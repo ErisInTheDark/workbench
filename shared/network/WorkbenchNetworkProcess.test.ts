@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
+import NativeArtifactStage from "../process/NativeArtifactStage.ts";
 import WorkbenchNetworkProcess from "./WorkbenchNetworkProcess.ts";
 
 async function fixture(context: { after(fn: () => Promise<void>): void }) {
@@ -48,6 +49,15 @@ test("refuses altered binaries and stale production sources while ignoring test-
   assert.equal(await WorkbenchNetworkProcess.inspect(root), binary);
   await writeFile(binary, "altered");
   await assert.rejects(WorkbenchNetworkProcess.inspect(root));
+});
+
+test("stages the verified network binary through the supplied stager", async context => {
+  const { root, binary } = await fixture(context);
+  const staged = path.join(root, "staged", "workbench-network.exe");
+  const requests: unknown[] = [];
+  const stage = { stage: async (request: unknown) => { requests.push(request); return staged; } };
+  assert.equal(await WorkbenchNetworkProcess.inspect(root, stage), staged);
+  assert.deepEqual(requests, [{ label: "network", executable: binary }]);
 });
 
 test("parent close rejects a pending operation and waits for child EOF shutdown", async context => {
@@ -228,7 +238,7 @@ test("the bundled Windows sidecar accepts disabled configuration and exits on pa
   context.after(() => temporary.dispose());
   let statusCount = 0;
   const owner = new WorkbenchNetworkProcess({
-    root, stateDirectory: directory,
+    root, stage: new NativeArtifactStage({ runtimeRoot: directory }), stateDirectory: directory,
     status: snapshot => {
       statusCount++;
       assert.equal(snapshot.hostServe.phase, "off");

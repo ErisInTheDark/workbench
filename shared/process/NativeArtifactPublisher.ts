@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - NativeArtifactPublisherOptions: native platform validation and diagnostic boundary.
+ * - NativeImageValidationOptions: platform and arch overrides for native image validation.
+ * - validateNativeImage: reject a truncated or wrong-architecture PE/ELF image.
  * - NativeArtifactPublisher (default): validate and replace committed native artifacts safely.
  */
 import { randomUUID } from "node:crypto";
@@ -12,6 +14,43 @@ export interface NativeArtifactPublisherOptions {
   arch?: string;
   warn?: (message: string) => void;
 }
+
+export interface NativeImageValidationOptions {
+  platform?: NodeJS.Platform;
+  arch?: string;
+}
+
+/** Reject a truncated or wrong-architecture PE/ELF native image. */
+export async function validateNativeImage(file: string, options: NativeImageValidationOptions = {}) {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const handle = await fs.open(file, "r");
+  try {
+    const header = Buffer.alloc(64);
+    const read = await handle.read(header, 0, header.length, 0);
+    if (read.bytesRead < header.length) throw new Error(`Native executable is truncated: ${file}`);
+    if (platform === "win32") {
+      if (header.readUInt16LE(0) !== 0x5a4d) throw new Error(`Native executable is not a PE image: ${file}`);
+      const pe = Buffer.alloc(6);
+      const readPE = await handle.read(pe, 0, pe.length, header.readUInt32LE(0x3c));
+      const machine = arch === "x64" ? 0x8664 : arch === "arm64" ? 0xaa64 : -1;
+      if (readPE.bytesRead !== pe.length || pe.readUInt32LE(0) !== 0x4550 || pe.readUInt16LE(4) !== machine) {
+        throw new Error(`Native executable has an invalid ${arch} PE header: ${file}`);
+      }
+    } else if (platform === "linux") {
+      const machine = arch === "x64" ? 62 : arch === "arm64" ? 183 : -1;
+      if (header.subarray(0, 4).toString("hex") !== "7f454c46" || header[4] !== 2 || header[5] !== 1
+        || header.readUInt16LE(18) !== machine) {
+        throw new Error(`Native executable has an invalid ${arch} ELF header: ${file}`);
+      }
+    } else {
+      throw new Error(`Native publication does not support ${platform}/${arch}.`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 export default class NativeArtifactPublisher {
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
@@ -24,31 +63,7 @@ export default class NativeArtifactPublisher {
   }
 
   async validate(file: string) {
-    const handle = await fs.open(file, "r");
-    try {
-      const header = Buffer.alloc(64);
-      const read = await handle.read(header, 0, header.length, 0);
-      if (read.bytesRead < header.length) throw new Error(`Native executable is truncated: ${file}`);
-      if (this.platform === "win32") {
-        if (header.readUInt16LE(0) !== 0x5a4d) throw new Error(`Native executable is not a PE image: ${file}`);
-        const pe = Buffer.alloc(6);
-        const readPE = await handle.read(pe, 0, pe.length, header.readUInt32LE(0x3c));
-        const machine = this.arch === "x64" ? 0x8664 : this.arch === "arm64" ? 0xaa64 : -1;
-        if (readPE.bytesRead !== pe.length || pe.readUInt32LE(0) !== 0x4550 || pe.readUInt16LE(4) !== machine) {
-          throw new Error(`Native executable has an invalid ${this.arch} PE header: ${file}`);
-        }
-      } else if (this.platform === "linux") {
-        const machine = this.arch === "x64" ? 62 : this.arch === "arm64" ? 183 : -1;
-        if (header.subarray(0, 4).toString("hex") !== "7f454c46" || header[4] !== 2 || header[5] !== 1
-          || header.readUInt16LE(18) !== machine) {
-          throw new Error(`Native executable has an invalid ${this.arch} ELF header: ${file}`);
-        }
-      } else {
-        throw new Error(`Native publication does not support ${this.platform}/${this.arch}.`);
-      }
-    } finally {
-      await handle.close();
-    }
+    await validateNativeImage(file, { platform: this.platform, arch: this.arch });
   }
 
   async publish(source: string, destination: string) {

@@ -1,11 +1,12 @@
 /*
  * Exports:
  * - WorkbenchDesktopLauncherOptions: checkout desktop artifact and process boundaries.
- * - default WorkbenchDesktopLauncher: launch and install the committed native tray shell.
+ * - default WorkbenchDesktopLauncher: launch and install a staged copy of the committed native tray shell.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import NativeArtifactStage, { type NativeArtifactStager } from "workbench-shared/process/NativeArtifactStage";
 import LinuxDesktopShortcut from "./LinuxDesktopShortcut.ts";
 
 interface CommandOptions {
@@ -21,6 +22,7 @@ export interface WorkbenchDesktopLauncherOptions {
   platform?: NodeJS.Platform;
   arch?: string;
   repositoryRootPath: string;
+  stage?: NativeArtifactStager;
   runCommand?: (command: string, args: string[], options: CommandOptions) => Promise<void>;
 }
 
@@ -62,6 +64,7 @@ export default class WorkbenchDesktopLauncher {
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
   private readonly repositoryRootPath: string;
+  private readonly stage: NativeArtifactStager;
   private readonly runCommand: NonNullable<WorkbenchDesktopLauncherOptions["runCommand"]>;
 
   constructor(options: WorkbenchDesktopLauncherOptions) {
@@ -70,6 +73,7 @@ export default class WorkbenchDesktopLauncher {
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
     this.repositoryRootPath = path.resolve(options.repositoryRootPath);
+    this.stage = options.stage ?? new NativeArtifactStage();
     this.runCommand = options.runCommand ?? runCommand;
   }
 
@@ -111,19 +115,19 @@ export default class WorkbenchDesktopLauncher {
   }
 
   private async requireLauncher() {
-    const launcherPath = path.join(
+    const committed = path.join(
       this.repositoryRootPath,
       "app", "tray",
       "bin",
       `${this.platform === "win32" ? "windows" : "linux"}-${this.arch}`,
       this.platform === "win32" ? "workbench-tray.exe" : "workbench-tray",
     );
-    if (!await this.pathExists(launcherPath)) {
+    if (!await this.pathExists(committed)) {
       throw new Error(
-        `Workbench tray launcher is missing at ${launcherPath}. Restore the committed artifact or run pnpm build:tray from the repository root.`,
+        `Workbench tray launcher is missing at ${committed}. Restore the committed artifact or run pnpm build:tray from the repository root.`,
       );
     }
-    return launcherPath;
+    return await this.stage.stage({ label: "tray", executable: committed });
   }
 
   private requirePlatform() {

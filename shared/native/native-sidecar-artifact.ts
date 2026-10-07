@@ -2,12 +2,13 @@
  * Exports:
  * - NativeSidecarArtifact: describes one committed Go sidecar's source directory, executable name and manifest protocol.
  * - nativeSidecarSourceHash: fingerprint production Go sources and module identities in one directory.
- * - verifyNativeSidecarArtifact: return the verified current-platform executable path or throw a bounded rebuild message.
+ * - verifyNativeSidecarArtifact: return the verified current-platform executable path, staged when a stager is supplied, or throw a bounded rebuild message.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { NativeArtifactStager } from "../process/NativeArtifactStage.ts";
 
 export interface NativeSidecarArtifact {
   /** Lowercase noun used in messages, such as "network". */
@@ -18,6 +19,7 @@ export interface NativeSidecarArtifact {
   source: string;
   /** Executable base name without platform extension. */
   executable: string;
+  /** Protocol number recorded in the artifact manifest. */
   protocol: number;
 }
 
@@ -37,7 +39,9 @@ export async function nativeSidecarSourceHash(directory: string): Promise<string
   return hash.digest("hex");
 }
 
-export async function verifyNativeSidecarArtifact(root: string, sidecar: NativeSidecarArtifact): Promise<string> {
+export async function verifyNativeSidecarArtifact(
+  root: string, sidecar: NativeSidecarArtifact, stage?: NativeArtifactStager,
+): Promise<string> {
   const { label, buildScript } = sidecar;
   if (process.arch !== "x64" || (process.platform !== "win32" && process.platform !== "linux")) {
     throw new Error(`A bundled ${label} executable is not available for this host platform.`);
@@ -65,5 +69,5 @@ export async function verifyNativeSidecarArtifact(root: string, sidecar: NativeS
   if (await nativeSidecarSourceHash(source) !== artifact.sourceHash) {
     throw new Error(`${label[0]!.toUpperCase()}${label.slice(1)} sources changed; rebuild the bundled executable.`);
   }
-  return executable;
+  return stage ? await stage.stage({ label, executable }) : executable;
 }

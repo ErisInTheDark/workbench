@@ -12,6 +12,7 @@ import {
 import { WORKBENCH_DAEMON_TAILNET_PORT } from "../../../shared/http/workbench-daemon-endpoint.ts";
 import { areDeeplyEqual } from "../../../shared/workbench/deep-equality.ts";
 import WorkbenchNetworkProcess from "../../../shared/network/WorkbenchNetworkProcess.ts";
+import type { NativeArtifactStager } from "../../../shared/process/NativeArtifactStage.ts";
 import type WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
 import type { WorkbenchDaemonDiscovery } from "../../../shared/http/workbench-daemon-discovery.ts";
 import type { WorkbenchDaemonBrowserEndpoints } from "../../../shared/http/workbench-daemon-discovery.ts";
@@ -38,6 +39,7 @@ export default class WorkbenchNetworkController {
   constructor(private readonly options: {
     repository: Pick<WorkbenchNetworkRepository, "read" | "write">;
     root: string;
+    stage?: NativeArtifactStager;
     stateDirectory: string;
     target(): Omit<WorkbenchNetworkSidecarConfiguration, "configuration" | "preparing">;
     preview(): { port: number | null; retainedPort: number | null };
@@ -142,7 +144,7 @@ export default class WorkbenchNetworkController {
 
   private async inspect() {
     try {
-      await (this.options.inspect?.() ?? WorkbenchNetworkProcess.inspect(this.options.root));
+      await (this.options.inspect?.() ?? WorkbenchNetworkProcess.inspect(this.options.root, this.options.stage));
       this.executable = { available: true, message: null };
     } catch (error) {
       this.executable = { available: false, message: error instanceof Error ? error.message.slice(0, 512) : "Network executable unavailable." };
@@ -178,7 +180,7 @@ export default class WorkbenchNetworkController {
     if (!this.process && !active) return null;
     if (!this.executable.available) throw new Error(this.executable.message ?? "Network executable unavailable.");
     if (!this.process) this.process = (this.options.createProcess ?? (options => new WorkbenchNetworkProcess(options)))({
-      root: this.options.root, stateDirectory: this.options.stateDirectory,
+      root: this.options.root, stage: this.options.stage, stateDirectory: this.options.stateDirectory,
       status: runtime => {
         if (this.closed) return;
         for (const key of ["hostServe", "privateAccess"] as const) {

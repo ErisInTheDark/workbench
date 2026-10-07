@@ -46,6 +46,7 @@ for (const platform of ["win32", "linux"] as const) {
     let launch: { command: string; args: string[]; options: SpawnOptions } | null = null;
     const host = new WorkbenchForegroundHost({
       root: "/repo", dataRoot: "/data", platform, environment: {},
+      stage: { stage: async options => options.executable },
       output: () => {}, warn: message => assert.fail(message),
       read: async () => readCount++ === 0 ? null : endpoint,
       verify: async () => {},
@@ -95,6 +96,7 @@ test("replacement keeps foreground ownership when the retired control cannot clo
   const replacement = { ...endpoint, instanceId: "30e59606-6ba9-4cd6-99ac-3dbec9083651", pid: 12346 };
   const host = new WorkbenchForegroundHost({
     root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    stage: { stage: async options => options.executable },
     output: () => {}, warn: message => { warnings.push(message); warned.resolve(); },
     read: async () => readCount++ === 0 ? null : readCount === 2 ? endpoint : replacement,
     verify: async () => {},
@@ -148,6 +150,7 @@ test("a failed daemon wake leaves the verified foreground host available for ret
   let readCount = 0;
   const host = new WorkbenchForegroundHost({
     root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    stage: { stage: async options => options.executable },
     output: () => {}, warn: message => { warnings.push(message); warned.resolve(); },
     read: async () => readCount++ === 0 ? null : endpoint,
     verify: async () => {},
@@ -194,6 +197,7 @@ test("foreground emergency input closes its owner pipe while graceful control is
   let readCount = 0;
   const host = new WorkbenchForegroundHost({
     root: "/repo", dataRoot: "/data", platform: "win32", environment: {},
+    stage: { stage: async options => options.executable },
     output: () => {}, warn: message => assert.fail(message),
     read: async () => readCount++ === 0 ? null : endpoint,
     verify: async () => {},

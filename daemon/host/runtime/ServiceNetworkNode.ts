@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import ReloadableNode from "../../../shared/reload/ReloadableNode.ts";
+import NativeArtifactStage from "../../../shared/process/NativeArtifactStage.ts";
 import WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
 import WorkbenchNetworkRepository from "../network/WorkbenchNetworkRepository.ts";
 import type { ServiceProcessContext } from "./service-process-context.ts";
@@ -14,12 +15,13 @@ export default ReloadableNode.define<ServiceProcessContext, ServiceRuntimeObject
   scope: "host:network", access: "operator", lifecycle: "handoff", safeAll: false,
   description: "Reload the shared network identity, grants and discovery owner.",
   requires: ["database"], provides: ["network"], children: [ServiceHttpNode],
-  // The native network process runs the prebuilt binary; Go sources only matter once rebuilt into bin.
+  // The native network process runs a staged copy of the prebuilt binary; Go sources only matter once rebuilt into bin.
   assets: "shared/network/native/bin/**",
   create(context, build) {
     const database = build.get("database");
     const create = () => new WorkbenchNetworkController({
       repository: new WorkbenchNetworkRepository(database), root: context.root,
+      stage: new NativeArtifactStage({ runtimeRoot: context.dataRoot, warn: context.warn }),
       stateDirectory: path.join(context.dataRoot, "app", "network"),
       target: () => ({
         appOrigin: context.sessions.current?.appOrigin ?? null,

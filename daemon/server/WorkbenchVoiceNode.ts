@@ -2,6 +2,7 @@
  * - default WorkbenchVoiceNode: reloadable private voice runtime and configuration.
  */
 import path from "node:path";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import ReloadableNode from "./ReloadableNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
@@ -27,6 +28,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const recognizer = new VoiceRecognizerProcess(
       path.resolve(context.daemonPackageRoot, "../.workbench/native-voice/runtime.json"),
       event => controller.native(event), error => controller.fail(error),
+      { stage: new NativeArtifactStage({ runtimeRoot: context.dataRootPath }) },
     );
     controller = new WorkbenchVoiceController({
       recognizer, resolveSettings: () => settings.resolve(),

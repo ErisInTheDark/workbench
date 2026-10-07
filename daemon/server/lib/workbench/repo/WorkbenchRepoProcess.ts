@@ -6,6 +6,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { verifyNativeSidecarArtifact, type NativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
+import type { NativeArtifactStager } from "workbench-shared/process/NativeArtifactStage";
 import {
   VirtualRepoPipeResponseSchema, VirtualRepoProbeSchema, type VirtualRepoAvailability,
 } from "workbench-shared/workbench/repo/virtual-repo-contract";
@@ -36,12 +37,12 @@ export default class WorkbenchRepoProcess {
   }
 
   /** Reports the first missing prerequisite. Check failures never claim something is missing. */
-  static async probe(root: string, warn: (message: string) => void): Promise<VirtualRepoAvailability> {
+  static async probe(root: string, warn: (message: string) => void, stage?: NativeArtifactStager): Promise<VirtualRepoAvailability> {
     const platform = WorkbenchRepoProcess.platform();
     if (platform === "other" || process.arch !== "x64") return { platform, status: "unsupported" };
     let executable: string;
     try {
-      executable = await verifyNativeSidecarArtifact(root, REPO_SIDECAR_ARTIFACT);
+      executable = await verifyNativeSidecarArtifact(root, REPO_SIDECAR_ARTIFACT, stage);
     } catch (error) {
       warn(error instanceof Error ? error.message : "The repository sidecar could not be verified.");
       return { platform, status: "nativeMissing" };
@@ -59,8 +60,8 @@ export default class WorkbenchRepoProcess {
     return { platform, ...parsed.data };
   }
 
-  static async start(root: string, cacheDirectory: string, warn: (message: string) => void) {
-    const executable = await verifyNativeSidecarArtifact(root, REPO_SIDECAR_ARTIFACT);
+  static async start(root: string, cacheDirectory: string, warn: (message: string) => void, stage?: NativeArtifactStager) {
+    const executable = await verifyNativeSidecarArtifact(root, REPO_SIDECAR_ARTIFACT, stage);
     const owner = new WorkbenchRepoProcess(warn);
     const child = spawn(executable, ["serve", "--cache-dir", cacheDirectory], { cwd: root, windowsHide: true, stdio: "pipe" });
     owner.child = child;

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - VoiceRecognizerProcessOptions: native process creation and retirement ports.
+ * - VoiceRecognizerProcessOptions: native process creation, staging and retirement ports.
  * - default VoiceRecognizerProcess: private warm native recogniser and bounded JSON-line transport.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
+import NativeArtifactStage, { type NativeArtifactStager } from "workbench-shared/process/NativeArtifactStage";
 import { VoiceEventSchema, VoiceRequestSchema, type VoiceEvent, type VoiceRequest } from "workbench-shared/workbench/voice/voice-contract";
 import { killProcessTreeAsync } from "../process-helpers";
 
@@ -19,6 +20,7 @@ const descriptorSchema = z.object({
 export interface VoiceRecognizerProcessOptions {
   createChild?: (executable: string, modelDirectory: string) => ChildProcess;
   terminateChild?: (child: ChildProcess) => Promise<void>;
+  stage?: NativeArtifactStager;
 }
 
 export default class VoiceRecognizerProcess {
@@ -27,12 +29,15 @@ export default class VoiceRecognizerProcess {
   private rejectReady: ((error: Error) => void) | null = null;
   private closed = false;
   private failed: Error | null = null;
+  private readonly stage: NativeArtifactStager;
   constructor(
     private readonly descriptorPath: string,
     private readonly onEvent: (event: VoiceEvent) => void,
     private readonly onError: (error: Error) => void,
     private readonly options: VoiceRecognizerProcessOptions = {},
-  ) {}
+  ) {
+    this.stage = options.stage ?? new NativeArtifactStage();
+  }
   prepare() {
     if (this.closed) return Promise.reject(new Error("Voice recogniser is disposed."));
     if (this.failed) return Promise.reject(this.failed);
@@ -70,10 +75,12 @@ export default class VoiceRecognizerProcess {
       throw new Error("Build voice support with node scripts/build-voice.mjs --build on the daemon machine.", { cause });
     }
     if (this.closed) throw new Error("Voice recogniser disposed.");
+    const executable = await this.stage.stage({ label: "voice", executable: descriptor.executable });
+    if (this.closed) throw new Error("Voice recogniser disposed.");
     return await new Promise<void>((resolve, reject) => {
       this.rejectReady = reject;
-      const child = this.options.createChild?.(descriptor.executable, descriptor.modelDirectory) ?? spawn(descriptor.executable, [], {
-        cwd: path.dirname(descriptor.executable), windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+      const child = this.options.createChild?.(executable, descriptor.modelDirectory) ?? spawn(executable, [], {
+        cwd: path.dirname(executable), windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, WORKBENCH_VOICE_MODEL_DIR: descriptor.modelDirectory },
       });
       this.child = child;

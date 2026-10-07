@@ -6,6 +6,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import NativeArtifactStage, { type NativeArtifactStager } from "../../shared/process/NativeArtifactStage.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
 import { readServiceEndpoint, verifyServiceEndpoint } from "../../shared/process/workbench-service-endpoint.ts";
 import type { WorkbenchServiceEndpoint } from "../../shared/http/workbench-service.ts";
@@ -29,6 +30,7 @@ export default class WorkbenchForegroundHost {
     warn(text: string): void;
     platform?: NodeJS.Platform;
     environment?: NodeJS.ProcessEnv;
+    stage?: NativeArtifactStager;
     spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
     read?: () => Promise<WorkbenchServiceEndpoint | null>;
     verify?: typeof verifyServiceEndpoint;
@@ -67,7 +69,9 @@ export default class WorkbenchForegroundHost {
     let command: string;
     let args: string[];
     if (platform === "win32") {
-      command = path.join(this.options.root, "daemon", "host", "bin", `windows-${process.arch}`, "workbench-daemon-host.exe");
+      const executable = path.join(this.options.root, "daemon", "host", "bin", `windows-${process.arch}`, "workbench-daemon-host.exe");
+      const stage = this.options.stage ?? new NativeArtifactStage({ runtimeRoot: this.options.dataRoot, warn: this.options.warn });
+      command = await stage.stage({ label: "host", executable });
       args = [this.options.root, process.execPath, this.options.dataRoot, "--foreground"];
     } else if (platform === "linux") {
       command = "systemd-run";

@@ -29,6 +29,7 @@ async function harness() {
   const recognizer = new VoiceRecognizerProcess(descriptor, event => events.push(event), error => errors.push(error), {
     createChild: () => { spawned(); return child as unknown as ChildProcess; },
     terminateChild: async () => { terminated = true; },
+    stage: { stage: async request => request.executable },
   });
   return { process: recognizer, child, launch, events, errors, get terminated() { return terminated; },
     async dispose() { await recognizer.dispose(); await temporary.dispose(); } };

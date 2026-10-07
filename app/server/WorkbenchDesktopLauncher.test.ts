@@ -7,7 +7,7 @@ import test from "node:test";
 
 import WorkbenchDesktopLauncher from "./WorkbenchDesktopLauncher.ts";
 
-function fixture(options: { launcherExists?: boolean; platform?: NodeJS.Platform } = {}) {
+function fixture(options: { launcherExists?: boolean; platform?: NodeJS.Platform; stage?: (executable: string) => string } = {}) {
   const calls: Array<{ args: string[]; command: string; detached?: boolean }> = [];
   const root = path.resolve("C:/workbench");
   const launcher = new WorkbenchDesktopLauncher({
@@ -17,6 +17,7 @@ function fixture(options: { launcherExists?: boolean; platform?: NodeJS.Platform
     pathExists: async () => options.launcherExists ?? true,
     platform: options.platform ?? "win32",
     repositoryRootPath: root,
+    stage: { stage: async request => options.stage ? options.stage(request.executable) : request.executable },
     runCommand: async (command, args) => {
       calls.push({ args, command });
     },
@@ -30,6 +31,14 @@ test("launches the existing native owner detached without rebuilding it", async 
   assert.equal(target.calls.length, 1);
   assert.equal(target.calls[0]?.detached, true);
   assert.match(target.calls[0]?.command ?? "", /tray[\\/]bin[\\/]windows-x64[\\/]workbench-tray\.exe$/u);
+  assert.deepEqual(target.calls[0]?.args, ["--workbench-root", target.root]);
+});
+
+test("launches a staged copy of the committed launcher", async () => {
+  const staged = path.resolve("C:/data/native/tray/workbench-tray.exe");
+  const target = fixture({ stage: () => staged });
+  await target.launcher.start();
+  assert.equal(target.calls[0]?.command, staged);
   assert.deepEqual(target.calls[0]?.args, ["--workbench-root", target.root]);
 });
 

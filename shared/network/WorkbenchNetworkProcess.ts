@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchNetworkProcess: verify bundled artifacts and own one cancellable sidecar pipe lifecycle.
+ * - default WorkbenchNetworkProcess: verify and stage bundled artifacts and own one cancellable sidecar pipe lifecycle.
  */
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchDaemonDiscovery } from "../http/workbench-daemon-discovery.ts";
 import { nativeSidecarSourceHash, verifyNativeSidecarArtifact, type NativeSidecarArtifact } from "../native/native-sidecar-artifact.ts";
+import type { NativeArtifactStager } from "../process/NativeArtifactStage.ts";
 import {
   WORKBENCH_NETWORK_PROTOCOL, WorkbenchNetworkCommandSchema, WorkbenchNetworkPipeResponseSchema,
   type WorkbenchNetworkCommand, type WorkbenchNetworkResult, type WorkbenchNetworkRuntime, type WorkbenchNetworkMember,
@@ -33,6 +34,7 @@ export default class WorkbenchNetworkProcess {
 
   constructor(private readonly options: {
     root: string;
+    stage?: NativeArtifactStager;
     warn: (message: string) => void;
     diagnostic?: (message: string) => void;
     failed?: (message: string) => void;
@@ -48,8 +50,8 @@ export default class WorkbenchNetworkProcess {
     return await nativeSidecarSourceHash(directory);
   }
 
-  static async inspect(root: string): Promise<string> {
-    return await verifyNativeSidecarArtifact(root, NETWORK_ARTIFACT);
+  static async inspect(root: string, stage?: NativeArtifactStager): Promise<string> {
+    return await verifyNativeSidecarArtifact(root, NETWORK_ARTIFACT, stage);
   }
 
   start() {
@@ -88,7 +90,7 @@ export default class WorkbenchNetworkProcess {
   }
 
   private async open() {
-    const executable = await WorkbenchNetworkProcess.inspect(this.options.root);
+    const executable = await WorkbenchNetworkProcess.inspect(this.options.root, this.options.stage);
     if (this.stopped) return;
     const environment = { ...process.env };
     for (const key of ["TS_AUTHKEY", "TS_CLIENT_SECRET", "TS_CLIENT_ID", "TS_ID_TOKEN", "TS_AUDIENCE", "TS_CONTROL_URL"]) delete environment[key];

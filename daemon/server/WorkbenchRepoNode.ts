@@ -3,6 +3,7 @@
  * - default WorkbenchRepoNode: own virtual repository mounts above the command, MCP and WebSocket surfaces that expose them.
  */
 import path from "node:path";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
@@ -20,10 +21,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const root = path.resolve(context.daemonPackageRoot, "..");
     const cacheDirectory = path.join(context.dataRootPath, ".cache", "repos");
     const warn = (message: string) => console.warn(`[repo] ${message}`);
+    const stage = new NativeArtifactStage({ runtimeRoot: context.dataRootPath, warn });
     const repo = new WorkbenchRepoController({
       cacheDirectory,
-      probe: async () => await WorkbenchRepoProcess.probe(root, warn),
-      startSidecar: async () => await WorkbenchRepoProcess.start(root, cacheDirectory, warn),
+      probe: async () => await WorkbenchRepoProcess.probe(root, warn, stage),
+      startSidecar: async () => await WorkbenchRepoProcess.start(root, cacheDirectory, warn, stage),
       bumpToolRevision: () => toolRevision.bump(),
       warn,
     });
