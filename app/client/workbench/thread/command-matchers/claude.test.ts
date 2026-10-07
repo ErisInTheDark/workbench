@@ -24,6 +24,20 @@ test("Claude Read, Grep, and Glob keep paths and patterns structured", () => {
   assert.ok(glob?.summaryParts.some(part => part.type === "path" && part.path === "."), "a missing search root means the working directory");
 });
 
+test("Claude Read maps every input shape to its range in the display", () => {
+  const read = (args: Record<string, string | number>) => {
+    const display = getClaudeToolDisplay(item("Read", args));
+    assert.ok(display, "a read still displays");
+    assert.equal(display.summaryStats.readFiles, 1);
+    return { text: display.summaryText, paths: display.summaryParts.filter(part => part.type === "path").map(part => part.path) };
+  };
+  assert.deepEqual(read({ file_path: "src/a.ts" }), { text: "Read src/a.ts", paths: ["src/a.ts"] });
+  assert.deepEqual(read({ file_path: "src/a.ts", offset: 12, limit: 5 }), { text: "Read lines 12-16 of src/a.ts", paths: ["src/a.ts"] });
+  assert.deepEqual(read({ file_path: "src/a.ts", offset: 12 }), { text: "Read from line 12 of src/a.ts", paths: ["src/a.ts"] });
+  assert.deepEqual(read({ file_path: "src/a.ts", limit: 5 }), { text: "Read first 5 lines of src/a.ts", paths: ["src/a.ts"] });
+  assert.deepEqual(read({ file_path: "doc.pdf", pages: "1-5" }), { text: "Read pages 1-5 of doc.pdf", paths: ["doc.pdf"] });
+});
+
 test("wrong argument shapes and other namespaces fall back to the generic tool row", () => {
   assert.equal(getClaudeToolDisplay(item("Read", { path: "opencode-shape" })), null);
   assert.equal(getClaudeToolDisplay(item("Grep", { path: "src" })), null);

@@ -6,13 +6,14 @@
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { readClaudeFileChangeMetadata } from "workbench-shared/workbench/provider/claude-file-change-metadata";
-import { nativePathToolSummary } from "./native-tools";
+import { nativePathToolSummary, nativeReadSummary } from "./native-tools";
 import type { NativeFileChange } from "./native-file-changes";
 import type { ThreadCommandSummaryDisplay } from "./types";
 
 type NativeItem = Extract<ThreadItem, { type: "dynamicToolCall" }>;
 
 const text = (value: unknown) => typeof value === "string" && value.trim() ? value : null;
+const positiveInteger = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 const record = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)
   ? value as Record<string, unknown> : null;
 
@@ -22,7 +23,14 @@ export function getClaudeToolDisplay(item: NativeItem): ThreadCommandSummaryDisp
   if (!args) return null;
   if (item.tool === "Read") {
     const path = text(args.file_path);
-    return path ? nativePathToolSummary({ claimedBy: "claude.read", kind: "read", path }) : null;
+    if (!path) return null;
+    return nativeReadSummary({
+      claimedBy: "claude.read",
+      path,
+      offset: positiveInteger(args.offset),
+      limit: positiveInteger(args.limit),
+      pages: text(args.pages),
+    });
   }
   if (item.tool === "Grep" || item.tool === "Glob") {
     const pattern = text(args.pattern);
