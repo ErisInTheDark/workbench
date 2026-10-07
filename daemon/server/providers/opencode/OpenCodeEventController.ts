@@ -363,15 +363,15 @@ export default class OpenCodeEventController {
         return;
       }
       case "session.compaction.started": {
-        // Sync first: OpenCode's running compaction message is the echo this start adopts instead of duplicating.
-        const identity = await this.options.threads.syncNative(sessionID);
-        const turnId = identity.latestTurnId ?? this.options.threads.currentTurn(sessionID)?.turnId;
-        if (!turnId) throw new Error("OpenCode compaction started without an admitted Workbench turn.");
+        const reference = event.data.inputID ?? event.id;
+        const scope = this.options.threads.observeCompaction(sessionID, "started", reference);
+        const active = scope ?? await this.active(sessionID);
         await this.options.transcript.recordCompaction({
-          threadId: identity.threadId, turnId, phase: "started", observedAt: event.created,
+          ...active, phase: "started", observedAt: event.created,
           reference: event.data.inputID ?? null,
         });
-        this.options.threads.observeCompaction(sessionID, "started", event.data.inputID ?? event.id);
+        // The report aliases the native reference before sync imports OpenCode's compaction-message echo.
+        await this.options.threads.syncNative(sessionID);
         return;
       }
       case "session.compaction.ended":

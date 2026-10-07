@@ -53,7 +53,8 @@ import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contra
 import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import {
-  WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema, sidebarRowKey,
+  WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
+  WorkbenchThreadSidebarRowVersionSchema, sidebarRowKey,
 } from "../thread/thread-sidebar-row";
 
 export const WORKSPACE_OBSERVE_METHOD = "workspace/observe";
@@ -84,7 +85,10 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("catalogue") }).strict(),
   z.object({ kind: z.literal("summaries") }).strict(),
   z.object({ kind: z.literal("projectPlacement") }).strict(),
-  z.object({ kind: z.literal("projectThreads"), projectIds: z.array(ProjectIdSchema) }).strict(),
+  z.object({
+    kind: z.literal("projectThreads"), projectIds: z.array(ProjectIdSchema),
+    sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
+  }).strict(),
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
@@ -174,6 +178,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("projectThreads"),
     projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
+    sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),

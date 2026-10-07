@@ -135,7 +135,8 @@ export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands 
 }): LiveThreadActivity | null {
   if (!turn || turn.status !== "inProgress" || pendingUserInputRequest) return null;
   const idle = (title: string): LiveThreadActivity => ({ kind: "reasoning", title, body: null, markdown: null, hiddenStep: null });
-  if (turn.items.some(isPendingInitialOptimisticInputItem)) return idle("Connecting");
+  const compacting = turn.items.some(item => item.type === "contextCompaction" && item.status === "inProgress");
+  if (turn.items.some(isPendingInitialOptimisticInputItem) && !compacting) return idle("Connecting");
   const reasoning = getCurrentThreadReasoningActivity(turn);
   if (reasoning) return { kind: "reasoning", ...reasoning };
   const runningIds = new Set(commands.filter(entry => entry.status === "inProgress").map(entry => entry.id));
@@ -154,6 +155,7 @@ export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands 
       summary, unmatched ? `Running ${unmatched} tool${unmatched === 1 ? "" : "s"}` : "",
     ].filter(Boolean).join(", ") };
   }
+  if (compacting) return null;
   const latest = turn.items.at(-1);
   if (latest?.type === "contextCompaction") return null;
   if (latest?.type === "webSearch" && isThreadWebSearchPlaceholder(latest)) {

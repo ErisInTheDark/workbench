@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadListEntry: a sidebar thread entry or pinned summary entry.
  * - isPinnedDraftSummaryEntry: identify pinned draft summaries, which carry no full draft.
+ * - describeThreadWait: identify explicit compaction or ordinary waiting presentation.
  * - describeThreadEntry: derive a thread entry's group, lifecycle status, icon, tone, claims, and activity time.
  */
 import type { ComponentType } from "react";
@@ -32,6 +33,12 @@ export function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Pinn
   return entry.entryKind === "draft" && "draftId" in entry;
 }
 
+export function describeThreadWait(entry: ThreadListEntry) {
+  const compacting = entry.entryKind !== "draft" && "compacting" in entry && entry.compacting;
+  const waiting = entry.entryKind !== "draft" && (Boolean(entry.waitingFor) || compacting);
+  return { compacting, label: compacting ? "Compacting" : "Waiting", waiting };
+}
+
 /** `hasTooltipDetails` says whether the caller adds attention details, which name the tooltip status "Needs attention". */
 export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "", hasTooltipDetails = false }: {
   attentionLabel?: string;
@@ -45,10 +52,11 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
   const stashedPaths = gitArc?.stashedPaths ?? [];
   const stashed = !claimedPaths.length && stashedPaths.length > 0;
   const hasProposedCommit = Boolean(gitArc?.proposals.some(({ status }) => status === "proposed"));
-  const waiting = entry.entryKind !== "draft" && Boolean(entry.waitingFor);
+  const wait = describeThreadWait(entry);
+  const waiting = wait.waiting;
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
   const status = waiting
-    ? "Waiting"
+    ? wait.label
     : showProposedCommit
     ? "Proposed commit"
     : entry.entryKind === "draft"

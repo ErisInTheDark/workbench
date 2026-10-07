@@ -58,7 +58,7 @@ function failure(error: unknown) {
 function archivedRows(sidebar: WorkbenchThreadSidebarSnapshot, limit: number) {
   const archived = sidebar.entries.filter(entry => entry.entryKind === "thread" && entry.metadata.archived)
     .sort((left, right) => right.activityAt - left.activityAt);
-  return { total: archived.length, rows: archived.slice(0, limit).map(projectSidebarRow) };
+  return { total: archived.length, rows: archived.slice(0, limit).map(entry => projectSidebarRow(entry)) };
 }
 
 function replaceProject<Item extends { projectId: string }>(items: readonly Item[], next: Item) {
@@ -76,7 +76,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     catalogue: Pick<WorkbenchProjectCatalogController, "getFacts" | "subscribe">;
     identities: Pick<WorkbenchThreadIdentityController, "findThread" | "resolve" | "subscribe">;
     threads: Pick<WorkbenchThreadStateController,
-      "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects" | "readWorkspaceThread">;
+      "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects"
+      | "readWorkspaceThread" | "isThreadCompacting">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange): void;
@@ -191,8 +192,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   }
 
   /** Observers get lean rows without archived threads. */
-  private sidebar(sidebar: WorkbenchThreadSidebarSnapshot) {
-    return projectSidebarRowSnapshot(sidebar);
+  private sidebar(sidebar: WorkbenchThreadSidebarSnapshot, version?: 2) {
+    return projectSidebarRowSnapshot(sidebar,
+      version === 2 ? threadId => this.owners.threads.isThreadCompacting(threadId) : undefined);
   }
 
   /** Activity to ten seconds, so a running agent's stream of items is one summary tick per window. */
@@ -314,10 +316,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         failures: value.failures.filter(item => selectedSet.has(item.projectId)),
       });
     } else if (value.kind === "projectThreads") {
+      const version = observation.request.query.kind === "projectThreads"
+        ? observation.request.query.sidebarRowVersion : undefined;
       const projects = selected.map(projectId => {
         const sidebar = this.owners.threads.peekProject(projectId);
         const retained = value.projects.find(project => project.projectId === projectId);
-        if (sidebar) return { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(sidebar) };
+        if (sidebar) return { projectId, phase: "current" as const, failure: null,
+          sidebar: this.sidebar(sidebar, version) };
         observation.dirty.add(projectId);
         return retained ?? { projectId, phase: "pending" as const, failure: null, sidebar: null };
       });
@@ -432,8 +437,11 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         pendingProjectIds: [...observation.dirty], failures,
       });
     } else if (value.kind === "projectThreads") {
+      const version = observation.request.query.kind === "projectThreads"
+        ? observation.request.query.sidebarRowVersion : undefined;
       const projects = value.projects.map(project => project.projectId === projectId
-        ? { projectId, phase: "current" as const, failure: null, sidebar: this.sidebar(sidebar) } : project);
+        ? { projectId, phase: "current" as const, failure: null,
+          sidebar: this.sidebar(sidebar, version) } : project);
       const failed = projects.find(project => project.failure);
       this.update(observation, {
         kind: "projectThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",

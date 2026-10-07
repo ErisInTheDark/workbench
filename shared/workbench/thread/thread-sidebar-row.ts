@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchSidebarGitArcSchema/WorkbenchSidebarGitArc: independently live and saved Git work for sidebar rows.
  * - WorkbenchSidebarGitArcPlanSchema/WorkbenchSidebarGitArcPlan: inactive-plan scope a sidebar row needs for collisions.
+ * - WORKBENCH_THREAD_SIDEBAR_ROW_VERSION/WorkbenchThreadSidebarRowVersionSchema: explicit compatible row capability.
  * - WorkbenchThreadSidebarRowSchema/WorkbenchThreadSidebarRow: lean list-rendering row; per-thread detail rides the thread observation.
  * - WorkbenchThreadSidebarRowSnapshotSchema/WorkbenchThreadSidebarRowSnapshot: one project's unarchived rows plus its archived count.
  * - WorkbenchProjectThreadRowSidebars: client store collection of row snapshots.
@@ -32,7 +33,10 @@ const heavy = { questionnaireHistory: true, previousTitles: true, gitArc: true, 
 const lean = {
   gitArc: WorkbenchSidebarGitArcSchema.nullable().optional(),
   gitArcPlan: WorkbenchSidebarGitArcPlanSchema.nullable().optional(),
+  compacting: z.boolean().optional(),
 };
+export const WORKBENCH_THREAD_SIDEBAR_ROW_VERSION = 2 as const;
+export const WorkbenchThreadSidebarRowVersionSchema = z.literal(WORKBENCH_THREAD_SIDEBAR_ROW_VERSION);
 const ThreadRowSchema = WorkbenchThreadSidebarEntryVariants.thread.omit(heavy).extend(lean).strict();
 const SubagentRowSchema = WorkbenchThreadSidebarEntryVariants.subagent.omit(heavy).extend(lean).strict()
   .superRefine(WorkbenchThreadSidebarEntryVariants.refineSubagent);
@@ -75,27 +79,39 @@ const nullableOptional = ["pendingQuestionnaire", "gitArc", "gitArcPlan"] as con
 const ACTIVITY_GRANULARITY_MS = 10_000;
 export const coarseActivity = (ms: number) => ms - ms % ACTIVITY_GRANULARITY_MS;
 
-const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>) => entry.activityAt % 1_000 === 0
+const isLean = (entry: Exclude<RowSource, { entryKind: "draft" }>, compacting: boolean | undefined) => entry.activityAt % 1_000 === 0
   && !("questionnaireHistory" in entry)
   && !("previousTitles" in entry) && !(entry.gitArc && "intentName" in entry.gitArc)
   && !(entry.gitArcPlan && "intentName" in entry.gitArcPlan)
-  && nullableOptional.every(field => !(field in entry) || entry[field] !== null);
+  && nullableOptional.every(field => !(field in entry) || entry[field] !== null)
+  && (compacting === undefined
+    ? !("compacting" in entry)
+    : ("compacting" in entry ? entry.compacting : undefined) === compacting);
 
 /** Idempotent and identity-preserving: an already-lean row is returned as-is, so keyed diffs short-circuit. */
-export function projectSidebarRow(entry: RowSource): WorkbenchThreadSidebarRow {
+export function projectSidebarRow(entry: RowSource): WorkbenchThreadSidebarRow;
+export function projectSidebarRow(entry: RowSource, compacting: boolean): WorkbenchThreadSidebarRow;
+export function projectSidebarRow(entry: RowSource, compacting?: boolean): WorkbenchThreadSidebarRow {
   if (entry.entryKind === "draft") return entry;
-  if (isLean(entry)) return entry as WorkbenchThreadSidebarRow;
-  const { questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan, pendingQuestionnaire, ...rest } = entry as Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
+  if (isLean(entry, compacting)) return entry as WorkbenchThreadSidebarRow;
+  const {
+    questionnaireHistory: _history, previousTitles: _titles, gitArc, gitArcPlan,
+    pendingQuestionnaire, compacting: _compacting, ...rest
+  } = entry as Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }> & { compacting?: boolean };
   return {
     ...rest,
     activityAt: coarseActivity(rest.activityAt),
+    ...(compacting === undefined ? {} : { compacting }),
     ...(pendingQuestionnaire ? { pendingQuestionnaire } : {}),
     ...(gitArc ? { gitArc: leanArc(gitArc) } : {}),
     ...(gitArcPlan ? { gitArcPlan: { checkpointCommit: gitArcPlan.checkpointCommit, scopePaths: gitArcPlan.scopePaths } } : {}),
   } as WorkbenchThreadSidebarRow;
 }
 
-export function projectSidebarRowSnapshot(snapshot: WorkbenchThreadSidebarSnapshot | WorkbenchThreadSidebarRowSnapshot): WorkbenchThreadSidebarRowSnapshot {
+export function projectSidebarRowSnapshot(
+  snapshot: WorkbenchThreadSidebarSnapshot | WorkbenchThreadSidebarRowSnapshot,
+  isCompacting?: (threadId: string) => boolean,
+): WorkbenchThreadSidebarRowSnapshot {
   const archived = new Set(snapshot.entries.flatMap(entry => entry.entryKind === "thread" && entry.metadata.archived ? [entry.identity.threadId] : []));
   let unchanged = true;
   const entries = snapshot.entries.flatMap(entry => {
@@ -104,7 +120,8 @@ export function projectSidebarRowSnapshot(snapshot: WorkbenchThreadSidebarSnapsh
       unchanged = false;
       return [];
     }
-    const row = projectSidebarRow(entry);
+    const compacting = entry.entryKind === "draft" ? undefined : isCompacting?.(entry.identity.threadId);
+    const row = compacting === undefined ? projectSidebarRow(entry) : projectSidebarRow(entry, compacting);
     if (row !== entry) unchanged = false;
     return [row];
   });

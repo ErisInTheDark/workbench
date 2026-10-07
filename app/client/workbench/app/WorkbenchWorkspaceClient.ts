@@ -9,12 +9,13 @@ import {
   type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
   type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import { WORKBENCH_THREAD_SIDEBAR_ROW_VERSION } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import type WorkbenchAppRpcClient from "./WorkbenchAppRpcClient";
-import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkspaceCommandSchema, WorkspaceTranscriptRequestSchema, WorkspaceThreadMutationSchema, workspaceCommandRoutes, type WorkspaceCommandMethod } from "workbench-shared/workbench/workspace/workspace-commands";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -259,7 +260,10 @@ export default class WorkbenchWorkspaceClient {
     listener: () => void = () => {},
   ): WorkspaceQueryHandle<Query["kind"]> {
     if (this.disposed) throw new Error("Workspace client is closed.");
-    const parsed = WorkspaceQuerySchema.parse(query);
+    const requested = WorkspaceQuerySchema.parse(query);
+    const parsed: WorkspaceQuery = requested.kind === "projectThreads" && !requested.sidebarRowVersion
+      ? { ...requested, sidebarRowVersion: WORKBENCH_THREAD_SIDEBAR_ROW_VERSION }
+      : requested;
     let interest = [...this.interests.values()].find(item => areDeeplyEqual(item.query, parsed));
     const created = !interest;
     if (!interest) {
@@ -330,10 +334,20 @@ export default class WorkbenchWorkspaceClient {
 
   private open(interest: Interest) {
     const generation = this.rpc.getSnapshot().generation;
-    void this.rpc.requestRaw({
-      method: "workspace/observe",
-      params: { subscriptionId: interest.id, generation, query: interest.query },
-    }, { signal: interest.cancellation.signal }).then(result => {
+    const request = (query: WorkspaceQuery) => this.rpc.requestRaw({
+      method: "workspace/observe", params: { subscriptionId: interest.id, generation, query },
+    }, { signal: interest.cancellation.signal });
+    const compatibleRequest = async () => {
+      try {
+        return await request(interest.query);
+      } catch (error) {
+        if (interest.query.kind !== "projectThreads" || !interest.query.sidebarRowVersion
+          || !(error instanceof WorkbenchDaemonRequestError) || error.code !== -32600) throw error;
+        const { sidebarRowVersion: _version, ...legacy } = interest.query;
+        return await request(legacy);
+      }
+    };
+    void compatibleRequest().then(result => {
       if (!this.active(interest) || !this.rpc.connected || generation !== this.rpc.getSnapshot().generation) return;
       const parsed = WorkspaceObservationSchema.safeParse(result);
       if (!parsed.success) {

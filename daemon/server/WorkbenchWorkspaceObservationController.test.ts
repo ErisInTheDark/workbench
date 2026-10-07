@@ -36,6 +36,7 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
       peekProject: () => null, readProject: async projectId => sidebar(projectId),
       peekProjectSummary: () => null, getProjectThreadSummary: async () => { throw new Error("Unexpected summary read."); },
       readWorkspaceThread: async () => { throw new Error("Unexpected thread read."); },
+      isThreadCompacting: () => false,
       subscribeProjects: listener => { projectChanged = listener; return () => {}; },
     },
     projects: { getCurrentUpdate: () => null, observe: () => () => {} },
@@ -110,6 +111,22 @@ test("lean rows leave out archived threads and their subagents but count them", 
   assert.deepEqual(rows?.entries.map(entry => entry.title), ["Thread 0 with a realistic title"]);
   assert.ok(rows && "archivedCount" in rows && rows.archivedCount === 1);
   assert.equal("previousTitles" in rows.entries[0]!, false);
+});
+
+test("project row v2 exposes current compaction while legacy projection omits it", context => {
+  const compactingThread = thread(0);
+  if (compactingThread.entryKind !== "thread") throw new Error("Expected a thread fixture.");
+  const project = { ...sidebar(a), entries: [compactingThread] };
+  const f = fixture(context);
+  f.owners.threads.peekProject = () => project;
+  f.owners.threads.isThreadCompacting = id => id === compactingThread.identity.threadId;
+  const legacy = f.observe({ kind: "projectThreads", projectIds: [a] });
+  const current = f.observe({ kind: "projectThreads", projectIds: [a], sidebarRowVersion: 2 });
+  assert.ok(legacy.kind === "projectThreads" && current.kind === "projectThreads");
+  const legacyEntry = legacy.projects[0]?.sidebar?.entries[0];
+  const currentEntry = current.projects[0]?.sidebar?.entries[0];
+  assert.equal(legacyEntry && "compacting" in legacyEntry, false);
+  assert.equal(currentEntry?.entryKind === "thread" ? currentEntry.compacting : null, true);
 });
 
 test("only a client's thread observations make it demand that thread's provider events", async context => {

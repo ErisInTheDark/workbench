@@ -8,7 +8,9 @@ import {
   type WorkspaceThreadRows,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
-import type { WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import {
+  projectSidebarRow, projectSidebarRowSnapshot, type WorkbenchThreadSidebarRowSnapshot,
+} from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -780,7 +782,9 @@ export default class WorkbenchWorkspaceRequestController {
     const fact = interest.thread?.observation.getSnapshot();
     const project = fact?.value?.kind === "projectThreads"
       ? fact.value.projects.find(item => item.projectId === owner.location.projectId) : undefined;
-    const entry = project?.sidebar?.entries.find(item => item.entryKind !== "draft" && item.identity.threadId === owner.identity.threadId);
+    const sourceEntry = project?.sidebar?.entries.find(item =>
+      item.entryKind !== "draft" && item.identity.threadId === owner.identity.threadId);
+    const entry = sourceEntry ? projectSidebarRow(sourceEntry) : undefined;
     const { location } = owner;
     const logical = this.options.workspace.getSnapshot().projects.find(item => item.locations.some(candidate =>
       candidate.daemonId === location.daemonId && candidate.target.projectId === location.projectId));
@@ -798,14 +802,18 @@ export default class WorkbenchWorkspaceRequestController {
     const query = interest.request.query;
     if (query.kind !== "projectThreads") return;
     const { workspace, targets } = this.rowTargets(query.projects);
-    this.observeTargets(interest, targets, projectIds => ({ kind: "projectThreads", projectIds }));
+    this.observeTargets(interest, targets, projectIds => ({
+      kind: "projectThreads", projectIds,
+      ...(query.sidebarRowVersion ? { sidebarRowVersion: query.sidebarRowVersion } : {}),
+    }));
     const sidebars = new Map<DaemonId, { projects: WorkbenchThreadSidebarRowSnapshot[] }>();
     const projects: WorkspaceThreadRows["projects"] = [];
     for (const [daemonId, ids] of targets) {
       const fact = interest.sources.get(daemonId)?.observation.getSnapshot();
       const rows = fact?.value?.kind === "projectThreads" ? fact.value.projects : [];
       // Sources already hold lean rows; the projection is identity-preserving for them.
-      const lean = rows.flatMap(row => row.sidebar ? [row.sidebar] : []);
+      const lean = rows.flatMap(row => row.sidebar
+        ? [query.sidebarRowVersion ? row.sidebar : projectSidebarRowSnapshot(row.sidebar)] : []);
       sidebars.set(daemonId, { projects: lean });
       for (const projectId of ids) {
         const row = rows.find(row => row.projectId === projectId);

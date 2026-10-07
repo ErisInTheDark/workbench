@@ -9,7 +9,9 @@ import WorkbenchDaemonSource, { type WorkbenchDaemonTranscriptEvent } from "./Wo
 
 class Socket extends EventTarget {
   readyState: number = WebSocket.CONNECTING;
-  sent: Array<{ id: number; method: string; params: { subscriptionId?: string; generation?: number } }> = [];
+  sent: Array<{ id: number; method: string; params: {
+    subscriptionId?: string; generation?: number; query?: object;
+  } }> = [];
   private readonly listeners = new Set<() => void>();
   open() { this.readyState = WebSocket.OPEN; this.dispatchEvent(new Event("open")); }
   send(payload: string) { this.sent.push(JSON.parse(payload)); for (const listener of [...this.listeners]) listener(); }
@@ -152,6 +154,33 @@ test("daemon deltas apply onto the exact first value, may arrive before it, and 
   assert.equal(reobserved.params.subscriptionId, request.params.subscriptionId);
   assert.equal(title(), "again", "A diverged copy keeps its last good facts until the fresh value lands");
   assert.match(f.warnings.join("\n"), /projectThreads observation resync/u);
+});
+
+test("v2 project rows retry legacy once when an older daemon rejects the query", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const projectId = ProjectIdSchema.parse("project");
+  const current = Promise.withResolvers<void>();
+  const handle = f.source.observe({
+    kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2,
+  }, () => {
+    if (handle.getSnapshot().phase === "current") current.resolve();
+  });
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const first = await socket.request("workspace/observe");
+  assert.deepEqual(first.params.query, { kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2 });
+  const offset = socket.sent.length;
+  socket.notify({ id: first.id, error: { code: -32602, message: "Invalid params" } });
+  const fallback = await socket.request("workspace/observe", offset);
+  assert.equal(fallback.params.subscriptionId, first.params.subscriptionId);
+  assert.deepEqual(fallback.params.query, { kind: "projectThreads", projectIds: [projectId] });
+  socket.notify({ id: fallback.id, result: {
+    kind: "projectThreads", subscriptionId: fallback.params.subscriptionId,
+    generation: fallback.params.generation, revision: 1, phase: "current", failure: null, projects: [],
+  } });
+  await current.promise;
+  assert.equal(handle.getSnapshot().phase, "current");
 });
 
 test("matching transcript views share an upstream subscription and late joiners receive a fresh baseline", async context => {

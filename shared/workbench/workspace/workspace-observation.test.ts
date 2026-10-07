@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyObservationDelta, diffObservationValue } from "./observation-patch";
 import {
-  WorkspaceObservationSchema, workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
+  DaemonWorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceQuerySchema,
+  workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
 } from "./workspace-observation";
 
 const value = (activityAt: number) => WorkspaceObservationSchema.parse({
@@ -35,6 +36,17 @@ test("an entry field change on an app thread row patches only that field and sti
   assert.throws(() => applyObservationDelta(value(10_000), {
     objects: { data: { collections: { rows: { update: [{ key, delta: { objects: { entry: { set: { activityAt: "soon" } } } } }] } } } },
   }, shape), /invalid/u);
+});
+
+test("sidebar row protocol v2 is explicit while legacy rows conform compacting to false", () => {
+  assert.deepEqual(WorkspaceQuerySchema.parse({
+    kind: "projectThreads", projects: null, sidebarRowVersion: 2,
+  }), { kind: "projectThreads", projects: null, sidebarRowVersion: 2 });
+  assert.deepEqual(DaemonWorkspaceQuerySchema.parse({
+    kind: "projectThreads", projectIds: ["project"], sidebarRowVersion: 2,
+  }), { kind: "projectThreads", projectIds: ["project"], sidebarRowVersion: 2 });
+  const entry = value(10_000).data.rows[0]?.entry;
+  assert.equal(entry?.entryKind === "thread" ? entry.compacting ?? false : null, false);
 });
 
 test("project tree updates ship changed counts and touched nodes, not the whole tree", () => {

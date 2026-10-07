@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import { getThreadCommandBlockDisplay } from "../../../workbench/thread/thread-command-matchers";
 
@@ -85,6 +86,24 @@ test("partial output keeps commands running and terminal turns do not show a liv
   const entries = getThreadTerminalEntries([item], { cwd: "/project" });
   assert.equal(entries[0]!.status, "inProgress");
   assert.equal(getLiveThreadActivity({ commands: entries, turn: { ...turn([item]), status: "completed" }, pendingUserInputRequest: null }), null);
+});
+
+test("an explicit compaction status suppresses redundant connecting activity", () => {
+  const compaction = {
+    id: "compaction", type: "contextCompaction", status: "inProgress",
+  } as const satisfies ThreadItem;
+  const pending = withWorkbenchInputState({
+    clientId: "client", content: [{ type: "text", text: "next", text_elements: [] }],
+    id: "pending", type: "userMessage",
+  } as const satisfies Extract<ThreadItem, { type: "userMessage" }>, {
+    kind: "optimistic", placement: "initial", status: "pending",
+  });
+  assert.equal(getLiveThreadActivity({
+    commands: [], turn: turn([compaction, pending]), pendingUserInputRequest: null,
+  }), null);
+  assert.equal(getLiveThreadActivity({
+    commands: [], turn: turn([pending]), pendingUserInputRequest: null,
+  })?.title, "Connecting");
 });
 
 test("terminal history keeps old running calls but intersects completed age and invocation limits", () => {

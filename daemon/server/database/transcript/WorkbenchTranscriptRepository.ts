@@ -1335,11 +1335,18 @@ export default class WorkbenchTranscriptRepository {
       this.#itemIdentity.admit({
         threadId,
         itemId: observation.itemId,
-        sources: [{
-          turnId,
-          kind: "client",
-          reference: observation.itemId,
-        }],
+        sources: [
+          {
+            turnId,
+            kind: "client",
+            reference: observation.itemId,
+          },
+          ...(reference && reference !== observation.itemId ? [{
+            turnId,
+            kind: "stable" as const,
+            reference,
+          }] : []),
+        ],
       });
     }
     const referenced = observation.itemId

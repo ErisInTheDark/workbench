@@ -461,9 +461,20 @@ export default class WorkbenchDaemonSource {
   private openInterest(interest: Interest) {
     const generation = this.socket.getSnapshot().generation;
     interest.failure = null;
-    void this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
-      subscriptionId: interest.subscriptionId, generation, query: interest.query,
-    }, {}, { signal: interest.cancellation.signal }).then(value => {
+    const request = (query: DaemonWorkspaceQuery) => this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
+      subscriptionId: interest.subscriptionId, generation, query,
+    }, {}, { signal: interest.cancellation.signal });
+    const compatibleRequest = async () => {
+      try {
+        return await request(interest.query);
+      } catch (error) {
+        if (interest.query.kind !== "projectThreads" || !interest.query.sidebarRowVersion
+          || !(error instanceof WorkbenchDaemonRequestError) || error.code !== -32602) throw error;
+        const { sidebarRowVersion: _version, ...legacy } = interest.query;
+        return await request(legacy);
+      }
+    };
+    void compatibleRequest().then(value => {
       const parsed = DaemonWorkspaceObservationSchema.safeParse(value);
       if (!parsed.success) {
         reportClientSchemaError("Rejected daemon observation response", parsed.error);

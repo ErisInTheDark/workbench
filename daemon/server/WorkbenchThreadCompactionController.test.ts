@@ -11,6 +11,7 @@ const itemId = "00000000-0000-4000-8000-000000000003";
 function fixture() {
   const admission = new WorkbenchThreadAdmissionController();
   const observations: Array<{ phase?: string }> = [];
+  const activity: boolean[] = [];
   let compact = async () => {};
   const owner = new WorkbenchThreadCompactionController(admission, {
     itemId: () => itemId,
@@ -21,12 +22,13 @@ function fixture() {
       }
       return { changedThreadIds: [threadId], compactionCompletions: [] };
     },
+    setCompacting: (_threadId, compacting) => { activity.push(compacting); },
   });
   const provider = { threads: {
     latestTurn: async () => ({ id: turnId }),
     compact: async () => compact(),
   } } as never;
-  return { admission, observations, owner, provider, compact: (next: () => Promise<void>) => { compact = next; } };
+  return { activity, admission, observations, owner, provider, compact: (next: () => Promise<void>) => { compact = next; } };
 }
 
 test("admits the canonical marker before provider execution and fences queued messages", async () => {
@@ -48,6 +50,7 @@ test("admits the canonical marker before provider execution and fences queued me
   await operation;
   await message;
   assert.equal(admitted, true);
+  assert.deepEqual(f.activity, [true, false]);
 });
 
 test("settles provider failure and rejects overlapping compaction", async () => {
@@ -65,4 +68,5 @@ test("settles provider failure and rejects overlapping compaction", async () => 
   release.resolve();
   await assert.rejects(operation, /native failure/u);
   assert.deepEqual(f.observations.map(entry => entry.phase), ["started", "failed"]);
+  assert.deepEqual(f.activity, [true, false]);
 });

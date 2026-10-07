@@ -34,6 +34,7 @@ import Draggable from "./drag/Draggable";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
+import { describeThreadWait } from "./thread-entry-presentation";
 
 const THREAD_FOLDER_HOVER_OPEN_DELAY_MS = 1_000;
 
@@ -46,7 +47,7 @@ type FolderStatusIcon = ComponentType<IconProps>;
 
 function folderStatusRank(entry: FolderEntry) {
   if (entry.entryKind === "draft") return 5;
-  if (entry.waitingFor) return 0;
+  if (describeThreadWait(entry).waiting) return 0;
   if (entry.lifecycle.kind === "needsAttention") return 1;
   if (entry.lifecycle.kind === "working") return 2;
   if (entry.lifecycle.kind === "stopped") return 3;
@@ -56,7 +57,8 @@ function folderStatusRank(entry: FolderEntry) {
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-fg/muted", strokeOpacity: 0.24 };
-  const waiting = Boolean(entry.waitingFor);
+  const wait = describeThreadWait(entry);
+  const waiting = wait.waiting;
   const proposed = !waiting && entry.lifecycle.kind === "completed" && Boolean(entry.gitArc?.proposals.some(({ status }) => status === "proposed"));
   const tone: WorkbenchThreadStatusTone = waiting
     ? "waiting"
@@ -67,7 +69,7 @@ function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThrea
   return {
     dashed: !waiting && (entry.lifecycle.kind === "needsAttention" || entry.lifecycle.kind === "stopped"),
     Icon: Icon as FolderStatusIcon,
-    label: waiting ? "Waiting" : proposed ? "Proposed commit" : entry.lifecycle.kind === "needsAttention" ? attentionLabelsByThreadId[entry.identity.threadId]?.trim() || "Needs attention" : entry.lifecycle.kind === "working" ? "Working" : entry.lifecycle.kind === "stopped" ? "Stopped" : "Completed",
+    label: waiting ? wait.label : proposed ? "Proposed commit" : entry.lifecycle.kind === "needsAttention" ? attentionLabelsByThreadId[entry.identity.threadId]?.trim() || "Needs attention" : entry.lifecycle.kind === "working" ? "Working" : entry.lifecycle.kind === "stopped" ? "Stopped" : "Completed",
     statusClassName: getWorkbenchThreadStatusClassName(tone),
     strokeOpacity: 1,
   };

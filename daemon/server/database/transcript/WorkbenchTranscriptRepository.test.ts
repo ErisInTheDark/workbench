@@ -17,6 +17,7 @@ import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread
 import { resolveSteerHistoryItemId } from "workbench-shared/workbench/thread/thread-steer-history";
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
+import type { WorkbenchItemId } from "workbench-shared/workbench/identity";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
@@ -2766,13 +2767,14 @@ function liveTurn(turnId: string, turnIndex: number): Extract<WorkbenchTranscrip
 function compaction(
   phase: "started" | "completed" | "failed",
   observedAt: number,
-  options: { turnId?: string; reference?: string | null; durationMs?: number } = {},
+  options: { turnId?: string; reference?: string | null; durationMs?: number; itemId?: WorkbenchItemId } = {},
 ): WorkbenchTranscriptObservation {
   return {
     kind: "contextCompaction", phase, observedAt,
     threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
     turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(options.turnId ?? "live"),
     reference: options.reference ?? null,
+    ...(options.itemId === undefined ? {} : { itemId: options.itemId }),
     ...(options.durationMs === undefined ? {} : { durationMs: options.durationMs }),
   };
 }
@@ -2799,6 +2801,25 @@ function readCompactions(repository: WorkbenchTranscriptRepository) {
     }];
   }));
 }
+
+test("a Workbench compaction adopts its later native reference before the provider echo", () => {
+  const { database, repository } = createRepository();
+  const itemId = fixtureIdentitySchemas.WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000099");
+  try {
+    repository.settle([
+      threadObservation(),
+      liveTurn("live", 0),
+      compaction("started", 100, { itemId }),
+      compaction("started", 110, { itemId, reference: "native-compaction" }),
+      compactionEcho("streaming", "native-compaction", 120),
+    ]);
+    assert.deepEqual(readCompactions(repository), [{
+      turnId: "live", status: "inProgress", startedAt: 100, completedAt: null,
+    }]);
+  } finally {
+    database.close();
+  }
+});
 
 for (const [outcome, reference] of [
   ["completed", "native-compaction"], ["failed", "native-compaction"],

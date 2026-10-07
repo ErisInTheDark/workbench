@@ -105,6 +105,25 @@ test("matching interests share work and releasing one does not retire the other"
   assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 1);
 });
 
+test("project rows negotiate v2 and retry legacy once when an older app rejects it", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const handle = fixture.workspace.observe({ kind: "projectThreads", projects: null });
+  const first = await socket.request("workspace/observe");
+  assert.equal(first.params.query.kind, "projectThreads");
+  assert.equal("sidebarRowVersion" in first.params.query ? first.params.query.sidebarRowVersion : null, 2);
+  const offset = socket.sent.length;
+  socket.fail(first, "Invalid workspace query.", -32600);
+  const fallback = await socket.request("workspace/observe", offset);
+  assert.equal(fallback.params.subscriptionId, first.params.subscriptionId);
+  assert.equal("sidebarRowVersion" in fallback.params.query, false);
+  await socket.observation(fallback, {
+    kind: "projectThreads", phase: "current", failure: null, data: { rows: [], projects: [] },
+  }, 1, true);
+  assert.equal(handle.getSnapshot().phase, "current");
+});
+
 test("app deltas update the exact retained value and a gap re-observes instead of guessing", async context => {
   const warnings: string[] = [];
   context.mock.method(console, "warn", (message: string) => warnings.push(message));

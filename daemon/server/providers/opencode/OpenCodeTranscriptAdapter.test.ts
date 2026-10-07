@@ -257,7 +257,7 @@ test("native reasoning streams through SQLite identity and live projection befor
   const active = { threadId: admitted.threadId, turnId: admitted.latestTurnId! };
   const events = new OpenCodeEventController({
     observe: async () => undefined,
-    threads: { observeCompaction: () => {}, currentTurn: () => active,
+    threads: { observeCompaction: () => null, currentTurn: () => active,
       acceptExecutionEvent: () => true, settleExecution: () => undefined, executionIntentVersion: () => 0,
       syncNative: async () => admitted, markExecutionSettled: () => undefined, markExecutionStarted: () => undefined,
       recordUsage: async () => null },

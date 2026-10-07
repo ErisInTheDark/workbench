@@ -4,7 +4,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { OpenCodeEvent } from "@opencode/client";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import {
+  ProjectIdSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+} from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import OpenCodeEventController from "./OpenCodeEventController";
@@ -153,7 +155,7 @@ test("write settlement replaces its live preview on the same canonical item for 
 });
 
 const executionLifecycle = {
-  observeCompaction: () => {},
+  observeCompaction: () => null,
   acceptExecutionEvent: () => true,
   settleExecution: () => undefined,
   executionIntentVersion: () => 0,
@@ -295,11 +297,14 @@ function turn(status: Turn["status"] = "inProgress", id: string = turnId): Turn 
 function compactionHarness() {
   const steps: string[] = [];
   const reports: Parameters<OpenCodeTranscriptAdapter["recordCompaction"]>[0][] = [];
+  const itemId = WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000099");
   const owner = new OpenCodeEventController({
     observe: async () => { assert.fail("Compaction reports cannot change the task lifecycle"); },
     threads: {
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
+      observeCompaction: (_sessionID: string, phase: "started" | "completed" | "failed") => phase === "started"
+        ? { itemId, threadId, turnId } : null,
       syncNative: async () => { steps.push("sync"); return { threadId, latestTurnId: turnId, turn: turn() }; },
     },
     transcript: {
@@ -309,18 +314,18 @@ function compactionHarness() {
       recordCompaction: async report => { steps.push(`report:${report.phase}`); reports.push(report); },
     },
   });
-  return { owner, reports, steps };
+  return { itemId, owner, reports, steps };
 }
 
 test("an OpenCode compaction start adopts its synced message and its end settles before the echo", async () => {
-  const { owner, reports, steps } = compactionHarness();
+  const { itemId, owner, reports, steps } = compactionHarness();
   await owner.accept(event({ type: "session.compaction.started", created: 10,
     data: { sessionID: "session", reason: "manual", recent: "", inputID: "compaction-input" } }));
   await owner.accept(event({ type: "session.compaction.ended", created: 40,
     data: { sessionID: "session", reason: "manual", text: "summary", recent: "" } }));
-  assert.deepEqual(steps, ["sync", "report:started", "report:completed", "sync"]);
+  assert.deepEqual(steps, ["report:started", "sync", "report:completed", "sync"]);
   assert.deepEqual(reports, [
-    { threadId, turnId, phase: "started", observedAt: 10, reference: "compaction-input" },
+    { itemId, threadId, turnId, phase: "started", observedAt: 10, reference: "compaction-input" },
     { threadId, turnId, phase: "completed", observedAt: 40, reference: null },
   ]);
 });

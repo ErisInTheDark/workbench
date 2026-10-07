@@ -680,9 +680,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   observeCompaction(sessionID: string, phase: "started" | "completed" | "failed", reference?: string) {
-    if (phase === "started") this.compactionCompletion.started(sessionID, reference ?? sessionID);
-    else if (phase === "completed") this.compactionCompletion.completed(sessionID);
+    if (phase === "started") return this.compactionCompletion.started(sessionID, reference ?? sessionID);
+    if (phase === "completed") this.compactionCompletion.completed(sessionID);
     else this.compactionCompletion.failed(sessionID, new Error("OpenCode compaction failed."));
+    return null;
   }
 
   async delete(threadId: string) {

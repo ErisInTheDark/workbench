@@ -139,6 +139,7 @@ function createWorkbenchCoreFeature(
   const admission = new WorkbenchThreadAdmissionController();
   const compaction = new WorkbenchThreadCompactionController(admission, {
     record: transcript.record.bind(transcript),
+    setCompacting: (threadId, compacting) => threadState?.controller.setThreadCompactionState(threadId, compacting),
     now: Date.now,
   });
   const autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {

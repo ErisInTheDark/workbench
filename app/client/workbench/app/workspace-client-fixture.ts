@@ -48,8 +48,8 @@ export class WorkspaceTestSocket extends EventTarget {
     });
   }
   reply(request: WorkbenchAppRpcRequest, result: object) { this.deliver({ id: request.id, result }); }
-  fail(request: WorkbenchAppRpcRequest, message: string) {
-    this.deliver({ id: request.id, error: { code: -32000, message } });
+  fail(request: WorkbenchAppRpcRequest, message: string, code = -32000) {
+    this.deliver({ id: request.id, error: { code, message } });
   }
   event(event: WorkbenchAppNetworkEvent) { this.deliver(event); }
   /**

@@ -21,6 +21,7 @@ export default class WorkbenchThreadCompactionController {
     private readonly admission: Pick<WorkbenchThreadAdmissionController, "run">,
     private readonly ports: {
       record: DaemonTranscriptRegistration["record"];
+      setCompacting?(threadId: string, compacting: boolean): void;
       now(): number;
       itemId?(): string;
     },
@@ -50,37 +51,42 @@ export default class WorkbenchThreadCompactionController {
   }
 
   private async execute(threadId: string, provider: CompactionProvider, signal?: AbortSignal) {
-    signal?.throwIfAborted();
-    const turn = await provider.threads.latestTurn(threadId);
-    signal?.throwIfAborted();
-    if (!turn) throw new Error("Compaction requires an existing turn.");
-    const scope = {
-      itemId: WorkbenchItemIdSchema.parse(this.ports.itemId?.() ?? randomUUID()),
-      turnId: WorkbenchTurnIdSchema.parse(turn.id),
-    };
-    const canonicalThreadId = WorkbenchThreadIdSchema.parse(threadId);
-    await this.ports.record([{
-      kind: "contextCompaction",
-      itemId: scope.itemId,
-      threadId: canonicalThreadId,
-      turnId: scope.turnId,
-      phase: "started",
-      observedAt: this.ports.now(),
-      reference: null,
-    }], { source: "workbench" });
+    this.ports.setCompacting?.(threadId, true);
     try {
-      await provider.threads.compact(threadId, { scope, signal });
-    } catch (error) {
+      signal?.throwIfAborted();
+      const turn = await provider.threads.latestTurn(threadId);
+      signal?.throwIfAborted();
+      if (!turn) throw new Error("Compaction requires an existing turn.");
+      const scope = {
+        itemId: WorkbenchItemIdSchema.parse(this.ports.itemId?.() ?? randomUUID()),
+        turnId: WorkbenchTurnIdSchema.parse(turn.id),
+      };
+      const canonicalThreadId = WorkbenchThreadIdSchema.parse(threadId);
       await this.ports.record([{
         kind: "contextCompaction",
         itemId: scope.itemId,
         threadId: canonicalThreadId,
         turnId: scope.turnId,
-        phase: "failed",
+        phase: "started",
         observedAt: this.ports.now(),
         reference: null,
       }], { source: "workbench" });
-      throw error;
+      try {
+        await provider.threads.compact(threadId, { scope, signal });
+      } catch (error) {
+        await this.ports.record([{
+          kind: "contextCompaction",
+          itemId: scope.itemId,
+          threadId: canonicalThreadId,
+          turnId: scope.turnId,
+          phase: "failed",
+          observedAt: this.ports.now(),
+          reference: null,
+        }], { source: "workbench" });
+        throw error;
+      }
+    } finally {
+      this.ports.setCompacting?.(threadId, false);
     }
   }
 }

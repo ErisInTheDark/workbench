@@ -312,6 +312,7 @@ test("a thread row observation publishes only that thread's row from its owner p
   const otherId = WorkbenchThreadIdSchema.parse("00000002-0000-4000-8000-000000000000");
   const entry = (id: typeof threadId, title: string) => ({
     entryKind: "thread" as const, title, activityAt: 10_000, waitingOnThreads: [],
+    compacting: true,
     identity: { harness: "codex" as const, threadId: id },
     metadata: { archived: false as const, pinned: false, snoozed: false },
     lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
@@ -339,6 +340,7 @@ test("a thread row observation publishes only that thread's row from its owner p
   assert.deepEqual(observed, [{ kind: "projectThreads", projectIds: [projectId] }]);
   assert.ok(initial.kind === "threadRow" && initial.phase === "current");
   assert.equal(initial.data?.entry.entryKind === "thread" && initial.data.entry.title, "first");
+  assert.equal(initial.data?.entry && "compacting" in initial.data.entry, false);
   title = "renamed";
   notify();
   const patched = await f.wait(value => value.kind === "threadRow" && value.data?.entry.entryKind === "thread" && value.data.entry.title === "renamed");
@@ -347,6 +349,53 @@ test("a thread row observation publishes only that thread's row from its owner p
   const unknown = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
     query: { kind: "threadRow", threadId: ThreadReferenceSchema.parse("00000003-0000-4000-8000-000000000000") } });
   assert.ok(unknown.kind === "threadRow" && unknown.data === null && unknown.phase === "unavailable");
+});
+
+test("project rows forward v2 compaction and strip it for legacy browsers", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const projectId = ProjectIdSchema.parse("project");
+  const threadId = WorkbenchThreadIdSchema.parse("00000001-0000-4000-8000-000000000000");
+  const observed: object[] = [];
+  const source = {
+    id: daemonId,
+    observe: (query: object) => {
+      observed.push(query);
+      return { getSnapshot: () => ({ phase: "current", failure: null, value: {
+        kind: "projectThreads", projects: [{ projectId, phase: "current", failure: null, sidebar: {
+          projectId, revision: 1, freshness: "fresh", error: null, displayOrder: {}, entries: [{
+            entryKind: "thread" as const, title: "Compacting", activityAt: 10_000, waitingOnThreads: [],
+            compacting: true, identity: { harness: "codex" as const, threadId },
+            metadata: { archived: false as const, pinned: false, snoozed: false },
+            lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false as const },
+          }],
+        } }],
+      } }), release: () => {} };
+    },
+    socket: { onNotification: () => () => {} },
+  };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
+  const workspace = f.workspace.getSnapshot();
+  context.mock.method(f.workspace, "getSnapshot", () => ({
+    ...workspace,
+    observedProjects: [{
+      identityKey: ProjectIdentityKeySchema.parse("local:///repo/project"), registrationFailure: null,
+      locations: [{ location: { daemonId, projectId }, hostname: "remote", project: {
+        id: projectId, kind: "git" as const, name: "project", relativePath: "project",
+        rootPath: "/repo/project", roots: [], lastCommitTimeMs: null,
+      } }],
+    }],
+  }));
+  const projects = [{ kind: "location" as const, location: { daemonId, projectId } }];
+  const current = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "projectThreads", projects, sidebarRowVersion: 2 } });
+  assert.deepEqual(observed[0], { kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2 });
+  assert.equal(current.kind === "projectThreads" && current.data.rows[0]?.entry.entryKind === "thread"
+    ? current.data.rows[0].entry.compacting : null, true);
+  const legacy = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "projectThreads", projects } });
+  assert.deepEqual(observed[1], { kind: "projectThreads", projectIds: [projectId] });
+  assert.equal(legacy.kind === "projectThreads" && legacy.data.rows[0]
+    ? "compacting" in legacy.data.rows[0].entry : null, false);
 });
 
 test("closing a caller stops invalidations and fences its pending state read", async context => {

@@ -263,6 +263,7 @@ export default class WorkbenchThreadStateController {
   private readonly subscribers = new Set<(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void>();
   private readonly projectSubscribers = new Set<(projectId: ProjectId) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
+  private readonly compactingThreadIds = new Set<string>();
 
   private inlineAttachment(url: string) {
     const match = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(url);
@@ -470,6 +471,21 @@ export default class WorkbenchThreadStateController {
     for (const [projectId, state] of this.projects) {
       if (state.entries.has(key)) this.publish(projectId, state);
     }
+  }
+
+  setThreadCompactionState(threadId: string, compacting: boolean) {
+    if (this.compactingThreadIds.has(threadId) === compacting) return;
+    if (compacting) this.compactingThreadIds.add(threadId);
+    else this.compactingThreadIds.delete(threadId);
+    for (const [projectId, state] of this.projects) {
+      if ([...state.entries.values()].some(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId)) {
+        this.publish(projectId, state);
+      }
+    }
+  }
+
+  isThreadCompacting(threadId: string) {
+    return this.compactingThreadIds.has(threadId);
   }
 
   private async handleRequestOwned(_connectionId: string, input: WorkbenchThreadStateRequest | object) {
