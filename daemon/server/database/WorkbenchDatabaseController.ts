@@ -22,6 +22,7 @@ import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-
 import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
 import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import type { WorkbenchFeedbackReadRequest, WorkbenchFeedbackRecord } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
@@ -761,9 +762,9 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.#statsMutation({ type: "recordStatsRateLimits", observation });
   }
 
-  async readStats(request: WorkbenchStatsReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
+  async readStats(request: WorkbenchStatsReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = [], workbenchProjectId: string | null = null) {
     await this.start();
-    const response = await this.#request({ type: "readStats", request, renames, ...(now === undefined ? {} : { now }) });
+    const response = await this.#request({ type: "readStats", request, renames, workbenchProjectId, ...(now === undefined ? {} : { now }) });
     if (response.type !== "statsResult") {
       throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${response.type}`);
     }
@@ -788,6 +789,20 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "readClaimStats", request, renames, ...(now === undefined ? {} : { now }) });
     if (response.type !== "claimStatsResult") throw new WorkbenchDatabaseFailure(`Unexpected claim stats response: ${response.type}`);
+    return response.result;
+  }
+
+  async recordFeedback(entry: WorkbenchFeedbackRecord, now = Date.now()) {
+    await this.start();
+    const response = await this.#request({ type: "recordFeedback", entry, now });
+    if (response.type !== "feedbackRecorded") throw new WorkbenchDatabaseFailure(`Unexpected feedback record response: ${response.type}`);
+    return response.feedbackId;
+  }
+
+  async readFeedback(request: WorkbenchFeedbackReadRequest, now?: number) {
+    await this.start();
+    const response = await this.#request({ type: "readFeedback", request, ...(now === undefined ? {} : { now }) });
+    if (response.type !== "feedbackResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback read response: ${response.type}`);
     return response.result;
   }
 

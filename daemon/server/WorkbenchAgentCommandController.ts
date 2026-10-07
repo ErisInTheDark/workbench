@@ -38,6 +38,8 @@ interface WorkbenchAgentDirectPort {
   executeSocketSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeHeapSnapshot?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeFeedbackStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Human-only project store access; command parsing already rejected managed callers. */
   executeProjectStoreRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -405,6 +407,14 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/stats/claims" && request.body) {
       if (!this.direct.executeClaimStats) throw new Error("Claim statistics are not configured.");
       return await this.direct.executeClaimStats(request.body, signal);
+    }
+    if (request.path === "/internal/stats/feedback" && request.body) {
+      if (!this.direct.executeFeedbackStats) throw new Error("Feedback statistics are not configured.");
+      return await this.direct.executeFeedbackStats(request.body, signal);
+    }
+    if (request.path === "/internal/feedback" && request.body) {
+      if (!this.direct.executeFeedbackSubmit) throw new Error("Agent feedback is not configured.");
+      return await this.direct.executeFeedbackSubmit(request.body, signal);
     }
     if (request.path === "/internal/test/live-scenario" && request.body) {
       if (!this.liveScenarios) throw new Error("Live scenario testing is not configured.");

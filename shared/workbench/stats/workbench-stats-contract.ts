@@ -7,13 +7,14 @@
  * - WorkbenchStatsRangeSchema/WorkbenchStatsRange: bounded selectable stats windows.
  * - STATS_TOKEN_TYPES/StatsTokenType: independently selectable billing categories.
  * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: project-scoped, filtered stats request.
- * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: tokens, priced cost, breakdowns, limits, and claim traffic for one scope.
+ * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: tokens, priced cost, breakdowns, limits, claim traffic, and agent feedback for one scope.
  * - statsRangeShape: shared UTC day/week window boundaries.
  * - statsPeriodShape: a range's buckets narrowed to a selected period.
  */
 import { z } from "zod";
 import { ProviderKeySchema as harness } from "../provider/provider-key.ts";
 import { StatsCacheEfficiencySchema } from "./workbench-stats-cache-contract.ts";
+import { EMPTY_WORKBENCH_STATS_FEEDBACK, WorkbenchStatsFeedbackSchema } from "./workbench-stats-feedback-contract.ts";
 
 const finiteNonNegative = z.number().finite().nonnegative();
 const timestamp = z.number().finite().nonnegative();
@@ -151,6 +152,8 @@ export const WorkbenchStatsResponseSchema = z.object({
     message: boundedText,
     source: z.enum(["capture", "refresh"]),
   }).strict()).max(20),
+  /** Agent friction reports in the selected projects and period; older daemons omit it. */
+  feedback: WorkbenchStatsFeedbackSchema.default(EMPTY_WORKBENCH_STATS_FEEDBACK),
   generatedAt: timestamp,
   historyImport: WorkbenchStatsImportProgressSchema,
   models: z.array(z.object({

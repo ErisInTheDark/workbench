@@ -286,6 +286,21 @@ test("canonical command descriptors are immutable and unique", () => {
   assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
 });
 
+test("cross-project feedback reads need the wb channel and are documented only at the Workbench root", async () => {
+  const outside = { callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench" };
+  const inside = { callerThreadId: "thread", cwd: "C:/workbench", projectRoot: "C:/workbench" };
+  const help = async (context: typeof outside) => {
+    const parsed = await parseWorkbenchAgentCliCommand(["stats", "--help"], context);
+    return parsed.kind === "help" ? parsed.help : "";
+  };
+  assert.equal((await help(outside)).includes("--all-projects"), false);
+  assert.equal((await help(inside)).includes("--all-projects"), true);
+  assert.equal((await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects"], outside)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects", "--channel", "project"], inside)).kind, "error");
+  const parsed = await parseWorkbenchAgentCliCommand(["stats", "feedback", "--all-projects", "--channel", "wb"], outside);
+  assert.equal(parsed.kind === "request" && parsed.request.body?.allProjects, true);
+});
+
 test("token commands restrict managed threads without restricting direct users", async () => {
   const userOutside = { callerThreadId: null, cwd: "C:/other", projectRoot: "C:/workbench" };
   const threadOutside = { callerThreadId: "thread", cwd: "C:/other", projectRoot: "C:/workbench" };

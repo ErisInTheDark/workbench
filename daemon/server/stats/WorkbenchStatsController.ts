@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchStatsControllerOptions: database, harness, rename, and warning ports.
- * - default WorkbenchStatsController: own imports, capture, streamed rename-aware stats observations, account-limit history, refresh, failures, and disposal.
+ * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed rename-aware stats observations, account-limit history, refresh, failures, and disposal.
  */
 import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
@@ -17,6 +17,9 @@ import type WorkbenchClaimRenameController from "./WorkbenchClaimRenameControlle
 import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.ts";
 import WorkbenchStatsObservation, { type WorkbenchStatsInvalidation, type WorkbenchStatsObservationState } from "./WorkbenchStatsObservation.ts";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import type {
+  WorkbenchFeedbackReadRequest, WorkbenchFeedbackReadResponse, WorkbenchFeedbackRecord,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 
 export interface WorkbenchStatsControllerOptions {
   renames?: Pick<WorkbenchClaimRenameController, "read" | "dispose">;
@@ -27,9 +30,11 @@ export interface WorkbenchStatsControllerOptions {
     claimStatsClaimImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsClaimImport"];
     claimStatsUsageImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsUsageImport"];
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
-    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchStatsResponse>;
+    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[], workbenchProjectId?: string | null): Promise<WorkbenchStatsResponse>;
     readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number): Promise<WorkbenchClaimedRoot[]>;
     readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
+    readFeedback(request: WorkbenchFeedbackReadRequest): Promise<WorkbenchFeedbackReadResponse>;
+    recordFeedback(entry: WorkbenchFeedbackRecord): Promise<number>;
     recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
     recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
     repairStatsAttributions: WorkbenchStatsImportControllerOptions["database"]["repairStatsAttributions"];
@@ -42,6 +47,8 @@ export interface WorkbenchStatsControllerOptions {
   };
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   log?(message: string): void;
+  /** The project that owns wb feedback; null means the catalogue lost the Workbench checkout. */
+  resolveWorkbenchProjectId?(): Promise<string | null>;
 }
 
 function rateWindow(candidate: WorkbenchRateLimitWindow | null) {
@@ -173,7 +180,11 @@ export default class WorkbenchStatsController {
   }
 
   private async readSnapshot(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead) {
-    const result = await this.options.database.readStats(request, undefined, history.renames);
+    const workbenchProjectId = this.options.resolveWorkbenchProjectId ? await this.options.resolveWorkbenchProjectId() : null;
+    if (this.options.resolveWorkbenchProjectId && !workbenchProjectId) {
+      this.options.log?.("The Workbench checkout is missing from the project catalogue, so wb agent feedback is hidden.");
+    }
+    const result = await this.options.database.readStats(request, undefined, history.renames, workbenchProjectId);
     return await this.withStatus(result, history);
   }
 
@@ -186,6 +197,19 @@ export default class WorkbenchStatsController {
     const history = await this.readRenames([request.projectId], request.range);
     if (history.failures.length) throw new Error("Committed rename history is unavailable for this claim report.");
     return await this.options.database.readClaimStats(request, undefined, history.renames);
+  }
+
+  /** Agents wait for the write so a failed submission reaches them; open stats views refresh once it lands. */
+  async recordFeedback(entry: WorkbenchFeedbackRecord) {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    const id = await this.options.database.recordFeedback(entry);
+    this.invalidate("usage");
+    return id;
+  }
+
+  async readFeedback(request: WorkbenchFeedbackReadRequest) {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    return await this.options.database.readFeedback(request);
   }
 
   /** Only roots with claims in the window need history, and only after their earliest claim. */

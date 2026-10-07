@@ -11,6 +11,7 @@ import {
   WorkbenchStatsResponseSchema,
   type WorkbenchStatsResponse,
 } from "./workbench-stats-contract.ts";
+import { EMPTY_WORKBENCH_STATS_FEEDBACK } from "./workbench-stats-feedback-contract.ts";
 
 const noCosts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 const noTokens = { all: 0, cachedInput: 0, cacheWriteInput: 0, input: 0, output: 0, uncachedInput: 0 };
@@ -24,6 +25,7 @@ export const EMPTY_WORKBENCH_STATS_RESPONSE: WorkbenchStatsResponse = {
     buckets: [], byTokenType: noCosts, totalUsd: 0, unpricedModels: [],
   },
   failures: [],
+  feedback: EMPTY_WORKBENCH_STATS_FEEDBACK,
   generatedAt: 0,
   historyImport: EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
   models: [],

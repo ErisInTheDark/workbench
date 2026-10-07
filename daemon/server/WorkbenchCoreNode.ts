@@ -3,6 +3,7 @@
  * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
+import path from "node:path";
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -322,6 +323,16 @@ function createWorkbenchCoreFeature(
     harnesses,
     log: (message) => {
       console.warn("[stats]", message.slice(0, 500));
+    },
+    // wb feedback belongs to the project whose root is this daemon's own Workbench checkout.
+    resolveWorkbenchProjectId: async () => {
+      const key = (value: string) => {
+        const resolved = path.resolve(value);
+        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+      };
+      const workbenchRoot = key(context.legacyMigrationProjectRoot);
+      const catalog = await projectCatalog.readCatalog();
+      return catalog.data.find((candidate) => candidate.roots.some((root) => key(root.rootPath) === workbenchRoot))?.id ?? null;
     },
   });
   const threadGit = new WorkbenchThreadGitFeature({

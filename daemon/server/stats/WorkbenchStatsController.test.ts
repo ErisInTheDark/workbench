@@ -1,5 +1,5 @@
 /*
- * No exports. Protect import startup, ordered capture, claimed-root rename reads, account-limit history, partial refresh, failures, and disposal.
+ * No exports. Protect import startup, ordered capture, feedback refresh, claimed-root rename reads, account-limit history, partial refresh, failures, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,9 +9,13 @@ import type {
   WorkbenchStatsReadRequest,
   WorkbenchStatsResponse,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import {
+  EMPTY_WORKBENCH_STATS_FEEDBACK, type WorkbenchFeedbackRecord,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
 import type { WorkbenchClaimRenameScope } from "./WorkbenchClaimRenameController.ts";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type WorkbenchProvider from "../WorkbenchProvider";
 import { WorkbenchAccountLimitsSchema } from "workbench-shared/workbench/provider/provider-account";
 
@@ -52,6 +56,7 @@ function emptyStats(): WorkbenchStatsResponse {
       buckets: [], byTokenType: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, totalUsd: 0, unpricedModels: [],
     },
     failures: [],
+    feedback: EMPTY_WORKBENCH_STATS_FEEDBACK,
     generatedAt: 1,
     historyImport: importProgress,
     models: [],
@@ -74,6 +79,8 @@ function emptyStats(): WorkbenchStatsResponse {
 function importPorts() {
   return {
     readClaimStats: async () => ({ kind: "files" as const, page: 1, pages: 1, rows: [] }),
+    readFeedback: async () => ({ page: 1, pages: 1, rows: [] }),
+    recordFeedback: async () => 1,
     readStatsClaimedRoots: async () => [],
     addStatsClaimDiscoveries: async () => importProgress,
     beginStatsImport: async () => importProgress,
@@ -203,6 +210,48 @@ test("reads include durable import status", async () => {
   });
   try {
     assert.equal((await settled(controller, { projectIds: null, range: "7d" })).historyImport.revision, 42);
+  } finally { await controller.dispose(); }
+});
+
+test("recorded feedback refreshes open observations and failed writes reach the caller", async () => {
+  let reads = 0;
+  let fail = false;
+  const controller = new WorkbenchStatsController({
+    claims,
+    providers: providers(),
+    database: {
+      ...importPorts(),
+      readStats: async () => ({ ...emptyStats(), generatedAt: ++reads }),
+      recordFeedback: async () => {
+        if (fail) throw new Error("disk full");
+        return 7;
+      },
+      recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
+    },
+    harnesses,
+  });
+  const entry: WorkbenchFeedbackRecord = {
+    category: "bug", channel: "wb", harness: "codex", model: null, projectId: testProjectIds.project,
+    reasoningEffort: null, report: "broken", threadId: WorkbenchThreadIdSchema.parse("thread"),
+  };
+  try {
+    const published: number[] = [];
+    let initial!: () => void;
+    let refreshed!: () => void;
+    const ready = new Promise<void>((resolve) => { initial = resolve; });
+    const refresh = new Promise<void>((resolve) => { refreshed = resolve; });
+    const handle = controller.observe({ projectIds: null, range: "7d" }, (state) => {
+      if (state.data && state.claimsPhase !== "pending") published.push(state.data.generatedAt);
+      if (published.length === 1) initial();
+      if (published.length === 2) refreshed();
+    });
+    await ready;
+    assert.equal(await controller.recordFeedback(entry), 7);
+    await refresh;
+    assert.deepEqual(published, [1, 2]);
+    handle.release();
+    fail = true;
+    await assert.rejects(controller.recordFeedback(entry), /disk full/u);
   } finally { await controller.dispose(); }
 });
 

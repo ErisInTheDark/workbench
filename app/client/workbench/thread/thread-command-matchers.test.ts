@@ -185,6 +185,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
+    case "feedback": return { category: "waste", channel: "wb", report: "diff printed lockfile churn" };
     case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
     case "task_set": return { title: "Render typed wb tools" };
     case "task_completed":

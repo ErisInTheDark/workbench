@@ -10,6 +10,9 @@
 import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchClaimedRoot } from "./stats/WorkbenchClaimStatsRepository.ts";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import type {
+  WorkbenchFeedbackReadRequest, WorkbenchFeedbackReadResponse, WorkbenchFeedbackRecord,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchHarness, WorkbenchProjectOption, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchProjectAlias, WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record.ts";
@@ -167,9 +170,11 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "search"; request: WorkbenchSearchRequest }
   | { type: "recordStatsClaimSnapshot"; snapshot: WorkbenchGitClaimSnapshot }
   | { type: "recordStatsRateLimits"; observation: WorkbenchRateLimitObservation }
-  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
+  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[]; workbenchProjectId?: string | null }
   | { type: "readStatsClaimedRoots"; projectIds: readonly string[] | null; range: WorkbenchStatsRange | "all"; now?: number }
   | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
+  | { type: "recordFeedback"; entry: WorkbenchFeedbackRecord; now: number }
+  | { type: "readFeedback"; request: WorkbenchFeedbackReadRequest; now?: number }
   | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
   | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
   | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
@@ -192,7 +197,7 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readThreadStatePinnedImports", "readThreadStateArchiveDeadline", "readThreadStateActivity",
   "readThreadStateSnoozeSources", "readThreadStateArchiveEligible", "readSubagents",
   "readOwnedSubagents",
-  "readStats", "readStatsClaimedRoots", "readClaimStats", "readStatsImportProgress",
+  "readStats", "readStatsClaimedRoots", "readClaimStats", "readStatsImportProgress", "readFeedback",
 ]);
 const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor", "readTranscriptCompactionExecution",
@@ -267,6 +272,8 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "statsResult"; result: WorkbenchStatsResponse }
   | { id: number; type: "statsClaimedRoots"; roots: WorkbenchClaimedRoot[] }
   | { id: number; type: "claimStatsResult"; result: WorkbenchClaimStatsResponse }
+  | { id: number; type: "feedbackRecorded"; feedbackId: number }
+  | { id: number; type: "feedbackResult"; result: WorkbenchFeedbackReadResponse }
   | { id: number; type: "statsUsageImportCandidate"; candidate: WorkbenchStatsUsageImportCandidate | null }
   | { id: number; type: "statsClaimImportCandidate"; candidate: WorkbenchGitClaimImportCandidate | null }
   | { id: number; type: "statsImportProgress"; progress: WorkbenchStatsImportProgress }

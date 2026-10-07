@@ -26,6 +26,7 @@ import WorkbenchTranscriptQueryRepository from "./transcript/WorkbenchTranscript
 import { TranscriptQueryError } from "./transcript/transcript-query-contract.ts";
 import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
 import WorkbenchClaimStatsRepository from "./stats/WorkbenchClaimStatsRepository.ts";
+import WorkbenchFeedbackRepository from "./stats/WorkbenchFeedbackRepository.ts";
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
@@ -481,7 +482,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   }
   if (request.type === "readStats") {
     if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now, request.renames) });
+    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now, request.renames, request.workbenchProjectId ?? null) });
     return;
   }
   if (request.type === "readStatsClaimedRoots") {
@@ -492,6 +493,16 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "readClaimStats") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "claimStatsResult", result: new WorkbenchClaimStatsRepository(database).read(request.request, request.now, request.renames) });
+    return;
+  }
+  if (request.type === "recordFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "feedbackRecorded", feedbackId: new WorkbenchFeedbackRepository(database).record(request.entry, request.now).id });
+    return;
+  }
+  if (request.type === "readFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "feedbackResult", result: new WorkbenchFeedbackRepository(database).read(request.request, request.now) });
     return;
   }
   if (request.type === "beginStatsImport") {

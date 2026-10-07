@@ -39,6 +39,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens",
   "tokens_instructions",
   "tokens_project",
+  "feedback",
   "request_user_input",
   "message",
   "message_wait",
@@ -668,6 +669,10 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.tokens", actionTarget("Counting ", "instruction tokens"), actionTarget("Counted ", "instruction tokens"));
     case "tokens_project":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
+    case "feedback": {
+      const kind = [readString(args.channel), readString(args.category)].filter(Boolean).join(" ") || "agent";
+      return simple("workbench-cli.feedback", actionTarget("Reporting ", `${kind} feedback`), actionTarget("Reported ", `${kind} feedback`));
+    }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));
     case "task_set": {

@@ -121,6 +121,8 @@ export interface WorkbenchAgentCommandDefinition {
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   usage: string;
+  /** Usage shown instead of `usage` to callers at the Workbench repository root, documenting root-only options. */
+  workbenchRootUsage?: string;
   words: readonly string[];
 }
 
@@ -141,6 +143,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpSteerInterruptible?: boolean;
   parseCliArgs(args: string[]): z.input<TSchema>;
   usage: string;
+  workbenchRootUsage?: string;
   words: readonly string[];
 }
 
@@ -172,6 +175,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
     usage: definition.usage,
+    workbenchRootUsage: definition.workbenchRootUsage,
     words: definition.words,
   };
 }

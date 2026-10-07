@@ -315,6 +315,19 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     },
   }),
   CommandMatcher({
+    id: "workbench-cli.feedback",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const tokens = tokenizeCommand(stage.text.trim());
+      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "feedback" || tokens.includes("--help")) return null;
+      const flag = (name: string) => {
+        const index = tokens.indexOf(name);
+        return index >= 0 ? tokens[index + 1] ?? null : null;
+      };
+      return getWorkbenchCommandRendering("feedback", { category: flag("--category"), channel: flag("--channel") })?.result ?? null;
+    },
+  }),
+  CommandMatcher({
     id: "workbench-cli.tokens",
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;

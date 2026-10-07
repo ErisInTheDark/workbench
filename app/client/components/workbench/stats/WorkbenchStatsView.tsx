@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsView: own the statistics scope, range, period, filters, and observations, and compose the usage, limit, cache, and claim panels.
+ * - default WorkbenchStatsView: own the statistics scope, range, period, filters, and observations, and compose the usage, limit, cache, claim, and agent feedback panels.
  */
 import {
   useContext,
@@ -32,6 +32,7 @@ import WorkbenchCacheEfficiency from "./WorkbenchCacheEfficiency";
 import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots";
 import WorkbenchStatsActivity, { type StatsActivityMetric } from "./WorkbenchStatsActivity";
 import WorkbenchStatsBreakdowns from "./WorkbenchStatsBreakdowns";
+import WorkbenchStatsFeedback from "./WorkbenchStatsFeedback";
 import WorkbenchStatsHeadline from "./WorkbenchStatsHeadline";
 import WorkbenchStatsLimits from "./WorkbenchStatsLimits";
 import WorkbenchStatsRangePicker from "./WorkbenchStatsRangePicker";
@@ -223,6 +224,7 @@ export default function WorkbenchStatsView({ onNavigateThread, projects, scope }
           showProjects={showProjects}
           stats={detail.stats}
         />
+        <WorkbenchStatsFeedback projectName={projectName} stats={detail.stats} />
       </div>
     </div>
   );

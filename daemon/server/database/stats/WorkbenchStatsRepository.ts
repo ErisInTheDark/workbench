@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchRateLimitObservation: typed durable rate-limit input.
- * - default WorkbenchStatsRepository: own live claim/rate writes, claimed-root discovery, and bounded SQLite aggregates.
+ * - default WorkbenchStatsRepository: own live claim/rate writes, claimed-root discovery, and bounded SQLite aggregates including agent feedback.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -16,6 +16,7 @@ import { API_PRICING_CATALOG_DATE } from "../../stats/api-pricing.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
 import WorkbenchUsageStatsRepository from "./WorkbenchUsageStatsRepository.ts";
 import WorkbenchClaimStatsRepository, { type WorkbenchClaimedRoot } from "./WorkbenchClaimStatsRepository.ts";
+import WorkbenchFeedbackRepository from "./WorkbenchFeedbackRepository.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 
 interface RateWindowObservation {
@@ -121,12 +122,14 @@ export default class WorkbenchStatsRepository {
     return new WorkbenchClaimStatsRepository(this.database).claimedRoots(this.resolveProjects(projectIds), startedAt, now);
   }
 
-  read(request: WorkbenchStatsReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = []): WorkbenchStatsResponse {
+  read(request: WorkbenchStatsReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = [], workbenchProjectId: string | null = null): WorkbenchStatsResponse {
     request = { ...request, projectIds: this.resolveProjects(request.projectIds) };
     const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
     const period = statsPeriodShape(request.range, request.period ?? null, now);
     const claimHotspots = new WorkbenchClaimStatsRepository(this.database)
       .hotspots(usage.projectIds, period.startedAt, Math.min(now, period.endedAt - 1), renames);
+    // Provider and model filters describe usage, not feedback authors, so feedback follows only scope and period.
+    const feedback = new WorkbenchFeedbackRepository(this.database).summary(usage.projectIds, period.startedAt, period.endedAt, workbenchProjectId);
     // Plan limits are account-wide and current, so they always span the whole range.
     const limitsStartedAt = statsRangeShape(request.range, now).startedAt;
     const rateBucketMs = Math.max(1, Math.ceil((now - limitsStartedAt + 1) / (MAX_RATE_LIMIT_SAMPLES - 1)));
@@ -188,6 +191,7 @@ export default class WorkbenchStatsRepository {
       ...usage,
       claimHotspots,
       failures: [],
+      feedback,
       generatedAt: now,
       historyImport: EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
       pricingCatalogDate: API_PRICING_CATALOG_DATE,

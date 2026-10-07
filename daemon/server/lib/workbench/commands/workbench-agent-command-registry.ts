@@ -23,6 +23,7 @@ import { WORKBENCH_TOKEN_COMMANDS } from "./token-command-definition";
 import { WORKBENCH_TRANSCRIPT_COMMANDS } from "./transcript-command-definitions";
 import { WORKBENCH_TOC_COMMANDS } from "./toc-command-definition";
 import { WORKBENCH_STATS_COMMANDS } from "./stats-command-definitions";
+import { WORKBENCH_FEEDBACK_COMMANDS } from "./feedback-command-definition";
 import { WORKBENCH_STORE_COMMANDS } from "./store-command-definitions";
 import {
   getWorkbenchAgentCommandToolName,
@@ -32,6 +33,7 @@ import {
 const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Object.freeze([
   ...WORKBENCH_TOC_COMMANDS,
   ...WORKBENCH_STATS_COMMANDS,
+  ...WORKBENCH_FEEDBACK_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_FILE_REMOVAL_COMMANDS,
   ...WORKBENCH_SKILL_COMMANDS,

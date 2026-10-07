@@ -18,6 +18,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
+import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandController";
 import WorkbenchFileRemovalController from "./WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
@@ -58,6 +59,28 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const claimStats = new WorkbenchClaimStatsController({
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
       read: async (request) => await stats.readClaims(request),
+    });
+    const feedback = new WorkbenchFeedbackCommandController({
+      resolveCaller: async ({ cwd, harness, threadId }, signal) => {
+        const { identity, binding } = await nativeTarget(threadId, cwd, harness);
+        const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Agent feedback" });
+        signal.throwIfAborted();
+        const callerHarness = WorkbenchHarnessSchema.parse(binding.harness);
+        const profile = await threadState.controller.readComposerProfileTarget({
+          harness: callerHarness, kind: "thread", projectId: project.id, threadId: identity.threadId,
+        });
+        return {
+          harness: callerHarness,
+          model: profile?.settings.model ?? null,
+          projectId: project.id,
+          reasoningEffort: profile?.settings.reasoningEffort ?? null,
+          threadId: identity.threadId,
+        };
+      },
+      resolveProjectId: async (cwd) => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Feedback statistics" })).project.id,
+      projectName: (projectId) => projectCatalog.getCurrentSnapshot().data.find(({ id }) => id === projectId)?.name ?? null,
+      record: async (entry) => await stats.recordFeedback(entry),
+      read: async (request) => await stats.readFeedback(request),
     });
     const transcriptCommands = new WorkbenchTranscriptCommandController({
       projectRoot: context.legacyMigrationProjectRoot,
@@ -187,6 +210,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         );
       },
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
+      executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
+      executeFeedbackStats: async (body, signal) => await feedback.read(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeProjectStoreRequest: async (body, signal) => {
         const request = WorkbenchStoreCommandRequestSchema.parse(body);

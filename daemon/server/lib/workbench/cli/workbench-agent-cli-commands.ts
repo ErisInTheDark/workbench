@@ -87,7 +87,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "toc", "rg", "rm",
   "tokens", "tokens instructions", "tokens project",
   "transcript projects", "transcript threads", "transcript turns", "transcript search", "transcript read", "transcript show", "transcript stats",
-  "stats claims",
+  "stats claims", "stats feedback", "feedback",
   "message", "message wait",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
@@ -126,12 +126,13 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     ].join("\n"),
   },
   {
-    commandOrder: ["stats claims"],
-    key: "stats", usage: "wb stats claims [options]", words: ["stats"],
+    commandOrder: ["stats claims", "stats feedback"],
+    key: "stats", usage: "wb stats <claims|feedback> [options]", words: ["stats"],
     footer: [
-      "Default range: 7d. Pages contain at most 50 rows; increment --page to continue.",
+      "Default range: 7d. Claim pages hold 50 rows, feedback pages 20; increment --page to continue.",
       "Ownership comes from cwd. Unqualified files use its owning root; root:path selects a workspace root.",
-      "Counts mean distinct claiming threads, not claim duration or checkpoint count.",
+      "Claim counts mean distinct claiming threads, not claim duration or checkpoint count.",
+      "Feedback importance weighs the author's model, effort and category; unscored models are missing from the trust registry.",
       "Reads imported SQLite history only; unsupported or unavailable history cannot contribute.",
       "Use wb thread recall --thread <id> to inspect a returned managed thread.",
     ].join("\n"),
@@ -232,13 +233,16 @@ function orderCommands(commands: readonly WorkbenchAgentCommandDefinition[], ord
   const indexes = new Map(order.map((key, index) => [key, index]));
   return [...commands].sort((left, right) => (indexes.get(commandKey(left)) ?? Number.MAX_SAFE_INTEGER) - (indexes.get(commandKey(right)) ?? Number.MAX_SAFE_INTEGER));
 }
+function commandUsage(command: WorkbenchAgentCommandDefinition, isWorkbenchRoot: boolean) {
+  return isWorkbenchRoot && command.workbenchRootUsage ? command.workbenchRootUsage : command.usage;
+}
 function renderRootHelp(commands = listWorkbenchAgentCommands(), isWorkbenchRoot = false) {
   commands = commands.filter((command) => !command.hideFromRootHelp);
   commands = orderCommands(commands, ROOT_HELP_COMMAND_ORDER);
   const helpGroups = HELP_GROUPS.filter((group) => commands.some((command) => command.helpGroups.includes(group.key)));
   return [
     "Usage:", "  wb --help", "  wb <command> [options]", "", "Commands:",
-    ...commands.map((command) => `  ${command.usage}`),
+    ...commands.map((command) => `  ${commandUsage(command, isWorkbenchRoot)}`),
     ...(isWorkbenchRoot ? ["  wb test [--list] [-- [<file>...]]  (local, claims-selected or explicit tests)"] : []), "", "Help commands:",
     ...helpGroups.map((group) => `  wb ${group.words.join(" ")} --help`), "",
     "Project ownership is derived from the current working directory.", "",
@@ -261,11 +265,12 @@ function renderGroupHelp(
   includeUnsafe = false,
   allCommands = listWorkbenchAgentCommands(),
   reloadCatalog: readonly DaemonReloadScopeDescriptor[] = [],
+  isWorkbenchRoot = false,
 ) {
   const commands = orderCommands(allCommands.filter((command) => command.helpGroups.includes(group.key)), group.commandOrder ?? []);
   const commandSection = group.key === "reload" ? renderReloadOptions(reloadCatalog, includeUnsafe) : group.options ?? [
     "Commands:",
-    ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${command.usage}`, `    ${command.description}`]),
+    ...commands.flatMap((command, index) => [...(index ? [""] : []), `  ${commandUsage(command, isWorkbenchRoot)}`, `    ${command.description}`]),
   ].join("\n");
   return [
     "Usage:", `  ${group.usage}`, "", commandSection,
@@ -323,7 +328,7 @@ export async function parseWorkbenchAgentCliCommand(
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(workbenchArgs));
     const visible = commands.filter((command) => isWorkbenchAgentCommandVisibleTo(command, callerHarness));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), visible, reloadCatalog) : renderRootHelp(visible, isWorkbenchRoot), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), visible, reloadCatalog, isWorkbenchRoot) : renderRootHelp(visible, isWorkbenchRoot), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))
