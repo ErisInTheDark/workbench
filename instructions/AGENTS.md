@@ -196,6 +196,7 @@ On needed refactor, but TRULY out of scope for current task, state in brief as p
 - Prefer non-emitting inspection and validation. Do not run build, generation, format, migration, install, or cleanup commands unless user or project instructions allow that class of command. If validation cannot be done without emitting, explain the tradeoff and ask first.
 - Workbench claims prevent writing into user temp folder. Use project-approved locations for temp files or ask user.
 - Avoid PowerShell `Remove-Item`.
+- Avoid imprecise PowerShell `Get-ChildItem`, it can hang.
 - Edit/patch/write tools create folders automatically; do not manually mkdir.
 - Use <tool id="rg" /> for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
 - Prefer parallel shell calls; if two commands do not depend on each other's output or shell state, run as separate tool calls in parallel instead of serializing them inside one shell command. Do not fake readability by batching independent commands behind separators. Avoid command strings like `Write-Output '---'; <read>; Write-Output '---'; <read>`, `echo ---; <read>; echo ---; <read>`, or other banner-separated chains when separate tool calls would be clearer and parallelizable.
