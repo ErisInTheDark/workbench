@@ -14,8 +14,10 @@ import type {
 import {
     WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
     type WorkbenchDaemonGitArcMethod,
+    type WorkbenchDaemonMethod,
     type WorkbenchQuestionnaireRespondRequest,
 } from "workbench-shared/workbench/daemon/workbench-daemon-requests";
+import type { REPO_RUNTIME_READ_METHOD } from "workbench-shared/workbench/repo/virtual-repo-contract";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import { ThreadAutoCompactSettingsPatchSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
@@ -78,33 +80,45 @@ export interface WorkbenchBrowseSessionPort {
   listSessions(params: object): Promise<object>;
 }
 
-const METHODS = new Set([
-  "project/tree/refresh", "project/entry/create", "project/file/delete",
-  "git/working-tree/read", "git/working-tree/summary", "git/working-tree/diff", "git/working-tree/preview", "git/working-tree/mutate",
+/** Typed daemon methods this controller's switch owns; voice and repo runtime stay with the socket controller. */
+type DaemonRequestMethod = Exclude<
+  WorkbenchDaemonMethod,
+  keyof typeof workbenchThreadActions | WorkbenchDaemonGitArcMethod | `voice/${string}` | typeof REPO_RUNTIME_READ_METHOD
+>;
+
+// Typed so adding a method to WorkbenchDaemonRequestMap fails typecheck until it is accepted here.
+const REQUEST_METHODS = {
+  "project/tree/refresh": true, "project/entry/create": true, "project/file/delete": true,
+  "git/working-tree/read": true, "git/working-tree/summary": true, "git/working-tree/diff": true,
+  "git/working-tree/preview": true, "git/working-tree/mutate": true,
+  "models/context/read": true, "models/list": true, "account/limits/read": true,
+  "agents/list": true, "agents/read": true,
+  "browse/sessions/forget": true, "browse/sessions/read": true, "browse/sessions/stop": true,
+  "sandbox-network/read": true, "sandbox-network/update": true,
+  "command-approvals/read": true, "command-approvals/remove": true, "command-approvals/patch": true,
+  "project/store/read": true, "project/store/update": true,
+  "project/discovery-settings/read": true, "project/discovery-settings/update": true,
+  "project/folders/list": true, "project/create": true,
+  "local-capabilities/read": true, "local-capabilities/update": true,
+  "thread-auto-compact/read": true, "thread-auto-compact/update": true,
+  "native/file/link-roots": true, "native/file/open": true, "native/file/reveal": true,
+  "profiles/delete": true, "profiles/read": true, "profiles/target/read": true, "profiles/target/set": true, "profiles/upsert": true,
+  "project/catalog/read": true, "project/file-index/read": true, "project/locations/read": true,
+  "thread/launch": true, "thread/launch/read": true,
+  "thread/presentation/export": true, "thread/presentation/attachment/read": true,
+  "thread/presentation/layout/read": true, "thread/presentation/manifest/read": true,
+  "project/file/read": true, "project/file/reset": true, "project/file/save": true,
+  "questionnaire/respond": true,
+  "search/query": true,
+  "stats/import/start": true, "stats/rate-limits/refresh": true, "stats/feedback/delete": true,
+  "skills/read": true,
+  "thread/identity/resolve": true,
+} as const satisfies Record<DaemonRequestMethod, true>;
+
+const METHODS = new Set<string>([
+  ...Object.keys(REQUEST_METHODS),
   ...Object.keys(workbenchThreadActions),
-  "models/context/read",
-  "models/list", "account/limits/read",
-  "agents/list", "agents/read",
-  "browse/sessions/forget", "browse/sessions/read", "browse/sessions/stop",
-  "sandbox-network/read", "sandbox-network/update",
-  "command-approvals/read", "command-approvals/remove", "command-approvals/patch",
-  "project/store/read", "project/store/update",
-  "project/discovery-settings/read", "project/discovery-settings/update",
-  "project/folders/list", "project/create",
   ...Object.keys(WORKBENCH_GIT_ARC_ACTION_BY_METHOD),
-  "local-capabilities/read", "local-capabilities/update",
-  "thread-auto-compact/read", "thread-auto-compact/update",
-  "native/file/link-roots", "native/file/open", "native/file/reveal",
-  "profiles/delete", "profiles/read", "profiles/target/read", "profiles/target/set", "profiles/upsert",
-  "project/catalog/read", "project/file-index/read", "project/locations/read", "thread/launch", "thread/launch/read",
-  "thread/presentation/export", "thread/presentation/attachment/read", "thread/presentation/layout/read",
-  "thread/presentation/manifest/read",
-  "project/file/read", "project/file/reset", "project/file/save",
-  "questionnaire/respond",
-  "search/query",
-  "stats/import/start", "stats/rate-limits/refresh", "stats/feedback/delete",
-  "skills/read",
-  "thread/identity/resolve",
 ]);
 
 function record(value: unknown) {
@@ -273,7 +287,8 @@ export default class WorkbenchDaemonRequestController {
         return { id, result: await this.executeGitArc(request.method as WorkbenchDaemonGitArcMethod, params) };
       }
       let result: object;
-      switch (request.method) {
+      const method = request.method as DaemonRequestMethod;
+      switch (method) {
         case "project/tree/refresh":
         case "project/entry/create":
         case "project/file/delete": {
@@ -284,7 +299,7 @@ export default class WorkbenchDaemonRequestController {
             "project/file/delete": "workbench/thread-state/project/file/delete",
           } as const;
           const operation = WorkbenchProjectStateRequestSchema.parse({
-            ...params, projectId: project.id, method: methods[request.method],
+            ...params, projectId: project.id, method: methods[method],
           });
           result = await this.owners.projectSnapshot.handleRequest(project.id, operation);
           break;
@@ -329,7 +344,7 @@ export default class WorkbenchDaemonRequestController {
         case "git/working-tree/preview": {
           if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
           const input = WorkingTreeFileRequestSchema.parse(params);
-          result = request.method.endsWith("/diff") ? await this.owners.workingTree.diff(input) : await this.owners.workingTree.preview(input);
+          result = method.endsWith("/diff") ? await this.owners.workingTree.diff(input) : await this.owners.workingTree.preview(input);
           break;
         }
         case "git/working-tree/mutate": {
@@ -343,7 +358,7 @@ export default class WorkbenchDaemonRequestController {
           const key = installedProviderKeys.find(candidate => candidate === params.provider);
           if (!key || !this.owners.providers) throw new InvalidParamsError("The requested provider is unavailable.");
           const provider = this.owners.providers.get(key);
-          if (request.method === "models/list") {
+          if (method === "models/list") {
             const models = await provider.configuration.models.read();
             let used = new Map<string, number>();
             try {
@@ -360,7 +375,7 @@ export default class WorkbenchDaemonRequestController {
                 return time === undefined ? latest : Math.max(latest ?? time, time);
               }, null),
             })) };
-          } else if (request.method === "models/context/read") {
+          } else if (method === "models/context/read") {
             result = { data: await provider.configuration.modelContext.read() };
           } else {
             if (!provider.account) throw new InvalidParamsError("The provider does not report account limits.");
@@ -387,12 +402,12 @@ export default class WorkbenchDaemonRequestController {
         case "command-approvals/patch": {
           const { id: projectId } = await this.owners.projects.resolveProjectById(requiredString(params, "projectId"));
           if (!this.owners.commandApprovals) throw new Error("Command approvals are unavailable.");
-          if (request.method === "command-approvals/remove") {
+          if (method === "command-approvals/remove") {
             const parsed = CommandApprovalRemoveSchema.safeParse({ ...params, projectId });
             if (!parsed.success) throw new InvalidParamsError("Invalid command approval removal.");
             await this.owners.commandApprovals.remove(projectId, parsed.data.id);
           }
-          if (request.method === "command-approvals/patch") {
+          if (method === "command-approvals/patch") {
             const parsed = CommandApprovalPatchSchema.safeParse({ ...params, projectId });
             if (!parsed.success) throw new InvalidParamsError("Invalid command approval patch.");
             result = { rules: await this.owners.commandApprovals.patch(
@@ -406,7 +421,7 @@ export default class WorkbenchDaemonRequestController {
         case "project/store/read":
         case "project/store/update": {
           if (!this.owners.projectStore) throw new Error("The project store is unavailable.");
-          if (request.method === "project/store/read") {
+          if (method === "project/store/read") {
             const parsed = ProjectStoreReadRequestSchema.safeParse(params);
             if (!parsed.success) throw new InvalidParamsError("A project ID is required for project store reads.");
             result = await this.owners.projectStore.read(parsed.data.projectId);
@@ -611,10 +626,13 @@ export default class WorkbenchDaemonRequestController {
           if (!this.browse) throw new Error("Browse session management is reloading.");
           result = await this.browse.controlSession({
             ...params,
-            action: request.method.endsWith("/forget") ? "forget" : "stop",
+            action: method.endsWith("/forget") ? "forget" : "stop",
           });
           break;
-        default: return { id, error: { code: -32601, message: "Daemon method not found." } };
+        default:
+          // Compile-time exhaustiveness; untyped wire methods still reach the runtime error.
+          method satisfies never;
+          return { id, error: { code: -32601, message: "Daemon method not found." } };
       }
       return { id, result };
     } catch (error) {

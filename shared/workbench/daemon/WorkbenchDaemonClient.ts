@@ -78,7 +78,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   if (method in WORKBENCH_GIT_ARC_RESULT_SCHEMAS) {
     return WORKBENCH_GIT_ARC_RESULT_SCHEMAS[method as WorkbenchDaemonGitArcMethod];
   }
-  switch (method) {
+  const switched = method as Exclude<WorkbenchDaemonMethod, keyof typeof workbenchThreadActions | WorkbenchDaemonGitArcMethod>;
+  switch (switched) {
     case "voice/configuration/read": return VoiceConfigurationSchema;
     case "voice/agents": return z.object({ data: z.array(z.object({
       name: z.string(), path: z.string(), description: z.string(), source: z.literal("library"), sourceLabel: z.string(),
@@ -160,7 +161,10 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     }).passthrough()) }).passthrough();
     case "profiles/target/read": return z.object({ selection: WorkbenchComposerProfileSelectionSchema.nullable() }).strict();
     case "profiles/target/set": return z.object({ ok: z.literal(true) }).strict();
-    default: throw new Error(`No response schema is registered for ${method}.`);
+    default:
+      // Compile-time exhaustiveness: every WorkbenchDaemonRequestMap method needs a response schema.
+      switched satisfies never;
+      throw new Error(`No response schema is registered for ${method}.`);
   }
 }
 
