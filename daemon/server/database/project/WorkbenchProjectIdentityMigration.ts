@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectIdentityMigration: convert project owners and consolidate proven empty split owners before serving.
+ * - default WorkbenchProjectIdentityMigration: convert project owners, restore fixed-id projects and consolidate proven empty split owners before serving.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -14,8 +14,10 @@ import type { UsageSchemaRows } from "workbench-shared/workbench/database/schema
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
 import WorkbenchSearchRepository from "../search/WorkbenchSearchRepository.ts";
 import type { WorkbenchProjectDiscovery } from "./workbench-project-persistence.ts";
+import { FIXED_PROJECT_IDS } from "./WorkbenchProjectRepository.ts";
 
 const uuid = z.string().uuid();
+const isLegacy = (project: ProjectSchemaRows["projects"]) => !FIXED_PROJECT_IDS.has(project.id) && !uuid.safeParse(project.id).success;
 const shadowTables = new Set([
   "workbench_project_roots", "workbench_project_aliases", "git_claim_thread_file_days",
   "git_claim_imports", "workbench_sidebar_project_layouts", "workbench_sidebar_pinned_imports",
@@ -44,7 +46,7 @@ export default class WorkbenchProjectIdentityMigration {
 
   async run(discovery?: WorkbenchProjectDiscovery, beforeConversion?: (backupPath: string) => Promise<void> | void) {
     const projects = this.database.prepare("SELECT * FROM workbench_projects").all() as ProjectSchemaRows["projects"][];
-    const needsConversion = projects.some(project => project.id !== "workbench-library" && !uuid.safeParse(project.id).success);
+    const needsConversion = projects.some(isLegacy) || this.findFixedRepairs(projects).length > 0;
     if (!needsConversion && (!discovery?.complete || !this.findEmptySplits(projects, discovery).length)) return;
     if (!this.database.memory) {
       const backupPath = await preserveWorkbenchDatabaseBackup(this.database, path.join(path.dirname(this.database.name), "backups", path.basename(this.database.name)));
@@ -58,20 +60,24 @@ export default class WorkbenchProjectIdentityMigration {
       // Backup/checkpoint admission yields. Re-read ownership under the write
       // transaction so newly populated shadow state cannot be discarded.
       const current = this.database.prepare("SELECT * FROM workbench_projects").all() as ProjectSchemaRows["projects"][];
-      const legacy = current.filter(project => project.id !== "workbench-library" && !uuid.safeParse(project.id).success);
+      const legacy = current.filter(isLegacy);
       const merges = discovery?.complete ? this.findEmptySplits(current, discovery) : [];
+      const repairs = this.findFixedRepairs(current);
       for (const merge of merges) this.mergeShadow(merge.source, merge.destination);
       for (const merge of merges) this.database.prepare("UPDATE workbench_projects SET identity_key = ? WHERE id = ?").run(merge.identityKey, merge.destination);
       const search = new WorkbenchSearchRepository(this.database);
+      for (const repair of repairs) {
+        // The converted row owns the real state; a recreated fixed row is an empty catalogue shell.
+        if (repair.fixedExists) this.mergeShadow(repair.fixedId, repair.source);
+        this.database.prepare("DELETE FROM workbench_project_aliases WHERE alias = ?").run(repair.fixedId);
+        this.rekey(search, repair.source, repair.fixedId);
+        this.database.prepare(`INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)
+          ON CONFLICT(alias) DO UPDATE SET project_id = excluded.project_id`).run(repair.source, repair.fixedId);
+      }
       for (const project of legacy) {
         if (!this.database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(project.id)) continue;
         const id = randomUUID();
-        search.rekeyProject(project.id, id);
-        for (const reference of this.projectReferences()) {
-          if (reference.table === "workbench_search_documents") continue;
-          this.database.prepare(`UPDATE "${reference.table}" SET "${reference.column}" = ? WHERE "${reference.column}" = ?`).run(id, project.id);
-        }
-        this.database.prepare("UPDATE workbench_projects SET id = ? WHERE id = ?").run(id, project.id);
+        this.rekey(search, project.id, id);
         this.database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?)").run(project.id, id);
       }
       // Git owners supply reliable pre-refresh root evidence. Workspace evidence is
@@ -80,10 +86,39 @@ export default class WorkbenchProjectIdentityMigration {
         SELECT identity_key FROM workbench_projects WHERE id = project_id AND kind = 'git'
       ) WHERE identity_key IS NULL AND project_id IN (SELECT id FROM workbench_projects WHERE kind = 'git')`).run();
       if ((this.database.pragma("foreign_key_check") as object[]).length) throw new Error("Project conversion left invalid ownership.");
-      return { converted: legacy.length - merges.filter(merge => legacy.some(project => project.id === merge.source)).length, consolidated: merges.length };
+      return {
+        converted: legacy.length - merges.filter(merge => legacy.some(project => project.id === merge.source)).length,
+        consolidated: merges.length, repaired: repairs.length,
+      };
     }).immediate();
     if (!this.database.memory) console.info(formatDatabaseLog("project conversion", "ok",
-      `${label}, ${counts.converted} converted, ${counts.consolidated} consolidated`, performance.now() - startedAt));
+      `${label}, ${counts.converted} converted, ${counts.consolidated} consolidated, ${counts.repaired} repaired`, performance.now() - startedAt));
+  }
+
+  /** Moves every owning reference, search document and the project row itself to a new id. */
+  private rekey(search: WorkbenchSearchRepository, from: string, to: string) {
+    search.rekeyProject(from, to);
+    for (const reference of this.projectReferences()) {
+      if (reference.table === "workbench_search_documents") continue;
+      this.database.prepare(`UPDATE "${reference.table}" SET "${reference.column}" = ? WHERE "${reference.column}" = ?`).run(to, from);
+    }
+    this.database.prepare("UPDATE workbench_projects SET id = ? WHERE id = ?").run(to, from);
+  }
+
+  /** Earlier conversions renamed fixed-id projects to uuids; find each one that can return to its fixed id. */
+  private findFixedRepairs(projects: ProjectSchemaRows["projects"][]) {
+    const repairs: Array<{ source: string; fixedId: string; fixedExists: boolean }> = [];
+    for (const fixedId of FIXED_PROJECT_IDS) {
+      const converted = projects.filter(project => project.kind === fixedId && project.id !== fixedId);
+      if (!converted.length) continue;
+      const fixedExists = projects.some(project => project.id === fixedId);
+      if (converted.length > 1 || (fixedExists && this.hasIndependentState(fixedId))) {
+        console.warn("[projects] fixed project repair found independent owners; retained both projects");
+        continue;
+      }
+      repairs.push({ source: converted[0]!.id, fixedId, fixedExists });
+    }
+    return repairs;
   }
 
   private roots(id: string) {

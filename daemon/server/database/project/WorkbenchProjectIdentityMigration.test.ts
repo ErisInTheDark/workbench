@@ -164,6 +164,53 @@ test("state added while the backup is retained prevents destructive split consol
   }
 });
 
+function fixedProjectFixture() {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const insertDaemonProject = (id: string) => {
+    database.prepare(`INSERT INTO workbench_projects(id, identity_key, kind, name, relative_path, icon_source_key)
+      VALUES (?, 'daemon', 'daemon', 'daemon', 'daemon', 'generation')`).run(id);
+    database.prepare(`INSERT INTO workbench_project_roots(project_id, root_id, root_index, name, relative_path, root_path, identity_key)
+      VALUES (?, 'daemon', 0, 'daemon', 'daemon', 'C:/daemon', 'daemon')`).run(id);
+  };
+  return { database, insertDaemonProject };
+}
+
+test("fixed project ids survive repeated conversion", async () => {
+  const { database, insertDaemonProject } = fixedProjectFixture();
+  try {
+    insertDaemonProject("daemon");
+    const migration = new WorkbenchProjectIdentityMigration(database);
+    await migration.run();
+    await migration.run();
+    assert.deepEqual(database.prepare("SELECT id FROM workbench_projects").pluck().all(), ["daemon"]);
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_project_aliases").pluck().get(), 0);
+  } finally { database.close(); }
+});
+
+test("a mistakenly converted fixed project is restored to its fixed id with its threads", async () => {
+  const { database, insertDaemonProject } = fixedProjectFixture();
+  try {
+    const converted = "3e909d14-071b-467d-877a-0000000000d0";
+    insertDaemonProject(converted);
+    insertDaemonProject("daemon");
+    database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES ('daemon', ?)").run(converted);
+    database.prepare(`INSERT INTO workbench_threads(id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES ('thread', ?, 'C:/daemon', 'daemon work', 3, 1, 2, 3)`).run(converted);
+    const migration = new WorkbenchProjectIdentityMigration(database);
+    await migration.run();
+    assert.deepEqual(database.prepare("SELECT id FROM workbench_projects").pluck().all(), ["daemon"]);
+    assert.equal(database.prepare("SELECT project_id FROM workbench_threads").pluck().get(), "daemon");
+    assert.equal(database.prepare("SELECT count(*) FROM workbench_project_aliases WHERE alias = 'daemon'").pluck().get(), 0);
+    assert.equal(new WorkbenchProjectRepository(database).requireStoredReference(converted), "daemon");
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+    const before = database.serialize();
+    await migration.run();
+    assert.deepEqual(database.serialize(), before);
+  } finally { database.close(); }
+});
+
 test("reconciliation failure rolls back split consolidation and all owning references", async () => {
   const { database, discovery, receipt } = fixture();
   try {

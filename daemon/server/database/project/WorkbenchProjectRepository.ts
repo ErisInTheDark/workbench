@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchProjectRepository: own project parents, aliases, catalogue reconciliation, and icon settlement.
+ * - FIXED_PROJECT_IDS: kinds catalogued under a fixed id equal to the kind, exempt from uuid conversion.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -15,7 +16,7 @@ import type { WorkbenchProjectAlias, WorkbenchProjectCandidate, WorkbenchProject
 
 const uuid = z.string().uuid();
 /** Kinds catalogued once per daemon under a fixed id equal to the kind, outside every discovery folder. */
-const FIXED_PROJECT_IDS: ReadonlySet<string> = new Set(["workbench-library", "daemon"]);
+export const FIXED_PROJECT_IDS: ReadonlySet<string> = new Set(["workbench-library", "daemon"]);
 
 export default class WorkbenchProjectRepository {
   constructor(private readonly database: Database.Database) {}
