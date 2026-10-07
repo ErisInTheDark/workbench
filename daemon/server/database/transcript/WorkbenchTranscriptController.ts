@@ -2,10 +2,16 @@
  * Exports:
  * - WorkbenchTranscriptItemActivity: one committed admission of new thread items.
  * - WorkbenchTranscriptTurnEvent: one thread turn named by a committed observation.
- * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity, settled-thread, turn-start, held-steer and live compaction publication, and disposal.
+ * - WorkbenchTranscriptAgentMessageDelivery: one agent message that reached its recipient's model.
+ * - default WorkbenchTranscriptController: own readiness, recording, recovery, reads, subscriptions, item-activity, settled-thread, turn-start, held-steer, agent-message delivery and live compaction publication, and disposal.
  */
 import { logError } from "../../process-helpers.ts";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import {
+  readWorkbenchAgentMessageInput,
+  readWorkbenchAgentMessageItem,
+  type WorkbenchAgentMessage,
+} from "workbench-shared/workbench/thread/thread-agent-message";
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptureGapController.ts";
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
@@ -93,6 +99,24 @@ function reportListenerFailure(scope: string) {
 const reportCompactionFailure = reportListenerFailure("workbench-transcript-compaction");
 const reportTurnStartFailure = reportListenerFailure("workbench-transcript-turn-start");
 const reportHeldSteerFailure = reportListenerFailure("workbench-transcript-held-steer");
+const reportAgentMessageDeliveryFailure = reportListenerFailure("workbench-transcript-agent-message-delivery");
+
+export interface WorkbenchTranscriptAgentMessageDelivery {
+  threadId: WorkbenchThreadId;
+  message: WorkbenchAgentMessage;
+}
+
+/** Codex delivers agent messages as completed tool-output items; Claude and OpenCode as sent steers or turn input. */
+function readDeliveredAgentMessage(observation: WorkbenchTranscriptObservation): WorkbenchTranscriptAgentMessageDelivery | null {
+  if (observation.kind === "steer") {
+    const message = observation.entry.status === "sent" ? readWorkbenchAgentMessageInput(observation.entry.input) : null;
+    return message ? { threadId: observation.entry.threadId, message } : null;
+  }
+  if (observation.kind !== "item" || observation.lifecycle !== "completed") return null;
+  const { item } = observation;
+  const message = item.type === "userMessage" || item.type === "functionCallOutput" ? readWorkbenchAgentMessageItem(item) : null;
+  return message ? { threadId: observation.threadId, message } : null;
+}
 
 /** Listener failure must never relabel a successful durable commit as a capture gap. */
 function notifyListeners<Event>(listeners: ReadonlySet<(event: Event) => Promise<void> | void>, event: Event, report: (error: unknown) => void) {
@@ -175,6 +199,7 @@ export default class WorkbenchTranscriptController {
   ) => Promise<void> | void>();
   readonly #turnStartListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
   readonly #heldSteerListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
+  readonly #agentMessageDeliveryListeners = new Set<(event: WorkbenchTranscriptAgentMessageDelivery) => Promise<void> | void>();
   readonly #settledListeners = new Set<(threadIds: readonly string[]) => void>();
   #disposed = false;
 
@@ -298,8 +323,11 @@ export default class WorkbenchTranscriptController {
     this.#publishSettlement(settlement, observations, context.source);
     this.#publishSettled(settlement.changedThreadIds);
     this.#publishContextCompactions(settlement);
-    // Compatibility imports replay history; their turns and steers are not live news.
-    if (context.source !== "compatibility") this.#publishTurnEvents(observations);
+    // Compatibility imports replay history; their turns, steers and deliveries are not live news.
+    if (context.source !== "compatibility") {
+      this.#publishTurnEvents(observations);
+      this.#publishAgentMessageDeliveries(observations);
+    }
     return settlement;
   }
 
@@ -330,6 +358,12 @@ export default class WorkbenchTranscriptController {
   subscribeHeldSteers(listener: (event: WorkbenchTranscriptTurnEvent) => Promise<void> | void) {
     this.#heldSteerListeners.add(listener);
     return () => { this.#heldSteerListeners.delete(listener); };
+  }
+
+  /** Observe live agent messages reaching their recipient's model, after commit; recovery replays never fire. */
+  subscribeAgentMessageDelivery(listener: (event: WorkbenchTranscriptAgentMessageDelivery) => Promise<void> | void) {
+    this.#agentMessageDeliveryListeners.add(listener);
+    return () => { this.#agentMessageDeliveryListeners.delete(listener); };
   }
 
   /** Observe which threads each commit actually changed, from every source including recovery. */
@@ -384,6 +418,14 @@ export default class WorkbenchTranscriptController {
           threadId: observation.entry.threadId, turnId: observation.entry.turnId,
         }, reportHeldSteerFailure);
       }
+    }
+  }
+
+  #publishAgentMessageDeliveries(observations: readonly WorkbenchTranscriptObservation[]) {
+    if (this.#disposed) return;
+    for (const observation of observations) {
+      const delivery = readDeliveredAgentMessage(observation);
+      if (delivery) notifyListeners(this.#agentMessageDeliveryListeners, delivery, reportAgentMessageDeliveryFailure);
     }
   }
 

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits, questionnaire settlement, and reload drain.
+ * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits and their undelivered mail, questionnaire settlement, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -76,6 +76,8 @@ export default class WorkbenchThreadMessageController {
   captureReloadState() { return this.waits.captureReloadState(); }
 
   receive(threadId: string, message: WorkbenchAgentMessage) { this.waits.receive(threadId, message); }
+
+  delivered(threadId: string, message: WorkbenchAgentMessage) { this.waits.delivered(threadId, message); }
 
   async wait(value: object, signal: AbortSignal, invocationSignal = signal) {
     const request = WorkbenchMessageWaitRequestSchema.parse(value);

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transcript readiness, durable recording, per-thread gaps, recovery, subscriptions, live compaction publication, and disposal.
+ * No production exports. Tests protect transcript readiness, durable recording, per-thread gaps, recovery, subscriptions, live compaction and agent-message delivery publication, and disposal.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -16,6 +16,7 @@ import type {
 } from "./workbench-transcript-types.ts";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { TranscriptPatchUpdate, TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import { createThreadStateTestDatabase } from "../../workbench-thread-state-test-database";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository";
@@ -792,6 +793,38 @@ test("only live completed context compactions notify compaction listeners", asyn
     // Recovery replays history; it must not re-send skills for an old compaction.
     await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
     assert.deepEqual(received, [{ threadId, turnId, usage: null }]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+test("delivered agent messages notify delivery listeners, but held steers and compatibility imports do not", async () => {
+  const { owner, threadId, turnId } = await createListenerFixture("5");
+  const agentMessage = { message: "GO", senderName: "parent agent", senderThreadId: "parent" };
+  const text = createWorkbenchAgentMessageText(agentMessage);
+  const steer = (entryKey: string, status: "pending" | "sent"): WorkbenchTranscriptObservation => ({
+    kind: "steer", observedAt: 5,
+    entry: {
+      threadId, turnId, itemId: entryKey, entryKey, status, attemptedAt: 5,
+      resolvedAt: status === "sent" ? 6 : null, requestId: null, canonicalItemId: null,
+      clientUserMessageId: null, dispatchSequence: null, error: null,
+      input: [{ type: "text", text, text_elements: [] }],
+    },
+  });
+  const toolOutput = (id: string): WorkbenchTranscriptObservation => ({
+    kind: "item", threadId, turnId, lifecycle: "completed", observedAt: 7,
+    item: { id, type: "functionCallOutput", ...createWorkbenchAgentMessageOutput(agentMessage) },
+  });
+  const delivered: unknown[] = [];
+  owner.subscribeAgentMessageDelivery(event => { delivered.push(event); });
+  try {
+    await owner.record([steer("held", "pending")], { source: "workbench" });
+    assert.deepEqual(delivered, []);
+    await owner.record([steer("held", "sent")], { source: "workbench" });
+    await owner.record([toolOutput("codex-delivery")], { source: "provider" });
+    assert.deepEqual(delivered, [{ threadId, message: agentMessage }, { threadId, message: agentMessage }]);
+    await owner.record([toolOutput("imported-delivery")], { source: "compatibility" });
+    assert.equal(delivered.length, 2);
   } finally {
     owner.dispose();
   }

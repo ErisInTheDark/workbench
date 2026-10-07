@@ -1,3 +1,4 @@
 - Workbench MCP long waits survive scoped reloads without surfacing reload errors. Retiring success wins; otherwise the same request resumes in the current command generation.
 - Caller/tool cancellation, declared steer or dismissal rules, and full-process shutdown remain terminal.
+- Message waits return a selected sender's undelivered message even if it was admitted before the wait attached. Another sender's message admitted while they wait interrupts them.
 - `request_user_input` also survives user steers and turns ending due to process interruption virtually.

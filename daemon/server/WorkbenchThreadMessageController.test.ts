@@ -56,7 +56,7 @@ test("message waits resolve sender names and native aliases without imposing the
     const senderThreadId = targets.names?.[0] === "luna" ? "child" : "target";
     const reply = { senderThreadId, senderName: "sender", message: "canonical reply" };
     controller.receive("reviewer", reply);
-    assert.deepEqual(await waited, reply);
+    assert.deepEqual(await waited, { kind: "message", message: reply });
     await controller.dispose();
   }
 });

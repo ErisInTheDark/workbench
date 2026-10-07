@@ -1,5 +1,5 @@
 /*
- * Exports: none. Protect message sender/recipient filtering, first-match delivery, independent waits, cancellation, and reload continuity.
+ * Exports: none. Protect message sender/recipient filtering, undelivered-mail pickup, interruption by other senders, independent waits, cancellation, and reload continuity.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -14,17 +14,51 @@ const input = (waitId: string, caller = "caller", senders = ["first", "second"])
   waitId, callerThreadId: id(caller), senderThreadIds: senders.map(sender => id(sender)),
 });
 const message = (senderThreadId: string, text = "reply") => ({ senderThreadId, senderName: "luna", message: text });
+const received = (senderThreadId: string, text = "reply") => ({ kind: "message", message: message(senderThreadId, text) });
 
-test("message waits ignore earlier messages and other recipients or senders, and retain the first matching reply", async () => {
+test("message waits ignore delivered earlier messages and other recipients, and retain the first matching reply", async () => {
   const owner = new WorkbenchMessageWaitController();
   const signal = new AbortController().signal;
   owner.receive("caller", message("first", "before arming"));
+  owner.delivered("caller", message("first", "  before arming "));
   const waited = owner.wait(input("wait"), signal);
   owner.receive("other-caller", message("first", "wrong recipient"));
-  owner.receive("caller", message("unselected", "wrong sender"));
   owner.receive("caller", message("second", "first matching reply"));
   owner.receive("caller", message("first", "later matching reply"));
-  assert.deepEqual(await waited, message("second", "first matching reply"));
+  assert.deepEqual(await waited, received("second", "first matching reply"));
+  owner.dispose();
+});
+
+test("a selected sender's undelivered message admitted before the wait attaches is returned once", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  const signal = new AbortController().signal;
+  owner.receive("caller", message("second", "sent while the caller was still reasoning"));
+  const waited = owner.wait(input("early"), signal);
+  owner.receive("caller", message("first", "later reply"));
+  assert.deepEqual(await waited, received("second", "sent while the caller was still reasoning"));
+  // The later reply arrived with no wait attached, so the next wait picks it up instead of the consumed one.
+  assert.deepEqual(await owner.wait(input("next"), signal), received("first", "later reply"));
+  owner.dispose();
+});
+
+test("another sender's message interrupts a live wait and stays undelivered mail", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  const signal = new AbortController().signal;
+  const waited = owner.wait(input("narrow", "caller", ["first"]), signal);
+  owner.receive("caller", message("unselected", "unrelated news"));
+  owner.receive("caller", message("first", "selected reply"));
+  assert.deepEqual(await waited, { kind: "interrupted" });
+  assert.deepEqual(await owner.wait(input("broad", "caller", ["unselected"]), signal), received("unselected", "unrelated news"));
+  owner.dispose();
+});
+
+test("existing undelivered mail from other senders never interrupts a new wait", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  const signal = new AbortController().signal;
+  owner.receive("caller", message("unselected", "already pending"));
+  const waited = owner.wait(input("narrow", "caller", ["first"]), signal);
+  owner.receive("caller", message("first", "selected reply"));
+  assert.deepEqual(await waited, received("first", "selected reply"));
   owner.dispose();
 });
 
@@ -32,13 +66,13 @@ test("simultaneous waits observe messages independently without consuming delive
   const owner = new WorkbenchMessageWaitController();
   const signal = new AbortController().signal;
   const first = owner.wait(input("one", "caller", ["first"]), signal);
-  const second = owner.wait(input("two", "caller", ["second"]), signal);
   const overlapping = owner.wait(input("three", "caller", ["first", "second"]), signal);
   owner.receive("caller", message("first"));
-  assert.deepEqual(await first, message("first"));
-  assert.deepEqual(await overlapping, message("first"));
+  assert.deepEqual(await first, received("first"));
+  assert.deepEqual(await overlapping, received("first"));
+  const second = owner.wait(input("two", "caller", ["second"]), signal);
   owner.receive("caller", message("second"));
-  assert.deepEqual(await second, message("second"));
+  assert.deepEqual(await second, received("second"));
   owner.dispose();
 });
 
@@ -67,9 +101,20 @@ test("reload re-entry retains original senders and a reply admitted between atta
   owner.dispose();
   successor.receive("caller", message("second", "during reload"));
   assert.deepEqual(await successor.wait(input("reload", "caller", ["changed-name-target"]),
-    new AbortController().signal, caller.signal), message("second", "during reload"));
+    new AbortController().signal, caller.signal), received("second", "during reload"));
   assert.equal(successor.hasWait("reload"), false);
   caller.abort();
+  successor.dispose();
+});
+
+test("undelivered mail survives a reload handoff", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  owner.receive("caller", message("first", "before reload"));
+  const successor = new WorkbenchMessageWaitController(owner.captureReloadState());
+  owner.dispose();
+  const waited = successor.wait(input("after-reload"), new AbortController().signal);
+  successor.receive("caller", message("second", "after reload"));
+  assert.deepEqual(await waited, received("first", "before reload"));
   successor.dispose();
 });
 
@@ -95,17 +140,20 @@ test("message waits survive real command-generation replacement and finish their
   const reentered = Promise.withResolvers<void>();
   const caller = new AbortController();
   const request: WorkbenchAgentCommandRequest = { method: "POST", path: "/api/message/wait", responseKind: "native" };
+  const text = (outcome: Awaited<ReturnType<WorkbenchMessageWaitController["wait"]>>) => (
+    outcome.kind === "message" ? outcome.message.message : "interrupted"
+  );
   registry.activateCommandExecutor({}, async (command, signal) => {
     const waited = owner.wait(input("reentry"), signal, command.lifetimeSignal);
     armed.resolve();
-    return new Response((await waited).message);
+    return new Response(text(await waited));
   });
   const result = registry.executeCommand(request, caller.signal);
   await armed.promise;
   registry.activateCommandExecutor({}, async (command, signal) => {
     const waited = successor.wait(input("reentry"), signal, command.lifetimeSignal);
     reentered.resolve();
-    return new Response((await waited).message);
+    return new Response(text(await waited));
   });
   await reentered.promise;
   successor.receive("caller", message("first", "replacement reply"));

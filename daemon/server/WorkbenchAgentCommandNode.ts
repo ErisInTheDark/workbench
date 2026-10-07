@@ -146,8 +146,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     });
     const agentCommand = new WorkbenchAgentCommandController(context.localDaemonOrigin, {
       executeMessageWaitRequest: async (body, signal, lifetimeSignal) => {
-        const message = await messages.wait(body, signal, lifetimeSignal);
-        return new Response(`Agent message from ${message.senderName} (${message.senderThreadId})\n\n${message.message}\n`, {
+        const outcome = await messages.wait(body, signal, lifetimeSignal);
+        const text = outcome.kind === "message"
+          ? `Agent message from ${outcome.message.senderName} (${outcome.message.senderThreadId})\n\n${outcome.message.message}\n`
+          : "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.\n";
+        return new Response(text, {
           headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
         });
       },

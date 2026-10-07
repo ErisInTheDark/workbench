@@ -105,7 +105,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeSettled">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -594,6 +594,10 @@ function createWorkbenchCoreFeature(
     await turnSettlement.settleSuperseded(threadId, turnId);
     if (lease.isCurrent()) await threadActions.resendUndeliveredAgentMessages(threadId, turnId);
   });
+  // Message waits keep admitted mail until its recipient's model sees it.
+  const unsubscribeAgentMessageDelivery = transcript.subscribeAgentMessageDelivery?.(({ threadId, message }) => {
+    if (lease.isCurrent()) messages.delivered(threadId, message);
+  }) ?? (() => undefined);
   const unsubscribeAutoCompactSettled = transcript.subscribeSettled(threadIds => {
     if (lease.isCurrent()) void autoCompact.refreshObserved(threadIds);
   });
@@ -742,6 +746,7 @@ function createWorkbenchCoreFeature(
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
+      unsubscribeAgentMessageDelivery();
       unfinishedTurns.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();

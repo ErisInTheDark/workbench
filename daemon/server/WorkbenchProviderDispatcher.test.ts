@@ -29,7 +29,7 @@ const compaction = {
   }),
 };
 
-test("accepted agent messages match their sender without interrupting message waits, while user steers still interrupt", async () => {
+test("accepted agent messages wake matching message waits and end others without registry cancellation, while user steers still cancel", async () => {
   const definition = listWorkbenchAgentCommands().find(command => getWorkbenchAgentCommandToolName(command) === "message_wait");
   assert.ok(definition);
   for (const harness of ["codex", "claude", "opencode"] as const) {
@@ -62,9 +62,15 @@ test("accepted agent messages match their sender without interrupting message wa
       await assert.rejects(send("selected", "rejected reply"), /rejected admission/u);
       rejectMessage = false;
       await send("unselected", "unrelated reply");
+      assert.deepEqual(await waiter, { kind: "interrupted" });
       assert.equal(registration.signal.aborted, false);
+      const selected = owner.wait({
+        waitId: "selected", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
+      }, registration.signal);
       await send("selected", "accepted reply");
-      assert.equal((await waiter).message, "accepted reply");
+      assert.deepEqual(await selected, {
+        kind: "message", message: { senderThreadId: "selected", senderName: "luna", message: "accepted reply" },
+      });
       assert.equal(registration.signal.aborted, false);
       const second = owner.wait({
         waitId: "user-steer", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],

@@ -197,6 +197,10 @@ export interface DaemonTranscriptRegistration {
   subscribeTurnStarted(
     listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,
   ): () => void;
+  /** Optional: transcript generations from before agent-message delivery publication lack it. */
+  subscribeAgentMessageDelivery?(
+    listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptAgentMessageDelivery) => Promise<void> | void,
+  ): () => void;
   subscribeHeldSteers(
     listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,
   ): () => void;
