@@ -308,7 +308,7 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({
       id: request.id,
       type: "transcriptSettlement",
-      settlement: transcriptRepository.settle(request.observations),
+      settlement: transcriptRepository.settle(request.observations, request.mode ?? "live"),
     });
     return;
   }
@@ -336,6 +336,15 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({
       id: request.id, type: "transcriptProviderCursor",
       cursor: transcriptRepository.readProviderPreviousCursor(request.threadId, request.turnId),
+    });
+    return;
+  }
+  if (request.type === "readTranscriptCompactionExecution") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptCompactionExecution",
+      execution: transcriptRepository.readCompactionExecution(request.input),
     });
     return;
   }

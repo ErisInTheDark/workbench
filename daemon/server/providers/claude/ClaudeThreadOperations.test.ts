@@ -1,8 +1,10 @@
-/* Exports: none. Protect Claude admission, context, continuation, thread interruption and turn liveness. */
+/* Exports: none. Protect Claude admission, context, continuation, compaction admission, thread interruption and turn liveness. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import {
+  ProjectIdSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+} from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import ClaudeSessionHost from "./ClaudeSessionHost";
@@ -11,6 +13,10 @@ import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./Cl
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
 const projectId = ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+const compactionScope = {
+  itemId: WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000004"),
+  turnId,
+};
 const selection = { kind: "custom" as const, settings: {
   harness: "claude", model: "sonnet", agentPath: null, agentSource: null,
   reasoningEffort: null, serviceTier: null,
@@ -34,7 +40,7 @@ function messageText(content: unknown) {
 
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
-  captured, hold, subagentName, interrupt, compactQuery, signal,
+  captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [],
 }: {
   failNative?: boolean;
   failUsage?: boolean;
@@ -53,6 +59,7 @@ function fixture({
   interrupt?: () => Promise<void>;
   compactQuery?: ClaudeThreadOperationsOptions["createQuery"];
   signal?: AbortSignal;
+  compactionReports?: Array<"started" | "completed" | "failed">;
 }) {
   let reads = 0;
   const profile = contextWindowTokens === undefined ? selection
@@ -138,8 +145,12 @@ function fixture({
       readContextUsage: async () => null,
       recordContextUsage: async () => undefined,
       recordTurnUsage: async () => undefined,
-      recordCompactionMessage: async () => undefined,
-      reportCompaction: async () => undefined,
+      recordCompactionMessage: async (_threadId: string, _turnId: string, message: { subtype: string }) => {
+        if (message.subtype === "compact_boundary") compactionReports.push("completed");
+      },
+      reportCompaction: async (_threadId: string, _turnId: string, phase: "started" | "completed" | "failed") => {
+        compactionReports.push(phase);
+      },
     },
   } as never);
   Object.assign(owner, {
@@ -151,6 +162,52 @@ function fixture({
   });
   return owner;
 }
+
+test("manual Claude compaction targets the shared marker when the provider boundary arrives", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const reports: Array<"started" | "completed" | "failed"> = [];
+  const owner = fixture({
+    usage: [], compactionReports: reports,
+    compactQuery: () => ({
+      async *[Symbol.asyncIterator]() {
+        entered.resolve();
+        await release.promise;
+        yield { type: "system", subtype: "compact_boundary" } as never;
+      },
+      close: () => undefined,
+    }) as never,
+  });
+  Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "completed" }] }) });
+  const work = owner.compact(threadId, { scope: compactionScope });
+  try {
+    await entered.promise;
+    assert.deepEqual(reports, []);
+  } finally {
+    release.resolve();
+    await work;
+    assert.deepEqual(reports, ["completed"]);
+    await owner.dispose();
+  }
+});
+
+test("failed manual Claude compaction propagates for the shared owner to settle", async () => {
+  const reports: Array<"started" | "completed" | "failed"> = [];
+  const owner = fixture({
+    usage: [], compactionReports: reports,
+    compactQuery: () => ({
+      async *[Symbol.asyncIterator]() { throw new Error("compaction query failed"); },
+      close: () => undefined,
+    }) as never,
+  });
+  Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "completed" }] }) });
+  try {
+    await assert.rejects(owner.compact(threadId, { scope: compactionScope }), /compaction query failed/);
+    assert.deepEqual(reports, []);
+  } finally {
+    await owner.dispose();
+  }
+});
 
 test("Claude compaction closes its query and rejects caller or owner cancellation even after a boundary", async () => {
   for (const cause of ["caller", "owner"] as const) {
@@ -171,7 +228,10 @@ test("Claude compaction closes its query and rejects caller or owner cancellatio
       }) as never,
     });
     Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "interrupted" }] }) });
-    const work = owner.compact(threadId, cause === "caller" ? { signal: cancellation.signal } : undefined);
+    const work = owner.compact(threadId, {
+      scope: compactionScope,
+      ...(cause === "caller" ? { signal: cancellation.signal } : {}),
+    });
     const rejected = assert.rejects(work, /cancelled compact/);
     await entered.promise;
     cancellation.abort(new Error("cancelled compact"));

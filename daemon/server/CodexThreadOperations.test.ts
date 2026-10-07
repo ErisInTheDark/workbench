@@ -12,7 +12,9 @@ import type { JsonRpcRequest } from "./bridge-types";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import {
+  NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
+} from "workbench-shared/workbench/identity";
 import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import type { WorkbenchThreadReconcile } from "workbench-shared/workbench/thread/thread-actions";
 
@@ -237,7 +239,9 @@ test("materialisation retains canonical identity for reconciliation while compac
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => { requests.push(request); return {}; });
   await fixture.operations.materialize(fixture.threadId, [fixture.turnId]);
-  await fixture.operations.compact(fixture.threadId);
+  await fixture.operations.compact(fixture.threadId, {
+    scope: { itemId: WorkbenchItemIdSchema.parse("compaction-item"), turnId: fixture.turnId },
+  });
   assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
     { method: "thread/compact/start", params: { threadId: "native-thread" } },
   ]);

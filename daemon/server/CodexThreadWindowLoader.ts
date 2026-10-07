@@ -152,6 +152,7 @@ function createWindowLoad(recording: CodexThreadWindowRecord): CodexThreadWindow
 export default class CodexThreadWindowLoader {
   constructor(
     private readonly request: (request: JsonRpcRequest) => Promise<JsonRpcResponse>,
+    private readonly excludeTurn: (threadId: string, turnId: string) => Promise<boolean> = async () => false,
   ) {}
 
   async recoverThread(
@@ -509,9 +510,18 @@ export default class CodexThreadWindowLoader {
   }
 
   private async requestTurns(params: ThreadTurnsListParams) {
-    return readPage(await this.request({
-      method: "thread/turns/list",
-      params,
-    }));
+    let cursor = params.cursor;
+    for (;;) {
+      const page = readPage(await this.request({
+        method: "thread/turns/list",
+        params: { ...params, ...(cursor ? { cursor } : {}) },
+      }));
+      const data: Turn[] = [];
+      for (const turn of page.data) {
+        if (!await this.excludeTurn(params.threadId, turn.id)) data.push(turn);
+      }
+      if (data.length || page.nextCursor === null || params.limit !== 1) return { ...page, data };
+      cursor = page.nextCursor;
+    }
   }
 }

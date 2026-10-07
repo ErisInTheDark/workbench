@@ -428,10 +428,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.identity;
   }
 
-  async settleTranscript(observations: readonly WorkbenchTranscriptObservation[]) {
+  async settleTranscript(
+    observations: readonly WorkbenchTranscriptObservation[],
+    mode: import("./transcript/workbench-transcript-types").WorkbenchTranscriptSettlementMode = "live",
+  ) {
     await this.start();
-    if (observations.length === 0) return { changedThreadIds: [] };
-    const response = await this.#request({ type: "settleTranscript", observations });
+    if (observations.length === 0) return { changedThreadIds: [], compactionCompletions: [] };
+    const response = await this.#request({ type: "settleTranscript", observations, mode });
     if (response.type !== "transcriptSettlement") {
       throw new WorkbenchDatabaseFailure(`Unexpected transcript settlement response: ${response.type}`);
     }
@@ -543,6 +546,17 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       throw new WorkbenchDatabaseFailure(`Unexpected transcript cursor response: ${response.type}`);
     }
     return response.cursor;
+  }
+
+  async readTranscriptCompactionExecution(input: {
+    harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
+  }) {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptCompactionExecution", input });
+    if (response.type !== "transcriptCompactionExecution") {
+      throw new WorkbenchDatabaseFailure(`Unexpected compaction execution response: ${response.type}`);
+    }
+    return response.execution;
   }
 
   async readTranscriptContext(threadId: string) {

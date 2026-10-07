@@ -19,3 +19,4 @@
 - Reading admitted transcript history must not depend on provider refresh or recovery succeeding.
 - Reconcile provider observations separately from SQLite reads, one demanded turn at a time. Never sweep historical bodies on open or subscription; acknowledge only capture gaps covered by completed recovery.
 - Transcript subscription bootstrap never reads inside provider ingest order. Opening views buffer settlements instead.
+Compaction is a Workbench item lifecycle, never a conversation turn. Manual and automatic compaction share admission and completion; native execution identity is evidence only.

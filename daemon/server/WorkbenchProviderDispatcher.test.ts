@@ -18,6 +18,17 @@ import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mc
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
 import { getWorkbenchAgentCommandToolName } from "./lib/workbench/commands/workbench-agent-command-definition";
 
+const compaction = {
+  compactInsideAdmission: async (
+    threadId: string,
+    provider: { threads: { compact: WorkbenchProvider["threads"]["compact"] } },
+    signal?: AbortSignal,
+  ) => provider.threads.compact(threadId, {
+    scope: { itemId: "item", turnId: "turn" } as never,
+    signal,
+  }),
+};
+
 test("accepted agent messages match their sender without interrupting message waits, while user steers still interrupt", async () => {
   const definition = listWorkbenchAgentCommands().find(command => getWorkbenchAgentCommandToolName(command) === "message_wait");
   assert.ok(definition);
@@ -97,7 +108,7 @@ test("user and agent messages on every provider share compact-before-start admis
         },
       } } as unknown as WorkbenchProvider;
       const admission = new WorkbenchThreadAdmissionController();
-      const owner = new WorkbenchThreadAutoCompactController(admission, {
+      const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
         readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
         readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
         readRuntime: async () => ({ latestTurn: { id: "previous" }, status: active ? "active" : "idle", turnLive: active }),
@@ -138,7 +149,7 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
     },
   } } as unknown as WorkbenchProvider;
   const admission = new WorkbenchThreadAdmissionController();
-  const owner = new WorkbenchThreadAutoCompactController(admission, {
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
     readEvidence: async () => ({ activityAt: 0, contextTokens: 200_000 }),
     readRuntime: async () => ({ latestTurn: { id: "previous" }, status: "idle", turnLive: false }),

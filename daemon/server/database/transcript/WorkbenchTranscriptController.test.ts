@@ -780,16 +780,18 @@ test("only live completed context compactions notify compaction listeners", asyn
   const compaction = (phase: "started" | "completed", observedAt: number): WorkbenchTranscriptObservation => ({
     kind: "contextCompaction", threadId, turnId, phase, observedAt, reference: null,
   });
-  const received: string[] = [];
-  owner.subscribeContextCompaction(id => { received.push(id); });
+  const received: Array<{ threadId: string; turnId: string; usage: unknown }> = [];
+  owner.subscribeContextCompaction(({ threadId, turnId, usage }) => {
+    received.push({ threadId, turnId, usage });
+  });
   try {
     await owner.record([compaction("started", 10)], { source: "provider" });
     assert.deepEqual(received, []);
     await owner.record([compaction("completed", 20)], { source: "provider" });
-    assert.deepEqual(received, [threadId]);
+    assert.deepEqual(received, [{ threadId, turnId, usage: null }]);
     // Recovery replays history; it must not re-send skills for an old compaction.
     await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
-    assert.deepEqual(received, [threadId]);
+    assert.deepEqual(received, [{ threadId, turnId, usage: null }]);
   } finally {
     owner.dispose();
   }

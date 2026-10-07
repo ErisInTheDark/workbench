@@ -71,6 +71,7 @@ const databaseReleases = Object.freeze({
   transcriptDeliveryStates: release(61, "0f02d62d3da2c78a0603b9b26949ce9336d30f6238b7529d298ffe19f339a165"),
   interruptedLifecycle: release(62, "c8aff20aa665e47762e541306cd763b4e3b1800bb6816b52a1d5c6671d15be2a"),
   threadAutoCompact: release(63, "e2307295af0b1504a0169542bdcb18c153760ce26d770e1459ccfc5fe5ea3ae9"),
+  compactionExecutions: release(64, "d659309153dfdfc8b037a09f44884682a32377cb5a4616c3650e4245cf27c387"),
 });
 
 export default databaseReleases;

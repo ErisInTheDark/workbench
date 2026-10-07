@@ -1,4 +1,4 @@
-/* No production exports. Tests protect Claude live-turn admission order, settlement, lifecycle publication, steer and working-notice delivery, and reload restoration. */
+/* No production exports. Tests protect Claude live-turn admission order, settlement, compaction usage publication, steer and working-notice delivery, and reload restoration. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -190,6 +190,43 @@ test("context injected by acceptance prefixes the prompt and early steers follow
   push(ack(steerId));
   push(result());
   await task;
+});
+
+test("Claude leaves zero-usage publication to the committed compaction owner", async () => {
+  const { turn, push, liveUsage, collaborators } = fixture(undefined, null, 300_000);
+  const compacted = Promise.withResolvers<void>();
+  collaborators.transcript.recordCompactionMessage = async (_threadId, _turnId, message) => {
+    if (message.subtype === "status") compacted.resolve();
+  };
+  const { task } = await turn.start("hi");
+  push(assistant(40_000));
+  push({ type: "system", subtype: "compact_boundary" });
+  push({ type: "system", subtype: "status", status: "requesting" });
+  try {
+    await compacted.promise;
+    assert.equal(liveUsage.at(-1)?.input, 40_000);
+    assert.equal(liveUsage.at(-1)?.window, 300_000);
+  } finally {
+    push(result());
+    await task;
+  }
+});
+
+test("Claude cannot restore pre-compaction context usage from a later result without a fresh measurement", async () => {
+  const { turn, push, liveUsage, collaborators } = fixture(undefined, null, 300_000);
+  const compacted = Promise.withResolvers<void>();
+  collaborators.transcript.recordCompactionMessage = async (_threadId, _turnId, message) => {
+    if (message.subtype === "status") compacted.resolve();
+  };
+  const { task } = await turn.start("hi");
+  push(assistant(40_000));
+  push({ type: "system", subtype: "compact_boundary" });
+  push({ type: "system", subtype: "status", status: "requesting" });
+  await compacted.promise;
+  const beforeResult = liveUsage.length;
+  push(result());
+  await task;
+  assert.ok(liveUsage.slice(beforeResult).every(usage => usage.input !== 40_000));
 });
 
 test("image prompts and steers reach Claude as content blocks behind acceptance context", async () => {

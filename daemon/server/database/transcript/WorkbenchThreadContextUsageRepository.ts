@@ -61,4 +61,26 @@ export default class WorkbenchThreadContextUsageRepository {
       this.database.prepare(statement.sql).run(...statement.parameters);
     })();
   }
+
+  resetCurrent(threadId: string): ThreadContextUsageSnapshot | null {
+    const current = this.read(threadId);
+    if (!current?.tokenUsage) return null;
+    const zero = {
+      cacheWriteInputTokens: 0,
+      cachedInputTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0,
+    };
+    const snapshot = {
+      tokenUsage: {
+        last: zero,
+        total: current.tokenUsage.total,
+        modelContextWindow: current.tokenUsage.modelContextWindow,
+      },
+    };
+    this.write(threadId, snapshot, false);
+    return snapshot;
+  }
 }

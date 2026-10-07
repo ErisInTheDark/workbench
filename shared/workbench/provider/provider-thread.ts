@@ -2,6 +2,7 @@
  * Exports:
  * - WORKBENCH_THREAD_HISTORY_PENDING/WorkbenchThreadHistoryPendingError: provider history is not materialised yet.
  * - WorkbenchProviderThreadCreate: resolved creation context supplied by the daemon.
+ * - WorkbenchProviderCompactionScope: canonical item and turn owned by one compaction execution.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
  * - WorkbenchProviderThreadContextRollover: optional fresh-native-context operations.
@@ -17,12 +18,17 @@ import type {
 import type { WorkbenchMessageContext } from "./provider-input.ts";
 import type { Turn } from "../thread/workbench-thread-turn.ts";
 import type { WorkbenchAgentMessage } from "../thread/thread-agent-message.ts";
-import type { ProjectId } from "../identity.ts";
+import type { ProjectId, WorkbenchItemId, WorkbenchTurnId } from "../identity.ts";
 
 export interface WorkbenchProviderThreadContextRollover {
   requestDirective(input: { instruction: string; key: string; threadId: string; turnId: string }): Promise<void>;
   /** Resolve only after the replacement summary turn has natively started. */
   replace(input: { summary: string; threadId: string; turnId: string }): Promise<void>;
+}
+
+export interface WorkbenchProviderCompactionScope {
+  itemId: WorkbenchItemId;
+  turnId: WorkbenchTurnId;
 }
 
 export const WORKBENCH_THREAD_HISTORY_PENDING = -32010;
@@ -64,7 +70,7 @@ export interface WorkbenchProviderThreads {
   /** Deliver an attributed agent message; report whether its Workbench turn started or was steered. */
   messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<{ kind: "started" | "steered"; turnId: string }>;
   rename(threadId: string, title: string): Promise<void>;
-  compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }): Promise<void>;
+  compact(threadId: string, options: { scope: WorkbenchProviderCompactionScope; signal?: AbortSignal }): Promise<void>;
   /** Delete the backing provider session, retaining WB identity, state and history. */
   delete?(threadId: string): Promise<void>;
   /** Interrupt the thread's current execution without requiring a caller-selected turn. */

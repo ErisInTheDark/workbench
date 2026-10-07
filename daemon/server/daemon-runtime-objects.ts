@@ -121,6 +121,13 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
   readThreadStateRecords: import("./database/WorkbenchDatabaseController").default["readThreadStateRecords"];
   readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
+  readTranscriptCompactionExecution?(input: {
+    harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
+  }): Promise<{
+    itemId: import("workbench-shared/workbench/identity").WorkbenchItemId;
+    threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId;
+    turnId: import("workbench-shared/workbench/identity").WorkbenchTurnId;
+  } | null>;
   readTranscriptContext?(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
   assertReady(): void;
   close(): Promise<void>;
@@ -174,13 +181,15 @@ export interface DaemonTranscriptRegistration {
   record(
     observations: readonly WorkbenchTranscriptObservation[],
     context: WorkbenchTranscriptRecordingContext,
-  ): Promise<{ changedThreadIds: string[] }>;
+  ): Promise<import("./database/transcript/workbench-transcript-types").WorkbenchTranscriptSettlement>;
   start(): Promise<void>;
   subscribeItemActivity(
     listener: (activity: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptItemActivity) => Promise<void> | void,
   ): () => void;
   subscribeContextCompaction(
-    listener: (threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId) => Promise<void> | void,
+    listener: (
+      completion: import("./database/transcript/workbench-transcript-types").WorkbenchTranscriptCompactionCompletion,
+    ) => Promise<void> | void,
   ): () => void;
   subscribeTurnStarted(
     listener: (event: import("./database/transcript/WorkbenchTranscriptController").WorkbenchTranscriptTurnEvent) => Promise<void> | void,

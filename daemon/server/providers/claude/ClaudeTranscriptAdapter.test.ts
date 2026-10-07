@@ -235,7 +235,6 @@ test("Claude's compacting status starts a compaction and its boundary completes 
   assert.deepEqual(compactionReports(records), [
     ["started", null, null],
     ["completed", null, 1_200],
-    ["usageReset", true],
   ]);
 });
 

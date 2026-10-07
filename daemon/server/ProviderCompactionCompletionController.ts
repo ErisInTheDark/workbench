@@ -2,18 +2,34 @@
  * Exports:
  * - default ProviderCompactionCompletionController: await native compaction success and execution settlement.
  */
+import type { WorkbenchProviderCompactionScope } from "workbench-shared/workbench/provider/provider-thread";
+import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
+
+type ProviderCompactionExecution = WorkbenchProviderCompactionScope & { threadId: WorkbenchThreadId };
+
 export default class ProviderCompactionCompletionController {
   private readonly pending = new Map<string, {
     reference: string | null;
+    scope: ProviderCompactionExecution;
     completed: boolean;
     completion: ReturnType<typeof Promise.withResolvers<void>>;
   }>();
   hasPendingWork() { return this.pending.size > 0; }
 
-  async run(key: string, signal: AbortSignal, request: () => Promise<void>): Promise<void> {
+  async run(
+    key: string,
+    scope: ProviderCompactionExecution,
+    signal: AbortSignal,
+    request: () => Promise<void>,
+  ): Promise<void> {
     signal.throwIfAborted();
     if (this.pending.has(key)) throw new Error("This thread already has a compaction completion wait.");
-    const entry = { reference: null as string | null, completed: false, completion: Promise.withResolvers<void>() };
+    const entry = {
+      reference: null as string | null,
+      scope,
+      completed: false,
+      completion: Promise.withResolvers<void>(),
+    };
     this.pending.set(key, entry);
     const abort = () => entry.completion.reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
@@ -28,6 +44,11 @@ export default class ProviderCompactionCompletionController {
   started(key: string, reference: string) {
     const entry = this.pending.get(key);
     if (entry && entry.reference === null) entry.reference = reference;
+    return entry?.reference === reference ? entry.scope : null;
+  }
+
+  scope(key: string, reference: string) {
+    return this.match(key, reference)?.scope ?? null;
   }
 
   completed(key: string, reference?: string) {

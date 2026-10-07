@@ -28,11 +28,13 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
   autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe">;
+  compaction: Pick<WorkbenchThreadCompactionController, "compact">;
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
@@ -165,7 +167,7 @@ export default class WorkbenchThreadActionController {
     },
     "thread/compact": async input => {
       const target = await this.target(input.threadId);
-      await target.provider.threads.compact(target.identity.threadId);
+      await this.owners.compaction.compact(target.identity.threadId, target.provider);
       return { ok: true };
     },
     "thread/provider/delete": async input => {

@@ -4,8 +4,20 @@ import { test } from "node:test";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import WorkbenchThreadAutoCompactController, { type ThreadAutoCompactEvidence } from "./WorkbenchThreadAutoCompactController";
+
+const compaction = {
+  compactInsideAdmission: async (
+    threadId: string,
+    provider: { threads: { compact: WorkbenchProvider["threads"]["compact"] } },
+    signal?: AbortSignal,
+  ) => provider.threads.compact(threadId, {
+    scope: { itemId: "item", turnId: "turn" } as never,
+    signal,
+  }),
+};
 
 function fixture() {
   let now = 30 * 60_000;
@@ -23,7 +35,7 @@ function fixture() {
   let settingsReads = 0;
   let publicationListener = () => {};
   const admission = new WorkbenchThreadAdmissionController();
-  const owner = new WorkbenchThreadAutoCompactController(admission, {
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: async () => {
       settingsReads += 1;
       return settings;

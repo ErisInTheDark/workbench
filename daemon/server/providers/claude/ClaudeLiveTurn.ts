@@ -293,6 +293,7 @@ export default class ClaudeLiveTurn {
         else await transcript.recordNativeToolResults(this.threadId, message);
       } else if (message.type === "system" && (message.subtype === "compact_boundary" || message.subtype === "status")) {
         await transcript.recordCompactionMessage(this.threadId, this.turnId, message);
+        if (message.subtype === "compact_boundary") this.last = null;
       } else if (message.type === "result") {
         for (const uuid of message.user_message_uuids ?? []) await this.deliver(uuid);
         this.total = addBreakdowns(this.total, claudeTokenBreakdown(message.usage));

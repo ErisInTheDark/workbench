@@ -11,7 +11,11 @@ import type { CodexApprovalPort } from "./CodexApprovalAdapter";
 import { summarizeApprovalList } from "./lib/workbench/approval-presentation";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
-import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, type NativeThreadId, type NativeTurnId } from "workbench-shared/workbench/identity";
+import {
+  NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema,
+  WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+  type NativeThreadId, type NativeTurnId,
+} from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchReadSchema } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchContextTrigger } from "workbench-shared/workbench/provider/provider-context";
 
@@ -196,6 +200,13 @@ export type CodexStdioBridgeOptions = {
   transcriptAssets?: Pick<import("./database/WorkbenchDatabaseController").default, "writeTranscriptAsset" | "readTranscriptAsset">;
   sqliteReader?: CodexStoredTranscriptAdapter;
   readSqliteProviderCursor?: (threadId: string, turnId: string) => Promise<string | null | undefined>;
+  readSqliteCompactionExecution?: (input: {
+    nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
+  }) => Promise<{
+    itemId: import("workbench-shared/workbench/identity").WorkbenchItemId;
+    threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId;
+    turnId: import("workbench-shared/workbench/identity").WorkbenchTurnId;
+  } | null>;
   readSqliteRecoveryGapIds?: (threadId: string) => Promise<string[]>;
 };
 
@@ -310,6 +321,7 @@ const UNCONFIGURED_WORKBENCH_APPROVALS: CodexApprovalPort = {
 const WORKBENCH_REQUEST_SOURCE_FIELD = "workbenchRequestSource";
 const WORKBENCH_THREAD_HYDRATION_FIELD = "workbenchThreadHydration";
 const WORKBENCH_THREAD_CONTEXT_ENTRIES_FIELD = "workbenchThreadContextEntries";
+const WORKBENCH_COMPACTION_SCOPE_FIELD = "workbenchCompactionScope";
 type WorkbenchRequestSource = "autoRefresh" | "internal" | "sqliteRecovery" | "user";
 
 function isJsonRpcResponse(message: unknown): message is JsonRpcResponse {
@@ -409,6 +421,7 @@ function createUpstreamRequest(message: JsonRpcRequest, upstreamRequestId: numbe
   delete upstreamMessage[WORKBENCH_PROMPT_CONTEXT_FIELD];
   delete upstreamMessage[WORKBENCH_REQUEST_SOURCE_FIELD];
   delete upstreamMessage[WORKBENCH_THREAD_HYDRATION_FIELD];
+  delete upstreamMessage[WORKBENCH_COMPACTION_SCOPE_FIELD];
   delete upstreamMessage.workbenchCreationLocation;
   return upstreamMessage;
 }
@@ -609,6 +622,7 @@ export default class CodexStdioBridge {
   private readonly transcriptAssets: CodexStdioBridgeOptions["transcriptAssets"];
   private readonly sqliteReader?: CodexStoredTranscriptAdapter;
   private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
+  private readonly readSqliteCompactionExecution?: CodexStdioBridgeOptions["readSqliteCompactionExecution"];
   private readonly readSqliteRecoveryGapIds?: CodexStdioBridgeOptions["readSqliteRecoveryGapIds"];
   private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
@@ -660,9 +674,10 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
+  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteCompactionExecution, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
+    this.readSqliteCompactionExecution = readSqliteCompactionExecution;
     this.readSqliteRecoveryGapIds = readSqliteRecoveryGapIds;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
@@ -973,11 +988,17 @@ export default class CodexStdioBridge {
       if (message.method === "thread/compact/start" && options.waitForCompletion) {
         const threadId = asString(asRecord(message.params)?.threadId)?.trim();
         if (!threadId) throw new Error("Compaction requires a thread id.");
+        const rawScope = asRecord(message[WORKBENCH_COMPACTION_SCOPE_FIELD]);
+        const scope = {
+          itemId: WorkbenchItemIdSchema.parse(rawScope?.itemId),
+          threadId: WorkbenchThreadIdSchema.parse(rawScope?.threadId),
+          turnId: WorkbenchTurnIdSchema.parse(rawScope?.turnId),
+        };
         const signal = controller
           ? AbortSignal.any([this.generation.signal, controller.signal]) : this.generation.signal;
         let response!: JsonRpcResponse;
         // Waiting outside the global command queue keeps Stop and other threads usable.
-        await this.compactionCompletion.run(threadId, signal, async () => {
+        await this.compactionCompletion.run(threadId, scope, signal, async () => {
           response = await this.enqueueCommand(() => this.compactThread(message, { signal }));
           if (response.error) throw new Error(response.error.message);
         });
@@ -1082,7 +1103,7 @@ export default class CodexStdioBridge {
     const store = this.createThreadWindowStore({ gapIds: input.gapIds, scope: "turns" });
     const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
       ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "sqliteRecovery",
-    }, signal));
+    }, signal), (threadId, turnId) => this.isCompactionExecution(threadId, turnId));
     const supportedMetadata = { ...metadata, turns: metadata.turns.map(turn => toThreadTurn(turn)) };
     const window = input.target.mode === "exact"
       ? await loader.reconcileExact(store, supportedMetadata, boundary!.native_turn_id!)
@@ -1138,7 +1159,7 @@ export default class CodexStdioBridge {
     const context = await this.resolveTranscriptThreadContext(thread);
     const loader = new CodexThreadWindowLoader((request) => this.dispatchManagedProviderRequest({
       ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "sqliteRecovery",
-    }, signal));
+    }, signal), (threadId, turnId) => this.isCompactionExecution(threadId, turnId));
     const turns = await loader.recoverThread({ ...thread, turns: thread.turns.map(turn => toThreadTurn(turn)) }, async ({ turn, previousCursor }) => {
       signal?.throwIfAborted();
       await this.captureTranscript(nativeThreadId, `sqlite-recovery-page:${threadId}:${turn.id}`, async () => {
@@ -1208,6 +1229,17 @@ export default class CodexStdioBridge {
         },
       };
     }
+  }
+
+  private async isCompactionExecution(nativeThreadId: string, nativeTurnId: string) {
+    if (!this.readSqliteCompactionExecution) return false;
+    const nativeLocation = this.transcriptThreadContexts.get(nativeThreadId)?.nativeLocation;
+    if (!nativeLocation) return false;
+    return Boolean(await this.readSqliteCompactionExecution({
+      nativeLocation,
+      nativeThreadId,
+      nativeTurnId,
+    }));
   }
 
   private async handleThreadRecallMaterializeRequest(message: JsonRpcRequest): Promise<JsonRpcResponse> {
@@ -2007,6 +2039,70 @@ export default class CodexStdioBridge {
         if (thread?.id) await this.resolveTranscriptThreadContext(thread, true, signal);
       }
       signal.throwIfAborted();
+      const compactionParams = asRecord(message.params);
+      const compactionThread = asString(compactionParams?.threadId);
+      const compactionTurn = asRecord(compactionParams?.turn);
+      const compactionTurnId = asString(compactionParams?.turnId) ?? asString(compactionTurn?.id);
+      let compaction = compactionThread && compactionTurnId
+        ? message.method === "turn/started"
+          ? this.compactionCompletion.started(compactionThread, compactionTurnId)
+          : this.compactionCompletion.scope(compactionThread, compactionTurnId)
+        : null;
+      if (!compaction && compactionThread && compactionTurnId && this.readSqliteCompactionExecution) {
+        const nativeLocation = this.transcriptThreadContexts.get(compactionThread)?.nativeLocation;
+        if (nativeLocation) {
+          compaction = await this.readSqliteCompactionExecution({
+            nativeLocation,
+            nativeThreadId: compactionThread,
+            nativeTurnId: compactionTurnId,
+          });
+        }
+      }
+      if (compaction && compactionThread && compactionTurnId) {
+        if (message.method === "turn/started") {
+          const nativeLocation = this.transcriptThreadContexts.get(compactionThread)?.nativeLocation;
+          if (nativeLocation) {
+            await this.persistTranscript(() => this.recordWorkbenchTranscript([{
+              kind: "contextCompaction",
+              itemId: compaction.itemId,
+              threadId: compaction.threadId,
+              turnId: compaction.turnId,
+              phase: "started",
+              observedAt: Date.now(),
+              reference: null,
+              execution: {
+                harnessId: "codex",
+                nativeLocation,
+                nativeThreadId: NativeThreadIdSchema.parse(compactionThread),
+                nativeTurnId: NativeTurnIdSchema.parse(compactionTurnId),
+              },
+            }], { source: "provider" }), signal);
+          }
+        } else if (message.method === "item/completed"
+          && asRecord(compactionParams?.item)?.type === "contextCompaction") {
+          await this.persistTranscript(() => this.recordWorkbenchTranscript([{
+            kind: "contextCompaction",
+            itemId: compaction.itemId,
+            threadId: compaction.threadId,
+            turnId: compaction.turnId,
+            phase: "completed",
+            observedAt: Date.now(),
+            reference: null,
+          }], { source: "provider" }), signal);
+          this.compactionCompletion.completed(compactionThread, compactionTurnId);
+        } else if (message.method === "turn/completed") {
+          if (compactionTurn?.status === "completed") {
+            this.compactionCompletion.settled(compactionThread, compactionTurnId);
+          } else {
+            this.compactionCompletion.failed(
+              compactionThread,
+              new Error("Native compaction was interrupted or failed."),
+              compactionTurnId,
+            );
+          }
+        }
+        return;
+      }
       let syntheticFileChangeNotification: Extract<ServerNotification, { method: "item/completed" }> | null = null;
       let failedPatch: { threadId: string; turnId: string; item: WorkbenchFileChangeItem } | null = null;
       // Analysis starts once this notification's own capture is queued, so it reads the recorded failure.
@@ -2096,21 +2192,12 @@ export default class CodexStdioBridge {
         await this.persistTranscript(() => admitNativeTranscriptObservations(this.identities!, observations), signal);
       }
       signal.throwIfAborted();
-      const compactionParams = asRecord(message.params);
-      const compactionThread = asString(compactionParams?.threadId);
-      const compactionTurn = asRecord(compactionParams?.turn);
-      const compactionTurnId = asString(compactionParams?.turnId) ?? asString(compactionTurn?.id);
-      if (compactionThread) {
-        if (message.method === "turn/started" && compactionTurnId) {
-          this.compactionCompletion.started(compactionThread, compactionTurnId);
-        } else if (message.method === "item/completed" && compactionTurnId && asRecord(compactionParams?.item)?.type === "contextCompaction") {
-          this.compactionCompletion.completed(compactionThread, compactionTurnId);
-        } else if (message.method === "turn/completed" && compactionTurnId) {
-          if (compactionTurn?.status === "completed") this.compactionCompletion.settled(compactionThread, compactionTurnId);
-          else this.compactionCompletion.failed(compactionThread, new Error("Native compaction was interrupted or failed."), compactionTurnId);
-        } else if (message.method === "error" && compactionParams?.willRetry !== true) {
-          this.compactionCompletion.failed(compactionThread, new Error("Native compaction failed."), compactionTurnId ?? undefined);
-        }
+      if (compactionThread && message.method === "error" && compactionParams?.willRetry !== true) {
+        this.compactionCompletion.failed(
+          compactionThread,
+          new Error("Native compaction failed."),
+          compactionTurnId ?? undefined,
+        );
       }
       this.publishNativeNotification(message);
       if (syntheticFileChangeNotification) this.publishNativeNotification(syntheticFileChangeNotification);
@@ -2637,7 +2724,7 @@ export default class CodexStdioBridge {
       const store = this.createThreadWindowStore();
       const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
         ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "autoRefresh",
-      }, signal));
+      }, signal), (threadId, turnId) => this.isCompactionExecution(threadId, turnId));
       const window = await loader.ensureWindow(store, { ...metadata, turns: metadata.turns.map(turn => toThreadTurn(turn)) }, hydrated,
         hydration.mode === "previous" ? { ...hydration, beforeTurnId: nativeId(hydration.beforeTurnId) } : hydration,
         { recoveryOnly: background });

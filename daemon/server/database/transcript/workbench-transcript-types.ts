@@ -212,6 +212,8 @@ export type WorkbenchTranscriptCaptureGapObservation<ThreadId extends string = W
  */
 export interface WorkbenchTranscriptContextCompactionObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
   kind: "contextCompaction";
+  /** Canonical marker selected by Workbench before provider execution. */
+  itemId?: WorkbenchItemId;
   threadId: ThreadId;
   turnId: TurnId;
   phase: "started" | "completed" | "failed";
@@ -220,6 +222,13 @@ export interface WorkbenchTranscriptContextCompactionObservation<ThreadId extend
   reference: string | null;
   /** Provider-measured duration; dates the start when Workbench never saw one. */
   durationMs?: number | null;
+  /** Native maintenance execution evidence; it never becomes a canonical conversation turn. */
+  execution?: {
+    harnessId: string;
+    nativeLocation: string;
+    nativeThreadId: NativeThreadId;
+    nativeTurnId: NativeTurnId;
+  };
 }
 
 export interface WorkbenchTranscriptProviderTurnScopeObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
@@ -261,8 +270,19 @@ export interface WorkbenchTranscriptRecordingContext {
   source: "compatibility" | "provider" | "workbench";
 }
 
+export type WorkbenchTranscriptSettlementMode = "live" | "replay";
+
+export interface WorkbenchTranscriptCompactionCompletion {
+  itemId: WorkbenchItemId;
+  threadId: WorkbenchThreadId;
+  turnId: WorkbenchTurnId;
+  usage: ThreadContextUsageSnapshot | null;
+}
+
 export interface WorkbenchTranscriptSettlement {
   changedThreadIds: string[];
+  /** Present on real repository settlements; optional for compatibility with older reload generations and test ports. */
+  compactionCompletions?: WorkbenchTranscriptCompactionCompletion[];
   changes?: {
     snapshot: WorkbenchTranscriptSnapshot;
     removedItemIds: string[];

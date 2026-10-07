@@ -3848,6 +3848,87 @@ test("fresh first turn prepares its stored profile across reload and failed admi
   }
 });
 
+test("manual Codex compaction does not admit or publish a conversation turn from native execution events", async () => {
+  const sql = await recordingFixture();
+  const original = bridgeThread([{
+    type: "userMessage", id: "prior-input", clientId: null,
+    content: [{ type: "text", text: "prior input", text_elements: [] }],
+  }]);
+  const priorTurn = { ...original.turns[0]!, status: "completed" as const, completedAt: 2, durationMs: 1 };
+  const thread = { ...original, status: { type: "idle" as const }, turns: [priorTurn] };
+  const published: JsonRpcNotification[] = [];
+  const acknowledged = Promise.withResolvers<void>();
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer: { send(request: JsonRpcRequest) {
+      const result = request.method === "thread/read" ? { thread: { ...thread, turns: [] } }
+        : request.method === "thread/turns/list" ? {
+          data: thread.turns.map(turn => (request.params as { itemsView: string }).itemsView === "full"
+            ? turn : { ...turn, items: [], itemsView: "notLoaded" }),
+          nextCursor: null,
+        } : {};
+      queueMicrotask(() => {
+        void bridge.handleUpstreamMessage({ id: request.id, result });
+        if (request.method === "thread/compact/start") acknowledged.resolve();
+      });
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification(notification) { published.push(notification); },
+  });
+  try {
+    await bridge.reconcileSqliteTranscriptWindow({
+      threadId: "thread", target: { mode: "latest" }, gapIds: [],
+    }, new AbortController().signal);
+    const before = sql.project();
+    const priorIds = before.snapshot.turns.map(turn => turn.id);
+    const priorItems = before.projection.turns.flatMap(turn => turn.items.map(item => item.id));
+    published.length = 0;
+    const work = bridge.handleServerRequest({
+      id: 1, method: "thread/compact/start", params: { threadId: "thread" },
+      workbenchCompactionScope: {
+        itemId: "00000000-0000-4000-8000-000000000099",
+        threadId: before.snapshot.thread.id,
+        turnId: priorIds[0],
+      },
+    }, { waitForCompletion: true });
+    await acknowledged.promise;
+    const execution = {
+      ...priorTurn, id: "native-compaction-execution", items: [], status: "inProgress" as const,
+      startedAt: 3, completedAt: null, durationMs: null,
+    };
+    await bridge.handleUpstreamMessage({
+      method: "turn/started", params: { threadId: "thread", turn: execution },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "item/started", params: {
+        threadId: "thread", turnId: execution.id, item: { id: "native-compaction", type: "contextCompaction" },
+      },
+    });
+    await bridge.waitForIdle();
+    const during = sql.project();
+    assert.deepEqual(during.projection.turns.flatMap(turn => turn.items.map(item => item.id)).slice(0, priorItems.length), priorItems);
+    assert.deepEqual({
+      turnIds: during.snapshot.turns.map(turn => turn.id),
+      publishedConversationTurn: published.some(notification => notification.method === "turn/started"),
+    }, { turnIds: priorIds, publishedConversationTurn: false });
+    await bridge.handleUpstreamMessage({
+      method: "item/completed", params: {
+        threadId: "thread", turnId: execution.id, item: { id: "native-compaction", type: "contextCompaction" },
+      },
+    });
+    await bridge.handleUpstreamMessage({
+      method: "turn/completed", params: { threadId: "thread", turn: { ...execution, status: "completed" } },
+    });
+    assert.equal((await work).error, undefined);
+  } finally {
+    await bridge.disposeImmediately();
+    sql.ports.identities.items.dispose();
+    sql.ports.identities.threads.dispose();
+    sql.database.close();
+  }
+});
+
 for (const outcome of ["completed", "interrupted"] as const) {
   test(`completion-aware compaction waits beyond acknowledgement without blocking other commands: ${outcome}`, async () => {
     const acknowledged = Promise.withResolvers<void>();
@@ -3864,7 +3945,14 @@ for (const outcome of ["completed", "interrupted"] as const) {
       onNotification() {}, resolveProjectFromCwd: async () => null,
     });
     let finished = false;
-    const work = bridge.handleServerRequest({ id: 1, method: "thread/compact/start", params: { threadId: "thread" } }, { waitForCompletion: true });
+    const work = bridge.handleServerRequest({
+      id: 1,
+      method: "thread/compact/start",
+      params: { threadId: "thread" },
+      workbenchCompactionScope: {
+        itemId: "workbench-compaction-item", threadId: "workbench-thread", turnId: "workbench-turn",
+      },
+    }, { waitForCompletion: true });
     const observed = work.then(() => { finished = true; }, error => { finished = true; throw error; });
     const result = outcome === "interrupted" ? assert.rejects(observed, /interrupted or failed/) : observed;
     try {

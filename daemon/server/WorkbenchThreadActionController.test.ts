@@ -42,6 +42,7 @@ function fixture(providerWarning?: string) {
   const recorded: object[] = [];
   const owners: WorkbenchThreadActionOwners = {
     autoCompact: { observe: async () => true },
+    compaction: { compact: unused },
     approvals: { list: () => [] },
     reconciliation: { reconcile: unused },
     transcripts: { readPage: unused, history: unused },

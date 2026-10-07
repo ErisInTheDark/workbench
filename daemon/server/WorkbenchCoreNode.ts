@@ -66,6 +66,7 @@ import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
+import WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import WorkbenchThreadContextRolloverController from "./WorkbenchThreadContextRolloverController";
 import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
@@ -133,7 +134,11 @@ function createWorkbenchCoreFeature(
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
   const admission = new WorkbenchThreadAdmissionController();
-  const autoCompact = new WorkbenchThreadAutoCompactController(admission, {
+  const compaction = new WorkbenchThreadCompactionController(admission, {
+    record: transcript.record.bind(transcript),
+    now: Date.now,
+  });
+  const autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: () => settings.readThreadAutoCompact(),
     readEvidence: async reference => {
       const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference) });
@@ -459,8 +464,19 @@ function createWorkbenchCoreFeature(
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
   }, approvalHandoff);
   const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
-  const unsubscribeCompaction = transcript.subscribeContextCompaction(async threadId => {
-    if (lease.isCurrent()) await threadSkills.observeCompaction(threadId);
+  const unsubscribeCompaction = transcript.subscribeContextCompaction(async completion => {
+    if (!lease.isCurrent()) return;
+    const tokenUsage = completion.usage?.tokenUsage;
+    const harness = (await threadIdentity.resolve({
+      threadId: ThreadReferenceSchema.parse(completion.threadId),
+    }))?.bindings[0]?.harness;
+    if (tokenUsage && harness && lease.isCurrent()) {
+      context.broadcastProviderNotification(WorkbenchHarnessSchema.parse(harness), {
+        method: "thread/tokenUsage/updated",
+        params: { threadId: completion.threadId, turnId: completion.turnId, tokenUsage },
+      });
+    }
+    if (lease.isCurrent()) await threadSkills.observeCompaction(completion.threadId);
   });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
@@ -545,6 +561,7 @@ function createWorkbenchCoreFeature(
   });
   const threadActions = new WorkbenchThreadActionController({
     autoCompact,
+    compaction,
     approvals,
     reconciliation: transcriptReconciliation,
     transcripts: transcriptReader,
@@ -673,7 +690,8 @@ function createWorkbenchCoreFeature(
     },
   };
   return new WorkbenchCoreFeature({
-    hasPendingWork: () => admission.hasPendingWork() || autoCompact.hasPendingWork() || threadContextRollover.hasPendingWork()
+    hasPendingWork: () => admission.hasPendingWork() || compaction.hasPendingWork()
+      || autoCompact.hasPendingWork() || threadContextRollover.hasPendingWork()
       || launches.hasPendingWork() || stats.hasPendingWork() || transcriptReconciliation.hasPendingWork(),
     captureReloadState: (): WorkbenchCoreReloadState => ({
       projectStartup: projectCatalog.captureReloadState(),

@@ -6,7 +6,7 @@
  * - threadItemAssistantMessages: assistant-message storage.
  * - threadItemReasoning/threadReasoningSections: reasoning storage.
  * - threadItemFileChanges/threadFileChanges/threadFileChangeHunks/threadFileChangeCandidates: file-change storage.
- * - threadItemContextCompactions/threadItemUnknown: compaction and opaque item storage.
+ * - threadItemContextCompactions/threadItemContextCompactionExecutions/threadItemUnknown: compaction, native execution evidence and opaque item storage.
  * - threadItemToolOutputs/threadToolOutputParts: tool-output storage.
  * - threadItemTimelines/threadItemTimelineAliases: item timing storage.
  * - itemTables/ItemSchemaRows: current item inventory and row types.
@@ -592,6 +592,23 @@ const threadItemContextCompactionsV1 = defineTable("thread_item_context_compacti
 const threadItemContextCompactionsHistory = initialHistory(threadItemContextCompactionsV1);
 export const threadItemContextCompactions = threadItemContextCompactionsHistory.current;
 
+const threadItemContextCompactionExecutionsV1 = defineTable("thread_item_context_compaction_executions", {
+  item_id: integer().primaryKey().references("thread_item_context_compactions", "item_id", { onDelete: "CASCADE" }),
+  harness_id: text().notNull(),
+  native_location: text().notNull(),
+  native_thread_id: text().notNull(),
+  native_turn_id: text().notNull(),
+}, (table) => ({
+  constraints: [unique([
+    table.harness_id, table.native_location, table.native_thread_id, table.native_turn_id,
+  ])],
+}));
+const threadItemContextCompactionExecutionsHistory = initialHistory(
+  threadItemContextCompactionExecutionsV1,
+  databaseReleases.compactionExecutions.version,
+);
+export const threadItemContextCompactionExecutions = threadItemContextCompactionExecutionsHistory.current;
+
 const threadItemUnknownV1 = defineTable("thread_item_unknown", {
   item_id: integer().primaryKey(),
   item_type: enumText("unknown").notNull().default("unknown"),
@@ -679,6 +696,7 @@ export const itemTables = Object.freeze({
   threadFileChangeHunks,
   threadFileChangeCandidates,
   threadItemContextCompactions,
+  threadItemContextCompactionExecutions,
   threadItemUnknown,
   threadItemToolOutputs,
   threadToolOutputParts,
@@ -708,6 +726,7 @@ export const itemSchemaHistory = defineSubsystemHistory([
   threadFileChangeHunksHistory,
   threadFileChangeCandidatesHistory,
   threadItemContextCompactionsHistory,
+  threadItemContextCompactionExecutionsHistory,
   threadItemUnknownHistory,
   threadItemToolOutputsHistory,
   threadToolOutputPartsHistory,

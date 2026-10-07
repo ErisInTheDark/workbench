@@ -33,6 +33,7 @@ import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptSettlement,
+  WorkbenchTranscriptSettlementMode,
   WorkbenchTranscriptSnapshot,
   WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptItemIdentity,
@@ -147,9 +148,16 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "reserveSubagent"; record: Omit<WorkbenchSubagentReservation, "directSubagentIndex"> }
   | { type: "activateSubagent"; parentThreadId: WorkbenchThreadId; reservationId: string; record: WorkbenchSubagentRelationship }
   | { type: "removeSubagent"; parentThreadId: WorkbenchThreadId; identifier: string }
-  | { type: "settleTranscript"; observations: readonly WorkbenchTranscriptObservation[] }
+  | {
+      type: "settleTranscript";
+      observations: readonly WorkbenchTranscriptObservation[];
+      mode?: WorkbenchTranscriptSettlementMode;
+    }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
   | { type: "readTranscriptProviderCursor"; threadId: string; turnId: string }
+  | { type: "readTranscriptCompactionExecution"; input: {
+      harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
+    } }
   | { type: "readTranscriptContext"; threadId: string }
   | { type: "queryTranscript"; request: TranscriptQuery }
   | { type: "readThreadContextUsage"; threadId: string }
@@ -187,7 +195,7 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readStats", "readStatsClaimedRoots", "readClaimStats", "readStatsImportProgress",
 ]);
 const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
-  "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor",
+  "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor", "readTranscriptCompactionExecution",
   "readTranscriptContext", "queryTranscript", "readThreadContextUsage",
   "readTranscriptMaterializedTurnIds",
 ]);
@@ -247,6 +255,11 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
   | { id: number; type: "transcriptContext"; snapshot: WorkbenchTranscriptContextSnapshot | null }
   | { id: number; type: "transcriptProviderCursor"; cursor: string | null | undefined }
+  | { id: number; type: "transcriptCompactionExecution"; execution: {
+      itemId: import("workbench-shared/workbench/identity").WorkbenchItemId;
+      threadId: WorkbenchThreadId;
+      turnId: import("workbench-shared/workbench/identity").WorkbenchTurnId;
+    } | null }
   | { id: number; type: "transcriptQueryResult"; result: { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } }
   | { id: number; type: "threadContextUsage"; snapshot: ThreadContextUsageSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }

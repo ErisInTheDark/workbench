@@ -17,6 +17,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { WorkbenchQuestionnaireHistoryEntryState } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
+import type { WorkbenchProviderCompactionScope } from "workbench-shared/workbench/provider/provider-thread";
 import { WORKBENCH_STATS_USAGE_DATA_VERSION } from "workbench-shared/workbench/stats/workbench-stats-usage";
 import { createAgentScreenshotSteerText } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { randomUUID } from "node:crypto";
@@ -359,6 +360,7 @@ export default class ClaudeTranscriptAdapter {
   /** Report Claude's compaction signals; Workbench owns the item. Claude names neither start nor end, so both are unreferenced. */
   async recordCompactionMessage(
     threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, message: SDKStatusMessage | SDKCompactBoundaryMessage,
+    scope?: WorkbenchProviderCompactionScope,
   ) {
     const boundary = message.subtype === "compact_boundary" ? message : null;
     const status = message.subtype === "status" ? message : null;
@@ -370,17 +372,19 @@ export default class ClaudeTranscriptAdapter {
     if (phase === "failed") {
       console.warn("[claude] context compaction failed", status?.compact_error?.slice(0, 300) ?? "no reason given");
     }
-    await this.reportCompaction(threadId, turnId, phase, boundary?.compact_metadata.duration_ms ?? null);
+    await this.reportCompaction(threadId, scope?.turnId ?? turnId, phase,
+      boundary?.compact_metadata.duration_ms ?? null, scope?.itemId);
   }
 
   /** Unreferenced: an end settles the thread's open compaction, or records nothing without a measured duration. */
   async reportCompaction(
     threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, phase: "started" | "completed" | "failed", durationMs: number | null = null,
+    itemId?: WorkbenchProviderCompactionScope["itemId"],
   ) {
     await this.owners.transcript.record([{
       kind: "contextCompaction", threadId, turnId, phase, observedAt: Date.now(), reference: null, durationMs,
+      ...(itemId ? { itemId } : {}),
     }], { source: "provider" });
-    if (phase === "completed") await this.recordContextUsage(threadId, null);
   }
 
   readContextUsage(threadId: WorkbenchThreadId) {

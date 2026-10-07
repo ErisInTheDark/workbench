@@ -14,7 +14,8 @@ import type {
   ThreadPayload, WorkbenchPendingUserInputRequest,
 } from "workbench-shared/types";
 import type {
-  WorkbenchProviderThreadCreate, WorkbenchProviderThreadList, WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile,
+  WorkbenchProviderCompactionScope, WorkbenchProviderThreadCreate, WorkbenchProviderThreadList,
+  WorkbenchProviderThreads, WorkbenchProviderTranscriptReconcile,
 } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchThreadMessageResultSchema } from "workbench-shared/workbench/thread/thread-actions";
@@ -418,8 +419,14 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     await this.mapped({ id: 0, method: "thread/name/set", params: { threadId, name: title } });
   }
 
-  async compact(threadId: string, options?: { waitForCompletion?: boolean; signal?: AbortSignal }) {
-    await this.mapped({ id: 0, method: "thread/compact/start", params: { threadId } }, options);
+  async compact(threadId: string, options: { scope: WorkbenchProviderCompactionScope; signal?: AbortSignal }) {
+    const nativeThreadId = await this.nativeThreadId(threadId);
+    await this.owners.bridge.handleServerRequest({
+      id: 0,
+      method: "thread/compact/start",
+      params: { threadId: nativeThreadId },
+      workbenchCompactionScope: { ...options.scope, threadId },
+    }, { waitForCompletion: true, signal: options.signal });
   }
 
   async delete(threadId: string) {

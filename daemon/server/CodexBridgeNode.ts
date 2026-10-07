@@ -257,6 +257,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       questionnaires: new CodexQuestionnaireAdapter(questionnaires, threadIdentity),
       sqliteReader,
       readSqliteProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
+      readSqliteCompactionExecution: input => build.get("database").readTranscriptCompactionExecution!({
+        harnessId: "codex",
+        ...input,
+      }),
       readSqliteRecoveryGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(

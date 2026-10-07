@@ -8,6 +8,7 @@ import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/setti
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
+import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
@@ -48,6 +49,7 @@ export default class WorkbenchThreadAutoCompactController {
   hasPendingWork() { return this.refreshes.size > 0; }
   constructor(
     private readonly admission: Pick<WorkbenchThreadAdmissionController, "run">,
+    private readonly compaction: Pick<WorkbenchThreadCompactionController, "compactInsideAdmission">,
     private readonly ports: {
     readSettings(): Promise<ThreadAutoCompactSettings>;
     readEvidence(threadId: string): Promise<ThreadAutoCompactEvidence | null>;
@@ -109,7 +111,7 @@ export default class WorkbenchThreadAutoCompactController {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       if (!options.skipAutoCompact && (await this.decide(threadId, provider)).willAutoCompact) {
-        await provider.threads.compact(threadId, { waitForCompletion: true, signal });
+        await this.compaction.compactInsideAdmission(threadId, provider, signal);
       }
       signal.throwIfAborted();
       const result = await admit();

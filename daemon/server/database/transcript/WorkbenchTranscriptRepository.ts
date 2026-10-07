@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   ItemReferenceSchema, NativeThreadIdSchema, NativeTurnIdSchema, ThreadReferenceSchema, TurnReferenceSchema,
+  WorkbenchItemIdSchema,
   WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
   type WorkbenchItemId, type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
@@ -80,6 +81,7 @@ import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptCaptureGapObservation,
   WorkbenchTranscriptContextCompactionObservation,
+  WorkbenchTranscriptCompactionCompletion,
   WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
@@ -114,6 +116,7 @@ interface SettlementChanges {
   removedItems: Map<string, Set<string>>;
   /** Latest observed time of rows this settlement newly admitted, per thread. */
   itemActivityAt: Map<string, number>;
+  compactionCompletions: WorkbenchTranscriptCompactionCompletion[];
 }
 
 type TranscriptSettlementMode = "live" | "canonicalImport" | "providerRecovery";
@@ -164,10 +167,14 @@ export default class WorkbenchTranscriptRepository {
     })();
   }
 
-  settle(observations: readonly WorkbenchTranscriptObservation[]): WorkbenchTranscriptSettlement {
+  settle(
+    observations: readonly WorkbenchTranscriptObservation[],
+    settlementMode: "live" | "replay" = "live",
+  ): WorkbenchTranscriptSettlement {
     const changedThreadIds = new Set<string>();
     const affected: SettlementChanges = {
       itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map(), itemActivityAt: new Map(),
+      compactionCompletions: [],
     };
     try {
       this.#settlementChanges = affected;
@@ -182,7 +189,7 @@ export default class WorkbenchTranscriptRepository {
             : observation.kind === "providerTurnScope"
               ? this.#settleProviderTurnScope(observation)
             : observation.kind === "contextCompaction"
-              ? this.#settleContextCompaction(observation)
+              ? this.#settleContextCompaction(observation, settlementMode)
             : this.#settleObservation(observation);
           if (threadId) changedThreadIds.add(threadId);
         }
@@ -211,7 +218,11 @@ export default class WorkbenchTranscriptRepository {
             },
           };
         });
-        return { changedThreadIds: [...changedThreadIds], changes };
+        return {
+          changedThreadIds: [...changedThreadIds],
+          compactionCompletions: affected.compactionCompletions,
+          changes,
+        };
       })();
     } finally {
       this.#settlementChanges = null;
@@ -530,6 +541,27 @@ export default class WorkbenchTranscriptRepository {
         existingTimeline?.started_at ?? null,
         observation.timeline?.startedAt ?? null,
       ),
+    };
+  }
+
+  readCompactionExecution(input: {
+    harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
+  }) {
+    const execution = this.#one(selectRows(itemTables.threadItemContextCompactionExecutions, {
+      where: {
+        harness_id: input.harnessId,
+        native_location: input.nativeLocation,
+        native_thread_id: input.nativeThreadId,
+        native_turn_id: input.nativeTurnId,
+      },
+    }));
+    if (!execution) return null;
+    const item = this.#one(selectRows(itemTables.threadItems, { where: { id: execution.item_id } }));
+    if (!item) throw new Error("Compaction execution lost its canonical item.");
+    return {
+      itemId: WorkbenchItemIdSchema.parse(item.public_id),
+      threadId: WorkbenchThreadIdSchema.parse(item.thread_id),
+      turnId: WorkbenchTurnIdSchema.parse(item.turn_id),
     };
   }
 
@@ -1291,12 +1323,28 @@ export default class WorkbenchTranscriptRepository {
    * item. Settled compactions never change again, an end with nothing open needs a reference or a measured
    * duration as evidence before it creates one, and a new start retires any older compaction left open.
    */
-  #settleContextCompaction(observation: WorkbenchTranscriptContextCompactionObservation) {
+  #settleContextCompaction(
+    observation: WorkbenchTranscriptContextCompactionObservation,
+    settlementMode: "live" | "replay",
+  ) {
     const threadId = WorkbenchThreadIdSchema.parse(observation.threadId);
     const turnId = WorkbenchTurnIdSchema.parse(observation.turnId);
     this.#requiredTurn(threadId, turnId);
     const { phase, observedAt, reference } = observation;
-    const referenced = reference === null ? null : this.#itemIdentity.resolve({
+    if (observation.itemId) {
+      this.#itemIdentity.admit({
+        threadId,
+        itemId: observation.itemId,
+        sources: [{
+          turnId,
+          kind: "client",
+          reference: observation.itemId,
+        }],
+      });
+    }
+    const referenced = observation.itemId
+      ? this.#itemIdentity.resolve({ threadId, turnId, itemId: observation.itemId })
+      : reference === null ? null : this.#itemIdentity.resolve({
       threadId, turnId, itemId: ItemReferenceSchema.parse(reference),
     });
     const openItems = this.#openContextCompactions(threadId);
@@ -1309,8 +1357,8 @@ export default class WorkbenchTranscriptRepository {
     if (phase === "started") {
       this.#interruptContextCompactions(openItems.filter(item => item.id !== existing?.id), observedAt);
     }
-    const publicItemId = referenced?.itemId ?? open?.public_id;
-    const sourceId = open ? open.public_id : reference ?? `workbench-compaction:${randomUUID()}`;
+    const publicItemId = observation.itemId ?? referenced?.itemId ?? open?.public_id;
+    const sourceId = open ? open.public_id : observation.itemId ?? reference ?? `workbench-compaction:${randomUUID()}`;
     const startedAt = phase === "started" ? observedAt
       : !existing && durationMs !== null ? Math.max(0, observedAt - durationMs) : null;
     const itemId = this.#writeItem({
@@ -1329,7 +1377,37 @@ export default class WorkbenchTranscriptRepository {
       threadId,
       turnId: open?.turn_id ?? turnId,
     });
+    if (observation.execution) {
+      const execution = {
+        item_id: itemId,
+        harness_id: observation.execution.harnessId,
+        native_location: observation.execution.nativeLocation,
+        native_thread_id: observation.execution.nativeThreadId,
+        native_turn_id: observation.execution.nativeTurnId,
+      };
+      const stored = this.#one(selectRows(itemTables.threadItemContextCompactionExecutions, {
+        where: { item_id: itemId },
+      }));
+      if (!stored) this.#run(insertRow(itemTables.threadItemContextCompactionExecutions, execution));
+      else if (stored.harness_id !== execution.harness_id
+        || stored.native_location !== execution.native_location
+        || stored.native_thread_id !== execution.native_thread_id
+        || stored.native_turn_id !== execution.native_turn_id) {
+        throw new Error("A compaction item cannot change its native execution identity.");
+      }
+    }
     if (phase !== "started") this.#settlementChanges?.completedItemIds.add(itemId);
+    if (phase === "completed" && settlementMode === "live") {
+      const usage = this.#contextUsage.resetCurrent(threadId);
+      const completed = this.#one(selectRows(itemTables.threadItems, { where: { id: itemId } }));
+      if (!completed) throw new Error("Completed compaction lost its canonical item.");
+      this.#settlementChanges?.compactionCompletions.push({
+        itemId: WorkbenchItemIdSchema.parse(completed.public_id),
+        threadId,
+        turnId: WorkbenchTurnIdSchema.parse(completed.turn_id),
+        usage,
+      });
+    }
     return threadId;
   }
 

@@ -15,6 +15,7 @@ import WorkbenchTranscriptSubscriptionController, {
   type WorkbenchTranscriptSubscription,
 } from "./WorkbenchTranscriptSubscriptionController.ts";
 import type {
+  WorkbenchTranscriptCompactionCompletion,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptRecordingContext,
@@ -169,7 +170,9 @@ export default class WorkbenchTranscriptController {
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
   readonly #live = new WorkbenchTranscriptLiveController();
   readonly #itemActivityListeners = new Set<(activity: WorkbenchTranscriptItemActivity) => Promise<void> | void>();
-  readonly #compactionListeners = new Set<(threadId: WorkbenchThreadId) => Promise<void> | void>();
+  readonly #compactionListeners = new Set<(
+    completion: WorkbenchTranscriptCompactionCompletion,
+  ) => Promise<void> | void>();
   readonly #turnStartListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
   readonly #heldSteerListeners = new Set<(event: WorkbenchTranscriptTurnEvent) => Promise<void> | void>();
   readonly #settledListeners = new Set<(threadIds: readonly string[]) => void>();
@@ -225,7 +228,7 @@ export default class WorkbenchTranscriptController {
     context: WorkbenchTranscriptRecordingContext,
   ) {
     this.#assertActive();
-    if (observations.length === 0) return { changedThreadIds: [] };
+    if (observations.length === 0) return { changedThreadIds: [], compactionCompletions: [] };
     const identity = observationIdentity(observations);
     // Retire at activity ingress, not settlement: database work may finish after a newer patch starts.
     // Window/catalogue observations replay history and must not end an unseen current megapatch.
@@ -258,7 +261,7 @@ export default class WorkbenchTranscriptController {
       ];
       let settlement: WorkbenchTranscriptSettlement;
       try {
-        settlement = await this.#recorder.record(recoveryObservations);
+        settlement = await this.#recorder.record(recoveryObservations, "replay");
       } catch (error) {
         reportSettlementFailure(error, identity.threadId);
         throw await this.#captureGaps.captureFailure({
@@ -276,7 +279,10 @@ export default class WorkbenchTranscriptController {
     }
     let settlement: WorkbenchTranscriptSettlement;
     try {
-      settlement = await this.#recorder.record(observations);
+      settlement = await this.#recorder.record(
+        observations,
+        context.source === "compatibility" ? "replay" : "live",
+      );
     } catch (error) {
       if (context.source === "compatibility") throw error;
       reportSettlementFailure(error, identity.threadId);
@@ -291,7 +297,7 @@ export default class WorkbenchTranscriptController {
     });
     this.#publishSettlement(settlement, observations, context.source);
     this.#publishSettled(settlement.changedThreadIds);
-    this.#publishContextCompactions(observations);
+    this.#publishContextCompactions(settlement);
     // Compatibility imports replay history; their turns and steers are not live news.
     if (context.source !== "compatibility") this.#publishTurnEvents(observations);
     return settlement;
@@ -309,7 +315,7 @@ export default class WorkbenchTranscriptController {
   }
 
   /** Observe live completed context compactions after their durable commit; recovery replays never fire. */
-  subscribeContextCompaction(listener: (threadId: WorkbenchThreadId) => Promise<void> | void) {
+  subscribeContextCompaction(listener: (completion: WorkbenchTranscriptCompactionCompletion) => Promise<void> | void) {
     this.#compactionListeners.add(listener);
     return () => { this.#compactionListeners.delete(listener); };
   }
@@ -361,11 +367,10 @@ export default class WorkbenchTranscriptController {
     }
   }
 
-  #publishContextCompactions(observations: readonly WorkbenchTranscriptObservation[]) {
+  #publishContextCompactions(settlement: WorkbenchTranscriptSettlement) {
     if (this.#disposed) return;
-    for (const observation of observations) {
-      if (observation.kind !== "contextCompaction" || observation.phase !== "completed") continue;
-      notifyListeners(this.#compactionListeners, observation.threadId, reportCompactionFailure);
+    for (const completion of settlement.compactionCompletions ?? []) {
+      notifyListeners(this.#compactionListeners, completion, reportCompactionFailure);
     }
   }
 

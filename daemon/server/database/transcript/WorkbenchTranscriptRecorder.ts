@@ -5,6 +5,7 @@ import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts"
 import type {
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptSettlement,
+  WorkbenchTranscriptSettlementMode,
 } from "./workbench-transcript-types.ts";
 
 export default class WorkbenchTranscriptRecorder {
@@ -14,7 +15,10 @@ export default class WorkbenchTranscriptRecorder {
     this.#database = database;
   }
 
-  async record(observations: readonly WorkbenchTranscriptObservation[]): Promise<WorkbenchTranscriptSettlement> {
-    return await this.#database.settleTranscript(observations);
+  async record(
+    observations: readonly WorkbenchTranscriptObservation[],
+    mode: WorkbenchTranscriptSettlementMode = "live",
+  ): Promise<WorkbenchTranscriptSettlement> {
+    return await this.#database.settleTranscript(observations, mode);
   }
 }
