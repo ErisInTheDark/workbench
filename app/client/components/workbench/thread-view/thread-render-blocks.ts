@@ -34,6 +34,7 @@ import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/threa
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   getThreadCommandDisplay, getThreadCommandExecutionOutcome, getThreadSubagentWaitMcpOutcome, getGitArcMatcherAction,
+  getNativeToolDisplay,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isNativeFileOperation, getNativeFileChanges,
   isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
@@ -63,7 +64,7 @@ const TASK_TITLE_ALREADY_MATCHES_OUTPUT = "Task title already matches";
 
 /** `workbenchShell` marks a command derived from a wb shell call, which Workbench owns and the user can stop. */
 export type CommandItem = Extract<ThreadItem, { type: "commandExecution" }> & { shell?: CommandShell; workbenchShell?: true };
-export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" }>;
+export type CommandSequenceItem = CommandItem | Extract<ThreadItem, { type: "mcpToolCall" | "dynamicToolCall" }>;
 type UserMessageItem = Extract<ThreadItem, { type: "userMessage" }>;
 export type IncomingAgentMessageItem = UserMessageItem | Extract<ThreadItem, { type: "functionCallOutput" }>;
 /** A settled subagent wait, as a CLI command or a wb MCP call. */
@@ -164,6 +165,15 @@ export function isHiddenCommandExecution(command: string) {
 
 export function hasReasoningSteps(item: Extract<ThreadItem, { type: "reasoning" }>) {
   return item.summary.some(section => section.trim()) || item.content.some(section => section.trim());
+}
+
+/**
+ * A provider-native tool call whose display is the shared command-summary grammar, so it groups with commands.
+ * File operations own the file-change sequence, and the opencode execute wrapper owns captured children.
+ */
+function isNativeCommandToolCall(item: Extract<ThreadItem, { type: "dynamicToolCall" }>): boolean {
+  return !isNativeFileOperation(item) && !(item.namespace === "opencode" && item.tool === "execute")
+    && getNativeToolDisplay(item) !== null;
 }
 
 function isAlreadyMatchingTaskTitle(item: ThreadItem, fallbackCwd: string) {
@@ -486,6 +496,10 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       pending.items.push(item);
       continue;
     }
+    if (item.type === "dynamicToolCall" && isNativeCommandToolCall(item)) {
+      commands(item);
+      continue;
+    }
     if (item.type === "webSearch") {
       if (pending?.kind !== "webSearchSequence") flush();
       if (hidden.webSearchItemIds?.has(item.id) || isThreadWebSearchPlaceholder(item)) continue;
@@ -556,6 +570,16 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
       flushWaits();
       if (item.status !== "completed" || item.error) { flushCommands(); segments.push({ kind: "commands", items: [item] }); }
       else commands.push(item);
+      continue;
+    }
+    if (item.type === "dynamicToolCall") {
+      flushWaits();
+      if (item.success === false || item.status !== "completed") {
+        flushCommands();
+        segments.push({ kind: "commands", items: [item] });
+      } else {
+        commands.push(item);
+      }
       continue;
     }
     const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);

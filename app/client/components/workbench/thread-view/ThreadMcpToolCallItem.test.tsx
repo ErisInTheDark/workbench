@@ -278,3 +278,35 @@ test("adjacent wb rg and shell calls share a command summary while retaining sep
   assert.match(visibleText, /Searched 1 file, listed files/u);
   assert.equal(getThreadTerminalEntries([rgItem, shellItem], { cwd: "C:/workspace" }).length, 2);
 });
+
+test("adjacent provider-native reads share one command summary", () => {
+  const read = (id: string, path: string): Extract<ThreadItem, { type: "dynamicToolCall" }> => ({
+    arguments: { file_path: path },
+    contentItems: null,
+    durationMs: 1,
+    id,
+    namespace: "claude",
+    status: "completed",
+    success: true,
+    tool: "Read",
+    type: "dynamicToolCall",
+  });
+  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 12,
+      error: null,
+      id: "turn-one",
+      items: [read("read-one", "src/a.ts"), read("read-two", "src/b.ts")],
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+  const visibleText = html.replace(/<[^>]+>/gu, "");
+
+  assert.match(visibleText, /Read 2 files/u);
+});

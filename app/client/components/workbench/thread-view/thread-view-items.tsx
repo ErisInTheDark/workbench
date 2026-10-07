@@ -62,6 +62,7 @@ import {
   getThreadCommandOutcomeDisplay,
   getWorkbenchMcpCommandDisplay,
   getWorkbenchMcpCommandRoute,
+  getNativeToolDisplay,
   shouldUseWorkbenchMcpSpecializedRenderer,
   getGitArcMatcherAction,
   isBrowseCommandMatcherClaim,
@@ -1878,6 +1879,22 @@ function ThreadRegularCommandItem ({
     );
   }
 
+  if (item.type === "dynamicToolCall") {
+    return (
+      <ThreadDynamicToolCallItem
+        activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
+        inlineMentionSources={inlineMentionSources}
+        item={item}
+        knownSkills={knownSkills}
+        threadCwdPath={threadCwdPath}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
+
   return (
     <ThreadCommandExecutionDetails
       activeStartedAtMs={getActiveItemStartedAtMs(item, itemTimeline)}
@@ -1948,6 +1965,10 @@ function ThreadRegularCommandSequence ({
         cwd: item.cwd,
         shell: item.shell,
       }];
+    }
+    if (item.type === "dynamicToolCall") {
+      const display = getNativeToolDisplay(item, { knownSkills });
+      return display ? [{ display }] : [];
     }
     const display = getWorkbenchMcpCommandDisplay({
       argumentsValue: item.arguments,

@@ -67,8 +67,29 @@ test("adjacent Claude Edit and Write calls group into one file sequence like oth
     claude("write", "Write"), emptyThought, claude("edit", "Edit"), claude("read", "Read"), claude("later", "Edit"),
   ]);
   assert.deepEqual(blocks.map(block => [block.kind, getRenderableBlockItems(block).map(item => item.id)]), [
-    ["fileChangeSequence", ["write", "edit"]], ["item", ["read"]], ["fileChangeSequence", ["later"]],
+    ["fileChangeSequence", ["write", "edit"]], ["commandSequence", ["read"]], ["fileChangeSequence", ["later"]],
   ]);
+});
+
+test("provider-native read, search, and list calls join adjacent commands", () => {
+  const native = (id: string, namespace: string, tool: string, args: Record<string, string>): ThreadItem => ({
+    id, type: "dynamicToolCall", namespace, tool, arguments: args,
+    status: "completed", success: true, contentItems: null, durationMs: 1,
+  });
+  const blocks = buildRenderableBlocks([
+    command("one"),
+    native("claude-read", "claude", "Read", { file_path: "src/a.ts" }),
+    native("opencode-read", "opencode", "read", { path: "src/b.ts" }),
+    native("mystery", "acme", "frobnicate", {}),
+    command("two"),
+  ]);
+  assert.deepEqual(blocks.map(block => [block.kind, getRenderableBlockItems(block).map(item => item.id)]), [
+    ["commandSequence", ["one", "claude-read", "opencode-read"]],
+    ["item", ["mystery"]],
+    ["commandSequence", ["two"]],
+  ]);
+  assert.deepEqual(rows([native("only", "claude", "Read", { file_path: "src/a.ts" })]).map(row => row.eligible), [true],
+    "native reads collapse with worked runs like ordinary commands");
 });
 
 test("captured children compact only their exact execute wrapper without deleting its evidence", () => {
