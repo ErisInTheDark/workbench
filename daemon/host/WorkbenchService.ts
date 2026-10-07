@@ -74,9 +74,8 @@ export default class WorkbenchService {
       writeLog: options.writeLog,
       lifetime: this.abort.signal,
       environment: { ...process.env, WORKBENCH_DATA_ROOT: this.dataRoot, WORKBENCH_SERVICE_MANAGED: "1" },
-      onFailure: async (error, beforeReady) => {
+      onFailure: error => {
         options.warn(`Daemon supervision failed: ${error.message.slice(0, 512)}`);
-        if (beforeReady) await this.runtime.run("database", "record daemon startup failure", async database => database.failStartup(error.message));
         this.publish();
       },
       requestRestart: fatal => options.restart(fatal),
@@ -161,13 +160,13 @@ export default class WorkbenchService {
     return {
       protocol: 1, daemonId: database.daemonId, hostname: hostname().slice(0, 253),
       wakeEnabled: database.wakeEnabled,
-      state: endpoint ? "ready" : database.startupFailure ? "failed" : daemon.state === "stopped" ? "sleeping" : daemon.state,
+      state: endpoint ? "ready" : daemon.state === "stopped" ? "sleeping" : daemon.state,
     };
   }
 
   snapshot(): WorkbenchServiceSnapshot {
     return {
-      identity: this.identity(), failure: this.runtime.get("database").startupFailure ?? this.daemon.snapshot().failure,
+      identity: this.identity(), failure: this.daemon.snapshot().failure,
       daemonOrigin: this.currentDaemonEndpoint()?.origin ?? null,
       network: this.runtime.get("network").snapshot(),
       discovery: this.runtime.get("network").discoverySnapshot(),
@@ -216,7 +215,6 @@ export default class WorkbenchService {
     await this.runtime.run("database", "admit daemon wake", async database => {
       if (this.daemon.snapshot().state === "stopped") throw new Error("The daemon was intentionally stopped.");
       if (remote && !database.wakeEnabled) throw new Error("Remote daemon wake is disabled.");
-      if (database.startupFailure) throw new Error(database.startupFailure);
       database.requestDaemon(this.options.session);
     });
     if (this.daemon.snapshot().state === "stopped") throw new Error("The daemon was intentionally stopped.");
@@ -340,11 +338,8 @@ export default class WorkbenchService {
           await this.daemon.wake();
           break;
         }
-        if (request.retry && this.runtime.get("database").startupFailure) {
-          await this.runtime.run("database", "retry daemon startup", async database => database.requestDaemon(this.options.session));
-          this.options.restart();
-          break;
-        }
+        // A failed daemon relaunches itself after backoff; an explicit retry skips the wait.
+        if (request.retry && this.daemon.retryNow()) break;
         await this.daemonTarget(signal, false);
         break;
       case "service/wake/enable":

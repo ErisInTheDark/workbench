@@ -144,6 +144,11 @@ test("cold service reads and app detach preserve durable identity without waking
   release();
   await viewerRestart;
   assert.equal(first.service.identity().state, "sleeping");
+  let retries = 0;
+  context.mock.method(activeDaemon!, "retryNow", () => { retries++; return true; });
+  // `restart` fails this fixture, so an explicit retry must relaunch in place instead of replacing the host.
+  await client.request({ method: "service/daemon/wake", retry: true });
+  assert.equal(retries, 1);
   // A verified daemon this host does not own must never block stopping the host itself.
   const { standalone } = first.service as unknown as { standalone: WorkbenchLocalDaemon };
   context.mock.method(standalone, "getSnapshot", () => ({ failure: null, endpoint: {

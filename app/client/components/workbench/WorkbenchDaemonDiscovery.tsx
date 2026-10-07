@@ -5,6 +5,7 @@
 "use client";
 import { useState } from "react";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
+import WorkbenchDaemonStartupFailure from "./WorkbenchDaemonStartupFailure";
 
 export default function WorkbenchDaemonDiscovery() {
   const network = useWorkbenchNetwork();
@@ -14,7 +15,7 @@ export default function WorkbenchDaemonDiscovery() {
   const daemon = network.snapshot?.daemon;
   if (!discovery && !daemon) return null;
 
-  async function act(action: "daemon-discovery-refresh" | "daemon-wake-retry") {
+  async function act(action: "daemon-discovery-refresh") {
     setWorking(true);
     setError(null);
     try { await network.client.action({ action }); }
@@ -34,10 +35,8 @@ export default function WorkbenchDaemonDiscovery() {
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-text">{daemon.hostname}</span>
         <span className="text-fg/muted">this device · {daemon.state}</span>
-        {daemon.state === "failed" && network.snapshot?.capabilities?.manageApp
-          ? <button type="button" disabled={working} className="rounded px-2 py-1 text-accent hover:bg-fg/5 disabled:opacity-50"
-            onClick={() => { void act("daemon-wake-retry"); }}>Retry startup</button> : null}
       </div>
+      <WorkbenchDaemonStartupFailure />
       <p className="m-0 break-all font-mono text-xs text-fg/muted">{daemon.daemonId}</p>
     </div> : null}
     {discovery?.peers.map(peer => <div key={peer.peerId} className="space-y-1 text-sm">

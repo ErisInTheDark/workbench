@@ -229,6 +229,7 @@ export default class WorkbenchNetworkController {
         phase: this.change.phase, sourceOrigin: this.change.sourceOrigin, destinationOrigin: this.change.destinationOrigin,
       } : null,
       daemon: this.client?.getSnapshot().snapshot?.identity,
+      daemonFailure: this.client?.getSnapshot().snapshot?.failure ?? null,
     });
   }
 

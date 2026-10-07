@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - WorkbenchDaemonHostOptions: owned child, supervision and observation boundaries.
- * - default WorkbenchDaemonHost: own daemon child startup, endpoint readiness, logs, health recovery, in-place restart and shutdown.
+ * - default WorkbenchDaemonHost: own daemon child startup, per-run process containers, endpoint readiness, logs, health recovery, failure backoff, in-place restart and shutdown.
  * Local mechanics:
  * - RunnerLog writes one plain formatted stream to terminal and the active file.
  * - WakeSignal wakes a pending watchdog wait when child output changes lifecycle truth.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { access, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -19,8 +19,12 @@ import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../
 const { killProcessTreeAsync } = createRequire(import.meta.url)("../server/process-helpers.ts") as typeof import("../server/process-helpers.ts");
 
 import DaemonHealthWatchdog from "./DaemonHealthWatchdog.ts";
+import DaemonProcessContainer from "./DaemonProcessContainer.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
 import { DaemonSleepMessageSchema, type DaemonHostMessage } from "../../shared/http/workbench-daemon-lifecycle.ts";
+
+/** Consecutive daemon failures back off from RESTART_DELAY_SECONDS, doubling up to this cap. */
+const MAX_RETRY_DELAY_MS = 60_000;
 
 type RunnerChildResult = {
   error?: Error;
@@ -145,16 +149,6 @@ function abortableSleep(delayMs: number, signal?: AbortSignal) {
   });
 }
 
-function defaultSpawnDaemon(daemonDirectoryPath: string, environment: NodeJS.ProcessEnv) {
-  return spawn(process.execPath, ["--env-file-if-exists=.env.local", "--import", "tsx", "server/index.ts"], {
-    cwd: daemonDirectoryPath,
-    env: { ...environment, WORKBENCH_DAEMON_LOOP: "1", FORCE_COLOR: "1" },
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    windowsHide: true,
-    detached: process.platform !== "win32",
-  });
-}
-
 function childResult(child: ChildProcess) {
   return new Promise<RunnerChildResult>((resolve) => {
     let settled = false;
@@ -190,11 +184,14 @@ export default class WorkbenchDaemonHost {
   private stopAbort = new AbortController();
   private activeAbort: AbortController | null = null;
   private activeChild: ChildProcess | null = null;
-  private retirement: Promise<void> | null = null;
   private activeLog: RunnerLog | null = null;
   private stopping = false;
   /** Set while an in-place restart retires the current child; supervision then spawns its replacement. */
   private restartReason: string | null = null;
+  /** Set while a failed daemon waits out its backoff before relaunching. */
+  private retrySkip: AbortController | null = null;
+  private readonly containers = new WeakMap<ChildProcess, DaemonProcessContainer>();
+  private readonly retirements = new WeakMap<ChildProcess, Promise<void>>();
   private lifecycle: DaemonLifecycle = { state: "sleeping" };
   private runTask: Promise<void> | null = null;
   private stopTask: Promise<void> | null = null;
@@ -210,9 +207,24 @@ export default class WorkbenchDaemonHost {
     this.healthClient = options.healthClient ?? new WorkbenchDaemonHealthClient();
     this.loggerFactory = options.loggerFactory ?? ((logFilePath) => new RunnerLogFile(logFilePath, options.writeLog));
     this.now = options.now ?? (() => performance.now());
-    this.terminateChild = options.terminateChild ?? (child => killProcessTreeAsync(child.pid));
+    this.terminateChild = options.terminateChild
+      ?? (child => this.containers.get(child)?.dispose() ?? killProcessTreeAsync(child.pid));
     this.sleep = options.sleep ?? abortableSleep;
-    this.spawnDaemon = options.spawnDaemon ?? defaultSpawnDaemon;
+    this.spawnDaemon = options.spawnDaemon ?? ((daemonDirectoryPath, environment) => {
+      const container = new DaemonProcessContainer({
+        root: this.projectRootPath, environment, killTree: killProcessTreeAsync,
+        warn: message => (this.activeLog ?? this.directLogger).error("host", message),
+      });
+      const child = container.spawn(process.execPath, ["--env-file-if-exists=.env.local", "--import", "tsx", "server/index.ts"], {
+        cwd: daemonDirectoryPath,
+        env: { ...environment, WORKBENCH_DAEMON_LOOP: "1", FORCE_COLOR: "1" },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        windowsHide: true,
+        detached: process.platform !== "win32",
+      });
+      this.containers.set(child, container);
+      return child;
+    });
     this.maxLogLines = positiveInteger(this.environment, "MAX_LOG_LINES", 1_000);
     this.maxLogFiles = positiveInteger(this.environment, "MAX_LOG_FILES", 5);
     this.logIdleTimeoutSeconds = positiveInteger(this.environment, "LOG_IDLE_TIMEOUT_SECONDS", 120);
@@ -278,6 +290,8 @@ export default class WorkbenchDaemonHost {
   async restart(reason: string) {
     if (this.stopping || this.stopTask) throw new Error("The daemon host is stopping.");
     if (this.sleepTransition) throw new Error("The daemon is going to sleep; wake it instead of restarting it.");
+    // A failed daemon waiting out its backoff restarts by relaunching now.
+    if (this.lifecycle.state === "failed" && this.retryNow()) return;
     if (this.lifecycle.state === "failed") throw this.lifecycle.error;
     if (!this.runTask || !this.activeChild) {
       // Nothing is running yet: starting (or the start already under way) is the restart.
@@ -305,6 +319,8 @@ export default class WorkbenchDaemonHost {
     let resolve!: (endpoint: WorkbenchDaemonEndpoint) => void;
     let reject!: (error: Error) => void;
     const promise = new Promise<WorkbenchDaemonEndpoint>((accept, fail) => { resolve = accept; reject = fail; });
+    // Backoff relaunches start without a waiting caller; fail() and its log own reporting that failure.
+    promise.catch(() => undefined);
     const ready = { promise, resolve, reject };
     this.lifecycle = { state: "starting", ready };
     this.publish();
@@ -341,35 +357,45 @@ export default class WorkbenchDaemonHost {
       if (this.stopping) return;
       this.logConfiguration(log);
       log.line("host", `logging complete daemon output to: ${logFilePath}`);
+      let consecutiveFailures = 0;
       let result = await this.runChild(log);
-      while (this.restartReason !== null && !this.stopping) {
-        log.line("host", `restarting the daemon (${this.restartReason}).`);
-        this.restartReason = null;
+      while (!this.stopping) {
+        if (this.restartReason !== null) {
+          log.line("host", `restarting the daemon (${this.restartReason}).`);
+          this.restartReason = null;
+          this.beginStarting();
+          result = await this.runChild(log);
+          continue;
+        }
+        if (this.sleepTransition?.accepted && result.exitCode === 0 && !result.error) {
+          await this.options.onSleep?.();
+          this.lifecycle = { state: "sleeping" };
+          log.line("host", "daemon is idle and sleeping; wake service remains available.");
+          this.publish();
+          return;
+        }
+        // runChild has already emptied this run's process container, so a relaunch cannot meet its orphans.
+        const beforeReady = this.lifecycle.state !== "ready";
+        const error = result.error ?? new Error(
+          `Daemon exited ${beforeReady ? "before readiness" : "after readiness"} with ${result.exitCode ?? result.signal ?? "unknown status"}.`,
+        );
+        consecutiveFailures = beforeReady ? consecutiveFailures + 1 : 1;
+        await this.fail(error, beforeReady);
+        const delayMs = Math.min(this.restartDelayMs * 2 ** (consecutiveFailures - 1), MAX_RETRY_DELAY_MS);
+        log.error("host", `${error.message.slice(0, 300)} Retrying in ${Math.ceil(delayMs / 1_000)} seconds (failure ${consecutiveFailures}).`);
+        await this.waitForRetry(delayMs);
+        if (this.stopping) return;
+        log.line("host", "relaunching the daemon.");
         this.beginStarting();
         result = await this.runChild(log);
       }
-      if (this.stopping) return;
-      if (this.sleepTransition?.accepted && result.exitCode === 0 && !result.error) {
-        await this.options.onSleep?.();
-        this.lifecycle = { state: "sleeping" };
-        log.line("host", "daemon is idle and sleeping; wake service remains available.");
-        this.publish();
-        return;
-      }
-      const beforeReady = this.lifecycle.state !== "ready";
-      const error = result.error ?? new Error(
-        `Daemon exited ${beforeReady ? "before readiness" : "after readiness"} with ${result.exitCode ?? result.signal ?? "unknown status"}.`,
-      );
-      await this.fail(error, beforeReady);
-      this.options.requestRestart?.();
-      if (!this.options.requestRestart) throw error;
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       if (!this.stopping && this.lifecycle.state !== "failed") await this.fail(normalized, this.lifecycle.state !== "ready");
-      // A failure here (e.g. a frozen child outliving its kill) must not leave the host stuck in `failed`
-      // with an orphaned daemon: replacing the crash unit lets the native supervisor's job end the whole tree.
+      // Supervision failed (e.g. a frozen child outliving its kill or a container that could not be emptied):
+      // replacing the host lets systemd's cgroup or the native supervisor's job end the whole tree.
       if (!this.stopping && this.options.requestRestart) {
-        log.error("host", `daemon supervision failed (${normalized.message.slice(0, 300)}); replacing the host so Windows ends the daemon's whole process tree.`);
+        log.error("host", `daemon supervision failed (${normalized.message.slice(0, 300)}); replacing the host so its platform container ends the daemon's whole process tree.`);
         this.options.requestRestart();
         return;
       }
@@ -543,7 +569,9 @@ export default class WorkbenchDaemonHost {
     } finally {
       abort.abort(new Error("Daemon child supervision ended."));
       child.off("message", acceptReady);
-      await this.retireChild();
+      // During stop(), that caller awaits the same retirement and owns reporting its failure.
+      try { await this.retireChild(); }
+      catch (error) { if (!this.stopping) throw error; }
       stdout.flush();
       stderr.flush();
       if (this.activeChild === child) this.activeChild = null;
@@ -559,21 +587,46 @@ export default class WorkbenchDaemonHost {
     log.line("host", `log directory: ${this.logDirectoryPath}`);
     log.line("host", `log rotation: more than ${this.maxLogLines} lines`);
     log.line("host", `log retention: ${this.maxLogFiles} files`);
-    log.line("host", "recovery: replace the managed host crash unit before restarting descendants.");
+    log.line("host", `recovery: empty the daemon's process container, then relaunch after ${this.restartDelayMs / 1_000} seconds, doubling per consecutive failure up to ${MAX_RETRY_DELAY_MS / 1_000} seconds.`);
     log.line("host", `inactivity recovery: WebSocket probes at ${this.logIdleTimeoutSeconds / 2} and ${this.logIdleTimeoutSeconds * 3 / 4} seconds; restart after ${this.logIdleTimeoutSeconds} seconds`);
     log.line("host", `pause sentinel: ${this.pauseSentinelPath}`);
     log.line("host", "press Ctrl+C to stop.");
   }
 
+  /**
+   * Empties the active run's process container, including after the daemon itself exited.
+   * Each run is retired once; later callers share that outcome, including its failure.
+   */
   private retireChild(): Promise<void> {
-    if (this.retirement) return this.retirement;
     const child = this.activeChild;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-    const retirement = this.terminateChild(child).finally(() => {
-      if (this.retirement === retirement) this.retirement = null;
-    });
-    this.retirement = retirement;
+    if (!child) return Promise.resolve();
+    const existing = this.retirements.get(child);
+    if (existing) return existing;
+    const retirement = this.terminateChild(child);
+    this.retirements.set(child, retirement);
     return retirement;
+  }
+
+  /** Waits out one failure backoff; `stop()` and `retryNow()` end it early. */
+  private async waitForRetry(delayMs: number) {
+    if (this.stopAbort.signal.aborted) return;
+    const skip = new AbortController();
+    const stopped = () => skip.abort(this.stopAbort.signal.reason);
+    this.stopAbort.signal.addEventListener("abort", stopped, { once: true });
+    this.retrySkip = skip;
+    try { await this.sleep(delayMs, skip.signal); }
+    catch (error) { if (!skip.signal.aborted) throw error; }
+    finally {
+      this.stopAbort.signal.removeEventListener("abort", stopped);
+      if (this.retrySkip === skip) this.retrySkip = null;
+    }
+  }
+
+  /** Skip the remaining failure backoff. Returns false when no relaunch is waiting. */
+  retryNow() {
+    if (!this.retrySkip) return false;
+    this.retrySkip.abort(new Error("Daemon retry requested."));
+    return true;
   }
 
   private async fail(error: Error, beforeReady: boolean) {

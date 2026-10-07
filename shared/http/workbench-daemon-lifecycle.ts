@@ -1,10 +1,12 @@
 /*
  * Exports:
  * - DaemonHostMessageSchema/DaemonHostMessage: parent-owned demand and sleep commitment.
+ * - DaemonOwnedMessageSchema: parent confirmation that the daemon's process container holds it.
  * - DaemonSleepMessageSchema/DaemonSleepMessage: child-owned idle request and commitment result.
  */
 import { z } from "zod";
 
+export const DaemonOwnedMessageSchema = z.object({ type: z.literal("workbench-daemon-owned") }).strict();
 export const DaemonHostMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("workbench-daemon-demand"), required: z.boolean() }).strict(),
   z.object({ type: z.literal("workbench-daemon-sleep-commit"), id: z.uuid(), allowed: z.boolean() }).strict(),

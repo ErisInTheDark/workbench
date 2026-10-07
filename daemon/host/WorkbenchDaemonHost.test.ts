@@ -337,32 +337,62 @@ test("wake coalesces callers and resolves only after child-bound readiness", asy
   assert.equal(host.snapshot().state, "ready");
 });
 
-test("pre-readiness exit rejects wake and retires the unit instead of respawning locally", async context => {
+test("daemon failures empty the exited run and relaunch in-host with backoff that readiness resets", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-failed-");
-  const root = temporary.path;
-  const child = fakeChild();
   const clock = new FakeClock();
-  const spawned = event();
-  const retired = event();
-  let spawns = 0;
-  let preReadyFailure = false;
+  const children: ChildProcess[] = [];
+  const disposed: ChildProcess[] = [];
+  const retries: number[] = [];
+  let retryArmed = event();
+  let spawned = event();
+  const failures: boolean[] = [];
   const host = new WorkbenchDaemonHost({
-    projectRootPath: root, environment: {}, now: clock.now, sleep: clock.sleep,
+    // A long silence window keeps watchdog waits distinguishable from failure backoff.
+    projectRootPath: temporary.path, environment: { LOG_IDLE_TIMEOUT_SECONDS: "10000" }, now: clock.now,
+    sleep: (delayMs, signal) => {
+      if (delayMs <= 60_000) { retries.push(delayMs); retryArmed.resolve(); }
+      return clock.sleep(delayMs, signal);
+    },
     loggerFactory: () => fakeLog([]),
-    spawnDaemon: () => { spawns++; spawned.resolve(); return child; },
-    terminateChild: async () => { child.emit("exit", 0, null); },
-    onFailure: (_error, beforeReady) => { preReadyFailure = beforeReady; },
-    requestRestart: () => retired.resolve(),
+    spawnDaemon: () => { const child = fakeChild(); children.push(child); spawned.resolve(); return child; },
+    terminateChild: async child => { disposed.push(child); if (child.exitCode === null) child.emit("exit", 0, null); },
+    onFailure: (_error, beforeReady) => { failures.push(beforeReady); },
+    requestRestart: () => assert.fail("A daemon failure keeps the host."),
   });
   context.after(async () => { await host.stop(); await temporary.dispose(); });
-  const waking = host.wake();
-  const rejected = assert.rejects(waking, /before readiness/i);
+  const nextFailure = async (child: ChildProcess, code: number) => {
+    child.emit("exit", code, null);
+    await retryArmed.promise;
+    retryArmed = event();
+    spawned = event();
+  };
+
+  const rejected = assert.rejects(host.wake(), /before readiness/i);
   await spawned.promise;
-  child.emit("exit", 7, null);
+  await nextFailure(children[0]!, 7);
   await rejected;
-  await retired.promise;
-  assert.equal(preReadyFailure, true);
-  assert.equal(spawns, 1);
+  // The crashed daemon's container is emptied even though its root process already exited.
+  assert.equal(disposed.length, 1);
+  assert.equal(disposed[0], children[0]);
+  assert.equal(host.snapshot().state, "failed");
+  assert.match(host.snapshot().failure ?? "", /before readiness/u);
+
+  clock.advance(retries[0]!);
+  await spawned.promise;
+  await nextFailure(children[1]!, 7);
+  assert.ok(retries[1]! > retries[0]!, "consecutive failures back off further");
+
+  assert.equal(host.retryNow(), true, "an explicit retry skips the remaining backoff");
+  await spawned.promise;
+  reportReady(children[2]!);
+  await host.wake();
+  await nextFailure(children[2]!, 9);
+  assert.equal(retries[2], retries[0], "readiness resets the backoff");
+  assert.deepEqual(failures, [true, true, false]);
+
+  await host.stop();
+  assert.equal(host.retryNow(), false);
+  assert.equal(children.length, 3, "stopping during backoff cancels the relaunch");
 });
 
 test("probes the reported endpoint twice before retiring only its owned child", async (context) => {

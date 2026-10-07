@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WindowsChildJob: hold a Windows kill-on-close job around the Node app process tree.
+ * - WindowsChildJob: hold a Windows kill-on-close job around a spawned child or an existing process tree.
  */
 use std::{io, process::Child};
 
@@ -12,7 +12,29 @@ pub struct WindowsChildJob {
 #[cfg(windows)]
 impl WindowsChildJob {
     pub fn attach(child: &Child) -> io::Result<Self> {
-        use std::{ffi::c_void, mem::size_of, os::windows::io::AsRawHandle};
+        use std::{ffi::c_void, os::windows::io::AsRawHandle};
+        Self::attach_handle(child.as_raw_handle() as *mut c_void)
+    }
+
+    /// Attach a process this binary did not spawn. It must not have spawned descendants yet.
+    pub fn attach_pid(pid: u32) -> io::Result<Self> {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+        };
+        let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        if process.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let attached = Self::attach_handle(process);
+        unsafe {
+            CloseHandle(process);
+        }
+        attached
+    }
+
+    fn attach_handle(process: *mut std::ffi::c_void) -> io::Result<Self> {
+        use std::{ffi::c_void, mem::size_of};
         use windows_sys::Win32::{
             Foundation::CloseHandle,
             System::JobObjects::{
@@ -37,7 +59,7 @@ impl WindowsChildJob {
             )
         };
         let assigned = configured != 0
-            && unsafe { AssignProcessToJobObject(handle, child.as_raw_handle() as *mut c_void) } != 0;
+            && unsafe { AssignProcessToJobObject(handle, process) } != 0;
         if !assigned {
             let error = io::Error::last_os_error();
             unsafe {
@@ -78,6 +100,10 @@ pub struct WindowsChildJob;
 impl WindowsChildJob {
     pub fn attach(_child: &Child) -> io::Result<Self> {
         Ok(Self)
+    }
+
+    pub fn attach_pid(_pid: u32) -> io::Result<Self> {
+        Err(io::Error::other("Process jobs are Windows-only."))
     }
 
     pub fn terminate(&self) -> io::Result<()> {

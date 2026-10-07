@@ -28,7 +28,7 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
-import { DaemonHostMessageSchema, type DaemonSleepMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
+import { DaemonHostMessageSchema, DaemonOwnedMessageSchema, type DaemonSleepMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
@@ -606,7 +606,14 @@ async function startDaemon() {
   }
 }
 
+// A Windows host assigns this process to its own job object before acknowledging it;
+// nothing may be spawned until then, or descendants would escape that container.
+const ownership = Promise.withResolvers<void>();
+if (process.env.WORKBENCH_DAEMON_ACK_REQUIRED !== "1") ownership.resolve();
+else if (!process.connected) ownership.reject(new Error("Daemon ownership requires host IPC."));
+
 process.on("message", message => {
+  if (DaemonOwnedMessageSchema.safeParse(message).success) { ownership.resolve(); return; }
   const parsed = DaemonHostMessageSchema.safeParse(message);
   if (!parsed.success) { logError("sleep", "Invalid daemon host lifecycle message."); return; }
   if (parsed.data.type === "workbench-daemon-demand") {
@@ -615,6 +622,6 @@ process.on("message", message => {
   } else featureHost?.get("daemonSleep").receive(parsed.data);
 });
 
-void startDaemon().catch((error) => {
+void ownership.promise.then(startDaemon).catch((error) => {
   shutdownAndExit(1, error);
 });

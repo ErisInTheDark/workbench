@@ -43,10 +43,6 @@ export default class WorkbenchServiceRepository {
     return this.query(selectRows(tables.wake))[0]?.enabled === 1;
   }
 
-  get startupFailure() {
-    return this.query(selectRows(tables.failure))[0]?.message ?? null;
-  }
-
   async start(beforeMigration?: (backupPath: string) => void) {
     if (this.database || this.opening || this.closing) throw new Error("Service repository is already open or changing lifecycle.");
     const opening = this.open(beforeMigration);
@@ -130,6 +126,8 @@ export default class WorkbenchServiceRepository {
     })]);
   }
 
+  // The daemon host now retries failures in memory. Clearing the retired durable failure
+  // row here releases installations parked by older hosts.
   requestDaemon(session: string) {
     if (!session) throw new Error("A supervision session is required.");
     this.executeTransaction([
@@ -141,7 +139,7 @@ export default class WorkbenchServiceRepository {
   }
 
   shouldResume(session: string) {
-    return this.startupFailure === null && this.query(selectRows(tables.intent))[0]?.session_id === session;
+    return this.query(selectRows(tables.intent))[0]?.session_id === session;
   }
 
   stopDaemon() {
@@ -149,12 +147,6 @@ export default class WorkbenchServiceRepository {
       deleteRows(tables.intent, { id: "singleton" }),
       deleteRows(tables.failure, { id: "singleton" }),
     ]);
-  }
-
-  failStartup(message: string) {
-    this.executeTransaction([upsertRow(tables.failure, {
-      id: "singleton", message: message.replace(/[\r\n]/gu, " ").slice(0, 512),
-    }, { conflictColumns: ["id"], updateColumns: ["message"] })]);
   }
 
   private requireDatabase() {

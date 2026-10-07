@@ -117,6 +117,8 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
 export const WorkbenchNetworkSnapshotSchema = z.object({
   discovery: WorkbenchDaemonDiscoverySchema.optional(),
   daemon: WorkbenchDaemonIdentitySchema.optional(),
+  /** Why this device's daemon last failed while it is failed or retrying. */
+  daemonFailure: z.string().max(512).nullable().optional(),
   configuration: WorkbenchNetworkConfigurationSchema,
   runtime: WorkbenchNetworkRuntimeSchema,
   executable: z.object({ available: z.boolean(), message: z.string().max(512).nullable() }).strict(),

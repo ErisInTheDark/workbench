@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, and the new project action.
+ * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, daemon failure, and the new project action.
  */
 "use client";
 
@@ -14,6 +14,7 @@ import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
 import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
 import { NewEntryIcon } from "./workbench-explorer";
 import { EllipsisIcon, HomeIcon, ProjectIcon } from "./workbench-icons";
+import WorkbenchDaemonStartupFailure from "./WorkbenchDaemonStartupFailure";
 import WorkbenchIconButton from "./WorkbenchIconButton";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
@@ -172,6 +173,7 @@ export default function ProjectSidebar ({
             </div>
           ) : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
+          {!displayedProjects.length ? <WorkbenchDaemonStartupFailure className="px-2" /> : null}
           {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
             {logicalLoading || !workspace || workspace.catalogues.some(item => item.phase === "pending")
               ? "Loading projects..." : "No projects were found."}
