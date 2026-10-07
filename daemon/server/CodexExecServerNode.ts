@@ -1,10 +1,8 @@
 /*
  * Exports:
- * - default CodexExecServerNode: retain the sandbox executor, its Windows ACL repair, the machine-wide expensive-command slots and the agent shell runner independently of tool-definition reloads.
+ * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair and the machine-wide expensive-command slots; reloadable shell orchestration lives in a child.
  */
 import ReloadableNode from "./ReloadableNode";
-import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
-import WorkbenchShellRunner from "./WorkbenchShellRunner";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexExecServer from "./CodexExecServer";
@@ -12,14 +10,15 @@ import CodexSandboxAclController from "./CodexSandboxAclController";
 import CodexToolsNode from "./CodexToolsNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
 import ClaudeProviderNode from "./providers/claude/ClaudeProviderNode";
+import WorkbenchShellRunnerNode from "./WorkbenchShellRunnerNode";
 import { logError } from "./process-helpers";
 import os from "node:os";
 import WorkbenchCommandCapacity, { expensiveCommandSlots } from "./WorkbenchCommandCapacity";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
-  create: (context, build) => {
+  children: [WorkbenchShellRunnerNode, CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
+  create: (context) => {
     const executor = new CodexExecServer({ cwd: context.daemonPackageRoot });
     const sandboxAcl = new CodexSandboxAclController();
     // Shared by every provider's shell so one machine-wide limit covers all agents' builds and test suites.
@@ -28,22 +27,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readMemory: () => ({ free: os.freemem(), total: os.totalmem() }),
       log: message => { process.stdout.write(`${message}\n`); },
     });
-    const shellRunner = new WorkbenchShellRunner({ executor, capacity: commandCapacity });
-    // Agent shells run here, leasing only this node, so reloads above it never wait on a running command.
-    const requestRegistry = getProcessWorkbenchAgentMcpRequestRegistry();
-    const runnerOwner = {};
     const retire = async () => {
-      requestRegistry.releaseShellRunner(runnerOwner);
       commandCapacity.dispose();
       await Promise.all([executor.dispose(), sandboxAcl.dispose()]);
     };
     return {
-      registrations: { codexExecutor: executor, codexSandboxAcl: sandboxAcl, commandCapacity, shellRunner },
-      afterCommit: () => {
-        requestRegistry.activateShellRunner(runnerOwner, async (run, signal) => (
-          await build.run("shellRunner", runner => runner.run(run, signal), "shell run")
-        ));
-      },
+      registrations: { codexExecutor: executor, codexSandboxAcl: sandboxAcl, commandCapacity },
       start: () => undefined,
       beginHandoff: () => ({
         // A half-propagated tree is safe but leaves agents read-only until the successor rescans it.
@@ -59,11 +48,11 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       shutdown: retire,
     };
   },
-  description: "Reload the sandbox executor after graph-owned operations drain.",
-  destructive: false,
+  description: "Restart the sandbox executor, interrupting running agent shell commands.",
+  destructive: true,
   lifecycle: "handoff",
-  provides: ["codexExecutor", "codexSandboxAcl", "commandCapacity", "shellRunner"],
+  provides: ["codexExecutor", "codexSandboxAcl", "commandCapacity"],
   requires: [],
-  safeAll: true,
+  safeAll: false,
   scope: "server:commands/exec",
 });

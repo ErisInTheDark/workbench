@@ -2,3 +2,4 @@
 - Reload ownership comes from imports. Nodes declare only `entries` (code run outside the process module graph: workers, child processes, plugins) and `assets` (non-module runtime inputs); never list imported modules.
 - Retired reload generations must become garbage. Non-reloadable code, including Node's `module.children`, must not keep references to retired modules or node objects.
 - Long-lived work must not hold reloadable owners in closures; resolve owners through graph tools (`get`/`run`/leases) at each step.
+- Nodes owning external processes are `destructive`, never dependants of non-destructive nodes, and keep churny orchestration in reloadable children.

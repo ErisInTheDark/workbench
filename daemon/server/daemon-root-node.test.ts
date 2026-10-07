@@ -116,32 +116,52 @@ test("every child requirement is registered by one of its direct parents", () =>
   }
 });
 
-test("tool reload preserves the executor and executor replacement owns the tool dependant closure", () => {
+test("tool and shell-runner reloads preserve the executor kernel, whose replacement owns their dependant closure", () => {
   const { dependantClosure, descriptors } = readReloadNodeSourceState();
   const catalog = new Map(descriptors.map((descriptor) => [descriptor.scope, descriptor]));
   const tools = dependantClosure(["server:codex/tools"]);
+  const shell = dependantClosure(["server:commands/shell"]);
   const execution = dependantClosure(["server:commands/exec"]);
   assert.deepEqual({
     executionIncludesDefinition: execution.includes("server:codex/def"),
     executionIncludesHarness: execution.includes("harness:codex"),
     executionIncludesProcess: execution.includes("server:process"),
+    executionIncludesShell: execution.includes("server:commands/shell"),
     executionIncludesTools: execution.includes("server:codex/tools"),
     executionIncludesVoice: execution.includes("server:voice"),
-    toolsIncludesExecutor: tools.includes("server:codex/exec"),
+    shellIncludesExecutor: shell.includes("server:commands/exec"),
+    shellIncludesHarness: shell.includes("harness:codex") || shell.includes("harness:claude"),
+    toolsIncludesExecutor: tools.includes("server:commands/exec"),
     toolsIncludesHarness: tools.includes("harness:codex"),
     toolsIncludesVoice: tools.includes("server:voice"),
   }, {
     executionIncludesDefinition: true,
     executionIncludesHarness: false,
     executionIncludesProcess: false,
+    executionIncludesShell: true,
     executionIncludesTools: true,
     executionIncludesVoice: false,
+    shellIncludesExecutor: false,
+    shellIncludesHarness: false,
     toolsIncludesExecutor: false,
     toolsIncludesHarness: false,
     toolsIncludesVoice: false,
   });
-  assert.equal(catalog.get("server:commands/exec")!.safeAll, true);
-  assert.notEqual(catalog.get("server:commands/exec")!.destructive, true);
+  // The executor kernel owns the sandbox process, so replacing it interrupts running shell commands.
+  assert.equal(catalog.get("server:commands/exec")!.destructive, true);
+  assert.equal(catalog.get("server:commands/exec")!.safeAll, false);
+  assert.equal(catalog.get("server:commands/shell")!.safeAll, true);
+  assert.notEqual(catalog.get("server:commands/shell")!.destructive, true);
+});
+
+test("reloading a non-destructive scope never replaces a destructive one", () => {
+  const { dependantClosure, descriptors } = readReloadNodeSourceState();
+  const destructive = new Set(descriptors.filter((descriptor) => descriptor.destructive).map(({ scope }) => scope));
+  for (const { scope } of descriptors) {
+    if (destructive.has(scope)) continue;
+    const reached = dependantClosure([scope]).filter((dependant) => destructive.has(dependant));
+    assert.deepEqual(reached, [], `${scope} reload would restart ${reached.join(", ")}`);
+  }
 });
 
 test("provider configuration reload owns its definition without acquiring the harness", () => {
