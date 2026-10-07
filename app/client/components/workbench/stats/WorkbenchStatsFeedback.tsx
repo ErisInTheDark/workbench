@@ -13,7 +13,7 @@ import {
   type WorkbenchFeedbackSort,
   type WorkbenchStatsFeedback as StatsFeedback,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import { formatThreadRelativeTimestamp } from "../thread-view/thread-view-formatters";
+import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { useWorkbenchThreads } from "../use-workbench-client";
 import WorkbenchModeRow from "../WorkbenchModeRow";
 import WorkbenchStatsFeedbackReport from "./WorkbenchStatsFeedbackReport";
@@ -71,7 +71,7 @@ export default function WorkbenchStatsFeedback({ projectName, stats }: {
         {feedback?.total ? (
           <span className="text-[0.72rem] text-fg/muted">
             {feedback.total} {feedback.total === 1 ? "report" : "reports"}
-            {newest ? <> · newest {formatThreadRelativeTimestamp(newest / 1_000, Date.now())}</> : null}
+            {newest ? <> · newest <WorkbenchRelativeTime timestampMs={newest} /></> : null}
           </span>
         ) : null}
       </div>

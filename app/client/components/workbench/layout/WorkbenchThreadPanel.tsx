@@ -18,7 +18,8 @@ import { FileScopeContext } from "../../../workbench/file/use-file";
 import WorkbenchComposerProfileProvider from "../WorkbenchComposerProfileProvider";
 import type WorkbenchComposerProfileController from "../../../workbench/state/WorkbenchComposerProfileController";
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
-import { formatThreadRelativeTimestamp, getThreadTitle } from "../thread-view/thread-view-formatters";
+import { getThreadTitle } from "../thread-view/thread-view-formatters";
+import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import WorkbenchProjectIcon from "../WorkbenchProjectIcon";
@@ -33,7 +34,6 @@ import {
 
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
-const THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
   fallbackThreadSummary?: ThreadSummary | null;
@@ -89,7 +89,6 @@ export default function WorkbenchThreadPanel ({
     || threadViewProps.threadTarget?.kind === "subagent"
     ? client.mounted?.threadOwnerFor(threadId) : null;
   const threadController = useWorkbenchThread(threadViewProps.projectId, threadViewProps.threadTarget, undefined, threadViewProps.routeOwned ? "route" : "summary");
-  const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const initializedNewRef = useRef(false);
@@ -109,23 +108,8 @@ export default function WorkbenchThreadPanel ({
   const threadActivityTimestampMs = resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary);
   const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
   const threadStatusLabel = threadActivityTimestampMs
-    ? formatThreadRelativeTimestamp(threadActivityTimestampMs / 1000, relativeTimeNowMs)
-    : "";
-
-  useEffect(() => {
-    if (!threadDisplaySource) {
-      return;
-    }
-
-    setRelativeTimeNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setRelativeTimeNowMs(Date.now());
-    }, THREAD_PANEL_RELATIVE_TIME_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [threadActivityTimestampMs, threadDisplaySource?.id]);
+    ? <WorkbenchRelativeTime label="Last activity" timestampMs={threadActivityTimestampMs} />
+    : null;
 
   const effectiveFontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number((threadViewProps.fontSizeRem + (zoomPreview ?? panelZoomDelta) * 0.08).toFixed(2))));
 

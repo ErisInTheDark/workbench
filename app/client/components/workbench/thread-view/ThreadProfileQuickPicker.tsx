@@ -14,7 +14,7 @@ import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { composerProfileRecency, orderComposerProfiles } from "./composer-profile-order";
 import ThreadHarnessControl from "./ThreadHarnessControl";
 import { formatProfileContext } from "./ThreadProfileEditor";
-import { formatThreadRelativeTimestamp } from "./thread-view-formatters";
+import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 
 export default function ThreadProfileQuickPicker({
   slot, fallbackSettings, agents, models, label, selectedLabel, onEdit, onOpen,
@@ -39,7 +39,6 @@ export default function ThreadProfileQuickPicker({
     const visible = profiles.controller.getVisibleProfiles(slot.projectId,
       slot.kind === "thread" ? slot.harness : null);
     const available = selected && !visible.some(profile => profile.id === selected.id) ? [...visible, selected] : visible;
-    const now = Date.now();
     return [
       { id: "edit", content: "Edit profiles" },
       ...orderComposerProfiles(available, "oldest").map(profile => {
@@ -55,7 +54,7 @@ export default function ThreadProfileQuickPicker({
             <span className="flex w-full min-w-0 items-baseline gap-3">
               <span className="min-w-0 truncate font-semibold text-text">{name}</span>
               <span className="ml-auto shrink-0 text-xs font-normal text-fg/muted">
-                <time dateTime={new Date(recency).toISOString()} title={`${profile.lastUsedAt == null ? "Last edited" : "Last used"}: ${new Date(recency).toLocaleString()}`}>{formatThreadRelativeTimestamp(recency / 1000, now)}</time>
+                <WorkbenchRelativeTime label={profile.lastUsedAt == null ? "Last edited" : "Last used"} timestampMs={recency} />
               </span>
             </span>
             <span className="block w-full truncate text-xs leading-snug text-fg/muted">

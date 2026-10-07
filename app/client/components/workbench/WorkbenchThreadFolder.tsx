@@ -21,7 +21,7 @@ import {
 import type { WorkbenchPinnedThreadSummaryEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import ThreadDisclosure from "./thread-view/ThreadDisclosure";
-import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
+import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
   getNeedsAttentionThreadStatusTone,
@@ -92,7 +92,6 @@ export default function WorkbenchThreadFolder({
   folder,
   homeFolderKey,
   isDragActive,
-  nowMs = Date.now(),
   onAutoFocusComplete,
   onOpenChange,
   onPrependThread,
@@ -110,7 +109,6 @@ export default function WorkbenchThreadFolder({
   folder: WorkbenchThreadFolder;
   homeFolderKey?: string;
   isDragActive: boolean;
-  nowMs?: number;
   onAutoFocusComplete?: () => void;
   onOpenChange: (open: boolean) => void;
   onPrependThread?: (payload: WorkbenchThreadRowDragPayload) => void;
@@ -130,7 +128,6 @@ export default function WorkbenchThreadFolder({
   const [isSaving, setIsSaving] = useState(false);
   const status = getFolderStatus(entries, attentionLabelsByThreadId);
   const latestActivityAt = Math.max(...entries.map((entry) => entry.activityAt));
-  const latestTimestamp = new Date(latestActivityAt);
   onOpenChangeRef.current = onOpenChange;
   const openFromHover = useCallback(() => onOpenChangeRef.current(true), []);
 
@@ -238,7 +235,7 @@ export default function WorkbenchThreadFolder({
       statusIcon={<StatusIcon className={status.statusClassName} size={14} />}
       statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
       metadata={priorityMarker}
-      timestamp={<time dateTime={latestTimestamp.toISOString()} title={latestTimestamp.toLocaleString()}>{formatThreadRelativeTimestamp(latestActivityAt / 1000, nowMs)}</time>}
+      timestamp={<WorkbenchRelativeTime timestampMs={latestActivityAt} tooltip={false} />}
       title={(
         <span className="flex min-w-0 items-center gap-1.5">
           {open ? <FolderOpenIcon className="shrink-0" size={14} /> : <FolderClosedIcon className="shrink-0" size={14} />}

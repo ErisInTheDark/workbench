@@ -19,17 +19,15 @@ function LoadedThreadTooltip({ agentName, harness, projectId, threadId, title }:
   const thread = useWorkbenchThread(projectId, { harness, kind: "provider", threadId });
   const entry = thread.state.entry;
   if (!entry) return <p className="m-0 text-[0.8rem] text-fg/muted">{thread.state.status === "loading" ? `Loading ${title}…` : title}</p>;
-  const shown = describeThreadEntry(entry, { nowMs: Date.now() });
+  const shown = describeThreadEntry(entry);
   return (
     <ThreadTooltipContent
+      activityAt={shown.activityAt}
       agentName={agentName}
       claimedPaths={shown.claimedPaths}
-      dateTime={shown.dateTime}
-      exactTime={shown.exactTime}
       Icon={shown.Icon}
       identity={{ harness, threadId }}
       projectId={projectId}
-      relativeTime={shown.relativeTime}
       snoozed={shown.group === "snoozed"}
       stashed={shown.stashed}
       status={shown.tooltipStatus}

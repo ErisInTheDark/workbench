@@ -16,7 +16,7 @@ export const FEEDBACK_CATEGORY_PRESENTATION: Readonly<Record<WorkbenchFeedbackCa
   tagClassName: string;
 }>> = {
   bug: { label: "Bug", tagClassName: "bg-hue-25/12 text-hue-25" },
-  waste: { label: "Waste", tagClassName: "bg-hue-75/14 text-hue-75" },
+  waste: { label: "Waste", tagClassName: "bg-hue-85/16 text-hue-85" },
   confusion: { label: "Confusion", tagClassName: "bg-hue-300/12 text-hue-300" },
   opportunity: { label: "Opportunity", tagClassName: "bg-hue-150/14 text-hue-150" },
 };

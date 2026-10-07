@@ -32,7 +32,7 @@ test("threads render one keyboard-navigable tablist with settled rows and custom
   assert.match(sidebarSource, /<WorkbenchThreadList/u);
   assert.match(listSource, /projectWorkbenchHomeThreadList/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?isDragActive=\{isDragActive\}/u);
-  assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?<a/u);
+  assert.match(itemSource, /<WorkbenchTooltip[\s\S]*?enabled=\{!isDragActive && [\s\S]*?<a/u);
   assert.match(itemSource, /More actions for \$\{entry\.title\}/u);
   assert.match(listSource, /<WorkbenchThreadListItem[\s\S]*?href=\{getThreadHref[\s\S]*?role="tab"/u);
   assert.match(itemSource, /<a[\s\S]*?href=\{href\}[\s\S]*?role=\{role\}/u);

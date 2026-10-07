@@ -55,7 +55,6 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 import { useWorkbenchClientController } from "./workbench-client-context";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 
-const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
 type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
 
 function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }> {
@@ -83,7 +82,6 @@ interface WorkbenchThreadSidebarActionsValue {
   isLoading: boolean;
   homeDisplayOrder: WorkbenchThreadDisplayOrder;
   homeDisplayOrderSupported: boolean;
-  nowMs: number;
   onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: ProjectId) => void;
   onActionFor: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction) => void;
   onAutoFocusFolderComplete: () => void;
@@ -161,8 +159,6 @@ function WorkbenchThreadSidebarActionsProvider({
   const homeDisplayOrderSupported = useWorkbenchHomeThreadDisplayOrderSupported();
   const pinnedThreadLayout = useWorkbenchPinnedThreadLayout();
   const entries = currentSidebar?.entries ?? [];
-  const entryCount = projectThreadSidebars.projects.reduce((total, sidebar) => total + sidebar.entries.length, 0);
-  const [relativeTimeNowMs, setRelativeTimeNowMs] = useState(() => Date.now());
   const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
 
@@ -180,13 +176,6 @@ function WorkbenchThreadSidebarActionsProvider({
     if (!qualified) throw new Error("The layout item has no project identity.");
     return getProjectQualifiedThreadDisplayKey(layoutProject(qualified.projectId), qualified.threadKey);
   }, [layoutProject]);
-
-  useEffect(() => {
-    if (!entries.length) return;
-    setRelativeTimeNowMs(Date.now());
-    const intervalId = window.setInterval(() => setRelativeTimeNowMs(Date.now()), THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [entryCount]);
 
   const mutateEntry = useCallback(async (entry: ThreadListEntry, ownerProjectId: ProjectId, method: "archive/set" | "pin/set" | "restore" | "settle" | "snooze/set" | "status/set", value?: boolean | "completed" | "needsAttention" | "stopped", source?: ProjectLocationReference) => {
     if (!controls || !ownerProjectId) return;
@@ -482,7 +471,6 @@ function WorkbenchThreadSidebarActionsProvider({
     homeDisplayOrder: homeThreadDisplayOrder.displayOrder,
     homeDisplayOrderSupported,
     isLoading: !currentSidebar && !projectThreadSidebars.projects.length,
-    nowMs: relativeTimeNowMs,
     onAction: (entry, action, ownerProjectId) => {
       if (entry.entryKind === "draft") {
         if (action === "discard" && !isPinnedDraftSummaryEntry(entry)) void controls?.deleteThreadDraft(entry.draft.draftId);
@@ -600,7 +588,7 @@ function WorkbenchThreadSidebarActionsProvider({
     pinnedDisplayOrder: pinnedThreadLayout.displayOrder,
     projectThreadSidebars,
     projectThreadSummaries,
-  }), [actionError, autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, qualifiedForEntry, relativeTimeNowMs, runDragMutation, layoutKey, layoutProject, logicalThreads]);
+  }), [actionError, autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, qualifiedForEntry, runDragMutation, layoutKey, layoutProject, logicalThreads]);
 
   return (
     <WorkbenchComposerDraftPresenceProvider>

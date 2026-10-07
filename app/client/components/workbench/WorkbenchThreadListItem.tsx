@@ -34,6 +34,8 @@ import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
 import { useWorkbenchSubagentClaims, type WorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchTooltip from "./WorkbenchTooltip";
+import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
+import { formatLongTimestamp } from "./thread-view/thread-view-formatters";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
 import ThreadAgentName from "./thread-view/ThreadAgentName";
@@ -83,14 +85,12 @@ function ClaimedPathsPanel({ label, paths, projectId, title }: { label?: ReactNo
 }
 
 export function ThreadTooltipContent({
+  activityAt,
   agentName,
   claimedPaths,
-  dateTime,
-  exactTime,
   extraDetails,
   Icon,
   projectId,
-  relativeTime,
   snoozed,
   status,
   statusClassName,
@@ -99,15 +99,13 @@ export function ThreadTooltipContent({
   title,
   identity,
 }: {
+  activityAt: number;
   /** Shown before the title, e.g. a coloured subagent name. */
   agentName?: ReactNode;
   claimedPaths: readonly string[];
-  dateTime: string;
-  exactTime: string;
   extraDetails?: ReactNode;
   Icon: ThreadStatusIcon;
   projectId: ProjectId;
-  relativeTime: string;
   snoozed: boolean;
   status: string;
   statusClassName: string;
@@ -130,7 +128,7 @@ export function ThreadTooltipContent({
         <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
         <span className="ml-auto" />
         {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon size={14} /></span> : null}
-        <time className="shrink-0" dateTime={dateTime} title={exactTime}>{relativeTime}</time>
+        <WorkbenchRelativeTime className="shrink-0" timestampMs={activityAt} />
       </div>
       {extraDetails}
       {ownClaims.length ? <ClaimedPathsPanel label={subagentClaims.length ? "Main agent" : undefined} paths={ownClaims} projectId={projectId} /> : null}
@@ -162,7 +160,6 @@ export default function WorkbenchThreadListItem({
   id,
   isDragActive = false,
   isShiftPressed = false,
-  nowMs = Date.now(),
   onAction,
   onActivate,
   onDragStart,
@@ -197,7 +194,6 @@ export default function WorkbenchThreadListItem({
   id?: string;
   isDragActive?: boolean;
   isShiftPressed?: boolean;
-  nowMs?: number;
   onAction?: (action: ThreadAction) => void;
   onActivate?: (target: WorkbenchThreadTarget) => void;
   onDragStart?: DragEventHandler<HTMLAnchorElement>;
@@ -228,9 +224,11 @@ export default function WorkbenchThreadListItem({
   );
   const target = targetForEntry(entry);
   const {
-    claimedPaths, dateTime, exactTime, group, Icon, lifecycle, relativeTime, showProposedCommit,
+    activityAt, claimedPaths, group, Icon, lifecycle, showProposedCommit,
     stashed, stashedPaths, status, statusClassName, statusTone, tooltipStatus, waiting,
-  } = describeThreadEntry(entry, { attentionLabel, hasTooltipDetails: Boolean(tooltipDetails), nowMs });
+  } = describeThreadEntry(entry, { attentionLabel, hasTooltipDetails: Boolean(tooltipDetails) });
+  // Row text is pointer-transparent under the link overlay; the row tooltip's own time carries the full form.
+  const rowTime = <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />;
   const subagentClaims = useWorkbenchSubagentClaims(projectId, entry.entryKind === "thread" ? entry.identity.threadId : null);
   const activeClaimCount = claimedPaths.length + subagentClaims.reduce((total, child) => total + child.claimedPaths.length, 0);
   const stashedClaimCount = stashedPaths.length;
@@ -254,7 +252,7 @@ export default function WorkbenchThreadListItem({
     activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
     stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
   ].filter(Boolean);
-  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${exactTime}`;
+  const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${showComposerDraft ? ", unsent draft" : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${formatLongTimestamp(activityAt)}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
   const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
   const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
@@ -317,9 +315,13 @@ export default function WorkbenchThreadListItem({
       </svg> : null}
       {presentation === "row" ? <ContextMenuCapability menu={contextMenu}>
         <WorkbenchTooltip
-          content={<ThreadTooltipContent claimedPaths={claimedPaths} dateTime={dateTime} exactTime={exactTime} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} relativeTime={relativeTime} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} stashed={stashed} subagentClaims={subagentClaims} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />}
-          enabled={showTooltip && !isDragActive}
-          interactive
+          content={showTooltip
+            ? <ThreadTooltipContent activityAt={activityAt} claimedPaths={claimedPaths} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} stashed={stashed} subagentClaims={subagentClaims} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />
+            // Without the rich tooltip, the row still offers the full time its pointer-transparent timestamp cannot.
+            : <span className="whitespace-nowrap">Last activity: {formatLongTimestamp(activityAt)}</span>}
+          enabled={!isDragActive && (showTooltip || trailing === undefined)}
+          interactive={showTooltip}
+          placement={showTooltip ? "right" : "top"}
         >
           <a
             data-workbench-sidebar-thread-link="true"
@@ -360,7 +362,7 @@ export default function WorkbenchThreadListItem({
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={14} /></span> : null}
-            {trailing ?? <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
+            {trailing ?? rowTime}
           </span>
           {actionButton}
           {secondaryRow ? <div className="col-span-3 row-start-2 min-w-0 pb-1 text-[0.9em]">{secondaryRow}</div> : null}
@@ -395,7 +397,7 @@ export default function WorkbenchThreadListItem({
           statusIcon={<Icon className={statusClassName} size={14} />}
           statusLabel={<span className={`truncate ${statusClassName}`}>{status}</span>}
           statusLeading={statusLeading}
-          timestamp={trailing ?? <time dateTime={dateTime} title={exactTime}>{relativeTime}</time>}
+          timestamp={trailing ?? rowTime}
           title={<span className={`${workbenchThreadListLabelClassName}${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>}
         />
         {secondaryRow ? <div className="pointer-events-none relative z-10 min-w-0 px-2 pb-1.5 text-[0.72rem] text-fg/muted">{secondaryRow}</div> : null}

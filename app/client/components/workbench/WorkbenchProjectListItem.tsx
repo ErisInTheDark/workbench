@@ -9,16 +9,12 @@ import { createLogicalProjectRoute, createProjectRoute } from "workbench-shared/
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { DisplaySidebarProject, LogicalSidebarProject, ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
-import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
+import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 
-function getProjectActivityLabel(activityAt: number | null, nowMs: number) {
-  return activityAt === null ? "" : formatThreadRelativeTimestamp(activityAt / 1000, nowMs);
-}
-
-function ProjectTooltipContent({ entry, nowMs }: { entry: DisplaySidebarProject; nowMs: number }) {
+function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
   const { project, summary } = entry;
   const logical = "matchKey" in project;
   const unsettledThreads = logical
@@ -36,20 +32,22 @@ function ProjectTooltipContent({ entry, nowMs }: { entry: DisplaySidebarProject;
           {logical ? project.locations.map(location => `${location.hostname}: ${location.rootPath}`).join("\n")
             : WorkbenchProjectLabel.getFullPath(project)}
         </p>
+        {entry.activityAt === null ? null : (
+          <p className="m-0 text-[0.72rem] text-fg/muted">
+            Active <WorkbenchRelativeTime label="Last activity" timestampMs={entry.activityAt} />
+          </p>
+        )}
       </div>
       <div className="scrollbar-hover-reveal flex max-h-64 min-h-0 flex-col gap-1 overflow-y-auto">
         {unsettledThreads.map(({ entry: thread, source }) => {
           const status = WorkbenchThreadStatusCounts.itemsByKey.get(thread.status) ?? WorkbenchThreadStatusCounts.items.at(-1)!;
-          const threadTimestamp = new Date(thread.activityAt);
           return (
             <div className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-[0.76rem]" key={`${source ? `${source.daemonId}:${source.projectId}:` : ""}${thread.identity.harness}:${thread.identity.threadId}`}>
               <span aria-label={status.label} className="inline-flex shrink-0" title={status.label}>
                 <status.Icon className={`size-3.5 ${getWorkbenchThreadStatusClassName(status.tone)}`} />
               </span>
               <span className="min-w-0 flex-1 truncate text-text">{thread.title}</span>
-              <time className="shrink-0 text-fg/muted" dateTime={threadTimestamp.toISOString()} title={threadTimestamp.toLocaleString()}>
-                {formatThreadRelativeTimestamp(thread.activityAt / 1000, nowMs)}
-              </time>
+              <WorkbenchRelativeTime className="shrink-0 text-fg/muted" timestampMs={thread.activityAt} />
             </div>
           );
         })}
@@ -64,7 +62,6 @@ export default function WorkbenchProjectListItem({
   entry,
   href,
   id,
-  nowMs,
   onProjectLinkClick,
   role,
   selected = false,
@@ -75,7 +72,6 @@ export default function WorkbenchProjectListItem({
   entry: DisplaySidebarProject;
   href?: string;
   id?: string;
-  nowMs: number;
   onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   role?: "option";
   selected?: boolean;
@@ -86,23 +82,21 @@ export default function WorkbenchProjectListItem({
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
   const hasStatuses = WorkbenchThreadStatusCounts.hasCounts(counts);
-  const timestamp = activityAt === null ? null : new Date(activityAt);
   const logical = "matchKey" in project;
   const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
   const content = (
     <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
       <span className="min-w-0 overflow-hidden">{projectTitle}</span>
       <span className="ml-2 text-[0.72rem] text-fg/muted">
-        {hasStatuses ? <WorkbenchThreadStatusCounts counts={counts} /> : timestamp ? (
-          <time dateTime={timestamp.toISOString()} title={timestamp.toLocaleString()}>
-            {getProjectActivityLabel(activityAt, nowMs)}
-          </time>
-        ) : null}
+        {/* Pointer-transparent row text; the project tooltip carries the full time. */}
+        {hasStatuses ? <WorkbenchThreadStatusCounts counts={counts} /> : activityAt === null ? null : (
+          <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />
+        )}
       </span>
     </div>
   );
   return (
-    <WorkbenchTooltip content={<ProjectTooltipContent entry={entry} nowMs={nowMs} />} enabled={showTooltip} interactive>
+    <WorkbenchTooltip content={<ProjectTooltipContent entry={entry} />} enabled={showTooltip} interactive>
       <div
         className="group/project-row relative isolate m-0 min-h-11 rounded-[0.8rem] md:min-h-0"
       >

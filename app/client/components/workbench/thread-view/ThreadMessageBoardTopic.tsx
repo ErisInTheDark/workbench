@@ -187,7 +187,7 @@ export default function ThreadMessageBoardTopic({
   // History holds the child's live "view" interest, so it mounts only while the topic is open.
   const [isOpen, setIsOpen] = useState(false);
   // The row's own status outline becomes the topic border; drawn as overlays so the colour never tints the text.
-  const status = entry ? describeThreadEntry(entry, { nowMs: Date.now() }) : null;
+  const status = entry ? describeThreadEntry(entry) : null;
   const borderClassName = status
     ? `${status.statusClassName} border-current ${!status.waiting && (status.lifecycle?.kind === "needsAttention" || status.lifecycle?.kind === "stopped") ? "border-dashed" : ""}`
     : neutralBorderClassName;

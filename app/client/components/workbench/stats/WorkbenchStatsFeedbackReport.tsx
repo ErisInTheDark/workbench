@@ -2,13 +2,13 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsFeedbackReport: one agent feedback report shaped like a thread message, with its author's profile, importance flame, and the authoring thread as a sidebar row.
+ * - default WorkbenchStatsFeedbackReport: one agent feedback report shaped like a thread message, with its author's profile, importance flame, and the authoring thread as a compact live thread row.
  */
 import { useLayoutEffect, useRef, useState } from "react";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import ThreadMarkdown from "../thread-view/ThreadMarkdown";
-import ThreadMessageTimestamp from "../thread-view/ThreadMessageTimestamp";
-import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
+import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
+import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import { FlameIcon, HarnessIcon } from "../workbench-icons";
 import { FEEDBACK_CATEGORY_PRESENTATION, feedbackImportanceTone } from "./stats-feedback-presentation";
 import { statsThreadIdentity } from "./stats-thread-identity";
@@ -60,13 +60,6 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, origin }
           {importance}
         </span>
       </div>
-      <p className="m-0 mt-1.5 flex min-w-0 items-center gap-1.5 text-[0.76rem] text-fg/muted">
-        {item.harness ? <HarnessIcon className="shrink-0" harness={item.harness} size={14} /> : null}
-        <span className="min-w-0 truncate">
-          <span className="font-semibold text-text">{modelName ?? "Unknown model"}</span>
-          {item.reasoningEffort ? <> <span className="font-semibold capitalize text-text">{item.reasoningEffort}</span></> : null}
-        </span>
-      </p>
       <div
         className={`
           mt-1 min-w-0 text-[0.84rem] text-text [overflow-wrap:anywhere]
@@ -86,16 +79,23 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, origin }
           {expanded ? "Show less" : "Show more"}
         </button>
       ) : null}
-      <div className="-mx-1 mt-1">
+      <div className="-mx-2 mt-1 min-w-0">
         {thread ? (
-          <WorkbenchThreadReferenceList references={[{
-            identity: { harness: thread.harness, threadId: thread.threadId },
-            projectId: thread.projectId,
-            title: item.title || thread.threadId,
-          }]} />
+          <WorkbenchThreadButton
+            fallback={<span className="px-2 text-[0.8rem] text-fg/muted">{item.title || thread.threadId}</span>}
+            threadId={thread.threadId}
+          />
         ) : <p className="m-0 px-2 py-1 text-[0.74rem] text-fg/muted">Thread removed</p>}
       </div>
-      <ThreadMessageTimestamp className="mt-1" timestampSeconds={item.createdAt / 1_000} />
+      <p className="m-0 mt-1 flex min-w-0 items-center gap-1.5 text-[0.72rem] text-fg/muted">
+        {item.harness ? <HarnessIcon className="shrink-0" harness={item.harness} size={14} /> : null}
+        <span className="min-w-0 truncate">
+          <span className="font-semibold text-text">{modelName ?? "Unknown model"}</span>
+          {item.reasoningEffort ? <> <span className="font-semibold capitalize text-text">{item.reasoningEffort}</span></> : null}
+        </span>
+        <span aria-hidden="true">·</span>
+        <WorkbenchRelativeTime className="shrink-0" timestampMs={item.createdAt} />
+      </p>
     </li>
   );
 }

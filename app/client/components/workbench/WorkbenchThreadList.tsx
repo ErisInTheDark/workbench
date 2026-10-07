@@ -556,7 +556,6 @@ export default function WorkbenchThreadList ({
                 : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
               : createHomeThreadRoute(homeEntry.projectId, target))}
             key={`tooltip:${homeEntry.threadKey}`}
-            nowMs={actions.nowMs}
             onActivate={(activatedTarget) => qualified
               ? onOpenQualifiedThread?.(qualified)
               : onOpenThread(activatedTarget, homeEntry.projectId)}
@@ -646,7 +645,6 @@ export default function WorkbenchThreadList ({
               folder={item.folder}
               homeFolderKey={key}
               isDragActive={isDragActive}
-              nowMs={actions.nowMs}
               onAutoFocusComplete={actions.onAutoFocusFolderComplete}
               onOpenChange={(open) => setFolderOpen("threads", key, open)}
               onPrependThread={(payload) => {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - formatThreadTimestamp: format thread timestamps for human-readable display. Keywords: workbench, thread, time.
+ * - formatLongTimestamp: full local date and time for timestamp tooltips and accessible labels.
  * - formatThreadRelativeTimestamp: format thread timestamps as compact relative activity labels. Keywords: workbench, thread, relative time, bumped.
  * - formatThreadDuration: format durations in short d/h/m/s form for thread metadata. Keywords: workbench, thread, duration.
  * - humanizeThreadLabel: turn thread status and type labels into readable text. Keywords: workbench, thread, label.
@@ -10,8 +10,11 @@
 
 import { resolveWorkbenchThreadTitle } from "workbench-shared/workbench/thread/thread-state";
 
-export function formatThreadTimestamp (timestampSeconds: number) {
-  return new Date(timestampSeconds * 1000).toLocaleString();
+const LONG_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "medium" });
+
+export function formatLongTimestamp (timestampMs: number) {
+  const date = new Date(timestampMs);
+  return Number.isFinite(date.getTime()) ? LONG_TIMESTAMP_FORMAT.format(date) : "";
 }
 
 export function formatThreadRelativeTimestamp (timestampSeconds: number, nowMs: number) {

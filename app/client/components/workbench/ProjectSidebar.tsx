@@ -101,8 +101,6 @@ export default function ProjectSidebar ({
   ];
   const nextTier = nextProjectSelectionTier(revealedTier, projectSelectionGroups);
   const nextLabel = nextTier === 1 ? "show unsettled" : nextTier === 2 ? "show unarchived" : "show all projects";
-  const nowMs = Date.now();
-
   return (
     <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
@@ -150,7 +148,6 @@ export default function ProjectSidebar ({
               active={entry.project.id === activeProjectId}
               entry={entry}
               key={entry.project.id}
-              nowMs={nowMs}
               onProjectLinkClick={onProjectLinkClick}
               selected={selectedSet.has(entry.project.id)}
             />

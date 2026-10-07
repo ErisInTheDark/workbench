@@ -154,7 +154,6 @@ function createActions(
     homeDisplayOrder,
     homeDisplayOrderSupported: true,
     isLoading: false,
-    nowMs: 1_723_456_790_000,
     onAction: () => undefined,
     onActionFor: () => undefined,
     onAutoFocusFolderComplete: () => undefined,
@@ -345,12 +344,10 @@ test("stashed arcs show the archive icon count and retained paths instead of liv
 
 test("thread tooltip hides stashed paths but keeps active claim links", () => {
   const props = {
+    activityAt: Date.UTC(2026, 7, 20),
     claimedPaths: ["src/one.ts"],
-    dateTime: "2026-08-20",
-    exactTime: "2026-08-20",
     Icon: () => null,
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-    relativeTime: "now",
     snoozed: false,
     status: "Completed",
     statusClassName: "",
@@ -537,7 +534,7 @@ test("thread rows expose explicit context-menu access alongside interactive tool
   });
   const source = await readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8");
   assert.match(html, /aria-label="More actions for Menu work"/u);
-  assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{showTooltip && !isDragActive\}[\s\S]*?interactive[\s\S]*?<a/u);
+  assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{!isDragActive && [\s\S]*?interactive=\{showTooltip\}[\s\S]*?<a/u);
   assert.match(source, /data-thread-project-file-link-boundary="true"/u);
 });
 

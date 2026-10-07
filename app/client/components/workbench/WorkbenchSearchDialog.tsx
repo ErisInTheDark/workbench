@@ -180,7 +180,6 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
                       activityAt: summary?.lastThreadUpdateAt ?? project!.lastCommitTimeMs, project: project!, summary,
                     }}
                     id={id}
-                    nowMs={Date.now()}
                     onProjectLinkClick={(event) => { event.preventDefault(); controller.activate(result); }}
                     role="option"
                     selected={selected}

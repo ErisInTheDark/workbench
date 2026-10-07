@@ -10,7 +10,6 @@ import {
   type WorkbenchPinnedThreadSummaryEntry,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import { formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
 import {
   getNeedsAttentionThreadStatusTone,
   getWorkbenchThreadStatusClassName,
@@ -34,11 +33,10 @@ export function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Pinn
 }
 
 /** `hasTooltipDetails` says whether the caller adds attention details, which name the tooltip status "Needs attention". */
-export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "", hasTooltipDetails = false, nowMs }: {
+export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "", hasTooltipDetails = false }: {
   attentionLabel?: string;
   hasTooltipDetails?: boolean;
-  nowMs: number;
-}) {
+} = {}) {
   const group = isPinnedDraftSummaryEntry(entry) ? "pinned" : getThreadSidebarGroup(entry);
   const lifecycle = entry.entryKind === "draft" ? null : entry.lifecycle;
   const gitArc = entry.entryKind === "draft" ? null : entry.gitArc ?? null;
@@ -74,15 +72,12 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
       : lifecycle?.kind === "stopped"
         ? "stopped"
         : "completed";
-  const timestamp = new Date(entry.activityAt);
   return {
+    activityAt: entry.activityAt,
     claimedPaths,
-    dateTime: timestamp.toISOString(),
-    exactTime: timestamp.toLocaleString(),
     group,
     Icon,
     lifecycle,
-    relativeTime: formatThreadRelativeTimestamp(entry.activityAt / 1000, nowMs),
     showProposedCommit,
     stashed,
     stashedPaths,

@@ -137,7 +137,8 @@ import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
-import { formatThreadRelativeTimestamp, getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
+import { getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
+import WorkbenchRelativeTime from "./workbench/WorkbenchRelativeTime";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
@@ -399,8 +400,6 @@ function getProjectTabLabel (projectName: string | null | undefined) {
   return projectName?.trim() || "Project";
 }
 
-const THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000;
-
 export default function Workbench ({ appRuntime = null }: { appRuntime?: WorkbenchAppRuntimeStore | null }) {
   const appRpc = useWorkbenchAppRpc();
   const clientStateController = useWorkbenchClientStateController();
@@ -483,7 +482,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }), [explorer.projects, selectionProjectIds]);
   const currentThread = threads.current;
   const threadDocuments = threads.documents;
-  const [threadRelativeTimeNowMs, setThreadRelativeTimeNowMs] = useState(() => Date.now());
   const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [localSelectionError, setSelectionError] = useState("");
   useEffect(() => {
@@ -1640,8 +1638,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const isThreadShellTitleLoading = showThreadView && !threadShellSource;
   const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : "";
   const threadShellStatusLabel = threadShellActivityTimestampMs
-    ? formatThreadRelativeTimestamp(threadShellActivityTimestampMs / 1000, threadRelativeTimeNowMs)
-    : "";
+    ? <WorkbenchRelativeTime label="Last activity" timestampMs={threadShellActivityTimestampMs} />
+    : null;
   const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
@@ -1848,21 +1846,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         : routeView
           ? `route:${route.view}`
         : "";
-  const shouldRunRelativeTimeClock = showThreadView && Boolean(threadShellSource);
-  useEffect(() => {
-    if (!shouldRunRelativeTimeClock) {
-      return;
-    }
-
-    setThreadRelativeTimeNowMs(Date.now());
-    const intervalId = window.setInterval(() => {
-      setThreadRelativeTimeNowMs(Date.now());
-    }, THREAD_RELATIVE_TIME_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [shouldRunRelativeTimeClock, threadShellActivityTimestampMs, threadShellSource?.id]);
   const routePanelTarget = useMemo<WorkbenchPanelTarget>(() => {
     if (showFileView) {
       return { filePath: effectiveFilePath, kind: "file" };

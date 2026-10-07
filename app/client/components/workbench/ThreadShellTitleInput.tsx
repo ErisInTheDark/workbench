@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from "react";
 
 function boundedErrorMessage(error: unknown) {
   return (error instanceof Error ? error.message : "Unable to update the thread title.").slice(0, 500);
@@ -18,7 +18,7 @@ export default function ThreadShellTitleInput({
   title,
   titleRef,
 }: {
-  activityLabel: string;
+  activityLabel: ReactNode;
   onSave?: (title: string) => Promise<string>;
   statusRef: Ref<HTMLParagraphElement>;
   title: string;
