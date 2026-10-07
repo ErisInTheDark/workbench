@@ -130,6 +130,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "search/query": return WorkbenchSearchResponseSchema;
     case "stats/import/start": return WorkbenchStatsImportProgressSchema;
     case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
+    case "stats/feedback/delete": return z.object({ deleted: z.number().int().nonnegative() }).strict();
     case "local-capabilities/read":
     case "local-capabilities/update": return z.object({
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),

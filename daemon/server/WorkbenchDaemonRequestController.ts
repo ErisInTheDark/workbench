@@ -102,7 +102,7 @@ const METHODS = new Set([
   "project/file/read", "project/file/reset", "project/file/save",
   "questionnaire/respond",
   "search/query",
-  "stats/import/start", "stats/rate-limits/refresh",
+  "stats/import/start", "stats/rate-limits/refresh", "stats/feedback/delete",
   "skills/read",
   "thread/identity/resolve",
 ]);

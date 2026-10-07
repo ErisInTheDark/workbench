@@ -538,6 +538,7 @@ test("stats commands refresh limits while reads arrive only through observations
   const { controller, statsRefreshes } = createController();
   assert.deepEqual((await controller.handle({ id: 3, method: "stats/rate-limits/refresh", params: {} })).result, { ok: true });
   assert.equal(statsRefreshes(), 1);
+  assert.deepEqual((await controller.handle({ id: 4, method: "stats/feedback/delete", params: { ids: [1, 2] } })).result, { deleted: 2 });
   for (const legacy of ["stats/read", "stats/read/scoped", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
     assert.equal(controller.accepts(legacy), false);
   }
