@@ -119,6 +119,8 @@ function createWorkbenchCoreFeature(
   const settings = new WorkbenchServerSettings(database);
   const projectCatalog = new WorkbenchProjectCatalogController({
     initialProjects: initialCatalog,
+    // The daemon's own checkout always has a project, so wb feedback and Workbench threads have an owner.
+    pinnedProjectRoots: [context.legacyMigrationProjectRoot],
     persistence: database,
     settings,
   });

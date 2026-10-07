@@ -6,7 +6,7 @@
  * - safeResolve/safeResolveProjectPath: validate project-relative paths.
  * - isPathWithinRoot: check absolute path containment.
  * - resolveDiscoveredProject/resolveProjectRootFromProjects: resolve durably admitted catalogue projects.
- * - discoverProjectIdentities: prepare structural projects and canonical identity evidence without icon scans.
+ * - discoverProjectIdentities: prepare structural projects, including pinned checkouts outside discovery folders, and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
  * - buildTree/buildProjectTree: build visible explorer trees.
@@ -615,7 +615,7 @@ function filterIndirectGitProjectDuplicates(
   });
 }
 
-async function discoverProjectOptions(discoveryFolders: readonly string[], signal?: AbortSignal) {
+async function discoverProjectOptions(discoveryFolders: readonly string[], signal?: AbortSignal, pinnedRoots: readonly string[] = []) {
   const discoveredProjects: WorkbenchProjectOption[] = [];
   const addresses: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
@@ -627,6 +627,15 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
     const canonicalFolder = await resolveCanonicalPath(discoveryFolder);
     discoveredProjects.push(...filterIndirectGitProjectDuplicates(projects, canonicalFolder));
     addresses.push(...projects);
+  }
+  // Pinned checkouts are catalogued even outside every discovery folder; a walked copy keeps precedence below.
+  for (const [index, pinnedRoot] of pinnedRoots.entries()) {
+    signal?.throwIfAborted();
+    if (!await resolveGitDirectory(pinnedRoot)) {
+      console.warn(`[projects] pinned project root is not a Git checkout: ${pinnedRoot.slice(0, 500)}`);
+      continue;
+    }
+    discoveredProjects.push(await createProjectOption(pinnedRoot, pinnedRoot, `pinned-${index + 1}`));
   }
   const registeredRoots = new Set<string>();
   for (const candidate of [...discoveredProjects]) {
@@ -673,8 +682,12 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
   };
 }
 
-export async function discoverProjectIdentities(discoveryFolders: readonly string[], signal?: AbortSignal): Promise<WorkbenchProjectDiscovery> {
-  const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(discoveryFolders, signal);
+export async function discoverProjectIdentities(
+  discoveryFolders: readonly string[],
+  signal?: AbortSignal,
+  { pinnedRoots = [] }: { pinnedRoots?: readonly string[] } = {},
+): Promise<WorkbenchProjectDiscovery> {
+  const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(discoveryFolders, signal, pinnedRoots);
   let complete = walkedCompletely;
   const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
     .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));

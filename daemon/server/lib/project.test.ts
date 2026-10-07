@@ -204,3 +204,32 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.equal((await resolveAgentEndpointProjectFromProjects(linkedProjects, linkedWorktree)).cwd, linkedWorktree);
   warning.mock.restore();
 });
+
+test("pinned checkouts are catalogued outside discovery folders exactly once", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-project-pinned-");
+  const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
+  context.after(async () => {
+    if (originalWorkbenchLibraryRoot === undefined) delete process.env.WORKBENCH_LIBRARY_ROOT;
+    else process.env.WORKBENCH_LIBRARY_ROOT = originalWorkbenchLibraryRoot;
+    await temporary.dispose();
+  });
+  process.env.WORKBENCH_LIBRARY_ROOT ??= path.join(temporary.path, "library");
+  const { discoverProjectIdentities } = await import("./project");
+  const discoveryFolder = path.join(temporary.path, "projects");
+  const inside = path.join(discoveryFolder, "inside");
+  const outside = path.join(temporary.path, "elsewhere", "workbench");
+  for (const root of [inside, outside]) {
+    await fs.mkdir(root, { recursive: true });
+    await git("init", "--quiet", root);
+  }
+  const gitRoots = async (pinnedRoots: string[]) => (await discoverProjectIdentities([discoveryFolder], undefined, { pinnedRoots }))
+    .data.filter(project => project.kind === "git").map(project => normalizePath(project.rootPath));
+  const outsidePath = normalizePath(await fs.realpath(outside));
+  const insidePath = normalizePath(await fs.realpath(inside));
+  assert.equal((await gitRoots([])).includes(outsidePath), false);
+  assert.equal((await gitRoots([outside])).filter(root => root === outsidePath).length, 1);
+  assert.equal((await gitRoots([inside])).filter(root => root === insidePath).length, 1);
+  const warning = context.mock.method(console, "warn", () => undefined);
+  assert.deepEqual(await gitRoots([path.join(temporary.path, "not-a-checkout")]), [insidePath]);
+  assert.equal(warning.mock.callCount(), 1, "A broken pinned root must be reported, not silently dropped");
+});

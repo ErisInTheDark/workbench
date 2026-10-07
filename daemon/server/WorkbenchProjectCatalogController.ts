@@ -59,6 +59,8 @@ export interface WorkbenchProjectCatalogControllerOptions {
   createWatcher?: (rootPath: string, listener: (eventType: string, filename: string | Buffer | null) => void, recursive: boolean) => ProjectWatcher;
   logError?: (message: string) => void;
   now?: () => number;
+  /** Checkouts catalogued even outside every configured discovery root, such as the daemon's own Workbench checkout. */
+  pinnedProjectRoots?: readonly string[];
   projectsRootPath?: string;
   settings?: Pick<WorkbenchServerSettings, "readProjectDiscoveryRoots" | "replaceProjectDiscoveryRoots">;
   resolveProjectByIdFromCatalog?: ResolveProjectByIdFromCatalog;
@@ -188,6 +190,7 @@ export default class WorkbenchProjectCatalogController {
   private readonly settings?: WorkbenchProjectCatalogControllerOptions["settings"];
   private readonly loadInitialProjects?: () => WorkbenchProjectStartup;
   private readonly discoverIdentities: typeof discoverProjectIdentities;
+  private readonly pinnedProjectRoots: readonly string[];
   private readonly discoverIcon: typeof discoverWorkbenchProjectIcon;
   private readonly cacheTtlMs: number;
   private catalog: ProjectCatalogSnapshot | null = null;
@@ -218,12 +221,14 @@ export default class WorkbenchProjectCatalogController {
     createWatcher = defaultCreateWatcher,
     logError = (message) => defaultLogError("project-catalog", message),
     now = Date.now,
+    pinnedProjectRoots = [],
     projectsRootPath,
     settings,
     resolveProjectByIdFromCatalog = resolveProjectRootFromProjects,
     resolveProjectFromCatalog = resolveAgentEndpointProjectFromProjects,
   }: WorkbenchProjectCatalogControllerOptions) {
     this.persistence = persistence;
+    this.pinnedProjectRoots = [...pinnedProjectRoots];
     this.settings = settings;
     this.discoverIdentities = discoverIdentities;
     this.discoverIcon = discoverIcon;
@@ -691,7 +696,7 @@ export default class WorkbenchProjectCatalogController {
         const generation = this.catalogGeneration;
         const roots = this.configuredRoots ?? await this.readConfiguredRoots();
         signal.throwIfAborted();
-        const discovery = await this.discoverIdentities(roots, signal);
+        const discovery = await this.discoverIdentities(roots, signal, { pinnedRoots: this.pinnedProjectRoots });
         signal.throwIfAborted();
         if (this.catalogGeneration !== generation) {
           if (this.catalog) return this.catalog;
