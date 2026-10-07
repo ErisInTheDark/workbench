@@ -103,8 +103,9 @@ export function createProviderBoundaryJourney(
       `6. ${ask("held-answer")}`,
       "7. Wait. Do not create more questions or finish while waiting.",
     ].join("\n"),
-    steer: (proof: string) =>
-      `After the current sleep, quote "${proof}" exactly in commentary, then continue the numbered steps.`,
+    // Claude Code holds slash-led queued input until the turn ends unless Workbench marks it client-composed.
+    steer: (proof: string) => `${provider === "claude" ? "/auto " : ""}`
+      + `After the current sleep, quote "${proof}" exactly in commentary, then continue the numbered steps.`,
     heldContinuation: (prefixProof: string) => [
       "Authorised scenario continuation. Follow exactly, in order.",
       `1. Quote the answer and project-instruction proof "${prefixProof}" exactly in commentary.`,

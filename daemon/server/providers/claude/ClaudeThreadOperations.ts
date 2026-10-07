@@ -456,6 +456,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
             [CLAUDE_COMMENTARY_SERVER_NAME]: createClaudeCommentaryServer(),
           },
           includePartialMessages: true,
+          // Workbench composes every prompt: the CLI must not dispatch slash commands or expand `@path`. Slash-led
+          // queued input would otherwise wait for the turn to end instead of folding in as a steer.
+          verbatimPrompts: true,
           // Replay acknowledgements mark when a queued steer is folded into the conversation.
           extraArgs: { "replay-user-messages": null },
         }),

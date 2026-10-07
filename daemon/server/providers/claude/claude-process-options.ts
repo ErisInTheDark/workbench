@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - claudeExecutable: resolve the installed Claude Code executable.
- * - claudeEnvironment: default eager tool-input streaming, disable account connectors, apply an optional config view and selected context window, and isolate fake-model traffic.
+ * - claudeEnvironment: default eager tool-input streaming, disable account connectors and CLI context attachments, apply an optional config view and selected context window, and isolate fake-model traffic.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -33,6 +33,8 @@ export function claudeEnvironment(
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1",
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+    // Workbench owns injected context; queued steers still arrive as the CLI's remaining queued-command attachments.
+    CLAUDE_CODE_DISABLE_ATTACHMENTS: "1",
     // Workbench owns tool exposure; claude.ai account connectors would otherwise auto-load.
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   };
