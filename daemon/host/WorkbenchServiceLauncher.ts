@@ -122,9 +122,13 @@ export default class WorkbenchServiceLauncher {
   async close() {
     const cancellation = new Error("Service startup observation closed.");
     this.lifetime.abort(cancellation);
-    if (this.task) {
-      try { await this.task; }
-      catch (error) { if (error !== cancellation) throw error; }
+    const task = this.task;
+    if (!task) return;
+    try { await task; }
+    catch (error) {
+      // Closing is not the owner of startup readiness: the `ensure` caller already saw and
+      // reported this failure. A dying host must never block the app's own clean exit.
+      if (error !== cancellation) this.options.warn(error instanceof Error ? error.message : String(error));
     }
   }
 }

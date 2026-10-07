@@ -93,13 +93,35 @@ export function createSpawnOptions(
   };
 }
 
+/**
+ * Restricted Windows environments deny `taskkill`, so tree retirement falls back to Windows
+ * PowerShell. It ships with Windows itself (unlike PowerShell 7) and walks `Win32_Process`
+ * to terminate leaves first, which ends the whole owned tree instead of just the root.
+ */
+function windowsPowerShellTreeKillScript(pid: number) {
+  return "$ErrorActionPreference='SilentlyContinue'; function Kill-Tree([int]$Id) { "
+    + 'Get-CimInstance Win32_Process -Filter "ParentProcessId=$Id" -ErrorAction SilentlyContinue '
+    + "| ForEach-Object { Kill-Tree $_.ProcessId }; "
+    + "Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue }; "
+    + `Kill-Tree ${pid}`;
+}
+
+function windowsPowerShellTreeKillArgs(pid: number) {
+  return ["-NoProfile", "-NonInteractive", "-Command", windowsPowerShellTreeKillScript(pid)];
+}
+
 export function killProcessTree(pid: number | undefined) {
   if (!pid) {
     return;
   }
 
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], {
+    const taskkill = spawnSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (taskkill.status === 0) return;
+    spawnSync("powershell.exe", windowsPowerShellTreeKillArgs(pid), {
       stdio: "ignore",
       windowsHide: true,
     });
@@ -138,27 +160,13 @@ export interface ProcessTreeRetirementOptions {
   spawnProcess?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 }
 
-export async function killProcessTreeAsync(pid: number | undefined, options: ProcessTreeRetirementOptions = {}) {
-  if (!pid) return;
-  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("A valid owned process is required.");
-  const platform = options.platform ?? process.platform;
-  if (platform === "linux") {
-    await new LinuxProcessGroupRetirement().retire(pid);
-    return;
-  }
-  if (platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
-    }
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const child = (options.spawnProcess ?? spawn)("taskkill.exe", [
-      "/pid", String(pid), "/t", "/f",
-    ], {
+function runWindowsTreeKillCommand(
+  command: string,
+  args: string[],
+  spawnProcess: (command: string, args: string[], options: SpawnOptions) => ChildProcess,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawnProcess(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -193,4 +201,33 @@ export async function killProcessTreeAsync(pid: number | undefined, options: Pro
     child.once("error", failed);
     child.once("exit", exited);
   });
+}
+
+export async function killProcessTreeAsync(pid: number | undefined, options: ProcessTreeRetirementOptions = {}) {
+  if (!pid) return;
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("A valid owned process is required.");
+  const platform = options.platform ?? process.platform;
+  if (platform === "linux") {
+    await new LinuxProcessGroupRetirement().retire(pid);
+    return;
+  }
+  if (platform !== "win32") {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+    }
+    return;
+  }
+
+  const spawnProcess = options.spawnProcess ?? spawn;
+  try {
+    await runWindowsTreeKillCommand("taskkill.exe", ["/pid", String(pid), "/t", "/f"], spawnProcess);
+  } catch (taskkillError) {
+    try {
+      await runWindowsTreeKillCommand("powershell.exe", windowsPowerShellTreeKillArgs(pid), spawnProcess);
+    } catch (fallbackError) {
+      throw new AggregateError([taskkillError, fallbackError], `Owned process tree ${pid} could not be retired.`);
+    }
+  }
 }

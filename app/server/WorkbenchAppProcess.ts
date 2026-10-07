@@ -5,6 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
+import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
 import WorkbenchApp from "./WorkbenchApp.ts";
 import WorkbenchAppControl from "./WorkbenchAppControl.ts";
@@ -77,7 +78,7 @@ async function main() {
     closing ??= control.close().finally(() => app.close())
       .then(() => protocol?.dispose())
       .catch((error) => {
-        processLogger.error("app", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        processLogger.error("app", `shutdown failed: ${describeErrorCauseChain(error)}`);
         process.exitCode = 1;
       });
     return closing;

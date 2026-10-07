@@ -58,3 +58,29 @@ test("an OS-observed failed run rejects instead of waiting forever for publicati
   context.after(() => launcher.close());
   await assert.rejects(launcher.ensure(), /native failure/);
 });
+
+test("closing during a failing readiness probe warns instead of failing shutdown", async context => {
+  let releaseStatus!: (error: Error) => void;
+  let statusStarted!: () => void;
+  const started = new Promise<void>(resolve => { statusStarted = resolve; });
+  const warnings: string[] = [];
+  const launcher = new WorkbenchServiceLauncher({
+    root: "/checkout", endpointPath: "unused",
+    read: async () => null,
+    acquire: async () => ({ dispose: async () => {} }),
+    startup: {
+      start: async () => "before",
+      status: () => new Promise((_resolve, reject) => { releaseStatus = reject; statusStarted(); }),
+    },
+    warn: message => warnings.push(message),
+  });
+  context.after(() => launcher.close());
+  const ensure = launcher.ensure();
+  void ensure.catch(() => {});
+  await started;
+  const closed = launcher.close();
+  releaseStatus(new Error("powershell.exe failed (1): Access denied"));
+  await closed;
+  await assert.rejects(ensure, /Access denied/);
+  assert.match(warnings.join("\n"), /Access denied/u);
+});

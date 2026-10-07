@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import WorkbenchProcessLogger from "../../shared/process/WorkbenchProcessLogger.ts";
 import WorkbenchRotatingLog from "../../shared/process/WorkbenchRotatingLog.ts";
+import { describeErrorCauseChain } from "../../shared/process/error-cause-chain.ts";
 
 import WorkbenchService from "./WorkbenchService.ts";
 
@@ -43,7 +44,7 @@ async function main() {
     if (process.env.WORKBENCH_FOREGROUND_PIPE === "1") process.stdin.destroy();
     process.exitCode = exitCode;
     stopping ??= service.close().catch((error) => {
-      logger.error("host", `shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.error("host", `shutdown failed: ${describeErrorCauseChain(error)}`);
       if (exitCode === 0) process.exitCode = 78;
     });
   };
