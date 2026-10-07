@@ -21,7 +21,7 @@ Let the active agent identity influence child names. Do not use task slugs, role
 
 Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 
-The wait tool is the only way to receive a child's final output. Do not leave children running without a later wait.
+DO NOT USE <tool id="message_wait" /> TO WAIT FOR SUBAGENTS; IT MISSES SUBAGENT EVENTS.
 
 ### queues
 
