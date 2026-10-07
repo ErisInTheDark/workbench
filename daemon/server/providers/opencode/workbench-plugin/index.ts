@@ -4,6 +4,7 @@
  * - resolveOpenCodeGoCredential: select the active or sole unambiguous Go credential inside OpenCode.
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
+ * - MANAGED_DISABLED_NATIVE_TOOLS: native tools hidden and denied in managed Workbench sessions.
  * - default plugin: preserve ordinary OpenCode sessions while adapting managed Workbench sessions.
  */
 import { z } from "zod";
@@ -23,8 +24,8 @@ const WORKBENCH_PLUGIN_ID = "workbench";
 const WORKBENCH_MCP_NAME = "wb";
 const MANAGED_CODE_MODE_SCOPE =
   "Search and call nested Workbench tools only. Native OpenCode tools such as edit, write, and apply_patch remain direct OpenCode tools outside this catalogue.";
-/** Managed sessions replace these with wb equivalents: shell, rg, skill, request_user_input. */
-const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "glob", "grep", "question", "shell", "skill"]);
+/** Managed sessions replace these with wb equivalents: shell, rg, skill, request_user_input. Read hangs on missing paths and directories, so it is denied too; agents read through the wb shell. */
+export const MANAGED_DISABLED_NATIVE_TOOLS = new Set(["bash", "glob", "grep", "question", "read", "shell", "skill"]);
 const OPENCODE_HOSTED_PROVIDERS = new Set(["opencode", "opencode-go"]);
 
 export interface OpenCodeWorkbenchPluginOptions {

@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import type { Result } from "@opencode/plugin/promise/tool";
-import { createOpenCodeWorkbenchPlugin, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
+import { createOpenCodeWorkbenchPlugin, MANAGED_DISABLED_NATIVE_TOOLS, readOpenCodeGoQuota, resolveOpenCodeGoCredential } from "./index";
 
 async function* lifecycleEvents({ signal }: { signal: AbortSignal }) {
   if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -140,14 +140,15 @@ for (const failure of ["rpc", "http.response"]) {
   });
 }
 
-test("managed native command, search, question, and skill denial preserves ordinary skill use and hosted request identity", async () => {
+test("managed native command, search, read, question, and skill denial preserves ordinary skill use and hosted request identity", async () => {
   const owner = await fixture();
   const cleanup = await owner.setup();
   try {
-    const tools = Object.fromEntries(["bash", "glob", "grep", "shell", "question", "skill", "edit", "write", "patch", "execute"].map(name => [name, { description: name }]));
+    const retained = ["edit", "write", "patch", "execute"];
+    const tools = Object.fromEntries([...MANAGED_DISABLED_NATIVE_TOOLS, ...retained].map(name => [name, { description: name }]));
     await owner.hooks.get("context")!({ sessionID: "managed", tools } as never);
-    assert.deepEqual(Object.keys(tools), ["edit", "write", "patch", "execute"]);
-    for (const tool of ["bash", "glob", "grep", "shell", "question", "skill"]) {
+    assert.deepEqual(Object.keys(tools), retained);
+    for (const tool of MANAGED_DISABLED_NATIVE_TOOLS) {
       await assert.rejects(owner.hooks.get("execute.before")!({ sessionID: "managed", tool } as never), /unavailable/);
       await owner.hooks.get("execute.before")!({ sessionID: "ordinary", tool } as never);
     }
