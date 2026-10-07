@@ -1,15 +1,20 @@
 /*
  * Exports:
- * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own delayed exclusive portal tooltip lifecycle, opening right of or above it.
+ * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own a delayed portal tooltip, opening right of or above it.
+ *   Tooltips on triggers nested inside another trigger stack in the outermost tooltip's panel; tooltips on triggers
+ *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in workbench-tooltip-layers.
  */
 "use client";
 
 import {
   cloneElement,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -26,14 +31,11 @@ import {
   isPointWithinWorkbenchTooltipArea,
   type WorkbenchTooltipPlacement,
 } from "./workbench-tooltip-geometry";
+import { workbenchTooltipLayers } from "./workbench-tooltip-layers";
 
 const DEFAULT_DELAY_MS = 500;
 const DEFAULT_HOVER_DISTANCE_PX = 12;
-
-interface ActiveTooltip {
-  close: () => void;
-  owner: symbol;
-}
+const BASE_LAYER_Z_INDEX = 90;
 
 interface TooltipPosition {
   left: number;
@@ -53,21 +55,47 @@ interface WorkbenchTooltipTriggerProps {
   ref?: Ref<HTMLElement>;
 }
 
-let activeTooltip: ActiveTooltip | null = null;
-
-function claimActiveTooltip(owner: symbol, close: () => void) {
-  const previous = activeTooltip;
-  activeTooltip = { close, owner };
-  if (previous && previous.owner !== owner) previous.close();
+/** The tooltip whose trigger encloses this one; a nested tooltip renders into its parent's panel. */
+interface TooltipNesting {
+  id: symbol;
+  /** Where nested children portal their sections; null until the parent's panel is mounted. */
+  slot: HTMLElement | null;
+  showNow: () => void;
 }
 
-function releaseActiveTooltip(owner: symbol) {
-  if (activeTooltip?.owner === owner) activeTooltip = null;
+/** The layer a tooltip opens on, and which tooltip's content holds its trigger. */
+interface TooltipLayer {
+  layer: number;
+  owner: symbol | null;
+}
+
+const TooltipNestingContext = createContext<TooltipNesting | null>(null);
+const TooltipLayerContext = createContext<TooltipLayer>({ layer: 0, owner: null });
+
+const layerHosts = new Map<number, HTMLElement>();
+
+/** Each layer is one fixed, pointer-transparent host stacked above the layer below it. */
+function getLayerHost(layer: number) {
+  const existing = layerHosts.get(layer);
+  if (existing?.isConnected) return existing;
+  const host = document.createElement("div");
+  host.dataset.workbenchTooltipLayer = String(layer);
+  host.style.cssText = `position:fixed;inset:0;pointer-events:none;z-index:${BASE_LAYER_Z_INDEX + layer}`;
+  document.body.append(host);
+  layerHosts.set(layer, host);
+  return host;
 }
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
   if (typeof ref === "function") ref(value);
   else if (ref) ref.current = value;
+}
+
+function viewport() {
+  return {
+    viewportHeight: window.visualViewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight,
+    viewportWidth: window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth,
+  };
 }
 
 export default function WorkbenchTooltip({
@@ -88,14 +116,21 @@ export default function WorkbenchTooltip({
   placement?: WorkbenchTooltipPlacement;
 }) {
   const ownerRef = useRef(Symbol("workbench-tooltip"));
+  const id = ownerRef.current;
+  const parent = useContext(TooltipNestingContext);
+  const { layer, owner } = useContext(TooltipLayerContext);
   const triggerRef = useRef<HTMLElement>(null);
-  const tooltipRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const showTimerRef = useRef<number | null>(null);
-  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
+  const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
   const [trackingPointer, setTrackingPointer] = useState(false);
   const [visible, setVisible] = useState(false);
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
   const tooltipId = useId();
+  // Disabled parents pass their own parent through, so this is the nearest tooltip able to host a panel.
+  const nestedIn = parent;
+  const isRoot = nestedIn === null;
 
   const clearShowTimer = useCallback(() => {
     if (showTimerRef.current === null) return;
@@ -103,30 +138,47 @@ export default function WorkbenchTooltip({
     showTimerRef.current = null;
   }, []);
 
-  const hide = useCallback(() => {
+  /** Called by the registry once this tooltip and everything it held open are closed. */
+  const reset = useCallback(() => {
     clearShowTimer();
-    releaseActiveTooltip(ownerRef.current);
     setPosition(null);
     setTrackingPointer(false);
     setVisible(false);
   }, [clearShowTimer]);
 
-  const show = useCallback(() => {
-    if (!enabled) return;
+  const hide = useCallback(() => {
+    if (workbenchTooltipLayers.isOpen(id)) workbenchTooltipLayers.close(id);
+    else reset();
+  }, [id, reset]);
+
+  const isPointerLocallySafe = useCallback((x: number, y: number) => {
     const trigger = triggerRef.current;
-    if (!trigger) return;
+    if (!trigger) return false;
+    return isPointWithinWorkbenchTooltipArea(
+      x,
+      y,
+      trigger.getBoundingClientRect(),
+      surfaceRef.current?.getBoundingClientRect() ?? null,
+      Math.max(0, hoverDistancePx),
+      interactive,
+    );
+  }, [hoverDistancePx, interactive]);
+
+  const show = useCallback(() => {
+    if (!enabled || !triggerRef.current) return;
     clearShowTimer();
-    claimActiveTooltip(ownerRef.current, hide);
-    const triggerRect = trigger.getBoundingClientRect();
-    const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight;
-    const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
-    setPosition({
-      ...getWorkbenchTooltipPosition({ placement, tooltipHeight: 0, triggerRect, viewportHeight, viewportWidth }),
-      ready: false,
-    });
+    if (workbenchTooltipLayers.isOpen(id)) return;
+    nestedIn?.showNow();
+    workbenchTooltipLayers.open({ id, layer, owner, parent: nestedIn?.id ?? null }, { close: reset, isPointerLocallySafe });
+    if (!nestedIn) {
+      setPosition({
+        ...getWorkbenchTooltipPosition({ placement, tooltipHeight: 0, triggerRect: triggerRef.current.getBoundingClientRect(), ...viewport() }),
+        ready: false,
+      });
+    }
     setTrackingPointer(true);
     setVisible(true);
-  }, [clearShowTimer, enabled, hide, placement]);
+  }, [clearShowTimer, enabled, id, isPointerLocallySafe, layer, nestedIn, owner, placement, reset]);
 
   const beginShowing = useCallback(() => {
     if (!enabled) return;
@@ -135,30 +187,17 @@ export default function WorkbenchTooltip({
     showTimerRef.current = window.setTimeout(show, Math.max(0, delayMs));
   }, [delayMs, enabled, show, visible]);
 
-  const pointerIsSafe = useCallback((x: number, y: number) => {
-    const trigger = triggerRef.current;
-    if (!trigger) return false;
-    return isPointWithinWorkbenchTooltipArea(
-      x,
-      y,
-      trigger.getBoundingClientRect(),
-      tooltipRef.current?.getBoundingClientRect() ?? null,
-      Math.max(0, hoverDistancePx),
-      interactive,
-    );
-  }, [hoverDistancePx, interactive]);
-
   const reconcilePointer = useCallback((x: number, y: number) => {
-    if (!pointerIsSafe(x, y)) hide();
-  }, [hide, pointerIsSafe]);
+    if (workbenchTooltipLayers.isOpen(id) ? !workbenchTooltipLayers.isPointerSafe(id, x, y) : !isPointerLocallySafe(x, y)) hide();
+  }, [hide, id, isPointerLocallySafe]);
 
   useEffect(() => {
-    setPortalHost(document.body);
+    setMounted(true);
     return () => {
       clearShowTimer();
-      releaseActiveTooltip(ownerRef.current);
+      if (workbenchTooltipLayers.isOpen(id)) workbenchTooltipLayers.close(id);
     };
-  }, [clearShowTimer]);
+  }, [clearShowTimer, id]);
 
   useEffect(() => {
     if (!enabled) hide();
@@ -184,23 +223,21 @@ export default function WorkbenchTooltip({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [hide, interactive, visible]);
 
+  // Only the outermost tooltip positions; nested sections grow its panel, which the resize observer follows.
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
-    const tooltip = tooltipRef.current;
-    if (!visible || !trigger || !tooltip) return;
+    const panel = surfaceRef.current;
+    if (!visible || !isRoot || !trigger || !panel) return;
 
     const updatePosition = () => {
-      const viewportHeight = window.visualViewport?.height ?? document.documentElement.clientHeight ?? window.innerHeight;
-      const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
-      const measured = tooltip.getBoundingClientRect();
+      const measured = panel.getBoundingClientRect();
       setPosition({
         ...getWorkbenchTooltipPosition({
           placement,
           tooltipHeight: measured.height,
           tooltipWidth: measured.width,
           triggerRect: trigger.getBoundingClientRect(),
-          viewportHeight,
-          viewportWidth,
+          ...viewport(),
         }),
         ready: true,
       });
@@ -208,7 +245,7 @@ export default function WorkbenchTooltip({
 
     updatePosition();
     const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updatePosition);
-    resizeObserver?.observe(tooltip);
+    resizeObserver?.observe(panel);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
     window.visualViewport?.addEventListener("resize", updatePosition);
@@ -220,7 +257,7 @@ export default function WorkbenchTooltip({
       window.visualViewport?.removeEventListener("resize", updatePosition);
       window.visualViewport?.removeEventListener("scroll", updatePosition);
     };
-  }, [placement, visible]);
+  }, [isRoot, placement, visible]);
 
   const childProps = children.props;
   const childRef = childProps.ref;
@@ -246,6 +283,23 @@ export default function WorkbenchTooltip({
     ref: setTriggerRef,
   });
 
+  // Nested children see this tooltip only while it can host them; a disabled tooltip passes its own parent through.
+  const nesting = useMemo<TooltipNesting | null>(
+    () => enabled ? { id, slot: visible ? slot : null, showNow: show } : parent,
+    [enabled, id, parent, show, slot, visible],
+  );
+
+  const section = (
+    <div className={nestedIn ? `mt-2 border-t border-fg/10 pt-2 ${interactive ? "pointer-events-auto" : ""}` : undefined} ref={nestedIn ? surfaceRef : undefined}>
+      <TooltipNestingContext.Provider value={null}>
+        <TooltipLayerContext.Provider value={{ layer: layer + 1, owner: id }}>
+          {content}
+        </TooltipLayerContext.Provider>
+      </TooltipNestingContext.Provider>
+      <div className="flex flex-col" ref={setSlot} />
+    </div>
+  );
+
   const tooltipStyle: CSSProperties | undefined = position ? {
     left: position.left,
     maxHeight: position.maxHeight,
@@ -253,26 +307,34 @@ export default function WorkbenchTooltip({
     top: position.top,
     visibility: position.ready ? "visible" : "hidden",
   } : undefined;
-  const tooltip = enabled && visible && portalHost && position ? createPortal(
-    <div
-      id={tooltipId}
-      ref={tooltipRef}
-      role={interactive ? "dialog" : "tooltip"}
-      aria-modal={interactive ? false : undefined}
-      className={`
-        fixed z-[90] w-max overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
-        ${interactive ? "pointer-events-auto" : "pointer-events-none"}
-      `}
-      style={tooltipStyle}
-    >
-      {content}
-    </div>,
-    portalHost,
-  ) : null;
+
+  let tooltip: ReactNode = null;
+  if (enabled && visible && mounted) {
+    if (nestedIn) {
+      tooltip = nestedIn.slot ? createPortal(<div id={tooltipId} role={interactive ? "dialog" : "tooltip"}>{section}</div>, nestedIn.slot) : null;
+    } else if (position) {
+      tooltip = createPortal(
+        <div
+          id={tooltipId}
+          ref={surfaceRef}
+          role={interactive ? "dialog" : "tooltip"}
+          aria-modal={interactive ? false : undefined}
+          className={`
+            fixed flex w-max flex-col overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
+            ${interactive ? "pointer-events-auto" : "pointer-events-none"}
+          `}
+          style={tooltipStyle}
+        >
+          {section}
+        </div>,
+        getLayerHost(layer),
+      );
+    }
+  }
 
   return (
     <>
-      {trigger}
+      <TooltipNestingContext.Provider value={nesting}>{trigger}</TooltipNestingContext.Provider>
       {tooltip}
     </>
   );
