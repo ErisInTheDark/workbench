@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexLifecycleControllerOptions: graph restart, generation and logging ports.
- * - default CodexLifecycleController: own native readiness and recover the child process.
+ * - default CodexLifecycleController: own native readiness, recover the child process, and stop recovery when it cannot help.
  */
 import { createInitializeCapabilities, createInitializeRequest } from "workbench-shared/codex/protocol";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -45,6 +45,12 @@ export default class CodexLifecycleController {
 
   requestRecovery(reason: string) {
     this.supervisor.requestRecovery(reason);
+  }
+
+  /** Recovery cannot help (the executable is missing); a lifecycle reload or daemon restart starts a fresh supervisor. */
+  stopRecovery(reason: string) {
+    this.supervisor.dispose();
+    this.options.logError(`Codex recovery stopped: ${reason}`);
   }
 
   pause() { this.supervisor.pause(); }

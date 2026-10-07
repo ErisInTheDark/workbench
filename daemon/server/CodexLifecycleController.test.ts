@@ -25,6 +25,28 @@ test("failed readiness stops its bridge and requests recovery without hiding the
   }
 });
 
+test("stopped recovery ignores every later recovery request", async () => {
+  let recoveries = 0;
+  const controller = new CodexLifecycleController({
+    isShuttingDown: () => false,
+    log: () => undefined,
+    logError: () => undefined,
+    recover: async () => { recoveries++; },
+  });
+  try {
+    controller.stopRecovery("codex executable not found");
+    controller.requestRecovery("health probe failed");
+    await assert.rejects(controller.ready({
+      ensureInitialized: async () => { throw new Error("readiness failed"); },
+      beginStopping: () => undefined,
+    }), /readiness failed/u);
+    // Recovery attempts invoke `recover` synchronously when requested.
+    assert.equal(recoveries, 0);
+  } finally {
+    controller.dispose();
+  }
+});
+
 test("retired readiness propagates failure without restarting a newer provider", async () => {
   let retired = false;
   let fail!: (error: Error) => void;

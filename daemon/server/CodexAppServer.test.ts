@@ -93,6 +93,24 @@ test("intentional replacement ignores stale child output and exit", async () => 
   assert.equal(lifecycleLogs.some((message) => /\b(?:started|ready)\b/iu.test(message)), false);
 });
 
+for (const [code, retry] of [["ENOENT", false], ["EACCES", true]] as const) {
+  test(`a ${code} spawn failure ${retry ? "requests" : "forbids"} recovery`, () => {
+    const child = fakeChild(501);
+    const fatal: { reason: string; retry: boolean }[] = [];
+    const server = new CodexAppServer({
+      createChild: () => child,
+      log: () => undefined,
+      logError: () => undefined,
+      onFatalExit: (reason, options) => fatal.push({ reason, retry: options.retry }),
+      onMessage: () => undefined,
+      projectRoot: "C:/workspace",
+    });
+    server.send({ method: "first" });
+    child.emit("error", Object.assign(new Error(`spawn codex ${code}`), { code }));
+    assert.deepEqual(fatal.map(item => item.retry), [retry]);
+  });
+}
+
 test("asynchronous stop detaches ownership before process-tree termination settles", async () => {
   const first = fakeChild(201);
   const second = fakeChild(202);

@@ -22,7 +22,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const lifecycle = build.get("codexLifecycle");
     const runtime = new CodexAppServerRuntime({
       appServer: { log, logError, projectRoot: context.daemonPackageRoot },
-      onFatalExit: reason => lifecycle.requestRecovery(reason),
+      onFatalExit: (reason, { retry }) => retry ? lifecycle.requestRecovery(reason) : lifecycle.stopRecovery(reason),
     }, { previousAppServer: previous?.appServer });
     const reportRetirement = (error: unknown) => {
       logError("codex-server", `previous process retirement failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`);

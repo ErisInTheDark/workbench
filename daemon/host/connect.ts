@@ -2,6 +2,7 @@
  * No exports. Human CLI controls independent startup, remote wake and development wake.
  */
 import path from "node:path";
+import recordHostEnvironment from "./host-environment-file.ts";
 import WorkbenchServiceStartup from "./WorkbenchServiceStartup.ts";
 import WorkbenchServiceLauncher from "./WorkbenchServiceLauncher.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
@@ -15,6 +16,9 @@ async function main() {
   if (!["connect", "disconnect", "wake", "status"].includes(command ?? "")) throw new Error("Usage: wb connect | wb disconnect | pnpm dev");
   const root = path.resolve(import.meta.dirname, "../..");
   const warn = (message: string) => process.stderr.write(`${message}\n`);
+  // Terminal commands carry the user's shell PATH for the Linux host unit.
+  try { await recordHostEnvironment(); }
+  catch (error) { warn(`Workbench host PATH was not recorded: ${error instanceof Error ? error.message : String(error)}`); }
   const startup = new WorkbenchServiceStartup({ root });
   const launcher = new WorkbenchServiceLauncher({ root, startup, warn, log: warn });
   const client = new WorkbenchServiceClient({

@@ -20,6 +20,7 @@ minimumReleaseAgeExclude:
   - "@github/copilot"
   - "@github/copilot-*"
   - "@anthropic-ai/*"
+  - "@openai/codex"
 trustPolicyExclude:
   - "@smithy/core@3.33.0"
   - "pino@9.14.0"

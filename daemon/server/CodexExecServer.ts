@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CodexExecServerOptions: inject the owned process launch and retirement boundaries.
- * - default CodexExecServer: retain one native sandbox executor, isolate commands and await retirement.
+ * - default CodexExecServer: retain one pinned native sandbox executor, isolate commands and await retirement.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -11,7 +11,8 @@ import { z } from "zod";
 import {
   CodexExecMessageSchema, type CodexExecRequest, type CodexExecResult,
 } from "./codex-exec-protocol";
-import { createSpawnOptions, getSpawnDescriptor, killProcessTreeAsync, logError, lowerAgentProcessPriority } from "./process-helpers";
+import resolveCodexExecutable from "./codex-executable";
+import { createSpawnOptions, killProcessTreeAsync, logError, lowerAgentProcessPriority } from "./process-helpers";
 
 const OUTPUT_BYTES = 1024 * 1024;
 const FRAME_BYTES = 4 * 1024 * 1024;
@@ -117,11 +118,7 @@ export default class CodexExecServer {
   private start(): Session {
     if (this.disposed) throw new Error("Codex executor has been disposed.");
     if (this.session) return this.session;
-    const descriptor = getSpawnDescriptor({
-      command: "codex",
-      args: ["exec-server", "--listen", "stdio"],
-    });
-    const child = this.options.spawnProcess?.() ?? spawn(descriptor.command, descriptor.args, {
+    const child = this.options.spawnProcess?.() ?? spawn(resolveCodexExecutable(), ["exec-server", "--listen", "stdio"], {
       ...createSpawnOptions(this.options.cwd, this.options.env ?? process.env, true),
       stdio: ["pipe", "pipe", "pipe"],
     });

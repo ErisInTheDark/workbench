@@ -91,8 +91,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       while (persistence.size) await Promise.allSettled([...persistence]);
     };
     const reportRecoveryFailure = (threadId: string | null, error: unknown) => {
-      console.error("[codex-transcript] capture recovery failed", threadId,
-        (error instanceof Error ? error.message : String(error)).slice(0, 500));
+      logError("codex-transcript", `capture recovery failed${threadId ? ` for ${threadId}` : ""}: ${
+        (error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
     };
     const startRecovery = () => {
       if (recovery) return;

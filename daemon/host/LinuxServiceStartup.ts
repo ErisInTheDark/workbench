@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - LinuxServiceStartup (default): owns the user systemd unit, optional boot enablement and recent unit journal output.
+ * - LinuxServiceStartup (default): owns the user systemd unit (including its recorded-PATH environment file reference), optional boot enablement and recent unit journal output.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { hostEnvironmentFilePath } from "./host-environment-file.ts";
 import type { ServiceStartupAdapter, ServiceStartupCommand, ServiceStartupOptions, ServiceStartupStatus } from "./WorkbenchServiceStartup.ts";
 
 /** Recent journal output is diagnostic context for one log line group, not a log export. */
@@ -44,6 +45,8 @@ export default class LinuxServiceStartup implements ServiceStartupAdapter {
       "RuntimeDirectory=workbench-host", "RuntimeDirectoryMode=0700", "RuntimeDirectoryPreserve=restart",
       "Environment=WORKBENCH_SERVICE_RUNTIME=%t/workbench-host",
       ...(this.options.dataRoot ? [`Environment=${environmentValue(`WORKBENCH_DATA_ROOT=${this.options.dataRoot}`)}`] : []),
+      // Optional: terminal entry points record the user's PATH; systemd rereads it on every host start.
+      `EnvironmentFile=-${pathValue(hostEnvironmentFilePath(this.options.dataRoot))}`,
       "KillMode=mixed", "Restart=on-failure", "RestartPreventExitStatus=78",
       "TimeoutStopSec=infinity", "",
       "[Install]", "WantedBy=default.target", "",

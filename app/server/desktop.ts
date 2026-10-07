@@ -3,6 +3,7 @@
  */
 import path from "node:path";
 
+import recordHostEnvironment from "../../daemon/host/host-environment-file.ts";
 import WorkbenchDesktopLauncher from "./WorkbenchDesktopLauncher.ts";
 
 async function main() {
@@ -10,6 +11,13 @@ async function main() {
     throw new Error("Managed agent threads cannot run the Workbench desktop launcher.");
   }
   const command = process.argv[2];
+  if (command === "start") {
+    // Terminal launches carry the user's shell PATH; the desktop shortcut bypasses this entry.
+    try { await recordHostEnvironment(); }
+    catch (error) {
+      process.stderr.write(`Workbench host PATH was not recorded: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
   const launcher = new WorkbenchDesktopLauncher({
     repositoryRootPath: path.resolve(import.meta.dirname, "../.."),
   });

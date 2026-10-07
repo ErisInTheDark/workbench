@@ -35,7 +35,7 @@ function describeUpstreamMessage(message: unknown) {
 
 export interface CodexAppServerRuntimePorts {
   appServer: Omit<CodexAppServerOptions, "onFatalExit" | "onMessage" | "previousAppServer">;
-  onFatalExit(reason: string): void;
+  onFatalExit(reason: string, options: { retry: boolean }): void;
 }
 
 function deferred() {
@@ -76,11 +76,11 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
     this.appServer = createAppServer({
       ...ports.appServer,
       previousAppServer,
-      onFatalExit: (reason) => {
+      onFatalExit: (reason, options) => {
         this.acceptingMessages = false;
         this.releaseHandoffGate();
         this.bridge?.beginStopping(reason);
-        ports.onFatalExit(reason);
+        ports.onFatalExit(reason, options);
       },
       onMessage: (message) => this.enqueueMessage(message),
     });

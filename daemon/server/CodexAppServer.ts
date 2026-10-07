@@ -2,13 +2,13 @@
  * Exports:
  * - CodexAppServerOptions: process callbacks, launch policy and testable lifecycle.
  * - getCodexAppServerArgs: managed Codex feature policy and stdio arguments.
- * - default CodexAppServer: native stdio process and retirement owner.
+ * - default CodexAppServer: pinned native stdio process and retirement owner; a missing executable forbids recovery.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
+import resolveCodexExecutable from "./codex-executable";
 import {
     createSpawnOptions,
-    getSpawnDescriptor,
     killProcessTreeAsync,
     log,
     logError,
@@ -21,7 +21,8 @@ export type CodexAppServerOptions = {
   createChild?: () => ChildProcess;
   log?: (name: string, message: string) => void;
   logError?: (name: string, message: string) => void;
-  onFatalExit: (reason: string) => void;
+  /** `retry: false` means another launch cannot succeed until Workbench's dependencies are reinstalled. */
+  onFatalExit: (reason: string, options: { retry: boolean }) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
   previousAppServer?: CodexAppServer;
@@ -137,12 +138,7 @@ export default class CodexAppServer {
   }
 
   private createStdioChild() {
-    const spawnDescriptor = getSpawnDescriptor({
-      command: "codex",
-      args: [...this.args],
-    });
-
-    const child = spawn(spawnDescriptor.command, spawnDescriptor.args, {
+    const child = spawn(resolveCodexExecutable(), [...this.args], {
       ...createSpawnOptions(this.projectRoot, {
         ...process.env,
         FORCE_COLOR: "0",
@@ -163,7 +159,12 @@ export default class CodexAppServer {
     if (this.state.kind === "running") return this.state.child;
 
     const generation = this.generation + 1;
-    const codexProcess = this.createChild();
+    let codexProcess: ChildProcess;
+    try { codexProcess = this.createChild(); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") this.reportMissingExecutable(error);
+      throw error;
+    }
     this.generation = generation;
     this.state = { kind: "running", child: codexProcess };
     this.bindStdout(codexProcess, generation);
@@ -173,8 +174,12 @@ export default class CodexAppServer {
       if (!this.owns(codexProcess, generation)) return;
       this.state = { kind: "idle" };
       this.generation += 1;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.reportMissingExecutable(error);
+        return;
+      }
       this.logError("codex-stdio", `failed to start: ${error instanceof Error ? error.message : String(error)}`);
-      this.onFatalExit("Codex app-server failed to start.");
+      this.onFatalExit("Codex app-server failed to start.", { retry: true });
     });
 
     codexProcess.once("exit", (code, signal) => {
@@ -185,11 +190,16 @@ export default class CodexAppServer {
         child: codexProcess,
         error: new Error("Codex leader exited before process-group retirement."),
       };
-      this.onFatalExit("Codex app-server exited.");
+      this.onFatalExit("Codex app-server exited.", { retry: true });
     });
 
     this.log("codex-stdio", "launched app-server child; awaiting protocol initialization");
     return codexProcess;
+  }
+
+  private reportMissingExecutable(error: unknown) {
+    this.logError("codex-stdio", `Codex executable not found (${error instanceof Error ? error.message : String(error)}); recovery stopped. Reinstall Workbench dependencies, then restart the daemon.`);
+    this.onFatalExit("Codex executable not found.", { retry: false });
   }
 
   private owns(codexProcess: ChildProcess, generation: number) {

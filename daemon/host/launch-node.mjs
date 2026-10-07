@@ -46,6 +46,8 @@ try {
     }
     if (!/^[a-f0-9-]{36}$/u.test(session)) throw new Error("Service supervision session is invalid.");
     process.env.WORKBENCH_SERVICE_SESSION = session;
+    // A bare `node` in daemon children (wb shims, hooks) must be the runtime running Workbench.
+    process.env.PATH = [path.dirname(process.execPath), process.env.PATH].filter(Boolean).join(path.delimiter);
   }
   // createRequire handles Windows drive paths as paths, not URL schemes.
   const require = createRequire(import.meta.url);

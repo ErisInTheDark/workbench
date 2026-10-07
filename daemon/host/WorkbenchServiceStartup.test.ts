@@ -8,6 +8,7 @@ import path from "node:path";
 import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import test, { type TestContext } from "node:test";
 import WorkbenchServiceStartup from "./WorkbenchServiceStartup.ts";
+import { hostEnvironmentFilePath } from "./host-environment-file.ts";
 
 async function fixture(context: TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-startup-");
@@ -94,6 +95,10 @@ test("linux unit directives decode to the exact checkout and data paths", async 
   assert.match(environment, /^".*"$/u);
   const decoded = decodeSpecifiers(environment.slice(1, -1).replace(/\\(.)/gu, "$1"));
   assert.equal(decoded, `WORKBENCH_DATA_ROOT=${dataRoot}`);
+  // The recorded-PATH file is optional (`-`) and must name the file terminal entry points write.
+  const environmentFile = directive("EnvironmentFile");
+  assert.ok(environmentFile.startsWith("-"));
+  assert.equal(decodeSpecifiers(environmentFile.slice(1)), hostEnvironmentFilePath(dataRoot));
 });
 
 test("platform registration failure cannot be reported as successful startup", async context => {

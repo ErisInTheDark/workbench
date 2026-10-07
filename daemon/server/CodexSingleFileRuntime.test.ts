@@ -108,7 +108,7 @@ test("native process failure rejects pending and future work without silently re
   const runtime = createCodexSingleFileRuntime({
     documentsDirectory: "/unused", transformerDirectory: path.join(temporary.path, "transformer"),
     createServer: options => {
-    fail = () => options.onFatalExit("exited");
+    fail = () => options.onFatalExit("exited", { retry: true });
     return { send() { sent++; dispatched.resolve(); }, async stopAsync() {} };
     },
   });
