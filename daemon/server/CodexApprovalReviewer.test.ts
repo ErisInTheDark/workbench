@@ -1,11 +1,11 @@
 /*
- * No production exports. Tests protect the codex-auto-review boundary: only a low/medium-risk allow decides,
- * and broken turns or replies never decide.
+ * No production exports. Tests protect the codex-auto-review boundary: only ChatGPT logins can use it,
+ * only a low/medium-risk allow decides, and broken turns or replies never decide.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { CodexIsolatedRequest, CodexIsolatedTransport } from "./CodexIsolatedAppServerTransport";
-import CodexApprovalReviewer, { parseCodexReviewVerdict } from "./CodexApprovalReviewer";
+import CodexApprovalReviewer, { codexReviewAvailability, parseCodexReviewVerdict } from "./CodexApprovalReviewer";
 
 test("only an allow at low or medium risk decides; everything else asks the person", () => {
   const verdict = (decision: string, risk: string) => parseCodexReviewVerdict(JSON.stringify({ decision, risk, rationale: "Reads a log." }));
@@ -15,6 +15,13 @@ test("only an allow at low or medium risk decides; everything else asks the pers
   assert.equal(verdict("deny", "low").decision, "manual");
   assert.throws(() => parseCodexReviewVerdict("sure, go ahead"), /not JSON/u);
   assert.throws(() => parseCodexReviewVerdict(JSON.stringify({ decision: "allow" })), /unexpected/u);
+});
+
+test("auto-review is available only to a ChatGPT login", () => {
+  assert.equal(codexReviewAvailability(null).ready, false);
+  assert.equal(codexReviewAvailability({ type: "apiKey" }).ready, false);
+  assert.equal(codexReviewAvailability({ type: "amazonBedrock" }).ready, false);
+  assert.equal(codexReviewAvailability({ type: "chatgpt", planType: "plus" }).ready, true);
 });
 
 function fakeCodex(finish: (emit: (message: unknown) => Promise<void>, threadId: string) => Promise<void>) {

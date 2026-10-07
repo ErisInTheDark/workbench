@@ -7,7 +7,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexSingleFileController from "./CodexSingleFileController";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
-import CodexApprovalReviewer from "./CodexApprovalReviewer";
+import CodexApprovalReviewer, { codexReviewAvailability } from "./CodexApprovalReviewer";
 import createCodexIsolatedTransport from "./CodexIsolatedAppServerTransport";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
@@ -36,7 +36,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       registrations: { codexProvider: {
         singleFile,
-        approvalReview: { review: (state, signal) => approvalReviewer.review(state, signal) },
+        approvalReview: {
+          availability: async () => codexReviewAvailability(await configuration.account()),
+          review: (state, signal) => approvalReviewer.review(state, signal),
+        },
         threads,
         context: threads.context,
         tools: get("codexTools"),

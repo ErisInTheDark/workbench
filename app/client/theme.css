@@ -89,6 +89,8 @@
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
   --color-success: var(--success);
+  --color-approval-skip: color-mix(in oklch, oklch(76.9% 0.188 70.08) 55%, var(--text));
+  --color-approval-auto: color-mix(in oklch, oklch(68.5% 0.169 237.323) 55%, var(--text));
   --font-sans: "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
   --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-mono: "Cascadia Code", "Consolas", monospace;

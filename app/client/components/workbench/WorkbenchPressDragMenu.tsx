@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection.
+ * - default WorkbenchPressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection, and an optional heading.
  * - PressDragMenuItem/PressDragMenuGroup: stable action and optional grouped navigation content.
  * - getPressDragGroupItems: items available from a saved-open group.
  */
@@ -46,10 +46,12 @@ function viewportBounds () {
 type MenuPlacement = { style: CSSProperties; below: boolean };
 
 export default function WorkbenchPressDragMenu ({
-  children, label, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName, align = "center", disabled = false,
+  children, label, heading, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName, align = "center", disabled = false,
 }: {
   children: ReactNode;
   label: string;
+  /** Title shown above an ungrouped item list. */
+  heading?: string;
   align?: "center" | "end";
   disabled?: boolean;
   getItems?: () => readonly PressDragMenuItem[];
@@ -339,7 +341,8 @@ export default function WorkbenchPressDragMenu ({
             </div>
           </section>)}
         </div>
-      </> : items.map((item, index) => <WorkbenchMenuAction
+      </> : <>{heading ? <p className="m-0 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-widest text-fg/muted">{heading}</p> : null}
+      {items.map((item, index) => <WorkbenchMenuAction
         key={item.id}
         id={`${menuId}-${index}`}
         data-menu-row={item.id}
@@ -350,7 +353,7 @@ export default function WorkbenchPressDragMenu ({
         onPointerDown={event => { if (event.pointerType !== "touch") event.preventDefault(); }}
         onPointerMove={event => { if (event.pointerType !== "touch" && menu.interaction.kind === "open") dispatch({ kind: "highlight", id: item.id }); }}
         onClick={() => dispatch({ kind: "select", id: item.id })}
-      ><span className="block w-full min-w-0">{item.content}</span></WorkbenchMenuAction>)}
+      ><span className="block w-full min-w-0">{item.content}</span></WorkbenchMenuAction>)}</>}
     </WorkbenchMenuSurface>, document.body) : null}
   </>;
 }

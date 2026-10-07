@@ -156,6 +156,10 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   };
 
   readonly approvalReview: NonNullable<WorkbenchProvider["approvalReview"]> = {
+    availability: () => this.run(providerRegistrations[this.key], provider => {
+      if (!provider.approvalReview) throw new Error(`Provider ${this.key} cannot review approvals.`);
+      return provider.approvalReview.availability();
+    }, `${this.key}: approvalReview.availability`),
     review: (state, signal) => this.run(providerRegistrations[this.key], provider => {
       if (!provider.approvalReview) throw new Error(`Provider ${this.key} cannot review approvals.`);
       return provider.approvalReview.review(state, signal);

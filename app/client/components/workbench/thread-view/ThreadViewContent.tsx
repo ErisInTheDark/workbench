@@ -52,7 +52,7 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThreadFileIndex, useWorkbenchThreads } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import WorkbenchApprovalModeMenu from "../WorkbenchApprovalModeMenu";
+import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
 import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
@@ -1007,9 +1007,12 @@ export default memo(function ThreadViewContent ({
       {ownedFileIndex.canRetry ? <button className="ml-2 rounded px-1 hover:bg-accent-soft" type="button"
         onClick={() => { void ownedFileIndex.retry(); }}>Retry</button> : null}
     </p> : null;
-  const approvalModeControl = approvalModeSettings && activeProfileSlot ? (
+  const approvalMode = approvalModeSettings && activeProfileSlot ? composerProfileController.getApprovalMode(activeProfileSlot) : null;
+  const approvalReviewer = useApprovalReviewerReady(approvalMode !== null);
+  const approvalModeControl = approvalMode && activeProfileSlot ? (
     <WorkbenchApprovalModeMenu
-      mode={composerProfileController.getApprovalMode(activeProfileSlot)}
+      mode={approvalMode}
+      onOpen={approvalReviewer.refresh}
       onSelect={mode => {
         const harness = resolvedActiveThread?.harness ?? activeThread?.harness;
         if (!harness) return;
@@ -1017,14 +1020,16 @@ export default memo(function ThreadViewContent ({
           harness, loadModels: () => threads.listModels(harness),
         });
       }}
-      onOpenSettings={approvalModeSettings.onOpenSettings}
     />
   ) : null;
+  const approvalNotice = approvalMode === "auto" && approvalReviewer.ready === false && approvalModeSettings
+    ? <ApprovalReviewerSetupNotice onOpenSettings={approvalModeSettings.onOpenSettings} /> : null;
   const composer = activeThread ? (
     <ThreadComposer
       autoFocusOnEntry={isFocused}
       onDraftSessionChange={onDraftSessionChange}
       targetControl={approvalModeControl ?? (isDraftThreadView ? draftTargetControl : null)}
+      controlNotice={approvalNotice}
       header={fileIndexError}
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}

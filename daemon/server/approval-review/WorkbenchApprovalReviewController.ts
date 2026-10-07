@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - formatApprovalReviewState: describe one approval subject as reviewer input.
- * - WorkbenchApprovalReviewOptions: database, credential and provider reviewer ports.
- * - default WorkbenchApprovalReviewController: own the selected auto-approve reviewer, its sealed secrets, readiness and dispatch.
+ * - WorkbenchApprovalReviewOptions: database, credential, model catalogue and provider reviewer ports.
+ * - default WorkbenchApprovalReviewController: own the selected auto-approve reviewer, its sealed secrets, availability and dispatch.
  */
 import os from "node:os";
 import type { WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
@@ -10,14 +10,15 @@ import {
   APPROVAL_REVIEWERS, ApprovalReviewerIdSchema, type ApprovalReviewerId,
 } from "workbench-shared/workbench/approval-review/approval-reviewers";
 import {
-  ApprovalReviewSettingsUpdateSchema, type ApprovalReviewSettingsSnapshot, type ApprovalReviewSettingsUpdate,
-  type ApprovalReviewVerdict,
+  ApprovalReviewSettingsUpdateSchema, type ApprovalReviewerAvailability, type ApprovalReviewSettingsSnapshot,
+  type ApprovalReviewSettingsUpdate, type ApprovalReviewVerdict,
 } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import {
   deleteRows, selectRows, upsertRow, type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
 import { approvalReviewSecrets, approvalReviewSelection } from "../lib/workbench/database/schema/approval-review-schema";
 import { deriveProjectStoreKey, openProjectStoreValue, sealProjectStoreValue } from "../store/project-store-crypto";
+import ReviewerModelCatalogue from "./ReviewerModelCatalogue";
 import { reviewWithSystemOne } from "./systemone-approval-reviewer";
 
 export interface WorkbenchApprovalReviewOptions {
@@ -28,13 +29,21 @@ export interface WorkbenchApprovalReviewOptions {
   readDeviceIdentity(): Promise<string>;
   readOpenCodeApiKey(): Promise<string | null>;
   /** The installed Codex provider's reviewer, or null when Codex is not installed. */
-  codexReviewer(): { review(state: string, signal: AbortSignal): Promise<ApprovalReviewVerdict> } | null;
+  codexReviewer(): {
+    availability(): Promise<ApprovalReviewerAvailability>;
+    review(state: string, signal: AbortSignal): Promise<ApprovalReviewVerdict>;
+  } | null;
+  catalogue?: ReviewerModelCatalogue;
   fetch?: typeof fetch;
   user?: () => string;
+  /** Receives availability check failures, which the snapshot reports only as short reasons. */
+  warn?: (message: string) => void;
 }
 
 // Secrets are sealed with the project-store cipher, bound to this device, OS user and this settings scope.
 const SECRET_SCOPE = "approval-review";
+// OpenCode's own client sends this key when signed out; Zen then serves only its free models.
+const ZEN_ANONYMOUS_KEY = "public";
 
 function sanitize(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 200);
@@ -73,31 +82,66 @@ export function formatApprovalReviewState(subject: WorkbenchApprovalSubject) {
 
 export default class WorkbenchApprovalReviewController {
   #secret: Promise<Buffer> | null = null;
+  private readonly catalogue: ReviewerModelCatalogue;
 
-  constructor(private readonly options: WorkbenchApprovalReviewOptions) {}
+  constructor(private readonly options: WorkbenchApprovalReviewOptions) {
+    this.catalogue = options.catalogue ?? new ReviewerModelCatalogue({ fetch: options.fetch });
+  }
 
   async read(): Promise<ApprovalReviewSettingsSnapshot> {
     const [selected, secrets] = await Promise.all([this.readSelected(), this.readSecrets()]);
     const reviewers = await Promise.all(ApprovalReviewerIdSchema.options.map(async id => {
-      const definition = APPROVAL_REVIEWERS[id];
-      if (definition.credential === "workbench-secret") {
-        const secret = secrets.get(id) ?? null;
-        return { id, ready: Boolean(secret), detail: secret ? "API key saved." : "Add an API key to use this reviewer.", secret };
-      }
-      if (definition.credential === "opencode-auth") {
-        try {
-          return (await this.options.readOpenCodeApiKey())
-            ? { id, ready: true, detail: "Uses your OpenCode login." }
-            : { id, ready: false, detail: "Sign in to OpenCode Zen with opencode auth login." };
-        } catch (error) {
-          return { id, ready: false, detail: `OpenCode credentials are unreadable: ${sanitize(error)}` };
-        }
-      }
-      return this.options.codexReviewer()
-        ? { id, ready: true, detail: "Uses your Codex login. Needs a ChatGPT plan." }
-        : { id, ready: false, detail: "Codex is not installed." };
+      const availability = await this.availability(id, secrets);
+      return APPROVAL_REVIEWERS[id].credential === "workbench-secret"
+        ? { id, ...availability, secret: secrets.get(id) ?? null }
+        : { id, ...availability };
     }));
     return { selected, reviewers };
+  }
+
+  /** Whether one reviewer can judge requests now; every failure becomes a short unavailable reason. */
+  private async availability(id: ApprovalReviewerId, secrets: ReadonlyMap<ApprovalReviewerId, string>): Promise<ApprovalReviewerAvailability> {
+    const definition = APPROVAL_REVIEWERS[id];
+    if (definition.transport === "codex") {
+      const reviewer = this.options.codexReviewer();
+      if (!reviewer) return { ready: false, detail: "Codex isn't installed" };
+      try {
+        return await reviewer.availability();
+      } catch (error) {
+        this.warn(`Codex account check failed: ${sanitize(error)}`);
+        return { ready: false, detail: "Couldn't read your Codex account" };
+      }
+    }
+    let apiKey: string | null;
+    try {
+      apiKey = await this.apiKey(id, secrets);
+    } catch (error) {
+      this.warn(`OpenCode credentials are unreadable: ${sanitize(error)}`);
+      return { ready: false, detail: "OpenCode login is unreadable" };
+    }
+    if (!apiKey) {
+      return definition.credential === "workbench-secret"
+        ? { ready: false, detail: "Needs a key" }
+        : { ready: false, detail: "Run opencode auth login" };
+    }
+    try {
+      return await this.catalogue.resolve(definition.model, apiKey)
+        ? { ready: true, detail: null }
+        : { ready: false, detail: "Not offered right now" };
+    } catch (error) {
+      this.warn(`${definition.label} model list failed: ${sanitize(error)}`);
+      return { ready: false, detail: "Couldn't reach OpenCode Zen" };
+    }
+  }
+
+  /** The credential a System One reviewer sends; Zen's free tier falls back to its anonymous key. */
+  private async apiKey(id: ApprovalReviewerId, secrets: ReadonlyMap<ApprovalReviewerId, string>) {
+    switch (APPROVAL_REVIEWERS[id].credential) {
+      case "workbench-secret": return secrets.get(id) ?? null;
+      case "opencode-auth": return await this.options.readOpenCodeApiKey();
+      case "opencode-public": return await this.options.readOpenCodeApiKey() ?? ZEN_ANONYMOUS_KEY;
+      case "codex-login": return null;
+    }
   }
 
   async update(input: ApprovalReviewSettingsUpdate): Promise<ApprovalReviewSettingsSnapshot> {
@@ -136,16 +180,21 @@ export default class WorkbenchApprovalReviewController {
       if (!reviewer) throw new Error("Codex is not installed, so Codex auto-review is unavailable.");
       return await reviewer.review(state, signal);
     }
-    const apiKey = definition.credential === "workbench-secret"
-      ? (await this.readSecrets()).get(id) ?? null
-      : await this.options.readOpenCodeApiKey();
+    const apiKey = await this.apiKey(id, await this.readSecrets());
     if (!apiKey) throw new Error(`${definition.label} has no usable credential.`);
-    return await reviewWithSystemOne({ label: definition.label, url: definition.url, model: definition.model, apiKey, state }, signal, this.options.fetch);
+    const model = await this.catalogue.resolve(definition.model, apiKey);
+    if (!model) throw new Error(`${definition.label} is not offered right now.`);
+    return await reviewWithSystemOne({ label: definition.label, url: definition.url, model, apiKey, state }, signal, this.options.fetch);
+  }
+
+  private warn(message: string) {
+    (this.options.warn ?? (text => console.warn(`[approval-review] ${text}`)))(message);
   }
 
   private async readSelected(): Promise<ApprovalReviewerId | null> {
     const [row] = await this.options.database.query(selectRows(approvalReviewSelection, { where: { id: "global" } }));
-    return row?.reviewer_id ?? null;
+    // Ids removed from the registry read as no selection.
+    return ApprovalReviewerIdSchema.safeParse(row?.reviewer_id).data ?? null;
   }
 
   /** Decrypted secrets by reviewer; rows sealed on another device or user read as unset. */
@@ -153,8 +202,9 @@ export default class WorkbenchApprovalReviewController {
     const rows = await this.options.database.query(selectRows(approvalReviewSecrets, {}));
     const secret = rows.length ? await this.secret() : null;
     return new Map(rows.flatMap(row => {
-      const value = openProjectStoreValue(secret!, SECRET_SCOPE, row.reviewer_id, row);
-      return value === null ? [] : [[row.reviewer_id, value] as const];
+      const id = ApprovalReviewerIdSchema.safeParse(row.reviewer_id).data;
+      const value = id ? openProjectStoreValue(secret!, SECRET_SCOPE, id, row) : null;
+      return id && value !== null ? [[id, value] as const] : [];
     }));
   }
 

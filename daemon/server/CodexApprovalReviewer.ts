@@ -2,11 +2,13 @@
  * Exports:
  * - CODEX_AUTO_REVIEW_OUTPUT_SCHEMA: structured verdict Codex must return.
  * - parseCodexReviewVerdict: map Codex's final message to an approval verdict; only low/medium-risk allows decide.
+ * - codexReviewAvailability: whether a Codex account can use auto-review.
  * - CodexApprovalReviewerOptions: isolated transport and scratch directory ports.
  * - default CodexApprovalReviewer: judge one approval with Codex's hidden auto-review model in an ephemeral, read-only, tool-less thread.
  */
 import { z } from "zod";
-import type { ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
+import type { ApprovalReviewerAvailability, ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
+import type { CodexAccount } from "./CodexConfigurationController";
 import type { CodexIsolatedTransport } from "./CodexIsolatedAppServerTransport";
 import type { JsonValue } from "workbench-shared/codex/generated/app-server/serde_json/JsonValue";
 
@@ -50,6 +52,13 @@ export function parseCodexReviewVerdict(text: string): ApprovalReviewVerdict {
   return decision === "allow" && (risk === "low" || risk === "medium")
     ? { decision: "allow", detail: `Codex auto-review (${risk} risk): ${rationale}` }
     : { decision: "manual", detail: `Codex auto-review (${decision}, ${risk} risk): ${rationale}` };
+}
+
+/** Codex auto-review runs on ChatGPT-plan usage; API-key and Bedrock logins cannot reach the model. */
+export function codexReviewAvailability(account: CodexAccount | null): ApprovalReviewerAvailability {
+  if (!account) return { ready: false, detail: "Sign in to Codex with ChatGPT" };
+  if (account.type !== "chatgpt") return { ready: false, detail: "Needs a ChatGPT login" };
+  return { ready: true, detail: null };
 }
 
 export interface CodexApprovalReviewerOptions {

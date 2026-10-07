@@ -90,7 +90,8 @@ export function WorkbenchOptionCard ({
         ? "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
         : `border-[color-mix(in_srgb,var(--text)_10%,transparent)] ${workbenchOptionHoverClassName}`),
     compactInline && !isHistoryMode && !disabled && "hover:text-text",
-    disabled && "cursor-not-allowed opacity-45",
+    // Composed cards dim only their option button; inline content and children own their own disabled state.
+    disabled && !isComposed && "cursor-not-allowed opacity-45",
     className,
   );
   const optionMarker = showMarker && !compactPresentation && isSingleChoice ? (
@@ -167,11 +168,12 @@ export function WorkbenchOptionCard ({
           onClick={onClick}
           className={`
             flex min-w-0 gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+            disabled:cursor-not-allowed disabled:opacity-45
             ${inlineContent ? "shrink-0" : "flex-1"}
             ${density === "tight" ? "items-center" : "items-start"}
           `}
         >{optionBody}</button>}
-        {inlineContent ? <div className="flex min-w-0 flex-wrap items-center gap-2">{inlineContent}</div> : null}
+        {inlineContent ? <div className="flex min-w-0 flex-auto flex-wrap items-center gap-2">{inlineContent}</div> : null}
         {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
       </div>
       {children ? <div className={`w-full min-w-0 ${showMarker ? "pl-7" : ""}`}>{children}</div> : null}

@@ -1,7 +1,9 @@
 /*
  * Exports:
- * - APPROVAL_MODE_OPTIONS: display label and glyph for each approval mode.
- * - default WorkbenchApprovalModeMenu: daemon-project composer control choosing approvals on, skip approvals, or auto-approve, with a way into reviewer setup.
+ * - APPROVAL_MODE_OPTIONS: display label, tone and glyph for each approval mode.
+ * - useApprovalReviewerReady: selected auto-approve reviewer readiness on the view's daemon, with a refresh.
+ * - ApprovalReviewerSetupNotice: composer alert linking to reviewer settings when auto-approve cannot work.
+ * - default WorkbenchApprovalModeMenu: daemon-project composer control choosing approvals on, skip approvals, or auto-approve.
  */
 "use client";
 
@@ -10,102 +12,79 @@ import type { WorkbenchApprovalMode } from "workbench-shared/types";
 import ApprovalReviewSettingsController, { selectedReviewerReady } from "../../workbench/ApprovalReviewSettingsController";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
-import { SettingsIcon, ShieldAlertIcon, ShieldCheckIcon, ShieldQuestionIcon, type IconProps } from "./workbench-icons";
+import { ShieldAlertIcon, ShieldCheckIcon, ShieldQuestionIcon, type IconProps } from "./workbench-icons";
 
-export const APPROVAL_MODE_OPTIONS: Record<WorkbenchApprovalMode, { label: string; description: string; icon: (size: NonNullable<IconProps["size"]>) => ReactNode }> = {
-  approvals: {
-    label: "Approvals on",
-    description: "Ask before each command runs outside the sandbox.",
-    icon: size => <ShieldQuestionIcon className="shrink-0" size={size} />,
-  },
-  skip: {
-    label: "Skip approvals",
-    description: "Run outside-sandbox commands without asking.",
-    icon: size => <ShieldAlertIcon className="shrink-0 text-danger" size={size} />,
-  },
-  auto: {
-    label: "Auto-approve",
-    description: "A reviewer approves safe commands and asks you about the rest.",
-    icon: size => <ShieldCheckIcon className="shrink-0 text-accent" size={size} />,
-  },
+type IconSize = NonNullable<IconProps["size"]>;
+
+export const APPROVAL_MODE_OPTIONS: Record<WorkbenchApprovalMode, { label: string; tone: string; icon: (size: IconSize) => ReactNode }> = {
+  approvals: { label: "Approvals on", tone: "text-text", icon: size => <ShieldQuestionIcon className="shrink-0" size={size} /> },
+  skip: { label: "Skip approvals", tone: "text-approval-skip", icon: size => <ShieldAlertIcon className="shrink-0" size={size} /> },
+  auto: { label: "Auto-approve", tone: "text-approval-auto", icon: size => <ShieldCheckIcon className="shrink-0" size={size} /> },
 };
 
 const ORDER: readonly WorkbenchApprovalMode[] = ["approvals", "skip", "auto"];
 
-/** The selected reviewer's readiness on the view's daemon, re-read whenever the menu opens. */
-function useReviewerReady() {
+function ModeLabel({ mode, size }: { mode: WorkbenchApprovalMode; size: IconSize }) {
+  const option = APPROVAL_MODE_OPTIONS[mode];
+  return <span className={`flex min-w-0 items-center gap-2 ${option.tone}`}>
+    {option.icon(size)}
+    <span className="min-w-0 truncate">{option.label}</span>
+  </span>;
+}
+
+/** The selected reviewer's readiness on the view's daemon; null while unknown or when disabled. */
+export function useApprovalReviewerReady(enabled: boolean) {
   const daemon = useWorkbenchDaemonClient();
-  const controller = useMemo(() => new ApprovalReviewSettingsController({
+  const controller = useMemo(() => enabled ? new ApprovalReviewSettingsController({
     read: () => daemon.approvalReview.read(),
     update: update => daemon.approvalReview.update(update),
-  }), [daemon]);
+  }) : null, [daemon, enabled]);
   useEffect(() => {
+    if (!controller) return;
     void controller.refresh();
     return () => controller.dispose();
   }, [controller]);
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  return { ready: selectedReviewerReady(state.settings), refresh: () => { void controller.refresh(); } };
+  const state = useSyncExternalStore(controller?.subscribe ?? noSubscription, controller?.getSnapshot ?? noSnapshot, controller?.getSnapshot ?? noSnapshot);
+  return { ready: selectedReviewerReady(state.settings), refresh: () => { void controller?.refresh(); } };
+}
+
+const idleSnapshot = { settings: null, busy: false, error: "" };
+const noSnapshot = () => idleSnapshot;
+const noSubscription = () => () => {};
+
+/** Composer alert for auto-approve without a usable reviewer, linking to its settings. */
+export function ApprovalReviewerSetupNotice({ onOpenSettings }: { onOpenSettings: () => void }) {
+  return <p role="alert" className="m-0 min-w-0 truncate px-1 text-[0.78em] text-danger">
+    No auto-approve reviewer.{" "}
+    <button type="button" className="cursor-pointer bg-transparent p-0 font-medium text-danger underline underline-offset-2"
+      onClick={onOpenSettings}>Set up</button>
+  </p>;
 }
 
 export default function WorkbenchApprovalModeMenu({
   mode,
   disabled = false,
+  onOpen,
   onSelect,
-  onOpenSettings,
 }: {
   mode: WorkbenchApprovalMode;
   disabled?: boolean;
+  onOpen?: () => void;
   onSelect: (mode: WorkbenchApprovalMode) => void;
-  onOpenSettings: () => void;
 }) {
-  const reviewer = useReviewerReady();
-  const current = APPROVAL_MODE_OPTIONS[mode];
-  const needsSetup = mode === "auto" && reviewer.ready === false;
   return (
-    <span className="inline-flex min-w-0 items-center">
-      <WorkbenchPressDragMenu
-        label="Outside-sandbox approvals"
-        disabled={disabled}
-        onOpen={reviewer.refresh}
-        triggerClassName="text-text"
-        items={ORDER.map(id => ({
-          id,
-          checked: id === mode,
-          content: (
-            <span className="flex min-w-0 items-start gap-2 text-left">
-              <span className="mt-0.5">{APPROVAL_MODE_OPTIONS[id].icon(16)}</span>
-              <span className="flex min-w-0 flex-col">
-                <span>{APPROVAL_MODE_OPTIONS[id].label}</span>
-                <span className="text-[0.72em] text-fg/muted">{APPROVAL_MODE_OPTIONS[id].description}</span>
-              </span>
-            </span>
-          ),
-        }))}
-        onSelect={id => {
-          const next = ORDER.find(candidate => candidate === id);
-          if (next && next !== mode) onSelect(next);
-        }}
-      >
-        {current.icon(16)}
-        <span className="min-w-0 truncate">{current.label}</span>
-      </WorkbenchPressDragMenu>
-      {mode === "auto" ? (
-        <button
-          type="button"
-          aria-label={needsSetup ? "Set up auto-approve" : "Auto-approve settings"}
-          title={needsSetup ? "Choose a reviewer to auto-approve" : "Auto-approve settings"}
-          className={`
-            relative isolate inline-flex shrink-0 items-center gap-1.5 bg-transparent px-2 py-2 transition cursor-pointer
-            before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-['']
-            hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft
-            ${needsSetup ? "text-danger" : "text-fg/muted hover:text-text"}
-          `}
-          onClick={onOpenSettings}
-        >
-          <SettingsIcon size={14} />
-          {needsSetup ? <span>Set up</span> : null}
-        </button>
-      ) : null}
-    </span>
+    <WorkbenchPressDragMenu
+      label={`Unsandboxed shell usage: ${APPROVAL_MODE_OPTIONS[mode].label}`}
+      heading="Unsandboxed shell usage"
+      disabled={disabled}
+      onOpen={onOpen}
+      items={ORDER.map(id => ({ id, checked: id === mode, content: <ModeLabel mode={id} size={16} /> }))}
+      onSelect={id => {
+        const next = ORDER.find(candidate => candidate === id);
+        if (next && next !== mode) onSelect(next);
+      }}
+    >
+      <ModeLabel mode={mode} size={18} />
+    </WorkbenchPressDragMenu>
   );
 }

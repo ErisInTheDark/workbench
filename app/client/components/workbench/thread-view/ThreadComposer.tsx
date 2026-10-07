@@ -134,6 +134,7 @@ export default function ThreadComposer ({
   thread,
   threadTarget,
   targetControl,
+  controlNotice,
   onDraftSessionChange,
 }: {
   autoFocusOnEntry?: boolean;
@@ -174,6 +175,8 @@ export default function ThreadComposer ({
   thread: ThreadPayload;
   threadTarget?: WorkbenchThreadTarget | null;
   targetControl?: ReactNode;
+  /** Short alert shown at the left of the control row, such as a mode that cannot work yet. */
+  controlNotice?: ReactNode;
   onDraftSessionChange?: (session: DraftSessionController<WorkbenchComposerInputDraft> | null) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
@@ -741,8 +744,9 @@ export default function ThreadComposer ({
               ) : null}
               {showComposerControlRow ? (
                 <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex min-w-0 shrink items-center gap-2">
                     {questionnaireToggleButton}
+                    {controlNotice}
                   </div>
                   <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
                     {showsThreadControls ? (

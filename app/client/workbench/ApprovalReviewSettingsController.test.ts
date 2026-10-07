@@ -11,9 +11,9 @@ function settings(selected: ApprovalReviewSettingsSnapshot["selected"], typesafe
   return {
     selected,
     reviewers: [
-      { id: "typesafe-jev", ready: typesafeReady, detail: "", secret: typesafeReady ? "key" : null },
-      { id: "zen-jev", ready: false, detail: "" },
-      { id: "codex-auto-review", ready: true, detail: "" },
+      { id: "typesafe-jev", ready: typesafeReady, detail: typesafeReady ? null : "Needs a key", secret: typesafeReady ? "key" : null },
+      { id: "zen-jev", ready: false, detail: "Run opencode auth login" },
+      { id: "codex-auto-review", ready: true, detail: null },
     ],
   };
 }

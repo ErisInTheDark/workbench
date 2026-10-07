@@ -1,11 +1,18 @@
 /*
  * Exports:
+ * - CodexAccount: signed-in Codex account kind and ChatGPT plan.
  * - CodexConfigurationOperations: native request and local model-context ports.
- * - default CodexConfigurationController: translate native models/account limits without owning another cache.
+ * - default CodexConfigurationController: translate native models, account and limits without owning another cache.
  */
+import { z } from "zod";
 import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
 import type { WorkbenchModelContextCapability, WorkbenchModelOption } from "workbench-shared/types";
 import { WorkbenchAccountLimitsSchema, type WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
+
+const AccountResponseSchema = z.object({
+  account: z.object({ type: z.string(), planType: z.string().nullish() }).passthrough().nullable(),
+}).passthrough();
+export type CodexAccount = { type: string; planType?: string | null };
 
 export interface CodexConfigurationOperations {
   request(method: string, params: object, options?: { background?: boolean }): Promise<unknown>;
@@ -57,6 +64,12 @@ export default class CodexConfigurationController {
       this.operations.warn("Codex context capabilities are unavailable; model choices and saved settings are retained.");
     }
     return models;
+  }
+
+  /** The signed-in Codex account kind and ChatGPT plan; null when signed out. */
+  async account(): Promise<CodexAccount | null> {
+    const response = AccountResponseSchema.parse(await this.operations.request("account/read", {}, { background: true }));
+    return response.account;
   }
 
   async accountLimits(): Promise<WorkbenchAccountLimits> {

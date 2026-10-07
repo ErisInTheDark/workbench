@@ -39,9 +39,12 @@ export default class ApprovalReviewSettingsController {
   select(reviewer: ApprovalReviewerId | null) {
     return this.perform(() => this.port.update({ selected: reviewer }), "Unable to choose that reviewer.");
   }
-  /** Save (string) or clear (null) a Workbench-held reviewer key. */
-  saveSecret(reviewer: ApprovalReviewerId, value: string | null) {
-    return this.perform(() => this.port.update({ secrets: { [reviewer]: value } }), "Unable to save the API key.");
+  /** Save (string) or clear (null) a Workbench-held reviewer key, optionally selecting that reviewer in the same write. */
+  saveSecret(reviewer: ApprovalReviewerId, value: string | null, options: { select?: boolean } = {}) {
+    return this.perform(() => this.port.update({
+      secrets: { [reviewer]: value },
+      ...(options.select ? { selected: reviewer } : {}),
+    }), "Unable to save the key.");
   }
 
   dispose() {
