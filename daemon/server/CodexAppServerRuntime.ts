@@ -2,7 +2,7 @@
  * Exports:
  * - CodexAppServerRuntimeOptions: inject the stable Codex app-server process and stall-diagnostic timers for tests.
  * - CodexAppServerRuntimePorts: native process configuration and failure notification.
- * - default CodexAppServerRuntime: own stable app-server ingress, two-phase bridge handoff, and stalled-ingress logs.
+ * - default CodexAppServerRuntime: own stable app-server ingress, two-phase bridge handoff, and stalled-handler and queue-wait logs.
  */
 import CodexAppServer, { type CodexAppServerOptions } from "./CodexAppServer";
 import type CodexStdioBridge from "./CodexStdioBridge";
@@ -55,6 +55,9 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
   private readonly ports: CodexAppServerRuntimePorts;
   private handoffGate: ReturnType<typeof deferred> | null = null;
   private messageTail = Promise.resolve();
+  /** Messages enqueued whose handler has not started; read only for queue-wait diagnostics. */
+  private queuedMessages = 0;
+  private lastQueueWaitWarningAt: number | null = null;
   private messageGeneration = new AbortController();
   private previousRetirement: ReturnType<typeof deferred> | null;
   private previousRetirementAttempt: Promise<void> | null = null;
@@ -213,10 +216,25 @@ export default class CodexAppServerRuntime implements DaemonCodexAppServerRuntim
     };
   }
 
+  /** Many individually quick handlers can still delay later responses; name the message that waited too long. */
+  private reportQueueWait(label: string, queuedAt: number) {
+    const now = this.timers.now();
+    const waitedMs = now - queuedAt;
+    if (waitedMs < STALL_WARNING_MS) return;
+    if (this.lastQueueWaitWarningAt !== null && now - this.lastQueueWaitWarningAt < STALL_REPEAT_MS) return;
+    this.lastQueueWaitWarningAt = now;
+    this.ports.appServer.logError?.("codex-bridge",
+      `upstream ${label} waited ${(waitedMs / 1_000).toFixed(1)}s in the ingress queue (${this.queuedMessages} still queued behind it); handlers are slower than Codex traffic.`);
+  }
+
   private enqueueMessage(message: unknown) {
     if (!this.acceptingMessages) return;
+    const queuedAt = this.timers.now();
+    this.queuedMessages++;
     this.messageTail = this.messageTail.catch(() => undefined).then(async () => {
+      this.queuedMessages--;
       const label = describeUpstreamMessage(message);
+      this.reportQueueWait(label, queuedAt);
       if (this.handoffGate) {
         const stopGateWatch = this.watchStall(`upstream ${label} waiting for the bridge handoff gate`);
         try { await this.handoffGate.promise; } finally { stopGateWatch(); }

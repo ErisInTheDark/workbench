@@ -159,6 +159,8 @@ export type CodexStdioBridgeOptions = {
     signal: AbortSignal,
   ) => Promise<void>;
   appServer: CodexAppServer;
+  /** Resolves once the app-server's predecessor process retired; initialization waits instead of racing it. */
+  waitForAppServer?: () => Promise<void>;
   handleWorkbenchRequest: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   initialState?: CodexStdioBridgeReloadState;
   instructions?: WorkbenchCodexInstructionPort;
@@ -610,6 +612,7 @@ function toFileChangeApprovalDecision(choice: ApprovalDecisionChoice): FileChang
 export default class CodexStdioBridge {
   private readonly compactionCompletion = new ProviderCompactionCompletionController();
   private readonly appServer: CodexAppServer;
+  private readonly waitForAppServer: CodexStdioBridgeOptions["waitForAppServer"];
   private readonly fileChanges: CodexFileChangeController;
   private readonly publishNativeNotification: (notification: JsonRpcNotification) => void;
   private readonly prepareTurnStart: NonNullable<CodexStdioBridgeOptions["prepareTurnStart"]>;
@@ -674,13 +677,14 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteCompactionExecution, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
+  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, waitForAppServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteCompactionExecution, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.readSqliteCompactionExecution = readSqliteCompactionExecution;
     this.readSqliteRecoveryGapIds = readSqliteRecoveryGapIds;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
+    this.waitForAppServer = waitForAppServer;
     const providerObservations = suppliedObservations ?? (identities ? new CodexProviderObservations(identities) : null);
     this.publishNativeNotification = notification => {
       const publication = providerObservations?.native(notification);
@@ -905,6 +909,7 @@ export default class CodexStdioBridge {
 
     const signal = this.generation.signal;
     const initialization = (async () => {
+      if (this.waitForAppServer) await this.waitForAppServerUntil(signal);
       const dispatch = await this.dispatchRequest(initializeMessage, { signal });
       const response = await dispatch.response;
       signal.throwIfAborted();
@@ -922,6 +927,21 @@ export default class CodexStdioBridge {
       await initialization;
     } finally {
       if (this.upstreamInitializePromise === initialization) this.upstreamInitializePromise = null;
+    }
+  }
+
+  /** A replaced process must retire before its successor launches; retirement of this bridge abandons the wait. */
+  private async waitForAppServerUntil(signal: AbortSignal) {
+    signal.throwIfAborted();
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([this.waitForAppServer!(), aborted]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
     }
   }
 

@@ -3,7 +3,8 @@
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
  * WorkbenchDatabaseResponse: typed responses returned by the database worker.
- * getWorkbenchDatabaseReadLane/isWorkbenchDatabaseReadRequest: route pure reads to isolated core or transcript workers.
+ * WORKBENCH_DATABASE_READ_LANES/WorkbenchDatabaseReadLane: isolated reader worker lanes (core, live transcript, history query).
+ * getWorkbenchDatabaseReadLane/isWorkbenchDatabaseReadRequest: route pure reads to their isolated reader lane.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
@@ -202,13 +203,19 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
 ]);
 const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor", "readTranscriptCompactionExecution",
-  "readTranscriptContext", "queryTranscript", "readThreadContextUsage",
+  "readTranscriptContext", "readThreadContextUsage",
   "readTranscriptMaterializedTurnIds",
 ]);
+// Unbounded history scans stay off the transcript lane that live provider ingest awaits.
+const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>(["queryTranscript"]);
 
-export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPayload): "core" | "transcript" | null {
+export const WORKBENCH_DATABASE_READ_LANES = ["core", "transcript", "query"] as const;
+export type WorkbenchDatabaseReadLane = typeof WORKBENCH_DATABASE_READ_LANES[number];
+
+export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPayload): WorkbenchDatabaseReadLane | null {
   return CORE_READ_REQUEST_TYPES.has(request.type) ? "core"
-    : TRANSCRIPT_READ_REQUEST_TYPES.has(request.type) ? "transcript" : null;
+    : TRANSCRIPT_READ_REQUEST_TYPES.has(request.type) ? "transcript"
+      : QUERY_READ_REQUEST_TYPES.has(request.type) ? "query" : null;
 }
 
 export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequestPayload): boolean {

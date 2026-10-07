@@ -54,10 +54,12 @@ const fixtureIdentityValues = {
   },
 };
 
-test("database read lanes isolate transcript work from interactive state reads", () => {
+test("database read lanes isolate transcript work from interactive state reads and history scans from live ingest", () => {
   assert.equal(getWorkbenchDatabaseReadLane({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }), "core");
   assert.equal(getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "core");
-  assert.equal(getWorkbenchDatabaseReadLane({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) }), "transcript");
+  const live = getWorkbenchDatabaseReadLane({ type: "readTranscriptCompactionExecution", input: { harnessId: "codex", nativeLocation: "/repo", nativeThreadId: "thread", nativeTurnId: "turn" } });
+  assert.equal(live, "transcript");
+  assert.notEqual(getWorkbenchDatabaseReadLane({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) }), live);
   assert.equal(getWorkbenchDatabaseReadLane({ type: "settleTranscript", observations: [] }), null);
 });
 

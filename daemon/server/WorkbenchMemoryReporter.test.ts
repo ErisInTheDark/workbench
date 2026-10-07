@@ -22,7 +22,7 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
 }
 
 test("one sample logs process and database worker memory in one line", async () => {
-  const f = fixture(async () => ({ writer: { used: 88 * MB, total: 120 * MB }, core: { used: 61 * MB, total: 80 * MB }, transcript: null }));
+  const f = fixture(async () => ({ writer: { used: 88 * MB, total: 120 * MB }, core: { used: 61 * MB, total: 80 * MB }, transcript: null, query: null }));
   await f.reporter.tick();
   assert.equal(f.logs.length, 1);
   const line = plain(f.logs[0]!);
@@ -41,7 +41,7 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
   const f = fixture(async () => {
     reads += 1;
     await new Promise<void>(resolve => { release = resolve; });
-    return { writer: null, core: null, transcript: null };
+    return { writer: null, core: null, transcript: null, query: null };
   });
   const first = f.reporter.tick();
   await f.reporter.tick();

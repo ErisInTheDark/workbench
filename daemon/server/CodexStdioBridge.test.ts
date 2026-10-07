@@ -2227,6 +2227,48 @@ test("rollback starts a fresh initialization without letting the old attempt ove
   }
 });
 
+test("initialization waits for the predecessor process to retire instead of failing", async () => {
+  const retired = deferred<void>();
+  const sent: string[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    appServer: { send(request: JsonRpcRequest) {
+      sent.push(String(request.method));
+      if (request.method === "initialize") queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id ?? null, result: {} }));
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
+    waitForAppServer: () => retired.promise,
+  });
+  try {
+    const initialized = bridge.ensureInitialized({ id: 0, method: "initialize", params: {} });
+    for (let index = 0; index < 8; index++) await Promise.resolve();
+    assert.deepEqual(sent, []);
+    retired.resolve();
+    await initialized;
+    assert.deepEqual(sent, ["initialize", "initialized"]);
+  } finally {
+    await bridge.disposeImmediately();
+  }
+});
+
+test("failed predecessor retirement rejects initialization without contacting the native process", async () => {
+  const failure = new Error("predecessor retirement failed");
+  let sent = false;
+  const bridge = new CodexStdioBridge({
+    appServer: { send() { sent = true; } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {}, resolveProjectFromCwd: async () => null,
+    waitForAppServer: async () => { throw failure; },
+  });
+  try {
+    await assert.rejects(bridge.ensureInitialized({ id: 0, method: "initialize", params: {} }), error => error === failure);
+    assert.equal(sent, false);
+  } finally {
+    await bridge.disposeImmediately();
+  }
+});
+
 test("an expired page read cannot begin transcript hydration after the old provider reply arrives", async () => {
   const entered = deferred<void>();
   const upstream = deferred<JsonRpcResponse>();

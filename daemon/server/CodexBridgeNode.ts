@@ -189,6 +189,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         });
       },
       appServer: parent.appServer,
+      waitForAppServer: () => parent.waitUntilReady(),
       initialState: build.handoffState as CodexStdioBridgeReloadState | undefined,
       handleWorkbenchRequest: request => request.method === "workbench/subagent/message"
         ? build.run("messages", feature => feature.send(request.params).then(
@@ -316,6 +317,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         void bridge.settleRestartedResponses().catch(error => reportRecoveryFailure(null, error));
         health.start({ armed: true });
         const signal = generation.signal;
+        // Waiting here first keeps a retired generation from reporting readiness failure as a recovery cause.
         void parent.waitUntilReady().then(async () => {
           if (!signal.aborted) await lifecycle.ready(bridge);
         }).then(() => {

@@ -317,7 +317,7 @@ for (const scenario of [
       if (scenario.replacesDatabase) await entered.promise;
       else await new Promise<void>(resolve => setImmediate(resolve));
       assert.equal(recoveryCalls, scenario.replacesDatabase ? 1 : 0);
-      assert.equal(readinessChecks, 1, "every bridge generation waits on parent-owned process readiness");
+      assert.ok(readinessChecks > 0, "every bridge generation waits on parent-owned process readiness");
       const handoff = instance.beginHandoff!({ isReplacing: () => false });
       handoff.expire();
       let detached = false;

@@ -338,6 +338,35 @@ test("a stuck upstream handler is named in the log until it finishes, and health
   assert.equal(timers.size, 0);
 });
 
+test("slow-but-moving ingress names the message that waited too long in the queue", async () => {
+  const { runtime, errors, advance, deliver } = stallFixture();
+  const releases = [deferred(), deferred(), deferred()];
+  const entered = [deferred(), deferred(), deferred()];
+  let calls = 0;
+  runtime.attachBridge({
+    async handleUpstreamMessage() {
+      const index = calls++;
+      entered[index]!.resolve();
+      await releases[index]!.promise;
+    },
+  } as unknown as CodexStdioBridge);
+  deliver({ method: "item/commandExecution/outputDelta" });
+  deliver({ method: "item/commandExecution/outputDelta" });
+  deliver({ id: 9, result: {} });
+  await entered[0]!.promise;
+  advance(6_000);
+  releases[0]!.resolve();
+  await entered[1]!.promise;
+  assert.deepEqual(errors, []);
+  advance(6_000);
+  releases[1]!.resolve();
+  await entered[2]!.promise;
+  assert.equal(errors.length, 1, "no single handler stalled, but the queue did");
+  assert.match(errors[0]!, /upstream response id=9 waited 12\.0s in the ingress queue/u);
+  releases[2]!.resolve();
+  await runtime.stop();
+});
+
 test("a message held behind a closed handoff gate is named in the log", async () => {
   const { runtime, errors, advance, deliver } = stallFixture();
   const bridge = { async handleUpstreamMessage() {} } as unknown as CodexStdioBridge;
