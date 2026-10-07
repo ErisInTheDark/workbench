@@ -19,7 +19,7 @@
     "typecheck": "node scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/foreground.ts",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server",
-    "pack": "npm pack ./package"
+    "pack": "pnpm --dir ./package pack"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
