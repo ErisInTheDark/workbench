@@ -103,6 +103,8 @@ export const workspaceCommandRoutes = {
   "command-approvals/read": "installation",
   "command-approvals/remove": "installation",
   "command-approvals/patch": "installation",
+  "approval-review/read": "installation",
+  "approval-review/update": "installation",
   "project/discovery-settings/read": "installation",
   "project/discovery-settings/update": "installation",
   "project/folders/list": "installation",

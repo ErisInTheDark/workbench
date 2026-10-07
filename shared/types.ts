@@ -94,6 +94,7 @@
  * - WorkbenchSubagentPage: paginated subagent response.
  * - WorkbenchComposerProfileSlot: composer profile slot identity.
  * - WorkbenchComposerProfileSelection/WorkbenchComposerProfileTargetSelection: unloaded browser selection and exact durable target selection.
+ * - WorkbenchApprovalMode: daemon-project outside-sandbox policy carried beside a target selection.
  * - WorkbenchThreadCreationProfile: target or captured snapshot used to create a thread.
  * - WorkbenchListModelsOptions: model-list options.
  * - ChangeSummary: file-change summary.
@@ -709,7 +710,7 @@ export interface WorkbenchProjectIcon {
 export interface WorkbenchProjectOption {
   id: ProjectId;
   icon?: WorkbenchProjectIcon;
-  kind: "git" | "workspace" | "workbench-library";
+  kind: "git" | "workspace" | "workbench-library" | "daemon";
   lastCommitTimeMs: number | null;
   name: string;
   rootPath: string;
@@ -857,13 +858,16 @@ export type WorkbenchComposerProfileSlot =
   | { kind: "new-thread"; projectId: ProjectId }
   | { harness: WorkbenchHarness; kind: "thread"; projectId: ProjectId; threadId: WorkbenchThreadId };
 
+/** Outside-sandbox policy for daemon-project threads; absent means approvals on. */
+export type WorkbenchApprovalMode = "approvals" | "skip" | "auto";
+
 export type WorkbenchComposerProfileSelection =
-  | { kind: "custom"; settings?: WorkbenchComposerSettings }
-  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings };
+  | { kind: "custom"; settings?: WorkbenchComposerSettings; approvalMode?: WorkbenchApprovalMode }
+  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings; approvalMode?: WorkbenchApprovalMode };
 
 export type WorkbenchComposerProfileTargetSelection =
-  | { kind: "custom"; settings: WorkbenchComposerSettings }
-  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings };
+  | { kind: "custom"; settings: WorkbenchComposerSettings; approvalMode?: WorkbenchApprovalMode }
+  | { kind: "profile"; profileId: string; settings: WorkbenchComposerSettings; approvalMode?: WorkbenchApprovalMode };
 
 export type WorkbenchThreadCreationProfile =
   | { kind: "target"; slot: WorkbenchComposerProfileSlot }

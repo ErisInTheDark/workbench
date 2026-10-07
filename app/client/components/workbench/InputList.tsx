@@ -1,28 +1,35 @@
 /*
  * Exports:
- * - default InputList: edit a list of single inputs or key/value pairs, owning the trailing blank row, empty-row cleanup and undo/redo.
+ * - default InputList: edit a list of single inputs or key/value pairs, owning the trailing blank row, empty-row cleanup and undo/redo;
+ *   optionally a fixed row set, and secret values shown as dots until revealed.
  */
 "use client";
 
-import { useLayoutEffect, useRef, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { InputListRows, type InputListHistory, type InputListRow } from "./input-list-rows";
-import { XIcon } from "./workbench-icons";
+import { EyeIcon, EyeOffIcon, XIcon } from "./workbench-icons";
 
 const fieldClassName = "w-full min-w-0 bg-transparent py-2 pl-3 text-[0.85rem] text-text outline-none";
+const rowButtonClassName = "flex size-7 items-center justify-center rounded-md bg-transparent text-fg/muted outline-none hover:bg-surface-hover hover:text-text focus-visible:bg-surface-hover focus-visible:text-text";
 
 export default function InputList({
   disabled,
   errors,
+  fixedRows = false,
   idPrefix,
   keyPlaceholder,
   kind = "single",
   onRowsChange,
   placeholder,
   rowLabel,
+  rowLabels,
   rows,
+  secret = false,
 }: {
   disabled?: boolean;
   errors?: Readonly<Record<string, string | undefined>>;
+  /** Edit exactly the given rows: no trailing blank row, removal or empty-row cleanup. */
+  fixedRows?: boolean;
   idPrefix: string;
   /** Placeholder for the key input in `pairs` mode. */
   keyPlaceholder?: string;
@@ -32,8 +39,13 @@ export default function InputList({
   /** Placeholder for the value input. */
   placeholder?: string;
   rowLabel: string;
+  /** Accessible labels by row id, replacing the numbered `rowLabel`. */
+  rowLabels?: Readonly<Record<string, string>>;
   rows: readonly InputListRow[];
+  /** Show values as dots until each row is revealed (single inputs only). */
+  secret?: boolean;
 }) {
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
   const fieldRefs = useRef(new Map<string, HTMLInputElement | HTMLTextAreaElement>());
   const pendingFocusIndex = useRef<number | null>(null);
   const history = useRef<InputListHistory>(InputListRows.history.empty());
@@ -99,14 +111,18 @@ export default function InputList({
       className="divide-y divide-text/16 overflow-hidden rounded-[0.8rem] border border-text/16 bg-text/[0.03]"
       onKeyDown={handleKeyDown}
       onBlur={event => {
-        if (pendingFocusIndex.current === null && !event.currentTarget.contains(event.relatedTarget)) {
+        if (!fixedRows && pendingFocusIndex.current === null && !event.currentTarget.contains(event.relatedTarget)) {
           const settled = InputListRows.settle(rows);
           if (settled.length !== rows.length) emit(settled, null);
         }
       }}
     >
       {rows.map((row, index) => {
-        const label = `${rowLabel} ${index + 1}`;
+        const label = rowLabels?.[row.id] ?? `${rowLabel} ${index + 1}`;
+        const editValue = (value: string) => fixedRows
+          ? rows.map(candidate => candidate.id === row.id ? { ...candidate, value } : candidate)
+          : InputListRows.edit(rows, row.id, { value });
+        const masked = secret && kind === "single" && !revealed.has(row.id);
         const inputId = `${idPrefix}-${row.id}`;
         const error = errors?.[row.id];
         const errorId = `${inputId}-issue`;
@@ -138,7 +154,7 @@ export default function InputList({
                   id={inputId}
                   aria-label={`${label} value`}
                   className={`${fieldClassName} resize-none overflow-hidden whitespace-pre-wrap break-words pr-3 font-mono`}
-                  onChange={event => emit(InputListRows.edit(rows, row.id, { value: event.target.value }), `${row.id}:value`)}
+                  onChange={event => emit(editValue(event.target.value), `${row.id}:value`)}
                   placeholder={placeholder}
                   rows={1}
                   value={row.value}
@@ -150,27 +166,49 @@ export default function InputList({
                 ref={bind(row, "value")}
                 id={inputId}
                 aria-label={label}
-                className={`${fieldClassName} pr-10`}
-                onChange={event => emit(InputListRows.edit(rows, row.id, { value: event.target.value }), `${row.id}:value`)}
+                className={`
+                  ${fieldClassName}
+                  ${secret ? "pr-[4.5rem] font-mono" : "pr-10"}
+                `}
+                onChange={event => emit(editValue(event.target.value), `${row.id}:value`)}
                 placeholder={placeholder}
-                type="text"
+                type={masked ? "password" : "text"}
                 value={row.value}
               />
             )}
-            {index === rows.length - 1 && !row.key.trim() && !row.value.trim() ? null : (
-              <button
-                aria-label={`Remove ${label}`}
-                className="absolute right-1 top-1 flex size-7 items-center justify-center rounded-md bg-transparent text-fg/muted outline-none hover:bg-surface-hover hover:text-text focus-visible:bg-surface-hover focus-visible:text-text"
-                disabled={disabled}
-                onClick={() => {
-                  pendingFocusIndex.current = index;
-                  emit(InputListRows.remove(rows, row.id), null);
-                }}
-                type="button"
-              >
-                <XIcon size={14} />
-              </button>
-            )}
+            <span className="absolute right-1 top-1 flex items-center">
+              {secret && kind === "single" && row.value ? (
+                <button
+                  aria-label={masked ? `Show ${label}` : `Hide ${label}`}
+                  aria-pressed={!masked}
+                  className={rowButtonClassName}
+                  disabled={disabled}
+                  onClick={() => setRevealed(current => {
+                    const next = new Set(current);
+                    if (next.has(row.id)) next.delete(row.id);
+                    else next.add(row.id);
+                    return next;
+                  })}
+                  type="button"
+                >
+                  {masked ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
+                </button>
+              ) : null}
+              {fixedRows || (index === rows.length - 1 && !row.key.trim() && !row.value.trim()) ? null : (
+                <button
+                  aria-label={`Remove ${label}`}
+                  className={rowButtonClassName}
+                  disabled={disabled}
+                  onClick={() => {
+                    pendingFocusIndex.current = index;
+                    emit(InputListRows.remove(rows, row.id), null);
+                  }}
+                  type="button"
+                >
+                  <XIcon size={14} />
+                </button>
+              )}
+            </span>
             {error ? <p id={errorId} role="alert" className="m-0 px-3 pb-2 text-[0.76rem] text-danger">{error}</p> : null}
           </div>
         );

@@ -1,9 +1,10 @@
 /*
- * No production exports. Tests protect the single live approval owner: presentation, saved rules, decisions, outcomes and cleanup.
+ * No production exports. Tests protect the single live approval owner: approval modes, presentation, saved rules, decisions, outcomes and cleanup.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchApprovalMode, WorkbenchHarness } from "workbench-shared/types";
+import type { ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalOutcomeEntry, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { COMMAND_APPROVAL_CONFIRMATION } from "./lib/workbench/command-approval-prefix";
@@ -21,12 +22,23 @@ function command(overrides: Partial<Extract<WorkbenchApprovalSubject, { kind: "c
   };
 }
 
-function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: boolean; handoff?: WorkbenchApprovalHandoff } = {}) {
+function harness(options: {
+  saved?: boolean; failSave?: boolean; deliverable?: boolean; handoff?: WorkbenchApprovalHandoff;
+  mode?: WorkbenchApprovalMode; review?: () => Promise<ApprovalReviewVerdict>;
+} = {}) {
   const events: string[] = [];
   const delivered: WorkbenchApprovalDecision[] = [];
   const outcomes: WorkbenchApprovalOutcomeEntry[] = [];
   const saves: string[][] = [];
+  const reviews: string[] = [];
+  const errors: string[] = [];
   const controller = new WorkbenchApprovalController({
+    resolveApprovalMode: async () => options.mode ?? "approvals",
+    review: async ({ subject }) => {
+      reviews.push(subject.kind);
+      if (!options.review) throw new Error("no reviewer configured");
+      return await options.review();
+    },
     broadcast: (_harness: WorkbenchHarness, notification) => { events.push(notification.method); },
     collectAnswerContext: async () => { events.push("context"); },
     commandApprovals: {
@@ -42,7 +54,7 @@ function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: b
       delivered.push(input.decision);
       return options.deliverable ?? true;
     },
-    logError: () => undefined,
+    logError: message => { errors.push(message); },
     observeLifecycle: async (_harness, _thread, event) => {
       events.push(`${event.kind}${"answered" in event && event.answered ? ":answered" : ""}`);
     },
@@ -57,8 +69,61 @@ function harness(options: { saved?: boolean; failSave?: boolean; deliverable?: b
   });
   const options_ = (requestKey: string) => controller.list().find(pending => pending.requestKey === requestKey)
     ?.request.questions[0]?.options.map(option => option.label) ?? [];
-  return { controller, events, delivered, outcomes, saves, open, choose, options: options_ };
+  const summary = (requestKey: string) => controller.list().find(pending => pending.requestKey === requestKey)?.request.summary ?? null;
+  return { controller, events, delivered, outcomes, saves, reviews, errors, open, choose, options: options_, summary };
 }
+
+test("skip approvals decides every request without asking or reviewing, and records it as auto-approved", async () => {
+  const h = harness({ mode: "skip", saved: true });
+  assert.deepEqual(await h.open("first"), { kind: "decided", decision: { kind: "allowOnce" } });
+  assert.deepEqual(await h.open("patch", { kind: "patch", reason: null, grantRoot: null, paths: ["C:/x.txt"] }),
+    { kind: "decided", decision: { kind: "allowOnce" } });
+  assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["autoApproved", "autoApproved"]);
+  assert.deepEqual(h.events, [], "nothing is shown");
+  assert.deepEqual(h.reviews, []);
+});
+
+test("auto-approve allows what the reviewer allows and records it as auto-approved", async () => {
+  const h = harness({ mode: "auto", review: async () => ({ decision: "allow", detail: "Routine read." }) });
+  assert.deepEqual(await h.open("first"), { kind: "decided", decision: { kind: "allowOnce" } });
+  assert.deepEqual(h.reviews, ["command"]);
+  assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["autoApproved"]);
+  assert.deepEqual(h.events, []);
+});
+
+test("auto-approve falls back to the person with the reviewer's verdict when it is unsure or refuses", async () => {
+  const h = harness({ mode: "auto", review: async () => ({ decision: "manual", detail: "Deletes system files." }) });
+  assert.deepEqual(await h.open("first"), { kind: "shown" });
+  assert.match(h.summary("first") ?? "", /Deletes system files\./u);
+  await h.choose("first", ["Decline"]);
+  assert.deepEqual(h.delivered, [{ kind: "decline" }]);
+  assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["denied"]);
+});
+
+test("a failing reviewer never decides: the person is asked and the failure is reported", async () => {
+  const h = harness({ mode: "auto", review: async () => { throw new Error("TypeSafe key rejected"); } });
+  assert.deepEqual(await h.open("first"), { kind: "shown" });
+  assert.match(h.summary("first") ?? "", /TypeSafe key rejected/u);
+  assert.ok(h.errors.some(message => message.includes("TypeSafe key rejected")));
+  assert.deepEqual(h.outcomes, []);
+});
+
+test("approvals on keeps asking without consulting a reviewer", async () => {
+  const h = harness({ mode: "approvals", review: async () => ({ decision: "allow", detail: "fine" }) });
+  assert.deepEqual(await h.open("first"), { kind: "shown" });
+  assert.deepEqual(h.reviews, []);
+});
+
+test("an approval closed while its review is running is never decided", async () => {
+  let release!: (verdict: ApprovalReviewVerdict) => void;
+  const h = harness({ mode: "auto", review: () => new Promise(resolve => { release = resolve; }) });
+  const opened = h.open("first");
+  for (let attempt = 0; attempt < 20 && !release; attempt++) await Promise.resolve();
+  h.controller.close("claude", "first");
+  release({ decision: "allow", detail: "fine" });
+  assert.deepEqual(await opened, { kind: "closed" });
+  assert.deepEqual(h.outcomes, []);
+});
 
 test("a shown approval carries command context, offers one-shot and remember choices, and records its answered outcome", async () => {
   const h = harness();

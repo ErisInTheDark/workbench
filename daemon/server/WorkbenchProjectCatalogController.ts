@@ -277,7 +277,7 @@ export default class WorkbenchProjectCatalogController {
     const pending = this.iconWork.get(projectId);
     if (pending) return pending;
     const record = this.catalog?.records?.find(record => record.project.id === projectId);
-    if (!record || record.project.kind === "workbench-library"
+    if (!record || record.project.kind === "workbench-library" || record.project.kind === "daemon"
       || (record.checkedAt !== null && this.now() - record.checkedAt < ICON_FRESHNESS_MS)) return Promise.resolve();
     const persistence = this.persistence;
     const work = (async () => {
@@ -771,7 +771,8 @@ export default class WorkbenchProjectCatalogController {
       for (;;) {
         if (this.disposed) return;
         const record = this.catalog?.records.find(item => item.checkedAt === null
-          && item.project.kind !== "workbench-library" && !this.sweptIconSources.has(item.sourceKey));
+          && item.project.kind !== "workbench-library" && item.project.kind !== "daemon"
+          && !this.sweptIconSources.has(item.sourceKey));
         if (!record) return;
         this.sweptIconSources.add(record.sourceKey);
         await this.observeProjectIcon(record.project.id);

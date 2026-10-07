@@ -14,6 +14,8 @@ import { projectLocationKey } from "../../lib/workbench/project/project-location
 import type { WorkbenchProjectAlias, WorkbenchProjectCandidate, WorkbenchProjectDiscovery, WorkbenchProjectStartup, WorkbenchProjectIconSettlement } from "./workbench-project-persistence.ts";
 
 const uuid = z.string().uuid();
+/** Kinds catalogued once per daemon under a fixed id equal to the kind, outside every discovery folder. */
+const FIXED_PROJECT_IDS: ReadonlySet<string> = new Set(["workbench-library", "daemon"]);
 
 export default class WorkbenchProjectRepository {
   constructor(private readonly database: Database.Database) {}
@@ -59,7 +61,7 @@ export default class WorkbenchProjectRepository {
       return projectId;
     }
     if (this.database.prepare("SELECT 1 FROM workbench_projects WHERE id = ?").get(projectId)) return projectId;
-    if (projectId === "workbench-library" || uuid.safeParse(projectId).success) {
+    if (FIXED_PROJECT_IDS.has(projectId) || uuid.safeParse(projectId).success) {
       this.database.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(projectId);
       return projectId;
     }
@@ -118,7 +120,7 @@ export default class WorkbenchProjectRepository {
     for (const row of projects) {
       const roots = rootsByProject.get(row.id) ?? [];
       if (!roots.length) continue;
-      if (row.kind !== "workbench-library"
+      if (!FIXED_PROJECT_IDS.has(row.kind)
         && !withinDiscovery(row.workspace_path ?? roots[0]!.root_path)) continue;
       if (!row.identity_key || roots.some(root => !root.identity_key) || !row.icon_source_key) {
         console.warn("[projects] retained catalogue entry needs identity rediscovery");
@@ -220,12 +222,14 @@ export default class WorkbenchProjectRepository {
       };
       const atLocation = retainedProjects.filter(row => (row.kind === "git" || row.kind === "workspace") && sameLocation(row));
       const historical = retainedProjects.filter(row => row.kind === "historical" && row.identity_key === project.identityKey);
-      let owner = atLocation[0] ?? (project.kind === "workbench-library"
-        ? retainedProjects.find(row => row.id === "workbench-library") : historical.length === 1 ? historical[0] : undefined);
+      // The library and the daemon project each own one fixed id named after their kind.
+      const fixedId = FIXED_PROJECT_IDS.has(project.kind) ? project.kind : null;
+      let owner = atLocation[0] ?? (fixedId
+        ? retainedProjects.find(row => row.id === fixedId) : historical.length === 1 ? historical[0] : undefined);
       let conflict = "";
       if (atLocation.length > 1) conflict = "multiple retained owners at the checkout";
       if (historical.length > 1 && !atLocation.length) conflict = "ambiguous historical project identity";
-      const id = ProjectIdSchema.parse(owner?.id ?? (project.kind === "workbench-library" ? "workbench-library" : randomUUID()));
+      const id = ProjectIdSchema.parse(owner?.id ?? fixedId ?? randomUUID());
       const addresses: string[] = [];
       for (const { alias: address } of discovery.aliases.filter(alias =>
         alias.locationKey === projectLocationKey(project)

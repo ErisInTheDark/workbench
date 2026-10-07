@@ -16,10 +16,13 @@ import type { WorkbenchProviderRecovery } from "workbench-shared/workbench/provi
 import type { WorkbenchProviderSingleFile } from "workbench-shared/workbench/provider/provider-single-file";
 import type { WorkbenchProviderContext } from "workbench-shared/workbench/provider/provider-context";
 import type { WorkbenchStatsHydrationResult } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
 
 export default interface WorkbenchProvider {
   readonly context?: WorkbenchProviderContext;
   readonly singleFile?: WorkbenchProviderSingleFile;
+  /** Judge one approval request with a provider-hosted reviewer model, using the user's provider login. */
+  readonly approvalReview?: { review(state: string, signal: AbortSignal): Promise<ApprovalReviewVerdict> };
   readonly threads: WorkbenchProviderThreads;
   readonly goals?: WorkbenchProviderGoals;
   readonly interactions?: WorkbenchProviderInteractions;

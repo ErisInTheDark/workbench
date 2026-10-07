@@ -306,6 +306,11 @@ test("relational batches roll back invalid references and preserve valid draft p
     assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.profile, record.profile);
     repository.commit({ projectProfiles: [{ projectId: draft.projectId, profile: record.profile }] });
     assert.deepEqual(repository.readProjectProfile(draft.projectId), record.profile);
+    // The approval mode rides beside the profile selection for applied threads and new-thread defaults.
+    const skipping = { ...record, profile: { kind: "custom" as const, settings: draft.composerSettings, approvalMode: "skip" as const } };
+    repository.commit({ records: [skipping], projectProfiles: [{ projectId: draft.projectId, profile: { ...skipping.profile, approvalMode: "auto" } }] });
+    assert.equal(repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.profile?.approvalMode, "skip");
+    assert.equal(repository.readProjectProfile(draft.projectId)?.approvalMode, "auto");
     assert.deepEqual(repository.readPinnedImports(), [fixtureIdentityValues.ProjectId.project]);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }

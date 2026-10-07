@@ -7,6 +7,9 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import CodexSingleFileController from "./CodexSingleFileController";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
+import CodexApprovalReviewer from "./CodexApprovalReviewer";
+import createCodexIsolatedTransport from "./CodexIsolatedAppServerTransport";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
@@ -16,6 +19,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime({
       documentsDirectory: path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),
     }));
+    const reviewDirectory = WorkbenchTemporaryDirectory.resolve("codex-auto-review");
+    const approvalReviewer = new CodexApprovalReviewer({
+      reviewDirectory,
+      createTransport: (onMessage, onFailure) => createCodexIsolatedTransport({
+        projectRoot: reviewDirectory, label: "Codex auto-review", onMessage, onFailure,
+      }),
+    });
     const local = get("codexConfiguration");
     const threads = get("codexThreadOperations");
     const configuration = get("codexNativeConfiguration");
@@ -26,6 +36,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       registrations: { codexProvider: {
         singleFile,
+        approvalReview: { review: (state, signal) => approvalReviewer.review(state, signal) },
         threads,
         context: threads.context,
         tools: get("codexTools"),
@@ -57,7 +68,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       } },
       start: () => undefined,
       hasPendingWork: () => singleFile.hasPendingWork(),
-      dispose: () => singleFile.dispose(),
+      dispose: async () => {
+        await Promise.all([singleFile.dispose(), approvalReviewer.dispose()]);
+      },
     };
   },
   description: "Reload the Codex provider definition.",

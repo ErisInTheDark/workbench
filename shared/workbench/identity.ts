@@ -40,7 +40,8 @@ export type ItemReference = z.infer<typeof ItemReferenceSchema>;
 
 export const ProjectIdSchema = z.string().trim().min(1).brand<"ProjectId">();
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
-export const ProjectIdentityKeySchema = z.string().regex(/^(?:workbench-library|(?:remote|local|workspace):\/\/.+)$/u).brand<"ProjectIdentityKey">();
+// `daemon` is daemon-local; the app qualifies it per daemon so each daemon is its own logical project.
+export const ProjectIdentityKeySchema = z.string().regex(/^(?:workbench-library|daemon|(?:remote|local|workspace):\/\/.+)$/u).brand<"ProjectIdentityKey">();
 export type ProjectIdentityKey = z.infer<typeof ProjectIdentityKeySchema>;
 export const DaemonIdSchema = z.uuid().brand<"DaemonId">();
 export type DaemonId = z.infer<typeof DaemonIdSchema>;

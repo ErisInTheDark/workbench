@@ -125,8 +125,11 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   assert.equal(directAlias?.identityKey, identifiedDirect.identityKey);
   assert.ok(directAlias?.locationKey);
 
+  // Every daemon catalogues itself and the library even with no discovery folders.
   const empty = await discoverProjectIdentities([]);
-  assert.deepEqual(empty.data.map(project => project.kind), ["workbench-library"]);
+  assert.deepEqual(empty.data.map(project => [project.kind, project.identityKey]), [
+    ["daemon", "daemon"], ["workbench-library", "workbench-library"],
+  ]);
   assert.deepEqual(empty.discoveryRoots, []);
   const additionalFolder = path.join(temporaryRoot, "additional");
   await fs.mkdir(additionalFolder);

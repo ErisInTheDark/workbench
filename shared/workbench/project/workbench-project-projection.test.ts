@@ -129,6 +129,23 @@ test("a local project's name stays separate from its shortest daemon folder addr
   assert.equal(project.displayPath, "bak");
 });
 
+test("a daemon's own project shows its host instead of its hidden workspace and stays listed without threads", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "tower-of-floof" }],
+    projects: [{ id: localId, matchKey: `daemon://${first}`, label: "tower-of-floof" }],
+    locations: [{
+      target: { daemonId: first, projectId: ProjectIdSchema.parse("daemon") }, logicalProjectId: localId,
+      identityKey: `daemon://${first}`, name: "tower-of-floof", rootPath: "C:/data/daemon/workspace",
+    }],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const projects = projectLogicalProjects(snapshot, new Map());
+  assert.equal(projects[0]?.displayName, "tower-of-floof");
+  assert.equal(projects[0]?.displayPath, null);
+  assert.equal(projects[0]?.locations[0]?.displayPath, "tower-of-floof");
+  assert.deepEqual(projectLogicalGroups(projects, {}, new Map(), snapshot).unarchivedProjectIds, [localId]);
+});
+
 test("one-daemon worktree locations use distinct short names without a redundant host", () => {
   const root = "C:/git/web/workbench";
   const worktree = `${root}/.workbench/worktrees/convex-lab`;

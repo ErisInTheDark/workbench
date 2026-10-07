@@ -1,4 +1,4 @@
-/* No exports. Tests protect restricted defaults, one-call approvals, bound caller ownership and the prepared hosted shell. */
+/* No exports. Tests protect restricted defaults, one-call approvals, bound caller ownership, daemon-workspace reach and the prepared hosted shell. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
@@ -140,4 +140,15 @@ test("identity drift and canonical path escape cannot dispatch", async () => {
     ? path.resolve(process.cwd(), "..") : path.resolve(value) });
   await assert.rejects(escape.controller.admit({ command: ["read"], cwd: "link" }, new AbortController().signal), /outside/);
   assert.equal(drift.calls.length + escape.calls.length, 0);
+});
+
+test("a daemon-workspace caller may run anywhere while writes stay limited to its workspace", async () => {
+  const elsewhere = path.resolve(process.cwd(), "..");
+  const daemon = fixture({ isUnboundedRoot: root => root === process.cwd() });
+  await daemon.controller.admit({ command: ["dir"], cwd: elsewhere }, new AbortController().signal);
+  assert.equal(daemon.calls[0]?.cwd, elsewhere);
+  assert.deepEqual(daemon.calls[0]?.permissions, { mode: "restricted", writableRoots: [process.cwd()], network: false });
+
+  const project = fixture({ isUnboundedRoot: () => false });
+  await assert.rejects(project.controller.admit({ command: ["dir"], cwd: elsewhere }, new AbortController().signal), /outside/);
 });

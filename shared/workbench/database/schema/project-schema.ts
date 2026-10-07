@@ -28,7 +28,12 @@ const projectColumns = {
   icon_checked_at: integer().nonNegative(),
 };
 
-function projectConstraints(table: ColumnReferences<typeof projectColumns>) {
+const daemonProjectColumns = {
+  ...projectColumns,
+  kind: enumText("historical", "git", "workspace", "workbench-library", "daemon").notNull().default("historical"),
+};
+
+function projectConstraints(table: ColumnReferences<typeof projectColumns> | ColumnReferences<typeof daemonProjectColumns>) {
   return [
     check(sql`
       (${table.kind} = ${literal("historical")} AND ${table.name} IS NULL AND ${table.relative_path} IS NULL
@@ -89,6 +94,26 @@ function defineStableProjects(uniqueIdentity: boolean) {
 }
 const stableProjects = defineStableProjects(true);
 const locationProjects = defineStableProjects(false);
+// Each daemon catalogues itself under the fixed id and daemon-local identity key `daemon`.
+const daemonProjects = defineTable("workbench_projects", {
+  ...preparingProjects.columns,
+  kind: daemonProjectColumns.kind,
+}, table => ({
+  constraints: [
+    ...projectConstraints(table),
+    check(sql`${table.id} IN (${literal("workbench-library")}, ${literal("daemon")}) OR (
+      length(${table.id}) = 36 AND substr(${table.id}, 9, 1) = '-' AND substr(${table.id}, 14, 1) = '-'
+      AND substr(${table.id}, 19, 1) = '-' AND substr(${table.id}, 24, 1) = '-'
+      AND length(replace(${table.id}, '-', '')) = 32
+      AND replace(${table.id}, '-', '') NOT GLOB '*[^0-9a-f]*'
+    )`),
+    check(sql`${table.kind} = ${literal("historical")} OR ${table.identity_key} IS NOT NULL`),
+    check(sql`${table.identity_key} IS NULL OR ${table.identity_key} IN (${literal("workbench-library")}, ${literal("daemon")})
+      OR ${table.identity_key} GLOB ${literal("remote://?*")}
+      OR ${table.identity_key} GLOB ${literal("local://?*")}
+      OR ${table.identity_key} GLOB ${literal("workspace://?*")}`),
+  ],
+}));
 
 const roots = defineTable("workbench_project_roots", {
   project_id: text().notNull().references("workbench_projects", "id"),
@@ -119,7 +144,7 @@ function initial<Table extends TableDefinition>(table: Table) {
 }
 
 const projectsHistory = defineTableHistory({
-  current: locationProjects,
+  current: daemonProjects,
   versions: [
     ...initial(projects).versions,
     tableVersion({
@@ -144,6 +169,11 @@ const projectsHistory = defineTableHistory({
       schemaVersion: databaseReleases.projectLocations.version,
       table: locationProjects,
       migration: rebuildTable({ from: stableProjects, to: locationProjects }),
+    }),
+    tableVersion({
+      schemaVersion: databaseReleases.daemonProjects.version,
+      table: daemonProjects,
+      migration: rebuildTable({ from: locationProjects, to: daemonProjects }),
     }),
   ],
 });

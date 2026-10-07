@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectIcon: render a concrete or logical project's discovered asset, stable theme-aware initial, or generic glyph fallback.
+ * - default WorkbenchProjectIcon: render a concrete or logical project's discovered asset, stable theme-aware initial, computer glyph for daemon projects, or generic glyph fallback.
  */
 "use client";
 
@@ -8,7 +8,7 @@ import { useContext, useEffect, useState } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
-import { ProjectIcon } from "./workbench-icons";
+import { ComputerIcon, ProjectIcon } from "./workbench-icons";
 import {
   resolveWorkbenchDaemonAssetOrigin, WorkbenchDaemonAssetOriginContext,
   type WorkbenchDaemonAssetSource,
@@ -70,6 +70,7 @@ export default function WorkbenchProjectIcon ({
   const className = `inline-flex shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;
 
   if (!project) return <ProjectIcon aria-hidden="true" className="shrink-0" size={VARIANT_CLASS_NAMES[variant].glyph} />;
+  if (project.kind === "daemon") return <ComputerIcon aria-hidden="true" className="shrink-0" size={VARIANT_CLASS_NAMES[variant].glyph} />;
 
   if (project.icon && assetUrl && !loadFailed) {
     return (

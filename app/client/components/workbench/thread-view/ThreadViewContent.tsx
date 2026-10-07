@@ -52,6 +52,7 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
 import { useWorkbenchThreadFileIndex, useWorkbenchThreads } from "../use-workbench-client";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
+import WorkbenchApprovalModeMenu from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
 import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
@@ -235,6 +236,7 @@ function useBackgroundProjectFilePathDisambiguationIndex (
 }
 
 export default memo(function ThreadViewContent ({
+  approvalModeSettings = null,
   composerSpellCheck,
   contained = false,
   draftLeadingContent = null,
@@ -275,6 +277,8 @@ export default memo(function ThreadViewContent ({
   threadTarget,
   viewInstanceKey = rootTarget.kind === "draft" ? rootTarget.draftId : rootTarget.threadId,
 }: {
+  /** Daemon projects replace the folder picker with an approval mode menu on drafts and threads. */
+  approvalModeSettings?: { onOpenSettings: () => void } | null;
   composerSpellCheck: boolean;
   contained?: boolean;
   draftLeadingContent?: ReactNode;
@@ -1003,11 +1007,24 @@ export default memo(function ThreadViewContent ({
       {ownedFileIndex.canRetry ? <button className="ml-2 rounded px-1 hover:bg-accent-soft" type="button"
         onClick={() => { void ownedFileIndex.retry(); }}>Retry</button> : null}
     </p> : null;
+  const approvalModeControl = approvalModeSettings && activeProfileSlot ? (
+    <WorkbenchApprovalModeMenu
+      mode={composerProfileController.getApprovalMode(activeProfileSlot)}
+      onSelect={mode => {
+        const harness = resolvedActiveThread?.harness ?? activeThread?.harness;
+        if (!harness) return;
+        void composerProfileController.setApprovalMode(activeProfileSlot, mode, {
+          harness, loadModels: () => threads.listModels(harness),
+        });
+      }}
+      onOpenSettings={approvalModeSettings.onOpenSettings}
+    />
+  ) : null;
   const composer = activeThread ? (
     <ThreadComposer
       autoFocusOnEntry={isFocused}
       onDraftSessionChange={onDraftSessionChange}
-      targetControl={isDraftThreadView ? draftTargetControl : null}
+      targetControl={approvalModeControl ?? (isDraftThreadView ? draftTargetControl : null)}
       header={fileIndexError}
       key={`${projectId}:${activeThread.id}`}
       composerSpellCheck={composerSpellCheck}

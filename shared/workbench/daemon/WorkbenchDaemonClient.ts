@@ -18,6 +18,7 @@ import { VirtualRepoAvailabilitySchema } from "../repo/virtual-repo-contract";
 import { WorkingTreeReadSchema, WorkingTreeSummarySchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
+import { ApprovalReviewSettingsSnapshotSchema } from "../approval-review/approval-review-settings";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
 import { ProjectCreateResultSchema, ProjectFolderListSchema } from "../project/project-creation";
 import { ProjectStoreSnapshotSchema, ProjectStoreUpdateResultSchema } from "../project/project-store";
@@ -104,6 +105,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "command-approvals/read":
     case "command-approvals/remove": return CommandApprovalSnapshotSchema;
     case "command-approvals/patch": return CommandApprovalSnapshotSchema;
+    case "approval-review/read":
+    case "approval-review/update": return ApprovalReviewSettingsSnapshotSchema;
     case "project/store/read": return ProjectStoreSnapshotSchema;
     case "project/store/update": return ProjectStoreUpdateResultSchema;
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
@@ -329,6 +332,11 @@ class WorkbenchDaemonClient {
     read: (params: WorkbenchDaemonParams<"command-approvals/read">) => this.request("command-approvals/read", params),
     remove: (params: WorkbenchDaemonParams<"command-approvals/remove">) => this.request("command-approvals/remove", params),
     patch: (params: WorkbenchDaemonParams<"command-approvals/patch">) => this.request("command-approvals/patch", params),
+  };
+
+  readonly approvalReview = {
+    read: () => this.request("approval-review/read", {}),
+    update: (params: WorkbenchDaemonParams<"approval-review/update">) => this.request("approval-review/update", params),
   };
 
   readonly projectStore = {

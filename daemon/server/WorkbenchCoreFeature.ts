@@ -31,6 +31,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "threadSkills",
   "transcriptReader",
   "transcriptReconciliation",
+  "turnRecoveryFailures",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {

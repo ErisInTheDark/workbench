@@ -155,6 +155,13 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     cancel: sessionId => this.singleFileOperation(owner => owner.cancel(sessionId)),
   };
 
+  readonly approvalReview: NonNullable<WorkbenchProvider["approvalReview"]> = {
+    review: (state, signal) => this.run(providerRegistrations[this.key], provider => {
+      if (!provider.approvalReview) throw new Error(`Provider ${this.key} cannot review approvals.`);
+      return provider.approvalReview.review(state, signal);
+    }, `${this.key}: approvalReview.review`),
+  };
+
   private interaction<T>(operation: (interactions: NonNullable<WorkbenchProvider["interactions"]>) => Promise<T>, label: string) {
     return this.run(providerRegistrations[this.key], provider => {
       if (!provider.interactions) throw new Error(`Provider ${this.key} does not support interactive requests.`);

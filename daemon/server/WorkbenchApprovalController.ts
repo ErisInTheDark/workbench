@@ -3,10 +3,13 @@
  * - WorkbenchApprovalControllerOptions: lifecycle, presentation, saved-rule, delivery, and outcome ports.
  * - WorkbenchApprovalOpenResult: whether an opened approval was decided automatically, shown, or closed meanwhile.
  * - WorkbenchApprovalHandoff: opaque pending-approval state a successor controller adopts across core reloads.
- * - default WorkbenchApprovalController: own every live approval across providers and wait in-process for Workbench-hosted ones; transports only adapt native requests and decisions.
+ * - default WorkbenchApprovalController: own every live approval across providers, apply the thread's approval mode, and wait in-process for Workbench-hosted ones; transports only adapt native requests and decisions.
  */
 import { randomUUID } from "node:crypto";
-import type { WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type {
+  WorkbenchApprovalMode, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchUserInputRequest, WorkbenchUserInputResponse,
+} from "workbench-shared/types";
+import type { ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type {
   WorkbenchApprovalDecision, WorkbenchApprovalOutcome, WorkbenchApprovalOutcomeEntry, WorkbenchApprovalSubject,
@@ -38,6 +41,10 @@ export interface WorkbenchApprovalControllerOptions {
   observeLifecycle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, event: LifecycleEvent): Promise<void>;
   recordOutcome(entry: WorkbenchApprovalOutcomeEntry): Promise<void>;
   resolveProject(threadId: WorkbenchThreadId): Promise<ProjectId | null>;
+  /** The thread's applied approval mode; only daemon-project threads ever carry a non-default mode. */
+  resolveApprovalMode(threadId: WorkbenchThreadId): Promise<WorkbenchApprovalMode>;
+  /** Ask the selected auto-approve reviewer; throws when no reviewer can judge. */
+  review(input: { threadId: WorkbenchThreadId; subject: WorkbenchApprovalSubject }, signal: AbortSignal): Promise<ApprovalReviewVerdict>;
 }
 
 export type WorkbenchApprovalOpenResult =
@@ -157,6 +164,14 @@ export default class WorkbenchApprovalController {
     const isCurrent = () => this.pending.get(key(input.harness, input.requestKey)) === entry && !this.shared.ended;
 
     let summary: string | undefined;
+    const policy = await this.applyApprovalMode(entry, input.subject);
+    if (!isCurrent()) return { kind: "closed" };
+    if (policy.kind === "allow") {
+      this.pending.delete(key(input.harness, input.requestKey));
+      await this.recordOutcome(entry, "autoApproved");
+      return { kind: "decided", decision: { kind: "allowOnce" } };
+    }
+    summary = policy.summary;
     if (input.subject.kind === "command" && input.subject.rememberable) {
       try {
         const automatic = await this.evaluateSavedRules(entry, input.subject);
@@ -170,7 +185,7 @@ export default class WorkbenchApprovalController {
         if (!isCurrent()) return { kind: "closed" };
         this.options.logError(`Saved command approvals failed: ${sanitize(error)}`);
         entry.remember = null;
-        summary = "Saved command approvals are unavailable. Review this request manually.";
+        summary = [summary, "Saved command approvals are unavailable. Review this request manually."].filter(Boolean).join("\n\n");
       }
     }
 
@@ -279,6 +294,31 @@ export default class WorkbenchApprovalController {
       this.options.broadcast(entry.harness, { method: "questionnaire/resolved", params: { threadId: entry.threadId, requestKey: entry.requestKey } });
     }
     this.pending.clear();
+  }
+
+  /**
+   * Apply the thread's approval mode before anything is shown. Only an explicit skip or a reviewer allow decides;
+   * every reviewer doubt or failure leaves the request for the person, with the reason in its summary.
+   */
+  private async applyApprovalMode(entry: PendingApproval, subject: WorkbenchApprovalSubject): Promise<
+    { kind: "allow" } | { kind: "ask"; summary?: string }
+  > {
+    let mode: WorkbenchApprovalMode;
+    try {
+      mode = await this.options.resolveApprovalMode(entry.threadId);
+    } catch (error) {
+      this.options.logError(`Approval mode was unavailable; asking instead: ${sanitize(error)}`);
+      return { kind: "ask" };
+    }
+    if (mode === "skip") return { kind: "allow" };
+    if (mode !== "auto") return { kind: "ask" };
+    try {
+      const verdict = await this.options.review({ threadId: entry.threadId, subject }, this.lifetime.signal);
+      return verdict.decision === "allow" ? { kind: "allow" } : { kind: "ask", summary: `Auto-review asked for you: ${verdict.detail}` };
+    } catch (error) {
+      this.options.logError(`Auto-review failed: ${sanitize(error)}`);
+      return { kind: "ask", summary: `Auto-review failed (${sanitize(error)}). Review this request manually.` };
+    }
   }
 
   private async evaluateSavedRules(entry: PendingApproval, subject: Extract<WorkbenchApprovalSubject, { kind: "command" }>): Promise<WorkbenchApprovalDecision | null> {

@@ -73,6 +73,41 @@ test("one remote groups locations but drafts retain a concrete daemon target acr
   }
 });
 
+test("each daemon's own project is a separate logical project named after its host, and keeps the approval mode on drafts", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-daemons-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  const daemonKey = ProjectIdentityKeySchema.parse("daemon");
+  const daemonCatalog = (rootPath: string) => ({ data: [{
+    identityKey: daemonKey, rootIdentityKeys: [daemonKey],
+    project: {
+      id: ProjectIdSchema.parse("daemon"), kind: "daemon" as const, name: "host", relativePath: "daemon",
+      rootPath, lastCommitTimeMs: null, roots: [{ id: "daemon", isPrimary: true, name: "host", relativePath: "daemon", rootPath }],
+    },
+  }] });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: daemonCatalog("/desktop/ws") });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: daemonCatalog("/laptop/ws") });
+    const projects = repository.read().projects;
+    assert.deepEqual(projects.map(project => project.label).sort(), ["desktop", "laptop"]);
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "workstation", catalog: daemonCatalog("/desktop/ws") });
+    assert.deepEqual(repository.read().projects.map(project => project.label).sort(), ["laptop", "workstation"]);
+
+    const desktop = repository.read().locations.find(location => location.target.daemonId === first)!;
+    const draft = {
+      id: draftId, logicalProjectId: desktop.logicalProjectId, target: desktop.target, prompt: "check disk",
+      selection: { ...selection, approvalMode: "skip" as const }, updatedAt: 1,
+    };
+    repository.mutate({ kind: "putDraft", draft, expectedRevision: null });
+    await repository.close();
+    await repository.start();
+    assert.equal(repository.read().drafts[0]?.selection.approvalMode, "skip");
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("only the exact revision from deleting an unlaunched draft can reopen it", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-reopen-");
   const root = temporary.path;

@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchComposerProfileController: own daemon profiles and guarded Custom target projections.
+ * - default WorkbenchComposerProfileController: own daemon profiles, guarded Custom target projections, and the approval mode carried beside each selection.
  * - WorkbenchComposerProfileSnapshot: immutable profile, selection, and failure snapshot.
  */
 import type {
+  WorkbenchApprovalMode,
   WorkbenchComposerProfile,
   WorkbenchComposerProfileChanges,
   WorkbenchComposerProfileMutation,
@@ -20,11 +21,17 @@ import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
 import { copyComposerSettings as cloneSettings } from "workbench-shared/workbench/thread/thread-profile";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
 import {
   normalizeComposerProfile,
 } from "workbench-shared/workbench/state/composer-profile-state";
 
 const EMPTY_CUSTOM_SELECTION: WorkbenchComposerProfileSelection = { kind: "custom" };
+
+/** Attach an approval mode beside a selection without ever writing `approvalMode: undefined`. */
+function withApprovalMode<Selection extends WorkbenchComposerProfileSelection>(selection: Selection, approvalMode: WorkbenchApprovalMode | undefined): Selection {
+  return approvalMode ? { ...selection, approvalMode } : selection;
+}
 
 export interface WorkbenchComposerProfileSnapshot {
   error: string;
@@ -143,7 +150,7 @@ export default class WorkbenchComposerProfileController {
   getSelection(slot: WorkbenchComposerProfileSlot): WorkbenchComposerProfileSelection {
     const selection = this.selections[getSlotKey(slot)] ?? EMPTY_CUSTOM_SELECTION;
     return selection.kind === "profile" && this.stableProfileGeneration > 0 && !this.getProfile(selection.profileId)
-      ? { kind: "custom", settings: selection.settings }
+      ? withApprovalMode({ kind: "custom", settings: selection.settings }, selection.approvalMode)
       : selection;
   }
   getProfile(profileId: string) { return this.profiles.find((profile) => profile.id === profileId) ?? null; }
@@ -158,7 +165,8 @@ export default class WorkbenchComposerProfileController {
     // A materialized thread is locked to its own provider: a linked profile whose provider
     // drifted previews the saved Custom snapshot, like a deleted definition. Drafts and the
     // new-thread target are provider-mobile and keep the linked profile.
-    return linked && linked.harness === slot.harness ? selection : { kind: "custom", settings: selection.settings };
+    return linked && linked.harness === slot.harness
+      ? selection : withApprovalMode({ kind: "custom", settings: selection.settings }, selection.approvalMode);
   }
   getSelectedProfile(slot: WorkbenchComposerProfileSlot) { const selection = this.getDisplaySelection(slot); return selection.kind === "profile" ? this.getProfile(selection.profileId) : null; }
   getVisibleProfiles(projectId: string | null, harness?: WorkbenchHarness | null) {
@@ -217,11 +225,19 @@ export default class WorkbenchComposerProfileController {
   }
   selectHarness(slot: WorkbenchComposerProfileSlot, harness: WorkbenchHarness, loadModels: () => Promise<WorkbenchModelOption[]>) {
     if (slot.kind === "thread" || this.getSelection(slot).kind === "profile") return Promise.resolve(false);
+    return this.selectDefaultModel(slot, harness, loadModels, this.getSelection(slot).approvalMode);
+  }
+
+  /** Persist a Custom selection on the provider's default model; OpenCode resolves its own default. */
+  private selectDefaultModel(
+    slot: WorkbenchComposerProfileSlot, harness: WorkbenchHarness,
+    loadModels: () => Promise<WorkbenchModelOption[]>, approvalMode: WorkbenchApprovalMode | undefined,
+  ) {
     if (harness === "opencode") {
-      return this.persistSelection(slot, { kind: "custom", settings: {
+      return this.persistSelection(slot, withApprovalMode({ kind: "custom", settings: {
         agentPath: null, agentSource: null, harness, model: "",
         reasoningEffort: null, serviceTier: null, contextWindowTokens: null,
-      } });
+      } }, approvalMode));
     }
     const key = getSlotKey(slot);
     const previous = this.selectionWrites.get(key);
@@ -234,13 +250,13 @@ export default class WorkbenchComposerProfileController {
         if (this.targetPersistence !== persistence || (this.selectionGenerations.get(key) ?? 0) !== generation) return false;
         const model = models.find(entry => entry.isDefault) ?? models[0];
         if (!model) throw new Error("No models are available for that provider.");
-        return await this.writeSelection(slot, { kind: "custom", settings: {
+        return await this.writeSelection(slot, withApprovalMode({ kind: "custom", settings: {
           agentPath: null, agentSource: null, harness, model: model.id,
           reasoningEffort: model.supportsReasoningEffort
             ? model.defaultReasoningEffort ?? model.supportedReasoningEfforts[0] ?? null : null,
           serviceTier: null,
           contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
-        } });
+        } }, approvalMode));
       } catch (error) {
         if (this.selectionGenerations.get(key) !== generation) return false;
         this.selectionFailures.set(key, error instanceof Error ? error.message : "Unable to change provider.");
@@ -273,6 +289,23 @@ export default class WorkbenchComposerProfileController {
       serviceTier: null,
       contextWindowTokens: model.contextWindow?.defaultTokens ?? null,
     } });
+  }
+  getApprovalMode(slot: WorkbenchComposerProfileSlot): WorkbenchApprovalMode {
+    return resolveApprovalMode(this.getSelection(slot));
+  }
+  /**
+   * Change only the slot's approval mode, keeping its profile and settings. A slot still previewing the
+   * provider default has nothing to store the mode beside, so it first adopts the default model.
+   */
+  setApprovalMode(
+    slot: WorkbenchComposerProfileSlot, approvalMode: WorkbenchApprovalMode,
+    fallback: { harness: WorkbenchHarness; loadModels: () => Promise<WorkbenchModelOption[]> },
+  ) {
+    const selection = this.getSelection(slot);
+    if (!selection.settings) return this.selectDefaultModel(slot, fallback.harness, fallback.loadModels, approvalMode);
+    return this.persistSelection(slot, selection.kind === "profile"
+      ? { kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings), approvalMode }
+      : { kind: "custom", settings: cloneSettings(selection.settings), approvalMode });
   }
   selectProfile(slot: WorkbenchComposerProfileSlot, profileId: string) {
     const profile = this.getProfile(profileId);
@@ -313,9 +346,9 @@ export default class WorkbenchComposerProfileController {
     const settings = selection.settings;
     if (!settings || settings.harness !== harness) return;
     const slot = { harness, kind: "thread" as const, projectId: sourceSlot.projectId, threadId };
-    this.installStableSelection(slot, selection.kind === "profile"
+    this.installStableSelection(slot, withApprovalMode(selection.kind === "profile"
       ? { kind: "profile", profileId: selection.profileId, settings }
-      : { kind: "custom", settings });
+      : { kind: "custom", settings }, selection.approvalMode));
   }
 
   materializeDraftSelection(draft: Pick<WorkbenchThreadDraft, "draftId" | "projectId" | "profileId" | "composerSettings">) {
@@ -375,7 +408,9 @@ export default class WorkbenchComposerProfileController {
 
   private persistSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileTargetSelection): Promise<boolean> {
     const key = getSlotKey(slot);
-    const pending = this.writeSelection(slot, selection, this.selectionWrites.get(key));
+    // Model and profile changes keep the slot's approval mode; only setApprovalMode changes it.
+    const carried = withApprovalMode(selection, selection.approvalMode ?? this.getSelection(slot).approvalMode);
+    const pending = this.writeSelection(slot, carried, this.selectionWrites.get(key));
     this.selectionWrites.set(key, pending);
     this.publish();
     return pending.finally(() => {
@@ -436,9 +471,9 @@ export default class WorkbenchComposerProfileController {
   }
 
   private cloneTargetSelection(selection: WorkbenchComposerProfileTargetSelection): WorkbenchComposerProfileTargetSelection {
-    return selection.kind === "profile"
+    return withApprovalMode(selection.kind === "profile"
       ? { kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings) }
-      : { kind: "custom", settings: cloneSettings(selection.settings) };
+      : { kind: "custom", settings: cloneSettings(selection.settings) }, selection.approvalMode);
   }
 
   private installSelection(slot: WorkbenchComposerProfileSlot, selection: WorkbenchComposerProfileSelection, publish = true) {
@@ -447,8 +482,10 @@ export default class WorkbenchComposerProfileController {
     this.selections = {
       ...this.selections,
       [key]: selection.kind === "profile"
-        ? { kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings) }
-        : selection.settings ? { kind: "custom", settings: cloneSettings(selection.settings) } : EMPTY_CUSTOM_SELECTION,
+        ? withApprovalMode({ kind: "profile", profileId: selection.profileId, settings: cloneSettings(selection.settings) }, selection.approvalMode)
+        : selection.settings
+          ? withApprovalMode({ kind: "custom", settings: cloneSettings(selection.settings) }, selection.approvalMode)
+          : EMPTY_CUSTOM_SELECTION,
     };
     if (publish) this.publish();
   }

@@ -754,7 +754,7 @@ export default function ThreadComposer ({
                       />
                     ) :
                     <ThreadComposerRibbon
-                      targetControl={thread.isDraft ? targetControl : null}
+                      targetControl={targetControl}
                       key={`${projectId}:${thread.id}`}
                       modelId={thread.model}
                       agentLabel={agentButtonLabel}

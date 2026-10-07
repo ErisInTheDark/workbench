@@ -288,6 +288,8 @@ export function projectLogicalGroups(
     summaries[project.id]?.unsettledThreads.length ? [project.id] : []);
   const unsettled = new Set(unsettledProjectIds);
   const unarchivedProjectIds = projects.flatMap(project => {
+    // Each daemon's own project is a standing entry point, visible before it has any threads.
+    if (project.matchKey.startsWith("daemon://")) return [project.id];
     const hasDaemonWork = projectDisplayLocations(project).some(location =>
       placement.get(location.target.daemonId)?.has(location.target.projectId));
     const hasAppDraft = presentation.drafts.some(draft =>
@@ -407,12 +409,15 @@ export function projectLogicalProjects(
       || left.rootPath.localeCompare(right.rootPath)
       || left.daemonId.localeCompare(right.daemonId));
     const showDaemon = new Set(projectLocations.map(location => location.daemonId)).size > 1;
+    // A daemon project's root is a hidden scratch folder; its host is its whole location.
+    const daemonProject = project.matchKey.startsWith("daemon://");
     for (const location of projectLocations) {
-      if (showDaemon) location.displayPath = `${location.hostname}:${location.displayPath}`;
+      if (daemonProject) location.displayPath = location.hostname;
+      else if (showDaemon) location.displayPath = `${location.hostname}:${location.displayPath}`;
       else if (location.displayPath?.startsWith("/")) location.displayPath = location.displayPath.slice(1);
     }
     const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
-    const displayPath = preferred?.displayPath ?? null;
+    const displayPath = daemonProject ? null : preferred?.displayPath ?? null;
     return {
       id: project.id,
       matchKey: project.matchKey,

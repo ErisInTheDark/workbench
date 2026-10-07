@@ -331,19 +331,27 @@ export default class WorkbenchPresentationRepository {
       ON CONFLICT(id) DO UPDATE SET hostname = excluded.hostname, last_seen_at = excluded.last_seen_at
     `).run(input.daemonId, input.hostname, now);
     for (const location of input.catalog.data) {
-      const key = location.identityKey;
-      const existing = db.prepare("SELECT id FROM presentation_projects WHERE match_key = ?")
-        .get(key) as { id: string } | undefined;
+      // `daemon` is daemon-local: qualify it so every daemon is its own logical project.
+      const daemonProject = location.project.kind === "daemon";
+      const key = daemonProject ? `daemon://${input.daemonId}` : location.identityKey;
+      const existing = db.prepare("SELECT id, label FROM presentation_projects WHERE match_key = ?")
+        .get(key) as { id: string; label: string } | undefined;
       const priorLocation = db.prepare(`
         SELECT * FROM presentation_locations WHERE daemon_id = ? AND project_id = ?
       `).get(input.daemonId, location.project.id) as LocationRow | undefined;
       const logicalId = existing?.id ?? randomUUID();
-      const label = location.identityKey.startsWith("remote://") && !location.identityKey.startsWith("remote://file:")
-        ? location.identityKey.slice("remote://".length) : location.project.rootPath;
+      const label = daemonProject ? input.hostname
+        : location.identityKey.startsWith("remote://") && !location.identityKey.startsWith("remote://file:")
+          ? location.identityKey.slice("remote://".length) : location.project.rootPath;
       if (!existing) db.prepare("INSERT INTO presentation_projects(id, match_key, label) VALUES (?, ?, ?)")
         .run(logicalId, key, label);
+      else if (daemonProject && existing.label !== label) {
+        // A daemon project is named after its host, so follow hostname changes.
+        db.prepare("UPDATE presentation_projects SET label = ? WHERE id = ?").run(label, logicalId);
+        changed = true;
+      }
       changed ||= !priorLocation || priorLocation.logical_project_id !== logicalId
-        || priorLocation.identity_key !== location.identityKey
+        || priorLocation.identity_key !== key
         || priorLocation.name !== location.project.name
         || priorLocation.root_path !== location.project.rootPath;
       db.prepare(`
@@ -353,7 +361,7 @@ export default class WorkbenchPresentationRepository {
         ON CONFLICT(daemon_id, project_id) DO UPDATE SET
           logical_project_id = excluded.logical_project_id, identity_key = excluded.identity_key,
           name = excluded.name, root_path = excluded.root_path, observed_at = excluded.observed_at
-      `).run(input.daemonId, location.project.id, logicalId, location.identityKey,
+      `).run(input.daemonId, location.project.id, logicalId, key,
         location.project.name, location.project.rootPath, now);
       const displaced = db.prepare(`
         SELECT count(*) FROM presentation_drafts

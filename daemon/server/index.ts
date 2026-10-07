@@ -7,7 +7,6 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type {
     DaemonReloadResponse,
     DaemonReloadScope,
@@ -269,24 +268,11 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonPr
       void featureHost.run("webSocketRequests", (controller) => controller.completeDelivery(delivery), "WebSocket delivery receipt")
         .catch((error: unknown) => logError("websocket", `delivery receipt failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
     },
-    reportTurnRecoveryFailure: async (cwd, harness, threadId) => {
-      const project = await featureHost.run(
-        "projectCatalog",
-        (controller) => controller.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" }),
-        "project catalog: turn recovery cwd",
-      );
-      const identity = await featureHost.run(
-        "threadIdentity",
-        (owner) => owner.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness }),
-        "thread identity: recovery failure",
-      );
-      if (!identity) throw new Error("Turn recovery failure has no matching Workbench thread identity.");
-      await featureHost.run(
-        "threadState",
-        (feature) => feature.controller.reportRecoveryFailed(project.project.id, harness, identity.threadId),
-        "thread state: report recovery failure",
-      );
-    },
+    reportTurnRecoveryFailure: async (cwd, harness, threadId) => await featureHost.run(
+      "turnRecoveryFailures",
+      (owner) => owner.report(cwd, harness, threadId),
+      "turn recovery: report failure",
+    ),
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
     runTurnRecoveryTask: async (owner, label, task) => await featureHost.run(
       "turnRecovery",

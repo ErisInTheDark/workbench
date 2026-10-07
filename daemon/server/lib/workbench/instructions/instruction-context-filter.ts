@@ -72,6 +72,7 @@ const MAX_MODEL_REGEX_LENGTH = 200;
 const KNOWN_AVAILABLE_VALUES = new Set([
   "browse",
   "browse-raw",
+  "daemon-workspace",
   "long-waits",
   "messages",
   "multi-root",

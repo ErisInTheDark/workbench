@@ -8,6 +8,7 @@ import {
 } from "workbench-shared/database/schema/schema-definition";
 import {
   addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion, retireTableHistory,
+  type TableHistory,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { ownProjectReferences } from "workbench-shared/workbench/database/schema/project-schema";
@@ -29,6 +30,22 @@ export function defineThreadDomainSchema(schemaVersion: number) {
         tableVersion({
           schemaVersion: databaseReleases.profileContextWindows.version, table: current,
           migration: addColumns({ from: table, to: current, columns: ["context_window_tokens"] }),
+        }),
+      ],
+    });
+  }
+
+  // Null approval mode means approvals on; it sits beside the profile selection, never inside settings.
+  function addApprovalMode<Table extends TableDefinition>(history: TableHistory<Table>) {
+    const previous = history.versions.at(-1)!.table;
+    const current = evolveTable(previous, { add: { approval_mode: enumText("approvals", "skip", "auto") } });
+    return defineTableHistory<TableDefinition>({
+      current,
+      versions: [
+        ...history.versions,
+        tableVersion({
+          schemaVersion: databaseReleases.daemonProjects.version, table: current,
+          migration: addColumns({ from: previous, to: current, columns: ["approval_mode"] }),
         }),
       ],
     });
@@ -241,18 +258,22 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     states, topLevel, subagents, retention, snoozeDependencies, profiles, projectProfiles,
     drafts, attachments, parents, relationships, relationshipMetadata, activeRelationships, importReceipt,
   };
+  // Drafts live in app presentation state now; legacy daemon drafts can never belong to a daemon project.
+  const profileHistories = new Set<unknown>([profiles, projectProfiles]);
+  const finalHistories = new Map(Object.entries(histories).map(([name, history]) => {
+    if (history === importReceipt) return [name, retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)];
+    const owned = "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history;
+    return [name, profileHistories.has(history) ? addApprovalMode(owned) : owned];
+  }));
   return {
     tables: {
       states: states.current, topLevel: topLevel.current, subagents: subagents.current,
       retention: retention.current, snoozeDependencies: snoozeDependencies.current,
-      profiles: profiles.current, projectProfiles: projectProfiles.current,
+      profiles: finalHistories.get("profiles")!.current, projectProfiles: finalHistories.get("projectProfiles")!.current,
       drafts: drafts.current, attachments: attachments.current, parents: parents.current,
       relationships: relationships.current, relationshipMetadata: relationshipMetadata.current,
       activeRelationships: activeRelationships.current,
     },
-    history: defineSubsystemHistory(Object.values(histories).map(history => (
-      history === importReceipt ? retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)
-        : "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history
-    ))),
+    history: defineSubsystemHistory([...finalHistories.values()]),
   };
 }

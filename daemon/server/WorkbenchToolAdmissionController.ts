@@ -14,6 +14,7 @@ import type {
 } from "./provider-execution";
 import { prepareWorkbenchShellExecution } from "./CodexShellController";
 import { isPathWithinRoot } from "./lib/project";
+import { isDaemonWorkspacePath } from "./lib/daemon-workspace-paths";
 
 export interface WorkbenchToolAdmissionOptions {
   caller: WorkbenchProviderCaller;
@@ -30,6 +31,8 @@ export interface WorkbenchToolAdmissionOptions {
   }, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
   prepare: NonNullable<WorkbenchProviderTools["prepareExecution"]>;
   canonicalize?: (path: string) => Promise<string>;
+  /** Whether a bound root may run commands in any directory; defaults to the daemon workspace. */
+  isUnboundedRoot?: (root: string) => boolean;
 }
 
 const MAX_APPROVAL_COMMAND_LENGTH = 4000;
@@ -47,6 +50,10 @@ function formatApprovalCommand(argv: readonly string[]) {
 
 export default class WorkbenchToolAdmissionController {
   constructor(private readonly options: WorkbenchToolAdmissionOptions) {}
+
+  private unboundedWorkdir(root: string) {
+    return (this.options.isUnboundedRoot ?? isDaemonWorkspacePath)(root);
+  }
 
   /**
    * The shell tool for providers that escalate through Workbench approval: the provider only names the trusted
@@ -114,7 +121,10 @@ export default class WorkbenchToolAdmissionController {
       throw new Error("Tool execution caller changed its bound working directory.");
     }
     const cwd = await canonicalize(path.resolve(currentRoot, requestedCwd ?? "."));
-    if (!isPathWithinRoot(cwd, currentRoot)) throw new Error("Tool working directory is outside its bound project.");
+    // Daemon-project threads analyse the whole machine; their sandbox still only writes the daemon workspace.
+    if (!isPathWithinRoot(cwd, currentRoot) && !this.unboundedWorkdir(boundRoot)) {
+      throw new Error("Tool working directory is outside its bound project.");
+    }
     const writableRoots = await Promise.all(resolved.writableRoots.map(root => canonicalize(root)));
     signal.throwIfAborted();
     let permissions: WorkbenchAdmittedExecution["permissions"] = {

@@ -22,6 +22,7 @@ import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/pr
 import { ThreadAutoCompactSettingsPatchSchema } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import { CommandApprovalPatchSchema, CommandApprovalRemoveSchema } from "workbench-shared/workbench/settings/command-approvals";
+import { ApprovalReviewSettingsUpdateSchema } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import { ProjectDiscoverySettingsUpdateSchema } from "workbench-shared/workbench/project/project-discovery-settings";
 import { ProjectCreateRequestSchema, ProjectFolderListRequestSchema } from "workbench-shared/workbench/project/project-creation";
 import { WorkbenchProjectFileIndexRequestSchema } from "workbench-shared/workbench/project/project-file-index";
@@ -96,6 +97,7 @@ const REQUEST_METHODS = {
   "browse/sessions/forget": true, "browse/sessions/read": true, "browse/sessions/stop": true,
   "sandbox-network/read": true, "sandbox-network/update": true,
   "command-approvals/read": true, "command-approvals/remove": true, "command-approvals/patch": true,
+  "approval-review/read": true, "approval-review/update": true,
   "project/store/read": true, "project/store/update": true,
   "project/discovery-settings/read": true, "project/discovery-settings/update": true,
   "project/folders/list": true, "project/create": true,
@@ -240,6 +242,7 @@ export default class WorkbenchDaemonRequestController {
   constructor(private readonly owners: {
     autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
     commandApprovals?: Pick<import("./WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
+    approvalReview?: Pick<import("./approval-review/WorkbenchApprovalReviewController").default, "read" | "update">;
     projectStore?: Pick<import("./store/WorkbenchProjectStore").default, "read" | "update">;
     providers?: Pick<WorkbenchProviderDispatcher, "get">;
     threadActions?: Pick<WorkbenchThreadActionController, "handle">;
@@ -415,6 +418,18 @@ export default class WorkbenchDaemonRequestController {
             ) };
           } else {
             result = { rules: await this.owners.commandApprovals.list(projectId) };
+          }
+          break;
+        }
+        case "approval-review/read":
+        case "approval-review/update": {
+          if (!this.owners.approvalReview) throw new Error("Auto-approve settings are unavailable.");
+          if (method === "approval-review/update") {
+            const parsed = ApprovalReviewSettingsUpdateSchema.safeParse(params);
+            if (!parsed.success) throw new InvalidParamsError("Invalid auto-approve settings update.");
+            result = await this.owners.approvalReview.update(parsed.data);
+          } else {
+            result = await this.owners.approvalReview.read();
           }
           break;
         }

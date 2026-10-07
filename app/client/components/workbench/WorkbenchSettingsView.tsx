@@ -10,6 +10,7 @@ import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/Workbe
 import type { DaemonId, LogicalProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import ApprovalReviewSettings from "./ApprovalReviewSettings";
 import CommandApprovalSettings from "./CommandApprovalSettings";
 import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSettings";
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
@@ -43,6 +44,7 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
   { id: "agents", label: "Agents", sections: [
     { id: "settings-agent-network", label: "Network access" },
     { id: "settings-capabilities", label: "Capabilities" },
+    { id: "settings-auto-approve", label: "Auto-approve" },
     { id: "settings-permissions", label: "Permissions" },
   ] },
   { id: "network", label: "Networking", sections: [
@@ -104,6 +106,7 @@ export default function WorkbenchSettingsView({
   folders,
   getDaemon,
   getFolderDaemon,
+  initialSection = null,
   logicalProject,
   onError,
   onGitRootsSaved,
@@ -116,6 +119,8 @@ export default function WorkbenchSettingsView({
   folders: readonly ProjectFolderOption[];
   getDaemon: (id: DaemonId) => WorkbenchDaemonClient | null;
   getFolderDaemon: (location: ProjectLocationReference) => WorkbenchDaemonClient | null;
+  /** Section to open and scroll to on mount, such as `settings-auto-approve`. */
+  initialSection?: string | null;
   logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchLogicalProject } | null;
   onError: (message: string) => void;
   onGitRootsSaved: (daemonId: DaemonId) => Promise<void>;
@@ -123,11 +128,17 @@ export default function WorkbenchSettingsView({
   selectionError: string | null;
   selectionPending: boolean;
 }) {
-  const [page, setPage] = useState<Page>("general");
+  const [page, setPage] = useState<Page>(() => pages.find(item => item.sections.some(section => section.id === initialSection))?.id ?? "general");
+  useEffect(() => {
+    if (initialSection) document.getElementById(initialSection)?.scrollIntoView({ block: "start" });
+  }, [initialSection]);
   const [chosenDaemonId, setChosenDaemonId] = useState<DaemonId | null>(null);
   const [chosenFolderKey, setChosenFolderKey] = useState("");
+  // A daemon project's settings start on that daemon.
+  const projectDaemonId = logicalProject?.iconProject.locations.find(location => location.project?.kind === "daemon")?.daemonId;
   const daemonId = daemons.some(item => item.id === chosenDaemonId) ? chosenDaemonId
-    : daemons.find(item => item.id === attachedDaemonId)?.id ?? daemons[0]?.id ?? null;
+    : daemons.find(item => item.id === projectDaemonId)?.id
+      ?? daemons.find(item => item.id === attachedDaemonId)?.id ?? daemons[0]?.id ?? null;
   const daemon = daemonId ? getDaemon(daemonId) : null;
   const daemonFolders = folders.filter(folder => folder.target.daemonId === daemonId && folder.project);
   const folder = daemonFolders.find(item => `${item.target.daemonId}/${item.target.projectId}` === chosenFolderKey)
@@ -245,6 +256,12 @@ export default function WorkbenchSettingsView({
           <WorkbenchFormSection id="settings-capabilities" title="Capabilities">
             {daemon ? <BrowseCapability key={daemonId} daemon={daemon} /> : null}
             {daemon ? <WorkbenchRepoPrerequisiteSettings key={`repo-${daemonId}`} daemon={daemon} /> : null}
+          </WorkbenchFormSection>
+          <WorkbenchFormSection id="settings-auto-approve" title="Auto-approve">
+            {daemonControl}
+            {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
+              <ApprovalReviewSettings key={daemonId} />
+            </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
           </WorkbenchFormSection>
           {logicalProject ? <WorkbenchFormSection id="settings-permissions" title="Permissions">
             {daemon && folder ? <WorkbenchOperationsContext.Provider value={daemon}>

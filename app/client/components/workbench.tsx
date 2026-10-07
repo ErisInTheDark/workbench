@@ -570,6 +570,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [settingsPageTitle, setSettingsPageTitle] = useState("General");
+  // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [pendingDeleteFilePath, setPendingDeleteFilePath] = useState("");
   const [isDeletingFile, setIsDeletingFile] = useState(false);
@@ -830,8 +832,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     project.id === route.logical?.projectId) ?? null;
   const viewedProjectId = route.logical ? route.logical.projectId ?? "" : activeProjectId;
   const browseProjectId = browseLocation?.projectId ?? explorer.currentProjectId;
-  const folderOptions =
-    workbenchClient.mounted?.projectNavigator?.folderOptions(selectionProjectIds) ?? [];
+  // A daemon project's workspace is agent scratch: no working tree or explorer to browse.
+  const folderOptions = (workbenchClient.mounted?.projectNavigator?.folderOptions(selectionProjectIds) ?? [])
+    .filter(folder => folder.project?.kind !== "daemon");
   const selectedFolderLocation = browseLocation;
   const folderSelected = Boolean(selectedFolderLocation);
   const gitRoute = workbenchClient.mounted?.projectNavigator?.gitRoute(route, browseLocation) ?? null;
@@ -1521,6 +1524,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     selectionProjectIds.length ? selectionProjectIds : null,
   ), [selectionProjectIds]);
   const showSettingsView = route.view === "settings";
+  useEffect(() => { if (!showSettingsView) setSettingsSection(null); }, [showSettingsView]);
   const selectedSettingsProject = selectionProjectIds.length === 1
     ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
     : null;
@@ -1694,6 +1698,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     || routeOwnerMetadata && project.locations.some(location =>
       location.target.daemonId === routeOwnerMetadata.daemonId
       && location.target.projectId === routeOwnerMetadata.projectId)) ?? null;
+  const logicalThreadDaemonProjectId = logicalThreadProject?.locations.some(location => location.project?.kind === "daemon")
+    ? logicalThreadProject.id : null;
+  const approvalModeSettings = useMemo(() => logicalThreadDaemonProjectId ? {
+    onOpenSettings: () => {
+      setSettingsSection("settings-auto-approve");
+      navigateToRoute(withProjectSelection(createSettingsRoute(""), [logicalThreadDaemonProjectId]), { selection: "exact" });
+    },
+  } : null, [logicalThreadDaemonProjectId, navigateToRoute]);
   const showThreadOwnerLabel = Boolean(routeOwnerMetadata
     && !(selectedLogicalProject?.id === logicalThreadProject?.id
       && selectedLogicalProject?.locations.length === 1));
@@ -2512,7 +2524,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </WorkbenchSidebarSectionDisclosure>
                   </section>
                 </WorkbenchThreadSidebarActionsProvider>
-                  <WorkbenchFolderSidebar
+                  {folderOptions.length ? <WorkbenchFolderSidebar
                     folders={folderOptions}
                     label="Choose folder"
                     onSelect={location => {
@@ -2617,7 +2629,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                     </WorkbenchSidebarSectionDisclosure>
                   </section> : null}
-                  </WorkbenchFolderSidebar>
+                  </WorkbenchFolderSidebar> : null}
                   <WorkbenchBrowseSessionsSection controller={browseSessionController} />
                   <ReloadNecessary
                     appRuntime={appRuntime}
@@ -2796,6 +2808,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       ) : null}
                       composerSpellCheck={resolvedSettings.composerSpellCheck}
                       draftLeadingContent={projectRotator}
+                      approvalModeSettings={approvalModeSettings}
                       draftTargetControl={route.logical && logicalThreadProject && threadForThreadView?.isDraft ? (
                         <WorkbenchProjectLocationMenu
                           folders={projectFolderOptions([logicalThreadProject])}
@@ -2899,6 +2912,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       await workbenchClient.mounted?.refreshInstallationProjects(daemonId);
                     }}
                     onPageChange={setSettingsPageTitle}
+                    initialSection={settingsSection}
                     selectionPending={dynamicSelectionPending
                       || (selectionProjectIds.length === 1 && !selectedSettingsProject
                         && presentationState?.phase !== "failed")}

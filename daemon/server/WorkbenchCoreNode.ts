@@ -63,6 +63,9 @@ import { reconcileCatalogClaims } from "./stats/reconcile-catalog-claims";
 import { resolveGitDirectory } from "./lib/git";
 import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
 import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
+import WorkbenchApprovalReviewController from "./approval-review/WorkbenchApprovalReviewController";
+import { readOpenCodeApiKey } from "./approval-review/opencode-auth-credential";
+import { DEFAULT_APPROVAL_MODE, resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
@@ -463,6 +466,12 @@ function createWorkbenchCoreFeature(
       console.error("[questionnaire]", message.slice(0, 500));
     },
   });
+  const approvalReview = new WorkbenchApprovalReviewController({
+    database,
+    readDeviceIdentity,
+    readOpenCodeApiKey: () => readOpenCodeApiKey(),
+    codexReviewer: () => installedProviderKeys.includes("codex") ? provider("codex").approvalReview : null,
+  });
   const approvals = new WorkbenchApprovalController({
     broadcast: (harness, notification) => context.broadcastProviderNotification(harness, notification),
     collectAnswerContext: async (harness, threadId, signal) => {
@@ -477,6 +486,22 @@ function createWorkbenchCoreFeature(
     },
     recordOutcome: entry => database.recordApprovalOutcome(entry),
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
+    resolveApprovalMode: async threadId => {
+      const identity = await threadIdentity.resolve({ threadId });
+      // Approval modes only exist in daemon projects; normal projects always ask.
+      if (!identity || (await projectCatalog.resolveProjectById(identity.projectId)).kind !== "daemon") return DEFAULT_APPROVAL_MODE;
+      const states = requireThreadState().controller;
+      // Subagents follow the mode of the top-level thread that started their tree.
+      let entry = await states.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+      for (let depth = 0; entry?.entryKind === "subagent" && depth < 64; depth += 1) {
+        entry = await states.getCanonicalThreadEntry(identity.projectId, entry.parentThreadId);
+      }
+      if (!entry || entry.entryKind === "draft" || entry.entryKind === "subagent") return DEFAULT_APPROVAL_MODE;
+      return resolveApprovalMode(await states.readComposerProfileSnapshot({
+        kind: "thread", projectId: identity.projectId, harness: entry.identity.harness, threadId: entry.identity.threadId,
+      }));
+    },
+    review: (input, signal) => approvalReview.review(input.subject, signal),
   }, approvalHandoff);
   const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
   const unsubscribeCompaction = transcript.subscribeContextCompaction(async completion => {
@@ -640,6 +665,7 @@ function createWorkbenchCoreFeature(
   const daemonRequests = new WorkbenchDaemonRequestController({
     autoCompact,
     commandApprovals,
+    approvalReview,
     projectStore,
     workingTree,
     providers,
@@ -697,6 +723,14 @@ function createWorkbenchCoreFeature(
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
     threadContextRollover,
+    turnRecoveryFailures: {
+      report: async (cwd, harness, threadId) => {
+        const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });
+        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness });
+        if (!identity) throw new Error("Turn recovery failure has no matching Workbench thread identity.");
+        await threadState.controller.reportRecoveryFailed(project.project.id, harness, identity.threadId);
+      },
+    },
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;

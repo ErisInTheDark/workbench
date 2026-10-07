@@ -292,6 +292,8 @@ export interface DaemonRuntimeObjects {
   threadState: WorkbenchThreadStateFeature;
   transcript: DaemonTranscriptRegistration;
   turnRecovery: WorkbenchTurnRecoveryController;
+  /** Mark the Workbench thread behind a failed native turn recovery; keeps that domain composition out of the process shell. */
+  turnRecoveryFailures: { report(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void> };
   codexRecovery: CodexRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

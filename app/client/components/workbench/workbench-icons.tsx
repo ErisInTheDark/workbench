@@ -59,6 +59,8 @@
  * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
+ * - ShieldAlertIcon: skip-approvals mode glyph.
+ * - ComputerIcon: daemon project glyph.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { GitArcCommandAction } from "../../workbench/thread/command-matchers/git-checkpoints";
@@ -97,6 +99,17 @@ export function ShieldCogCornerIcon(props: IconProps) {
 
 export function ShieldMinusIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M9 12h6" /></OutlinedIcon>;
+}
+
+export function ShieldAlertIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={SHIELD_PATH} /><path d="M12 8v4" /><path d="M12 16h.01" /></OutlinedIcon>;
+}
+
+export function ComputerIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M12 18h6" /><path d="M6 18h.01" /><path d="M8 6h1" />
+    <rect x="2" y="14" width="20" height="8" rx="2" /><rect x="4" y="2" width="16" height="12" rx="2" />
+  </OutlinedIcon>;
 }
 
 export function GitGraphIcon(props: IconProps) {

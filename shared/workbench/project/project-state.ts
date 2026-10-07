@@ -30,7 +30,7 @@ export const WorkbenchProjectIconSchema = z.object({
 export const WorkbenchProjectOptionSchema = z.object({
   id: z.string().min(1).brand<"ProjectId">(),
   icon: WorkbenchProjectIconSchema.optional(),
-  kind: z.enum(["git", "workspace", "workbench-library"]),
+  kind: z.enum(["git", "workspace", "workbench-library", "daemon"]),
   lastCommitTimeMs: z.number().nullable().nonoptional(),
   name: z.string(),
   relativePath: z.string(),

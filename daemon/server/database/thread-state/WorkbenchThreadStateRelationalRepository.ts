@@ -106,7 +106,21 @@ function profileRow(profile: WorkbenchComposerProfileSelectionState) {
     reasoning_effort: profile.settings.reasoningEffort,
     service_tier: profile.settings.serviceTier,
     context_window_tokens: profile.settings.contextWindowTokens ?? null,
+    approval_mode: profile.approvalMode ?? null,
   } satisfies SqlRow;
+}
+
+/** Decode one stored profile row, including the approval mode carried beside its settings. */
+function decodeProfileRow(row: Record<string, SqlValue> | ProfileRow) {
+  return WorkbenchComposerProfileSelectionSchema.parse({
+    kind: row.selection_kind, ...(row.selection_kind === "profile" ? { profileId: row.profile_id } : {}),
+    settings: {
+      harness: row.harness_id, agentPath: row.agent_path, agentSource: row.agent_source,
+      model: row.model, reasoningEffort: row.reasoning_effort, serviceTier: row.service_tier,
+      ...(row.context_window_tokens !== null ? { contextWindowTokens: row.context_window_tokens as number } : {}),
+    },
+    ...(row.approval_mode !== null && row.approval_mode !== undefined ? { approvalMode: row.approval_mode } : {}),
+  });
 }
 
 function lifecycleRow(lifecycle: WorkbenchThreadLifecycle) {
@@ -349,14 +363,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     projectId = this.projects.requireStoredReference(projectId);
     const profile = this.database.prepare("SELECT * FROM workbench_project_thread_profiles WHERE project_id = ?")
       .get(projectId) as Record<string, SqlValue> | undefined;
-    return profile ? WorkbenchComposerProfileSelectionSchema.parse({
-      kind: profile.selection_kind, ...(profile.selection_kind === "profile" ? { profileId: profile.profile_id } : {}),
-      settings: {
-        harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
-        model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
-        ...(profile.context_window_tokens !== null ? { contextWindowTokens: profile.context_window_tokens as number } : {}),
-      },
-    }) : null;
+    return profile ? decodeProfileRow(profile) : null;
   }
 
   readDrafts(projectId: ProjectId, pinnedOnly = false): WorkbenchStoredThreadDraft[] {
@@ -749,14 +756,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       activityAt: row.activity_at, lifecycle, providerObserved: Boolean(row.provider_observed),
       settledAt: row.settled_at, gitHistoryCleanedAt: row.git_history_cleaned_at, mcpGeneration: row.mcp_generation,
       titleHistory: titles.map((title) => ({ title: title.title, usedAt: title.used_at })),
-      profile: profile ? WorkbenchComposerProfileSelectionSchema.parse({
-        kind: profile.selection_kind, ...(profile.selection_kind === "profile" ? { profileId: profile.profile_id } : {}),
-        settings: {
-          harness: profile.harness_id, agentPath: profile.agent_path, agentSource: profile.agent_source,
-          model: profile.model, reasoningEffort: profile.reasoning_effort, serviceTier: profile.service_tier,
-          ...(profile.context_window_tokens !== null ? { contextWindowTokens: profile.context_window_tokens } : {}),
-        },
-      }) : null,
+      profile: profile ? decodeProfileRow(profile) : null,
       snoozedUntil: dependencies.length ? { targets: dependencies.map(dependency => ({
         identity: { harness: dependency.harness_id, threadId: dependency.thread_id },
         projectId: dependency.project_id, title: dependency.title,

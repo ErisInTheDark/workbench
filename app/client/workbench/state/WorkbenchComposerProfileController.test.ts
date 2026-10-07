@@ -155,6 +155,25 @@ test("catalogue refresh coalesces without overwriting edits or surviving disconn
   assert.equal(controller.getProfile("profile-a")?.name, "New name");
 });
 
+test("the approval mode persists on a default-previewing slot and survives later model and profile changes", async (context) => {
+  const { controller, targets } = await createController([profile()]);
+  context.after(() => controller.dispose());
+  const slot: WorkbenchComposerProfileSlot = { kind: "new-thread", projectId: fixtureIdentityValues.ProjectId["project-a"] };
+  const codexDefault = { ...OPENCODE_MODEL, id: "gpt-default" };
+  await controller.loadSelection(slot);
+  assert.equal(await controller.setApprovalMode(slot, "skip", { harness: "codex", loadModels: async () => [codexDefault] }), true);
+  assert.deepEqual(await targets.read(slot), {
+    kind: "custom", approvalMode: "skip",
+    settings: { agentPath: null, agentSource: null, harness: "codex", model: "gpt-default", reasoningEffort: "high", serviceTier: null, contextWindowTokens: 200_000 },
+  });
+  await controller.selectCustom(slot, CODEX_SETTINGS);
+  assert.equal((await targets.read(slot))?.approvalMode, "skip");
+  controller.selectProfile(slot, "profile-a");
+  await controller.waitForSelection(slot);
+  assert.equal((await targets.read(slot))?.approvalMode, "skip");
+  assert.equal(controller.getApprovalMode(slot), "skip");
+});
+
 test("missing daemon selection never resolves settings from a raw thread", async () => {
   const { controller } = await createController();
   const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };

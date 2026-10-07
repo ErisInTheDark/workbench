@@ -7,6 +7,7 @@
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import type { WorkbenchInstructionTool } from "./instruction-tool-reference";
 import type { WorkbenchPromptContext } from "./workbench-prompt-types";
+import { isDaemonWorkspacePath } from "../../daemon-workspace-paths";
 
 export function isManagedPromptThread(context: WorkbenchPromptContext) {
   return context.managedThread === true || Boolean(context.threadId?.trim() && context.workbenchOrigin?.trim());
@@ -32,14 +33,17 @@ export async function listWorkbenchInstructionMechanics(
     }
   }
   if ((context.roots?.length ?? 0) > 1) available.add("multi-root");
+  // Daemon-project threads run on the machine itself: no repository, so no Git mechanics.
+  const daemonWorkspace = Boolean(context.roots?.length) && context.roots!.every(root => isDaemonWorkspacePath(root.rootPath));
+  if (daemonWorkspace) available.add("daemon-workspace");
   if (isManagedPromptThread(context)) {
-    available.add("thread-git");
+    if (!daemonWorkspace) available.add("thread-git");
     available.add("thread-recall");
     available.add("thread-refresh");
     available.add("task-status");
     if (!context.subagentName?.trim()) {
       available.add("task-title");
-      available.add("git-proposals");
+      if (!daemonWorkspace) available.add("git-proposals");
     }
   }
   return available;

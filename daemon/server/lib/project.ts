@@ -6,7 +6,7 @@
  * - safeResolve/safeResolveProjectPath: validate project-relative paths.
  * - isPathWithinRoot: check absolute path containment.
  * - resolveDiscoveredProject/resolveProjectRootFromProjects: resolve durably admitted catalogue projects.
- * - discoverProjectIdentities: prepare structural projects, including pinned checkouts outside discovery folders, and canonical identity evidence without icon scans.
+ * - discoverProjectIdentities: prepare structural projects, including the daemon project and pinned checkouts outside discovery folders, and canonical identity evidence without icon scans.
  * - ResolvedProject/ResolvedProjectRoot: validated project and root locations.
  * - createProjectEntry/assertProjectFileCanBeDeleted/deleteProjectFile: create entries and validate deletion.
  * - buildTree/buildProjectTree: build visible explorer trees.
@@ -17,8 +17,10 @@
  * - listUserInvocableAgentsFromResolvedProject/readUserInvocableAgentDefinitionFromRoot: discover and read project agents.
  */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import { DAEMON_PROJECT_ID, daemonWorkspaceRoot, ensureDaemonWorkspace } from "./daemon-workspace-paths";
 import type { WorkbenchProjectDiscovery } from "../database/project/workbench-project-persistence";
 
 import { getGitChanges, isLinkedGitWorktree, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
@@ -357,6 +359,21 @@ async function createWorkbenchLibraryProjectOption(): Promise<WorkbenchProjectOp
   };
 }
 
+// Discovery only names the workspace; resolving the project for use creates it.
+function createDaemonProjectOption(): WorkbenchProjectOption {
+  const rootPath = normalizeRelativePath(daemonWorkspaceRoot);
+  const name = os.hostname().trim().slice(0, 253) || "This machine";
+  return {
+    id: DAEMON_PROJECT_ID as ProjectId,
+    kind: "daemon",
+    lastCommitTimeMs: null,
+    name,
+    relativePath: DAEMON_PROJECT_ID,
+    rootPath,
+    roots: [{ id: DAEMON_PROJECT_ID, isPrimary: true, name, relativePath: DAEMON_PROJECT_ID, rootPath }],
+  };
+}
+
 function stripJsonComments(content: string) {
   let result = "";
   let inString = false;
@@ -619,6 +636,7 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
   const discoveredProjects: WorkbenchProjectOption[] = [];
   const addresses: WorkbenchProjectOption[] = [];
   const libraryProject = await createWorkbenchLibraryProjectOption();
+  const daemonProject = createDaemonProjectOption();
   let complete = true;
   for (const [index, discoveryFolder] of discoveryFolders.entries()) {
     const projects: WorkbenchProjectOption[] = [];
@@ -657,12 +675,13 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
       }
     }
   }
-  const normalizedLibraryRoot = normalizePathForComparison(workbenchLibraryRoot);
-  const seenLocations = new Set<string>();
+  const seenLocations = new Set([
+    normalizePathForComparison(workbenchLibraryRoot), normalizePathForComparison(daemonWorkspaceRoot),
+  ]);
   const uniqueProjects = discoveredProjects
     .filter(project => {
       const location = normalizePathForComparison(project.workspacePath ?? project.rootPath);
-      if (location === normalizedLibraryRoot || seenLocations.has(location)) return false;
+      if (seenLocations.has(location)) return false;
       seenLocations.add(location);
       return true;
     })
@@ -676,8 +695,8 @@ async function discoverProjectOptions(discoveryFolders: readonly string[], signa
       return left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" });
     });
   return {
-    data: [libraryProject, ...uniqueProjects],
-    addresses: [libraryProject, ...addresses],
+    data: [daemonProject, libraryProject, ...uniqueProjects],
+    addresses: [daemonProject, libraryProject, ...addresses],
     complete,
   };
 }
@@ -689,7 +708,7 @@ export async function discoverProjectIdentities(
 ): Promise<WorkbenchProjectDiscovery> {
   const { data: candidates, addresses, complete: walkedCompletely } = await discoverProjectOptions(discoveryFolders, signal, pinnedRoots);
   let complete = walkedCompletely;
-  const roots = new Map(candidates.filter(project => project.kind !== "workbench-library")
+  const roots = new Map(candidates.filter(project => project.kind !== "workbench-library" && project.kind !== "daemon")
     .flatMap(project => project.roots.map(root => [normalizePathForComparison(root.rootPath), root.rootPath] as const)));
   const classifications = new Map<string, { identityKey: ProjectIdentityKey; excluded: boolean }>();
   const remaining = roots.entries();
@@ -714,9 +733,9 @@ export async function discoverProjectIdentities(
   const candidateIdentities = new Map<WorkbenchProjectOption, ProjectIdentityKey>();
   const observedKeys = new Set([...classifications.values()].map(item => item.identityKey));
   for (const candidate of candidates) {
-    if (candidate.kind === "workbench-library") {
+    if (candidate.kind === "workbench-library" || candidate.kind === "daemon") {
       const { id: _address, ...metadata } = candidate;
-      const identityKey = ProjectIdentityKeySchema.parse("workbench-library");
+      const identityKey = ProjectIdentityKeySchema.parse(candidate.kind);
       data.push({ ...metadata, identityKey, roots: candidate.roots.map(root => ({ ...root, identityKey })) });
       observedKeys.add(identityKey);
       continue;
@@ -739,7 +758,8 @@ export async function discoverProjectIdentities(
     const retained = candidates.find(candidate => candidate.kind !== "workspace"
       && normalizePathForComparison(candidate.rootPath) === normalizePathForComparison(address.rootPath));
     if (!retained) continue;
-    const identityKey = retained.kind === "workbench-library" ? ProjectIdentityKeySchema.parse("workbench-library") : candidateIdentities.get(retained);
+    const identityKey = retained.kind === "workbench-library" || retained.kind === "daemon"
+      ? ProjectIdentityKeySchema.parse(retained.kind) : candidateIdentities.get(retained);
     if (identityKey && address.id !== String(identityKey)) aliases.push({ alias: address.id, identityKey, locationKey: projectLocationKey(retained) });
   }
   return {
@@ -787,6 +807,24 @@ async function verifyRegisteredWorktree(rootPath: string) {
 }
 
 export async function resolveDiscoveredProject(project: WorkbenchProjectOption): Promise<ResolvedProject> {
+  if (project.kind === "daemon") {
+    await ensureDaemonWorkspace();
+    const rootPath = normalizeRelativePath(daemonWorkspaceRoot);
+    return {
+      id: project.id,
+      kind: project.kind,
+      root: daemonWorkspaceRoot,
+      rootPath,
+      roots: [{
+        id: project.roots[0]?.id ?? DAEMON_PROJECT_ID,
+        name: project.roots[0]?.name ?? project.name,
+        relativePath: project.roots[0]?.relativePath ?? DAEMON_PROJECT_ID,
+        root: daemonWorkspaceRoot,
+        rootPath,
+      }],
+    } satisfies ResolvedProject;
+  }
+
   if (project.kind === "workbench-library") {
     await ensureWorkbenchLibrary();
     return {
@@ -1110,7 +1148,7 @@ async function buildWorkspaceTree(project: ResolvedProject) {
 }
 
 async function getProjectChanges(project: ResolvedProject) {
-  if (project.kind === "workbench-library") {
+  if (project.kind === "workbench-library" || project.kind === "daemon") {
     return {};
   }
 
@@ -1130,7 +1168,9 @@ async function getProjectChanges(project: ResolvedProject) {
 
 export async function getProjectSnapshotFromResolvedProject(resolvedProject: ResolvedProject) {
   const [tree, changes] = await Promise.all([
-    resolvedProject.kind === "workspace" ? buildWorkspaceTree(resolvedProject) : buildProjectTree(resolvedProject.root),
+    // The daemon workspace is agent scratch, not a browsable project.
+    resolvedProject.kind === "daemon" ? Promise.resolve([])
+      : resolvedProject.kind === "workspace" ? buildWorkspaceTree(resolvedProject) : buildProjectTree(resolvedProject.root),
     getProjectChanges(resolvedProject),
   ]);
   return {
