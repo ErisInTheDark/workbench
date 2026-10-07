@@ -14,6 +14,14 @@ const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 // Leave space for Git's executable, fixed arguments and Windows argument quoting.
 const PATH_ARGUMENT_BUDGET = 8_000;
+// Reload snapshots are Workbench-internal objects, so their commits must not depend on
+// the user having configured a Git identity. Values match the daemon's actor fallback.
+const SNAPSHOT_COMMIT_IDENTITY = {
+  GIT_AUTHOR_NAME: "workbench",
+  GIT_AUTHOR_EMAIL: "workbench@localhost",
+  GIT_COMMITTER_NAME: "workbench",
+  GIT_COMMITTER_EMAIL: "workbench@localhost",
+} as const;
 
 function parseNullPaths(output: string) {
   return output.split("\0").filter(Boolean);
@@ -64,7 +72,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   async createCommitFromTree(tree: string, parent: string, message: string) {
     return (await this.runWithInput([
       "commit-tree", tree, "--no-gpg-sign", "-p", parent, "-F", "-",
-    ], message)).trim();
+    ], message, { ...process.env, ...SNAPSHOT_COMMIT_IDENTITY })).trim();
   }
 
   async listWorktreeChangedPaths(baseTreeish: string, paths: string[], signal?: AbortSignal) {

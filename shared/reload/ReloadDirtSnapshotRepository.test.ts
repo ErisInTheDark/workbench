@@ -146,3 +146,37 @@ test("large scoped reads preserve exact path ownership without writing Git objec
   );
   assert.deepEqual(await listObjectPaths(repoRoot), objectsBefore);
 });
+
+test("reload snapshots commit without a configured Git identity", async (context) => {
+  const repositoryTemporary = await WorkbenchTemporaryDirectory.create("workbench-reload-identity-");
+  const configTemporary = await WorkbenchTemporaryDirectory.create("workbench-reload-identity-config-");
+  const repoRoot = repositoryTemporary.path;
+  context.after(async () => {
+    await repositoryTemporary.dispose();
+    await configTemporary.dispose();
+  });
+  const git = async (...args: string[]) => await run("git", args, { cwd: repoRoot });
+  await git("init");
+  await fs.writeFile(path.join(repoRoot, "source.ts"), "before\n");
+  // Seed HEAD with a command-line-only identity so the repository itself has no usable one.
+  await git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "add", ".");
+  await git("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "baseline");
+
+  const emptyGlobalConfig = path.join(configTemporary.path, "gitconfig");
+  await fs.writeFile(emptyGlobalConfig, "");
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = emptyGlobalConfig;
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  try {
+    const repository = new ReloadDirtSnapshotRepository(repoRoot);
+    const tree = await repository.writeWorktreeTree();
+    const head = (await git("rev-parse", "HEAD")).stdout.trim();
+    assert.match(await repository.createCommitFromTree(tree, head, "workbench reload snapshot"), /^[a-f0-9]{40}$/u);
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+  }
+});
