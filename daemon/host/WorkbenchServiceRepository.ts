@@ -126,16 +126,11 @@ export default class WorkbenchServiceRepository {
     })]);
   }
 
-  // The daemon host now retries failures in memory. Clearing the retired durable failure
-  // row here releases installations parked by older hosts.
   requestDaemon(session: string) {
     if (!session) throw new Error("A supervision session is required.");
-    this.executeTransaction([
-      upsertRow(tables.intent, { id: "singleton", session_id: session }, {
-        conflictColumns: ["id"], updateColumns: ["session_id"],
-      }),
-      deleteRows(tables.failure, { id: "singleton" }),
-    ]);
+    this.executeTransaction([upsertRow(tables.intent, { id: "singleton", session_id: session }, {
+      conflictColumns: ["id"], updateColumns: ["session_id"],
+    })]);
   }
 
   shouldResume(session: string) {
@@ -143,10 +138,7 @@ export default class WorkbenchServiceRepository {
   }
 
   stopDaemon() {
-    this.executeTransaction([
-      deleteRows(tables.intent, { id: "singleton" }),
-      deleteRows(tables.failure, { id: "singleton" }),
-    ]);
+    this.executeTransaction([deleteRows(tables.intent, { id: "singleton" })]);
   }
 
   private requireDatabase() {

@@ -8,9 +8,10 @@ import {
   booleanInteger, defineTable, enumText, integer, text, type TableDefinition,
 } from "../database/schema/schema-definition.ts";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema, tableVersion,
+  createTable, defineSubsystemHistory, defineTableHistory, defineWorkbenchDatabaseSchema, retireTableHistory, tableVersion,
 } from "../database/schema/schema-history.ts";
 import { workbenchNetworkHistory, workbenchNetworkTables } from "./workbench-network-state-schema.ts";
+import serviceReleases from "./workbench-service-releases.ts";
 
 const metadata = defineTable("service_identity", {
   id: enumText("singleton").primaryKey(),
@@ -43,17 +44,20 @@ const ownHistories = {
   metadata: initialHistory(metadata),
   wake: initialHistory(wake),
   intent: initialHistory(intent),
-  failure: initialHistory(failure),
   imported: initialHistory(imported),
 };
-const histories = [...workbenchNetworkHistory(1, 1, 1), ...Object.values(ownHistories)];
+// The daemon host retries failed daemons in memory, so durable startup-failure parking is retired.
+// Sealed fingerprints follow history order, so the retired table keeps its original position.
+const histories = [
+  ...workbenchNetworkHistory(1, 1, 1), ownHistories.metadata, ownHistories.wake, ownHistories.intent,
+  retireTableHistory(initialHistory(failure), serviceReleases.retireStartupFailure.version), ownHistories.imported,
+];
 export const serviceSchema = defineWorkbenchDatabaseSchema({ subsystems: [defineSubsystemHistory(histories)] });
 export const serviceTables = Object.freeze({
   ...workbenchNetworkTables,
   metadata: ownHistories.metadata.current,
   wake: ownHistories.wake.current,
   intent: ownHistories.intent.current,
-  failure: ownHistories.failure.current,
   imported: ownHistories.imported.current,
 });
 export const serviceTableInventory = Object.freeze(Object.fromEntries(

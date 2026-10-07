@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests durable service identity, session-scoped restart intent and release of legacy failure parks.
+ * No production exports. Tests durable service identity and session-scoped restart intent.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -8,8 +8,6 @@ import path from "node:path";
 import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import test from "node:test";
 import WorkbenchServiceRepository from "./WorkbenchServiceRepository.ts";
-import { insertRow } from "../../shared/database/workbench-database-statements.ts";
-import { serviceTables } from "../../shared/state/workbench-service-schema.ts";
 
 test("service identity and wake policy survive repository reopening", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-service-db-");
@@ -46,9 +44,6 @@ test("restart intent wakes only its supervision session", async context => {
   repository.requestDaemon("session-a");
   assert.equal(repository.shouldResume("session-a"), true);
   assert.equal(repository.shouldResume("session-b"), false);
-  // Older hosts parked failed startups durably; that row must no longer block resuming.
-  repository.executeTransaction([insertRow(serviceTables.failure, { id: "singleton", message: "parked by an older host" })]);
-  assert.equal(repository.shouldResume("session-a"), true);
   repository.stopDaemon();
   assert.equal(repository.shouldResume("session-a"), false);
   assert.equal(repository.wakeEnabled, false);
