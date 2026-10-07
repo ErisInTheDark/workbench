@@ -458,7 +458,9 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     tools: WorkbenchProviderTools,
   ) {
     if (definition.hideMcpTranscript) {
-      return await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools);
+      return this.observeTool(getWorkbenchAgentCommandToolName(definition), {}, meta, clientScope, signal, tools,
+        () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools),
+        result => ({ content: [], isError: result.isError === true }));
     }
     return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, clientScope, signal, tools,
       () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools));
@@ -483,10 +485,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private async observeTool(
     tool: string, input: object, meta: Record<string, unknown> | undefined, clientScope: string, signal: AbortSignal,
     tools: WorkbenchProviderTools, execute: (reference: WorkbenchToolTranscriptReference | null) => Promise<CallToolResult>,
+    capture: (result: CallToolResult) => CallToolResult = result => result,
   ): Promise<CallToolResult> {
     const started = await this.startTranscript(tool, input, meta, clientScope, signal, tools);
     if (started.kind === "failed") return started.result;
-    return await this.finishTranscript(tools, started.reference, await execute(started.reference));
+    const result = await execute(started.reference);
+    return await this.finishTranscript(tools, started.reference, capture(result), result);
   }
 
   private async startTranscript(
@@ -507,17 +511,20 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   }
 
   private async finishTranscript(
-    tools: WorkbenchProviderTools, reference: WorkbenchToolTranscriptReference | null, result: CallToolResult,
+    tools: WorkbenchProviderTools,
+    reference: WorkbenchToolTranscriptReference | null,
+    capturedResult: CallToolResult,
+    returnedResult: CallToolResult = capturedResult,
   ): Promise<CallToolResult> {
-    if (!reference || !tools.transcript) return result;
+    if (!reference || !tools.transcript) return returnedResult;
     try {
-      await tools.transcript.finish(reference, ProviderToolResultSchema.parse(result));
-      return result;
+      await tools.transcript.finish(reference, ProviderToolResultSchema.parse(capturedResult));
+      return returnedResult;
     } catch (error) {
       this.lifecycleLogError("workbench-mcp", sanitizeError(error));
       return {
-        ...result, isError: true,
-        content: [...result.content, {
+        ...returnedResult, isError: true,
+        content: [...returnedResult.content, {
           type: "text",
           text: "Operation finished, but transcript recording failed. The original result is retained above. Do not retry the operation.",
         }],

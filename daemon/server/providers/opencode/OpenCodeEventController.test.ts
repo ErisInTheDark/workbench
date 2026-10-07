@@ -188,15 +188,12 @@ test("invalidates cached model catalogues on provider catalogue events", async (
   assert.deepEqual(notifications, ["models/updated", "models/updated"]);
 });
 
-test("context rollover tool starts the shared hold and never records a dynamic tool item", async () => {
+test("native context rollover tool events stay hidden and do not own replacement settlement", async () => {
   const lifecycle: string[] = [];
   const owner = new OpenCodeEventController({
     observe: async () => undefined,
     rollover: {
       observeUsage: async () => undefined,
-      toolStarted: async input => { lifecycle.push(`started:${input.reference}`); },
-      toolSucceeded: async input => { lifecycle.push(`completed:${input.reference}`); },
-      toolFailed: async () => assert.fail("successful rollover must not fail"),
     },
     threads: {
       ...executionLifecycle,
@@ -225,7 +222,7 @@ test("context rollover tool starts the shared hold and never records a dynamic t
     created: 3,
     data: { sessionID: "session", id: "compact", metadata: {}, content: [] },
   }));
-  assert.deepEqual(lifecycle, ["started:compact", "completed:compact"]);
+  assert.deepEqual(lifecycle, []);
 });
 
 test("persists and publishes live cumulative usage for the active OpenCode turn", async () => {

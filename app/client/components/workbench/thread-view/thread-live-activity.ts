@@ -142,9 +142,11 @@ export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands 
   const runningIds = new Set(commands.filter(entry => entry.status === "inProgress").map(entry => entry.id));
   const childGroups = new Set(turn.items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
     && item.toolCallGroupId && runningIds.has(item.id) ? [item.toolCallGroupId] : []));
+  const rolloverGroups = new Set(turn.items.flatMap(item => item.type === "mcpToolCall" && item.server === "wb"
+    && item.tool === "thread_compact" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
   const coveredWrappers = new Set(turn.items.flatMap(item => item.type === "dynamicToolCall"
     && item.namespace === "opencode" && item.tool === "execute" && item.toolCallGroupId
-    && childGroups.has(item.toolCallGroupId) ? [item.id] : []));
+    && (childGroups.has(item.toolCallGroupId) || rolloverGroups.has(item.toolCallGroupId)) ? [item.id] : []));
   const running = commands.filter(entry => entry.status === "inProgress" && !coveredWrappers.has(entry.id));
   if (running.length) {
     const matched = running.flatMap(entry => entry.display ? [{ display: entry.display }] : []);

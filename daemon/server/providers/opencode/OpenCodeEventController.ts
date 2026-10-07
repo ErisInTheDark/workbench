@@ -25,7 +25,7 @@ export interface OpenCodeEventControllerOptions {
   broadcast?(notification: WorkbenchTranscriptNotification): void;
   invalidateModelCatalogs?(): void;
   observe(facts: WorkbenchProviderObservation): Promise<WorkbenchThreadLifecycle | null | void>;
-  rollover?: Pick<WorkbenchThreadContextRolloverController, "observeUsage" | "toolStarted" | "toolSucceeded" | "toolFailed">;
+  rollover?: Pick<WorkbenchThreadContextRolloverController, "observeUsage">;
   threads: {
     consumeRequestedInterrupt?(nativeThreadId: string): boolean;
     currentTurn(nativeThreadId: string): ActiveTurn | null;
@@ -278,8 +278,6 @@ export default class OpenCodeEventController {
         const active = await this.active(sessionID);
         this.setTool(sessionID, event.data.id, { active, input: "", name: event.data.name, startedAt: event.created });
         if (event.data.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-          if (!this.options.rollover) throw new Error("OpenCode context rollover is unavailable.");
-          await this.options.rollover.toolStarted({ ...active, reference: event.data.id });
           return;
         }
         await this.recordTool(sessionID, event.data.id, "inProgress", event.created);
@@ -329,16 +327,6 @@ export default class OpenCodeEventController {
         const succeeded = event.type === "session.tool.success"
           && !(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.error === true);
         if (previous?.name === WORKBENCH_THREAD_COMPACT_NATIVE_TOOL_NAME) {
-          if (!this.options.rollover) throw new Error("OpenCode context rollover is unavailable.");
-          if (succeeded) {
-            await this.options.rollover.toolSucceeded({ ...active, reference: event.data.id });
-          } else {
-            const reason = event.type === "session.tool.failed" ? event.data.error : "Context rollover tool reported failure.";
-            await this.options.rollover.toolFailed(
-              { ...active, reference: event.data.id },
-              new Error(typeof reason === "string" ? reason.slice(0, 300) : "Context rollover tool failed."),
-            );
-          }
           this.deleteTool(sessionID, event.data.id);
           return;
         }

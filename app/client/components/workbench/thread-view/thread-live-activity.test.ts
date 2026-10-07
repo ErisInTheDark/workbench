@@ -42,6 +42,25 @@ test("native summaries avoid counting a running child and its wrapper twice with
   assert.ok(nativeEntries[0]?.display?.ongoingSummaryParts.some(part => part.type === "path" && part.path === "src/a.ts"));
 });
 
+test("completed rollover capture keeps its retired execute wrapper out of live activity", () => {
+  const wrapper: Extract<ThreadItem, { type: "dynamicToolCall" }> = {
+    id: "wrapper", type: "dynamicToolCall", namespace: "opencode", tool: "execute", toolCallGroupId: "group",
+    arguments: { code: "opaque" }, status: "inProgress", contentItems: null, durationMs: null, success: null,
+  };
+  const child: Extract<ThreadItem, { type: "mcpToolCall" }> = {
+    id: "child", type: "mcpToolCall", server: "wb", tool: "thread_compact", toolCallGroupId: "group",
+    arguments: {}, status: "completed", durationMs: 1, result: null, error: null,
+    appContext: null, pluginId: null, readOnlyHint: null,
+  };
+  const items = [wrapper, child];
+  const activity = getLiveThreadActivity({
+    commands: getThreadTerminalEntries(items, { cwd: "/project" }),
+    turn: turn(items),
+    pendingUserInputRequest: null,
+  });
+  assert.notEqual(activity?.kind, "commands");
+});
+
 test("started commands with no output are admitted alongside completed history", () => {
   const entries = getThreadTerminalEntries([command("first", "completed"), command("second")], { cwd: "/project" });
   assert.deepEqual(entries.map(entry => [entry.id, entry.status, entry.output]), [

@@ -79,13 +79,31 @@ for (const name of ["task_get", "shell"]) {
 
 test("OpenCode context handoff executes without admitting MCP arguments or results", async () => {
   const order: string[] = [];
+  const captured: Array<{ arguments: unknown; result?: ProviderToolResult }> = [];
+  const reference = {
+    threadId: WorkbenchThreadIdSchema.parse("thread"),
+    turnId: "turn",
+    itemId: "item",
+    sourceId: "child",
+    parentId: "parent",
+    tool: "thread_compact",
+    arguments: {},
+    startedAt: 1,
+  } as WorkbenchToolTranscriptReference;
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd: "C:/workspace" }),
     describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
     patchClaims: async () => "",
     transcript: {
-      start: async () => { order.push("start"); return null; },
-      finish: async () => { order.push("finish"); },
+      start: async input => {
+        order.push("start");
+        captured.push({ arguments: input.arguments });
+        return reference;
+      },
+      finish: async (_reference, result) => {
+        order.push("finish");
+        captured[0]!.result = result;
+      },
     },
   };
   const controller = new WorkbenchAgentMcpController({
@@ -96,7 +114,7 @@ test("OpenCode context handoff executes without admitting MCP arguments or resul
       order.push("execute");
       assert.equal(request.path, "/api/thread-compact");
       assert.deepEqual(request.body, {
-        cwd: "C:/workspace", harness: "opencode", summary: "complete handoff", threadId: "thread",
+        callerThreadId: "thread", cwd: "C:/workspace", summary: "complete handoff",
       });
       return Response.json({ accepted: true });
     },
@@ -107,7 +125,11 @@ test("OpenCode context handoff executes without admitting MCP arguments or resul
   try {
     const result = await client.callTool({ name: "thread_compact", arguments: { summary: "complete handoff" } });
     assert.equal(result.isError, false, responseText(result));
-    assert.deepEqual(order, ["execute"]);
+    assert.deepEqual(order, ["start", "execute", "finish"]);
+    assert.deepEqual(captured, [{
+      arguments: {},
+      result: { content: [], isError: false },
+    }]);
   } finally {
     await client.close();
     await server.close();

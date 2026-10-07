@@ -109,10 +109,9 @@ const compact = defineWorkbenchAgentCommand({
     const flags = new WorkbenchAgentCommandFlags(args, { values: ["--summary"] });
     return { summary: flags.required("--summary") };
   },
-  buildRequest({ summary }, context) {
+  buildRequest({ summary }, { callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/thread-compact", {
-      ...managedWorkbenchAgentCommandBody(context),
-      summary,
+      callerThreadId: requireCallerThreadId(callerThreadId), cwd, summary,
     });
   },
 });

@@ -41,6 +41,7 @@ import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
+import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
 import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
@@ -89,6 +90,7 @@ export interface OpenCodeThreadOperationsOptions {
   readWorkingRecords(): Promise<Array<Pick<WorkbenchThreadStateRecord, "identity" | "lifecycle">>>;
   readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
   recovery: Pick<WorkbenchTurnRecoveryController, "shouldContinue">;
+  rollover: Pick<WorkbenchThreadContextRolloverController, "isActiveTool" | "toolFailed" | "toolStarted">;
 }
 
 interface SessionExecution {
@@ -176,6 +178,16 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   private readonly pendingSteerSessions = new Map<string, Set<string>>();
   private readonly requestedInterruptions = new Set<string>();
   private readonly replacementStarts = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+  readonly contextRolloverTool = {
+    isActiveTool: (input: Parameters<WorkbenchThreadContextRolloverController["isActiveTool"]>[0]) =>
+      this.options.rollover.isActiveTool(input),
+    toolFailed: (
+      input: Parameters<WorkbenchThreadContextRolloverController["toolFailed"]>[0],
+      error: unknown,
+    ) => this.options.rollover.toolFailed(input, error),
+    toolStarted: (input: Parameters<WorkbenchThreadContextRolloverController["toolStarted"]>[0]) =>
+      this.options.rollover.toolStarted(input),
+  };
 
   readonly history = {
     materialize: async (threadId: string, turnId: string | null, signal: AbortSignal) => {
@@ -1117,6 +1129,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         session.location.directory, { endpointName: "OpenCode provider history" },
       );
     const latest = options.window?.latest !== false;
+    const activeCompactionItemId = latest ? this.compactionCompletion.currentScope(session.id)?.itemId : undefined;
     const canCommit = (latestTurnId: WorkbenchTurnId | null) => options.canCommit?.(latestTurnId) !== false
       && execution.turn === startingTurn && execution.intentVersion === startingIntent
       && !(latest && execution.active && execution.turn && latestTurnId !== execution.turn.turnId);
@@ -1124,6 +1137,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       id: resolution.project.id,
       rootPath: resolution.project.rootPath,
     }, {
+      ...(activeCompactionItemId ? { activeCompactionItemId } : {}),
       keepLatestTurnOpen: latest && this.pendingSteerSessions.has(session.id),
       settleUsage: latest && Boolean(options.window),
       ...options,

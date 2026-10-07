@@ -686,7 +686,7 @@ export function getWorkbenchCommandRoute(
     case "thread_refresh":
       return simple("workbench-cli.thread-refresh", actionTarget("Refreshing ", "thread"), actionTarget("Refreshed ", "thread"));
     case "thread_compact":
-      return simple("workbench-cli.thread-compact", actionTarget("Compacting ", "thread context"), actionTarget("Compacted ", "thread context"));
+      return hidden("workbench-cli.thread-compact");
     case "thread_recall_search":
       return specialized("thread-context.read", {
         kind: "threadRecall",

@@ -391,6 +391,9 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
   const blocks: ThreadRenderableBlock[] = [];
   const capturedGroups = new Set(items.flatMap(item =>
     item.type === "mcpToolCall" && item.server === "wb" && item.toolCallGroupId ? [item.toolCallGroupId] : []));
+  const rolloverGroups = new Set(items.flatMap(item =>
+    item.type === "mcpToolCall" && item.server === "wb" && item.tool === "thread_compact" && item.toolCallGroupId
+      ? [item.toolCallGroupId] : []));
   let pending: Extract<ThreadRenderableBlock, { kind: "commandSequence" | "fileChangeSequence" | "reasoningSequence" | "webSearchSequence" }> | null = null;
   const flush = () => { if (pending) blocks.push(pending); pending = null; };
   const commands = (item: CommandSequenceItem) => {
@@ -466,7 +469,12 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       pending.items.push(visible);
       continue;
     }
-    if (item.type === "dynamicToolCall" && hidden.dynamicToolCallIds?.has(item.id)) { flush(); continue; }
+    if (item.type === "dynamicToolCall" && (hidden.dynamicToolCallIds?.has(item.id)
+      || item.namespace === "opencode" && item.tool === "execute"
+      && item.toolCallGroupId && rolloverGroups.has(item.toolCallGroupId))) {
+      flush();
+      continue;
+    }
     if (item.type === "fileChange" || isNativeFileOperation(item)) {
       if (item.type !== "fileChange" && item.status === "inProgress" && !getNativeFileChanges(item).length) continue;
       if (pending?.kind !== "fileChangeSequence") { flush(); pending = { kind: "fileChangeSequence", items: [] }; }

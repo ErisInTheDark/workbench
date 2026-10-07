@@ -1298,3 +1298,13 @@ test("PowerShell numbered reads invalidate a literal path after dynamic reassign
   assert.deepEqual(pathOperands(display.summaryParts), ["$p"]);
   assert.deepEqual(pathOperands(display.ongoingSummaryParts), ["$p"]);
 });
+
+test("context rollover capture stays hidden behind the canonical compaction item", () => {
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: {},
+    server: "wb",
+    tool: "thread_compact",
+  });
+  assert.equal(route?.kind, "simple");
+  assert.equal(route?.rendering.result.omitFromDisplay, true);
+});

@@ -37,6 +37,7 @@ test("native completion before acknowledgement still waits for both, and cleans 
   const ack = Promise.withResolvers<void>();
   let finished = false;
   const work = owner.run("thread", scope, new AbortController().signal, () => ack.promise).then(() => { finished = true; });
+  assert.deepEqual(owner.currentScope("thread"), scope);
   owner.started("thread", "turn");
   owner.completed("thread", "turn");
   owner.settled("thread", "turn");
@@ -44,6 +45,7 @@ test("native completion before acknowledgement still waits for both, and cleans 
   assert.equal(finished, false);
   ack.resolve();
   await work;
+  assert.equal(owner.currentScope("thread"), null);
   const next = owner.run("thread", scope, new AbortController().signal, async () => {});
   owner.started("thread", "next");
   owner.completed("thread", "next");

@@ -72,7 +72,7 @@ test("directive admission failure warns and remains retryable", async () => {
   await admission.dispose();
 });
 
-test("tool start holds later input until replacement execution is active", async () => {
+test("summary acceptance replaces immediately and holds later input until replacement execution is active", async () => {
   const f = fixture();
   const replacing = Promise.withResolvers<void>();
   const replaced = Promise.withResolvers<void>();
@@ -84,8 +84,7 @@ test("tool start holds later input until replacement execution is active", async
   await f.owner.toolStarted({ reference: "compact", threadId, turnId });
   let admitted = false;
   const queued = f.admission.run(threadId, async () => { admitted = true; });
-  await f.owner.acceptSummary({ summary: "full summary", threadId, turnId });
-  const settlement = f.owner.toolSucceeded({ reference: "compact", threadId, turnId });
+  const settlement = f.owner.acceptSummary({ summary: "full summary", threadId, turnId });
   await replacing.promise;
   assert.equal(admitted, false);
   replaced.resolve();
@@ -104,8 +103,10 @@ test("replacement failure visibly rejects already-held input and leaves later ad
   await f.owner.toolStarted({ reference: "compact", threadId, turnId });
   const first = f.admission.run(threadId, async () => assert.fail("held input was admitted"));
   const second = f.admission.run(threadId, async () => assert.fail("held input was admitted"));
-  await f.owner.acceptSummary({ summary: "full summary", threadId, turnId });
-  await assert.rejects(f.owner.toolSucceeded({ reference: "compact", threadId, turnId }), /replacement failed/);
+  await assert.rejects(
+    f.owner.acceptSummary({ summary: "full summary", threadId, turnId }),
+    /replacement failed/,
+  );
   await assert.rejects(first, /replacement failed/);
   await assert.rejects(second, /replacement failed/);
   assert.deepEqual(f.observations, ["started", "failed"]);
@@ -120,6 +121,22 @@ test("summary completion without native tool-input start is rejected", async () 
     f.owner.acceptSummary({ summary: "full summary", threadId, turnId }),
     /has not started/,
   );
+  await f.owner.dispose();
+  await f.admission.dispose();
+});
+
+test("active matching is exact and disappears after replacement", async () => {
+  const f = fixture();
+  await f.owner.toolStarted({ reference: "compact", threadId, turnId });
+  assert.equal(f.owner.isActiveTool({ reference: "compact", threadId, turnId }), true);
+  assert.equal(f.owner.isActiveTool({ reference: "other", threadId, turnId }), false);
+  assert.equal(f.owner.isActiveTool({
+    reference: "compact",
+    threadId,
+    turnId: WorkbenchTurnIdSchema.parse("other-turn"),
+  }), false);
+  await f.owner.acceptSummary({ summary: "full summary", threadId, turnId });
+  assert.equal(f.owner.isActiveTool({ reference: "compact", threadId, turnId }), false);
   await f.owner.dispose();
   await f.admission.dispose();
 });

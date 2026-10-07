@@ -84,6 +84,22 @@ test("captured children compact only their exact execute wrapper without deletin
   assert.deepEqual(a.item, wrapper("parent-a"));
 });
 
+test("context rollover capture removes its retired execute wrapper even when the wrapper fails", () => {
+  const wrapper: ThreadItem = {
+    type: "dynamicToolCall", id: "execute", namespace: "opencode",
+    tool: "execute", toolCallGroupId: "execute", arguments: { code: "opaque code" }, status: "failed",
+    success: false, contentItems: [{ type: "inputText", text: "interrupted" }], durationMs: 1,
+  };
+  const child = { ...mcp("child", "thread_compact", {}), toolCallGroupId: "execute" };
+  const compaction = {
+    id: "compaction", type: "contextCompaction", status: "completed",
+  } as const satisfies ThreadItem;
+  assert.deepEqual(
+    buildRenderableBlocks([wrapper, compaction, child]).flatMap(getRenderableBlockItems).map(item => item.id),
+    ["compaction"],
+  );
+});
+
 test("adjacent textual steers group only while their exact state matches", () => {
   const blocks = buildRenderableBlocks([
     steer("sent-a", "sent"),

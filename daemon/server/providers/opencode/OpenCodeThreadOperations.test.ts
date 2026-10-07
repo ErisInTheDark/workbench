@@ -330,6 +330,11 @@ function operations(
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
     recovery: new WorkbenchTurnRecoveryController(() => undefined),
+    rollover: {
+      isActiveTool: () => false,
+      toolFailed: async () => undefined,
+      toolStarted: async () => undefined,
+    },
     readWorkingRecords: lifecycle.workingRecords ?? (async () => []),
   });
   return owner;
@@ -508,6 +513,11 @@ test("fails a public read when no OpenCode binding exists", async () => {
     } as never,
     transcript: {} as never,
     reader: {} as never,
+    rollover: {
+      isActiveTool: () => false,
+      toolFailed: async () => undefined,
+      toolStarted: async () => undefined,
+    },
     signal: new AbortController().signal,
   });
   await assert.rejects(owner.read("missing"), /identity is unavailable/u);

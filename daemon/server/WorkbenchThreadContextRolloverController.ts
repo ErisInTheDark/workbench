@@ -21,7 +21,6 @@ interface RolloverIdentity {
 interface ActiveRollover extends RolloverIdentity {
   hold: WorkbenchThreadAdmissionHold;
   phase: "started" | "replacing";
-  summary: string | null;
 }
 
 export default class WorkbenchThreadContextRolloverController {
@@ -89,7 +88,6 @@ export default class WorkbenchThreadContextRolloverController {
       ...input,
       hold: this.admission.hold(input.threadId),
       phase: "started",
-      summary: null,
     };
     this.active.set(input.threadId, active);
     try {
@@ -106,24 +104,12 @@ export default class WorkbenchThreadContextRolloverController {
     const active = this.active.get(input.threadId);
     if (!active || active.turnId !== input.turnId) throw new Error("Thread context rollover has not started.");
     if (active.phase !== "started") throw new Error("Thread context rollover is already replacing its native session.");
-    if (active.summary !== null) throw new Error("Thread context rollover summary has already been accepted.");
     const summary = input.summary.trim();
     if (!summary) throw new Error("Thread context rollover summary must not be empty.");
-    active.summary = summary;
-  }
-
-  async toolSucceeded(input: RolloverIdentity) {
-    const active = this.exactActive(input);
-    if (active.phase !== "started") throw new Error("Thread context rollover replacement has already started.");
-    if (active.summary === null) {
-      const error = new Error("Thread context rollover tool completed without an accepted summary.");
-      await this.failActive(active, error);
-      throw error;
-    }
     active.phase = "replacing";
     try {
       await this.ports.replace({
-        summary: active.summary,
+        summary,
         threadId: active.threadId,
         turnId: active.turnId,
       });
@@ -134,6 +120,11 @@ export default class WorkbenchThreadContextRolloverController {
       await this.failActive(active, error);
       throw error;
     }
+  }
+
+  isActiveTool(input: RolloverIdentity) {
+    const active = this.active.get(input.threadId);
+    return active?.turnId === input.turnId && active.reference === input.reference;
   }
 
   async toolFailed(input: RolloverIdentity, error: unknown) {

@@ -81,6 +81,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
     });
     const tools = new OpenCodeToolsController({
+      contextRollover: threads.contextRolloverTool,
+      currentTurn: nativeThreadId => threads.currentTurn(nativeThreadId),
       transcript: {
         start: (input, context, caller) => threads.startToolTranscript(input, context, caller),
         finish: (reference, result) => threads.finishToolTranscript(reference, result),
@@ -133,7 +135,10 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload the OpenCode provider definition.",
   lifecycle: "atomic",
   provides: ["openCodeProvider"],
-  requires: ["openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexSandboxAcl", "codexThreadOperations"],
+  requires: [
+    "openCodeService", "openCodeModelCatalog", "openCodeThreadOperations", "codexExecutor", "codexSandboxAcl",
+    "codexThreadOperations",
+  ],
   safeAll: true,
   scope: "server:opencode/def",
 });

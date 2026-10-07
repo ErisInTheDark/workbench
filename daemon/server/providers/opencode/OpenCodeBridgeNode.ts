@@ -77,6 +77,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       signal: lifetime.signal,
       recovery: build.get("turnRecovery"),
+      rollover: build.get("threadContextRollover"),
     });
     const events = new OpenCodeEventController({
       broadcast: notification => context.broadcastProviderNotification("opencode", notification),

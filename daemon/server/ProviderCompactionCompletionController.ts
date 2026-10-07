@@ -16,6 +16,10 @@ export default class ProviderCompactionCompletionController {
   }>();
   hasPendingWork() { return this.pending.size > 0; }
 
+  currentScope(key: string) {
+    return this.pending.get(key)?.scope ?? null;
+  }
+
   async run(
     key: string,
     scope: ProviderCompactionExecution,

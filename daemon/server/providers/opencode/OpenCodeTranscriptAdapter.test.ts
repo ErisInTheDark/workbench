@@ -78,6 +78,67 @@ test("live context usage preserves the latest model step beside cumulative accou
   });
 });
 
+test("active manual compaction aliases its latest native echo and preserves usage for canonical reset", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const turnId = WorkbenchTurnIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const itemId = WorkbenchItemIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  const admissions: Array<{ itemId?: string; sources: readonly WorkbenchTranscriptItemSource[] }> = [];
+  const observations: WorkbenchTranscriptObservation[] = [];
+  const adapter = new OpenCodeTranscriptAdapter({
+    threads: {
+      observe: async () => ({ threadId }),
+      observeTurns: async () => [{
+        threadId, turnId, turnIndex: 0,
+        nativeTurnId: NativeTurnIdSchema.parse("root"),
+        nativeThreadId: NativeThreadIdSchema.parse("session"),
+        nativeLocation: "C:/repo",
+        harnessId: "opencode",
+      }],
+    } as never,
+    items: {
+      admit: async inputs => inputs.map((input, index) => {
+        admissions.push(input);
+        return {
+          ...input,
+          itemId: input.itemId ?? WorkbenchItemIdSchema.parse(`00000000-0000-4000-8000-0000000000${10 + index}`),
+          sources: input.sources.map(source => ({
+            ...source,
+            component: source.component ?? { kind: "item" as const, index: 0 },
+          })),
+        };
+      }),
+      itemIdForSource: () => { throw new Error("not used"); },
+    },
+    transcript: {
+      record: async entries => {
+        observations.push(...entries);
+        return { changedThreadIds: [] };
+      },
+    },
+  });
+  await adapter.record({
+    id: "session", projectID: "project", title: "Thread", cost: 0,
+    tokens: { input: 20, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 3 }, location: { directory: "C:/repo" },
+  }, [
+    { id: "root", type: "user", text: "compact", time: { created: 1 } },
+    {
+      id: "native-compaction",
+      type: "compaction",
+      status: "completed",
+      reason: "manual",
+      summary: "summary",
+      recent: "",
+      time: { created: 2 },
+    },
+  ], { id: "project", rootPath: "C:/repo" }, {
+    activeCompactionItemId: itemId,
+    settleUsage: true,
+  });
+  assert.equal(admissions.at(-1)?.itemId, itemId);
+  assert.equal(observations.some(entry => entry.kind === "threadContextUsage"), false);
+});
+
 test("sent and native OpenCode user images survive transcript rereads without duplicates", async context => {
   const fixture = createThreadStateTestDatabase();
   context.after(() => fixture.sqlite.close());

@@ -15,7 +15,8 @@ import type WorkbenchDatabaseController from "../../database/WorkbenchDatabaseCo
 import { z } from "zod";
 import {
   NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema,
-  type WorkbenchThreadId, WorkbenchThreadIdSchema, type WorkbenchTurnId, WorkbenchTurnIdSchema, WorkbenchItemIdSchema,
+  type WorkbenchItemId, WorkbenchItemIdSchema, type WorkbenchThreadId, WorkbenchThreadIdSchema,
+  type WorkbenchTurnId, WorkbenchTurnIdSchema,
 } from "workbench-shared/workbench/identity";
 import {
   WorkbenchUserInputSchema, type WorkbenchUserInput,
@@ -452,6 +453,7 @@ export default class OpenCodeTranscriptAdapter {
     messages: readonly SessionMessageInfo[],
     project: { id: string; rootPath: string; launchId?: string },
     options: {
+      activeCompactionItemId?: WorkbenchItemId;
       canCommit?: (latestTurnId: WorkbenchTurnId | null) => boolean;
       keepLatestTurnOpen?: boolean;
       settleUsage?: boolean;
@@ -538,10 +540,14 @@ export default class OpenCodeTranscriptAdapter {
       translated.push(entries);
     }
     const flatTranslated = translated.flat();
+    const activeCompactionMessage = options.activeCompactionItemId
+      ? messages.findLast(message => message.type === "compaction") ?? null
+      : null;
     const itemIdentities = await this.owners.items.admit(flatTranslated.map((entry) => ({
       threadId: identity.threadId,
       ...(entry.kind === "steer"
         ? { itemId: entry.metadata.itemId }
+        : entry.message === activeCompactionMessage ? { itemId: options.activeCompactionItemId! }
         : entry.preferredItemId ? { itemId: WorkbenchItemIdSchema.parse(entry.preferredItemId) } : {}),
       sources: [{ turnId: entry.turnId, kind: "stable" as const, ...entry.source }],
     })));
@@ -589,7 +595,7 @@ export default class OpenCodeTranscriptAdapter {
           },
           initialise: false,
         });
-      } else if (latestMessage?.type === "compaction") {
+      } else if (latestMessage?.type === "compaction" && !options.activeCompactionItemId) {
         usageObservations.push({
           kind: "threadContextUsage",
           threadId: identity.threadId,
