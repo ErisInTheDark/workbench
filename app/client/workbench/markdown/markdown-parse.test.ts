@@ -4,7 +4,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseBlocks, parseInlineMarkdown } from "./markdown-parse";
+import { isThreadMarkdownSectionBreak, parseBlocks, parseInlineMarkdown, parseThreadMarkdownSections } from "./markdown-parse";
+
+test("thread sections split prose at top-level plans and mode changes only", () => {
+  const markdown = [
+    "intro **text**",
+    "",
+    "```md",
+    "<plan>",
+    "<set-state mode=\"Fake\" />",
+    "```",
+    "",
+    "<notice title=\"n\" color=\"blue\">",
+    "<plan>",
+    "</notice>",
+    "before mode <set-state mode=\"Inspect\" /> after mode",
+    "<plan>",
+    "step one",
+    "</plan>",
+    "",
+    "tail",
+  ].join("\r\n");
+  const sections = parseThreadMarkdownSections(markdown);
+
+  assert.deepEqual(sections.map(section => section.kind), ["prose", "stateChange", "prose", "plan", "prose"]);
+  assert.match(sections[0]!.markdown, /^intro \*\*text\*\*\n\n```md\n<plan>\n<set-state mode="Fake" \/>\n```[\s\S]*<\/notice>\nbefore mode$/u);
+  assert.equal(sections[2]!.markdown, "after mode");
+  assert.equal(sections[4]!.markdown, "tail");
+  // Rendering identifies the same breaks from parsed blocks.
+  const options = { profile: "thread" } as const;
+  assert.equal(parseBlocks(markdown, options).filter(block => isThreadMarkdownSectionBreak(block, options)).length, 2);
+});
 
 test("thread disclosures pair nested tags and leave fenced examples untouched", () => {
   const blocks = parseBlocks([

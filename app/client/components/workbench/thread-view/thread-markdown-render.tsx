@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers.
+ * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
 
@@ -11,6 +11,7 @@ import {
 } from "../../../workbench/markdown/comment-markdown";
 import {
   formatThreadStateChangeMode,
+  isThreadMarkdownSectionBreak,
   parseBlocks,
   parseInlineMarkdown,
   parseThreadStateChangeMode,
@@ -36,6 +37,7 @@ import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadFileList from "./ThreadFileList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
+import ThreadMarkdownSectionActions from "./ThreadMarkdownSectionActions";
 import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
@@ -392,11 +394,11 @@ function renderThreadSingleItemOrderedStep (
   );
 }
 
-function renderThreadStateChange (mode: string, keyPrefix: string) {
+function renderThreadStateChange (mode: string, keyPrefix: string, sectionActions?: ReactNode) {
   return (
     <div
       className={`
-        my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0
+        relative my-[0.85em] flex items-center gap-2 font-sans leading-none text-fg/muted last:mb-0
         before:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
         after:(block h-px flex-1 bg-[color-mix(in srgb, var(--text) 10%, transparent)] content-[''])
       `}
@@ -406,6 +408,7 @@ function renderThreadStateChange (mode: string, keyPrefix: string) {
     >
       <span className="text-[0.62em] font-medium uppercase tracking-[0.14em]" data-thread-state-change-kicker="true">Mode</span>
       <span className="text-[0.84em] font-semibold text-text" data-thread-state-change-label="true">{formatThreadStateChangeMode(mode)}</span>
+      {sectionActions}
     </div>
   );
 }
@@ -415,12 +418,16 @@ function renderThreadMarkdownBlocks (markdown: string, options: MarkdownParseOpt
     .map((block, index) => renderThreadBlock(block, options, `${keyPrefix}-${index}`));
 }
 
-function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, options: MarkdownParseOptions, keyPrefix: string) {
+function renderThreadPlanBlock (
+  block: Extract<ParsedBlock, { type: "plan" }>,
+  options: MarkdownParseOptions,
+  keyPrefix: string,
+  sectionActions?: ReactNode,
+) {
   const content = renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`);
-
-  return (
+  const disclosure = (
     <ThreadDisclosure
-      className={BLOCK_SPACING_CLASS}
+      className={sectionActions === undefined ? BLOCK_SPACING_CLASS : undefined}
       contentClassName="mt-2"
       initialOpen
       key={keyPrefix}
@@ -437,6 +444,14 @@ function renderThreadPlanBlock (block: Extract<ParsedBlock, { type: "plan" }>, o
         {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
       </ThreadPreviewFrame>
     </ThreadDisclosure>
+  );
+  if (sectionActions === undefined) return disclosure;
+  // A closed <details> hides non-summary children, so section actions hang from a wrapper that owns the spacing.
+  return (
+    <div className={`relative ${BLOCK_SPACING_CLASS}`} key={keyPrefix}>
+      {disclosure}
+      {sectionActions}
+    </div>
   );
 }
 
@@ -733,6 +748,7 @@ function renderThreadBlock (
   options: MarkdownParseOptions,
   keyPrefix: string,
   appendTarget?: ThreadMarkdownAppendRenderTarget,
+  sectionActions?: ReactNode,
 ) {
   switch (block.type) {
     case "list-break":
@@ -756,7 +772,7 @@ function renderThreadBlock (
         </blockquote>
       );
     case "plan":
-      return renderThreadPlanBlock(block, options, keyPrefix);
+      return renderThreadPlanBlock(block, options, keyPrefix, sectionActions);
     case "details":
       return renderThreadDetailsBlock(block, options, keyPrefix);
     case "notice":
@@ -786,7 +802,7 @@ function renderThreadBlock (
     case "paragraph": {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);
       if (stateChangeMode) {
-        return renderThreadStateChange(stateChangeMode, keyPrefix);
+        return renderThreadStateChange(stateChangeMode, keyPrefix, sectionActions);
       }
 
       return <p className={BLOCK_SPACING_CLASS} key={keyPrefix}>{renderThreadInlineMarkdown(block.text, options, keyPrefix, appendTarget)}</p>;
@@ -803,12 +819,16 @@ export function renderThreadMarkdown (
     ...options,
     profile: "thread",
   } satisfies MarkdownParseOptions;
+  let sectionBreakIndex = 0;
   const renderedBlocks = parseBlocks(markdown, threadOptions)
     .map((block, index) => renderThreadBlock(
       block,
       threadOptions,
       `thread-markdown-${index}`,
       appendTarget?.blockIndex === index ? appendTarget : undefined,
+      isThreadMarkdownSectionBreak(block, threadOptions)
+        ? <ThreadMarkdownSectionActions breakIndex={sectionBreakIndex++} />
+        : undefined,
     ));
 
   return renderedBlocks.length ? renderedBlocks : <p className={BLOCK_SPACING_CLASS}><br /></p>;

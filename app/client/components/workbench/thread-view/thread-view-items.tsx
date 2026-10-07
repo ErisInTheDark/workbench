@@ -10,7 +10,7 @@
  */
 "use client";
 
-import { memo, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -163,6 +163,9 @@ import ThreadSteerDecoration from "./ThreadSteerDecoration";
 import ThreadItemActionsContext from "./ThreadItemActionsContext";
 import { RefreshCwIcon, StopIcon, XIcon } from "../workbench-icons";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
+import ThreadCommentaryActionRow from "./ThreadCommentaryActionRow";
+import { ThreadMarkdownSectionActionsProvider } from "./ThreadMarkdownSectionActions";
+import { buildThreadCommentaryRuns, type ThreadCommentaryRunActions } from "./thread-commentary-runs";
 import { splitUserMessageBubbles } from "./user-message-bubbles";
 import useThreadPresentedText from "./use-thread-presented-text";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
@@ -170,7 +173,7 @@ import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
   getRenderableBlockItems, getRenderableBlockKey, getUserMessageDeliveryState, groupIncomingAgentMessageRuns,
   hasReasoningSteps, hasSameBlockTimeline, isBrowseCommandItem, reuseRenderableBlocks,
-  type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type IncomingAgentMessageItem,
+  type AgentCommentaryItem, type CommandItem, type CommandSequenceItem, type HiddenThreadItemIds, type IncomingAgentMessageItem,
   type SubagentWaitItem, type ThreadRenderableBlock,
 } from "./thread-render-blocks";
 import ThreadWorkedRun from "./ThreadWorkedRun";
@@ -985,6 +988,7 @@ function mergeSteerUserMessages(items: Extract<ThreadItem, { type: "userMessage"
 
 function ThreadAgentMessageItem ({
   completedAt,
+  copyRuns,
   inlineMentionSources,
   isFinal,
   item,
@@ -998,6 +1002,8 @@ function ThreadAgentMessageItem ({
   workspaceRoots,
 }: {
   completedAt: number | null;
+  /** Commentary prose runs this item ends; each gets a copy row. */
+  copyRuns?: ThreadCommentaryRunActions;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   isFinal: boolean;
   item: Extract<ThreadItem, { type: "agentMessage" }>;
@@ -1018,21 +1024,54 @@ function ThreadAgentMessageItem ({
     threadId,
     turnId,
   }));
+  const breakCopyMarkdown = copyRuns?.breakCopyMarkdown;
+  const renderBreakActions = useCallback((breakIndex: number) => {
+    const markdown = breakCopyMarkdown?.[breakIndex];
+    return markdown ? <ThreadCommentaryActionRow markdown={markdown} placement="break" /> : null;
+  }, [breakCopyMarkdown]);
   if (!text.trim()) return null;
   return (
-    <section className="py-2">
-      <ThreadMarkdown
-        inlineMentionSources={inlineMentionSources}
-        markdown={text}
-        threadCwdPath={threadCwdPath}
-        projectFilePaths={projectFilePaths}
-        projectId={projectId}
-        projectRootPath={projectRootPath}
-        revealAppends={Boolean(presentationSource)}
-        workspaceRoots={workspaceRoots}
-      />
+    <section className={copyRuns ? "relative py-2" : "py-2"}>
+      <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
+        <ThreadMarkdown
+          inlineMentionSources={inlineMentionSources}
+          markdown={text}
+          threadCwdPath={threadCwdPath}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          revealAppends={Boolean(presentationSource)}
+          workspaceRoots={workspaceRoots}
+        />
+      </ThreadMarkdownSectionActionsProvider>
+      {copyRuns?.endCopyMarkdown ? <ThreadCommentaryActionRow markdown={copyRuns.endCopyMarkdown} placement="end" /> : null}
       {isFinal ? <ThreadMessageTimestamp className="mt-1" timestampSeconds={completedAt} /> : null}
     </section>
+  );
+}
+
+/** Consecutive commentary items render as one hover group so a merged prose run's copy row appears from any of its items. */
+function ThreadAgentCommentarySequence ({
+  animateEntries,
+  items,
+  ...itemProps
+}: Omit<Parameters<typeof ThreadAgentMessageItem>[0], "copyRuns" | "isFinal" | "item"> & {
+  animateEntries: boolean;
+  items: readonly AgentCommentaryItem[];
+}) {
+  const copyRuns = useMemo(() => buildThreadCommentaryRuns(items.map(item => stripWorkbenchTurnEndMarker(item.text))), [items]);
+  return (
+    <div className="group/commentary space-y-2">
+      {items.map((item, index) => (
+        <ThreadEntryMotion enabled={animateEntries && index > 0} identity={getThreadEntryMotionIdentity(item)} key={item.id}>
+          {(animate) => (
+            <div className={animate ? `block ${enterMotionClassName}` : undefined}>
+              <ThreadAgentMessageItem {...itemProps} copyRuns={copyRuns[index]} isFinal={false} item={item} />
+            </div>
+          )}
+        </ThreadEntryMotion>
+      ))}
+    </div>
   );
 }
 
@@ -2264,6 +2303,24 @@ function ThreadRenderableBlockViewComponent ({
       </ThreadIncomingAgentMessageGroup>
     );
   }
+  if (block.kind === "agentCommentarySequence") {
+    return (
+      <ThreadAgentCommentarySequence
+        animateEntries={animateEntries}
+        completedAt={turnCompletedAt}
+        inlineMentionSources={inlineMentionSources}
+        items={block.items}
+        presentationSource={presentationSource}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        threadCwdPath={threadCwdPath}
+        threadId={threadId}
+        turnId={turnId}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
   if (block.kind === "subagentWaitExchange") {
     return (
       <ThreadSubagentWaitExchange
@@ -2900,6 +2957,8 @@ function ThreadTurnDetailsComponent ({
               ? `userMessages:${block.items[0]?.id ?? index}`
             : block.kind === "agentMessageSequence"
               ? `agentMessages:${block.state}:${block.items[0]?.id ?? index}`
+            : block.kind === "agentCommentarySequence"
+              ? `commentary:${block.items[0]?.id ?? index}`
             : block.kind === "subagentWaitExchange"
               ? `waitExchange:${block.items[0]?.id ?? index}`
             : block.kind === "subagentCoordination"

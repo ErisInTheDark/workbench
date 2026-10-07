@@ -2,6 +2,7 @@
  * Exports:
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
+ * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
  * - buildRenderableBlocks: group visible provider items, preserve wait folds, then give qualifying two-way subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
@@ -72,8 +73,11 @@ export interface IncomingAgentMessageRun {
   items: IncomingAgentMessageItem[];
   messages: [WorkbenchAgentMessage, ...WorkbenchAgentMessage[]];
 }
+export type AgentCommentaryItem = Extract<ThreadItem, { type: "agentMessage" }>;
 export type ThreadRenderableBlock =
   | { kind: "agentMessageSequence"; items: IncomingAgentMessageItem[]; state: "delivered" | "held" }
+  /** Consecutive non-final agent messages, which share copy runs. */
+  | { kind: "agentCommentarySequence"; items: AgentCommentaryItem[] }
   | {
     /** Existing render blocks absorbed by the priority two-way coordination disclosure. */
     blocks: ThreadRenderableBlock[];
@@ -490,6 +494,12 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
       continue;
     }
     flush();
+    if (item.type === "agentMessage" && item.phase !== "final_answer") {
+      const previous = blocks.at(-1);
+      if (previous?.kind === "agentCommentarySequence") previous.items.push(item);
+      else blocks.push({ items: [item], kind: "agentCommentarySequence" });
+      continue;
+    }
     blocks.push({ kind: "item", item, ...(item.type === "dynamicToolCall" && item.namespace === "opencode"
       && item.tool === "execute" && item.toolCallGroupId && capturedGroups.has(item.toolCallGroupId)
       ? { hasCapturedChildren: true } : {}) });
@@ -582,7 +592,7 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
 export function getWorkedBlockRows(block: ThreadRenderableBlock, context: CommandContext = {}): Array<{ block: ThreadRenderableBlock; eligible: boolean }> {
   if (block.kind !== "commandSequence") {
     // Exchanges hold delivered messages, which never hide inside a worked summary.
-    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence"
+    if (block.kind === "userMessageSequence" || block.kind === "agentMessageSequence" || block.kind === "agentCommentarySequence"
       || block.kind === "subagentWaitExchange" || block.kind === "subagentCoordination") {
       return [{ block, eligible: false }];
     }

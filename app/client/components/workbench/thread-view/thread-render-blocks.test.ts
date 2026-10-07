@@ -378,6 +378,21 @@ test("conversation and unclassified interaction rows break work runs", () => {
   }
 });
 
+test("consecutive non-final agent messages share one commentary block until another row intervenes", () => {
+  const reply = (id: string, phase: Extract<ThreadItem, { type: "agentMessage" }>["phase"]): ThreadItem => ({
+    type: "agentMessage", id, text: id, phase, memoryCitation: null, delivery: null, questions: null,
+  });
+  const blocks = buildRenderableBlocks([
+    reply("a", "commentary"), reply("b", null), command("run"), reply("c", "commentary"), reply("final", "final_answer"),
+  ]);
+  assert.deepEqual(blocks.map(block => [block.kind, getRenderableBlockItems(block).map(item => item.id)]), [
+    ["agentCommentarySequence", ["a", "b"]],
+    ["commandSequence", ["run"]],
+    ["agentCommentarySequence", ["c"]],
+    ["item", ["final"]],
+  ]);
+});
+
 test("native plan items are excluded from render blocks", () => {
   const plan: ThreadItem = { type: "plan", id: "native-plan", text: "unsupported" };
   assert.deepEqual(buildRenderableBlocks([plan]), []);

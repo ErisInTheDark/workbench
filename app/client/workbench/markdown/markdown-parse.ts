@@ -8,6 +8,8 @@
  * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
  * - MarkdownParseOptions: optional project-root, mention, and autolink context for richer thread parsing. Keywords: markdown, file link, skills, mentions, autolink.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
+ * - ThreadMarkdownSection/parseThreadMarkdownSections: split thread markdown source into prose, plan, and mode-change sections.
+ * - isThreadMarkdownSectionBreak: identify the parsed blocks that end a thread prose section.
  * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
  * - parseThreadStateChangeMode: detect display-only thread mode change tags. Keywords: thread, mode, state, parser.
  * - normalizeThreadBlockTagBoundaries: isolate known thread block tags before line-oriented parsing. Keywords: thread, HTML, block, parser.
@@ -1434,7 +1436,18 @@ function parseTableBlock(lines: string[], startIndex: number, options: MarkdownP
   };
 }
 
-function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {}): ParsedBlock[] {
+/** Line span of a top-level thread section break, collected while parsing. */
+interface ThreadMarkdownSectionBreakSpan {
+  end: number;
+  kind: "plan" | "stateChange";
+  start: number;
+}
+
+function parseBlocksFromLines(
+  lines: string[],
+  options: MarkdownParseOptions = {},
+  sectionBreaks?: ThreadMarkdownSectionBreakSpan[],
+): ParsedBlock[] {
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
 
@@ -1452,6 +1465,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       maybePushStandardBreak(blocks, blankLineCount, "paragraph");
       blankLineCount = 0;
       blocks.push({ type: "paragraph", text: line });
+      sectionBreaks?.push({ end: index + 1, kind: "stateChange", start: index });
       index += 1;
       continue;
     }
@@ -1461,6 +1475,7 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
       maybePushStandardBreak(blocks, blankLineCount, "plan");
       blankLineCount = 0;
       const plan = collectThreadPlanLines(lines, index + 1);
+      sectionBreaks?.push({ end: plan.nextIndex, kind: "plan", start: index });
       index = plan.nextIndex;
 
       blocks.push({ type: "plan", text: plan.planLines.join("\n").trim() });
@@ -1614,9 +1629,39 @@ function parseBlocksFromLines(lines: string[], options: MarkdownParseOptions = {
   return blocks;
 }
 
+function splitMarkdownLines(markdown: string, options: MarkdownParseOptions) {
+  return normalizeThreadBlockTagBoundaries(markdown, options).replace(/\r\n/g, "\n").split("\n");
+}
+
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
-  const normalizedMarkdown = normalizeThreadBlockTagBoundaries(markdown, options);
-  const lines = normalizedMarkdown.replace(/\r\n/g, "\n").split("\n");
-  return parseBlocksFromLines(lines, options);
+  return parseBlocksFromLines(splitMarkdownLines(markdown, options), options);
+}
+
+export type ThreadMarkdownSection = { kind: "plan" | "prose" | "stateChange"; markdown: string };
+
+/** Top-level plan blocks and mode-change dividers split thread markdown into separately presented sections. */
+export function isThreadMarkdownSectionBreak(block: ParsedBlock, options: MarkdownParseOptions) {
+  return block.type === "plan"
+    || (block.type === "paragraph" && parseThreadStateChangeMode(block.text, options) !== null);
+}
+
+export function parseThreadMarkdownSections(markdown: string): ThreadMarkdownSection[] {
+  const options = { profile: "thread" } satisfies MarkdownParseOptions;
+  const lines = splitMarkdownLines(markdown, options);
+  const sectionBreaks: ThreadMarkdownSectionBreakSpan[] = [];
+  parseBlocksFromLines(lines, options, sectionBreaks);
+  const sections: ThreadMarkdownSection[] = [];
+  const pushProse = (start: number, end: number) => {
+    const prose = lines.slice(start, end).join("\n").trim();
+    if (prose) sections.push({ kind: "prose", markdown: prose });
+  };
+  let cursor = 0;
+  for (const sectionBreak of sectionBreaks) {
+    pushProse(cursor, sectionBreak.start);
+    sections.push({ kind: sectionBreak.kind, markdown: lines.slice(sectionBreak.start, sectionBreak.end).join("\n") });
+    cursor = sectionBreak.end;
+  }
+  pushProse(cursor, lines.length);
+  return sections;
 }
 
