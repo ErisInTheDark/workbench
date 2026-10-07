@@ -22,6 +22,32 @@ use tauri::{
 /// Emitted once the tray shell is up, so the launcher can tell readiness from a dead child.
 const READY_SENTINEL: &str = "\u{001e}WORKBENCH_TRAY_V1 READY";
 
+/// Whether Tauri can build a system-tray icon on this platform. Linux needs an
+/// AppIndicator backend that some distributions (notably NixOS) do not expose to
+/// the dynamic loader.
+#[cfg(target_os = "linux")]
+fn system_tray_backend_available() -> bool {
+    ["libayatana-appindicator3.so.1", "libappindicator3.so.1"]
+        .into_iter()
+        .any(|candidate| {
+            // SAFETY: probing for loadability only. The handle is deliberately kept
+            // for the process lifetime so the tray crate reuses the loaded library
+            // instead of unloading and reloading GObject-based code.
+            match unsafe { libloading::Library::new(candidate) } {
+                Ok(library) => {
+                    std::mem::forget(library);
+                    true
+                }
+                Err(_) => false,
+            }
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_tray_backend_available() -> bool {
+    true
+}
+
 #[derive(Debug, PartialEq)]
 struct LauncherInputs {
     repository_root_path: PathBuf,
@@ -112,46 +138,50 @@ fn run() -> Result<(), String> {
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::clone(&controller))
         .setup(move |app| {
-            let open_url = MenuItem::with_id(app, "open-url", "Open url", true, None::<&str>)?;
-            let copy_url = MenuItem::with_id(app, "copy-url", "Copy url", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open_url, &copy_url, &quit])?;
-            TrayIconBuilder::new()
-                .icon(
-                    app.default_window_icon()
-                        .ok_or("Workbench tray icon is unavailable.")?
-                        .clone(),
-                )
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .tooltip("Workbench")
-                .on_menu_event(|app, event| {
-                    let controller = app.state::<Arc<DesktopAppController>>();
-                    match event.id.as_ref() {
-                        "open-url" => controller.open_browser(app),
-                        "copy-url" => controller.copy_url(),
-                        "quit" => controller.request_quit(),
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    let app = tray.app_handle();
-                    let controller = app.state::<Arc<DesktopAppController>>();
-                    match event {
-                        TrayIconEvent::Click {
-                            button: MouseButton::Left,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } => controller.open_browser(app),
-                        TrayIconEvent::Click {
-                            button: MouseButton::Middle,
-                            button_state: MouseButtonState::Up,
-                            ..
-                        } => controller.copy_url(),
-                        _ => {}
-                    }
-                })
-                .build(app)?;
+            if system_tray_backend_available() {
+                let open_url = MenuItem::with_id(app, "open-url", "Open url", true, None::<&str>)?;
+                let copy_url = MenuItem::with_id(app, "copy-url", "Copy url", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open_url, &copy_url, &quit])?;
+                TrayIconBuilder::new()
+                    .icon(
+                        app.default_window_icon()
+                            .ok_or("Workbench tray icon is unavailable.")?
+                            .clone(),
+                    )
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .tooltip("Workbench")
+                    .on_menu_event(|app, event| {
+                        let controller = app.state::<Arc<DesktopAppController>>();
+                        match event.id.as_ref() {
+                            "open-url" => controller.open_browser(app),
+                            "copy-url" => controller.copy_url(),
+                            "quit" => controller.request_quit(),
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        let app = tray.app_handle();
+                        let controller = app.state::<Arc<DesktopAppController>>();
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } => controller.open_browser(app),
+                            TrayIconEvent::Click {
+                                button: MouseButton::Middle,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } => controller.copy_url(),
+                            _ => {}
+                        }
+                    })
+                    .build(app)?;
+            } else {
+                setup_controller.note_system_tray_unavailable();
+            }
             setup_controller.start(app.handle().clone())?;
             println!("{READY_SENTINEL}");
             Ok(())

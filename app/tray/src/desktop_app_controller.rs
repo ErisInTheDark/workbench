@@ -120,6 +120,7 @@ pub struct DesktopAppController {
     command_sender: Sender<ManagerCommand>,
     command_receiver: Mutex<Option<Receiver<ManagerCommand>>>,
     exit_allowed: AtomicBool,
+    headless: AtomicBool,
     log: Arc<Mutex<RotatingLogWriter>>,
     repository_root_path: PathBuf,
     shutdown_started: AtomicBool,
@@ -141,6 +142,7 @@ impl DesktopAppController {
             command_sender,
             command_receiver: Mutex::new(Some(command_receiver)),
             exit_allowed: AtomicBool::new(false),
+            headless: AtomicBool::new(false),
             log: Arc::new(Mutex::new(log)),
             repository_root_path,
             shutdown_started: AtomicBool::new(false),
@@ -150,6 +152,15 @@ impl DesktopAppController {
 
     pub fn exit_allowed(&self) -> bool {
         self.exit_allowed.load(Ordering::SeqCst)
+    }
+
+    /// Mark that no system-tray backend is available, so readiness opens the browser
+    /// itself instead of the tray's "Open url" menu.
+    pub fn note_system_tray_unavailable(&self) {
+        self.headless.store(true, Ordering::SeqCst);
+        self.log_launcher(
+            "System tray backend is unavailable (libayatana-appindicator3 or libappindicator3). Running without a tray icon; the Workbench URL opens in the browser when the app is ready.",
+        );
     }
 
     pub fn open_browser(&self, app: &AppHandle) {
@@ -325,8 +336,10 @@ impl DesktopAppController {
             } if valid_app_origin(&app_origin) => {
                 let mut origin_state =
                     self.app_origin.lock().expect("app origin lock poisoned");
-                let (change, open_browser) =
-                    origin_state.update(app_origin.clone(), open_browser);
+                let (change, open_browser) = origin_state.update(
+                    app_origin.clone(),
+                    open_browser || self.headless.load(Ordering::SeqCst),
+                );
                 drop(origin_state);
                 match change {
                     AppOriginChange::Ready => {

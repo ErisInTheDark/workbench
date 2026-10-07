@@ -4885,6 +4885,7 @@ name = "workbench-tray"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "libloading",
  "serde",
  "serde_json",
  "tauri",
