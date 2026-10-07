@@ -1,208 +1,159 @@
 /*
- * No production exports. Protect keyboard stop intent versus terminal detachment.
+ * No production exports. Protect detachable key handling, always-on logging and lifecycle intent routing.
  */
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import WorkbenchProcessView from "./WorkbenchProcessView.ts";
+import type { ProcessViewControls, ProcessViewControlsSnapshot } from "./WorkbenchProcessViewControls.ts";
 
 class Terminal extends PassThrough {
   isTTY = true;
   isRaw = false;
+  ready: () => void = () => {};
   setRawMode(value: boolean) { this.isRaw = value; return this; }
+  resume() { this.ready(); return super.resume(); }
 }
 
-function event() {
+function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
 
-function fixture(target: "app" | "daemon" | "all") {
+const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+const LIFECYCLE_CALLS = ["daemon", "host", "force", "app", "start"];
+
+function fixture(options: {
+  snapshot?: ProcessViewControlsSnapshot;
+  failHost?: boolean;
+  openControls?: (warn: (message: string) => void) => Promise<ProcessViewControls>;
+  isTTY?: boolean;
+} = {}) {
   const input = new Terminal();
-  const attached = event();
-  const daemonStopped = event();
+  input.isTTY = options.isTTY ?? true;
+  const attached = deferred();
+  input.ready = attached.resolve;
   const calls: string[] = [];
+  const notices: string[] = [];
+  const legends: string[] = [];
+  const snapshot = options.snapshot ?? { host: true, daemon: true, app: true };
+  const controls: ProcessViewControls = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+    killDaemon: async () => { calls.push("daemon"); },
+    killHost: async () => { calls.push("host"); if (options.failHost) throw new Error("host stop failed"); },
+    forceStopHost: async () => { calls.push("force"); },
+    killApp: async () => { calls.push("app"); },
+    startApp: async () => { calls.push("start"); },
+    close: async () => { calls.push("close-controls"); },
+  };
   const view = new WorkbenchProcessView({
-    target, input,
-    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
-    warn: message => assert.fail(message),
-    createFollower: () => ({ start: async () => {}, close: async () => { calls.push("unfollow"); } }),
-    connect: async () => ({
-      logDirectory: "/unused", logPrefix: target === "app" ? "workbench-app" : "workbench-host",
-      restartDaemon: async () => { calls.push("daemon"); daemonStopped.resolve(); },
-      stopHost: async () => { calls.push("host"); },
-      emergencyStopHost: async () => { calls.push("emergency"); },
-      quitApp: async () => { calls.push("app"); },
-      close: async () => { calls.push("detach"); },
+    input,
+    write: async () => {},
+    warn: message => { notices.push(message); },
+    logDirectory: "/unused",
+    prefixes: ["workbench-app"],
+    openControls: options.openControls ?? (async () => controls),
+    createFollower: () => ({
+      start: async () => { calls.push("follow"); },
+      close: async () => { calls.push("unfollow"); },
+    }),
+    createStatusLine: () => ({
+      enabled: true,
+      install: () => {},
+      update: text => { legends.push(text); },
+      notice: text => { notices.push(text); },
+      close: () => {},
     }),
   });
-  return { input, view, attached, daemonStopped, calls };
+  return { input, view, attached, calls, notices, legends, snapshot, controls };
 }
 
-test("q, terminal EOF and external detachment never stop the viewed process", async () => {
-  for (const cause of ["q", "eof", "external"]) {
-    const f = fixture("daemon");
+for (const cause of ["q", "ctrl-c", "eof", "external"] as const) {
+  test(`${cause} detachment never invokes lifecycle controls`, async () => {
+    const f = fixture();
     const running = f.view.run();
     await f.attached.promise;
-    // Wait for run's same-turn listener installation after its awaited output.
-    await Promise.resolve();
     if (cause === "q") f.input.write("q");
+    else if (cause === "ctrl-c") f.input.write("\u0003");
     else if (cause === "eof") f.input.end();
     else f.view.detach();
     await running;
-    assert.deepEqual(f.calls.sort(), ["detach", "unfollow"]);
+    assert.ok(!f.calls.some(call => LIFECYCLE_CALLS.includes(call)));
     assert.equal(f.input.isRaw, false);
-  }
-});
+  });
+}
 
-test("daemon Ctrl+C restarts the daemon, then stops the host", async () => {
-  const f = fixture("daemon");
+test("logs and controls start even when no process is running", async () => {
+  const f = fixture({ snapshot: { host: false, daemon: false, app: false } });
   const running = f.view.run();
   await f.attached.promise;
-  await Promise.resolve();
-  f.input.write("\u0003");
-  await f.daemonStopped.promise;
-  await Promise.resolve();
-  await Promise.resolve();
-  f.input.write("\u0003");
+  assert.ok(f.calls.includes("follow"));
+  assert.ok(!f.calls.includes("close-controls"));
+  f.view.detach();
   await running;
-  assert.deepEqual(f.calls.slice(0, 2), ["daemon", "host"]);
+});
+
+test("a failing control connection still leaves logs running", async () => {
+  const f = fixture({ openControls: async () => { throw new Error("app not running"); } });
+  const running = f.view.run();
+  await f.attached.promise;
+  assert.ok(f.calls.includes("follow"));
+  assert.match(f.notices.join("\n"), /controls are unavailable/u);
+  f.view.detach();
+  await running;
+});
+
+test("d, h, a and s route to the matching control without detaching", async () => {
+  const f = fixture();
+  const running = f.view.run();
+  await f.attached.promise;
+  for (const key of ["d", "h", "a"]) f.input.write(key);
+  await flush();
+  f.snapshot.app = false;
+  f.input.write("s");
+  await flush();
+  assert.deepEqual(f.calls.filter(call => LIFECYCLE_CALLS.includes(call)), ["daemon", "host", "app", "start"]);
+  assert.equal(f.input.isRaw, true);
+  f.view.detach();
+  await running;
+});
+
+test("unavailable lifecycle keys warn instead of acting", async () => {
+  const f = fixture({ snapshot: { host: false, daemon: false, app: false } });
+  const running = f.view.run();
+  await f.attached.promise;
+  for (const key of ["d", "h", "a"]) f.input.write(key);
+  await flush();
+  assert.ok(!f.calls.some(call => LIFECYCLE_CALLS.includes(call)));
+  assert.match(f.notices.join("\n"), /unavailable/u);
+  f.view.detach();
+  await running;
+});
+
+test("a failed kill host arms force halt for the next h", async () => {
+  const f = fixture({ failHost: true });
+  const running = f.view.run();
+  await f.attached.promise;
+  f.input.write("h");
+  await flush();
+  assert.deepEqual(f.calls.filter(call => call === "host" || call === "force"), ["host"]);
+  assert.match(f.notices.join("\n"), /force-halt armed/u);
+  f.input.write("h");
+  await flush();
+  assert.deepEqual(f.calls.filter(call => call === "host" || call === "force"), ["host", "force"]);
+  f.view.detach();
+  await running;
+});
+
+test("non-interactive views follow logs and skip raw input", async () => {
+  const f = fixture({ isTTY: false });
+  const running = f.view.run();
+  await flush();
+  assert.ok(f.calls.includes("follow"));
   assert.equal(f.input.isRaw, false);
-});
-
-test("a second Ctrl+C bypasses a pending daemon restart instead of joining its queue", async () => {
-  const input = new Terminal();
-  const attached = event();
-  const started = event();
-  const calls: string[] = [];
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  const view = new WorkbenchProcessView({
-    target: "daemon", input,
-    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
-    warn: message => assert.fail(message),
-    createFollower: () => ({ start: async () => {}, close: async () => {} }),
-    connect: async () => ({
-      logDirectory: "/unused", logPrefix: "workbench-host",
-      restartDaemon: async () => { calls.push("daemon"); started.resolve(); await pending; },
-      stopHost: async () => { calls.push("host"); },
-      emergencyStopHost: async () => { calls.push("emergency"); },
-      quitApp: async () => {},
-      close: async () => {},
-    }),
-  });
-  const running = view.run();
-  try {
-    await attached.promise;
-    await Promise.resolve();
-    input.write("\u0003");
-    await started.promise;
-    input.write("\u0003");
-    await Promise.resolve();
-    assert.deepEqual(calls, ["daemon", "emergency"]);
-  } finally {
-    release();
-    view.detach();
-    await running;
-  }
-});
-
-test("a daemon restart that fails arms the emergency halt for the next Ctrl+C", async () => {
-  const input = new Terminal();
-  const attached = event();
-  const failed = event();
-  const calls: string[] = [];
-  const warnings: string[] = [];
-  const view = new WorkbenchProcessView({
-    target: "daemon", input,
-    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
-    warn: message => { warnings.push(message); failed.resolve(); },
-    createFollower: () => ({ start: async () => {}, close: async () => {} }),
-    connect: async () => ({
-      logDirectory: "/unused", logPrefix: "workbench-host",
-      restartDaemon: async () => { calls.push("daemon"); throw new Error("daemon unreachable"); },
-      stopHost: async () => { calls.push("host"); },
-      emergencyStopHost: async () => { calls.push("emergency"); },
-      quitApp: async () => {},
-      close: async () => {},
-    }),
-  });
-  const running = view.run();
-  await attached.promise;
-  await Promise.resolve();
-  input.write("\u0003");
-  await failed.promise;
-  assert.match(warnings.join("\n"), /daemon unreachable[\s\S]*Ctrl\+C again/u);
-  input.write("\u0003");
+  f.view.detach();
   await running;
-  assert.deepEqual(calls, ["daemon", "emergency"]);
-});
-
-test("q cancels a pending viewer wait without pretending to undo an admitted restart", async () => {
-  const input = new Terminal();
-  const attached = event();
-  const started = event();
-  let cancelled = false;
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  const view = new WorkbenchProcessView({
-    target: "daemon", input,
-    write: async text => { if (text.includes("Viewing")) attached.resolve(); },
-    warn: () => {},
-    createFollower: () => ({ start: async () => {}, close: async () => {} }),
-    connect: async () => ({
-      logDirectory: "/unused", logPrefix: "workbench-host",
-      restartDaemon: async (signal?: AbortSignal) => {
-        started.resolve();
-        signal?.addEventListener("abort", () => { cancelled = true; }, { once: true });
-        await pending;
-      },
-      stopHost: async () => {},
-      emergencyStopHost: async () => {},
-      quitApp: async () => {},
-      close: async () => {},
-    }),
-  });
-  const running = view.run();
-  try {
-    await attached.promise;
-    await Promise.resolve();
-    input.write("\u0003");
-    await started.promise;
-    input.write("q");
-    assert.equal(cancelled, true);
-  } finally {
-    release();
-    view.detach();
-    await running;
-  }
-});
-
-for (const target of ["app", "all"] as const) test(`${target} Ctrl+C invokes only app Quit`, async () => {
-  const f = fixture(target);
-  const running = f.view.run();
-  await f.attached.promise;
-  await Promise.resolve();
-  f.input.write("\u0003");
-  await running;
-  assert.equal(f.calls[0], "app");
-  assert.ok(!f.calls.includes("daemon") && !f.calls.includes("host"));
-});
-
-test("detaching during connection cancels observation without sending stop", async () => {
-  const connecting = event();
-  const input = new Terminal();
-  const view = new WorkbenchProcessView({
-    target: "daemon", input, write: async () => {}, warn: message => assert.fail(message),
-    connect: signal => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-      connecting.resolve();
-    }),
-  });
-  const running = view.run();
-  await connecting.promise;
-  view.detach();
-  await running;
-  assert.equal(input.isRaw, false);
 });
