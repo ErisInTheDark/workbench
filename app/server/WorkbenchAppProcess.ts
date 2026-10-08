@@ -29,6 +29,13 @@ async function main() {
   const outputDirectoryPath = path.join(resolveWorkbenchRuntimeRoot(repositoryRootPath), "frontend");
   let protocol: WorkbenchAppProcessProtocol | null = null;
   let runtime: WorkbenchAppRuntime | null = null;
+  // The tray learns the chosen browser address after readiness and whenever networking changes it.
+  const announceLaunchUrl = () => {
+    const url = runtime?.readLaunchUrl();
+    if (!protocol || !url) return;
+    try { protocol.announceLaunchUrl(url); }
+    catch (error) { processLogger.error("app", `launch URL announcement failed: ${describeErrorCauseChain(error)}`); }
+  };
   const control = new WorkbenchAppControl({
     endpointPath: path.join(resolveWorkbenchDataRoot(), "app", "runtime.json"),
     root: repositoryRootPath,
@@ -37,6 +44,7 @@ async function main() {
     subscribeRuntime: listener => runtime?.subscribeControlRuntime(listener) ?? (() => {}),
     reloadAll: () => runtime?.admitReloadAll() ?? null,
     pull: reload => runtime?.admitPull(reload) ?? null,
+    readLaunchUrl: () => runtime?.readLaunchUrl() ?? null,
     quit: () => {
       if (desktopProtocolEnabled) {
         if (!protocol) throw new Error("Desktop Quit is not ready.");
@@ -45,21 +53,26 @@ async function main() {
     },
   });
   const app = new WorkbenchApp({
-    createRuntime: (appPort) => runtime = new WorkbenchAppRuntime({
-      appPort,
-      createDatabase: (Repository) => new Repository(),
-      logger: processLogger,
-      outputDirectoryPath,
-      repositoryRootPath,
-      ...(desktopProtocolEnabled
-        ? {
-            requestProcessRestart: () => {
-              if (!protocol) throw new Error("Full app restart requires the Workbench desktop tray.");
-              protocol.requestRestart();
-            },
-          }
-        : {}),
-    }),
+    createRuntime: (appPort) => {
+      const created = new WorkbenchAppRuntime({
+        appPort,
+        createDatabase: (Repository) => new Repository(),
+        logger: processLogger,
+        outputDirectoryPath,
+        repositoryRootPath,
+        ...(desktopProtocolEnabled
+          ? {
+              requestProcessRestart: () => {
+                if (!protocol) throw new Error("Full app restart requires the Workbench desktop tray.");
+                protocol.requestRestart();
+              },
+            }
+          : {}),
+      });
+      created.subscribeLaunchUrl(announceLaunchUrl);
+      runtime = created;
+      return created;
+    },
     createServer: (runtime, port) => new WorkbenchFrontendServer({
       hostname,
       onDiagnostic: (message) => processLogger.error("app", `http ${message}`),
@@ -109,6 +122,7 @@ async function main() {
     });
     protocol.start();
     protocol.announceReady(result.address.url, result.portSource === "random");
+    announceLaunchUrl();
   }
   await control.publish(result.address.url);
 }

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchNetworkController: own app settings handoff and a private service session, relaunching a lost host while the app runs.
+ * - default WorkbenchNetworkController: own app settings handoff, the browser launch URL and a private service session, relaunching a lost host while the app runs.
  */
 import {
   WorkbenchNetworkActionSchema, workbenchNetworkMode,
@@ -231,6 +231,21 @@ export default class WorkbenchNetworkController {
       daemon: this.client?.getSnapshot().snapshot?.identity,
       daemonFailure: this.client?.getSnapshot().snapshot?.failure ?? null,
     });
+  }
+
+  /**
+   * The address browsers should open for this installation's chosen connection mode; null while that mode is still
+   * starting. Modes waiting on the user, off or failed fall back to the loopback app, which always works on this machine.
+   */
+  launchUrl(): string | null {
+    const target = this.options.readTarget();
+    const local = target ? new URL("/launch", target.appOrigin).href : null;
+    if (!this.configurationValue) return this.failure ? local : null;
+    const mode = workbenchNetworkMode(this.configuration);
+    if (mode === "localhost") return local;
+    const status = mode === "tailnet-service" ? this.runtime.privateAccess : this.runtime.hostServe;
+    if (status.phase === "starting") return null;
+    return status.phase === "ready" && status.url ? new URL("/launch", status.url).href : local;
   }
 
   discovery(deviceNodeId: string | null) {

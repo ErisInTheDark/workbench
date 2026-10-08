@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppControl: publish private app control and admit Quit, reload and update operations.
+ * - default WorkbenchAppControl: publish private app control, report the launch URL and admit Quit, reload and update operations.
  */
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -8,7 +8,7 @@ import path from "node:path";
 import type { WorkbenchServiceEndpoint } from "../../shared/http/workbench-service.ts";
 import { publishServiceEndpoint, removeServiceEndpoint } from "../../shared/process/workbench-service-endpoint.ts";
 import { WorkbenchAppControlPullRequestSchema, type WorkbenchAppProcessInfo,
-  type WorkbenchAppControlRuntime } from "../../shared/http/workbench-app-control.ts";
+  type WorkbenchAppControlLaunchUrl, type WorkbenchAppControlRuntime } from "../../shared/http/workbench-app-control.ts";
 import { areDeeplyEqual } from "../../shared/workbench/deep-equality.ts";
 
 interface OperationAdmission { start(): Promise<void>; cancel(): void; }
@@ -42,6 +42,8 @@ export default class WorkbenchAppControl {
     subscribeRuntime?(listener: () => void): () => void;
     reloadAll?(): OperationAdmission | null;
     pull?(reload: boolean): OperationAdmission | null;
+    /** The chosen browser address; null while networking is still resolving it. */
+    readLaunchUrl?(): string | null;
     warn(message: string): void;
   }) {}
 
@@ -77,6 +79,9 @@ export default class WorkbenchAppControl {
       const info: WorkbenchAppProcessInfo = { instanceId: this.instanceId,
         logDirectory: path.join(this.options.root, ".workbench", "logs"), logPrefix: "workbench-app" };
       send(info);
+    } else if (url === "/_workbench-control/launch-url" && request.method === "GET") {
+      const launch: WorkbenchAppControlLaunchUrl = { url: this.options.readLaunchUrl?.() ?? null };
+      send(launch);
     } else if (url === "/_workbench-control/runtime/events" && request.method === "GET") {
       const initial = this.options.readRuntime?.();
       if (!initial) { send({ error: "App runtime is not ready." }, 503); return true; }

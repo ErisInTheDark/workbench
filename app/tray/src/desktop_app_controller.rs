@@ -59,27 +59,41 @@ enum AppOriginChange {
     Unchanged,
 }
 
+/// The app's loopback origin from readiness, plus the address it announces for its chosen connection mode.
 #[derive(Default)]
 struct AppOriginState {
+    launch: Option<String>,
     open_when_ready: bool,
     origin: Option<String>,
 }
 
 impl AppOriginState {
+    /// The address to copy: the announced one, or the always-working loopback launcher until it arrives.
     fn launch_url(&self) -> Option<String> {
-        self.origin
-            .as_ref()
-            .map(|origin| format!("{origin}/launch"))
+        self.launch.clone().or_else(|| {
+            self.origin
+                .as_ref()
+                .map(|origin| format!("{origin}/launch"))
+        })
     }
 
+    /// Opening waits for the announced address so it never lands on the wrong one.
     fn request_open(&mut self) -> Option<String> {
-        match self.launch_url() {
+        match self.launch.clone() {
             Some(url) => Some(url),
             None => {
                 self.open_when_ready = true;
                 None
             }
         }
+    }
+
+    fn take_open(&mut self) -> bool {
+        let open = self.open_when_ready && self.launch.is_some();
+        if open {
+            self.open_when_ready = false;
+        }
+        open
     }
 
     fn update(&mut self, next: String, requested: bool) -> (AppOriginChange, bool) {
@@ -92,11 +106,16 @@ impl AppOriginState {
             AppOriginChange::Ready
         };
         self.origin = Some(next);
-        let open = change == AppOriginChange::Ready && (requested || self.open_when_ready);
-        if open {
-            self.open_when_ready = false;
+        if change == AppOriginChange::Ready && requested {
+            self.open_when_ready = true;
         }
-        (change, open)
+        (change, change == AppOriginChange::Ready && self.take_open())
+    }
+
+    /// Returns whether a held open request should now fire.
+    fn set_launch(&mut self, url: String) -> bool {
+        self.launch = Some(url);
+        self.take_open()
     }
 }
 
@@ -111,6 +130,7 @@ enum DesktopRecord {
         open_browser: bool,
         version: u8,
     },
+    LaunchUrl { url: String, version: u8 },
     Restart { version: u8 },
     Quit { version: u8 },
 }
@@ -355,6 +375,17 @@ impl DesktopAppController {
                     }
                 }
             }
+            DesktopRecord::LaunchUrl { url, version: 1 } if valid_launch_url(&url) => {
+                let open = self
+                    .app_origin
+                    .lock()
+                    .expect("app origin lock poisoned")
+                    .set_launch(url.clone());
+                self.log_launcher(&format!("Workbench opens at {url}."));
+                if open {
+                    self.open_browser(app);
+                }
+            }
             DesktopRecord::Restart { version: 1 } => {
                 self.log_launcher("Workbench app requested a full native restart.");
                 self.request_restart();
@@ -362,6 +393,7 @@ impl DesktopAppController {
             DesktopRecord::Quit { version: 1 } => self.request_quit(),
             DesktopRecord::AlreadyRunning { .. }
             | DesktopRecord::Ready { .. }
+            | DesktopRecord::LaunchUrl { .. }
             | DesktopRecord::Restart { .. }
             | DesktopRecord::Quit { .. } => {
                 self.log_launcher("Rejected unsupported app readiness record.");
@@ -595,6 +627,18 @@ fn valid_app_origin(value: &str) -> bool {
     !port.is_empty() && port.parse::<u16>().is_ok_and(|port| port > 0)
 }
 
+/// The tray hands this to the system opener, so only browser schemes with a host are accepted.
+fn valid_launch_url(value: &str) -> bool {
+    let rest = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"));
+    rest.is_some_and(|rest| {
+        !rest.is_empty()
+            && !rest.starts_with('/')
+            && !rest.chars().any(|character| character.is_whitespace() || character.is_control())
+    })
+}
+
 fn write_child_log(log: &Arc<Mutex<RotatingLogWriter>>, line: &str) {
     if let Ok(mut log) = log.lock() {
         let _ = log.write_child_line(line);
@@ -610,7 +654,8 @@ fn write_launcher_log(log: &Arc<Mutex<RotatingLogWriter>>, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        quit_deadline_expired, unexpected_child_failure, valid_app_origin, AppOriginChange,
+        quit_deadline_expired, unexpected_child_failure, valid_app_origin, valid_launch_url,
+        AppOriginChange,
         AppOriginState, DesktopAppController, DesktopRecord, ManagerCommand, ShutdownIntent,
     };
     use std::{
@@ -686,26 +731,69 @@ mod tests {
     }
 
     #[test]
-    fn pre_ready_open_is_retained_and_consumed_once() {
+    fn early_open_is_held_until_the_launch_url_arrives_and_fires_once() {
         let mut origin = AppOriginState::default();
         assert_eq!(origin.request_open(), None);
         assert_eq!(
             origin.update("http://127.0.0.1:43210".into(), false),
-            (AppOriginChange::Ready, true)
+            (AppOriginChange::Ready, false)
         );
+        assert!(origin.set_launch("https://desk.wb.inthedark.boo/launch".into()));
+        assert!(!origin.set_launch("https://desk.wb.inthedark.boo/launch".into()));
         assert_eq!(
-            origin.update("http://127.0.0.1:43210".into(), false),
-            (AppOriginChange::Unchanged, false)
+            origin.request_open().as_deref(),
+            Some("https://desk.wb.inthedark.boo/launch")
         );
     }
 
     #[test]
-    fn random_ready_requests_open_without_pending_activation() {
+    fn random_ready_open_lands_on_the_announced_url() {
         let mut origin = AppOriginState::default();
         assert_eq!(
             origin.update("http://127.0.0.1:43210".into(), true),
+            (AppOriginChange::Ready, false)
+        );
+        assert!(origin.set_launch("http://127.0.0.1:43210/launch".into()));
+
+        let mut announced_first = AppOriginState::default();
+        assert!(!announced_first.set_launch("http://100.80.0.2:8080/launch".into()));
+        assert_eq!(
+            announced_first.update("http://127.0.0.1:43210".into(), true),
             (AppOriginChange::Ready, true)
         );
+    }
+
+    #[test]
+    fn copy_falls_back_to_the_loopback_launcher_until_announced() {
+        let mut origin = AppOriginState::default();
+        assert_eq!(origin.launch_url(), None);
+        origin.update("http://127.0.0.1:43210".into(), false);
+        assert_eq!(
+            origin.launch_url().as_deref(),
+            Some("http://127.0.0.1:43210/launch")
+        );
+        origin.set_launch("http://100.80.0.2:8080/launch".into());
+        origin.update("http://127.0.0.1:43211".into(), false);
+        assert_eq!(
+            origin.launch_url().as_deref(),
+            Some("http://100.80.0.2:8080/launch")
+        );
+    }
+
+    #[test]
+    fn launch_urls_accept_only_browser_addresses() {
+        assert!(valid_launch_url("https://desk.wb.inthedark.boo/launch"));
+        assert!(valid_launch_url("http://127.0.0.1:43210/launch"));
+        assert!(!valid_launch_url("file:///etc/passwd"));
+        assert!(!valid_launch_url("https://"));
+        assert!(!valid_launch_url("https:///launch"));
+        assert!(!valid_launch_url("https://desk/launch now"));
+        assert!(matches!(
+            serde_json::from_str::<DesktopRecord>(
+                r#"{"type":"launchUrl","url":"https://desk.wb.inthedark.boo/launch","version":1}"#
+            ),
+            Ok(DesktopRecord::LaunchUrl { url, version: 1 }) if url == "https://desk.wb.inthedark.boo/launch"
+        ));
     }
 
     #[test]

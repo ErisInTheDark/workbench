@@ -25,6 +25,25 @@ test("announces structured loopback readiness", () => {
   );
 });
 
+test("announces the tray launch URL and refuses non-browser schemes", () => {
+  const output = new PassThrough();
+  let written = "";
+  output.on("data", (chunk) => {
+    written += chunk.toString();
+  });
+  const protocol = new WorkbenchAppProcessProtocol({
+    input: new PassThrough(),
+    onQuit: async () => {},
+    output,
+  });
+  protocol.announceLaunchUrl("https://desk.wb.inthedark.boo/launch");
+  assert.throws(() => protocol.announceLaunchUrl("file:///etc/passwd"), /HTTP or HTTPS/u);
+  assert.equal(
+    written,
+    '\u001eWORKBENCH_DESKTOP_V1 {"type":"launchUrl","url":"https://desk.wb.inthedark.boo/launch","version":1}\n',
+  );
+});
+
 test("encodes native lifecycle intents independently of human log output", () => {
   const output = new PassThrough();
   let written = "";

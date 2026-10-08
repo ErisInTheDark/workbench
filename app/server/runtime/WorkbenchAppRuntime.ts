@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeOptions: process-owned compiler, database, logging, and port configuration.
- * - default WorkbenchAppRuntime: own the stable graph host, runtime facts and reload ingress.
+ * - default WorkbenchAppRuntime: own the stable graph host, runtime facts, the relayed launch URL and reload ingress.
  */
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -86,6 +86,9 @@ export default class WorkbenchAppRuntime {
   private lastRequestedReactDevelopmentMode = false;
   private runtimeSourcesReady = false;
   private readonly controlListeners = new Set<() => void>();
+  private readonly launchUrlListeners = new Set<() => void>();
+  /** Last resolved launch URL; graph swaps and still-starting networking keep it rather than falling back to unknown. */
+  private launchUrl: string | null = null;
   private controlSourceUnsubscribers: Array<() => void> = [];
   private controlDaemonId: string | null = null;
   private controlObservations: {
@@ -240,6 +243,28 @@ export default class WorkbenchAppRuntime {
     };
   }
 
+  readLaunchUrl() {
+    return this.launchUrl;
+  }
+
+  subscribeLaunchUrl(listener: () => void) {
+    this.launchUrlListeners.add(listener);
+    return () => { this.launchUrlListeners.delete(listener); };
+  }
+
+  private refreshLaunchUrl() {
+    const next = this.host.get("network").launchUrl();
+    if (next === null || next === this.launchUrl) return;
+    this.launchUrl = next;
+    for (const listener of this.launchUrlListeners) {
+      try { listener(); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown launch URL listener failure.";
+        this.options.logger.error("app", `Launch URL notice failed: ${message.slice(0, 500)}`);
+      }
+    }
+  }
+
   private releaseControlSources() {
     for (const unsubscribe of this.controlSourceUnsubscribers) unsubscribe();
     this.controlSourceUnsubscribers = [];
@@ -297,6 +322,7 @@ export default class WorkbenchAppRuntime {
     this.runtimeListeners.clear();
     this.releaseControlSources();
     this.controlListeners.clear();
+    this.launchUrlListeners.clear();
     await this.host.dispose();
   }
 
@@ -331,12 +357,16 @@ export default class WorkbenchAppRuntime {
         this.publishRuntimeChange();
       }),
       network.subscribe(() => {
+        this.refreshLaunchUrl();
         const next = network.hostReloadDirt();
         if (areDeeplyEqual(next, this.lastHostDirt)) return;
         this.lastHostDirt = next;
         this.publishRuntimeChange();
       }),
+      // The loopback launch URL carries the listener port, which moves without a network change.
+      this.options.appPort.subscribe?.(async () => this.refreshLaunchUrl()) ?? (() => {}),
     ];
+    this.refreshLaunchUrl();
     this.bindControlSources();
   }
 

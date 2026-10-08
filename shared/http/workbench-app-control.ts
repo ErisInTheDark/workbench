@@ -3,6 +3,7 @@
  * - WorkbenchAppProcessInfoSchema/WorkbenchAppProcessInfo: private app identity and log location.
  * - WorkbenchAppControlRuntimeSchema/WorkbenchAppControlRuntime: local viewer summary of reload dirt, update and the in-flight operation.
  * - WorkbenchAppControlPullRequestSchema: local viewer pull intent.
+ * - WorkbenchAppControlLaunchUrlSchema/WorkbenchAppControlLaunchUrl: the browser address local viewers open.
  */
 import { z } from "zod";
 import { InstallationUpdateSchema } from "../workbench/installation-update";
@@ -25,3 +26,7 @@ export const WorkbenchAppControlRuntimeSchema = z.object({
 export type WorkbenchAppControlRuntime = z.infer<typeof WorkbenchAppControlRuntimeSchema>;
 
 export const WorkbenchAppControlPullRequestSchema = z.object({ reload: z.boolean() }).strict();
+
+/** `url`: the browser address for the chosen connection mode; null while networking is still resolving it. */
+export const WorkbenchAppControlLaunchUrlSchema = z.object({ url: z.url().nullable() }).strict();
+export type WorkbenchAppControlLaunchUrl = z.infer<typeof WorkbenchAppControlLaunchUrlSchema>;

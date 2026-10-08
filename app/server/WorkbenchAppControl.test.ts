@@ -70,7 +70,7 @@ test("app control authenticates, follows port movement and routes Quit once", as
   assert.equal(quitCount, 1);
 });
 
-test("private runtime and update endpoints require local admission and resolve callbacks per request", async context => {
+test("private runtime, update and launch-url endpoints require local admission and resolve callbacks per request", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-app-control-");
   const endpointPath = path.join(temporary.path, "runtime.json");
   let ready = false;
@@ -85,9 +85,11 @@ test("private runtime and update endpoints require local admission and resolve c
     cancel: () => assert.fail("Unexpected cancellation."),
     start: async () => { started(); },
   });
+  let launchUrl: string | null = null;
   const control = new WorkbenchAppControl({
     root: temporary.path, endpointPath, quit: () => assert.fail("Unexpected Quit."),
     warn: message => assert.fail(message),
+    readLaunchUrl: () => launchUrl,
     readRuntime: () => ready ? Promise.resolve({
       dirty, destructive: false, update: null, operation: IDLE_RELOAD_OPERATION,
     }) : null,
@@ -134,6 +136,12 @@ test("private runtime and update endpoints require local admission and resolve c
     assert.equal((await fetch(url, options)).status, 503);
   }
   assert.deepEqual(requests, []);
+  const launch = `${origin}/_workbench-control/launch-url`;
+  assert.equal((await fetch(launch)).status, 403);
+  assert.equal((await fetch(launch, { headers: { ...headers, "x-workbench-network-device": "remote" } })).status, 403);
+  assert.deepEqual(await (await fetch(launch, { headers })).json(), { url: null });
+  launchUrl = "https://desk.wb.inthedark.boo/launch";
+  assert.deepEqual(await (await fetch(launch, { headers })).json(), { url: launchUrl });
   ready = true;
   const runtime = await fetch(`${origin}/_workbench-control/runtime`, { headers });
   assert.equal(runtime.status, 200);

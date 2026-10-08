@@ -2,14 +2,15 @@
  * Exports:
  * - WorkbenchAppControlSnapshot: live app-control readiness, process identity and pushed reload/update summary.
  * - WorkbenchAppControlClientOptions: publication, transport and test seams.
- * - default WorkbenchAppControlClient: follow the private app publication and its runtime events, report its verified origin and admit Quit, reload-all and pull.
+ * - default WorkbenchAppControlClient: follow the private app publication and its runtime events, report its launch URL and admit Quit, reload-all and pull.
  */
 import { watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchServiceEndpoint } from "../shared/http/workbench-service.ts";
 import {
-  WorkbenchAppControlPullRequestSchema, WorkbenchAppControlRuntimeSchema, type WorkbenchAppControlRuntime,
+  WorkbenchAppControlLaunchUrlSchema, WorkbenchAppControlPullRequestSchema, WorkbenchAppControlRuntimeSchema,
+  type WorkbenchAppControlRuntime,
 } from "../shared/http/workbench-app-control.ts";
 import { readServiceEndpoint, verifyServiceEndpoint } from "../shared/process/workbench-service-endpoint.ts";
 
@@ -75,9 +76,21 @@ export default class WorkbenchAppControlClient {
     return this.queue;
   }
 
-  /** The live app's verified browser origin. */
-  async origin(): Promise<string> {
-    return (await this.current()).origin;
+  /** The browser address for the app's chosen connection mode, or its loopback launcher while that is still resolving. */
+  async launchUrl(): Promise<string> {
+    const endpoint = await this.current();
+    const fetcher = this.options.fetcher ?? fetch;
+    const response = await fetcher(`${endpoint.origin}/_workbench-control/launch-url`, {
+      headers: { Authorization: `Bearer ${endpoint.token}` },
+      redirect: "error",
+      signal: this.lifetime.signal,
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).trim().slice(0, 500);
+      throw new Error(`App launch URL was rejected${detail ? `: ${detail}` : ` (HTTP ${response.status}).`}`);
+    }
+    const { url } = WorkbenchAppControlLaunchUrlSchema.parse(await response.json());
+    return url ?? new URL("/launch", endpoint.origin).href;
   }
 
   async quit(): Promise<void> {

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAppProcessProtocolOptions: desktop stdio protocol ports.
- * - default WorkbenchAppProcessProtocol: announce app state and route native restart and Quit through one owner.
+ * - default WorkbenchAppProcessProtocol: announce app state and launch URL, and route native restart and Quit through one owner.
  */
 import type { Readable, Writable } from "node:stream";
 
@@ -59,6 +59,15 @@ export default class WorkbenchAppProcessProtocol {
       type: "ready",
       version: 1,
     });
+  }
+
+  /** The address the tray opens and copies; the loopback origin from readiness stays the app's own identity. */
+  announceLaunchUrl(url: string) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Desktop launch URLs must use HTTP or HTTPS.");
+    }
+    this.writeRecord({ type: "launchUrl", url: parsed.href, version: 1 });
   }
 
   requestRestart() {
@@ -120,7 +129,8 @@ export default class WorkbenchAppProcessProtocol {
 
   private writeRecord(record:
     | { type: "alreadyRunning" | "restart" | "quit"; version: 1 }
-    | { appOrigin: string; openBrowser: boolean; type: "ready"; version: 1 }) {
+    | { appOrigin: string; openBrowser: boolean; type: "ready"; version: 1 }
+    | { type: "launchUrl"; url: string; version: 1 }) {
     this.output.write(`${RECORD_PREFIX}${JSON.stringify(record)}\n`);
   }
 }

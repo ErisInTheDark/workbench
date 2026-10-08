@@ -333,6 +333,39 @@ test("persisted owner can manage its network while disconnected but a member can
   }
 });
 
+test("the launch URL follows the chosen mode once ready, waits while it starts and otherwise stays local", async context => {
+  const local = fixture();
+  context.after(() => local.owner.close());
+  assert.equal(local.owner.launchUrl(), null, "unknown until networking configuration arrives");
+  await local.start();
+  assert.equal(local.owner.launchUrl(), "http://127.0.0.1:4200/launch");
+
+  const tailnet = fixture();
+  context.after(() => tailnet.owner.close());
+  tailnet.seed({ mode: "tailnet-ip", hostServe: { enabled: true, port: 8080 }, privateAccess: null, members: [] });
+  await tailnet.start();
+  const runtime = () => tailnet.owner.snapshot().runtime;
+  tailnet.publish({ ...runtime(), hostServe: { phase: "starting", message: null, url: null } });
+  assert.equal(tailnet.owner.launchUrl(), null);
+  tailnet.publish({ ...runtime(), hostServe: { phase: "ready", message: null, url: "http://100.80.0.2:8080" } });
+  assert.equal(tailnet.owner.launchUrl(), "http://100.80.0.2:8080/launch");
+  tailnet.publish({ ...runtime(), hostServe: { phase: "failed", message: "down", url: null } });
+  assert.equal(tailnet.owner.launchUrl(), "http://127.0.0.1:4200/launch");
+
+  const service = fixture();
+  context.after(() => service.owner.close());
+  service.seed({
+    mode: "tailnet-service", hostServe: { enabled: true, port: 8080 }, members: [],
+    privateAccess: { role: "authority", label: "desktop", enabled: true },
+  });
+  await service.start();
+  const ready = { ...service.owner.snapshot().runtime, hostServe: { phase: "ready" as const, message: null, url: "http://100.80.0.2:8080" } };
+  service.publish({ ...ready, privateAccess: { ...ready.privateAccess, phase: "login", url: null } });
+  assert.equal(service.owner.launchUrl(), "http://127.0.0.1:4200/launch", "private HTTPS never falls back to plain tailnet");
+  service.publish({ ...ready, privateAccess: { ...ready.privateAccess, phase: "ready", url: "https://desktop.wb.inthedark.boo" } });
+  assert.equal(service.owner.launchUrl(), "https://desktop.wb.inthedark.boo/launch");
+});
+
 test("disabled defaults spawn nothing; independent modes follow port changes and close when disabled", async () => {
   const f = fixture();
   await f.start();

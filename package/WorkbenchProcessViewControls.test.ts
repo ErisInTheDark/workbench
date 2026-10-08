@@ -42,7 +42,7 @@ function fixture() {
     close: async () => { calls.push("close-app"); },
     subscribe: () => () => {},
     getSnapshot: () => ({ ready: appState.ready, instanceId: appState.instanceId, runtime: appState.runtime }),
-    origin: async () => "http://127.0.0.1:45409",
+    launchUrl: async () => "https://desk.wb.inthedark.boo/launch",
     quit: async () => { calls.push("quit"); },
     reloadAll: async () => { calls.push("reload-all"); },
     pull: async reload => { calls.push(`pull ${reload}`); },
@@ -117,7 +117,7 @@ test("kill app, open app and start app follow app availability", async () => {
   const controls = await f.controls;
   await assert.rejects(controls.startApp(), /already running/u);
   await controls.openApp();
-  assert.ok(f.calls.includes("open http://127.0.0.1:45409"));
+  assert.ok(f.calls.includes("open https://desk.wb.inthedark.boo/launch"));
   await controls.killApp();
   assert.ok(f.calls.includes("quit"));
   f.appState.ready = false;

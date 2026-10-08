@@ -45,7 +45,7 @@ export interface ProcessViewAppClient {
   close(): Promise<void>;
   subscribe(listener: () => void): () => void;
   getSnapshot(): { ready: boolean; instanceId: string | null; runtime: WorkbenchAppControlRuntime | null };
-  origin(): Promise<string>;
+  launchUrl(): Promise<string>;
   quit(): Promise<void>;
   reloadAll(): Promise<void>;
   pull(reload: boolean): Promise<void>;
@@ -147,7 +147,7 @@ export default async function createWorkbenchProcessViewControls(
     },
     async openApp() {
       requireApp();
-      await (options.openUrl ?? openUrl)(await app.origin());
+      await (options.openUrl ?? openUrl)(await app.launchUrl());
     },
     async reloadAll() {
       requireApp();

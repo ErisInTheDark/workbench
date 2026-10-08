@@ -17,6 +17,7 @@ const runtime = (dirty: boolean): WorkbenchAppControlRuntime => ({ dirty, destru
 function fixture() {
   let current: WorkbenchServiceEndpoint | null = null;
   let health = async () => {};
+  let launchUrl: string | null = null;
   const requests: Array<{ url: string; body: string | null }> = [];
   const warnings: string[] = [];
   const streams: Array<ReadableStreamDefaultController<Uint8Array>> = [];
@@ -32,6 +33,7 @@ function fixture() {
         return new Response(new ReadableStream<Uint8Array>({ start: controller => { streams.push(controller); } }), { status: 200 });
       }
       requests.push({ url, body: typeof init?.body === "string" ? init.body : null });
+      if (url.endsWith("/launch-url")) return Response.json({ url: launchUrl });
       return new Response(null, { status: 200 });
     },
   });
@@ -40,6 +42,7 @@ function fixture() {
   return {
     client, requests, warnings, streams, emit,
     set current(value: WorkbenchServiceEndpoint | null) { current = value; },
+    set launchUrl(value: string | null) { launchUrl = value; },
     failHealth() { health = async () => { throw new Error("unreachable"); }; },
   };
 }
@@ -94,6 +97,16 @@ test("runtime events belong to the instance that sent them", async () => {
   f.emit(1, runtime(false));
   await flush();
   assert.deepEqual(f.client.getSnapshot().runtime, runtime(false));
+  await f.client.close();
+});
+
+test("the launch URL is the app's chosen address, or its loopback launcher while that resolves", async () => {
+  const f = fixture();
+  f.current = endpoint("one");
+  await f.client.start();
+  assert.equal(await f.client.launchUrl(), "http://127.0.0.1:4321/launch");
+  f.launchUrl = "https://desk.wb.inthedark.boo/launch";
+  assert.equal(await f.client.launchUrl(), "https://desk.wb.inthedark.boo/launch");
   await f.client.close();
 });
 
