@@ -1,7 +1,7 @@
 /*
- * Exports: none. Tests protect subagent settle readiness polling: a late terminal
- * lifecycle is awaited before mutating, a still-working child still errors at the
- * deadline, and a runtime drain aborts a pending wait.
+ * Exports: none. Tests protect subagent settle: a late terminal lifecycle is awaited,
+ * a still-working child still errors at the deadline, a runtime drain aborts the wait,
+ * and a refused mutation surfaces as failure instead of false success.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -54,7 +54,9 @@ async function createHarness() {
     directSubagentIndex: reservation.directSubagentIndex,
   });
 
+  let gitArc: unknown = null;
   let lifecycle: Lifecycle = { kind: "working" };
+  let refuseMutation = false;
   const mutations: Array<Record<string, unknown>> = [];
   const controller = new WorkbenchSubagentController({
     identities: database.identities.threads,
@@ -67,15 +69,20 @@ async function createHarness() {
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
     subagentStore,
     threadState: {
-      getEntry: async () => ({ entryKind: "subagent", pinned: false, lifecycle }) as never,
-      mutate: async (request) => { mutations.push(request as unknown as Record<string, unknown>); },
+      getEntry: async () => ({ entryKind: "subagent", gitArc, pinned: false, lifecycle }) as never,
+      mutate: async (request) => {
+        mutations.push(request as unknown as Record<string, unknown>);
+        return { accepted: !refuseMutation };
+      },
       subscribe: () => () => undefined,
     },
   });
   return {
     controller,
     mutations,
+    setGitArc: (next: unknown) => { gitArc = next; },
     setLifecycle: (next: Lifecycle) => { lifecycle = next; },
+    setRefuseMutation: (next: boolean) => { refuseMutation = next; },
     settle: (): Promise<JsonRpcResponse> => controller.handleRequest({
       id: 1,
       method: "workbench/subagent/settle",
@@ -137,4 +144,18 @@ test("a runtime drain aborts a pending settle wait", async (context) => {
   const response = await pending;
   assert.match(response.error?.message ?? "", /draining for runtime reload/u);
   assert.deepEqual(harness.mutations, []);
+});
+
+test("a refused mutation surfaces failure instead of false success", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const harness = await createHarness();
+  context.after(() => harness.controller.dispose());
+  harness.setLifecycle({ kind: "completed" });
+  harness.setGitArc({ claimedPaths: ["src/a.ts"], phase: "active" });
+  harness.setRefuseMutation(true);
+
+  const response = await harness.settle();
+  assert.match(response.error?.message ?? "", /still holds live Git arc claims and cannot be settled/u);
+  assert.equal(response.result, undefined);
+  assert.equal(harness.mutations.length, 1);
 });

@@ -23,7 +23,7 @@ import {
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
-import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import { gitArcPreventsThreadSettlement, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
@@ -64,7 +64,7 @@ export interface WorkbenchSubagentControllerOptions {
   queueReleaseNote?(threadId: WorkbenchThreadId): string | null;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
-    mutate(request: WorkbenchThreadStateRequest): Promise<void>;
+    mutate(request: WorkbenchThreadStateRequest): Promise<{ accepted: boolean }>;
     subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
   };
 }
@@ -544,7 +544,12 @@ export default class WorkbenchSubagentController {
     }
     if (blocked) throw new Error(`Subagent ${blocked.name} can be settled only after it is Completed or Stopped.`);
     for (const record of records) {
-      await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
+      const { accepted } = await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
+      if (accepted) continue;
+      const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
+      throw new Error(entry?.entryKind === "subagent" && gitArcPreventsThreadSettlement(entry.gitArc)
+        ? `Subagent ${record.name} still holds live Git arc claims and cannot be settled.`
+        : `Subagent ${record.name} could not be settled.`);
     }
     return { settled: records.map(({ name, threadId }) => ({ name, threadId })) };
   }
