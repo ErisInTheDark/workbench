@@ -16,25 +16,27 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-package-wb-");
   const root = temporary.path;
   const adapterPath = path.join(root, "package", "wb");
-  const checkoutCliPath = path.join(root, "wb");
+  const checkoutCliPath = path.join(root, "cli", "dispatch.mjs");
   const workingDirectory = path.join(root, "project");
   await fs.mkdir(path.dirname(adapterPath), { recursive: true });
+  await fs.mkdir(path.dirname(checkoutCliPath), { recursive: true });
+  await fs.mkdir(path.join(root, "installation"), { recursive: true });
   await fs.mkdir(workingDirectory);
   await fs.copyFile(packageAdapterPath, adapterPath);
-  for (const name of ["WorkbenchBootstrap.mjs", "WorkbenchInstallPrompt.mjs", "installer-cube.mjs", "SetupCommand.mjs"]) {
+  for (const name of ["WorkbenchBootstrap.mjs", "WorkbenchBootstrapPrompt.mjs", "WorkbenchBootstrapCommand.mjs"]) {
     await fs.copyFile(path.join(import.meta.dirname, name), path.join(root, "package", name));
   }
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "workbench-root", type: "module" }));
-  await fs.writeFile(path.join(root, "package", "setup.mjs"), "");
+  await fs.writeFile(path.join(root, "installation", "install.mjs"), "");
+  await fs.writeFile(path.join(root, "wb"), "");
   await fs.writeFile(path.join(workingDirectory, "caller-sentinel"), "", "utf8");
 
   if (options.checkoutCli !== false) {
     await fs.writeFile(checkoutCliPath, [
-      "#!/usr/bin/env bash",
-      "if [[ -f ./caller-sentinel ]]; then printf 'cwd=preserved|args='; else printf 'cwd=changed|args='; fi",
-      "printf '%s,' \"$@\"",
-      "printf '\\n'",
-      "exit \"${FIXTURE_EXIT_CODE:-0}\"",
+      "import fs from 'node:fs';",
+      "process.stdout.write(`${fs.existsSync('./caller-sentinel') ? 'cwd=preserved' : 'cwd=changed'}|args=`);",
+      "process.stdout.write(`${process.argv.slice(2).map(value => `${value},`).join('')}\\n`);",
+      "process.exitCode = Number(process.env.FIXTURE_EXIT_CODE ?? 0);",
       "",
     ].join("\n"), "utf8");
   }
@@ -42,7 +44,7 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
   return { adapterPath, root, workingDirectory };
 }
 
-test("delegates to the checkout wb with the caller context", async (context) => {
+test("delegates to the checkout CLI with the caller context", async (context) => {
   const fixture = await packageFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
   const result = await execFileAsync(process.execPath, [fixture.adapterPath, "thread", "recall"], {

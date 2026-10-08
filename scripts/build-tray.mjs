@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { register } from "tsx/cjs/api";
-import SetupCommand from "../package/SetupCommand.mjs";
+import { runCommand } from "./run-command.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRootPath = path.resolve(path.dirname(scriptPath), "..");
@@ -18,7 +18,7 @@ async function runTrayBuild() {
   }
   const name = process.platform === "win32" ? "workbench-tray.exe" : "workbench-tray";
   const platform = `${process.platform === "win32" ? "windows" : "linux"}-${process.arch}`;
-  await new SetupCommand().run("cargo", ["build", "--release", "--manifest-path", manifestPath], { cwd: repositoryRootPath });
+  await runCommand("cargo", ["build", "--release", "--manifest-path", manifestPath], { cwd: repositoryRootPath });
   const unregister = register();
   try {
     const Publisher = createRequire(import.meta.url)("../shared/process/NativeArtifactPublisher.ts").default;

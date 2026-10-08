@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { readJournal, isRepairPending } from "../../package/update-journal.mjs";
+import { readJournal, isRepairPending } from "../../installation/update-journal.mjs";
 
 try {
   if (isRepairPending(await readJournal())) {

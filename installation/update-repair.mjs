@@ -7,7 +7,7 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import SetupCommand from "./SetupCommand.mjs";
+import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
 import { resolveDataRoot, readJournal, writeJournal, isRepairPending, journalPath } from "./update-journal.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -280,10 +280,10 @@ async function repair(options) {
     appendFileSync(journal.logPath, `${line}\n`);
     process.stderr.write(`${line}\n`);
   });
-  // SetupCommand turns onOutput failures into typed child-command failures.
+  // WorkbenchBootstrapCommand turns onOutput failures into typed child-command failures.
   // Writing in the output sink itself would escape its error boundary.
   const commandOutput = { write() {} };
-  const commands = options.commands ?? new SetupCommand({ output: commandOutput, errorOutput: commandOutput });
+  const commands = options.commands ?? new WorkbenchBootstrapCommand({ output: commandOutput, errorOutput: commandOutput });
   const stop = options.stop ?? (() => stopProcesses(dataRoot, {
     files, alive: options.alive ?? isAlive, sleep: options.sleep ?? delay, log,
     verify: options.verify ?? verifyPublication,
@@ -375,7 +375,7 @@ async function repair(options) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+async function main() {
   try {
     if (process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim()) {
       throw new Error("Managed threads cannot repair Workbench dependencies. Ask the user to run `wb repair`.");
@@ -387,3 +387,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exitCode = 1;
   }
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) void main();

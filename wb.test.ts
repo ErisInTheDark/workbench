@@ -18,7 +18,7 @@ async function dispatcherFixture() {
   const root = temporary.path;
   const dispatcherPath = path.join(root, "wb");
   const daemonCliPath = path.join(root, "daemon", "server", "lib", "workbench", "cli", "workbench-agent-cli.sh");
-  const dispatchPath = path.join(root, "package", "dispatch.mjs");
+  const dispatchPath = path.join(root, "cli", "dispatch.mjs");
   await fs.mkdir(path.dirname(daemonCliPath), { recursive: true });
   await fs.mkdir(path.dirname(dispatchPath), { recursive: true });
   await fs.copyFile(rootDispatcherPath, dispatcherPath);

@@ -41,7 +41,7 @@ export const InstallationUpdateSchema = z.object({
 export type InstallationUpdate = z.infer<typeof InstallationUpdateSchema>;
 
 /**
- * The repair journal written by the built-ins-only engine in `package/update.mjs` (which mirrors this shape without
+ * The repair journal written by the built-ins-only engine in `installation/update-repair.mjs` (which mirrors this shape without
  * zod). Phases advance in order; `done` and `stranded` are terminal, and only `done` lets processes load
  * `node_modules`. `failure` survives `done` when a rung beyond a plain install was needed, until dismissed.
  */

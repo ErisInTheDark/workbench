@@ -17,9 +17,11 @@ test("a fresh sandboxed install clones the working tree, builds it and hands lat
   context.after(() => sandbox.dispose());
 
   const { default: Bootstrap } = await import(pathToFileURL(path.join(sandbox.packageRoot, "WorkbenchBootstrap.mjs")).href);
-  const { default: SetupCommand } = await import(pathToFileURL(path.join(sandbox.packageRoot, "SetupCommand.mjs")).href);
+  const { default: WorkbenchBootstrapCommand } = await import(
+    pathToFileURL(path.join(sandbox.packageRoot, "WorkbenchBootstrapCommand.mjs")).href,
+  );
   const sink = { write: (bytes: unknown) => { log.push(String(bytes)); return true; } };
-  const real = new SetupCommand({ environment: sandbox.environment, output: sink, errorOutput: sink });
+  const real = new WorkbenchBootstrapCommand({ environment: sandbox.environment, output: sink, errorOutput: sink });
   const calls: Call[] = [];
   const commands = {
     async run(command: string, args: readonly string[], options: RunOptions = {}) {

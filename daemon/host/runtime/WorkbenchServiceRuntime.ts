@@ -34,7 +34,7 @@ export default class WorkbenchServiceRuntime {
         },
         assets: [
           "daemon/host/launch-node.mjs", "daemon/host/launch-foreground.mjs",
-          "daemon/host/native/**", "daemon/host/package.json", "package/update-journal.mjs",
+          "daemon/host/native/**", "daemon/host/package.json", "installation/update-journal.mjs",
         ].join("\n"),
       }],
     });

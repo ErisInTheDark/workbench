@@ -7,7 +7,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
-import SetupCommand from "./SetupCommand.mjs";
+import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
 
 const windowsOnly = { skip: process.platform !== "win32" && "Git Bash lookup is Windows-only" };
 
@@ -26,7 +26,7 @@ async function machine(context: test.TestContext, executables: string[], pathDir
     ProgramFiles: at("Program Files"),
     LOCALAPPDATA: at("Local"),
   };
-  return { at, command: new SetupCommand({ environment }) };
+  return { at, command: new WorkbenchBootstrapCommand({ environment }) };
 }
 
 test("WSL's bash launcher is skipped in favour of the Git Bash beside git", windowsOnly, async context => {
@@ -58,7 +58,7 @@ test("setup forwards literal arguments without shell interpretation", async () =
   const output = new PassThrough();
   let text = "";
   output.on("data", chunk => { text += chunk.toString(); });
-  const command = new SetupCommand({ output, errorOutput: output });
+  const command = new WorkbenchBootstrapCommand({ output, errorOutput: output });
   await command.run(process.execPath, [
     "-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
     "has spaces", "$(not-a-command)", "a&b", 'a"b', "tail\\",
@@ -67,7 +67,7 @@ test("setup forwards literal arguments without shell interpretation", async () =
 });
 
 test("setup preserves process failures and does not run cancelled commands", async () => {
-  const command = new SetupCommand();
+  const command = new WorkbenchBootstrapCommand();
   await assert.rejects(command.run(process.execPath, ["-e", "process.exit(7)"]), /7/);
   const controller = new AbortController();
   controller.abort();
@@ -79,7 +79,7 @@ test("setup preserves process failures and does not run cancelled commands", asy
 });
 
 test("interactive handoff releases signal forwarding after child exit and startup failure", async () => {
-  const command = new SetupCommand();
+  const command = new WorkbenchBootstrapCommand();
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   const before = signals.map(signal => process.listenerCount(signal));
   await command.run(process.execPath, ["-e", "process.exit(0)"], { interactive: true });

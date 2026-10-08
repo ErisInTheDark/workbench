@@ -1,5 +1,5 @@
 /*
- * No exports. Install-sandbox overlay for package/dispatch.mjs: host-level human commands only pretend; others reach the checkout CLI.
+ * No exports. Install-sandbox overlay for cli/dispatch.mjs: host-level human commands only pretend; others reach the checkout CLI.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +20,11 @@ if (Object.hasOwn(pretend, command)) {
   process.stdout.write(`[install sandbox] pretending: ${pretend[command]}\n`);
 } else {
   try {
-    // Resolved where InstallSandbox copies this overlay: the snapshot's package/dispatch.mjs.
-    const { default: SetupCommand } = await import(new URL("./SetupCommand.mjs", import.meta.url).href);
-    await new SetupCommand().run("bash", [path.join(root, "wb"), ...args]); }
+    // Resolved where InstallSandbox copies this overlay: the snapshot's cli/dispatch.mjs.
+    const { default: WorkbenchBootstrapCommand } = await import(
+      new URL("../package/WorkbenchBootstrapCommand.mjs", import.meta.url).href,
+    );
+    await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args]); }
   catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;

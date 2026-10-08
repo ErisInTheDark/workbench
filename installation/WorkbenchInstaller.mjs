@@ -1,16 +1,16 @@
 /*
  * Exports:
- * - WorkbenchSetup (default): checkout-owned dependency setup and first-run actions.
+ * - WorkbenchInstaller (default): owns pinned checkout preparation and first-run actions.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
-import SetupCommand from "./SetupCommand.mjs";
+import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
 
-export default class WorkbenchSetup {
+export default class WorkbenchInstaller {
   constructor({
     root,
-    commands = new SetupCommand(),
+    commands = new WorkbenchBootstrapCommand(),
     prompt = new WorkbenchInstallPrompt(),
     detectTailscale,
     nodeVersion = process.versions.node,
@@ -25,6 +25,14 @@ export default class WorkbenchSetup {
   }
 
   async prepare() {
+    this.write("Installing pinned runtime...\n");
+    await this.commands.run("vp", ["env", "install"], { cwd: this.root });
+    await this.commands.run("vp", ["node", path.join(this.root, "installation", "install.mjs"), "--prepare-pinned"], {
+      cwd: this.root,
+    });
+  }
+
+  async preparePinned() {
     const manifest = JSON.parse(await fs.readFile(path.join(this.root, "package.json"), "utf8"));
     const expectedNode = manifest.devEngines?.runtime?.version;
     if (!expectedNode || this.nodeVersion !== expectedNode) {
@@ -81,7 +89,7 @@ export default class WorkbenchSetup {
   }
 
   async dispatch(args) {
-    await this.commands.run(process.execPath, [path.join(this.root, "package", "dispatch.mjs"), ...args], { cwd: this.root });
+    await this.commands.run(process.execPath, [path.join(this.root, "cli", "dispatch.mjs"), ...args], { cwd: this.root });
   }
 
   async hasTailscale() {

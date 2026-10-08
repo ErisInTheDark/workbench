@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - SetupCommand (default): owns checkout setup child commands, their Windows executable lookup (including Git Bash) and their failures.
+ * - WorkbenchBootstrapCommand (default): owns bootstrap child commands, Windows executable lookup (including Git Bash), and failures.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export default class SetupCommand {
+export default class WorkbenchBootstrapCommand {
   constructor({ output = process.stdout, errorOutput = process.stderr, environment = process.env } = {}) {
     this.output = output;
     this.errorOutput = errorOutput;

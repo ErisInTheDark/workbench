@@ -34,4 +34,4 @@ if (( hook_mode == 1 )) || [[ -n "$thread_id" ]] || (( human_mode == 0 )); then
   exec bash "$daemon_cli" "$@"
 fi
 
-exec node --disable-warning=ExperimentalWarning "$workbench_root/package/dispatch.mjs" "$@"
+exec node --disable-warning=ExperimentalWarning "$workbench_root/cli/dispatch.mjs" "$@"

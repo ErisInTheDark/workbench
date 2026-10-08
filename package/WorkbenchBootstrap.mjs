@@ -9,16 +9,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
-import SetupCommand from "./SetupCommand.mjs";
+import WorkbenchBootstrapPrompt from "./WorkbenchBootstrapPrompt.mjs";
+import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
 
 export default class WorkbenchBootstrap {
   constructor({
     home = os.homedir(),
     packageRoot = path.dirname(fileURLToPath(import.meta.url)),
     environment = process.env,
-    prompt = new WorkbenchInstallPrompt(),
-    commands = new SetupCommand(),
+    prompt = new WorkbenchBootstrapPrompt(),
+    commands = new WorkbenchBootstrapCommand(),
     write = text => process.stdout.write(text),
   } = {}) {
     this.home = home;
@@ -35,7 +35,8 @@ export default class WorkbenchBootstrap {
       const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
       if (manifest.name !== "workbench-root") return false;
       await fs.access(path.join(root, "wb"));
-      await fs.access(path.join(root, "package", "setup.mjs"));
+      await fs.access(path.join(root, "installation", "install.mjs"));
+      await fs.access(path.join(root, "cli", "dispatch.mjs"));
       return true;
     } catch (error) {
       if (error.code === "ENOENT") return false;
@@ -135,12 +136,12 @@ export default class WorkbenchBootstrap {
     if (managed && humanCommand) throw new Error("Managed threads cannot install or launch Workbench services.");
     const linked = path.resolve(this.packageRoot, "..");
     if (await this.checkoutExists(linked)) {
-      return await this.commands.run("bash", [path.join(linked, "wb"), ...args], { interactive: view });
+      return await this.delegate(linked, args);
     }
     const installed = await this.readInstallation();
     if (installed?.phase === "ready") {
       const state = await this.checkoutState(installed.root);
-      if (state === "usable") return await this.delegate(installed.root, args, humanCommand);
+      if (state === "usable") return await this.delegate(installed.root, args);
       if (state === "invalid") {
         throw new Error(`Workbench checkout is unavailable at ${installed.root}. Restore or repair that installation; no replacement was created.`);
       }
@@ -180,7 +181,7 @@ export default class WorkbenchBootstrap {
       const latest = await this.readInstallation();
       if (latest?.phase === "ready") {
         const state = await this.checkoutState(latest.root);
-        if (state === "usable") return await this.delegate(latest.root, args, humanCommand);
+        if (state === "usable") return await this.delegate(latest.root, args);
         if (state === "invalid") {
           throw new Error(`Workbench checkout is unavailable at ${latest.root}. Restore or repair that installation; no replacement was created.`);
         }
@@ -201,8 +202,7 @@ export default class WorkbenchBootstrap {
           if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
           record = { ...record, phase: "setup" };
           await this.writeInstallation(record);
-          await this.commands.run("vp", ["env", "install"], { cwd: root });
-          await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"), "--prepare"], { cwd: root });
+          await this.commands.run(process.execPath, [path.join(root, "installation", "install.mjs"), "--prepare"], { cwd: root });
         } catch (error) {
           try { await this.discardIncomplete(record); }
           catch (cleanupError) {
@@ -220,15 +220,12 @@ export default class WorkbenchBootstrap {
     }
     // Persist readiness before optional platform actions: missing native artifacts
     // must not turn a usable source installation into an endless setup loop.
-    await this.commands.run("vp", ["node", path.join(root, "package", "setup.mjs"),
+    await this.commands.run(process.execPath, [path.join(root, "installation", "install.mjs"),
       args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root, interactive: true });
   }
 
-  async delegate(root, args, humanCommand) {
-    if (humanCommand) {
-      return await this.commands.run(process.execPath, [path.join(root, "package", "dispatch.mjs"), ...args], { interactive: args[0] === "view" });
-    }
-    return await this.commands.run("bash", [path.join(root, "wb"), ...args]);
+  async delegate(root, args) {
+    return await this.commands.run(process.execPath, [path.join(root, "cli", "dispatch.mjs"), ...args], { interactive: true });
   }
 
   async requireEmptyDestination(root) {

@@ -19,7 +19,8 @@
     "typecheck": "node scripts/typecheck.mjs",
     "dev": "node --env-file-if-exists=./daemon/.env.local ./daemon/host/launch-foreground.mjs",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server",
-    "pack": "pnpm --dir ./package pack"
+    "pack": "node scripts/publish-package.mjs --pack",
+    "publish:package": "node scripts/publish-package.mjs --publish"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",

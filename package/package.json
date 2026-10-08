@@ -2,6 +2,14 @@
   "name": "@inthedark/wb",
   "version": "0.0.1",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ErisInTheDark/workbench.git",
+    "directory": "package"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
@@ -17,9 +25,8 @@
   "files": [
     "wb",
     "WorkbenchBootstrap.mjs",
-    "WorkbenchInstallPrompt.mjs",
-    "installer-cube.mjs",
-    "SetupCommand.mjs",
+    "WorkbenchBootstrapCommand.mjs",
+    "WorkbenchBootstrapPrompt.mjs",
     "index.mjs",
     "index.d.ts",
     "store-definitions.mjs",

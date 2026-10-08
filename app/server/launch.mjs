@@ -4,8 +4,8 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readJournal, isRepairPending } from "../../package/update-journal.mjs";
-import { runRepair } from "../../package/update.mjs";
+import { readJournal, isRepairPending } from "../../installation/update-journal.mjs";
+import { runRepair } from "../../installation/update-repair.mjs";
 
 try {
   if (process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim()) {

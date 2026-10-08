@@ -10,7 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
 import { InstallationRepairJournalSchema } from "workbench-shared/workbench/installation-update";
-import { readJournal, writeJournal, resolveDataRoot, isRepairPending } from "../../../package/update-journal.mjs";
+import { readJournal, writeJournal, resolveDataRoot, isRepairPending } from "../../../installation/update-journal.mjs";
 
 import type WorkbenchAppReloadDirtController from "./WorkbenchAppReloadDirtController.ts";
 

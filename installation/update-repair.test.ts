@@ -9,7 +9,7 @@ import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory.t
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { runRepair } from "./update.mjs";
+import { runRepair } from "./update-repair.mjs";
 import { InstallationRepairJournalSchema, type InstallationRepairJournal } from "../shared/workbench/installation-update.ts";
 import { isRepairPending, readJournal, resolveDataRoot, writeJournal } from "./update-journal.mjs";
 import resolveWorkbenchDataRoot from "../shared/workbench-data-root.ts";
@@ -282,7 +282,12 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
   const root = temporary.path;
   const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const entries = ["app/server/launch.mjs", "daemon/host/launch-node.mjs", "daemon/host/launch-foreground.mjs"];
-  for (const filename of [...entries, "package/update.mjs", "package/update-journal.mjs", "package/SetupCommand.mjs"]) {
+  for (const filename of [
+    ...entries,
+    "installation/update-repair.mjs",
+    "installation/update-journal.mjs",
+    "package/WorkbenchBootstrapCommand.mjs",
+  ]) {
     await fs.mkdir(path.dirname(path.join(root, filename)), { recursive: true });
     await fs.copyFile(path.join(checkout, filename), path.join(root, filename));
   }
@@ -305,7 +310,7 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
   }
   // Managed threads never touch the journal.
   const untouched = (await readJournal(dataRoot))?.updatedAt;
-  for (const entry of ["app/server/launch.mjs", "package/update.mjs"]) {
+  for (const entry of ["app/server/launch.mjs", "installation/update-repair.mjs"]) {
     await assert.rejects(promisify(execFile)(process.execPath, [path.join(root, entry)], {
       cwd: root, env: { ...process.env, WORKBENCH_DATA_ROOT: dataRoot, WORKBENCH_THREAD_ID: "fixture-managed" },
     }), error => {

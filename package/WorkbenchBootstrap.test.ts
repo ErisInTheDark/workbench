@@ -34,10 +34,12 @@ async function fixture(context, options = {}) {
     async run(command, args, config) {
       calls.push({ command, args, config, pinned: header.pinned });
       if (command === "git" && args[0] === "clone") {
-        await fs.mkdir(path.join(checkout, "package"), { recursive: true });
+        await fs.mkdir(path.join(checkout, "installation"), { recursive: true });
+        await fs.mkdir(path.join(checkout, "cli"), { recursive: true });
         await fs.mkdir(path.join(checkout, ".git"));
         await fs.writeFile(path.join(checkout, "package.json"), '{"name":"workbench-root"}');
-        await fs.writeFile(path.join(checkout, "package", "setup.mjs"), "");
+        await fs.writeFile(path.join(checkout, "installation", "install.mjs"), "");
+        await fs.writeFile(path.join(checkout, "cli", "dispatch.mjs"), "");
         await fs.writeFile(path.join(checkout, "wb"), "");
       }
       if (command === "git" && args[0] === "status") {
@@ -109,9 +111,9 @@ test("installation records the selected checkout and never clones it again", asy
   assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 1);
   assert.equal(f.calls.find(call => call.command === "git" && call.args[0] === "clone").args.at(-1), f.checkout);
   assert.ok(f.output.some(line => line.includes(f.checkout)));
-  const runtimeInstall = f.calls.findIndex(call => call.command === "vp" && call.args[0] === "env" && call.args[1] === "install");
-  const setup = f.calls.findIndex(call => call.command === "vp" && call.args[0] === "node" && call.args.includes("--prepare"));
-  assert.ok(runtimeInstall >= 0 && setup > runtimeInstall);
+  const setup = f.calls.findIndex(call => call.command === process.execPath && call.args.includes("--prepare"));
+  assert.ok(setup >= 0);
+  assert.equal(f.calls.some(call => call.command === "vp" && call.args[0] === "env"), false);
   // Setup prompts need the caller's terminal; piped stdio makes them refuse.
   assert.equal(f.calls.find(call => call.args.includes("--connect"))?.config?.interactive, true);
   // The header owns the terminal during the build, then must release it before setup prompts.
@@ -241,11 +243,13 @@ test("an abruptly exited installer cannot leave a permanent installation lock", 
       prompt: { choose: async () => "Let's go!", location: async () => root, withHeader: task => task() },
       commands: { run: async (command, args) => {
         if (command === "git" && args[0] === "clone") {
-          await fs.mkdir(path.join(root, "package"), { recursive: true });
+          await fs.mkdir(path.join(root, "installation"), { recursive: true });
+          await fs.mkdir(path.join(root, "cli"), { recursive: true });
           await fs.mkdir(path.join(root, ".git"));
           await fs.writeFile(path.join(root, "package.json"), '{"name":"workbench-root"}');
           await fs.writeFile(path.join(root, "wb"), "");
-          await fs.writeFile(path.join(root, "package/setup.mjs"), "");
+          await fs.writeFile(path.join(root, "installation/install.mjs"), "");
+          await fs.writeFile(path.join(root, "cli/dispatch.mjs"), "");
         } else if (args.includes("--prepare")) {
           process.send("setup-entered");
           await new Promise(() => {});

@@ -229,7 +229,7 @@ export default class InstallSandbox {
     await git("init", "-q", "-b", "main");
     await git("add", "-A");
     await git("commit", "-q", "--no-verify", "-m", "sandbox snapshot of the working tree");
-    await fs.copyFile(PRETEND_DISPATCH, path.join(this.repository, "package", "dispatch.mjs"));
+    await fs.copyFile(PRETEND_DISPATCH, path.join(this.repository, "cli", "dispatch.mjs"));
     await git("commit", "-q", "--no-verify", "-am", "sandbox: pretend host-level wb commands");
   }
 

@@ -3,9 +3,9 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import SetupCommand from "./SetupCommand.mjs";
-import { readJournal, isRepairPending } from "./update-journal.mjs";
-import { runRepair } from "./update.mjs";
+import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
+import { readJournal, isRepairPending } from "../installation/update-journal.mjs";
+import { runRepair } from "../installation/update-repair.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -25,12 +25,12 @@ try {
   if (command === "repair") {
     process.stdout.write("Workbench dependency repair complete. Run `wb` to launch.\n");
   } else if (human) {
-    const entry = view ? "package/view.ts" : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
-    await new SetupCommand().run(process.execPath, [
+    const entry = view ? "cli/process-view.ts" : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
+    await new WorkbenchBootstrapCommand().run(process.execPath, [
       "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry), ...(view ? args.slice(1) : [command]),
     ], { cwd: root, interactive: view });
   } else {
-    await new SetupCommand().run("bash", [path.join(root, "wb"), ...args]);
+    await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args]);
   }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

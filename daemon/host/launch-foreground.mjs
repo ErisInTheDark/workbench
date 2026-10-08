@@ -2,7 +2,7 @@
  * No exports. Keep foreground development startup behind the dependency repair gate.
  */
 import { createRequire } from "node:module";
-import { readJournal, isRepairPending } from "../../package/update-journal.mjs";
+import { readJournal, isRepairPending } from "../../installation/update-journal.mjs";
 
 try {
   if (isRepairPending(await readJournal())) {
