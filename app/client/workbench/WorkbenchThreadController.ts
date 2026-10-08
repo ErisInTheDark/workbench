@@ -15,7 +15,6 @@ import { GitArcFailureException, type GitArcFailure } from "workbench-shared/wor
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { getNextSubagentHydrationBatch } from "./thread/thread-subagents";
 import type ThreadDocumentController from "./thread/ThreadDocumentController";
 import type ThreadObservationController from "./thread/ThreadObservationController";
@@ -72,15 +71,12 @@ export interface ThreadControllerPorts {
   };
   reportError: (message: string) => void;
   getChild: (subagent: WorkbenchSubagentSummary) => WorkbenchThreadController;
-  scheduleRefresh?: (callback: () => void) => ReturnType<typeof setTimeout>;
-  cancelRefresh?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
 export default class WorkbenchThreadController {
   private readonly consumers = new Map<object, "summary" | "view" | "route">();
   private readonly listeners = new Set<() => void>();
   private readonly families = new Map<object, { ids: readonly string[]; children: Map<string, { owner: WorkbenchThreadController; release: () => void }> }>();
-  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private observation: ReturnType<ThreadObservationController["acquire"]> | null = null;
   private stopDocument: (() => void) | null = null;
   private stopNative: (() => void) | null = null;
@@ -237,7 +233,6 @@ export default class WorkbenchThreadController {
         this.observation?.release();
         this.observation = null;
         this.releaseTranscript();
-        this.cancelRefresh();
         this.publish({ ...this.snapshot, status: "loading", error: null, entry: null, gitArcProposals: {} });
         for (const listener of this.listeners) listener();
       } else this.reconcile();
@@ -272,7 +267,6 @@ export default class WorkbenchThreadController {
   read(options: WorkbenchReadThreadOptions = {}, { retain = true, selectionBound = false }: { retain?: boolean; selectionBound?: boolean } = {}): Promise<ThreadPayload | null> {
     if (!options.cursor && this.opening) return this.opening;
     const release = retain ? this.acquire("summary") : () => {};
-    if (!options.cursor) this.cancelRefresh();
     const generation = this.generation;
     let recovery: Promise<boolean | void> | null = null;
     const recover = () => recovery ??= this.ports.reconcile?.(options) ?? Promise.resolve();
@@ -329,7 +323,6 @@ export default class WorkbenchThreadController {
     this.generation++;
     this.invalidateGitArcProposalObservation();
     this.opening = null;
-    this.cancelRefresh();
     this.publish({ ...this.snapshot, error: null, status: "loading" });
     for (const listener of this.listeners) listener();
     this.reconcile();
@@ -359,7 +352,6 @@ export default class WorkbenchThreadController {
     this.clearGitArcProposalObservation();
     this.gitArcProposalDemands.clear();
     this.consumers.clear();
-    this.cancelRefresh();
     for (const family of this.families.values()) {
       for (const child of family.children.values()) child.release();
     }
@@ -409,7 +401,6 @@ export default class WorkbenchThreadController {
       error: this.snapshot.error ?? failure,
     });
     this.hydrateChildren();
-    this.syncRefresh(needsDocument);
     if (!needsDocument) {
       this.releaseTranscript();
       this.historyRetention.select(native.document);
@@ -565,25 +556,6 @@ export default class WorkbenchThreadController {
           .finally(() => { if (this.families.has(token)) this.reconcile(); });
       }
     }
-  }
-
-  private cancelRefresh() {
-    if (this.refreshTimer === null) return;
-    (this.ports.cancelRefresh ?? clearTimeout)(this.refreshTimer);
-    this.refreshTimer = null;
-  }
-
-  private syncRefresh(hasView: boolean) {
-    if (this.target.kind !== "subagent" || !hasView || !this.snapshot.document || !getCurrentInProgressTurn(this.snapshot.document)) {
-      this.cancelRefresh();
-      return;
-    }
-    if (this.refreshTimer !== null || this.opening) return;
-    this.refreshTimer = (this.ports.scheduleRefresh ?? (callback => setTimeout(callback, 1500)))(() => {
-      this.refreshTimer = null;
-      void this.read({ readScope: "subagentBackground" }, { retain: false })
-        .catch(() => { /* The thread owner reports refresh failures and retains usable content. */ });
-    });
   }
 
   private publish(next: ThreadControllerSnapshot) {

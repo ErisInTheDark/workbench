@@ -730,19 +730,11 @@ test("family views coalesce child hydration and release only their own demand", 
   const listeners = new Set<() => void>();
   let reads = 0;
   let refreshFailure = false;
-  const timers = new Map<ReturnType<typeof setTimeout>, () => void>();
-  let nextTimer = 0;
   const child = new WorkbenchThreadController("project", {
     kind: "subagent", harness: "codex", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["thread"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"],
   }, {
     ...f.ports,
     getChild: () => child,
-    scheduleRefresh: callback => {
-      const timer = ++nextTimer as unknown as ReturnType<typeof setTimeout>;
-      timers.set(timer, callback);
-      return timer;
-    },
-    cancelRefresh: timer => { timers.delete(timer); },
     readNative: () => ({ document, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
     subscribeNative: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     read: async (_options, admit) => {
@@ -774,27 +766,12 @@ test("family views coalesce child hydration and release only their own demand", 
   accept();
   await loading;
   assert.equal(f.owner.getSnapshot().relatedDocuments.child?.id, "child");
-  assert.equal(timers.size, 0, "background hydration does not own active-view polling");
-  const firstView = child.acquire("view");
-  const secondView = child.acquire("view");
-  assert.equal(timers.size, 1);
-  const [timer, callback] = [...timers][0]!;
-  timers.delete(timer);
-  callback();
-  await child.read();
-  assert.equal(reads, 2);
-  assert.equal(timers.size, 1);
+  const view = child.acquire("view");
   refreshFailure = true;
-  const [next, refresh] = [...timers][0]!;
-  timers.delete(next);
-  refresh();
   await assert.rejects(child.read(), /refresh failed/);
   assert.equal(child.getSnapshot().status, "ready");
   assert.equal(f.errors.length, 1);
-  firstView();
-  assert.equal(timers.size, 1);
-  secondView();
-  assert.equal(timers.size, 0);
+  view();
   second.update([]);
   assert.equal(child.hasConsumers, false, "an unlisted child is released");
   second.release();
