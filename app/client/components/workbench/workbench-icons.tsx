@@ -834,7 +834,9 @@ export function GitArcIcon({ action, ...props }: IconProps & { action: GitArcCom
     return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" />{action !== "release" ? <path d="M12 8v8" /> : null}</OutlinedIcon>;
   }
   if (action === "mv") return <FileMoveIcon {...props} />;
-  if (action === "propose" || action === "rescind" || action === "unknown") {
+  // Proposals share the commit glyph every commit display uses.
+  if (action === "propose") return <GitArcProposalIcon {...props} />;
+  if (action === "rescind" || action === "unknown") {
     return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 8h8" /><path d="M7 12h10" /><path d="M7 16h6" /></OutlinedIcon>;
   }
   if (action === "compare" || action === "diff") {

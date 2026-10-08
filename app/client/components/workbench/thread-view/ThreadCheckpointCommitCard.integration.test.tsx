@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect observed proposal resolution, claim-release choice, and terminal thread-tail cleanup.
+ * No production exports. Tests protect transcript proposal cards, observed proposal resolution and summaries, claim-release choice, and terminal thread-tail cleanup.
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -9,7 +9,7 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
-import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import getFinishedThreadTailHiddenItemIds from "./thread-finished-tail";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
@@ -117,25 +117,11 @@ function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-pr
   }));
 }
 
-function hiddenTailIds(
-  itemGroups: readonly (readonly ThreadItem[])[],
-  {
-    hideReasoning = true,
-    hoistedProposalIds = new Set(["proposal-one"]),
-  }: {
-    hideReasoning?: boolean;
-    hoistedProposalIds?: ReadonlySet<string>;
-  } = {},
-) {
-  return getFinishedThreadTailHiddenItemIds({
-    hideReasoning,
-    hoistedProposalIds,
-    itemGroups,
-    projectRootPath: "C:/workspace",
-  });
+function hiddenTailIds(itemGroups: readonly (readonly ThreadItem[])[], hideReasoning = true) {
+  return getFinishedThreadTailHiddenItemIds({ hideReasoning, itemGroups });
 }
 
-test("failed proposal creation stays an action, while identified proposals retain their card", () => {
+test("transcript proposals are collapsed git arc cards named by their proposal; failures keep agent detail out", () => {
   const client: WorkbenchClientController = {
     controls: null,
     explorer: {} as WorkbenchClientController["explorer"],
@@ -169,14 +155,14 @@ test("failed proposal creation stays an action, while identified proposals retai
           },
         })),
       }));
+      // Collapsed transcript proposals never mount (or read) their commit card.
+      assert.doesNotMatch(html, /data-thread-checkpoint-card=/u, transport);
+      assert.match(html, /data-thread-git-arc-card="propose"/u, transport);
       if (identified) {
-        assert.match(html, /data-thread-checkpoint-proposal-source=/u, transport);
+        assert.match(html, /Clean finished thread tail/u, transport);
         assert.doesNotMatch(html, /data-thread-git-arc-failure=/u);
-        assert.doesNotMatch(html, /data-thread-git-arc-card="propose"/u);
       } else {
-        assert.match(html, /data-thread-git-arc-card="propose"/u, transport);
         if (outcome !== "timedOut") assert.match(html, /data-thread-git-arc-failure=/u, transport);
-        assert.doesNotMatch(html, /data-thread-checkpoint-card=/u, transport);
         assert.doesNotMatch(html, /agent-only-detail/u, transport);
       }
     }
@@ -221,12 +207,12 @@ test("proposal cards consume loaded validity from thread observation", () => {
     unavailableReason: "Proposal is no longer valid.",
   };
   const html = renderToStaticMarkup(createElement(ThreadGitArcObservationProvider, {
+    lifecycleProposals: null,
     observeProposal: () => () => {},
     proposals: {
       [proposal.proposalId]: { proposal, status: "loaded" },
     },
-    children: createElement(ThreadCheckpointCommitItem, {
-      commandOutcome: "completed",
+    children: createElement(ThreadCheckpointCommitController, {
       cwd: "C:/workspace",
       harness: "codex",
       intent: null,
@@ -238,6 +224,43 @@ test("proposal cards consume loaded validity from thread observation", () => {
 
   assert.match(html, /Proposal is no longer valid\./u);
   assert.doesNotMatch(html, /aria-busy="true"/u);
+});
+
+test("hydrating proposal cards show the observed summary instead of skeletons", () => {
+  const render = (summary: boolean) => renderToStaticMarkup(createElement(ThreadGitArcObservationProvider, {
+    lifecycleProposals: [{
+      proposalId: "proposal-hydrating",
+      status: "proposed",
+      ...(summary ? {
+        summary: {
+          changes: [{ additions: 7, deletions: 3, kind: "update", path: "src/one.ts" }],
+          committedSha: null,
+          description: "Observed description",
+          mode: "commit",
+          title: "Observed title",
+        },
+      } : {}),
+    }],
+    observeProposal: () => () => {},
+    proposals: { "proposal-hydrating": { status: "loading" } },
+    children: createElement(ThreadCheckpointCommitController, {
+      cwd: "C:/workspace",
+      harness: "codex",
+      intent: null,
+      proposalId: "proposal-hydrating",
+      sourceItemId: "proposal-item",
+      threadId: "thread-one",
+    }),
+  }));
+
+  const observed = render(true);
+  assert.match(observed, /Observed title/u);
+  assert.match(observed, /Observed description/u);
+  assert.match(observed, /1 changed file/u);
+  assert.match(observed, />\+7</u);
+  assert.doesNotMatch(observed, /aria-busy="true"/u);
+  // Without a Git-derived summary (startup cache, older daemon) the card still loads.
+  assert.match(render(false), /aria-busy="true"/u);
 });
 
 test("content amend proposals expose an amend-default fresh commit choice", () => {
@@ -321,28 +344,12 @@ test("content amend proposals expose an amend-default fresh commit choice", () =
   assert.doesNotMatch(freshHtml, /differs from current commit/u);
 });
 
-test("finished tails hide terminal reasoning and hoisted proposals from shell and MCP routes", () => {
+test("finished tails hide only terminal reasoning; transcript proposals never vanish", () => {
   assert.deepEqual(
     hiddenTailIds([[messageItem("visible"), proposalCommandItem(), reasoningItem()]]),
-    new Set(["proposal-command", "terminal-reasoning"]),
-  );
-  assert.deepEqual(
-    hiddenTailIds([[messageItem("visible")], [reasoningItem(), proposalMcpItem()]]),
-    new Set(["proposal-mcp", "terminal-reasoning"]),
-  );
-});
-
-test("finished-tail cleanup stops at visible work and preserves ineligible terminal items", () => {
-  assert.deepEqual(
-    hiddenTailIds([[proposalCommandItem(), reasoningItem(), messageItem("later")]]),
-    new Set(["proposal-command"]),
-  );
-  assert.deepEqual(
-    hiddenTailIds([[proposalCommandItem(), reasoningItem()]], { hideReasoning: false }),
-    new Set(["proposal-command"]),
-  );
-  assert.deepEqual(
-    hiddenTailIds([[proposalCommandItem(), reasoningItem()]], { hoistedProposalIds: new Set() }),
     new Set(["terminal-reasoning"]),
   );
+  assert.deepEqual(hiddenTailIds([[messageItem("visible")], [reasoningItem(), proposalMcpItem()]]), new Set());
+  assert.deepEqual(hiddenTailIds([[proposalCommandItem(), reasoningItem(), messageItem("later")]]), new Set());
+  assert.deepEqual(hiddenTailIds([[proposalCommandItem(), reasoningItem()]], false), new Set());
 });

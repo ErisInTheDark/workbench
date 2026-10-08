@@ -69,7 +69,6 @@ import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadGoalControl from "./ThreadGoalControl";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import ThreadCheckpointCommitPortalLayer from "./ThreadCheckpointCommitPortalLayer";
 import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
@@ -90,7 +89,6 @@ import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
 const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
-const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
@@ -1104,9 +1102,6 @@ export default memo(function ThreadViewContent ({
     proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
   const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
-  const hoistedGitArcProposalIds = useMemo(() => hoistedGitArc
-    ? new Set(hoistedGitArc.proposals.map(({ proposalId }) => proposalId))
-    : EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS, [hoistedGitArc]);
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message
     : activeTranscriptSource?.status === "absent"
@@ -1127,6 +1122,7 @@ export default memo(function ThreadViewContent ({
     >
       <ThreadGitArcObservationProvider
         acceptance={activeThreadController.state.entry?.gitArc?.acceptance ?? null}
+        lifecycleProposals={activeThreadController.state.entry?.gitArc?.proposals ?? null}
         observeProposal={observeGitArcProposal}
         proposals={activeThreadController.state.gitArcProposals}
       >
@@ -1192,21 +1188,6 @@ export default memo(function ThreadViewContent ({
               subagents={subagents}
             />
           ) : <>
-          {activeThread ? (
-            <ThreadCheckpointCommitPortalLayer
-              commitActions={checkpointCommitActions}
-              cwd={activeThread.cwd}
-              harness={activeThread.harness}
-              hoistedProposalIds={hoistedGitArcProposalIds}
-              lifecycleProposalIds={hoistedGitArc?.proposals.map(({ proposalId }) => proposalId) ?? []}
-              projectFilePaths={projectFilePaths}
-              projectId={projectId}
-              projectRootPath={projectRootPath}
-              proposalSources={visibleGitArcProposalPresentation.sources}
-              threadId={activeThread.id}
-              workspaceRoots={workspaceFileLinkRoots}
-            />
-          ) : null}
           {activeThread && usesSqlTranscript && renderActiveThread && previousTurnEntry ? (
             previousTurnLoadStatus === "loading" ? (
               <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
@@ -1232,7 +1213,6 @@ export default memo(function ThreadViewContent ({
                     canLoadPreviousTurn={canLoadPreviousTurn}
                     hiddenReasoningStep={null}
                     historySentinelRef={setHistorySentinel}
-                    hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                     inlineMentionSources={inlineMentionSources}
                     knownSkills={workbenchSkills}
                     projectFilePaths={projectFilePaths}
@@ -1288,7 +1268,6 @@ export default memo(function ThreadViewContent ({
                 projectRootPath={projectRootPath}
                 relatedThreadsById={relatedThreadsById}
                 subagents={subagents}
-                hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                 thread={renderActiveThread ?? activeThread}
                 visibleHistoryEntries={visibleHistoryEntries}
                 workspaceRoots={workspaceFileLinkRoots}

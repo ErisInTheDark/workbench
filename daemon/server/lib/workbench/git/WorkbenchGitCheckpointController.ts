@@ -639,10 +639,6 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(() => this.proposals.listLifecycleStates({ cwd }));
   }
 
-  async readProposalSummaries(input: ControllerInput & { proposalIds: string[] }) {
-    return await GitObjectReadSession.run(() => this.proposals.readProposalSummaries(input));
-  }
-
   async readUnviewedAccepted(input: ControllerInput & { proposalIds: string[] }) {
     return await GitObjectReadSession.run(() => this.proposals.readUnviewedAccepted(input));
   }
@@ -1179,15 +1175,6 @@ export default class WorkbenchGitCheckpointController {
     threadId,
   }: ControllerInput & { includeNewer: boolean; includeUnclaimed?: boolean; proposalId: string }): Promise<GitCheckpointProposal> {
     return await GitObjectReadSession.run(() => this.proposals.getProposal({ cwd, harness: rawHarness, includeNewer, includeUnclaimed, proposalId, threadId }));
-  }
-
-  async getProposalPaths({
-    cwd,
-    harness: rawHarness,
-    proposalId,
-    threadId,
-  }: ControllerInput & { proposalId: string }): Promise<string[]> {
-    return await GitObjectReadSession.run(() => this.proposals.getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }));
   }
 
   async rescindProposal(input: ControllerInput & { proposalId: string }) {

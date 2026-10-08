@@ -1,13 +1,14 @@
 /*
  * Exports:
  * - default ThreadGitArcCollapsedSummary: compose established result rows beneath a closed Git arc card.
- * - ThreadGitArcCollapsedSummaryContent: typed file, claim, move, or count preview content.
+ * - ThreadGitArcCollapsedSummaryContent: typed commit, file, claim, move, or count preview content.
  * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows: normalise parsed operation changes for file-row presentation.
  */
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { ThreadCommitRow, type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import {
@@ -18,6 +19,8 @@ import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export type ThreadGitArcCollapsedSummaryContent =
+  /** Every commit is listed: a stack card's commits are its whole message, never a preview. Null summaries load. */
+  | { commits: Array<{ key: string; summary: ThreadCommitSummary | null }>; kind: "commits" }
   | { changes: ThreadFileChangeListChange[]; kind: "files" }
   | { kind: "claims"; label: string; marker: ThreadClaimMarker; paths: string[]; totalCount: number }
   | { kind: "moves"; mappings: Array<{ destination: string; source: string }> }
@@ -76,18 +79,22 @@ export default function ThreadGitArcCollapsedSummary ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const visibleCount = content.kind === "files"
-    ? Math.min(content.changes.length, 2)
-    : content.kind === "moves"
-      ? Math.min(content.mappings.length, 2)
-      : content.kind === "claims"
-        ? Math.min(content.paths.length, 2)
-        : Math.min(content.rows.length, 2);
-  const totalCount = content.kind === "files"
-    ? content.changes.length
-    : content.kind === "moves"
-      ? content.mappings.length
-      : content.kind === "claims" ? content.totalCount : content.rows.length;
+  const visibleCount = content.kind === "commits"
+    ? content.commits.length
+    : content.kind === "files"
+      ? Math.min(content.changes.length, 2)
+      : content.kind === "moves"
+        ? Math.min(content.mappings.length, 2)
+        : content.kind === "claims"
+          ? Math.min(content.paths.length, 2)
+          : Math.min(content.rows.length, 2);
+  const totalCount = content.kind === "commits"
+    ? content.commits.length
+    : content.kind === "files"
+      ? content.changes.length
+      : content.kind === "moves"
+        ? content.mappings.length
+        : content.kind === "claims" ? content.totalCount : content.rows.length;
   const remainingCount = totalCount - visibleCount;
 
   return (
@@ -95,7 +102,11 @@ export default function ThreadGitArcCollapsedSummary ({
       className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"
       data-thread-git-arc-collapsed-summary="true"
     >
-      {content.kind === "files" ? (
+      {content.kind === "commits" ? (
+        <div className="py-1.5">
+          {content.commits.map(({ key, summary }) => <ThreadCommitRow key={key} summary={summary} />)}
+        </div>
+      ) : content.kind === "files" ? (
         <ThreadFileChangePreviewList
           changes={content.changes.slice(0, 2)}
           projectFilePaths={projectFilePaths}

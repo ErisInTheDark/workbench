@@ -57,9 +57,19 @@ test("stashed pending proposals can be reworded without changing frozen work", a
   assert.equal((await controller.getProposal({
     cwd, threadId: "owner", proposalId: reworded.proposalId, includeNewer: false,
   })).title, "clear saved title");
-  assert.deepEqual((await controller.findLifecycleState({ cwd, threadId: "owner" }))?.proposals, [
-    { proposalId: reworded.proposalId, status: "proposed" },
-  ]);
+  // The observed lifecycle carries the revision's message and the frozen content's recorded totals.
+  assert.deepEqual((await controller.findLifecycleState({ cwd, threadId: "owner" }))?.proposals, [{
+    paths: ["one.txt"],
+    proposalId: reworded.proposalId,
+    status: "proposed",
+    summary: {
+      changes: [{ additions: 1, deletions: 1, kind: "update", path: "one.txt" }],
+      committedSha: null,
+      description: "Keep the frozen content.",
+      mode: "commit",
+      title: "clear saved title",
+    },
+  }]);
   assert.equal(await repository.readRef(stashRef), frozenBefore);
   await assert.rejects(controller.createProposal({
     cwd, threadId: "owner", amend: true, amendProposalId: reworded.proposalId,

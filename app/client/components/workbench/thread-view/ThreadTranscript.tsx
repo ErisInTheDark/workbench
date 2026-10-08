@@ -53,7 +53,6 @@ export default function ThreadTranscript({
   projectRootPath,
   relatedThreadsById,
   subagents,
-  hoistedGitArcProposalIds,
   thread,
   visibleHistoryEntries,
   workspaceRoots,
@@ -80,7 +79,6 @@ export default function ThreadTranscript({
   projectRootPath: string;
   relatedThreadsById: Record<string, ThreadPayload | undefined>;
   subagents: readonly WorkbenchSubagentSummary[];
-  hoistedGitArcProposalIds: ReadonlySet<string>;
   thread: ThreadPayload;
   visibleHistoryEntries: readonly WorkbenchThreadTurnHistoryEntry[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
@@ -142,7 +140,6 @@ export default function ThreadTranscript({
                 turn={turn}
                 workspaceRoots={workspaceRoots}
                 hiddenReasoningStep={isCurrentTurn ? hiddenReasoningStep : null}
-                hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                 hiddenWebSearchItemIds={isCurrentTurn ? hiddenWebSearchItemIds : undefined}
                 itemTimeline={entry.itemTimeline}
               />

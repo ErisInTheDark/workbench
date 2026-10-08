@@ -657,7 +657,8 @@ export default class WorkbenchThreadStateRelationalRepository {
       ...(record.gitArc === undefined ? {} : { gitArc: record.gitArc }),
       ...(record.gitArcPlan === undefined ? {} : { gitArcPlan: record.gitArcPlan }),
     };
-    if (!isDeepStrictEqual(this.git.read(threadId), observations)) this.git.replace(threadId, observations);
+    // Live observations carry Git-derived facts the startup cache never stores; compare only the persisted subset.
+    if (!isDeepStrictEqual(this.git.read(threadId), this.git.project(observations))) this.git.replace(threadId, observations);
     const requestedQuestionnaires = {
       pending: record.pendingQuestionnaire ?? null, history: record.questionnaireHistory ?? [],
     };

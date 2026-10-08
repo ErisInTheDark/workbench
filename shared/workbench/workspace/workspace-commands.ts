@@ -140,7 +140,6 @@ export const workspaceCommandRoutes = {
   "git/arc/proposal/commit": "threadCwd",
   "git/arc/proposals/commit": "threadCwd",
   "git/arc/proposal/read": "threadCwd",
-  "git/arc/proposals/summaries": "threadCwd",
   "git/arc/release": "threadCwd",
   "git/arc/remove": "threadCwd",
   "git/arc/restore": "threadCwd",

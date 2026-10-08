@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateGitRepository: read and replace one thread's typed Git observations.
+ * - default WorkbenchThreadStateGitRepository: read, project and replace one thread's typed Git observation startup cache.
  * - WorkbenchThreadGitObservations: independently absent, null or populated arc and plan cache.
  */
 import { randomUUID } from "node:crypto";
@@ -120,9 +120,48 @@ export default class WorkbenchThreadStateGitRepository {
     return result;
   }
 
+  /**
+   * The persisted startup-cache subset of live observations: exactly what `read` returns after `replace(value)`.
+   * Git-derived facts outside it (proposal summaries, stack layers, acceptance, saved stash beside live claims) are
+   * never cached, so they cannot drift; compare against this, not the live value, to skip unchanged writes.
+   */
+  project(value: WorkbenchThreadGitObservations): WorkbenchThreadGitObservations {
+    const arcPaths = (arc: { claimedPaths: string[]; phase: string; stashedPaths?: string[] }) => arc.phase === "stashed"
+      ? { claimedPaths: [], phase: arc.phase, stashedPaths: arc.stashedPaths ?? [] }
+      : { claimedPaths: arc.claimedPaths, phase: arc.phase };
+    const base = ({ checkpointCommit, intentDescription, intentName, updatedAt }: WorkbenchGitArcPlanState | ArcMember | PlanMember | WorkbenchGitArcLifecycleState) => (
+      { checkpointCommit, intentName, intentDescription, updatedAt }
+    );
+    const member = ({ harness, repoRoot, rootId, rootIds, threadId }: ArcMember | PlanMember) => ({ harness, threadId, repoRoot, rootId, rootIds });
+    const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status }) => (
+      { proposalId, status, ...(rootId === undefined ? {} : { rootId }) }
+    ));
+    const result: WorkbenchThreadGitObservations = {};
+    if (value.gitArc !== undefined) {
+      const arc = value.gitArc;
+      result.gitArc = arc === null ? null : WorkbenchGitArcLifecycleStateSchema.parse({
+        ...base(arc), ...arcPaths(arc), proposals: proposals(arc.proposals),
+        ...(arc.members?.length ? {
+          members: arc.members.map((entry) => ({
+            ...base(entry), ...member(entry), ...arcPaths(entry), proposals: proposals(entry.proposals),
+          })),
+        } : {}),
+      });
+    }
+    if (value.gitArcPlan !== undefined) {
+      const plan = value.gitArcPlan;
+      result.gitArcPlan = plan === null ? null : WorkbenchGitArcPlanStateSchema.parse({
+        ...base(plan), scopePaths: plan.scopePaths,
+        ...(plan.members?.length ? {
+          members: plan.members.map((entry) => ({ ...base(entry), ...member(entry), scopePaths: entry.scopePaths })),
+        } : {}),
+      });
+    }
+    return result;
+  }
+
   replace(threadId: string, value: WorkbenchThreadGitObservations) {
-    const arc = value.gitArc == null ? value.gitArc : WorkbenchGitArcLifecycleStateSchema.parse(value.gitArc);
-    const plan = value.gitArcPlan == null ? value.gitArcPlan : WorkbenchGitArcPlanStateSchema.parse(value.gitArcPlan);
+    const { gitArc: arc, gitArcPlan: plan } = this.project(value);
     this.database.transaction(() => {
       this.writeObservation(threadId, "arc", arc);
       this.writeObservation(threadId, "plan", plan);

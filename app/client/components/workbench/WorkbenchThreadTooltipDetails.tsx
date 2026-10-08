@@ -9,7 +9,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import ThreadCheckpointCommitItem from "./thread-view/ThreadCheckpointCommitItem";
+import ThreadCheckpointCommitController from "./thread-view/ThreadCheckpointCommitController";
 import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
@@ -123,8 +123,7 @@ export default function WorkbenchThreadTooltipDetails({
           data-thread-tooltip-proposal={materialized || !cwd ? "preview" : "commit"}
         >
           <div>
-            <ThreadCheckpointCommitItem
-              commandOutcome="completed"
+            <ThreadCheckpointCommitController
               cwd={cwd}
               embedded
               harness={harness}

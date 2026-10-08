@@ -316,6 +316,43 @@ test("relational batches roll back invalid references and preserve valid draft p
   } finally { database.close(); }
 });
 
+test("the git startup cache stores only its persisted subset, so live Git-derived facts never rewrite or drift into it", () => {
+  const database = openDatabase();
+  try {
+    const [threadId] = seedIdentities(database, "project", "arc");
+    const record = (title: string, summaryTitle: string): WorkbenchThreadStateRecord => ({
+      entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title, activityAt: 1,
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
+      profile: null, snoozedUntil: null, titleHistory: [{ title, usedAt: 1 }],
+      gitArc: {
+        acceptance: { landingId: "proposal", queuedIds: [] },
+        checkpointCommit: "a".repeat(40), claimedPaths: ["one.ts"], intentDescription: "", intentName: "arc", phase: "active",
+        proposals: [{
+          proposalId: "proposal", status: "proposed",
+          summary: { changes: [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }], committedSha: null, description: "", mode: "commit", title: summaryTitle },
+        }],
+        stackLayers: [{ layerId: "layer", proposalIds: ["proposal"], sealedAt: "sealed", title: "layer" }],
+        stashedPaths: [],
+        updatedAt: "now",
+      },
+    });
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    repository.writeRecords([record("first", "observed title")]);
+    database.exec(`
+      CREATE TEMP TRIGGER reject_cache_rewrite BEFORE UPDATE ON workbench_thread_git_observations
+      BEGIN SELECT RAISE(ABORT, 'unchanged cache rewritten'); END
+    `);
+    // A changed summary is a live Git fact, not cached state: the unchanged persisted subset is not rewritten.
+    repository.commit({ projectId: testProjectIds.project, records: [record("updated", "reworded title")] });
+    const loaded = repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]!;
+    assert.equal(loaded.title, "updated");
+    assert.deepEqual(loaded.gitArc?.proposals, [{ proposalId: "proposal", status: "proposed" }]);
+    assert.equal(loaded.gitArc?.stackLayers, undefined);
+  } finally { database.close(); }
+});
+
 test("affected-record writes preserve unchanged caches and roll back an entire failed batch", () => {
   const database = openDatabase();
   try {

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, lineage, outcome, history, and proposal reads.
- * - GitArcProposalSummary: normalized proposal identity, status and commit message facts, read in bulk without diffs.
+ * - GitArcProposalSummary: normalized proposal identity, status, message, scope and recorded totals, read in bulk without diffs.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
  * - StoredProposal: owned proposal identity, metadata, and tree.
@@ -27,20 +27,24 @@ import {
   legacyProposalNamespace,
   legacyCheckpointNamespace,
   normalizeCommit,
+  proposalMessage,
   type ProposalMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
+import type { GitArcChangeTotal } from "workbench-shared/workbench/git/git-arc-receipts";
 import {
   gitArcThreadStorageIds,
   passthroughGitArcThreadIdentityResolver,
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 
-/** Metadata-only proposal facts: enough to decide and perform a commit, without building diffs. */
+/** Metadata-only proposal facts: message, status, scope and recorded totals, without building diffs. */
 export interface GitArcProposalSummary {
+  /** Null when the proposal predates recorded totals. */
+  changes: GitArcChangeTotal[] | null;
   committedSha: string | null;
   description: string;
-  hasChanges: boolean;
   mode: "amend" | "commit";
+  paths: string[];
   proposalId: string;
   status: GitArcProposalStatus;
   title: string;
@@ -233,7 +237,7 @@ export default class GitCheckpointStore {
     });
     const commits = await this.repository.readCommits(selections.flatMap((selection) => selection.flatMap(({ entry }) => entry ? [entry.value] : [])));
     const missing = (proposalId: string): GitArcProposalSummary => ({
-      committedSha: null, description: "", hasChanges: false, mode: "commit", proposalId, status: "unavailable", title: "",
+      changes: null, committedSha: null, description: "", mode: "commit", paths: [], proposalId, status: "unavailable", title: "",
     });
     return selections.map((selection) => selection.map(({ entry, proposalId }): GitArcProposalSummary => {
       if (!entry) return missing(proposalId);
@@ -243,10 +247,31 @@ export default class GitCheckpointStore {
       if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
       const metadata = normalizeProposalMetadata(parsed);
       return {
-        committedSha: metadata.committedSha, description: metadata.description, hasChanges: metadata.paths.length > 0,
-        mode: metadata.mode, proposalId, status: metadata.status, title: metadata.title,
+        changes: metadata.changes ?? null, committedSha: metadata.committedSha, description: metadata.description,
+        mode: metadata.mode, paths: metadata.paths, proposalId, status: metadata.status, title: metadata.title,
       };
     }));
+  }
+
+  /**
+   * The one writer of proposal state commits: records per-file totals from `baseCommit` to `tree` so summaries never
+   * need diff hydration. A transition of `previous` over the same content reuses its recorded totals.
+   */
+  async createProposalCommit(tree: string, metadata: ProposalMetadata, options: { parent?: string | null; previous?: StoredProposal } = {}) {
+    const { parent = metadata.baseCommit, previous } = options;
+    const reusable = previous
+      && previous.tree === tree
+      && previous.metadata.baseCommit === metadata.baseCommit
+      && previous.metadata.paths.length === metadata.paths.length
+      && previous.metadata.paths.every((candidate, index) => candidate === metadata.paths[index])
+      ? previous.metadata.changes
+      : undefined;
+    const changes = reusable ?? await this.repository.buildChangeTotals(metadata.baseCommit, tree, metadata.paths);
+    const recorded: ProposalMetadata = { ...metadata, changes };
+    return {
+      commit: await this.repository.createCommitFromTree(tree, parent, proposalMessage(recorded)),
+      metadata: recorded,
+    };
   }
 
   checkpointRefName(harness: GitArcHarness, threadId: string, commit: string) {

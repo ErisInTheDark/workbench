@@ -90,7 +90,7 @@ import {
 } from "./thread-view-formatters";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import { ThreadItemApprovalsContext, useThreadItemApproval } from "../../../workbench/thread/thread-item-approvals";
-import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import ThreadGitArcProposalItem from "./ThreadGitArcProposalItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import { getThreadEntryMotionIdentity } from "./ThreadEntryMotionController";
@@ -182,7 +182,6 @@ import { getThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import { partitionWorkedRows } from "./thread-worked-run";
 
 const EMPTY_BROWSE_SCREENSHOT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
-const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
 type CommandBlockItem =
   | Pick<CommandItem, "command" | "commandActions" | "cwd" | "shell">
@@ -1553,18 +1552,16 @@ function ThreadCommandExecutionDetails ({
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
   if (gitArcAction === "propose") {
     return (
-      <ThreadCheckpointCommitItem
-        commandOutcome={commandOutcome}
-        cwd={item.cwd}
+      <ThreadGitArcProposalItem
+        durationMs={visibleDurationMs ?? null}
         failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut" ? item.aggregatedOutput : null}
         intent={gitArcProposal?.intent ?? null}
+        outcome={commandOutcome}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
         proposalId={gitArcProposal?.proposalId ?? null}
-        relocatable
         sourceItemId={item.id}
-        threadId={threadId}
         workspaceRoots={workspaceRoots}
       />
     );
@@ -2598,7 +2595,6 @@ interface ThreadTranscriptItemsDetailsProps {
   initialUserItemId?: string | null;
   browseResultEntries?: readonly WorkbenchBrowseResultEntry[];
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
-  hoistedGitArcProposalIds?: ReadonlySet<string>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   items: readonly WorkbenchProjectedTranscriptItem[];
@@ -2623,7 +2619,6 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
   initialUserItemId = null,
   browseResultEntries = EMPTY_BROWSE_SCREENSHOT_ENTRIES,
   hiddenReasoningStep = null,
-  hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   inlineMentionSources,
   itemTimeline,
   items,
@@ -2664,17 +2659,9 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
   let pendingItems: ThreadItem[] = [];
   const flushItems = () => {
     if (!pendingItems.length) return;
-    const hiddenProposalItemIds = getFinishedThreadTailHiddenItemIds({
-      hideReasoning: false,
-      hoistedProposalIds: hoistedGitArcProposalIds,
-      itemGroups: [pendingItems],
-      knownSkills,
-      projectRootPath,
-      workspaceRoots,
-    });
     entries.push(...buildRenderableBlocks(
       pendingItems,
-      { itemIds: hiddenProposalItemIds, reasoningStep: hiddenReasoningStep },
+      { reasoningStep: hiddenReasoningStep },
       threadCwdPath,
     ).flatMap((block) => initialInactiveItemIds
       ? getWorkedBlockRows(block, { knownSkills, projectRootPath, workspaceRoots }).map(row => ({ ...row, kind: "block" as const }))
@@ -2825,7 +2812,6 @@ function ThreadTurnDetailsComponent ({
   hideWorkbenchControlAgentMessages = false,
   hideWorkbenchControlUserMessages = false,
   hiddenReasoningStep = null,
-  hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   hiddenWebSearchItemIds = [],
   inlineMentionSources = null,
   itemTimeline = [],
@@ -2851,7 +2837,6 @@ function ThreadTurnDetailsComponent ({
   hideWorkbenchControlAgentMessages?: boolean;
   hideWorkbenchControlUserMessages?: boolean;
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
-  hoistedGitArcProposalIds?: ReadonlySet<string>;
   hiddenWebSearchItemIds?: readonly string[];
   inlineMentionSources?: InlineMentionHighlightSources | null;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
@@ -2901,21 +2886,10 @@ function ThreadTurnDetailsComponent ({
   );
   const finishedTailHiddenItemIds = useMemo(() => getFinishedThreadTailHiddenItemIds({
     hideReasoning: hideTerminalReasoning,
-    hoistedProposalIds: hoistedGitArcProposalIds,
     itemGroups: baseRenderableBlocks
       .filter((block) => block.kind !== "item" || block.item.type !== "collabAgentToolCall")
       .map(getRenderableBlockItems),
-    knownSkills,
-    projectRootPath,
-    workspaceRoots,
-  }), [
-    baseRenderableBlocks,
-    hideTerminalReasoning,
-    hoistedGitArcProposalIds,
-    knownSkills,
-    projectRootPath,
-    workspaceRoots,
-  ]);
+  }), [baseRenderableBlocks, hideTerminalReasoning]);
   const hiddenItemIds = useMemo(() => ({
     ...baseHiddenItemIds,
     itemIds: finishedTailHiddenItemIds,
@@ -3191,7 +3165,6 @@ function areThreadTurnDetailsPropsEqual (
     && left.hideWorkbenchControlAgentMessages === right.hideWorkbenchControlAgentMessages
     && left.hideWorkbenchControlUserMessages === right.hideWorkbenchControlUserMessages
     && left.hiddenReasoningStep === right.hiddenReasoningStep
-    && left.hoistedGitArcProposalIds === right.hoistedGitArcProposalIds
     && left.hiddenWebSearchItemIds === right.hiddenWebSearchItemIds
     && left.browseResultEntries === right.browseResultEntries
     && left.inlineMentionSources === right.inlineMentionSources

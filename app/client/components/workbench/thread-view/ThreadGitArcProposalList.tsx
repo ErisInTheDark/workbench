@@ -1,42 +1,23 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses (listing each landed commit's message and totals when nothing is pending) unless a stopped thread has pending proposals, and offers stack-ordered commit all (whether or not the header is collapsed) backed by one bulk proposal summary read.
+ * - default ThreadGitArcProposalList: the thread's only interactive proposal cards, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses to just its counts unless a stopped thread has pending proposals, and offers stack-ordered commit all (whether or not the header is collapsed) backed by observed summaries.
  */
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
-import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
-import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../PrimaryButton";
 import { CheckCheckIcon, GitArcStackIcon } from "../workbench-icons";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
+import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import { ThreadCheckpointCommitTargetAnchor } from "./ThreadCheckpointCommitPortalLayer";
+import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import ThreadDisclosure from "./ThreadDisclosure";
-import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
-import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
-
-/** One landed commit's message and totals; demands its own observation because closed cards are hidden. */
-function ClosedCommitRow({ proposalId }: { proposalId: string }) {
-  const { observe, state } = useThreadGitArcProposalObservation(proposalId);
-  useEffect(() => observe?.(proposalId), [observe, proposalId]);
-  const proposal = state?.status === "loaded" ? state.proposal : null;
-  return (
-    <div
-      className="flex min-w-0 items-baseline gap-2 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-1.5 text-[0.8em] leading-[1.5]"
-      data-thread-git-arc-closed-proposal={proposalId}
-    >
-      <span className={`min-w-0 truncate ${proposal ? "text-text" : "text-fg/muted"}`}>
-        {proposal?.title ?? (state?.status === "failed" ? "Commit unavailable" : "Loading commit...")}
-      </span>
-      {proposal ? <ThreadGitArcChangeTotals changes={proposal.changes} /> : null}
-    </div>
-  );
-}
 
 function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -68,39 +49,32 @@ function readProposalsOpen(records: readonly WorkbenchClientStateRecord[]) {
 
 /**
  * Collapsed layers keep their cards mounted but never load them, so readiness and commits for every pending
- * proposal come from one diff-free bulk read; a card that did load (and may hold edits) still wins.
+ * proposal come from the observed summaries; a card that did load (and may hold edits) still wins.
  */
-function useStoredProposalCommits({ commitActions, cwd, harness, pendingIds, threadId }: {
-  commitActions: ThreadCheckpointCommitActions;
-  cwd: string;
-  harness: WorkbenchHarnessId;
-  pendingIds: readonly string[];
-  threadId: string;
-}) {
-  const daemon = useWorkbenchDaemonClient();
+function useObservedProposalCommits(commitActions: ThreadCheckpointCommitActions, pending: readonly WorkbenchGitArcProposalState[]) {
   const [failure, setFailure] = useState<string | null>(null);
-  const pendingKey = pendingIds.join("\0");
+  const stored = pending.flatMap(({ proposalId, status, summary }): ThreadCheckpointStoredProposal[] => summary ? [{
+    description: summary.description,
+    hasChanges: summary.changes === null || summary.changes.length > 0,
+    mode: summary.mode,
+    proposalId,
+    status,
+    title: summary.title,
+  }] : []);
+  // Rows are re-observed on every lifecycle change; only their commit facts decide whether the stored tier changes.
+  const storedKey = stored.map(({ description, hasChanges, mode, proposalId, title }) => (
+    [proposalId, mode, hasChanges ? "1" : "0", title, description].join("\u0001")
+  )).join("\0");
+  const latestStored = useRef(stored);
+  useEffect(() => { latestStored.current = stored; });
   useEffect(() => {
-    const proposalIds = pendingKey ? pendingKey.split("\0") : [];
-    if (!proposalIds.length) return;
-    let disposed = false;
-    let release = () => {};
-    void (async () => {
-      try {
-        const { proposals } = await daemon.git.arc.proposal.summaries({ cwd, harness, proposalIds, threadId });
-        if (disposed) return;
-        release = commitActions.setStored(proposals, ({ title }, outcome) => {
-          setFailure("error" in outcome
-            ? `${title}: ${(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)).slice(0, 300)}`
-            : null);
-        });
-      } catch (error) {
-        // Daemons that predate bulk summaries leave readiness to each card's own load.
-        if (!disposed) console.warn(`Proposal summaries unavailable: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`);
-      }
-    })();
-    return () => { disposed = true; release(); };
-  }, [commitActions, cwd, daemon, harness, pendingKey, threadId]);
+    if (!storedKey) return;
+    return commitActions.setStored(latestStored.current, ({ title }, outcome) => {
+      setFailure("error" in outcome
+        ? `${title}: ${(outcome.error instanceof Error ? outcome.error.message : String(outcome.error)).slice(0, 300)}`
+        : null);
+    });
+  }, [commitActions, storedKey]);
   return failure;
 }
 
@@ -109,18 +83,26 @@ export default function ThreadGitArcProposalList({
   commitActions,
   cwd,
   harness,
+  projectFilePaths,
+  projectId,
+  projectRootPath,
   proposals,
   running,
   stackLayers,
   threadId,
+  workspaceRoots,
 }: {
   /** The observed running batched acceptance, if any. */
   acceptance: WorkbenchGitArcLifecycleState["acceptance"] | null;
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
   threadId: string;
-  proposals: ReadonlyArray<{ proposalId: string; status: GitArcProposalStatus }>;
+  proposals: readonly WorkbenchGitArcProposalState[];
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   /** Running turns collapse by saved preference; stopped threads always show pending proposals. */
   running: boolean;
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
@@ -153,7 +135,7 @@ export default function ThreadGitArcProposalList({
   // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
   const collapsible = running || !proposedIds.length;
   const open = !collapsible || (canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen);
-  const storedFailure = useStoredProposalCommits({ commitActions, cwd, harness, pendingIds: proposedIds, threadId });
+  const storedFailure = useObservedProposalCommits(commitActions, proposals.filter(({ status }) => status === "proposed"));
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);
   const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup?.pendingIds ?? []);
@@ -210,11 +192,24 @@ export default function ThreadGitArcProposalList({
   );
   const anchor = (proposalId: string) => (
     <div
-      className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+      className="scroll-mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+      data-thread-git-arc-proposal={proposalId}
       data-thread-git-arc-proposal-separator="true"
       key={proposalId}
     >
-      <ThreadCheckpointCommitTargetAnchor proposalId={proposalId} />
+      <ThreadCheckpointCommitController
+        cwd={cwd}
+        embedded
+        harness={harness}
+        intent={null}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        proposalId={proposalId}
+        sourceItemId={`lifecycle-proposal:${proposalId}`}
+        threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
     </div>
   );
   const anchors = [
@@ -286,33 +281,30 @@ export default function ThreadGitArcProposalList({
     </p>
   ) : null;
 
-  // Closed lists name landed commits only, in card order; pending proposals must not read as commits, and while any
-  // are pending the header count alone stands in for a possibly long accepted history.
-  const closedRows = proposedIds.length ? [] : [...layerGroups.flatMap(({ proposals: layerProposals }) => layerProposals), ...unsealedProposals]
-    .filter(({ status }) => status === "committed")
-    .map(({ proposalId }) => <ClosedCommitRow key={proposalId} proposalId={proposalId} />);
-
-  return collapsible ? (
-    <>
-      <ThreadDisclosure
-        // Anchors stay mounted while closed so relocated controllers keep their edits.
-        keepMounted
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-        open={open}
-        summary={summary}
-        summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
-      >
-        {open ? failureRow : null}
-        {anchors}
-      </ThreadDisclosure>
-      {open ? null : failureRow}
-      {open ? null : closedRows}
-    </>
-  ) : (
-    <div>
-      <div className="flex min-w-0 items-center px-3 py-2 text-[0.76em] leading-[1.45] text-fg/muted">{summary}</div>
-      {failureRow}
-      {anchors}
-    </div>
+  return (
+    <ThreadCheckpointCommitActionsContext.Provider value={commitActions}>
+      {collapsible ? (
+        <>
+          <ThreadDisclosure
+            // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
+            keepMounted
+            onToggle={(event) => setOpen(event.currentTarget.open)}
+            open={open}
+            summary={summary}
+            summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
+          >
+            {open ? failureRow : null}
+            {anchors}
+          </ThreadDisclosure>
+          {open ? null : failureRow}
+        </>
+      ) : (
+        <div>
+          <div className="flex min-w-0 items-center px-3 py-2 text-[0.76em] leading-[1.45] text-fg/muted">{summary}</div>
+          {failureRow}
+          {anchors}
+        </div>
+      )}
+    </ThreadCheckpointCommitActionsContext.Provider>
   );
 }

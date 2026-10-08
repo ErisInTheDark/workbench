@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its presentation inputs.
- * - default ThreadCheckpointCommitController: demand near-visible proposal state, own edit and commit actions, and register commit-all readiness when relocatable.
+ * - default ThreadCheckpointCommitController: demand near-visible proposal state (showing the observed summary until it loads), own edit and commit actions, and register commit-all readiness.
  */
 "use client";
 
@@ -15,18 +15,14 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
-  type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
-import type {
-  GitCheckpointCommitCommandIntent,
-  ThreadCommandExecutionOutcome,
-} from "../../../workbench/thread/thread-command-matchers";
+import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
+import type { GitCheckpointCommitCommandIntent } from "../../../workbench/thread/thread-command-matchers";
 import ThreadCheckpointCommitCard, {
   canCommitCheckpointProposal,
   type CheckpointCommitCardState,
 } from "./ThreadCheckpointCommitCard";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointCommitOutcome } from "./ThreadCheckpointCommitActions";
-import ThreadGitArcItem from "./ThreadGitArcItem";
 import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
@@ -34,10 +30,6 @@ import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
 
 export interface ThreadCheckpointCommitControllerProps {
-  commandOutcome: ThreadCommandExecutionOutcome;
-  failureReason?: string | null;
-  interruptedBySteer?: boolean;
-  typedFailure?: GitArcFailure | null;
   cwd: string | null;
   embedded?: boolean;
   harness?: WorkbenchHarness;
@@ -68,12 +60,15 @@ function ThreadCheckpointCommitController({
   isProposalObserved,
   observeProposal,
   proposalObservation,
+  proposalSummary,
 }: ThreadCheckpointCommitControllerProps & {
   cwd: string;
   harness: WorkbenchHarness;
   isProposalObserved: boolean;
   observeProposal: ((proposalId: string) => () => void) | null;
   proposalObservation: ThreadGitArcProposalObservation | null;
+  /** The observed lifecycle's summary: shown while the full proposal hydrates, instead of skeletons. */
+  proposalSummary: WorkbenchGitArcProposalSummary | null;
 }) {
   const daemon = useWorkbenchDaemonClient();
   // A running batched acceptance is an observed fact, so every tab shows which card is landing and which wait.
@@ -86,16 +81,21 @@ function ThreadCheckpointCommitController({
     tree: string;
     changes: GitCheckpointProposal["changes"];
   } | null>(null);
-  const initialMode = intent?.amend ? "amend" : "commit";
+  const intentOwnsMessage = proposalIntentOwnsMessage(intent);
+  const intentOwnsAmend = Boolean(intent?.amend && intentOwnsMessage);
+  const intentOwnsCommit = Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage);
+  // The observed summary is the stored message, so it fills whatever the intent does not, from the first paint.
+  const seedAmend = proposalSummary?.mode === "amend" && !intentOwnsAmend ? proposalSummary : null;
+  const seedCommit = proposalSummary?.mode === "commit" && !intentOwnsCommit ? proposalSummary : null;
+  const initialMode = intent ? intent.amend ? "amend" : "commit" : proposalSummary?.mode ?? "commit";
   const [commitMode, setCommitMode] = useState<"amend" | "commit">(initialMode);
-  const [amendTitle, setAmendTitle] = useState(intent?.title ?? "");
-  const [amendDescription, setAmendDescription] = useState(intent?.description ?? "");
+  const [amendTitle, setAmendTitle] = useState(seedAmend?.title ?? intent?.title ?? "");
+  const [amendDescription, setAmendDescription] = useState(seedAmend?.description ?? intent?.description ?? "");
   const [commitTitle, setCommitTitle] = useState(
-    (intent?.amend ? intent.freshTitle : intent?.title)
-      ?? "",
+    seedCommit?.title ?? (intent?.amend ? intent.freshTitle : intent?.title) ?? "",
   );
   const [commitDescription, setCommitDescription] = useState(
-    (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
+    seedCommit?.description ?? (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
   );
   const [committing, setCommitting] = useState(false);
   // Synchronous guard so a card click and commit-all cannot both start the same commit.
@@ -103,18 +103,31 @@ function ThreadCheckpointCommitController({
   const loadedModeRef = useRef<"amend" | "commit" | null>(null);
   const commitActions = useContext(ThreadCheckpointCommitActionsContext);
   const [observationTarget, setObservationTarget] = useState<HTMLElement | null>(null);
+  const latestSummary = useRef(proposalSummary);
+  /** Not loaded yet: the observed summary when Git has been read, otherwise a skeleton. */
+  const hydratingState = useCallback((): CheckpointCommitCardState => latestSummary.current
+    ? { status: "summary", summary: latestSummary.current }
+    : { status: "pending" }, []);
   const [state, setState] = useState<CheckpointCommitCardState>(() => proposalObservation
     ? proposalObservation.status === "loaded"
       ? { proposal: proposalObservation.proposal, status: "loaded" }
       : proposalObservation.status === "failed"
         ? { error: proposalObservation.error, failure: proposalObservation.failure, retryable: true, status: "error" }
-        : { status: "pending" }
-    : { status: proposalId ? "pending" : "idle" });
-  const intentOwnsMessage = proposalIntentOwnsMessage(intent);
-  const amendTitleHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
-  const amendDescriptionHydrated = useRef(Boolean(intent?.amend && intentOwnsMessage));
-  const commitTitleHydrated = useRef(Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage));
-  const commitDescriptionHydrated = useRef(Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage));
+        : hydratingState()
+    : proposalId ? hydratingState() : { status: "idle" });
+  useEffect(() => {
+    latestSummary.current = proposalSummary;
+    // A hydrating card follows the newest summary; loaded, failed and idle cards keep their own state.
+    if (proposalSummary) {
+      setState(current => current.status === "pending" || current.status === "summary"
+        ? { status: "summary", summary: proposalSummary }
+        : current);
+    }
+  }, [proposalSummary]);
+  const amendTitleHydrated = useRef(intentOwnsAmend || Boolean(seedAmend));
+  const amendDescriptionHydrated = useRef(intentOwnsAmend || Boolean(seedAmend));
+  const commitTitleHydrated = useRef(intentOwnsCommit || Boolean(seedCommit));
+  const commitDescriptionHydrated = useRef(intentOwnsCommit || Boolean(seedCommit));
   const title = commitMode === "amend" ? amendTitle : commitTitle;
   const description = commitMode === "amend" ? amendDescription : commitDescription;
   const freshCommitAvailable = Boolean(intent?.amend && intent.freshTitle?.trim());
@@ -175,6 +188,26 @@ function ThreadCheckpointCommitController({
     }
   }, [intent]);
 
+  // The observed summary is the stored message, so it fills whatever the intent did not before the card loads.
+  const summaryMode = proposalSummary?.mode ?? null;
+  const summaryTitle = proposalSummary?.title ?? null;
+  const summaryDescription = proposalSummary?.description ?? null;
+  useEffect(() => {
+    if (summaryMode === null || summaryTitle === null || summaryDescription === null || loadedModeRef.current) return;
+    const [titleHydrated, descriptionHydrated, setTitle, setDescription] = summaryMode === "amend"
+      ? [amendTitleHydrated, amendDescriptionHydrated, setAmendTitle, setAmendDescription]
+      : [commitTitleHydrated, commitDescriptionHydrated, setCommitTitle, setCommitDescription];
+    if (!titleHydrated.current) {
+      titleHydrated.current = true;
+      setTitle(summaryTitle);
+    }
+    if (!descriptionHydrated.current) {
+      descriptionHydrated.current = true;
+      setDescription(summaryDescription);
+    }
+    if (!intent) setCommitMode(summaryMode);
+  }, [intent, summaryDescription, summaryMode, summaryTitle]);
+
   const acceptProposal = useCallback((proposal: GitCheckpointProposal) => {
     setUnclaimedSelection(current => {
       if (!current) return current;
@@ -203,7 +236,7 @@ function ThreadCheckpointCommitController({
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
-    setState((current) => current.status === "loaded" ? current : { status: "pending" });
+    setState((current) => current.status === "loaded" ? current : hydratingState());
     try {
       const proposal = await daemon.git.arc.proposal.read(
         { cwd, harness, includeNewer, includeUnclaimed, proposalId, threadId },
@@ -222,7 +255,7 @@ function ThreadCheckpointCommitController({
         status: "error",
       });
     }
-  }, [acceptProposal, cwd, daemon, harness, includeNewer, includeUnclaimed, proposalId, threadId]);
+  }, [acceptProposal, cwd, daemon, harness, hydratingState, includeNewer, includeUnclaimed, proposalId, threadId]);
 
   useEffect(() => {
     if (!isProposalObserved || includeNewer || includeUnclaimed) return;
@@ -231,7 +264,7 @@ function ThreadCheckpointCommitController({
       return;
     }
     if (!proposalObservation || proposalObservation.status === "loading") {
-      setState({ status: "pending" });
+      setState(hydratingState());
       return;
     }
     if (proposalObservation.status === "failed") {
@@ -244,7 +277,7 @@ function ThreadCheckpointCommitController({
       return;
     }
     acceptProposal(proposalObservation.proposal);
-  }, [acceptProposal, includeNewer, includeUnclaimed, isProposalObserved, proposalId, proposalObservation]);
+  }, [acceptProposal, hydratingState, includeNewer, includeUnclaimed, isProposalObserved, proposalId, proposalObservation]);
 
   useEffect(() => {
     if (isProposalObserved && !includeNewer && !includeUnclaimed) return;
@@ -419,25 +452,6 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
   const proposalObservation = useThreadGitArcProposalObservation(props.proposalId);
   const harness = props.harness ?? presentation?.harness ?? defaultProviderKey;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
-  if (!props.proposalId && (
-    props.commandOutcome === "failed" || props.commandOutcome === "declined" || props.commandOutcome === "timedOut"
-  )) {
-    return (
-      <ThreadGitArcItem
-        commandIntent={{ action: "propose", intentName: null, paths: [], ref: null }}
-        durationMs={null}
-        failureReason={props.failureReason}
-        interruptedBySteer={props.interruptedBySteer}
-        outcome={props.commandOutcome}
-        projectFilePaths={props.projectFilePaths}
-        projectId={props.projectId}
-        projectRootPath={props.projectRootPath}
-        receipt={null}
-        typedFailure={props.typedFailure}
-        workspaceRoots={props.workspaceRoots}
-      />
-    );
-  }
   if (!props.cwd) {
     return (
       <ThreadCheckpointCommitCard
@@ -474,6 +488,7 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
       isProposalObserved={proposalObservation.isObserved}
       observeProposal={proposalObservation.observe}
       proposalObservation={proposalObservation.state}
+      proposalSummary={proposalObservation.summary}
     />
   );
 }

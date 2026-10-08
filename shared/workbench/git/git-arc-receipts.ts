@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
+ * - GitArcChangeTotalSchema/GitArcChangeTotal: one file's diff-free change totals.
  * - GitArcStackedProposalSchema/GitArcStackedProposal: sealed proposal message and per-file totals captured at stacking.
  * - GitArcInvalidatedProposalSchema/GitArcInvalidatedProposal: proposal an operation made unavailable, with its reason.
  * - GitArcReceiptSchema/projectGitArcReceipt/parseGitArcReceipt: validate compact presentation facts and decode current or historical text.
@@ -12,14 +13,18 @@ import { DAEMON_RELOAD_SCOPE_PATTERN } from "../daemon-reload.ts";
 
 const RECEIPT_PREFIX = "Workbench arc receipt: ";
 
+/** One file's diff-free change totals, recorded when a proposal or stack layer is written. */
+export const GitArcChangeTotalSchema = z.object({
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  kind: z.enum(["add", "delete", "update"]),
+  path: z.string().min(1),
+}).strict();
+export type GitArcChangeTotal = z.infer<typeof GitArcChangeTotalSchema>;
+
 /** One sealed proposal as captured when its layer was stacked. */
 export const GitArcStackedProposalSchema = z.object({
-  changes: z.array(z.object({
-    additions: z.number().int().nonnegative(),
-    deletions: z.number().int().nonnegative(),
-    kind: z.enum(["add", "delete", "update"]),
-    path: z.string().min(1),
-  }).strict()),
+  changes: z.array(GitArcChangeTotalSchema),
   description: z.string(),
   proposalId: z.string().min(1),
   title: z.string(),

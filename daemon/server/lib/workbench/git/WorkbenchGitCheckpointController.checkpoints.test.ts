@@ -830,6 +830,12 @@ checkpointTest("proposal file sets stay frozen while newer selected edits remain
   });
   assert.equal(committedNewer.status, "committed");
   assert.equal(await git(repoRoot, ["show", "HEAD:deleted.txt"]), "newer selected version\n");
+  // Observed totals describe what landed, newer selected edits included, without hydrating the proposal.
+  const newerSummary = (await controller.findLifecycleState({ cwd: repoRoot, threadId: newerThreadId }))
+    ?.proposals.find(({ proposalId }) => proposalId === fixture.state.newerProposalId)?.summary;
+  assert.deepEqual(newerSummary?.changes, committedNewer.changes.map(({ additions, deletions, kind, path: filePath }) => (
+    { additions, deletions, kind: kind.type, path: filePath }
+  )));
   assert.equal(await git(repoRoot, ["show", "HEAD:unrelated.txt"]), "unrelated checkpoint\n");
   assert.equal(await git(repoRoot, ["show", ":unrelated.txt"]), "unrelated staged\n");
   assert.equal(await fs.readFile(path.join(repoRoot, "unrelated.txt"), "utf8"), "unrelated worktree\n");

@@ -403,7 +403,6 @@ class WorkbenchDaemonClient {
         read: (params: WorkbenchDaemonParams<"git/arc/proposal/read">) => this.requestGitArc("git/arc/proposal/read", params),
         commit: (params: WorkbenchDaemonParams<"git/arc/proposal/commit">) => this.requestGitArc("git/arc/proposal/commit", params),
         commitMany: (params: WorkbenchDaemonParams<"git/arc/proposals/commit">) => this.requestGitArc("git/arc/proposals/commit", params),
-        summaries: (params: WorkbenchDaemonParams<"git/arc/proposals/summaries">) => this.requestGitArc("git/arc/proposals/summaries", params),
       },
     },
   };

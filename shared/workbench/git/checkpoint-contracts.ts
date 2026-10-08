@@ -17,7 +17,6 @@
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
  * - GitArcProposalCommitEntry: one proposal's commit choices inside a batched acceptance.
  * - GitArcProposalCommitManyResultSchema/GitArcProposalCommitManyResult: landed proposals and the first failure of a batch.
- * - GitArcProposalSummarySchema/GitArcProposalSummary/GitArcProposalSummariesSchema/GitArcProposalSummaries: bulk diff-free proposal commit facts.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "../provider/provider-key.ts";
@@ -267,11 +266,6 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     ...checkpointBaseRequest,
   }),
   z.object({
-    action: z.literal("proposalSummaries"),
-    proposalIds: z.array(nonEmptyString).min(1).max(200),
-    ...checkpointBaseRequest,
-  }),
-  z.object({
     action: z.literal("proposalState"),
     includeNewer: z.boolean(),
     includeUnclaimed: z.boolean().optional(),
@@ -436,17 +430,3 @@ export const GitArcProposalCommitManyResultSchema = z.object({
   landed: z.array(GitCheckpointProposalSchema),
 }).strict();
 export type GitArcProposalCommitManyResult = z.infer<typeof GitArcProposalCommitManyResultSchema>;
-
-/** Metadata-only proposal facts read in one batch: enough to decide and perform a commit, without diffs. */
-export const GitArcProposalSummarySchema = z.object({
-  description: z.string(),
-  hasChanges: z.boolean(),
-  mode: z.enum(["amend", "commit"]),
-  proposalId: nonEmptyString,
-  rootId: rootId.optional(),
-  status: z.enum(["proposed", "committed", "rescinded", "superseded", "unavailable"]),
-  title: z.string(),
-}).strict();
-export type GitArcProposalSummary = z.infer<typeof GitArcProposalSummarySchema>;
-export const GitArcProposalSummariesSchema = z.object({ proposals: z.array(GitArcProposalSummarySchema) }).strict();
-export type GitArcProposalSummaries = z.infer<typeof GitArcProposalSummariesSchema>;

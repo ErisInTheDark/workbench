@@ -18,7 +18,7 @@
  * - GitArcSavedStashSchema/GitArcSavedStash: caller-owned adopted-stash registry metadata.
  */
 import { z } from "zod";
-import type { GitArcStackedProposal } from "./git-arc-receipts";
+import type { GitArcChangeTotal, GitArcStackedProposal } from "./git-arc-receipts";
 
 export const CHECKPOINT_METADATA_MARKER = "workbench-git-checkpoint-v1";
 export const PROPOSAL_METADATA_MARKER = "workbench-git-checkpoint-proposal-v1";
@@ -66,6 +66,8 @@ export interface StackLayerMetadata {
 export interface ProposalMetadata {
   amendTargetSha: string | null;
   baseCommit: string | null;
+  /** Per-file totals from `baseCommit` to this state's tree; absent on proposals written before totals were recorded. */
+  changes?: GitArcChangeTotal[];
   committedSha: string | null;
   description: string;
   freshCommitMessage?: {

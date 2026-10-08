@@ -11,7 +11,6 @@ import {
   GitArcFailureException,
   type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
-import type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../PrimaryButton";
@@ -28,10 +27,9 @@ import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 
 type LifecycleAction = "discardStash" | "restore" | "restoreAndUnclaim" | "stash" | "unclaim" | "unstash";
 type ClaimChangeState = "clean" | "dirty" | "error" | "loading";
-type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase" | "proposals"> & {
+type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase"> & {
   phase?: "active" | "stashed" | "resolved";
   proposalIds?: string[];
-  proposals: Array<{ proposalId: string; status: GitArcProposalStatus }>;
   stashedPaths?: string[];
 };
 
@@ -169,10 +167,14 @@ export default function ThreadGitArcLifecycleCard ({
             commitActions={commitActions}
             cwd={cwd}
             harness={harness}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
             proposals={visibleProposals}
             running={running}
             stackLayers={claim.stackLayers ?? []}
             threadId={threadId}
+            workspaceRoots={workspaceRoots}
           />
         ) : null}
         {sections.map(({ phase, paths: lifecyclePaths }, index) => (

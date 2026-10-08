@@ -9,7 +9,7 @@
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
 import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
-import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchGitArcLifecycleState, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 
@@ -37,10 +37,14 @@ interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
 interface SubagentRelationshipList { subagents: WorkbenchSubagentRelationship[] }
 
-type GitArcLifecycleState = Omit<RepoGitArcLifecycleState, "threadId"> & { threadId: WorkbenchThreadId };
+/** Published lifecycle state: proposals are root-placed with optional Git-derived summaries, never repository paths. */
+type GitArcLifecycleState = Omit<RepoGitArcLifecycleState, "proposals" | "threadId"> & {
+  proposals: WorkbenchGitArcLifecycleState["proposals"];
+  threadId: WorkbenchThreadId;
+};
 type GitArcPlanState = Omit<RepoGitArcPlanState, "threadId"> & { threadId: WorkbenchThreadId };
 
-function projectGitArc(state: GitArcLifecycleState | RepoGitArcLifecycleState | undefined) {
+function projectGitArc(state: GitArcLifecycleState | undefined) {
   if (!state) return null;
   const { harness: _harness, reloadScopes: _reloadScopes, threadId: _threadId, ...gitArc } = state as typeof state & { reloadScopes?: unknown };
   return WorkbenchGitArcLifecycleStateSchema.parse(gitArc);

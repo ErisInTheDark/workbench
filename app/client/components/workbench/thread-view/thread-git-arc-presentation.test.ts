@@ -206,12 +206,12 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: currentProposalTurns,
   }), "pending proposals hoist while the turn is still running");
-  assert.equal(getHoistedThreadGitArc({
+  assert.deepEqual(getHoistedThreadGitArc({
     currentTurn: { ...currentTurn, status: "inProgress" },
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: currentProposalTurns,
-  }), null, "landed proposals stay in the transcript while the turn runs");
+  })?.proposals, [{ proposalId: "proposal", status: "committed" }], "landed proposals stay in the lifecycle card while the turn runs");
   assert.deepEqual(getHoistedThreadGitArc({
     currentTurn: { ...currentTurn, status: "inProgress" },
     gitArc: gitArc({
@@ -222,7 +222,10 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     }),
     proposalObservations: {},
     proposalTurnIds: new Map([["accepted", currentTurn.id], ["pending", currentTurn.id]]),
-  })?.proposals, [{ proposalId: "pending", status: "proposed" }], "a running turn hoists only pending proposals");
+  })?.proposals, [
+    { proposalId: "accepted", status: "committed" },
+    { proposalId: "pending", status: "proposed" },
+  ], "a running turn keeps landed proposals beside pending ones, so acceptance never relocates cards");
   assert.equal(getHoistedThreadGitArc({
     currentTurn: { ...currentTurn, status: "inProgress" },
     gitArc: gitArc({ claimedPaths: ["src/one.ts"] }),

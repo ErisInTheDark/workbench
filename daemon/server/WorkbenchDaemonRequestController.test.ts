@@ -915,16 +915,6 @@ test("Git arc dispatch returns domain data and preserves structured failure data
     threadId: "thread",
   }]);
 
-  const summaries = { proposals: [{
-    description: "", hasChanges: true, mode: "commit", proposalId: "one", rootId: "root", status: "proposed", title: "one",
-  }] };
-  const summaryRead = createController({ gitArcResponse: Response.json(summaries) });
-  assert.deepEqual((await summaryRead.controller.handle({
-    id: 6,
-    method: "git/arc/proposals/summaries",
-    params: { cwd: "C:/git/web/workbench", harness: "codex", proposalIds: ["one"], threadId: "thread" },
-  })).result, summaries, "bulk proposal summaries pass their own contract");
-
   const discard = createController();
   assert.deepEqual((await discard.controller.handle({
     id: 5,

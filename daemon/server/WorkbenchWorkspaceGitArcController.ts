@@ -19,7 +19,6 @@ import type { ResolvedProjectRoot } from "./lib/project";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
   GitArcClaimViewResult,
-  GitArcProposalSummary,
   GitArcRootPaths,
   GitArcStackResult,
   GitCheckpointFileChange,
@@ -87,11 +86,14 @@ function findWorkspaceGitArcWaitBlockedError(error: unknown) {
   return null;
 }
 
-export interface WorkspaceGitArcMemberState extends GitArcLifecycleState {
+/** Published proposals are placed in a workspace root; their repository paths stay internal. */
+type WorkspaceGitArcProposalState = Omit<GitArcLifecycleState["proposals"][number], "paths"> & { rootId: string };
+
+export interface WorkspaceGitArcMemberState extends Omit<GitArcLifecycleState, "proposals"> {
   repoRoot: string;
   rootId: string;
   rootIds: string[];
-  proposals: Array<GitArcLifecycleState["proposals"][number] & { rootId: string }>;
+  proposals: Array<Omit<WorkspaceGitArcProposalState, "summary">>;
 }
 
 class WorkspaceGitArcRetentionDeferredError extends Error {
@@ -100,9 +102,9 @@ class WorkspaceGitArcRetentionDeferredError extends Error {
   }
 }
 
-export interface WorkspaceGitArcLifecycleState extends GitArcLifecycleState {
+export interface WorkspaceGitArcLifecycleState extends Omit<GitArcLifecycleState, "proposals"> {
   members: WorkspaceGitArcMemberState[];
-  proposals: Array<GitArcLifecycleState["proposals"][number] & { rootId: string }>;
+  proposals: WorkspaceGitArcProposalState[];
 }
 
 export interface WorkspaceGitArcPlanMemberState extends GitArcPlanState {
@@ -160,7 +162,7 @@ export default class WorkbenchWorkspaceGitArcController {
       const key = identityKey(value.state.harness, value.state.threadId);
       groups.set(key, [...groups.get(key) ?? [], value]);
     }
-    return await Promise.all([...groups.values()].map((values) => this.aggregateLifecycle(project, values)));
+    return [...groups.values()].map((values) => this.aggregateLifecycle(project, values));
   }
 
   async findLifecycleState(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string) {
@@ -186,7 +188,7 @@ export default class WorkbenchWorkspaceGitArcController {
       const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness, threadId });
       return state ? { member, state } : null;
     }))).flatMap((value) => value ? [value] : []);
-    return values.length ? await this.aggregateLifecycle(project, values) : null;
+    return values.length ? this.aggregateLifecycle(project, values) : null;
   }
 
   async listPlanStates(project: AgentEndpointProjectResolution): Promise<WorkspaceGitArcPlanState[]> {
@@ -479,7 +481,6 @@ export default class WorkbenchWorkspaceGitArcController {
       }
       case "arcMove": return await this.executeMove(project, members, request);
       case "proposalCreate": return await this.createProposal(project, members, request);
-      case "proposalSummaries": return await this.executeProposalSummaries(members, request);
       case "proposalState":
       case "proposalCommit":
       case "proposalRescind": return await this.executeProposalOperation(project, members, request);
@@ -1369,24 +1370,6 @@ export default class WorkbenchWorkspaceGitArcController {
     throw new GitArcRejectionError({ reason: "proposalNotFound", proposalId: request.proposalId }, `Git arc proposal not found: ${request.proposalId}`);
   }
 
-  /** One metadata read per repository member; a proposal lives in exactly one, so its known summary wins. */
-  private async executeProposalSummaries(
-    members: readonly RepoMember[],
-    request: Extract<GitCheckpointRequest, { action: "proposalSummaries" }>,
-  ) {
-    const values = await this.runMembers(members, async member => await this.local.readProposalSummaries({
-      cwd: member.repoRoot, harness: request.harness, proposalIds: request.proposalIds, threadId: request.threadId,
-    }), undefined, "read");
-    const byId = new Map<string, GitArcProposalSummary>();
-    for (const { member, result } of values) {
-      for (const summary of result) {
-        if (summary.status === "unavailable" && byId.has(summary.proposalId)) continue;
-        byId.set(summary.proposalId, { ...summary, rootId: member.roots[0]!.id });
-      }
-    }
-    return { proposals: request.proposalIds.flatMap(id => byId.get(id) ?? []) };
-  }
-
   private async executeProposalOperation(
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
@@ -1432,25 +1415,25 @@ export default class WorkbenchWorkspaceGitArcController {
     return this.aggregateResults(project, values);
   }
 
-  private async aggregateLifecycle(
+  private aggregateLifecycle(
     project: AgentEndpointProjectResolution,
     values: Array<{ member: RepoMember; state: GitArcLifecycleState }>,
-  ): Promise<WorkspaceGitArcLifecycleState> {
-    const members = await Promise.all(values.map(async ({ member, state }): Promise<WorkspaceGitArcMemberState> => ({
+  ): WorkspaceGitArcLifecycleState {
+    const placed = values.map(({ member, state }) => state.proposals.map(({ paths, ...proposal }): WorkspaceGitArcProposalState => ({
+      ...proposal, rootId: this.proposalRootId(member, paths),
+    })));
+    const members = values.map(({ member, state }, index): WorkspaceGitArcMemberState => ({
       ...state,
       claimedPaths: state.claimedPaths.map((candidate) => this.qualify(project, member, candidate)),
       ...(state.stashedPaths?.length ? {
         stashedPaths: state.stashedPaths?.map((candidate) => this.qualify(project, member, candidate)) ?? [],
       } : {}),
-      proposals: await Promise.all(state.proposals.map(async (proposal) => {
-        const paths = await this.local.getProposalPaths({ cwd: member.repoRoot, harness: state.harness as WorkbenchHarness, proposalId: proposal.proposalId, threadId: state.threadId });
-        const roots = unique(paths.map((candidate) => this.rootForRepoPath(member, candidate).id));
-        return { ...proposal, rootId: roots[0] ?? member.roots[0]!.id };
-      })),
+      // Summaries ride the aggregate proposals only, so each one is published once.
+      proposals: placed[index]!.map(({ summary: _summary, ...proposal }) => proposal),
       repoRoot: member.repoRoot,
       rootId: member.roots[0]!.id,
       rootIds: member.roots.map(({ id }) => id),
-    })));
+    }));
     const first = members[0]!;
     const phase = members.some(({ phase }) => phase === "active")
       ? "active" as const
@@ -1473,7 +1456,7 @@ export default class WorkbenchWorkspaceGitArcController {
       intentName: first.intentName,
       members,
       phase,
-      proposals: members.flatMap(({ proposals }) => proposals),
+      proposals: placed.flat(),
       ...(stackLayers.size ? {
         stackLayers: [...stackLayers.values()].sort((left, right) => left.sealedAt.localeCompare(right.sealedAt)),
       } : {}),

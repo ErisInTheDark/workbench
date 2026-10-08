@@ -19,7 +19,7 @@ import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
-import parseGitFileChangeOutput from "./git-file-change-output";
+import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
 const execFileAsync = promisify(execFile);
@@ -982,6 +982,27 @@ export default class WorkbenchGitRepository {
     }
     const changedPaths = filterPathsByScopes(parsed.paths, paths).sort((left, right) => left.localeCompare(right));
     return await this.inspectFileChanges(from, to, changedPaths, signal);
+  }
+
+  /** Per-file totals without patches, for durable summaries; scoped like `buildFileChanges`. */
+  async buildChangeTotals(from: string | null, to: string, paths: string[]) {
+    if (!paths.length) return [];
+    from = await this.contentBase(from);
+    const scopes = paths.includes(".") ? [] : paths;
+    const diff = async (pathspecs: string[]) => parseGitChangeTotalsOutput(await this.run([
+      "diff", "--raw", "--numstat", "-z", "--no-renames", from, to, "--", ...pathspecs,
+    ]));
+    let totals: Awaited<ReturnType<typeof diff>>;
+    try {
+      totals = await diff(scopes.map((scope) => this.literalPathspec(scope)));
+    } catch (error) {
+      // Long path lists can overflow the argument limit; the unscoped diff is filtered below instead.
+      if (!(error instanceof Error && "code" in error && (error.code === "E2BIG" || error.code === "ENAMETOOLONG"))) throw error;
+      totals = await diff([]);
+    }
+    const selected = new Set(filterPathsByScopes(totals.map(({ path: filePath }) => filePath), paths));
+    return totals.filter(({ path: filePath }) => selected.has(filePath))
+      .sort((left, right) => left.path.localeCompare(right.path));
   }
 
   private async inspectFileChanges(from: string, to: string, changedPaths: string[], signal?: AbortSignal) {

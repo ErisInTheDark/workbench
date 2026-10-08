@@ -57,7 +57,7 @@ export default class GitArcLifecycleController {
       ...(savedPaths.length ? { stashedPaths: savedPaths } : {}),
       adoptedPaths: current.phase === "plan" || (current.phase === "stashed" && current.retainedArc)
         ? checkpoint.metadata?.adoptedPaths ?? [] : [],
-      proposals: (await this.proposals.findLifecycleState(input))?.proposals ?? [],
+      proposals: (await this.proposals.findLifecycleState(input))?.proposals.map(({ proposalId, status }) => ({ proposalId, status })) ?? [],
       repoRoot: repository.root,
     };
   }

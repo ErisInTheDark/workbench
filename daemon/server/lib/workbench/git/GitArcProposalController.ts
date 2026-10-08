@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default GitArcProposalController: own proposal validity (including stacked proposals), bounded diff hydration, publication, acceptance, and lifecycle projection.
- * - GitArcLifecycleState: active or resolved arc with ordered proposal summaries.
+ * - GitArcLifecycleState: active or resolved arc with ordered proposals, their paths and Git-derived summaries.
  * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
  * - GitCheckpointProposalReceipt: published proposal identity.
  */
@@ -13,6 +13,7 @@ import type { GitArcProposalCommitEntry, GitCheckpointProposal, GitCheckpointReq
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
+import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
 import GitArcProposalDiffController from "./GitArcProposalDiffController";
 import {
   passthroughGitArcThreadIdentityResolver,
@@ -35,7 +36,6 @@ import {
   type CheckpointMetadata,
   type GitArcHarness,
   outcomeRef,
-  proposalMessage,
   type ProposalMetadata,
   remapArcOutcome,
   remapProposalMetadata,
@@ -68,7 +68,8 @@ export interface GitArcLifecycleState {
   intentDescription: string;
   intentName: string;
   phase: "active" | "stashed" | "resolved";
-  proposals: Array<{ proposalId: string; status: "committed" | "proposed" }>;
+  /** `paths` lets workspace aggregation place each proposal in a root without another read; it is not published. */
+  proposals: Array<{ paths: string[]; proposalId: string; status: "committed" | "proposed"; summary: WorkbenchGitArcProposalSummary }>;
   /** Own sealed layers, bottom first; absent means none. */
   stackLayers?: Array<{ layerId: string; proposalIds: string[]; sealedAt: string; title: string }>;
   stashedPaths?: string[];
@@ -128,8 +129,10 @@ function projectLifecycleState(
     harness: entry.harness,
     intentDescription: lifecycle.intentDescription,
     intentName: lifecycle.intentName,
-    proposals: summaries.flatMap(({ proposalId, status }) => (
-      status === "proposed" || status === "committed" ? [{ proposalId, status }] : []
+    proposals: summaries.flatMap(({ changes, committedSha, description, mode, paths, proposalId, status, title }) => (
+      status === "proposed" || status === "committed"
+        ? [{ paths, proposalId, status, summary: { changes, committedSha, description, mode, title } }]
+        : []
     )),
     ...(stackLayers.length ? { stackLayers } : {}),
     threadId: entry.threadId,
@@ -465,9 +468,9 @@ async function persistProposalTransition(
   treeish?: string,
 ) {
   const tree = treeish ?? proposal.tree;
-  const stateCommit = await repository.createCommitFromTree(tree, metadata.baseCommit, proposalMessage(metadata));
-  await repository.updateRefs([{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }]);
-  return { ...proposal, metadata, proposalCommit: stateCommit, tree };
+  const state = await new GitCheckpointStore(repository).createProposalCommit(tree, metadata, { previous: proposal });
+  await repository.updateRefs([{ newValue: state.commit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }]);
+  return { ...proposal, metadata: state.metadata, proposalCommit: state.commit, tree };
 }
 
 async function resolveProposalState(
@@ -764,14 +767,6 @@ export default class GitArcProposalController {
     return projectLifecycleState(entry, lifecycle, summaries, saved, stackLayers);
   }
 
-  /** Commit facts for many proposals from one batched metadata read; unknown ids read as unavailable. */
-  async readProposalSummaries(input: ArcIdentityInput & { proposalIds: string[] }) {
-    const repository = await WorkbenchGitRepository.tryOpen(input.cwd);
-    if (!repository) return [];
-    const summaries = await this.store(repository).readProposalSummaries(normalizeHarness(input.harness), input.threadId, input.proposalIds);
-    return summaries.map(({ committedSha: _committedSha, ...summary }) => summary);
-  }
-
   async readAcceptedOutcomes(input: ArcIdentityInput & {
     checkpointCommit: string;
     repository?: WorkbenchGitRepository;
@@ -886,7 +881,7 @@ export default class GitArcProposalController {
       version: 2,
     };
     const proposalTree = await repository.resolveTree(amendability.resolvedTarget);
-    const proposalCommit = await repository.createCommitFromTree(proposalTree, metadata.baseCommit, proposalMessage(metadata));
+    const { commit: proposalCommit } = await store.createProposalCommit(proposalTree, metadata);
     const currentProposalIds = current?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []);
     const proposalIds = [...new Set([...currentProposalIds, proposalId])];
     const registryMutation = await registry.prepareClaim(current ? {
@@ -980,9 +975,10 @@ export default class GitArcProposalController {
       title: proposalTitle,
       unavailableReason: null,
     };
-    const proposalCommit = await repository.createCommitFromTree(tree, metadata.baseCommit, proposalMessage(metadata));
+    const created = await this.store(repository).createProposalCommit(tree, metadata);
+    const proposalCommit = created.commit;
     const replacement: StoredProposal = {
-      metadata,
+      metadata: created.metadata,
       proposalCommit,
       proposalRef: await this.store(repository).proposalRefName(harness, threadId, proposalId),
       tree,
@@ -1009,11 +1005,7 @@ export default class GitArcProposalController {
       supersededBySha: null,
       unavailableReason: null,
     };
-    const supersededCommit = await repository.createCommitFromTree(
-      target.tree,
-      supersededMetadata.baseCommit,
-      proposalMessage(supersededMetadata),
-    );
+    const { commit: supersededCommit } = await this.store(repository).createProposalCommit(target.tree, supersededMetadata, { previous: target });
     await repository.updateRefs([
       ...(stackRevision?.updates ?? []),
       ...rewrite.updates,
@@ -1213,7 +1205,7 @@ export default class GitArcProposalController {
       version: 2,
     };
     commitMessage(metadata.title, metadata.description);
-    const proposalCommit = await repository.createCommitFromTree(proposalTree, baseCommit, proposalMessage(metadata));
+    const { commit: proposalCommit } = await store.createProposalCommit(proposalTree, metadata);
     await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
     // New proposals append so every still-pending proposal remains visible to the thread.
     const nextProposalIds = [...proposalIds, proposalId];
@@ -1311,12 +1303,6 @@ export default class GitArcProposalController {
     return { ...result, unclaimedDirt: { changes, tree: snapshot.tree } };
   }
 
-  async getProposalPaths({ cwd, harness: rawHarness, proposalId, threadId }: ArcIdentityInput & { proposalId: string }) {
-    const repository = await WorkbenchGitRepository.open(cwd);
-    const harness = normalizeHarness(rawHarness);
-    const proposal = await this.store(repository).readProposal(harness, threadId, proposalId);
-    return [...proposal.metadata.paths];
-  }
 
   private async sealingLayer(repository: WorkbenchGitRepository, harness: GitArcHarness, threadId: string, proposalId: string) {
     return await this.stack(repository).sealingLayer(await this.registry(repository).find({ harness, threadId }), proposalId);
@@ -1334,7 +1320,7 @@ export default class GitArcProposalController {
     }
     if (proposal.metadata.status !== "proposed") throw new GitArcRejectionError({ reason: "proposalCannotBeRescinded" }, "Only a pending proposal can be rescinded.");
     const metadata = { ...proposal.metadata, status: "rescinded" as const, unavailableReason: null };
-    const stateCommit = await repository.createCommitFromTree(proposal.tree, metadata.baseCommit, proposalMessage(metadata));
+    const { commit: stateCommit } = await this.store(repository).createProposalCommit(proposal.tree, metadata, { previous: proposal });
     await repository.updateRefs([{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }]);
     return { committedSha: null, proposalId: metadata.proposalId, status: metadata.status };
   }
@@ -1385,7 +1371,7 @@ export default class GitArcProposalController {
         mutatePlan: async ({ amendedCommit: nextCommit, arcPlan, newHead, targetTree }) => {
           amendedCommit = nextCommit;
           const sourceCheckpoint = arcPlan.commits.get(proposal.metadata.sourceCheckpoint) ?? proposal.metadata.sourceCheckpoint;
-          committedMetadata = {
+          const state = await store.createProposalCommit(targetTree, {
             ...remapProposalMetadata(proposal.metadata, arcPlan.commits),
             amendTargetSha: nextCommit,
             committedSha: nextCommit,
@@ -1395,9 +1381,9 @@ export default class GitArcProposalController {
             status: "committed",
             title: title.trim(),
             unavailableReason: null,
-          };
-          const stateCommit = await repository.createCommitFromTree(targetTree, committedMetadata.baseCommit, proposalMessage(committedMetadata));
-          const updates: GitRefUpdate[] = [{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }];
+          }, { previous: proposal });
+          committedMetadata = state.metadata;
+          const updates: GitRefUpdate[] = [{ newValue: state.commit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }];
           const replaceRefs = [proposal.proposalRef, oldOutcomeRef];
           if (supersededPrior) {
             const priorMetadata: ProposalMetadata = {
@@ -1407,7 +1393,7 @@ export default class GitArcProposalController {
               supersededByProposalId: proposal.metadata.proposalId,
               supersededBySha: nextCommit,
             };
-            const priorState = await repository.createCommitFromTree(supersededPrior.tree, priorMetadata.baseCommit, proposalMessage(priorMetadata));
+            const { commit: priorState } = await store.createProposalCommit(supersededPrior.tree, priorMetadata, { previous: supersededPrior });
             updates.push({ newValue: priorState, oldValue: supersededPrior.proposalCommit, ref: supersededPrior.proposalRef });
             replaceRefs.push(supersededPrior.proposalRef);
           }
@@ -1620,7 +1606,7 @@ export default class GitArcProposalController {
           targetTree,
           mutatePlan: async ({ amendedCommit, arcPlan, headRef, newHead }) => {
           const remappedSource = arcPlan.commits.get(activeSource.checkpointCommit) ?? activeSource.checkpointCommit;
-          committedMetadata = {
+          const state = await store.createProposalCommit(targetTree, {
             ...remapProposalMetadata(proposal.metadata, arcPlan.commits),
             amendTargetSha: amendedCommit,
             committedSha: amendedCommit,
@@ -1630,9 +1616,9 @@ export default class GitArcProposalController {
             status: "committed",
             title: title.trim(),
             unavailableReason: null,
-          };
-          const stateCommit = await repository.createCommitFromTree(targetTree, committedMetadata.baseCommit, proposalMessage(committedMetadata));
-          const updates: GitRefUpdate[] = [{ newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }];
+          }, { previous: proposal });
+          committedMetadata = state.metadata;
+          const updates: GitRefUpdate[] = [{ newValue: state.commit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef }];
           const replaceRefs = [proposal.proposalRef, REGISTRY_REF];
           if (supersededPrior) {
             const priorMetadata: ProposalMetadata = {
@@ -1642,7 +1628,7 @@ export default class GitArcProposalController {
               supersededByProposalId: proposalId,
               supersededBySha: amendedCommit,
             };
-            const priorState = await repository.createCommitFromTree(supersededPrior.tree, priorMetadata.baseCommit, proposalMessage(priorMetadata));
+            const { commit: priorState } = await store.createProposalCommit(supersededPrior.tree, priorMetadata, { previous: supersededPrior });
             updates.push({ newValue: priorState, oldValue: supersededPrior.proposalCommit, ref: supersededPrior.proposalRef });
             replaceRefs.push(supersededPrior.proposalRef);
           }
@@ -1719,7 +1705,7 @@ export default class GitArcProposalController {
     const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message,
       proposedAt ? { authorDate: proposedAt, committerDate: proposedAt } : undefined);
     const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = proposal.metadata;
-    const committedMetadata: ProposalMetadata = {
+    const { commit: stateCommit, metadata: committedMetadata } = await store.createProposalCommit(targetTree, {
       ...proposalMetadata,
       ...(committingFresh ? {
         amendTargetSha: null,
@@ -1732,8 +1718,7 @@ export default class GitArcProposalController {
       status: "committed",
       title: title.trim(),
       unavailableReason: null,
-    };
-    const stateCommit = await repository.createCommitFromTree(targetTree, proposal.metadata.baseCommit, proposalMessage(committedMetadata));
+    }, { parent: proposal.metadata.baseCommit, previous: proposal });
     const acceptedProposals = [...previousAcceptedProposals];
     if (!acceptedProposals.some((receipt) => receipt.proposalId === proposalId)) {
       acceptedProposals.push({ commitSha: committedSha, headSha: committedSha, proposalId });
@@ -1795,10 +1780,10 @@ export default class GitArcProposalController {
     const invalidations = await Promise.all(proposalIds.map(async (proposalId) => {
       const proposal = await store.readProposal(harness, threadId, proposalId);
       if (proposal.metadata.status !== "proposed") return null;
-      const stateCommit = await repository.createCommitFromTree(
+      const { commit: stateCommit } = await store.createProposalCommit(
         proposal.tree,
-        proposal.metadata.baseCommit,
-        proposalMessage({ ...proposal.metadata, status: "unavailable", unavailableReason: reason }),
+        { ...proposal.metadata, status: "unavailable", unavailableReason: reason },
+        { previous: proposal },
       );
       const update: GitRefUpdate = { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef };
       return { proposalId, update };

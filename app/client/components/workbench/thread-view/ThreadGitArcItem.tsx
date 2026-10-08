@@ -29,8 +29,8 @@ import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-import ThreadGitArcStackedProposals from "./ThreadGitArcStackedProposals";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
+import { ThreadReadonlyCommitCard } from "./ThreadCheckpointCommitCard";
 
 const ACTION_LABELS = {
   adopt: { completed: "Adopted claims", failed: "Failed to adopt claims", inProgress: "Adopting claims", timedOut: "Timed out adopting claims" },
@@ -119,6 +119,7 @@ export default function ThreadGitArcItem ({
   durationPresentation = "default",
   failureReason,
   interruptedBySteer = false,
+  name = null,
   operationDetails,
   outcome,
   operationSummaryRows = [],
@@ -137,6 +138,8 @@ export default function ThreadGitArcItem ({
   durationPresentation?: "default" | "waited";
   failureReason?: string | null;
   interruptedBySteer?: boolean;
+  /** Names the card's subject (a proposal title) instead of the arc intent. */
+  name?: string | null;
   operationDetails?: ReactNode;
   outcome: ThreadCommandExecutionOutcome;
   operationSummaryRows?: readonly ThreadFileChangeListChange[];
@@ -209,17 +212,8 @@ export default function ThreadGitArcItem ({
   const stackAction = commandIntent.action === "stack" || commandIntent.action === "unstack";
   const stackedProposals = stackAction ? receipt?.stackedProposals ?? null : null;
   const stackedProposalCount = stackAction ? stackedProposals?.length ?? receipt?.proposals?.length ?? null : null;
-  const stackedProposalList = (expanded: boolean) => stackedProposals?.length ? (
-    <ThreadGitArcStackedProposals
-      expanded={expanded}
-      projectFilePaths={projectFilePaths}
-      projectId={projectId}
-      projectRootPath={projectRootPath}
-      proposals={stackedProposals}
-      workspaceRoots={workspaceRoots}
-    />
-  ) : null;
-  const planName = (stackAction ? receipt?.layer ?? commandIntent.layerTitle : null)
+  const planName = name
+    ?? (stackAction ? receipt?.layer ?? commandIntent.layerTitle : null)
     ?? receipt?.intentName
     ?? commandIntent.intentName
     ?? (commandIntent.action === "start" && currentPlanMatchesCommand ? currentPlan?.intentName : null)
@@ -351,7 +345,11 @@ export default function ThreadGitArcItem ({
   const firstClaimSummaryGroup = claimSummaryGroups.find((entry) => entry.paths.length);
   const claimSummaryCount = claimSummaryGroups.reduce((total, entry) => total + entry.paths.length, 0);
   // Stack cards summarise their sealed proposals instead of the arc's claim counts.
-  const collapsedContent: ThreadGitArcCollapsedSummaryContent | null = stackAction ? null : moveMappings.length
+  const collapsedContent: ThreadGitArcCollapsedSummaryContent | null = stackAction
+    ? stackedProposals?.length
+      ? { commits: stackedProposals.map((summary) => ({ key: summary.proposalId, summary })), kind: "commits" }
+      : null
+    : moveMappings.length
     ? { kind: "moves", mappings: moveMappings }
     : operationSummaryRows.length
       ? {
@@ -433,7 +431,21 @@ export default function ThreadGitArcItem ({
           />
         ) : null}
         {operationDetails && !ignoredFailure && !failedStartDrift ? <div>{operationDetails}</div> : null}
-        {stackedProposalList(true)}
+        {stackedProposals?.length ? (
+          <div className="divide-y divide-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-stacked-proposals="true">
+            {stackedProposals.map((summary) => (
+              <ThreadReadonlyCommitCard
+                key={summary.proposalId}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                sourceItemId={`stacked-proposal:${summary.proposalId}`}
+                state={{ status: "summary", summary }}
+                workspaceRoots={workspaceRoots}
+              />
+            ))}
+          </div>
+        ) : null}
         {commandIntent.action === "status" && state === "completed" && (statusOutput !== undefined || statusFacts !== undefined) ? (
           <ThreadGitArcStatusDetails output={statusOutput ?? ""} status={statusFacts} incomplete={statusIncomplete} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
         ) : null}
@@ -545,11 +557,6 @@ export default function ThreadGitArcItem ({
           </div>
         ) : null}
       </ThreadDisclosure>
-      {!isOpen && stackedProposals?.length ? (
-        <div className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-collapsed-summary="true">
-          {stackedProposalList(false)}
-        </div>
-      ) : null}
       {!isOpen && collapsedContent ? (
         <ThreadGitArcCollapsedSummary
           content={collapsedContent}

@@ -3,6 +3,7 @@
  * - WorkbenchHarnessSchema/WorkbenchHarnessId: stored provider identities, independent of installation.
  * - WorkbenchThreadDraft/WorkbenchThreadLifecycle/WorkbenchGitArcPlanState: draft, lifecycle, and inactive-plan types.
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
+ * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
@@ -47,6 +48,7 @@ import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadI
 
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
+import { GitArcChangeTotalSchema } from "../git/git-arc-receipts.ts";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerSettingsSchema } from "./composer-profile-selection.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
 import { WorkbenchThreadTitleHistoryEntrySchema } from "./thread-title-history.ts";
@@ -247,11 +249,25 @@ export const WorkbenchThreadLifecycleSchema = z.union([
 });
 export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSchema>;
 
+/** A proposal's message and change totals as Git currently records them; never cached in SQLite. */
+const WorkbenchGitArcProposalSummarySchema = z.object({
+  /** Null on proposals written before change totals were recorded. */
+  changes: z.array(GitArcChangeTotalSchema).nullable(),
+  committedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).nullable(),
+  description: z.string(),
+  mode: z.enum(["amend", "commit"]),
+  title: z.string(),
+}).strict();
+export type WorkbenchGitArcProposalSummary = z.infer<typeof WorkbenchGitArcProposalSummarySchema>;
+
 const WorkbenchGitArcProposalStateSchema = z.object({
   proposalId: z.string().min(1),
   rootId: z.string().min(1).optional(),
   status: z.enum(["committed", "proposed"]),
+  /** Absent until observed from Git: older daemons and SQLite startup-cache reads omit it. */
+  summary: WorkbenchGitArcProposalSummarySchema.optional(),
 }).strict();
+export type WorkbenchGitArcProposalState = z.infer<typeof WorkbenchGitArcProposalStateSchema>;
 
 /** Own sealed stack layers, bottom first; proposals listed here render inside their layer. Absent means none. */
 const WorkbenchGitArcStackLayersSchema = z.array(z.object({

@@ -6,7 +6,6 @@ import { z } from "zod";
 
 import {
   GitArcProposalCommitManyResultSchema,
-  GitArcProposalSummariesSchema,
   GitArcStashResultSchema,
   GitCheckpointCompareResultSchema,
   GitCheckpointProposalSchema,
@@ -22,7 +21,6 @@ export const WORKBENCH_GIT_ARC_RESULT_SCHEMAS = {
   "git/arc/proposal/commit": GitCheckpointProposalSchema,
   "git/arc/proposals/commit": GitArcProposalCommitManyResultSchema,
   "git/arc/proposal/read": GitCheckpointProposalSchema,
-  "git/arc/proposals/summaries": GitArcProposalSummariesSchema,
   "git/arc/release": acknowledged,
   "git/arc/remove": acknowledged,
   "git/arc/restore": acknowledged,

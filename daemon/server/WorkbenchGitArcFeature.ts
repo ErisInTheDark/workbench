@@ -84,7 +84,7 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCommitMany", "proposalCreate", "proposalRescind", "restore",
 ]);
-const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState", "proposalSummaries"]);
+const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
 
 function acceptanceKey(owner: { harness: string; threadId: string }) {
@@ -958,10 +958,6 @@ export default class WorkbenchGitArcFeature {
       case "proposalState": return Response.json(await this.controller.getProposal({
         ...common, includeNewer: input.includeNewer, includeUnclaimed: input.includeUnclaimed, proposalId: input.proposalId,
       }));
-      case "proposalSummaries": return Response.json({
-        proposals: (await this.controller.readProposalSummaries({ ...common, proposalIds: input.proposalIds }))
-          .filter(({ proposalId }) => input.proposalIds.includes(proposalId)),
-      });
       case "proposalCommit": return Response.json(await this.controller.commitProposal({
         ...common, description: input.description, includeNewer: input.includeNewer,
         mode: input.mode, unclaimedSelection: input.unclaimedSelection,

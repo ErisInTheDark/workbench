@@ -102,7 +102,8 @@ test("proposal summary groups read only the requested thread proposal namespaces
   ], new Map([
     [proposedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-one", "proposed", null)))],
     [committedCommit, commitIdentity(proposalMessage({
-      ...proposalMetadata("proposal-two", "committed", committedSha), description: "why", mode: "amend", paths: [],
+      ...proposalMetadata("proposal-two", "committed", committedSha), description: "why", mode: "amend", paths: ["two.ts"],
+      changes: [{ additions: 3, deletions: 1, kind: "update", path: "two.ts" }],
     }))],
   ]));
   const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository, async ({ threadId }) => (
@@ -120,8 +121,12 @@ test("proposal summary groups read only the requested thread proposal namespaces
   assert.deepEqual(repository.namespaceReads, [[canonical, canonicalLegacy, provider, providerLegacy]]);
   assert.deepEqual(repository.commitReads, [[proposedCommit, committedCommit]], "one batched commit read, no diffs");
   assert.deepEqual(summaries, [[
-    { committedSha: null, description: "", hasChanges: true, mode: "commit", proposalId: "proposal-one", status: "proposed", title: "proposal-one" },
-    { committedSha, description: "why", hasChanges: false, mode: "amend", proposalId: "proposal-two", status: "committed", title: "proposal-two" },
+    // Proposals written before totals were recorded summarise without them.
+    { changes: null, committedSha: null, description: "", mode: "commit", paths: ["changed.ts"], proposalId: "proposal-one", status: "proposed", title: "proposal-one" },
+    {
+      changes: [{ additions: 3, deletions: 1, kind: "update", path: "two.ts" }],
+      committedSha, description: "why", mode: "amend", paths: ["two.ts"], proposalId: "proposal-two", status: "committed", title: "proposal-two",
+    },
   ]]);
 });
 

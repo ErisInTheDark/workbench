@@ -1,15 +1,17 @@
 /*
  * Exports:
  * - default parseGitFileChangeOutput: decode combined NUL-delimited Git metadata and exact patches, identifying gitlinks for separate inspection.
+ * - parseGitChangeTotalsOutput: decode NUL-delimited raw and numstat metadata into diff-free per-file totals.
  */
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
+import type { GitArcChangeTotal } from "workbench-shared/workbench/git/git-arc-receipts";
 
 type GitFileChangeOutput =
   | { kind: "changes"; changes: GitCheckpointFileChange[] }
   | { kind: "gitlinks"; paths: string[] };
 
-export default function parseGitFileChangeOutput(output: string): GitFileChangeOutput {
-  if (!output) return { kind: "changes", changes: [] };
+/** Reads `--raw --numstat -z` records from the start of `output`, leaving `field`/`offset` positioned after the counts. */
+function readRawNumstat(output: string) {
   let offset = 0;
   const field = () => {
     const end = output.indexOf("\0", offset);
@@ -42,12 +44,25 @@ export default function parseGitFileChangeOutput(output: string): GitFileChangeO
     change.additions = numstat[1] === "-" ? 0 : Number(numstat[1]);
     change.deletions = numstat[2] === "-" ? 0 : Number(numstat[2]);
   }
+  return { entries, field, offset: () => offset };
+}
+
+export function parseGitChangeTotalsOutput(output: string): GitArcChangeTotal[] {
+  if (!output) return [];
+  const { entries, offset } = readRawNumstat(output);
+  if (offset() !== output.length) throw new Error("Git returned unexpected output after change counts.");
+  return entries.map(({ change: { additions, deletions, kind, path } }) => ({ additions, deletions, kind: kind.type, path }));
+}
+
+export default function parseGitFileChangeOutput(output: string): GitFileChangeOutput {
+  if (!output) return { kind: "changes", changes: [] };
+  const { entries, field, offset } = readRawNumstat(output);
   if (field() !== "") throw new Error("Git returned an invalid patch separator.");
   // Expanded submodule diffs can contain nested patch headers.
   if (entries.some(({ gitlink }) => gitlink)) {
     return { kind: "gitlinks", paths: entries.map(({ change }) => change.path) };
   }
-  const patches = output.slice(offset);
+  const patches = output.slice(offset());
   const headers = [...patches.matchAll(/^(?:\x1b\[[0-9;]*m)*diff --git /gm)].map((match) => ({
     boundary: match.index,
     start: match.index + match[0].indexOf("diff --git "),

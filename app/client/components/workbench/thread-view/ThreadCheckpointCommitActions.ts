@@ -2,9 +2,9 @@
  * Exports:
  * - ThreadCheckpointCommitAction: one mounted proposal controller's readiness, batched commit choices and outcome handling.
  * - ThreadCheckpointCommitOutcome: a batched acceptance's landed proposal or failure for one proposal.
- * - ThreadCheckpointStoredProposal: bulk-read proposal commit facts used while a card has not loaded.
- * - ThreadCheckpointCommitActionsContext: provide the owning view's registry to relocatable proposal controllers.
- * - default ThreadCheckpointCommitActions: resolve each proposal's commit action (loaded card first, bulk summary otherwise) and land selected proposals in one batched acceptance.
+ * - ThreadCheckpointStoredProposal: observed proposal commit facts used while a card has not loaded.
+ * - ThreadCheckpointCommitActionsContext: provide the owning lifecycle list's registry to its proposal controllers.
+ * - default ThreadCheckpointCommitActions: resolve each proposal's commit action (loaded card first, observed summary otherwise) and land selected proposals in one batched acceptance.
  */
 "use client";
 
@@ -13,7 +13,6 @@ import { createContext } from "react";
 import type {
   GitArcProposalCommitEntry,
   GitArcProposalCommitManyResult,
-  GitArcProposalSummary,
   GitCheckpointProposal,
 } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcFailureException } from "workbench-shared/workbench/git/git-arc-failures";
@@ -23,14 +22,22 @@ export type ThreadCheckpointCommitOutcome = { proposal: GitCheckpointProposal } 
 export interface ThreadCheckpointCommitAction {
   /** This proposal's current commit choices, or null when it has nothing committable. */
   entry: () => GitArcProposalCommitEntry | null;
-  /** False until the card loaded its proposal; an unloaded card defers to the bulk summary. Defaults to true. */
+  /** False until the card loaded its proposal; an unloaded card defers to the observed summary. Defaults to true. */
   loaded?: boolean;
   ready: boolean;
   /** Shows a batched acceptance's outcome for this proposal on its own card. */
   settle: (outcome: ThreadCheckpointCommitOutcome) => void;
 }
 
-export type ThreadCheckpointStoredProposal = Omit<GitArcProposalSummary, "rootId">;
+export interface ThreadCheckpointStoredProposal {
+  description: string;
+  /** False only when recorded totals prove the proposal empty; unknown totals defer to the daemon's revalidation. */
+  hasChanges: boolean;
+  mode: "amend" | "commit";
+  proposalId: string;
+  status: "committed" | "proposed";
+  title: string;
+}
 
 function isStoredReady(proposal: ThreadCheckpointStoredProposal) {
   return proposal.status === "proposed" && proposal.hasChanges && Boolean(proposal.title.trim());
@@ -52,7 +59,7 @@ export default class ThreadCheckpointCommitActions {
     };
   }
 
-  /** Replace the bulk summaries; they commit with their stored message, so cards that never loaded still take part. */
+  /** Replace the observed summaries; they commit with their stored message, so cards that never loaded still take part. */
   setStored(
     proposals: readonly ThreadCheckpointStoredProposal[],
     settle: (proposal: ThreadCheckpointStoredProposal, outcome: ThreadCheckpointCommitOutcome) => void,
@@ -96,7 +103,7 @@ export default class ThreadCheckpointCommitActions {
    * Lands every proposal in one batched acceptance, in order; the daemon stops at the first failure and earlier ones
    * stay landed. Readiness gates the start only, since the daemon revalidates each proposal. Proposals with neither a
    * card nor a summary stop the run before it starts. The stored tier is captured at the start, because each landed
-   * commit makes the list refetch its summaries.
+   * commit changes the observed summaries.
    */
   async commitAll(
     proposalIds: readonly string[],

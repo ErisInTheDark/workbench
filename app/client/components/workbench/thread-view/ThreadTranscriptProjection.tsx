@@ -23,7 +23,6 @@ import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
-const EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS: ReadonlySet<string> = new Set();
 
 function mergeAdjacentTurnSegments(
   segments: WorkbenchTranscriptProjection["display"]["segments"],
@@ -55,7 +54,6 @@ function mergeAdjacentTurnSegments(
 export default function ThreadTranscriptProjection({
   canLoadPreviousTurn,
   hiddenReasoningStep,
-  hoistedGitArcProposalIds = EMPTY_HOISTED_GIT_ARC_PROPOSAL_IDS,
   historySentinelRef,
   inlineMentionSources,
   knownSkills,
@@ -70,7 +68,6 @@ export default function ThreadTranscriptProjection({
 }: {
   canLoadPreviousTurn: boolean;
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
-  hoistedGitArcProposalIds?: ReadonlySet<string>;
   historySentinelRef: Ref<HTMLDivElement>;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills: WorkbenchSkillSummary[];
@@ -139,7 +136,6 @@ export default function ThreadTranscriptProjection({
                   initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                   browseResultEntries={browseResultEntries}
                   hiddenReasoningStep={hiddenReasoningStep}
-                  hoistedGitArcProposalIds={hoistedGitArcProposalIds}
                   inlineMentionSources={inlineMentionSources}
                   items={segment.items}
                   itemTimeline={turn.itemTimeline}

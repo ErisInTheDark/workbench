@@ -23,7 +23,7 @@ import {
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
 import { resolveWorkbenchSubagentCommandTargets } from "../../../workbench/thread/thread-subagents";
-import ThreadCheckpointCommitItem from "./ThreadCheckpointCommitItem";
+import ThreadGitArcProposalItem from "./ThreadGitArcProposalItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
@@ -179,19 +179,17 @@ export default function ThreadWorkbenchCommandItem({
     const proposalId = receipt?.proposalId ?? (!hasStructuredResult ? parseGitCheckpointProposalId(output) : null);
     if (intent.action === "propose") {
       return (
-        <ThreadCheckpointCommitItem
-          commandOutcome={gitArcOutcome}
-          cwd={threadCwdPath ?? null}
+        <ThreadGitArcProposalItem
+          durationMs={visibleDurationMs ?? null}
           failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
           interruptedBySteer={interruptedBySteer}
           intent={intent.proposalIntent ?? null}
+          outcome={gitArcOutcome}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           proposalId={proposalId}
-          relocatable
           sourceItemId={item.id}
-          threadId={threadId}
           typedFailure={structured?.kind === "failure" ? structured.failure : null}
           workspaceRoots={workspaceRoots}
         />

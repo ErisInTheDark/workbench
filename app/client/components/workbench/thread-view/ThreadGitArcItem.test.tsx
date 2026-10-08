@@ -114,6 +114,21 @@ test("closed compare cards show two file samples, totals, and a remaining count"
   assert.match(html, />-1</u);
 });
 
+test("closed stack cards list every sealed commit as a commit row, never a truncated preview", () => {
+  const stackedProposals = ["one", "two", "three"].map((name, index) => ({
+    changes: [{ additions: index + 1, deletions: 0, kind: "update" as const, path: `src/${name}.ts` }],
+    description: "",
+    proposalId: `proposal-${name}`,
+    title: `seal ${name}`,
+  }));
+  const html = renderCard("stack", receipt("stack", { layer: "layer", stackedProposals }));
+
+  for (const name of ["one", "two", "three"]) assert.match(html, new RegExp(`seal ${name}`, "u"));
+  assert.match(html, />\+3</u);
+  assert.match(html, /aria-label="commit"/u);
+  assert.doesNotMatch(html, /and \d+ more/u);
+});
+
 test("artifact-only diff cards do not invent a collapsed preview", () => {
   const html = renderCard("diff");
   assert.doesNotMatch(html, /data-thread-git-arc-collapsed-summary/u);

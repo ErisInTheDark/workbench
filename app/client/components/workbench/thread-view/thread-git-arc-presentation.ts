@@ -3,8 +3,8 @@
  * - ThreadGitArcProposalTranscriptItem: associate one rendered proposal command with its receipt and editable message intent.
  * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent.
  * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message.
- * - ThreadGitArcProposalSource/ThreadGitArcProposalPresentation: index proposal controller inputs and latest source turns from loaded transcript turns.
- * - getHoistedThreadGitArc: select useful current Git arc work without duplicating Git validity; running turns hoist pending proposals only.
+ * - ThreadGitArcProposalPresentation: index proposal message intents and latest source turns from loaded transcript turns.
+ * - getHoistedThreadGitArc: select useful current Git arc work without duplicating Git validity; hoisted proposals keep their observed summaries.
  * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
@@ -41,13 +41,6 @@ export interface ThreadGitArcProposalTranscriptItem {
 export interface ThreadGitArcProposalPresentation {
   intents: Map<string, GitCheckpointCommitCommandIntent>;
   proposalTurnIds: Map<string, string>;
-  sources: Map<string, ThreadGitArcProposalSource>;
-}
-
-export interface ThreadGitArcProposalSource {
-  cwd: string | null;
-  intent: GitCheckpointCommitCommandIntent | null;
-  sourceItemId: string;
 }
 
 export function proposalIntentOwnsMessage(intent: GitCheckpointCommitCommandIntent | null) {
@@ -122,11 +115,11 @@ export function getHoistedThreadGitArc({
 }) {
   if (!gitArc) return null;
   const running = currentTurn?.status === "inProgress";
-  const proposals = gitArc.proposals.flatMap(({ proposalId, status: lifecycleStatus }) => {
-    const observation = proposalObservations[proposalId];
-    const status = observation?.status === "loaded" ? observation.proposal.status : lifecycleStatus;
-    // Landed proposals stay inline in a running turn's transcript; only pending ones hoist.
-    return status === "proposed" || (!running && status === "committed") ? [{ proposalId, status }] : [];
+  // The lifecycle card owns every interactive proposal card, so landed proposals stay hoisted even mid-turn.
+  const proposals = gitArc.proposals.flatMap((proposal) => {
+    const observation = proposalObservations[proposal.proposalId];
+    const status = observation?.status === "loaded" ? observation.proposal.status : proposal.status;
+    return status === "proposed" || status === "committed" ? [{ ...proposal, status }] : [];
   });
   const visibleGitArc = proposals.length === gitArc.proposals.length
     && proposals.every((proposal, index) => proposal.status === gitArc.proposals[index]?.status)
@@ -156,7 +149,6 @@ export default function getThreadGitArcProposalPresentation({
 }): ThreadGitArcProposalPresentation {
   const intents = new Map<string, GitCheckpointCommitCommandIntent>();
   const proposalTurnIds = new Map<string, string>();
-  const sources = new Map<string, ThreadGitArcProposalSource>();
   for (const turn of turns) {
     for (const item of turn.items) {
       const proposal = item.type === "commandExecution"
@@ -172,12 +164,7 @@ export default function getThreadGitArcProposalPresentation({
       if (!proposal?.proposalId) continue;
       proposalTurnIds.set(proposal.proposalId, turn.id);
       if (proposal.intent) intents.set(proposal.proposalId, proposal.intent);
-      sources.set(proposal.proposalId, {
-        cwd: item.type === "commandExecution" ? item.cwd : null,
-        intent: proposal.intent,
-        sourceItemId: item.id,
-      });
     }
   }
-  return { intents, proposalTurnIds, sources };
+  return { intents, proposalTurnIds };
 }

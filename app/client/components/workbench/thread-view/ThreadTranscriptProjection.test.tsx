@@ -63,7 +63,6 @@ function renderItems(
   items: ThreadItem[],
   hiddenReasoningStep: ThreadReasoningStepReference | null = null,
   durableItemCount = items.length,
-  hoistedGitArcProposalIds: ReadonlySet<string> = new Set(),
 ) {
   const turns = [turn("turn", 0, items)];
   const projection: WorkbenchTranscriptProjection = {
@@ -100,7 +99,6 @@ function renderItems(
       canLoadPreviousTurn={false}
       hiddenReasoningStep={hiddenReasoningStep}
       historySentinelRef={createRef<HTMLDivElement>()}
-      hoistedGitArcProposalIds={hoistedGitArcProposalIds}
       knownSkills={[]}
       projectFilePaths={[]}
       projectId="project"
@@ -146,13 +144,14 @@ test("standalone skill transport adds no display while visible and missing user 
   }
 });
 
-test("canonical projection removes a proposal source while its card is hoisted", () => {
+test("canonical projection keeps a proposal in place as its collapsed git arc card", () => {
   const proposal = {
-    ...command("proposal", 'wb git arc propose --title "Move this proposal" -- src/one.ts'),
+    ...command("proposal", 'wb git arc propose --title "Keep this proposal" -- src/one.ts'),
     aggregatedOutput: "Workbench arc proposal: proposal-one\n",
   };
-  const html = renderItems([proposal], null, 1, new Set(["proposal-one"]));
-  assert.doesNotMatch(html, /data-thread-checkpoint-proposal-source=/u);
+  const html = renderItems([proposal], null, 1);
+  assert.match(html, /data-thread-git-arc-card="propose"/u);
+  assert.match(html, /Keep this proposal/u);
   assert.doesNotMatch(html, /data-thread-checkpoint-card=/u);
 });
 

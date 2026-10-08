@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type WorkbenchGitCheckpointController from "./lib/workbench/git/WorkbenchGitCheckpointController";
+import type { GitArcLifecycleState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import { WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import { renderGitArcOutput } from "./lib/workbench/cli/git-arc-output";
@@ -115,7 +116,6 @@ class FakeLocalGitArcController {
   readonly lifecycleFindCalls: string[] = [];
   readonly lifecycleListCalls: string[] = [];
   readonly proposalDetailCalls: string[] = [];
-  readonly proposalPathCalls: string[] = [];
   readonly snapshotCalls: string[] = [];
   readonly stashFailureRoots = new Set<string>();
   readonly unstashFailureRoots = new Set<string>();
@@ -137,7 +137,7 @@ class FakeLocalGitArcController {
   private readonly proposals = new Map<string, { cwd: string; paths: string[]; proposalId: string }>();
   private readonly states = new Map<string, {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
-    phase: "active" | "stashed"; proposals: Array<{ proposalId: string; status: "proposed" }>; stashedPaths?: string[];
+    phase: "active" | "stashed"; proposals: GitArcLifecycleState["proposals"]; stashedPaths?: string[];
     threadId: string; updatedAt: string; pendingPlan?: boolean;
   }>();
 
@@ -460,7 +460,10 @@ class FakeLocalGitArcController {
       ? path.relative(input.cwd, filePath).replace(/\\/gu, "/")
       : filePath);
     this.proposals.set(proposalId, { cwd: input.cwd, paths, proposalId });
-    state?.proposals.push({ proposalId, status: "proposed" });
+    state?.proposals.push({
+      paths, proposalId, status: "proposed",
+      summary: { changes: [], committedSha: null, description: "", mode: "commit", title: proposalId },
+    });
     return {
       baseCommit: "f".repeat(40), description: "", includeNewer: false, paths, proposalId,
       receivedPaths: input.paths, status: "proposed", title: proposalId,
@@ -470,11 +473,6 @@ class FakeLocalGitArcController {
   async getProposal(input: { cwd: string; proposalId: string }) {
     this.proposalDetailCalls.push(input.proposalId);
     return this.getStoredProposal(input);
-  }
-
-  async getProposalPaths(input: { cwd: string; proposalId: string }) {
-    this.proposalPathCalls.push(input.proposalId);
-    return this.getStoredProposal(input).paths;
   }
 
   private getStoredProposal(input: { cwd: string; proposalId: string }) {
@@ -843,18 +841,15 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
   const findCallsBefore = local.lifecycleFindCalls.length;
   const listCallsBefore = local.lifecycleListCalls.length;
   const proposalDetailCallsBefore = local.proposalDetailCalls.length;
-  const proposalPathCallsBefore = local.proposalPathCalls.length;
   const lifecycle = await controller.findLifecycleState(project, "codex", identity.threadId);
   assert.deepEqual(local.lifecycleFindCalls.slice(findCallsBefore).sort(), [apiRoot, webRoot].sort());
   assert.equal(local.lifecycleListCalls.length, listCallsBefore);
+  // Roots come from the lifecycle's own summary paths: aggregation reads no proposal.
   assert.equal(local.proposalDetailCalls.length, proposalDetailCallsBefore);
-  assert.deepEqual(local.proposalPathCalls.slice(proposalPathCallsBefore), [
-    apiProposal.proposalId,
-    webProposal.proposalId,
-    messageAmendment.proposalId,
-    contentAmendment.proposalId,
-  ]);
   assert.ok(lifecycle);
+  assert.ok(lifecycle.proposals.every(({ summary }) => summary), "aggregate proposals publish their summaries");
+  assert.ok(lifecycle.members.every(({ proposals }) => proposals.every(proposal => !("summary" in proposal) && !("paths" in proposal))),
+    "member proposals publish neither repository paths nor a second copy of each summary");
   const { harness: _arcHarness, threadId: _arcThreadId, ...sidebarLifecycle } = lifecycle;
   assert.deepEqual(WorkbenchGitArcLifecycleStateSchema.parse(sidebarLifecycle).claimedPaths, ["api:one.txt", "web:two.txt"]);
   assert.deepEqual(lifecycle?.claimedPaths, ["api:one.txt", "web:two.txt"]);
