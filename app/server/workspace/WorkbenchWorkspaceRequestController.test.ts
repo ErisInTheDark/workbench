@@ -128,7 +128,7 @@ function state(revision: number): WorkbenchClientStateResponse {
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
 async function fixture(
   context: TestContext,
-  daemons?: { get(daemonId: string): object | undefined },
+  daemons?: { get(daemonId: string): object | undefined; attached?: object },
   owners?: Partial<Pick<WorkbenchWorkspaceThreads, "observe" | "withThread">>,
 ) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
@@ -149,10 +149,12 @@ async function fixture(
   const providerEvents: Array<{ method: string; harness: string; daemonId: string }> = [];
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
+  const requestSources = daemons ? Object.assign(Object.create(sources) as typeof sources, { get: daemons.get }) : sources;
+  if (daemons?.attached) Object.defineProperty(requestSources, "attached", { value: daemons.attached });
   const owner = new WorkbenchWorkspaceRequestController({
     workspace, presentation,
     threads: owners ? Object.assign(Object.create(threads) as typeof threads, owners) : threads,
-    sources: daemons ? Object.assign(Object.create(sources) as typeof sources, daemons) : sources,
+    sources: requestSources,
     network: { read: () => ({ kind: "network", phase: "pending", failure: null, data: null }), subscribe: () => () => {} },
     runtime: { read: () => null, subscribe: () => () => {} },
     appState: { read: () => read(), subscribe: (_id, listener) => {
@@ -204,6 +206,35 @@ test("provider-wide model changes reach browsers without thread demand", async c
   } as never);
   notify({ method: "models/updated", params: {} }, "opencode");
   assert.deepEqual(f.providerEvents, [{ method: "models/updated", harness: "opencode", daemonId: "daemon" }]);
+});
+
+test("update observations relay the local installation but expose no remote checkout update", async context => {
+  const localId = DaemonIdSchema.parse(randomUUID());
+  const remoteId = DaemonIdSchema.parse(randomUUID());
+  const update = {
+    state: "available" as const, reason: null, upstream: "origin/main", behind: 2, ahead: 0,
+    conflicts: [], lockfileChanged: false, checkedAt: 1, projectId: null, failure: null,
+  };
+  let released = false;
+  const local = {
+    id: localId,
+    observe: () => ({
+      getSnapshot: () => ({ phase: "current", failure: null,
+        value: { kind: "update", subscriptionId: randomUUID(), generation: 1, revision: 1,
+          phase: "current", failure: null, data: update } }),
+      release: () => { released = true; },
+    }),
+  };
+  const remote = { id: remoteId, observe: () => assert.fail("Remote installation update should not be queried.") };
+  const f = await fixture(context, { attached: local, get: id => id === localId ? local : id === remoteId ? remote : undefined });
+  const subscriptionId = randomUUID();
+  const received = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "daemonUpdate", daemonId: localId } });
+  assert.equal(received.kind, "daemonUpdate");
+  if (received.kind === "daemonUpdate") assert.deepEqual(received.data, update);
+  const remoteValue = f.owner.observe({ subscriptionId, generation: 2, query: { kind: "daemonUpdate", daemonId: remoteId } });
+  assert.equal(remoteValue.kind, "daemonUpdate");
+  if (remoteValue.kind === "daemonUpdate") assert.equal(remoteValue.data, null);
+  assert.equal(released, true);
 });
 
 test("pending browser-state binding cannot block already-available app presentation", async context => {

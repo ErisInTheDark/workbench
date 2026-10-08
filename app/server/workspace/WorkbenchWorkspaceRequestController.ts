@@ -45,6 +45,8 @@ import {
   workbenchTranscriptOperations, conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed,
   type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type WorkbenchAppReloadOrchestrator from "../runtime/WorkbenchAppReloadOrchestrator";
+import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 
 type Payload = {
   [Kind in WorkspaceObservation["kind"]]: Omit<
@@ -99,6 +101,7 @@ export default class WorkbenchWorkspaceRequestController {
       read(): Extract<WorkspaceObservation, { kind: "runtime" }>["data"];
       subscribe(listener: () => void): () => void;
     };
+    reloadOperation?: Pick<WorkbenchAppReloadOrchestrator, "read" | "subscribe">;
     appState: {
       read(browserStateId: string | null): Promise<Extract<WorkspaceObservation, { kind: "appState" }>["data"]>;
       subscribe(browserStateId: string | null, listener: () => void): () => void;
@@ -443,7 +446,12 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, observation.getSnapshot());
         break;
       }
-      case "daemonRuntime": interest.stop.push(this.options.sources.subscribe(refresh)); break;
+      case "daemonRuntime":
+      case "daemonUpdate": interest.stop.push(this.options.sources.subscribe(refresh)); break;
+      case "reloadOperation": {
+        if (this.options.reloadOperation) interest.stop.push(this.options.reloadOperation.subscribe(refresh));
+        break;
+      }
       case "network": interest.stop.push(this.options.network.subscribe(refresh)); break;
       case "runtime": interest.stop.push(this.options.runtime.subscribe(refresh)); break;
       case "presentation": interest.stop.push(this.options.presentation.subscribe(refresh)); break;
@@ -554,6 +562,8 @@ export default class WorkbenchWorkspaceRequestController {
     switch (request.query.kind) {
       case "search": return { ...base, kind: "search", data: { results: [] }, sources: [] };
       case "daemonRuntime": return { ...base, kind: "daemonRuntime", daemonId: request.query.daemonId ?? null, data: null };
+      case "daemonUpdate": return { ...base, kind: "daemonUpdate", daemonId: request.query.daemonId ?? null, data: null };
+      case "reloadOperation": return { ...base, kind: "reloadOperation", data: this.options.reloadOperation?.read() ?? IDLE_RELOAD_OPERATION };
       case "network": return this.options.network.read();
       case "runtime": return { ...base, kind: "runtime", data: this.options.runtime.read() };
       case "presentation": return { phase: "current", failure: null, kind: "presentation", data: this.options.presentation.read() };
@@ -588,7 +598,16 @@ export default class WorkbenchWorkspaceRequestController {
     const query = interest.request.query;
     switch (query.kind) {
       case "search": return;
-      case "daemonRuntime": {
+      case "daemonRuntime":
+      case "daemonUpdate": {
+        if (query.kind === "daemonUpdate" && query.daemonId
+          && query.daemonId !== this.options.sources.attached?.id) {
+          interest.thread?.observation.release();
+          interest.thread = null;
+          this.update(interest, { kind: "daemonUpdate", daemonId: query.daemonId,
+            phase: "current", failure: null, data: null });
+          return;
+        }
         const source = query.daemonId ? this.options.sources.get(query.daemonId) : this.options.sources.attached;
         if (interest.thread && interest.thread.key !== source?.id) {
           const previous = interest.thread;
@@ -596,14 +615,19 @@ export default class WorkbenchWorkspaceRequestController {
           previous.observation.release();
         }
         if (source && !interest.thread) interest.thread = {
-          key: source.id, observation: source.observe({ kind: "runtime" }, () => this.refresh(interest)),
+          key: source.id, observation: source.observe({ kind: query.kind === "daemonRuntime" ? "runtime" : "update" }, () => this.refresh(interest)),
         };
         const fact = interest.thread?.observation.getSnapshot();
-        this.update(interest, { kind: "daemonRuntime", daemonId: source?.id ?? null,
+        if (query.kind === "daemonRuntime") this.update(interest, { kind: "daemonRuntime", daemonId: source?.id ?? null,
           phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
           data: fact?.value?.kind === "runtime" ? fact.value.data : null });
+        else this.update(interest, { kind: "daemonUpdate", daemonId: source?.id ?? null,
+          phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
+          data: fact?.value?.kind === "update" ? fact.value.data : null });
         return;
       }
+      case "reloadOperation": this.update(interest, { kind: "reloadOperation", phase: "current",
+        failure: null, data: this.options.reloadOperation?.read() ?? IDLE_RELOAD_OPERATION }); return;
       case "network": this.update(interest, this.options.network.read()); return;
       case "runtime": this.update(interest, { kind: "runtime", phase: "current", failure: null, data: this.options.runtime.read() }); return;
       case "presentation": this.update(interest, { kind: "presentation", phase: "current", failure: null, data: this.options.presentation.read() }); return;

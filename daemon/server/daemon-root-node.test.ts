@@ -37,10 +37,10 @@ function readReloadNodeSourceState() {
   const sources = { ...graph, roots: graph.roots.map(copy) };
   return new ReloadableNodeHost(null, { load: () => sources, reload: () => sources }, {
     topologyScope: "server:topology",
-    processScope: {
+    processScopes: [{
       descriptor: { scope: "server:process", access: "operator", description: "Process", destructive: true, safeAll: false },
       assets: "",
-    },
+    }],
   }).getSourceState();
 }
 
@@ -80,7 +80,7 @@ test("the root knows only direct roots and parents declare every dependant", () 
   assert.deepEqual([...parents.get("server:codex")!].sort(), ["harness:codex", "server:codex/configuration", "server:codex/instructions", "server:codex/lifecycle", "server:codex/recovery", "server:core", "server:database", "server:turns"]);
   assert.deepEqual([...parents.get("server:codex/instructions")!], ["server:database"]);
   assert.deepEqual([...parents.get("server:browse")!].sort(), ["server:core", "server:database"]);
-  assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:repo", "server:turns", "server:voice"]);
+  assert.deepEqual([...parents.get("server:websocket")!].sort(), ["server:core", "server:database", "server:repo", "server:turns", "server:update", "server:voice"]);
   assert.deepEqual([...parents.get("server:voice")!], ["server:core"]);
   assert.deepEqual(nodes.get("server:voice")!.requires, ["voiceSettings"]);
   assert.deepEqual([...parents.get("server:instructions")!], ["server:database"]);

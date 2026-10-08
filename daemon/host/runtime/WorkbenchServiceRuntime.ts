@@ -27,15 +27,16 @@ export default class WorkbenchServiceRuntime {
       topologyScope: "host:database",
       logError: context.warn,
       onSwap: context.publish,
-      processScope: {
+      processScopes: [{
         descriptor: {
           scope: "host:process", description: "Replace the independently supervised host and daemon crash unit.",
           access: "operator", destructive: true, safeAll: false,
         },
         assets: [
-          "daemon/host/launch-node.mjs", "daemon/host/native/**", "daemon/host/package.json",
+          "daemon/host/launch-node.mjs", "daemon/host/launch-foreground.mjs",
+          "daemon/host/native/**", "daemon/host/package.json", "package/update-journal.mjs",
         ].join("\n"),
-      },
+      }],
     });
   }
 

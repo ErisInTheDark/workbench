@@ -128,20 +128,22 @@ test("keeps Windows human launch on the same dispatcher", async (context) => {
   assert.equal(result.stderr, "");
 });
 
-test("keeps shortcut installation local for humans and delegated for managed agents", async (context) => {
+test("keeps shortcut and repair local for humans and delegated for managed agents", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
-  const human = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut"], {
-    cwd: fixture.root,
-    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
-  });
-  assert.equal(human.stdout, 'human|cwd=preserved|args=["shortcut"]\n');
+  for (const command of ["shortcut", "repair"]) {
+    const human = await execFileAsync("bash", [fixture.dispatcherPath, command], {
+      cwd: fixture.root,
+      env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "" },
+    });
+    assert.equal(human.stdout, `human|cwd=preserved|args=["${command}"]\n`);
 
-  const managed = await execFileAsync("bash", [fixture.dispatcherPath, "shortcut"], {
-    cwd: fixture.root,
-    env: { ...process.env, WORKBENCH_ORIGIN: "", CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
-  });
-  assert.match(managed.stdout, /^daemon\|origin=\|thread=thread-one\|args=shortcut,/u);
+    const managed = await execFileAsync("bash", [fixture.dispatcherPath, command], {
+      cwd: fixture.root,
+      env: { ...process.env, WORKBENCH_ORIGIN: "", CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "thread-one" },
+    });
+    assert.equal(managed.stdout, `daemon|origin=|thread=thread-one|args=${command},\n`);
+  }
 });
 
 test("does not discard extra shortcut arguments", async (context) => {

@@ -133,6 +133,7 @@ import {
 import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
+import WorkbenchConnectionSpinner from "./workbench/WorkbenchConnectionSpinner";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
@@ -2401,8 +2402,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-[0.95rem] leading-6">
                         <DropTargetBoundary className="scrollbar-hover-reveal flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto pt-3 pb-[calc(0.75rem+min(0.75rem,var(--workbench-safe-area-bottom,0px)))] pr-2">
                 <header className="-mr-2 grid shrink-0 grid-cols-[1fr_auto_auto_auto] items-center gap-1 pb-2">
-                  <span className="min-w-0 truncate pl-5 text-xl font-semibold leading-tight text-text">
-                    workbench
+                  <span className="flex min-w-0 items-center gap-2 pl-5 text-xl font-semibold leading-tight text-text">
+                    <span className="min-w-0 truncate">workbench</span>
+                    <WorkbenchConnectionSpinner />
                   </span>
                   <WorkbenchIconButton
                     label="Open workspace search"
@@ -2634,6 +2636,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   <ReloadNecessary
                     appRuntime={appRuntime}
                     daemonRuntime={controls?.daemonRuntime ?? null}
+                    onAskAgent={addressFeedback}
                   />
                 </DropTargetBoundary>
               </div>

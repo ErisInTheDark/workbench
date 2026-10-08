@@ -602,6 +602,104 @@ test("app reload detaches its session without stopping independent networking", 
   await f.owner.close();
 });
 
+test("install stop suppresses host relaunch before shutdown and waits for acknowledgement before closing", async () => {
+  for (const rejectStop of [false, true]) {
+    let phase: "connecting" | "ready" | "failed" = "connecting";
+    let ensures = 0;
+    let closed = false;
+    let entered!: () => void;
+    let acknowledge!: () => void;
+    const stopping = new Promise<void>(resolve => { entered = resolve; });
+    const ack = new Promise<void>(resolve => { acknowledge = resolve; });
+    const listeners = new Set<() => void>();
+    const emit = () => { for (const listener of [...listeners]) listener(); };
+    const methods: string[] = [];
+    const instanceId = "64cf3b66-fcff-4ff9-9809-a56e4e13ef70";
+    const warnings: string[] = [];
+    const owner = new WorkbenchNetworkController({
+      endpointPath: "unused", wakeLocal: false, readTarget: () => null,
+      warn: message => { warnings.push(message); },
+      ensure: async () => { ensures++; },
+      createClient: () => ({
+        start: async () => { phase = "ready"; emit(); },
+        reconnect: async () => assert.fail("Unexpected reconnection."),
+        getSnapshot: () => ({ phase, generation: 1, snapshot: null, failure: null }),
+        subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        request: async request => {
+          methods.push(request.method);
+          if (request.method === "service/process/read") return {
+            kind: "process", id: instanceId, instanceId, logDirectory: ".", logPrefix: "workbench-host",
+          };
+          assert.equal(request.method, "service/stop");
+          assert.equal(request.instanceId, instanceId);
+          phase = "failed";
+          emit();
+          entered();
+          await ack;
+          if (rejectStop) throw new Error("Host refused stop.");
+          return { kind: "ok", id: instanceId };
+        },
+        close: async () => { closed = true; },
+      }),
+    });
+    owner.start();
+    await new Promise<void>(resolve => {
+      const stop = owner.subscribe(() => { if (phase === "ready") { stop(); resolve(); } });
+    });
+    const work = owner.stopHostForInstall();
+    await stopping;
+    assert.equal(ensures, 1);
+    assert.equal(closed, false);
+    acknowledge();
+    if (rejectStop) {
+      await assert.rejects(work, /refused stop/u);
+      assert.ok(warnings.some(message => message.includes("refused stop")));
+    } else await work;
+    assert.equal(closed, true);
+    assert.equal(ensures, 1);
+    assert.deepEqual(methods, ["service/process/read", "service/stop"]);
+    await owner.close();
+  }
+});
+
+test("host reload admission is not mistaken for successful completion", async context => {
+  let ready = false;
+  const listeners = new Set<() => void>();
+  let reloadError: string | null = null;
+  const owner = new WorkbenchNetworkController({
+    endpointPath: "unused", wakeLocal: false, readTarget: () => null,
+    ensure: async () => {}, warn: message => assert.fail(message),
+    createClient: () => ({
+      start: async () => { ready = true; for (const listener of [...listeners]) listener(); },
+      reconnect: async () => {},
+      getSnapshot: () => ({
+        phase: ready ? "ready" as const : "connecting" as const, generation: 1, failure: null,
+        snapshot: {
+          identity: { protocol: 1, daemonId: "67e323d5-949a-4c41-956f-1fa28905f034",
+            hostname: "fixture", state: "ready" as const, wakeEnabled: false },
+          daemonOrigin: null, failure: null, network: null, discovery: { refreshing: false, peers: [] },
+          reloadDirt: { dirtyScopes: [{ scope: "host:http", description: "HTTP", destructive: false }],
+            pendingScopes: [], error: reloadError },
+        },
+      }),
+      subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      request: async request => {
+        assert.equal(request.method, "service/reload");
+        reloadError = "Host candidate failed.";
+        for (const listener of [...listeners]) listener();
+        return { kind: "ok", id: "fixture" };
+      },
+      close: async () => {},
+    }),
+  });
+  context.after(() => owner.close());
+  owner.start();
+  await new Promise<void>(resolve => {
+    const stop = owner.subscribe(() => { if (ready) { stop(); resolve(); } });
+  });
+  await assert.rejects(owner.reloadHost(["host:http"]), /candidate failed/u);
+});
+
 test("incompatible private HTTPS configuration is reported without preventing the independent static mode", async () => {
   const f = fixture(() => "Insecure explicit daemon URL.");
   await f.start();

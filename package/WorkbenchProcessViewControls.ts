@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ProcessViewControlsSnapshot/ProcessViewControls: live host, daemon and app availability plus lifecycle intent.
+ * - ProcessViewControlsSnapshot/ProcessViewControls: live host, daemon and app availability, the app's reload/update summary, plus lifecycle, reload-all and pull intent.
  * - ProcessViewHostClient/ProcessViewAppClient: minimal seams each owner must satisfy.
  * - WorkbenchProcessViewControlsOptions: data, launch and test seams.
  * - default createWorkbenchProcessViewControls: compose host service, app control, desktop start and browser-open owners.
@@ -11,11 +11,14 @@ import type { WorkbenchServiceResponse } from "../shared/http/workbench-service.
 import WorkbenchServiceClient from "../shared/process/WorkbenchServiceClient.ts";
 import { openUrl } from "../shared/process/spawn-detached.ts";
 import WorkbenchAppControlClient from "./WorkbenchAppControlClient.ts";
+import type { WorkbenchAppControlRuntime } from "../shared/http/workbench-app-control.ts";
 
 export interface ProcessViewControlsSnapshot {
   host: boolean;
   daemon: boolean;
   app: boolean;
+  /** The ready app's reload/update summary; null while the app is down or before its first event. */
+  runtime: WorkbenchAppControlRuntime | null;
 }
 
 export type ProcessViewHostIntent =
@@ -41,9 +44,11 @@ export interface ProcessViewAppClient {
   start(): Promise<void>;
   close(): Promise<void>;
   subscribe(listener: () => void): () => void;
-  getSnapshot(): { ready: boolean; instanceId: string | null };
+  getSnapshot(): { ready: boolean; instanceId: string | null; runtime: WorkbenchAppControlRuntime | null };
   origin(): Promise<string>;
   quit(): Promise<void>;
+  reloadAll(): Promise<void>;
+  pull(reload: boolean): Promise<void>;
 }
 
 export interface ProcessViewControls {
@@ -55,6 +60,10 @@ export interface ProcessViewControls {
   killApp(): Promise<void>;
   startApp(): Promise<void>;
   openApp(): Promise<void>;
+  /** Admit the app's reload-all sequence. */
+  reloadAll(): Promise<void>;
+  /** Admit a pull of the running checkout without reloading. */
+  pullChanges(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -93,7 +102,11 @@ export default async function createWorkbenchProcessViewControls(
       host: current.phase === "ready",
       daemon: current.phase === "ready" && current.snapshot?.identity.state === "ready",
       app: app.getSnapshot().ready,
+      runtime: app.getSnapshot().ready ? app.getSnapshot().runtime : null,
     };
+  };
+  const requireApp = () => {
+    if (!app.getSnapshot().ready) throw new Error("The Workbench app is not running, so that control is unavailable.");
   };
 
   const requireHost = async () => {
@@ -133,8 +146,16 @@ export default async function createWorkbenchProcessViewControls(
       await startApp();
     },
     async openApp() {
-      if (!app.getSnapshot().ready) throw new Error("The Workbench app is not running, so that control is unavailable.");
+      requireApp();
       await (options.openUrl ?? openUrl)(await app.origin());
+    },
+    async reloadAll() {
+      requireApp();
+      await app.reloadAll();
+    },
+    async pullChanges() {
+      requireApp();
+      await app.pull(false);
     },
     async close() {
       if (closed) return;

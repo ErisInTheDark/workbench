@@ -287,16 +287,25 @@ test("source ownership is published with its successful graph and restored after
   });
   const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
     topologyScope: "client:topology",
-    processScope: {
+    processScopes: [{
       descriptor: { scope: "client:process", access: "operator", description: "process", safeAll: false, destructive: true },
       assets: "shared/reload/**",
-    },
+    }, {
+      descriptor: { scope: "client:install", access: "operator", description: "install", safeAll: false, destructive: true },
+      assets: "pnpm-lock.yaml",
+      sources: "assets",
+      subsumesAll: true,
+    }],
   });
   const read = () => host.run("readSources", readSources => readSources());
   const paths = (state: ReloadDirtSourceState) => state.descriptors.find(({ scope }) => scope === "client:owner")?.paths;
   await host.start();
   try {
     assert.deepEqual(paths(await read()), ["shared/first.ts"]);
+    assert.deepEqual(host.getReloadScopesForPaths(["pnpm-lock.yaml"]), ["client:install"]);
+    assert.deepEqual(host.getReloadScopesForPaths(["shared/reload/kernel.ts"]), ["client:process"]);
+    assert.deepEqual((await read()).dependantClosure(["client:install"]), host.getReloadScopeCatalog().map(({ scope }) => scope));
+    assert.equal((await read()).dependantClosure(["client:process"]).includes("client:install"), false);
     source = "shared/second.ts";
     const reload = host.reload(["client:owner"]);
     await starting.promise;

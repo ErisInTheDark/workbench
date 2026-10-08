@@ -2,3 +2,4 @@
 - Incomplete installs never resume. Show the failed checkout in the existing consent prompt; cancel preserves it. Clean only the recorded, safely owned checkout and preserve user changes. Use Vite+ for the pinned checkout runtime, dependencies and global CLI registration.
 - Keep native binaries committed. Missing platform artifacts must not prevent repository installation or trigger automatic native builds.
 - Preserve ordinary daemon CLI shell dispatch. Managed threads cannot install or launch the app.
+- Self-update changes only this app's local checkout: the local daemon fetches and pulls it under its worktree Git transition lease; the app sequences pull and reload. Lockfile changes reload via `client:install`, whose repair journal every entry point resumes with built-ins before loading `node_modules`.

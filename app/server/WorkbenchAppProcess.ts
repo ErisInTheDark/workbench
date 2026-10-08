@@ -28,10 +28,15 @@ async function main() {
   const desktopProtocolEnabled = process.env.WORKBENCH_DESKTOP_PROTOCOL === "1";
   const outputDirectoryPath = path.join(resolveWorkbenchRuntimeRoot(repositoryRootPath), "frontend");
   let protocol: WorkbenchAppProcessProtocol | null = null;
+  let runtime: WorkbenchAppRuntime | null = null;
   const control = new WorkbenchAppControl({
     endpointPath: path.join(resolveWorkbenchDataRoot(), "app", "runtime.json"),
     root: repositoryRootPath,
     warn: message => processLogger.error("app", message),
+    readRuntime: () => runtime?.readControlRuntime() ?? null,
+    subscribeRuntime: listener => runtime?.subscribeControlRuntime(listener) ?? (() => {}),
+    reloadAll: () => runtime?.admitReloadAll() ?? null,
+    pull: reload => runtime?.admitPull(reload) ?? null,
     quit: () => {
       if (desktopProtocolEnabled) {
         if (!protocol) throw new Error("Desktop Quit is not ready.");
@@ -40,7 +45,7 @@ async function main() {
     },
   });
   const app = new WorkbenchApp({
-    createRuntime: (appPort) => new WorkbenchAppRuntime({
+    createRuntime: (appPort) => runtime = new WorkbenchAppRuntime({
       appPort,
       createDatabase: (Repository) => new Repository(),
       logger: processLogger,

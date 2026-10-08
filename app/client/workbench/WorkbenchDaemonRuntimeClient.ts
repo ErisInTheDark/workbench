@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchDaemonRuntimeClientOptions: app workspace and optional installation selection.
- * - default WorkbenchDaemonRuntimeClient: project source runtime facts and send app-routed reload intent.
+ * - default WorkbenchDaemonRuntimeClient: project source runtime facts and the checkout update position, and send app-routed reload intent.
  */
 import type {
   WorkbenchReloadDirtSnapshot,
@@ -17,6 +17,7 @@ import reportClientSchemaError from "workbench-shared/workbench/report-client-sc
 import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
 
 const EMPTY: WorkbenchReloadDirtSnapshot = { dirtyScopes: [], error: null, pendingScopes: [] };
 
@@ -33,10 +34,21 @@ export default class WorkbenchDaemonRuntimeClient {
   #generation = -1;
   #revision = -1;
   #snapshot: WorkbenchReloadDirtSnapshot = EMPTY;
+  readonly #updateListeners = new Set<() => void>();
+  #updateObservation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
+  #update: InstallationUpdate | null = null;
 
   constructor(private readonly options: WorkbenchDaemonRuntimeClientOptions) {}
 
   getSnapshot = () => this.#snapshot;
+
+  /** The attached daemon's checkout update position, or null before its first observation. */
+  getUpdate = () => this.#update;
+
+  subscribeUpdate = (listener: () => void) => {
+    this.#updateListeners.add(listener);
+    return () => this.#updateListeners.delete(listener);
+  };
 
   subscribe = (listener: () => void) => {
     this.#listeners.add(listener);
@@ -65,6 +77,27 @@ export default class WorkbenchDaemonRuntimeClient {
     const observation = this.options.workspace.observe({ kind: "daemonRuntime", daemonId: this.options.daemonId }, update);
     this.#observation = observation;
     update();
+    // A stale or failed relay keeps the last known position; a failure is not "no update".
+    const updateChanged = () => {
+      const value = updateObservation.getSnapshot().value;
+      if (this.#disposed || !value?.data || areDeeplyEqual(this.#update, value.data)) return;
+      this.#update = value.data;
+      for (const listener of this.#updateListeners) listener();
+    };
+    const updateObservation = this.options.workspace.observe({ kind: "daemonUpdate", daemonId: this.options.daemonId }, updateChanged);
+    this.#updateObservation = updateObservation;
+    updateChanged();
+  }
+
+  /** Discard the last update failure record once its fix is underway or no longer relevant. */
+  async dismissUpdateFailure() {
+    await this.options.workspace.rpc.requestRaw({
+      method: "workspace/command",
+      params: {
+        method: "installation/update/failure/dismiss", params: {},
+        ...(this.options.daemonId ? { scope: { kind: "installation", daemonId: this.options.daemonId } } : {}),
+      },
+    });
   }
 
   async reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse> {
@@ -91,7 +124,9 @@ export default class WorkbenchDaemonRuntimeClient {
   dispose() {
     this.#disposed = true;
     this.#observation?.release();
+    this.#updateObservation?.release();
     this.#listeners.clear();
+    this.#updateListeners.clear();
     this.#serverReloadListeners.clear();
   }
 

@@ -554,20 +554,11 @@ impl DesktopAppController {
     }
 
     fn spawn_child(&self) -> Result<Child, String> {
-        let tsx_path = self
-            .repository_root_path
-            .join("app")
-            .join("node_modules")
-            .join("tsx")
-            .join("dist")
-            .join("cli.mjs");
-        let entry_path = self.repository_root_path.join("app").join("server").join("index.ts");
-        require_file(&tsx_path)?;
+        let entry_path = self.repository_root_path.join("app").join("server").join("launch.mjs");
         require_file(&entry_path)?;
         let mut command = Command::new("node");
         command
             .arg("--disable-warning=ExperimentalWarning")
-            .arg(tsx_path)
             .arg(entry_path)
             .current_dir(&self.repository_root_path)
             .env("NO_COLOR", "1")
@@ -774,5 +765,25 @@ mod tests {
         assert!(!quit_deadline_expired(Some(deadline), now));
         assert!(quit_deadline_expired(Some(deadline), deadline));
         assert!(!quit_deadline_expired(None, deadline));
+    }
+
+    #[test]
+    fn app_bootstrap_runs_without_installed_dependencies() {
+        let root = std::env::temp_dir().join(format!(
+            "workbench-tray-bootstrap-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("system clock").as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("app/server")).expect("create bootstrap fixture");
+        std::fs::write(root.join("app/server/launch.mjs"),
+            "process.stdout.write(`${process.env.NO_COLOR}:${process.env.WORKBENCH_DESKTOP_PROTOCOL}`);")
+            .expect("write bootstrap fixture");
+        let controller = DesktopAppController::new(root.clone()).expect("controller");
+        let child = controller.spawn_child().expect("spawn builtins-only bootstrap");
+        let output = child.wait_with_output().expect("read bootstrap result");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).expect("utf8"), "1:1");
+        drop(controller);
+        std::fs::remove_dir_all(root).expect("remove bootstrap fixture");
     }
 }

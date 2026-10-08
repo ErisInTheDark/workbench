@@ -17,6 +17,27 @@ import WorkbenchThreadStateRelationalRepository from "./database/thread-state/Wo
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
+test("installation request registrations survive rollback and never revive retired generations", async () => {
+  const { controller } = createController();
+  const calls: string[] = [];
+  const port = (generation: string) => ({
+    pull: async () => { calls.push(generation); return { fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: false }; },
+    dismissFailure: async () => { calls.push(generation); return { ok: true as const }; },
+  });
+  const pull = () => controller.handle({ id: 1, method: "installation/update/pull", params: {} });
+  const unregisterOld = controller.registerInstallationUpdate(port("old"));
+  const unregisterFailed = controller.registerInstallationUpdate(port("failed"));
+  assert.ok((await pull()).result);
+  unregisterFailed();
+  assert.ok((await pull()).result, "rollback restores the old live request owner");
+  const unregisterNew = controller.registerInstallationUpdate(port("new"));
+  unregisterOld();
+  assert.ok((await controller.handle({ id: 2, method: "installation/update/failure/dismiss", params: {} })).result);
+  unregisterNew();
+  assert.ok((await pull()).error, "retired owners must not revive when the replacement retires");
+  assert.deepEqual(calls, ["failed", "old", "new"]);
+});
+
 test("discovery settings RPC admits bounded lists and rejects malformed replacements", async () => {
   const { controller } = createController();
   assert.deepEqual((await controller.handle({

@@ -10,6 +10,7 @@ import WorkbenchWorkspaceObservationController, { type DaemonObservationChange }
 import { applyObservationDelta, describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import { daemonObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
 
 type Client = { id: string };
 type Owners = ConstructorParameters<typeof WorkbenchWorkspaceObservationController<Client>>[0];
@@ -64,6 +65,36 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
     }),
   };
 }
+
+test("installation changes publish typed deltas only to update observers and release their owner", context => {
+  let current: InstallationUpdate = {
+    state: "current", reason: null, upstream: "origin/main", behind: 0, ahead: 0,
+    conflicts: [], lockfileChanged: false, checkedAt: 1, projectId: a, failure: null,
+  };
+  let changed!: () => void;
+  let released = 0;
+  const f = fixture(context, { installationUpdate: {
+    read: () => current,
+    subscribe: listener => { changed = listener; return () => { released++; }; },
+  } });
+  const initial = f.observe({ kind: "update" });
+  f.observe({ kind: "runtime" });
+  assert.equal(initial.kind, "update");
+  if (initial.kind !== "update") throw new Error("Expected installation observation");
+  assert.deepEqual(initial.data, current);
+  current = { ...current, state: "available", behind: 1, checkedAt: 2 };
+  changed();
+  assert.equal(f.updates.length, 1);
+  const pushed = f.updates[0]!;
+  assert.equal(pushed.value.kind, "update");
+  assert.deepEqual(applyObservationDelta(initial, pushed.change.delta, daemonObservationShape("update")), {
+    ...pushed.value, revision: initial.revision,
+  });
+  f.owner.dispose();
+  assert.equal(released, 1);
+  changed();
+  assert.equal(f.updates.length, 1);
+});
 
 const thread = (index: number, overrides: Partial<Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>> = {}): WorkbenchThreadSidebarEntry => ({
   entryKind: "thread", title: `Thread ${index} with a realistic title`, activityAt: 1_000 + index,

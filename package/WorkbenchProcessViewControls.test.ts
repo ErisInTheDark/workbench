@@ -6,15 +6,21 @@ import test from "node:test";
 import createWorkbenchProcessViewControls, {
   type ProcessViewAppClient, type ProcessViewHostClient, type ProcessViewHostIntent,
 } from "./WorkbenchProcessViewControls.ts";
+import type { WorkbenchAppControlRuntime } from "../shared/http/workbench-app-control.ts";
+import { IDLE_RELOAD_OPERATION } from "../shared/reload/workbench-reload.ts";
 
 type Phase = ReturnType<ProcessViewHostClient["getSnapshot"]>["phase"];
 type DaemonState = "sleeping" | "starting" | "ready" | "failed";
+
+const appRuntime: WorkbenchAppControlRuntime = { dirty: true, destructive: false, update: null, operation: IDLE_RELOAD_OPERATION };
 
 function fixture() {
   const requests: ProcessViewHostIntent[] = [];
   const calls: string[] = [];
   const hostState: { phase: Phase; daemon: DaemonState } = { phase: "ready", daemon: "ready" };
-  const appState: { ready: boolean; instanceId: string | null } = { ready: true, instanceId: "app-1" };
+  const appState: { ready: boolean; instanceId: string | null; runtime: WorkbenchAppControlRuntime | null } = {
+    ready: true, instanceId: "app-1", runtime: appRuntime,
+  };
   const host: ProcessViewHostClient = {
     start: async () => {},
     close: async () => { calls.push("close-host"); },
@@ -35,9 +41,11 @@ function fixture() {
     start: async () => {},
     close: async () => { calls.push("close-app"); },
     subscribe: () => () => {},
-    getSnapshot: () => ({ ready: appState.ready, instanceId: appState.instanceId }),
+    getSnapshot: () => ({ ready: appState.ready, instanceId: appState.instanceId, runtime: appState.runtime }),
     origin: async () => "http://127.0.0.1:45409",
     quit: async () => { calls.push("quit"); },
+    reloadAll: async () => { calls.push("reload-all"); },
+    pull: async reload => { calls.push(`pull ${reload}`); },
   };
   const controls = createWorkbenchProcessViewControls({
     dataRoot: "/data",
@@ -54,12 +62,24 @@ function fixture() {
 test("availability composes host, daemon and app truth", async () => {
   const f = fixture();
   const controls = await f.controls;
-  assert.deepEqual(controls.snapshot(), { host: true, daemon: true, app: true });
+  assert.deepEqual(controls.snapshot(), { host: true, daemon: true, app: true, runtime: appRuntime });
   f.hostState.daemon = "sleeping";
-  assert.deepEqual(controls.snapshot(), { host: true, daemon: false, app: true });
+  assert.deepEqual(controls.snapshot(), { host: true, daemon: false, app: true, runtime: appRuntime });
   f.hostState.phase = "failed";
   f.appState.ready = false;
-  assert.deepEqual(controls.snapshot(), { host: false, daemon: false, app: false });
+  // A gone app's last summary is never shown as live.
+  assert.deepEqual(controls.snapshot(), { host: false, daemon: false, app: false, runtime: null });
+});
+
+test("reload-all and pull-only require the app and pull without reloading", async () => {
+  const f = fixture();
+  const controls = await f.controls;
+  await controls.reloadAll();
+  await controls.pullChanges();
+  assert.deepEqual(f.calls.filter(call => call === "reload-all" || call.startsWith("pull")), ["reload-all", "pull false"]);
+  f.appState.ready = false;
+  await assert.rejects(controls.reloadAll(), /app is not running/u);
+  await assert.rejects(controls.pullChanges(), /app is not running/u);
 });
 
 test("kill daemon restarts with the live host identity", async () => {

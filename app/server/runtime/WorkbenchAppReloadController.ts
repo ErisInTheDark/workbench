@@ -1,10 +1,16 @@
 /*
  * Exports:
- * - WorkbenchAppReloadControllerState: transferable active reload batch. Keywords: reload, state, handoff.
- * - WorkbenchAppReloadAdmission: response-first reload or restart execution controls. Keywords: HTTP, admission, lifecycle.
- * - default WorkbenchAppReloadController: validate and serialize app-node replacement and full-process restart admission. Keywords: app, reload, lifecycle.
+ * - WorkbenchAppReloadControllerState: transferable active reload batch.
+ * - WorkbenchAppReloadAdmission: response-first reload or restart execution controls.
+ * - default WorkbenchAppReloadController: serialize node replacement, dependency repair and process restart.
  */
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import { InstallationRepairJournalSchema } from "workbench-shared/workbench/installation-update";
+import { readJournal, writeJournal, resolveDataRoot, isRepairPending } from "../../../package/update-journal.mjs";
 
 import type WorkbenchAppReloadDirtController from "./WorkbenchAppReloadDirtController.ts";
 
@@ -29,6 +35,9 @@ export default class WorkbenchAppReloadController {
     execute(scopes: WorkbenchReloadScope[]): Promise<WorkbenchReloadScope[]>;
     now?: () => number;
     processScope?: WorkbenchReloadScope;
+    repositoryRootPath?: string;
+    repairInstall?(fromSha?: string): Promise<void>;
+    prepareInstall?(fromSha?: string): Promise<void>;
     schedule?: (callback: () => void) => void;
   }, state?: WorkbenchAppReloadControllerState) {
     this.state = state ?? { activeScopes: null };
@@ -37,17 +46,24 @@ export default class WorkbenchAppReloadController {
   admit(
     scopes: readonly WorkbenchReloadScope[],
     restartProcess?: () => Promise<void> | void,
+    options?: { installFromSha?: string },
   ): WorkbenchAppReloadAdmission {
     const selected = [...new Set(scopes)];
     if (!selected.length) throw new Error("At least one app reload scope is required.");
-    if (this.options.processScope && selected.includes(this.options.processScope)) {
-      if (selected.length !== 1) throw new Error(`${this.options.processScope} must be requested by itself.`);
-      if (!restartProcess) throw new Error(`${this.options.processScope} requires the Workbench desktop tray.`);
+    const install = selected.includes("client:install");
+    const restartScope = install ? "client:install" : this.options.processScope;
+    if (restartScope && selected.includes(restartScope)) {
+      if (selected.length !== 1) throw new Error(`${restartScope} must be requested by itself.`);
+      if (!restartProcess) throw new Error(`${restartScope} requires the Workbench desktop tray.`);
+    }
+    if (install) {
+      if (!this.options.repairInstall || !this.options.repositoryRootPath) throw new Error("Dependency install repair is unavailable.");
+      if (options?.installFromSha && !/^[0-9a-f]{40,64}$/u.test(options.installFromSha)) throw new Error("Invalid dependency rollback commit.");
     }
     if (this.reservedScopes || this.state.activeScopes) throw new Error("An app reload batch is already active.");
     const startedAt = (this.options.now ?? Date.now)();
     this.reservedScopes = selected;
-    const processRestart = Boolean(this.options.processScope && selected[0] === this.options.processScope);
+    const processRestart = install || Boolean(this.options.processScope && selected[0] === this.options.processScope);
     let active = true;
     return {
       cancel: () => {
@@ -72,15 +88,37 @@ export default class WorkbenchAppReloadController {
         active = false;
         return this.scheduleCompletion(async () => {
           if (this.reservedScopes !== selected) throw new Error("The app reload admission was replaced before execution.");
-          this.reservedScopes = null;
           if (processRestart) {
-            await restartProcess!();
+            try {
+              if (install) {
+                await (this.options.prepareInstall?.(options?.installFromSha) ?? this.prepareInstall(options?.installFromSha));
+                await this.options.repairInstall!(options?.installFromSha);
+              }
+              await restartProcess!();
+            } finally {
+              if (this.reservedScopes === selected) this.reservedScopes = null;
+            }
             return;
           }
+          this.reservedScopes = null;
           await this.execute(selected);
         });
       },
     };
+  }
+
+  private async prepareInstall(fromSha?: string) {
+    const root = this.options.repositoryRootPath!;
+    const dataRoot = resolveDataRoot();
+    if (isRepairPending(await readJournal(dataRoot))) throw new Error("A dependency update repair is already pending.");
+    const { stdout } = await promisify(execFile)("git", ["rev-parse", "HEAD"], { cwd: root, windowsHide: true });
+    const at = (this.options.now ?? Date.now)();
+    const journal = InstallationRepairJournalSchema.parse({
+      version: 1, id: randomUUID(), phase: "pending", fromSha: fromSha ?? null, toSha: stdout.trim(),
+      logPath: path.join(root, ".workbench", "logs", `workbench-update-${at}.log`),
+      lastError: null, createdAt: at, updatedAt: at, failure: null,
+    });
+    await writeJournal(journal, dataRoot);
   }
 
   detachForReload() {

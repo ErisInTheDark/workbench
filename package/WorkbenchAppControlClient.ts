@@ -1,18 +1,23 @@
 /*
  * Exports:
- * - WorkbenchAppControlSnapshot: live app-control readiness and process identity.
+ * - WorkbenchAppControlSnapshot: live app-control readiness, process identity and pushed reload/update summary.
  * - WorkbenchAppControlClientOptions: publication, transport and test seams.
- * - default WorkbenchAppControlClient: follow the private app publication, report its verified origin and admit process-bound Quit.
+ * - default WorkbenchAppControlClient: follow the private app publication and its runtime events, report its verified origin and admit Quit, reload-all and pull.
  */
 import { watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { WorkbenchServiceEndpoint } from "../shared/http/workbench-service.ts";
+import {
+  WorkbenchAppControlPullRequestSchema, WorkbenchAppControlRuntimeSchema, type WorkbenchAppControlRuntime,
+} from "../shared/http/workbench-app-control.ts";
 import { readServiceEndpoint, verifyServiceEndpoint } from "../shared/process/workbench-service-endpoint.ts";
 
 export interface WorkbenchAppControlSnapshot {
   ready: boolean;
   instanceId: string | null;
+  /** Pushed reload/update summary of the ready app; null until its first event. */
+  runtime: WorkbenchAppControlRuntime | null;
 }
 
 export interface WorkbenchAppControlClientOptions {
@@ -32,7 +37,8 @@ export default class WorkbenchAppControlClient {
   private queue: Promise<void> = Promise.resolve();
   private started = false;
   private closed = false;
-  private value: WorkbenchAppControlSnapshot = { ready: false, instanceId: null };
+  private value: WorkbenchAppControlSnapshot = { ready: false, instanceId: null, runtime: null };
+  private stream: AbortController | null = null;
 
   constructor(private readonly options: WorkbenchAppControlClientOptions) {}
 
@@ -75,22 +81,87 @@ export default class WorkbenchAppControlClient {
   }
 
   async quit(): Promise<void> {
+    await this.post(endpoint => `/_workbench-control/quit/${endpoint.instanceId}`, null, "App Quit");
+  }
+
+  /** Admit the app's reload-all sequence; progress arrives through the runtime stream. */
+  async reloadAll(): Promise<void> {
+    await this.post(() => "/_workbench-control/reload-all", null, "Reload all");
+  }
+
+  /** Admit a pull, optionally followed by reload-all; progress arrives through the runtime stream. */
+  async pull(reload: boolean): Promise<void> {
+    await this.post(() => "/_workbench-control/pull", WorkbenchAppControlPullRequestSchema.parse({ reload }), "Pull");
+  }
+
+  private async post(route: (endpoint: WorkbenchServiceEndpoint) => string, body: object | null, action: string) {
     const endpoint = await this.current();
     const fetcher = this.options.fetcher ?? fetch;
-    const response = await fetcher(`${endpoint.origin}/_workbench-control/quit/${endpoint.instanceId}`, {
+    const response = await fetcher(`${endpoint.origin}${route(endpoint)}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${endpoint.token}` },
+      headers: {
+        Authorization: `Bearer ${endpoint.token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
       redirect: "error",
       signal: this.lifetime.signal,
     });
-    await response.body?.cancel();
-    if (!response.ok) throw new Error("App Quit was rejected.");
+    const detail = response.ok ? "" : (await response.text()).trim().slice(0, 500);
+    if (response.ok) await response.body?.cancel();
+    if (!response.ok) throw new Error(`${action} was rejected${detail ? `: ${detail}` : "."}`);
+  }
+
+  /** Follow one app instance's runtime events until it is replaced, gone or this client closes. */
+  private follow(endpoint: WorkbenchServiceEndpoint) {
+    this.stream?.abort();
+    const stream = new AbortController();
+    this.stream = stream;
+    const signal = AbortSignal.any([stream.signal, this.lifetime.signal]);
+    void (async () => {
+      const fetcher = this.options.fetcher ?? fetch;
+      const response = await fetcher(`${endpoint.origin}/_workbench-control/runtime/events`, {
+        headers: { Authorization: `Bearer ${endpoint.token}`, Accept: "text/event-stream" },
+        redirect: "error",
+        signal,
+      });
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const decoder = new TextDecoder();
+      let buffered = "";
+      for await (const bytes of response.body) {
+        buffered += decoder.decode(bytes, { stream: true });
+        let boundary = buffered.indexOf("\n\n");
+        while (boundary >= 0) {
+          const frame = buffered.slice(0, boundary);
+          buffered = buffered.slice(boundary + 2);
+          const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+          if (data) this.acceptRuntime(endpoint.instanceId, WorkbenchAppControlRuntimeSchema.parse(JSON.parse(data)));
+          boundary = buffered.indexOf("\n\n");
+        }
+      }
+    })().catch(error => {
+      if (signal.aborted) return;
+      // An app exiting ends its stream; the publication watcher reports the app as gone.
+      if (this.value.instanceId === endpoint.instanceId) {
+        this.options.warn(`App runtime events stopped: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  }
+
+  private acceptRuntime(instanceId: string, runtime: WorkbenchAppControlRuntime) {
+    if (this.value.instanceId !== instanceId) return;
+    this.value = { ...this.value, runtime };
+    for (const listener of this.listeners) listener();
   }
 
   async close() {
     if (this.closed) return;
     this.closed = true;
     this.lifetime.abort(new Error("App control client closed."));
+    this.stream = null;
     this.stopObserving?.();
     this.stopObserving = null;
     this.watcher = null;
@@ -107,7 +178,7 @@ export default class WorkbenchAppControlClient {
     }
     try {
       await this.verify(endpoint);
-      this.publish(endpoint.instanceId);
+      this.publish(endpoint);
     } catch (error) {
       const wasReady = this.value.ready;
       this.publish(null);
@@ -131,10 +202,16 @@ export default class WorkbenchAppControlClient {
     return endpoint;
   }
 
-  private publish(instanceId: string | null) {
+  private publish(endpoint: WorkbenchServiceEndpoint | null) {
+    const instanceId = endpoint?.instanceId ?? null;
     const ready = instanceId !== null;
     if (ready === this.value.ready && instanceId === this.value.instanceId) return;
-    this.value = { ready, instanceId };
+    this.value = { ready, instanceId, runtime: null };
+    if (endpoint) this.follow(endpoint);
+    else {
+      this.stream?.abort();
+      this.stream = null;
+    }
     for (const listener of this.listeners) listener();
   }
 

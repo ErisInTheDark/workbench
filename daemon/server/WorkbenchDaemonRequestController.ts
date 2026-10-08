@@ -89,6 +89,7 @@ type DaemonRequestMethod = Exclude<
 
 // Typed so adding a method to WorkbenchDaemonRequestMap fails typecheck until it is accepted here.
 const REQUEST_METHODS = {
+  "installation/update/pull": true, "installation/update/failure/dismiss": true,
   "project/tree/refresh": true, "project/entry/create": true, "project/file/delete": true,
   "git/working-tree/read": true, "git/working-tree/summary": true, "git/working-tree/diff": true,
   "git/working-tree/preview": true, "git/working-tree/mutate": true,
@@ -238,6 +239,9 @@ function linkRootsRequest(params: Record<string, unknown>): ResolveExternalFileL
 
 export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
+  private readonly installationUpdateRegistrations = new Set<Pick<import("./WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">>();
+
+  private get installationUpdate() { return [...this.installationUpdateRegistrations].at(-1) ?? null; }
 
   constructor(private readonly owners: {
     autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
@@ -270,6 +274,10 @@ export default class WorkbenchDaemonRequestController {
 
   accepts(method: string) { return METHODS.has(method); }
   registerBrowse(port: WorkbenchBrowseSessionPort) { this.browse = port; return () => { if (this.browse === port) this.browse = null; }; }
+  registerInstallationUpdate(port: Pick<import("./WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">) {
+    this.installationUpdateRegistrations.add(port);
+    return () => { this.installationUpdateRegistrations.delete(port); };
+  }
 
   private async resolveProfileSlot(slot: ReturnType<typeof WorkbenchComposerProfileSlotInputSchema.parse>): Promise<WorkbenchComposerProfileSlot> {
     if (slot.kind !== "thread") return slot;
@@ -475,6 +483,14 @@ export default class WorkbenchDaemonRequestController {
           result = { data: [{ ...updated, provider }] };
           break;
         }
+        case "installation/update/pull":
+          if (!this.installationUpdate) throw new Error("Installation updates are unavailable.");
+          result = await this.installationUpdate.pull();
+          break;
+        case "installation/update/failure/dismiss":
+          if (!this.installationUpdate) throw new Error("Installation updates are unavailable.");
+          result = await this.installationUpdate.dismissFailure();
+          break;
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;
         case "project/file-index/read": {
           const request = WorkbenchProjectFileIndexRequestSchema.safeParse(params);

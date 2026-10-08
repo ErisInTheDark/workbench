@@ -111,6 +111,8 @@ export const workspaceCommandRoutes = {
   "project/create": "installation",
   "local-capabilities/read": "installation",
   "local-capabilities/update": "installation",
+  "installation/update/pull": "installation",
+  "installation/update/failure/dismiss": "installation",
   "thread-auto-compact/read": "installation",
   "thread-auto-compact/update": "installation",
   "native/file/link-roots": "folder",

@@ -69,6 +69,7 @@ export default class WorkbenchSetup {
       "  wb - launch",
       "  wb connect - enable wake service",
       "  wb disconnect - disable wake service",
+      "  wb repair - reinstall dependencies and recover a failed update",
       ...(shortcut === "Add shortcut" ? [] : ["  wb shortcut - add a desktop shortcut"]),
       "",
     ].join("\n"));

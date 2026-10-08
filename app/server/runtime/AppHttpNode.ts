@@ -20,6 +20,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       runtime: {
         read: context.readAppRuntimeSnapshot,
         subscribe: context.subscribeAppRuntimeChanges,
+        operations: context.reloadOperations,
       },
       outputDirectoryPath: context.outputDirectoryPath,
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,

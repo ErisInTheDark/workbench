@@ -32,6 +32,7 @@ import type WorkbenchPresentationImportController from "../state/WorkbenchPresen
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import type WorkbenchAppSettingsController from "./WorkbenchAppSettingsController.ts";
 import type WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
+import type WorkbenchAppReloadOrchestrator from "./WorkbenchAppReloadOrchestrator";
 
 type Frame =
   | Extract<WorkbenchAppNetworkEvent, { kind: "transcriptSnapshot" | "transcriptStream" | "transcriptState" }>
@@ -99,7 +100,11 @@ export default class WorkbenchAppEventSocketController {
       "readWorkspaceBrowser" | "mutateBrowser" | "subscribeBrowser">;
     settings?: Pick<WorkbenchAppSettingsController, "read" | "update"> | null;
     port?: Pick<WorkbenchAppPortRoutes, "read">;
-    runtime?: { read(): object; subscribe(listener: () => void): () => void };
+    runtime?: {
+      read(): object;
+      subscribe(listener: () => void): () => void;
+      operations?: Pick<WorkbenchAppReloadOrchestrator, "read" | "subscribe" | "admitReloadAll" | "admitPull">;
+    };
     sources?: WorkbenchDaemonSources;
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
@@ -180,6 +185,7 @@ export default class WorkbenchAppEventSocketController {
           read: () => WorkbenchAppRuntimeResponseSchema.parse(this.options.runtime!.read()),
           subscribe: listener => this.options.runtime!.subscribe(listener),
         },
+        reloadOperation: this.options.runtime.operations,
         appState: {
           read: browserStateId => {
             bindState(browserStateId);
@@ -249,6 +255,21 @@ export default class WorkbenchAppEventSocketController {
       }
       const operation = (async () => {
         if (!this.options.routes.admitSocket(request)) throw new Error("App network grant was revoked.");
+        if (input.method === "app/reload/all" || input.method === "app/update/pull") {
+          if (!this.options.routes.canManageApp(request)) throw new Error("This device cannot reload or update the app.");
+          const operations = this.options.runtime?.operations;
+          if (!operations) throw new Error("App reload controls are unavailable.");
+          const admission = input.method === "app/reload/all"
+            ? operations.admitReloadAll(input.params.daemonId)
+            : operations.admitPull(input.params.daemonId, input.params.reload);
+          // Do not retain this in pendingRequests: HTTP quiescence is part of the
+          // reload being admitted, so awaiting its execution here would deadlock.
+          setImmediate(() => {
+            void admission.start().catch(error => this.options.logger.error("app",
+              `Reload admission failed: ${error instanceof Error ? boundedSocketError(error) : "Unexpected failure."}`));
+          });
+          return { admitted: true };
+        }
         if (input.method === "workspace/thread/action") {
           if (!workspace) throw new Error("Workspace actions are unavailable.");
           return workspace.threadAction(input.params);

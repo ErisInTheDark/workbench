@@ -205,6 +205,11 @@ export interface WorkbenchAppRuntimeStore {
   getSnapshot(): WorkbenchAppRuntimeSnapshot;
   reloadScopes(scopes: readonly WorkbenchReloadScope[]): Promise<WorkbenchReloadResponse>;
   subscribe(listener: () => void): () => void;
+  /** The app's in-flight reload-all / pull sequence. */
+  getOperation(): import("./reload/workbench-reload.ts").WorkbenchReloadOperation;
+  subscribeOperation(listener: () => void): () => void;
+  reloadAll(): Promise<void>;
+  pull(options: { reload: boolean }): Promise<void>;
 }
 
 export type { WorkbenchFrontendGeneration };
@@ -213,6 +218,9 @@ export interface WorkbenchDaemonRuntimeStore {
   getSnapshot(): WorkbenchReloadDirtSnapshot;
   reloadScopes(scopes: readonly DaemonReloadScope[]): Promise<DaemonReloadResponse>;
   subscribe(listener: () => void): () => void;
+  getUpdate(): import("./workbench/installation-update.ts").InstallationUpdate | null;
+  subscribeUpdate(listener: () => void): () => void;
+  dismissUpdateFailure(): Promise<void>;
 }
 
 export interface WorkbenchLocalCapabilitySettings {

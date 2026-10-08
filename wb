@@ -19,7 +19,7 @@ if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
   hook_mode=1
 elif [[ "${1:-}" == "__hook" && "${2:-}" == "apply-patch-claim" && "$#" -eq 2 ]]; then
   hook_mode=1
-elif [[ "$#" -eq 0 ]] || { [[ "$#" -eq 1 ]] && [[ "${1:-}" == "shortcut" || "${1:-}" == "connect" || "${1:-}" == "disconnect" ]]; }; then
+elif [[ "$#" -eq 0 ]] || { [[ "$#" -eq 1 ]] && [[ "${1:-}" == "shortcut" || "${1:-}" == "connect" || "${1:-}" == "disconnect" || "${1:-}" == "repair" ]]; }; then
   human_mode=1
 elif [[ "${1:-}" == "view" ]] && { [[ "$#" -eq 1 ]] || [[ "$#" -eq 2 && ( "${2:-}" == "daemon" || "${2:-}" == "app" ) ]]; }; then
   human_mode=1

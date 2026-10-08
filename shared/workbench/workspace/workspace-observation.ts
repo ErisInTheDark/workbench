@@ -2,11 +2,11 @@
  * Exports:
  * - WorkspaceSourcePhaseSchema/WorkspaceSourcePhase: independently observed source freshness.
  * - WorkspaceTranscriptStateSchema/WorkspaceTranscriptState: caller-local transcript subscription freshness.
- * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts, independent of socket selection.
+ * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts (incl. the running checkout's `update` position), independent of socket selection.
  * - DaemonWorkspaceObserveSchema/DaemonWorkspaceObserve: named daemon observation arguments.
  * - DaemonWorkspaceObservationSchema/DaemonWorkspaceObservation: versioned partial daemon results.
  * - WorkspaceProjectReferenceSchema/WorkspaceProjectReference: registered project or explicit observed location.
- * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations.
+ * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate` and the app's `reloadOperation`).
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
  * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
@@ -47,6 +47,8 @@ import { appStateClientTables } from "../../state/workbench-app-state-schema";
 import { tablePrimaryKeyColumns } from "../../database/schema/schema-definition";
 import { WorkbenchNetworkSnapshotSchema } from "../../http/workbench-network";
 import { WorkbenchDaemonReloadDirtEnvelopeSchema } from "../daemon-reload";
+import { InstallationUpdateSchema } from "../installation-update";
+import { WorkbenchReloadOperationSchema } from "../../reload/workbench-reload";
 import { WorkbenchSearchRequestSchema } from "../search/workbench-search";
 import { WorkspaceSearchResponseSchema } from "./workspace-commands";
 import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
@@ -82,6 +84,7 @@ const envelope = {
 
 export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("runtime") }).strict(),
+  z.object({ kind: z.literal("update") }).strict(),
   z.object({ kind: z.literal("catalogue") }).strict(),
   z.object({ kind: z.literal("summaries") }).strict(),
   z.object({ kind: z.literal("projectPlacement") }).strict(),
@@ -129,6 +132,7 @@ const archivedProject = z.object({
 
 export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("runtime"), data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
+  z.object({ ...envelope, kind: z.literal("update"), data: InstallationUpdateSchema }).strict(),
   z.object({
     ...envelope, kind: z.literal("catalogue"),
     catalogue: WorkbenchProjectsPayloadSchema.nullable(),
@@ -172,6 +176,7 @@ export type WorkspaceProjectReference = z.infer<typeof WorkspaceProjectReference
 export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("search"), request: WorkbenchSearchRequestSchema }).strict(),
   z.object({ kind: z.literal("daemonRuntime"), daemonId: DaemonIdSchema.optional() }).strict(),
+  z.object({ kind: z.literal("daemonUpdate"), daemonId: DaemonIdSchema.optional() }).strict(),
   z.object({ kind: z.literal("network") }).strict(),
   z.object({ kind: z.literal("projects"), daemonIds: z.array(DaemonIdSchema).optional() }).strict(),
   z.object({ kind: z.literal("projectGroups") }).strict(),
@@ -190,6 +195,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     schemaVersion: revision.optional(),
   }).strict(),
   z.object({ kind: z.literal("runtime") }).strict(),
+  z.object({ kind: z.literal("reloadOperation") }).strict(),
   z.object({ kind: z.literal("stats"), daemonId: DaemonIdSchema, request: WorkbenchStatsReadRequestSchema }).strict(),
   z.object({
     kind: z.literal("archivedThreads"),
@@ -336,6 +342,8 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
     }).strict()) }).strict(),
   z.object({ ...envelope, kind: z.literal("daemonRuntime"), daemonId: DaemonIdSchema.nullable(),
     data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("daemonUpdate"), daemonId: DaemonIdSchema.nullable(),
+    data: InstallationUpdateSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("network"), data: WorkbenchNetworkSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projects"), data: WorkspaceProjectsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("projectGroups"), data: WorkspaceProjectGroupsSchema }).strict(),
@@ -351,6 +359,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("reloadOperation"), data: WorkbenchReloadOperationSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
   z.object({ ...envelope, kind: z.literal("archivedThreads"), data: WorkspaceArchivedThreadsSchema }).strict(),
 ]);

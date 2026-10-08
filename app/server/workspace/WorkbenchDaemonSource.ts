@@ -171,7 +171,8 @@ export default class WorkbenchDaemonSource {
   get hasDemand() { return this.interests.size > 0 || this.transcripts.size > 0 || this.leases.size > 0; }
   private get hasActiveDemand() {
     return this.leases.size > 0 || this.transcripts.size > 0 || [...this.interests.values()].some(interest =>
-      interest.query.kind !== "catalogue" && interest.query.kind !== "summaries");
+      interest.query.kind !== "catalogue" && interest.query.kind !== "summaries"
+      && interest.query.kind !== "runtime" && interest.query.kind !== "update");
   }
   get httpOrigin() {
     if (!this.available || !this.socket.url) return null;
@@ -356,7 +357,9 @@ export default class WorkbenchDaemonSource {
         : interest.failure ? interest.value ? "stale" : "failed"
         : !current ? interest.value ? "stale" : "pending"
         : interest.value!.phase,
-      failure: interest.failure ?? (!current ? this.getSnapshot().failure : interest.value?.failure ?? null),
+      failure: !this.descriptor.access ? "This app no longer has access to the daemon."
+        : interest.failure ?? (this.descriptor.state === "failed" ? this.descriptor.failure
+          : current ? interest.value?.failure ?? null : null),
       value: this.descriptor.access ? interest.value : null,
     };
   }
@@ -450,7 +453,7 @@ export default class WorkbenchDaemonSource {
         phase: !this.descriptor.access ? "unavailable"
           : interest.failure ? "failed" : current ? "current" : listener.generation === null ? "pending" : "stale",
         failure: !this.descriptor.access ? "This app no longer has access to the daemon."
-          : interest.failure ?? (!current ? this.getSnapshot().failure : null),
+          : interest.failure ?? (this.descriptor.state === "failed" ? this.descriptor.failure : null),
       };
       if (areDeeplyEqual(listener.state, state)) continue;
       listener.state = state;

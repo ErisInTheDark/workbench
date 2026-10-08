@@ -1,5 +1,5 @@
 - The daemon host owns lightweight networking and daemon startup independently of the app; the daemon owns project and harness execution.
 - Keep app/tray outside the managed host's crash unit. Retire owned descendants before replacing a failed daemon.
 - Keep durable daemon identity separate from process endpoints. Discovery and status reads must not wake the daemon.
-- Fresh supervision sessions start cold. Resume daemon intent only within its original session; failed startup requires explicit retry.
+- Fresh supervision sessions start cold. Resume daemon intent only within its original session; failed daemons retry in-host with backoff and explicit retry skips the wait.
 - Only unattended, idle managed daemons may sleep. Connected apps, foreground ownership, admitted work and active harness execution prevent sleep; log views do not. The host fences wake against retirement and remains running.

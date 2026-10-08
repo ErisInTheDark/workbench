@@ -82,7 +82,7 @@ export default class WorkbenchWorkspaceClient {
         const connection = rpc.getSnapshot();
         if (connection.phase === "current") return;
         for (const interest of this.interests.values()) this.publish(interest, {
-          ...interest.snapshot, phase: interest.snapshot.value ? "stale" : "pending", failure: connection.failure,
+          ...interest.snapshot, phase: interest.snapshot.value ? "stale" : "pending", failure: null,
         });
       }),
     ];

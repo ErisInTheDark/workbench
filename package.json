@@ -2,7 +2,7 @@
   "name": "workbench-root",
   "private": true,
   "scripts": {
-    "app": "node app/node_modules/tsx/dist/cli.mjs app/server/index.ts",
+    "app": "node --disable-warning=ExperimentalWarning app/server/launch.mjs",
     "build:app": "node --import tsx app/server/build.ts",
     "build:tray": "node scripts/build-tray.mjs",
     "build:host": "node scripts/build-host.mjs",
@@ -17,7 +17,7 @@
     "test:install": "node --disable-warning=ExperimentalWarning --import tsx test/run-install-test.mjs",
     "sandbox:install": "node --disable-warning=ExperimentalWarning --import tsx test/install/open-install-sandbox.ts",
     "typecheck": "node scripts/typecheck.mjs",
-    "dev": "node --env-file-if-exists=./daemon/.env.local --import tsx ./daemon/host/foreground.ts",
+    "dev": "node --env-file-if-exists=./daemon/.env.local ./daemon/host/launch-foreground.mjs",
     "codex:types": "codex app-server generate-ts --experimental --out ./shared/codex/generated/app-server",
     "pack": "pnpm --dir ./package pack"
   },

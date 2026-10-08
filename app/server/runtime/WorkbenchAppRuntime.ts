@@ -25,11 +25,12 @@ import type WorkbenchAppStateRepository from "../state/WorkbenchAppStateReposito
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import { projectWorkbenchAppRuntimeSnapshot } from "./workbench-app-runtime-snapshot.ts";
+import type WorkbenchDaemonSource from "../workspace/WorkbenchDaemonSource";
 
 const RUNTIME_PATH = "/api/workbench-app-runtime";
 const MAX_RELOAD_BODY_BYTES = 16_000;
 const requiredRegistrations = [
-  "compiler", "database", "http", "logger", "network", "reloadController", "reloadDirt", "state", "topology",
+  "compiler", "database", "http", "logger", "network", "reloadController", "reloadDirt", "reloadOrchestrator", "state", "topology",
 ] as const satisfies readonly (keyof AppRuntimeObjects)[];
 
 export interface WorkbenchAppRuntimeOptions {
@@ -84,6 +85,13 @@ export default class WorkbenchAppRuntime {
   private lastHostDirt: WorkbenchReloadDirtSnapshot | null = null;
   private lastRequestedReactDevelopmentMode = false;
   private runtimeSourcesReady = false;
+  private readonly controlListeners = new Set<() => void>();
+  private controlSourceUnsubscribers: Array<() => void> = [];
+  private controlDaemonId: string | null = null;
+  private controlObservations: {
+    runtime: ReturnType<WorkbenchDaemonSource["observe"]>;
+    update: ReturnType<WorkbenchDaemonSource["observe"]>;
+  } | null = null;
 
   constructor(private readonly options: WorkbenchAppRuntimeOptions) {
     let host!: ReloadableNodeHost<AppProcessContext, AppRuntimeObjects, never>;
@@ -111,6 +119,36 @@ export default class WorkbenchAppRuntime {
           throw error;
         }
       },
+      runRuntimeObject: (key, operation) => host.run(key, operation, `app reload orchestration: ${String(key)}`),
+      admitAppReload: (scopes, installOptions) => {
+        if (!scopes.includes("client:process") && !scopes.includes("client:install")) host.validateReloadScopes(scopes);
+        return host.get("reloadController").admit(scopes, options.requestProcessRestart, installOptions);
+      },
+      reloadOperations: {
+        read: () => host.get("reloadOrchestrator").read(),
+        subscribe: listener => host.get("reloadOrchestrator").subscribe(listener),
+        admitReloadAll: daemonId => host.get("reloadOrchestrator").admitReloadAll(daemonId),
+        admitPull: (daemonId, reload) => host.get("reloadOrchestrator").admitPull(daemonId, reload),
+      },
+      readControlDaemonFacts: () => {
+        const observations = this.controlObservations;
+        // A plain GET can reuse facts already held by browser observers. Streams
+        // retain these interests until close and rebind them after graph swaps.
+        const source = observations ? null : host.get("sources").attached;
+        const runtime = observations?.runtime ?? source?.observe({ kind: "runtime" }, () => {});
+        const update = observations?.update ?? source?.observe({ kind: "update" }, () => {});
+        try {
+          const runtimeValue = runtime?.getSnapshot().value;
+          const updateValue = update?.getSnapshot().value;
+          return {
+            dirt: runtimeValue?.kind === "runtime" ? runtimeValue.data : null,
+            update: updateValue?.kind === "update" ? updateValue.data : null,
+          };
+        } finally {
+          if (!observations) { runtime?.release(); update?.release(); }
+        }
+      },
+      isLocalDaemon: daemonId => host.get("sources").attached?.id === daemonId,
       outputDirectoryPath: options.outputDirectoryPath,
       processLogger: options.logger,
       readAppRuntimeSnapshot: () => this.readRuntimeSnapshot(),
@@ -145,7 +183,7 @@ export default class WorkbenchAppRuntime {
           this.publishRuntimeChange();
         }
       },
-      processScope: {
+      processScopes: [{
         descriptor: {
           access: "operator",
           description: "Restart the Workbench app to replace its stable process shell.",
@@ -157,12 +195,26 @@ export default class WorkbenchAppRuntime {
           "app/package.json",
           "app/tsconfig.json",
           "app/server/index.ts",
+          "app/server/launch.mjs",
+          "package/update.mjs",
+          "package/update-journal.mjs",
           "package.json",
           "shared/package.json",
           "app/tray/**",
           "!app/tray/target/**",
         ].join("\n"),
-      },
+      }, {
+        descriptor: {
+          access: "operator",
+          description: "Install changed dependencies and fully restart Workbench.",
+          destructive: true,
+          safeAll: false,
+          scope: "client:install",
+        },
+        assets: "pnpm-lock.yaml",
+        sources: "assets",
+        subsumesAll: true,
+      }],
       requiredRegistrations,
       requiredScopes: ["client:topology"],
       topologyScope: "client:topology",
@@ -172,6 +224,56 @@ export default class WorkbenchAppRuntime {
 
   get outputDirectoryPath() {
     return this.options.outputDirectoryPath;
+  }
+
+  readControlRuntime() {
+    if (!this.runtimeSourcesReady) return null;
+    return this.host.get("reloadOrchestrator").readControlRuntime();
+  }
+
+  subscribeControlRuntime(listener: () => void) {
+    this.controlListeners.add(listener);
+    if (this.controlListeners.size === 1 && this.runtimeSourcesReady) this.bindControlSources();
+    return () => {
+      this.controlListeners.delete(listener);
+      if (!this.controlListeners.size) this.releaseControlSources();
+    };
+  }
+
+  private releaseControlSources() {
+    for (const unsubscribe of this.controlSourceUnsubscribers) unsubscribe();
+    this.controlSourceUnsubscribers = [];
+    this.controlDaemonId = null;
+    this.controlObservations = null;
+  }
+
+  private bindControlSources() {
+    this.releaseControlSources();
+    if (!this.controlListeners.size || !this.runtimeSourcesReady) return;
+    const source = this.host.get("sources").attached;
+    this.controlDaemonId = source?.id ?? null;
+    const changed = () => this.publishRuntimeChange();
+    this.controlSourceUnsubscribers = [this.host.get("sources").subscribe(() => {
+      if ((this.host.get("sources").attached?.id ?? null) !== this.controlDaemonId) this.bindControlSources();
+      changed();
+    })];
+    if (source) {
+      this.controlObservations = {
+        runtime: source.observe({ kind: "runtime" }, changed),
+        update: source.observe({ kind: "update" }, changed),
+      };
+      this.controlSourceUnsubscribers.push(this.controlObservations.runtime.release, this.controlObservations.update.release);
+    }
+  }
+
+  admitReloadAll() {
+    if (!this.runtimeSourcesReady) return null;
+    return this.host.get("reloadOrchestrator").admitReloadAll();
+  }
+
+  admitPull(reload: boolean) {
+    if (!this.runtimeSourcesReady) return null;
+    return this.host.get("reloadOrchestrator").admitPull(undefined, reload);
   }
 
   getReloadScopeCatalog() {
@@ -193,6 +295,8 @@ export default class WorkbenchAppRuntime {
     for (const unsubscribe of this.runtimeSourceUnsubscribers) unsubscribe();
     this.runtimeSourceUnsubscribers = [];
     this.runtimeListeners.clear();
+    this.releaseControlSources();
+    this.controlListeners.clear();
     await this.host.dispose();
   }
 
@@ -217,6 +321,7 @@ export default class WorkbenchAppRuntime {
     this.lastHostDirt = network.hostReloadDirt();
     this.lastRequestedReactDevelopmentMode = state.readGlobalPreference("reactDevelopmentMode") === true;
     this.runtimeSourceUnsubscribers = [
+      this.host.get("reloadOrchestrator").subscribe(() => this.publishRuntimeChange()),
       dirt.subscribe(() => this.publishRuntimeChange()),
       compiler.subscribe(() => this.publishRuntimeChange()),
       state.subscribeBrowser(undefined, () => {
@@ -232,10 +337,11 @@ export default class WorkbenchAppRuntime {
         this.publishRuntimeChange();
       }),
     ];
+    this.bindControlSources();
   }
 
   private publishRuntimeChange() {
-    for (const listener of this.runtimeListeners) {
+    for (const listener of new Set([...this.runtimeListeners, ...this.controlListeners])) {
       try { listener(); }
       catch (error) {
         const message = error instanceof Error ? error.message : "Unknown runtime listener failure.";
@@ -270,7 +376,7 @@ export default class WorkbenchAppRuntime {
         const scopes = await readReloadScopes(request);
         const hostScopes = scopes.filter(scope => scope.startsWith("host:"));
         const clientScopes = scopes.filter(scope => scope.startsWith("client:"));
-        if (clientScopes.length && !clientScopes.includes("client:process")) this.host.validateReloadScopes(clientScopes);
+        if (clientScopes.length && !clientScopes.includes("client:process") && !clientScopes.includes("client:install")) this.host.validateReloadScopes(clientScopes);
         const admission = clientScopes.length ? this.host.get("reloadController").admit(
           clientScopes,
           this.options.requestProcessRestart,

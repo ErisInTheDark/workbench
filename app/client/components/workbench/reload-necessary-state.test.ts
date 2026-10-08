@@ -11,7 +11,6 @@ import {
   getReloadScopeHoldMs,
   mergeReloadDirt,
   NORMAL_RELOAD_HOLD_MS,
-  partitionReloadScopes,
 } from "./reload-necessary-state";
 
 const regular = { description: "Core", destructive: false, scope: "server:core" } as const;
@@ -24,42 +23,14 @@ test("destructive scopes require the long hold and reload all uses the longest h
   assert.equal(getReloadAllHoldMs([regular, destructive]), DESTRUCTIVE_RELOAD_HOLD_MS);
 });
 
-test("merges app and daemon dirt while routing each namespace to its owner", () => {
+test("merges app and daemon dirt", () => {
   const merged = mergeReloadDirt(
     { dirtyScopes: [{ description: "HTTP", destructive: false, scope: "client:http" }], error: null, pendingScopes: [] },
     { dirtyScopes: [regular], error: "daemon warning", pendingScopes: ["server:core"] },
   );
   assert.deepEqual(merged?.dirtyScopes.map(({ scope }) => scope), ["client:http", "server:core"]);
   assert.equal(merged?.error, "daemon warning");
-  assert.deepEqual(partitionReloadScopes(merged?.dirtyScopes.map(({ scope }) => scope) ?? []), {
-    client: ["client:http"],
-    server: ["server:core"],
-  });
-});
-
-test("full app restart subsumes client reloads without swallowing daemon scopes", () => {
-  const process = { description: "Process", destructive: true, scope: "client:process" };
-  assert.deepEqual(partitionReloadScopes([
-    "client:http",
-    process.scope,
-    regular.scope,
-  ]), {
-    client: ["client:process"],
-    server: ["server:core"],
-  });
-});
-
-test("host and app process replacement subsume only their own graph", () => {
-  assert.deepEqual(partitionReloadScopes([
-    "host:http", "client:http", "host:process", "client:process", "server:core",
-  ]), {
-    client: ["host:process", "client:process"],
-    server: ["server:core"],
-  });
-  assert.deepEqual(partitionReloadScopes(["host:http", "client:process", "server:core"]), {
-    client: ["host:http", "client:process"],
-    server: ["server:core"],
-  });
+  assert.deepEqual(merged?.pendingScopes, ["server:core"]);
 });
 
 test("derives sibling highlights from owner metadata and reload all affects every visible scope", () => {

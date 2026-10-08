@@ -47,6 +47,26 @@ function fixture() {
   return { source, descriptor, created: created.promise, warnings };
 }
 
+test("passive reload and update status leaves sleeping daemons cold while explicit work retains them", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  f.source.update({ ...f.descriptor, state: "sleeping" });
+  const runtime = f.source.observe({ kind: "runtime" }, () => {});
+  const update = f.source.observe({ kind: "update" }, () => {});
+  assert.equal(f.source.socket.getSnapshot().phase, "suspended");
+  const releaseWork = f.source.retain();
+  const socket = await f.created;
+  const opening = f.source.socket.connect();
+  socket.open();
+  await opening;
+  assert.equal(f.source.available, true);
+  releaseWork();
+  assert.equal(socket.readyState, WebSocket.CLOSED);
+  assert.equal(f.source.socket.getSnapshot().phase, "suspended");
+  runtime.release();
+  update.release();
+});
+
 test("one stalled source cannot hold another source's shared observation", async context => {
   const a = fixture();
   const b = fixture();
@@ -103,8 +123,59 @@ test("revocation removes usable facts and prevents late replies from restoring a
   socket.notify({ method: "workspace/updated", params: { ...update, revision: 2 } });
   assert.equal(observation.getSnapshot().phase, "unavailable");
   assert.equal(observation.getSnapshot().value, null);
+  assert.ok(observation.getSnapshot().failure);
+  const late = source.observe({ kind: "runtime" }, () => {});
+  assert.equal(late.getSnapshot().phase, "unavailable");
+  assert.ok(late.getSnapshot().failure);
   await assert.rejects(source.request("models/list", { provider: "codex" }));
   assert.equal(socket.sent.filter(request => request.method === "models/list").length, 0);
+});
+
+test("connection loss changes observation and transcript freshness without scoped failures", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const query = { kind: "threadIdentity" as const, threadId: ThreadReferenceSchema.parse(randomUUID()) };
+  const retained = f.source.observe(query, () => {});
+  const pending = f.source.observe({ kind: "runtime" }, () => {});
+  const events: WorkbenchDaemonTranscriptEvent[] = [];
+  const pendingEvents: WorkbenchDaemonTranscriptEvent[] = [];
+  f.source.observeTranscript({ threadId: randomUUID(), turnLimit: 1 }, event => events.push(event));
+  f.source.observeTranscript({ threadId: randomUUID(), turnLimit: 1 }, event => pendingEvents.push(event));
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = await socket.request("workspace/observe");
+  socket.notify({ method: "workspace/updated", params: {
+    kind: "threadIdentity", subscriptionId: request.params.subscriptionId,
+    generation: request.params.generation, revision: 1, phase: "current", failure: null, identity: null,
+  } });
+  const transcript = await socket.request("workbench/transcript/subscribe");
+  socket.notify({ method: "workbench/transcript/streamed",
+    params: { subscriptionId: transcript.params.subscriptionId, update: { kind: "absent" } } });
+  socket.notify({ id: transcript.id, result: { subscribed: true } });
+  const value = retained.getSnapshot().value;
+  assert.ok(value);
+  socket.close();
+  assert.deepEqual(retained.getSnapshot(), { phase: "stale", failure: null, value });
+  assert.deepEqual(pending.getSnapshot(), { phase: "pending", failure: null, value: null });
+  const state = events.at(-1);
+  const pendingState = pendingEvents.at(-1);
+  assert.ok(state?.kind === "transcriptState");
+  assert.ok(pendingState?.kind === "transcriptState");
+  assert.equal(state.data.phase, "stale");
+  assert.equal(state.data.failure, null);
+  assert.equal(pendingState.data.phase, "pending");
+  assert.equal(pendingState.data.failure, null);
+  assert.ok(f.source.getSnapshot().failure);
+
+  f.source.update({ ...f.descriptor, state: "failed", failure: "Daemon startup failed." });
+  assert.equal(retained.getSnapshot().failure, "Daemon startup failed.");
+  assert.equal(pending.getSnapshot().failure, "Daemon startup failed.");
+  const failedState = events.at(-1);
+  const failedPendingState = pendingEvents.at(-1);
+  assert.ok(failedState?.kind === "transcriptState");
+  assert.ok(failedPendingState?.kind === "transcriptState");
+  assert.equal(failedState.data.failure, "Daemon startup failed.");
+  assert.equal(failedPendingState.data.failure, "Daemon startup failed.");
 });
 
 test("daemon deltas apply onto the exact first value, may arrive before it, and a gap re-observes", async context => {
@@ -260,4 +331,5 @@ test("revocation fences transcript delivery without reviving it through late bas
   assert.ok(events.at(-1)?.kind === "transcriptState");
   const state = events.at(-1);
   assert.equal(state?.kind === "transcriptState" ? state.data.phase : null, "unavailable");
+  assert.ok(state?.kind === "transcriptState" && state.data.failure);
 });

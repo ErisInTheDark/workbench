@@ -194,6 +194,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "git/arc/unstash": { params: GitArcParams<"arcUnstash">; result: GitArcStashResult };
   "git/arc/stash/discard": { params: GitArcParams<"arcDiscardStash">; result: WorkbenchGitArcSuccess };
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };
+  "installation/update/pull": { params: object; result: import("../installation-update").InstallationPullResult };
+  "installation/update/failure/dismiss": { params: object; result: { ok: true } };
   "thread-auto-compact/read": { params: object; result: { settings: ThreadAutoCompactSettings } };
   "thread-auto-compact/update": { params: { settings: Partial<ThreadAutoCompactSettings> }; result: { settings: ThreadAutoCompactSettings } };
   "local-capabilities/update": { params: WorkbenchLocalCapabilitySettingsUpdateRequest; result: WorkbenchLocalCapabilitySettingsResponse };

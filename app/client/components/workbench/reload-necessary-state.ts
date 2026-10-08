@@ -3,7 +3,7 @@
  * - NORMAL_RELOAD_HOLD_MS/DESTRUCTIVE_RELOAD_HOLD_MS: user-confirmation durations for ordinary and destructive scopes. Keywords: reload, confirmation, duration.
  * - getReloadScopeHoldMs/getReloadAllHoldMs: derive user-confirmation duration from destructive scope metadata. Keywords: reload, confirmation, destructive.
  * - getAffectedReloadScopes: derive buttons affected by one reload selection from owner metadata. Keywords: reload, hover, dependants.
- * - mergeReloadDirt/partitionReloadScopes: combine snapshots and route scopes while full app restart subsumes client-node reloads. Keywords: reload, client, server.
+ * - mergeReloadDirt: combine app and daemon dirt snapshots. Keywords: reload, client, server.
  */
 import type { WorkbenchReloadDirtScope, WorkbenchReloadDirtSnapshot } from "workbench-shared/types";
 
@@ -39,17 +39,5 @@ export function mergeReloadDirt(
     dirtyScopes: [...dirty.values()],
     error: errors.length ? errors.join(" ") : null,
     pendingScopes: [...new Set([...client?.pendingScopes ?? [], ...server?.pendingScopes ?? []])],
-  };
-}
-
-export function partitionReloadScopes(scopes: readonly string[]) {
-  const client = scopes.filter((scope) => scope.startsWith("client:"));
-  const host = scopes.filter((scope) => scope.startsWith("host:"));
-  return {
-    client: [
-      ...(host.includes("host:process") ? ["host:process"] : host),
-      ...(client.includes("client:process") ? ["client:process"] : client),
-    ],
-    server: scopes.filter((scope) => !scope.startsWith("client:") && !scope.startsWith("host:")),
   };
 }

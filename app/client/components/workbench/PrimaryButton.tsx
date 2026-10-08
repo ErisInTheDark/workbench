@@ -17,7 +17,7 @@ import {
 import WorkbenchSpinningBorder from "./WorkbenchSpinningBorder";
 
 type PrimaryButtonShape = "pill" | "circle";
-type PrimaryButtonTone = "danger" | "default";
+type PrimaryButtonTone = "attention" | "danger" | "default";
 type HoldSource = "keyboard" | "pointer";
 
 type PrimaryButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -49,6 +49,12 @@ const shapeClassNames: Record<PrimaryButtonShape, string> = {
 };
 
 const toneClassNames: Record<PrimaryButtonTone, string> = {
+  // Needs the user's attention before it can proceed normally; matches the amber "needs attention" status tone.
+  attention: `
+    !text-amber-700 dark:!text-amber-300
+    [--primary-button-bg: color-mix(in srgb, var(--color-amber-500) 16%, var(--app-bg-solid) 84%)]
+    enabled:hover:[--primary-button-bg: color-mix(in srgb, var(--color-amber-500) 28%, var(--app-bg-solid) 72%)]
+  `,
   default: "enabled:hover:[--primary-button-bg:var(--color-button-hover)]",
   danger: `
     enabled:hover:(

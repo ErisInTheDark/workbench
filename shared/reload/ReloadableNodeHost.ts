@@ -50,11 +50,13 @@ export interface ReloadableNodeHostOptions {
   logError?: (message: string) => void;
   now?: () => number;
   onSwap?: (nodeIds: readonly string[]) => Promise<void> | void;
-  processScope?: {
+  processScopes?: readonly {
     descriptor: DaemonReloadScopeDescriptor;
     /** Non-module process inputs and entries above the process module; imports are discovered. */
     assets: string;
-  };
+    sources?: "process" | "assets";
+    subsumesAll?: boolean;
+  }[];
   requiredRegistrations?: readonly PropertyKey[];
   requiredScopes?: readonly DaemonReloadScope[];
   runtimeDrainTimeoutMs?: number;
@@ -149,8 +151,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private readonly logError: NonNullable<ReloadableNodeHostOptions["logError"]>;
   private readonly now: NonNullable<ReloadableNodeHostOptions["now"]>;
   private readonly onSwap: NonNullable<ReloadableNodeHostOptions["onSwap"]>;
-  private readonly processScope: ReloadableNodeHostOptions["processScope"];
-  private processSourceMatcher: GitignoreMatcher | null = null;
+  private readonly processScopes: NonNullable<ReloadableNodeHostOptions["processScopes"]>;
+  private processSourceMatchers = new Map<DaemonReloadScope, GitignoreMatcher>();
   private readonly requiredRegistrations: readonly PropertyKey[];
   private readonly requiredScopes: readonly DaemonReloadScope[];
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
@@ -183,7 +185,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     this.logError = options.logError ?? (() => undefined);
     this.now = options.now ?? Date.now;
     this.onSwap = options.onSwap ?? (() => undefined);
-    this.processScope = options.processScope;
+    this.processScopes = options.processScopes ?? [];
     this.requiredRegistrations = options.requiredRegistrations ?? [];
     this.requiredScopes = options.requiredScopes ?? [];
     this.runtimeDrainTimeoutMs = options.runtimeDrainTimeoutMs ?? DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS;
@@ -215,7 +217,12 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         ...(definition.destructive ? { destructive: true } : {}),
       });
     });
-    return this.processScope ? [...graph, this.processScope.descriptor] : graph;
+    const scopes = [...graph.map(({ scope }) => scope), ...this.processScopes.map(({ descriptor }) => descriptor.scope)];
+    return [...graph, ...this.processScopes.map(({ descriptor, subsumesAll }) => ({
+      ...descriptor,
+      dependantScopes: scopes.filter(scope => scope !== descriptor.scope
+        && (subsumesAll || !this.processScopes.some(item => item.descriptor.scope === scope))),
+    }))];
   }
 
   getSourceState(): ReloadDirtSourceState {
@@ -244,18 +251,22 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         boundaryPatterns: definition.sourcePatterns,
       };
     });
-    if (this.processScope) descriptors.push({
-      ...this.processScope.descriptor,
-      paths: this.processSourcePaths,
+    for (const processScope of this.processScopes) descriptors.push({
+      ...processScope.descriptor,
+      paths: processScope.sources === "assets" ? [] : this.processSourcePaths,
       boundaryPatterns: [
-        ...this.processScope.assets.split(/\r?\n/u).filter(Boolean),
+        ...processScope.assets.split(/\r?\n/u).filter(Boolean),
         ...this.sourceExclusions.map(source => `!${source}`),
       ],
     });
     return {
       descriptors,
       dependantClosure: scopes => {
-        if (this.processScope && scopes.includes(this.processScope.descriptor.scope)) return descriptors.map(({ scope }) => scope);
+        if (this.processScopes.some(({ descriptor, subsumesAll }) => subsumesAll && scopes.includes(descriptor.scope))) {
+          return descriptors.map(({ scope }) => scope);
+        }
+        const processScopes = this.processScopes.filter(({ descriptor }) => scopes.includes(descriptor.scope));
+        if (processScopes.length) return [...topology, ...processScopes.map(({ descriptor }) => descriptor.scope)];
         const selected = this.selectDependants(scopes.filter(scope => definitions.has(scope)), definitions);
         return topology.filter(scope => selected.has(scope));
       },
@@ -264,13 +275,14 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
 
   private setProcessSources(paths: readonly string[]) {
     this.processSourcePaths = [...new Set(paths)].filter(source => !this.excludedSources.matches(source)).sort();
-    this.processSourceMatcher = this.processScope
-      ? createGitignoreMatcher([
-        ...this.processSourcePaths,
-        this.processScope.assets,
+    this.processSourceMatchers = new Map(this.processScopes.map(processScope => [
+      processScope.descriptor.scope,
+      createGitignoreMatcher([
+        ...(processScope.sources === "assets" ? [] : this.processSourcePaths),
+        processScope.assets,
         ...this.sourceExclusions.map(source => `!${source}`),
-      ].join("\n"))
-      : null;
+      ].join("\n")),
+    ]));
   }
 
   getReloadScopesForPaths(paths: readonly string[]): DaemonReloadScope[] {
@@ -279,11 +291,9 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       const matcher = this.requireNode(scope).definition.matcher;
       return admittedPaths.some((path) => matcher.matchesPathOrDescendant(path));
     });
-    if (
-      this.processScope
-      && this.processSourceMatcher
-      && admittedPaths.some((path) => this.processSourceMatcher!.matchesPathOrDescendant(path))
-    ) scopes.push(this.processScope.descriptor.scope);
+    for (const [scope, matcher] of this.processSourceMatchers) {
+      if (admittedPaths.some(path => matcher.matchesPathOrDescendant(path))) scopes.push(scope);
+    }
     return scopes;
   }
 

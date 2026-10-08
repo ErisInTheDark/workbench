@@ -1,9 +1,13 @@
 /*
  * Exports:
  * - WorkbenchAppRuntimeClientOptions: workspace facts, loaded bundle identity and reload handoff transport.
- * - default WorkbenchAppRuntimeClient: project pushed runtime facts and preserve connection-changing reload control.
+ * - default WorkbenchAppRuntimeClient: project pushed runtime facts and the app's reload/pull operation, and send reload, reload-all and pull intents.
  */
-import type { WorkbenchReloadResponse, WorkbenchReloadScope } from "workbench-shared/reload/workbench-reload";
+import {
+  IDLE_RELOAD_OPERATION,
+  type WorkbenchReloadOperation, type WorkbenchReloadResponse, type WorkbenchReloadScope,
+} from "workbench-shared/reload/workbench-reload";
+import { WorkbenchAppOperationAdmissionSchema, type WorkbenchAppRpcIntent } from "workbench-shared/http/workbench-app-rpc";
 
 import type {
   WorkbenchAppRuntimeSnapshot,
@@ -34,6 +38,9 @@ export default class WorkbenchAppRuntimeClient {
   readonly #workspace: WorkbenchWorkspaceClient;
   #observation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
   #snapshot: WorkbenchAppRuntimeSnapshot = EMPTY;
+  readonly #operationListeners = new Set<() => void>();
+  #operationObservation: Pick<ReturnType<WorkbenchWorkspaceClient["observe"]>, "release"> | null = null;
+  #operation: WorkbenchReloadOperation = IDLE_RELOAD_OPERATION;
 
   constructor(options: WorkbenchAppRuntimeClientOptions) {
     const fetcher = options.fetcher ?? globalThis.fetch;
@@ -48,6 +55,29 @@ export default class WorkbenchAppRuntimeClient {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   };
+
+  getOperation = () => this.#operation;
+
+  subscribeOperation = (listener: () => void) => {
+    this.#operationListeners.add(listener);
+    return () => this.#operationListeners.delete(listener);
+  };
+
+  async reloadAll() {
+    await this.#admit({ method: "app/reload/all", params: {} });
+  }
+
+  async pull({ reload }: { reload: boolean }) {
+    await this.#admit({ method: "app/update/pull", params: { reload } });
+  }
+
+  async #admit(intent: Extract<WorkbenchAppRpcIntent, { method: "app/reload/all" | "app/update/pull" }>) {
+    const parsed = WorkbenchAppOperationAdmissionSchema.safeParse(await this.#workspace.rpc.requestRaw(intent));
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected Workbench app operation admission", parsed.error);
+      throw new Error("The Workbench app operation admission was invalid.");
+    }
+  }
 
   async bootstrap() {
     if (this.#observation) return this.#snapshot;
@@ -67,6 +97,16 @@ export default class WorkbenchAppRuntimeClient {
     const observation = this.#workspace.observe({ kind: "runtime" }, update);
     this.#observation = observation;
     update();
+    // Stale values survive reconnects: an operation that dropped the socket stays visible until facts resume.
+    const operationChanged = () => {
+      const value = operationObservation.getSnapshot().value;
+      if (!value?.data || areDeeplyEqual(this.#operation, value.data)) return;
+      this.#operation = value.data;
+      for (const listener of this.#operationListeners) listener();
+    };
+    const operationObservation = this.#workspace.observe({ kind: "reloadOperation" }, operationChanged);
+    this.#operationObservation = operationObservation;
+    operationChanged();
     return this.#snapshot;
   }
 
@@ -97,7 +137,10 @@ export default class WorkbenchAppRuntimeClient {
   dispose() {
     this.#observation?.release();
     this.#observation = null;
+    this.#operationObservation?.release();
+    this.#operationObservation = null;
     this.#listeners.clear();
+    this.#operationListeners.clear();
   }
 
   #isTabOutOfDate(current: WorkbenchFrontendGeneration | null) {

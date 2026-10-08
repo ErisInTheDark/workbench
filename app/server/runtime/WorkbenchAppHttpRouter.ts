@@ -113,7 +113,7 @@ export default class WorkbenchAppHttpRouter {
     workspaceThreads?: WorkbenchWorkspaceThreads;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
     presentationImport?: WorkbenchPresentationImportController;
-    runtime?: { read(): object; subscribe(listener: () => void): () => void };
+    runtime?: ConstructorParameters<typeof WorkbenchAppEventSocketController>[0]["runtime"];
     supportsAppWebSockets?: boolean;
   }) {
     this.assets = options.sources ? new WorkbenchWorkspaceAssetRoutes({

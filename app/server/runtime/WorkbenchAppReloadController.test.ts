@@ -102,3 +102,52 @@ test("a resumed reload owner reports failed replacement and accepts another batc
   await controller.admit(["client:http"]).start();
   assert.deepEqual(events, ["begin", "fail", "begin", "complete"]);
 });
+
+test("install admission requires the tray and persists before stopping and restarting", async () => {
+  const events: string[] = [];
+  const controller = new WorkbenchAppReloadController({
+    dirt: {} as never, execute: async () => [],
+    repositoryRootPath: "/repo",
+    prepareInstall: async fromSha => { events.push(`journal:${fromSha}`); },
+    repairInstall: async () => { events.push("stop"); },
+    schedule: callback => callback(),
+  });
+  assert.throws(() => controller.admit(["client:install"]), /desktop tray/u);
+  assert.throws(() => controller.admit(["client:install", "client:http"], () => {}), /by itself/u);
+  const admission = controller.admit(["client:install"], () => { events.push("restart"); }, { installFromSha: "a".repeat(40) });
+  assert.deepEqual(events, []);
+  await admission.start();
+  assert.deepEqual(events, [`journal:${"a".repeat(40)}`, "stop", "restart"]);
+});
+
+test("failed install preparation or host stop never requests native restart", async () => {
+  for (const fails of ["prepare", "stop"]) {
+    let restarted = false;
+    const controller = new WorkbenchAppReloadController({
+      dirt: {} as never, execute: async () => [], repositoryRootPath: "/repo",
+      prepareInstall: async () => { if (fails === "prepare") throw new Error("journal failed"); },
+      repairInstall: async () => { if (fails === "stop") throw new Error("host failed"); },
+      schedule: callback => callback(),
+    });
+    await assert.rejects(controller.admit(["client:install"], () => { restarted = true; }).start(), /failed/u);
+    assert.equal(restarted, false);
+  }
+});
+
+test("install owns reload admission until asynchronous host stop completes", async () => {
+  let release!: () => void;
+  let stopping!: () => void;
+  const stopped = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { stopping = resolve; });
+  const controller = new WorkbenchAppReloadController({
+    dirt: {} as never, execute: async () => [], repositoryRootPath: "/repo",
+    prepareInstall: async () => {},
+    repairInstall: async () => { stopping(); await stopped; },
+    schedule: callback => callback(),
+  });
+  const completion = controller.admit(["client:install"], () => {}).start();
+  await entered;
+  assert.throws(() => controller.admit(["client:http"]), /already active/u);
+  release();
+  await completion;
+});

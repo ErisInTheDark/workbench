@@ -3,6 +3,7 @@
  * - WorkbenchAppRpcRequestSchema/WorkbenchAppRpcRequest/WorkbenchAppRpcIntent: bounded browser-to-app JSON intents.
  * - WorkbenchAppRuntimeResponseSchema: validated app reload and frontend projection.
  * - WorkbenchPresentationIntent/WorkbenchPresentationIntentSchema: browser-owned draft edits only.
+ * - WorkbenchAppReloadAllRequestSchema/WorkbenchAppPullRequestSchema/WorkbenchAppOperationAdmissionSchema: app-sequenced reload-all and pull intents.
  */
 import { z } from "zod";
 import { WorkbenchNetworkActionSchema } from "./workbench-network";
@@ -31,6 +32,11 @@ export const WorkbenchAppRuntimeResponseSchema = z.object({
     pendingScopes: z.array(z.string().regex(WORKBENCH_RELOAD_SCOPE_PATTERN)),
   }).strict(),
 }).strict();
+
+/** `daemonId` selects whose server scopes and checkout; omitted means the attached daemon. */
+export const WorkbenchAppReloadAllRequestSchema = z.object({ daemonId: DaemonIdSchema.optional() }).strict();
+export const WorkbenchAppPullRequestSchema = z.object({ daemonId: DaemonIdSchema.optional(), reload: z.boolean() }).strict();
+export const WorkbenchAppOperationAdmissionSchema = z.object({ admitted: z.literal(true) }).strict();
 
 const browserStateId = z.uuid().nullable();
 const id = z.number().int().positive();
@@ -77,6 +83,9 @@ export const WorkbenchAppRpcRequestSchema = z.discriminatedUnion("method", [
     id, method: z.literal("app/port/read"),
     params: z.object({}).strict(),
   }).strict(),
+  // Both admit one app-owned sequence and answer immediately; progress is the `reloadOperation` observation.
+  z.object({ id, method: z.literal("app/reload/all"), params: WorkbenchAppReloadAllRequestSchema }).strict(),
+  z.object({ id, method: z.literal("app/update/pull"), params: WorkbenchAppPullRequestSchema }).strict(),
 ]);
 export type WorkbenchAppRpcRequest = z.infer<typeof WorkbenchAppRpcRequestSchema>;
 export type WorkbenchAppRpcIntent = {

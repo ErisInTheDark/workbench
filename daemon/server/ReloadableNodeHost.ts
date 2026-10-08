@@ -13,7 +13,7 @@ export type { ReloadableNodeModuleLoader };
 
 export interface ReloadableNodeHostOptions extends Omit<
   SharedReloadableNodeHostOptions,
-  "processScope" | "topologyScope"
+  "processScopes" | "topologyScope"
 > {}
 
 export default class ReloadableNodeHost<TContext, TFeatures extends object, TNotification>
@@ -25,7 +25,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   ) {
     super(context, loader, {
       ...options,
-      processScope: {
+      processScopes: [{
         descriptor: {
           access: "operator",
           description: "Restart the complete daemon process to replace the stable graph kernel.",
@@ -35,7 +35,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         },
         // The process module's import walk owns every process source.
         assets: "",
-      },
+      }],
       topologyScope: "server:topology",
     });
   }

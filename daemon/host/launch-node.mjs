@@ -5,8 +5,12 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readJournal, isRepairPending } from "../../package/update-journal.mjs";
 
 try {
+  if (isRepairPending(await readJournal())) {
+    throw new Error("Dependency update repair is pending. Launch Workbench or run `wb repair` before starting the host.");
+  }
   if (process.env.WORKBENCH_SERVICE_ACK_REQUIRED === "1") {
     await new Promise((resolve, reject) => {
       let input = "";

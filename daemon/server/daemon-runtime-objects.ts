@@ -56,6 +56,7 @@ import type WorkbenchAgentMcpController from "./WorkbenchAgentMcpController";
 import type WorkbenchToolRevisionController from "./WorkbenchToolRevisionController";
 import type WorkbenchCodexInstructionAdapter from "./WorkbenchCodexInstructionAdapter";
 import type WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
+import type WorkbenchInstallationUpdateController from "./WorkbenchInstallationUpdateController";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import type WorkbenchBrowseController from "./WorkbenchBrowseController";
 import type WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
@@ -268,6 +269,7 @@ export interface DaemonRuntimeObjects {
   database: DaemonDatabaseRegistration;
   commandApprovals: WorkbenchCommandApprovalController;
   daemonRequests: WorkbenchDaemonRequestController;
+  installationUpdate: WorkbenchInstallationUpdateController;
   threadActions: WorkbenchThreadActionController;
   threadContextRollover: import("./WorkbenchThreadContextRolloverController").default;
   gitArc: WorkbenchGitArcFeature;

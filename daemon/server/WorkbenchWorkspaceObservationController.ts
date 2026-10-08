@@ -72,6 +72,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private closed = false;
 
   constructor(private readonly owners: {
+    installationUpdate?: Pick<import("./WorkbenchInstallationUpdateController").default, "read" | "subscribe">;
     reload: { read(): WorkbenchReloadDirtSnapshot; subscribe(listener: () => void): () => void };
     catalogue: Pick<WorkbenchProjectCatalogController, "getFacts" | "subscribe">;
     identities: Pick<WorkbenchThreadIdentityController, "findThread" | "resolve" | "subscribe">;
@@ -85,6 +86,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     cooperate?: () => Promise<void>;
   }) {
     this.unsubscribe = [
+      ...(owners.installationUpdate ? [owners.installationUpdate.subscribe(() => {
+        for (const observation of this.observations.values()) {
+          if (observation.request.query.kind === "update") this.update(observation, {
+            kind: "update", phase: "current", failure: null, data: owners.installationUpdate!.read(),
+          });
+        }
+      })] : []),
       owners.reload.subscribe(() => {
         for (const observation of this.observations.values()) {
           if (observation.request.query.kind === "runtime") this.update(observation, {
@@ -125,6 +133,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const request = observation.request;
     switch (request.query.kind) {
       case "runtime": break;
+      case "update": break;
       case "catalogue": break;
       case "threadIdentity": this.readIdentity(observation); break;
       case "thread": this.readThread(observation); break;
@@ -212,6 +221,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const catalogue = this.owners.catalogue.getFacts();
     switch (request.query.kind) {
       case "runtime": return { ...envelope, kind: "runtime", phase: "current", failure: null, data: this.readReload() };
+      case "update": return { ...envelope, kind: "update", phase: this.owners.installationUpdate ? "current" : "pending",
+        failure: null, data: this.owners.installationUpdate?.read() ?? null };
       case "catalogue": return {
         ...envelope, kind: "catalogue", phase: catalogue.phase, failure: catalogue.failure,
         catalogue: catalogue.catalogue, locations: catalogue.locations,

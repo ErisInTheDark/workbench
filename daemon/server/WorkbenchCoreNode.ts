@@ -84,6 +84,7 @@ import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
+import WorkbenchInstallationUpdateNode from "./WorkbenchInstallationUpdateNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -847,7 +848,7 @@ function createWorkbenchCoreFeature(
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>()({
   access: "agent",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchInstallationUpdateNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing, mode }) => {
     const reloadState = handoffState as WorkbenchCoreReloadState | undefined;
     return createWorkbenchCoreFeature(

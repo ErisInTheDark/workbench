@@ -4,6 +4,7 @@
  * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data.
  * - default WorkbenchDaemonClient: create the browser daemon client.
  */
+import { InstallationPullResultSchema } from "../installation-update";
 import type {
   WorkbenchDaemonGitArcMethod,
   WorkbenchDaemonMethod,
@@ -81,6 +82,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   }
   const switched = method as Exclude<WorkbenchDaemonMethod, keyof typeof workbenchThreadActions | WorkbenchDaemonGitArcMethod>;
   switch (switched) {
+    case "installation/update/pull": return InstallationPullResultSchema;
+    case "installation/update/failure/dismiss": return z.object({ ok: z.literal(true) }).strict();
     case "voice/configuration/read": return VoiceConfigurationSchema;
     case "voice/agents": return z.object({ data: z.array(z.object({
       name: z.string(), path: z.string(), description: z.string(), source: z.literal("library"), sourceLabel: z.string(),
@@ -173,6 +176,11 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
 
 class WorkbenchDaemonClient {
   constructor(private readonly transport: WorkbenchDaemonTransport) {}
+
+  readonly installationUpdate = {
+    pull: () => this.request("installation/update/pull", {}),
+    dismissFailure: () => this.request("installation/update/failure/dismiss", {}),
+  };
 
   readonly voice = {
     configuration: {

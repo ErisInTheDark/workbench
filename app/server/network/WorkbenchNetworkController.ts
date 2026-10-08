@@ -253,14 +253,64 @@ export default class WorkbenchNetworkController {
 
   hostReloadDirt() { return this.client?.getSnapshot().snapshot?.reloadDirt ?? null; }
 
-  async reloadHost(scopes: readonly string[]) {
+  async reloadHost(scopes: readonly string[], signal?: AbortSignal) {
     const selected = scopes.map(scope => {
       if (scope !== "host:database" && scope !== "host:network" && scope !== "host:http" && scope !== "host:process") {
         throw new Error("Unknown host reload scope.");
       }
       return scope;
     });
-    await this.send({ method: "service/reload", scopes: selected });
+    const client = this.client;
+    const initial = client?.getSnapshot();
+    if (!client || !initial || initial.phase !== "ready") throw new Error("The Workbench host is unavailable for reload.");
+    const session = this.session;
+    if (!session) throw new Error("The Workbench host session is unavailable.");
+    const cancellation = signal ? AbortSignal.any([session.signal, signal]) : session.signal;
+    cancellation.throwIfAborted();
+    let pending = false;
+    let acknowledged = false;
+    let changed = () => {};
+    const stop = client.subscribe(() => changed());
+    let cancel = () => {};
+    const completed = new Promise<void>((resolve, reject) => {
+      changed = () => {
+        const current = client.getSnapshot();
+        const dirt = current.snapshot?.reloadDirt;
+        pending ||= Boolean(dirt?.pendingScopes.length);
+        if (!acknowledged) return;
+        if (cancellation.aborted) { reject(cancellation.reason); return; }
+        if (dirt?.error && (pending || dirt.error !== initial.snapshot?.reloadDirt?.error
+          || current.generation !== initial.generation)) { reject(new Error(dirt.error)); return; }
+        if (current.phase === "failed" && !selected.includes("host:process")) {
+          reject(new Error(current.failure ?? "The Workbench host disconnected during reload."));
+          return;
+        }
+        if (current.phase !== "ready") return;
+        if (!dirt) { reject(new Error("Host reload completion is unavailable.")); return; }
+        if (dirt.pendingScopes.length) return;
+        const applied = !dirt.dirtyScopes.some(({ scope }) => selected.some(selectedScope => selectedScope === scope));
+        if (selected.includes("host:process")) {
+          if (current.generation !== initial.generation) resolve();
+        } else if (pending || applied || current.generation !== initial.generation) resolve();
+      };
+      cancel = () => reject(cancellation.reason);
+      cancellation.addEventListener("abort", cancel, { once: true });
+    });
+    // Attach rejection ownership before admission: a session may retire while
+    // its acknowledgement is still in flight.
+    const outcome = completed.then(() => ({ error: null }), error => ({ error }));
+    try {
+      const response = await client.request({ method: "service/reload", scopes: selected }, cancellation);
+      if (response.kind === "error") throw new Error(response.message);
+      if (response.kind !== "ok") throw new Error("The Workbench host did not acknowledge reload.");
+      acknowledged = true;
+      changed();
+      const result = await outcome;
+      if (result.error) throw result.error;
+    } finally {
+      stop();
+      cancellation.removeEventListener("abort", cancel);
+    }
   }
 
   subscribe(listener: () => void) {
@@ -381,6 +431,30 @@ export default class WorkbenchNetworkController {
     if (this.phase === "closed") return;
     this.phase = "suspended";
     await this.stopProcess();
+  }
+
+  async stopHostForInstall() {
+    if (this.phase === "closed") throw new Error("App networking has closed.");
+    const client = this.client;
+    this.phase = "suspended";
+    this.session?.abort(new Error("App networking suspended for installation repair."));
+    try {
+      if (this.startup) await this.startup;
+      if (this.relaunching) await this.relaunching;
+      if (!client || client.getSnapshot().phase !== "ready") throw new Error("The Workbench host is unavailable for installation repair.");
+      const process = await client.request({ method: "service/process/read" }, this.lifetime.signal);
+      if (process.kind === "error") throw new Error(process.message);
+      if (process.kind !== "process") throw new Error("The Workbench host returned no process identity.");
+      const stopped = await client.request({ method: "service/stop", instanceId: process.instanceId }, this.lifetime.signal);
+      if (stopped.kind === "error") throw new Error(stopped.message);
+      if (stopped.kind !== "ok") throw new Error("The Workbench host did not acknowledge installation shutdown.");
+    } catch (error) {
+      this.report(error);
+      throw error;
+    } finally {
+      await this.stopProcess();
+      this.publish();
+    }
   }
 
   private async stopProcess() {

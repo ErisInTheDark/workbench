@@ -3,6 +3,7 @@
  * - WORKBENCH_RELOAD_SCOPE_PATTERN/WorkbenchReloadScope/WorkbenchReloadScopeDescriptor: shared reload node identity and catalog metadata.
  * - WorkbenchReloadDirtScope/WorkbenchReloadDirtSnapshot: process-local source dirt projection.
  * - WorkbenchReloadDirtSnapshotSchema: validate reload ownership and pending-scope diagnostics.
+ * - WorkbenchReloadOperationSchema/WorkbenchReloadOperation/IDLE_RELOAD_OPERATION: the app's in-flight reload-all or pull sequence.
  * - WorkbenchReloadResponse: admitted and completed reload batch state.
  */
 import { z } from "zod";
@@ -41,6 +42,19 @@ export interface WorkbenchReloadDirtSnapshot {
   error: string | null;
   pendingScopes: WorkbenchReloadScope[];
 }
+
+/**
+ * The app's single in-flight reload-all / pull sequence. `waiting`: pulled, waiting for dirt to observe the new
+ * HEAD. `restarting`: a process-replacing scope was admitted, so this app is about to exit.
+ */
+export const WorkbenchReloadOperationSchema = z.object({
+  action: z.enum(["reloadAll", "pull", "pullAndReload"]).nullable(),
+  phase: z.enum(["idle", "pulling", "waiting", "reloading", "restarting", "failed"]),
+  error: z.string().max(500).nullable(),
+  startedAt: z.number().int().nonnegative().nullable(),
+}).strict();
+export type WorkbenchReloadOperation = z.infer<typeof WorkbenchReloadOperationSchema>;
+export const IDLE_RELOAD_OPERATION: WorkbenchReloadOperation = { action: null, phase: "idle", error: null, startedAt: null };
 
 export interface WorkbenchReloadResponse {
   appliedScopes: WorkbenchReloadScope[];

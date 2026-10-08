@@ -176,12 +176,16 @@ test("reconnect retains facts as stale, restores reads and fences the old genera
   context.after(() => fixture.dispose());
   const socket = await fixture.open();
   const query = fixture.workspace.observe({ kind: "runtime" });
+  const pending = fixture.workspace.observe({ kind: "network" });
   const initial = await socket.request("workspace/observe");
   await socket.observation(initial, runtime);
   socket.reply(initial, { malformedRetiredReply: true });
   socket.close();
   assert.equal(query.getSnapshot().phase, "stale");
   assert.ok(query.getSnapshot().value?.data);
+  assert.equal(query.getSnapshot().failure, null);
+  assert.deepEqual(pending.getSnapshot(), { phase: "pending", failure: null, value: null });
+  assert.ok(fixture.workspace.rpc.getSnapshot().failure);
   context.mock.timers.tick(60_000);
   const next = await fixture.nextSocket(1);
   const connected = fixture.workspace.connect();
