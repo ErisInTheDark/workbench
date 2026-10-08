@@ -12,7 +12,8 @@ import type {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
-import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { createUndeliveredSteerItems } from "workbench-shared/workbench/thread/thread-steer-history";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { upsertWorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
@@ -102,18 +103,6 @@ function overlayLiveItemTimelines(
         : entry;
     }),
   };
-}
-
-function localSteers(thread: ThreadTranscriptLocalThread | undefined) {
-  return (thread?.turns ?? []).flatMap(turn => {
-    const items = turn.items.flatMap(item => item.type === "userMessage" && isWorkbenchSyntheticSteerUserMessage(item) ? [item] : []);
-    if (!items.length) return [];
-    const ids = new Set(items.map(item => item.id));
-    return [{
-      turnId: turn.id, items,
-      timeline: thread?.turnHistory.find(entry => entry.turnId === turn.id)?.itemTimeline?.filter(entry => ids.has(entry.itemId)) ?? [],
-    }];
-  });
 }
 
 function localInitials(thread: ThreadTranscriptLocalThread | undefined) {
@@ -235,7 +224,6 @@ export default class ThreadTranscriptProjectionController {
       selection?.thread.turns.filter(isLocallyProjectedTurn) ?? [],
     );
     const initialsChanged = !areDeeplyEqual(this.#localInitials, nextLocalInitials);
-    const steersChanged = !areDeeplyEqual(localSteers(this.#selection?.thread), localSteers(selection?.thread));
     const itemTimelinesChanged = !areDeeplyEqual(
       liveItemTimelines(this.#selection?.thread),
       liveItemTimelines(selection?.thread),
@@ -274,7 +262,7 @@ export default class ThreadTranscriptProjectionController {
       this.#replaceSubscription();
       return;
     }
-    if (publishState && (!this.#incremental || localPendingChanged || initialsChanged || steersChanged || itemTimelinesChanged)) {
+    if (publishState && (!this.#incremental || localPendingChanged || initialsChanged || itemTimelinesChanged)) {
       this.#publishProjection();
     }
   }
@@ -308,10 +296,13 @@ export default class ThreadTranscriptProjectionController {
         item.type === "userMessage" && item.clientId && canonicalClients.has(item.clientId)
       )),
     })).filter(entry => entry.items.length > 0);
-    const steers = localSteers(this.#selection.thread).map(entry => ({
-      ...entry,
-      items: entry.items.filter(item => !canonicalIds.has(item.id) && !(item.clientId && canonicalClients.has(item.clientId))),
-    })).filter(entry => entry.items.length > 0);
+    // Held steers live beside the transcript until delivered; they wait at the loaded tail.
+    const tailTurnId = projection.turns.at(-1)?.id;
+    const heldItems = tailTurnId
+      ? createUndeliveredSteerItems(canonicalItems as ThreadItem[], projection.steerEntries.filter(entry => entry.threadId === projection.thread.id))
+        .filter(item => !canonicalIds.has(item.id) && !(item.clientId && canonicalClients.has(item.clientId)))
+      : [];
+    const steers = tailTurnId && heldItems.length ? [{ turnId: tailTurnId, items: heldItems }] : [];
     // Local pre-admission input is not provider transcript truth. Keep it visible until admission.
     const pending = this.#selection.thread.turns.filter(turn =>
       isLocallyProjectedTurn(turn) && !projection.turns.some(existing => existing.id === turn.id));
@@ -349,20 +340,8 @@ export default class ThreadTranscriptProjectionController {
     }
     for (const entry of steers) {
       const index = turns.findIndex(turn => turn.id === entry.turnId);
-      if (index >= 0) {
-        const turn = turns[index]!;
-        const items = entry.items.filter(item => !turn.items.some(existing => existing.id === item.id));
-        turns[index] = {
-          ...turn, items: [...turn.items, ...items],
-          itemTimeline: [...turn.itemTimeline, ...entry.timeline.filter(event => items.some(item => item.id === event.itemId))],
-        };
-      } else {
-        const source = this.#selection.thread.turns.find(turn => turn.id === entry.turnId)!;
-        turns.push({
-          ...source, items: entry.items, itemTimeline: entry.timeline,
-          turnIndex: Math.max(-1, ...turns.map(turn => turn.turnIndex)) + 1,
-        });
-      }
+      const turn = turns[index]!;
+      turns[index] = { ...turn, items: [...turn.items, ...entry.items.filter(item => !turn.items.some(existing => existing.id === item.id))] };
     }
     const virtualHead = initials.flatMap(entry => entry.items.map(payload => ({ turnId: entry.turnId, payload })));
     const virtualTail = [

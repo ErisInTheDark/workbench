@@ -7,6 +7,7 @@
  * - isWorkbenchSyntheticSteerUserMessage: detect Workbench-only steer user messages that must not become durable anchors.
  * - isWorkbenchPendingSteerUserMessage: detect Workbench-only steer messages still queued for the active turn.
  * - applySteerHistoryToThread: strip prior synthetic steer items and show held steers at the loaded thread tail; dismissed steers stay hidden.
+ * - createUndeliveredSteerItems: the held-steer items to show beside a thread's items, in dispatch order, skipping delivered ones.
  */
 
 import type { ThreadItem, UserInput } from "./workbench-thread-items.ts";
@@ -130,11 +131,16 @@ function sortSteerHistoryEntries(entries: WorkbenchSteerHistoryEntry[]) {
   });
 }
 
-function applySteerHistoryToItems(items: ThreadItem[], entries: WorkbenchSteerHistoryEntry[]) {
-  const baseItems = stripSyntheticSteerHistoryItems(items);
-  const syntheticItems = sortSteerHistoryEntries(entries)
+export function createUndeliveredSteerItems(items: readonly ThreadItem[], entries: readonly WorkbenchSteerHistoryEntry[]) {
+  const baseItems = stripSyntheticSteerHistoryItems([...items]);
+  return sortSteerHistoryEntries([...entries])
     .filter((entry): entry is RenderableSteerHistoryEntry => shouldRenderSteerHistoryEntry(baseItems, entry))
     .map(createSyntheticSteerHistoryItem);
+}
+
+function applySteerHistoryToItems(items: ThreadItem[], entries: WorkbenchSteerHistoryEntry[]) {
+  const baseItems = stripSyntheticSteerHistoryItems(items);
+  const syntheticItems = createUndeliveredSteerItems(baseItems, entries);
   if (!syntheticItems.length) {
     return baseItems.length === items.length ? items : baseItems;
   }

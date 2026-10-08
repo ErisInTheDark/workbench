@@ -9,7 +9,7 @@ import type { WorkspaceTranscriptState } from "workbench-shared/workbench/worksp
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchInputState, withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { applySteerHistoryToThread, isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
+import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { projectWorkbenchThreadItemTimelines } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { createOptimisticItem, type OptimisticInputPlacement, type OptimisticInputStatus } from "../thread/thread-optimistic-items";
 import {
@@ -482,8 +482,8 @@ test("patch previews appear before admission, grow immutably and become one cano
 
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const steer = localInput("steer", "keep this input");
-    view.controller.select({ thread: withLocalInputs(source, [steer]) });
+    const local = localInput("initial", "keep this input");
+    view.controller.select({ thread: withLocalInputs(source, [local]) });
     assert.deepEqual(fileItems()[0]!.changes, grown.changes);
     const admitted = patchBaseline("inProgress", baseline.snapshot);
     view.receive(admitted);
@@ -495,10 +495,10 @@ test("patch previews appear before admission, grow immutably and become one cano
     assert.equal(fileItems().length, 1);
     assert.equal(fileItems()[0]!.status, "completed");
     assert.deepEqual(fileItems()[0]!.changes, []);
-    const retainedSteer = view.projection().turns[0]!.items.find(item => item.id === steer.handle);
-    assert.ok(retainedSteer?.type === "userMessage");
-    assert.equal(getWorkbenchInputState(retainedSteer)?.status, "pending");
-    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === steer.handle).length, 1);
+    const retained = view.projection().turns[0]!.items.find(item => item.id === local.handle);
+    assert.ok(retained?.type === "userMessage");
+    assert.equal(getWorkbenchInputState(retained)?.status, "pending");
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === local.handle).length, 1);
     assert.deepEqual(view.errors, []);
   } finally { await view.controller.dispose(); }
 });
@@ -510,8 +510,8 @@ test("server withdrawal removes only the transient tail and preserves canonical 
     view.receive(view.patch("+canonical"));
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const steer = localInput("steer", "keep input");
-    view.controller.select({ thread: withLocalInputs(source, [steer]) });
+    const local = localInput("initial", "keep input");
+    view.controller.select({ thread: withLocalInputs(source, [local]) });
     const draft = view.patch("+draft", "preview");
     view.receive(draft);
     view.receive({ ...draft, changes: [] });
@@ -521,7 +521,7 @@ test("server withdrawal removes only the transient tail and preserves canonical 
     const canonical = view.projection().turns[0]!.items.find(item => item.id === patchItemId);
     assert.ok(canonical?.type === "fileChange");
     assert.equal(canonical.changes[0]?.diff, "+canonical");
-    assert.ok(view.projection().turns[0]!.items.some(item => item.id === steer.handle));
+    assert.ok(view.projection().turns[0]!.items.some(item => item.id === local.handle));
     assert.deepEqual(view.errors, []);
   } finally { await view.controller.dispose(); }
 });
@@ -599,116 +599,6 @@ test(`unadmitted previews are cleared on ${boundary}`, async () => {
     assert.deepEqual(view.errors, []);
   } finally { await view.controller.dispose(); }
 });
-}
-
-for (const correlation of ["item", "client"] as const) {
-  test(`incremental SQL retains local steers until canonical ${correlation} delivery`, async () => {
-    const states: ThreadTranscriptProjectionState[] = [];
-    const errors: Error[] = [];
-    let receive!: (update: TranscriptStreamUpdate) => void;
-    let subscriptions = 0;
-    const controller = new ThreadTranscriptProjectionController({
-      available: true, turnLimit: 4,
-      onStateChange: state => states.push(state), onError: error => errors.push(error),
-      transcripts: {
-        unsubscribe: async () => {},
-        subscribe: async (_params, _snapshot, stream) => { subscriptions++; receive = stream!; },
-      },
-    });
-    const source = thread("thread");
-    source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const first = localInput("steer", "same");
-    const second = localInput("steer", "same");
-    let local: LocalInput[] = [];
-    const select = () => controller.select({ thread: withLocalInputs(source, local) });
-    const projection = () => {
-      const state = states.at(-1)!;
-      assert.ok(state.status === "ready");
-      return state.projection;
-    };
-    const inputStates = () => projection().turns[0]!.items.map(item => item.type === "userMessage" ? getWorkbenchInputState(item) : null);
-    try {
-      select();
-      await flush();
-      receive(streamBaseline("thread"));
-      const canonicalSegment = projection().display.segments[0]!.id;
-      local = [first, second];
-      select();
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
-      assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
-      assert.deepEqual(projection().display.segments.flatMap(segment => segment.items.map(item => item.id)),
-        [baselineItemId, first.handle, second.handle]);
-      assert.equal(projection().display.segments[0]!.id, canonicalSegment);
-      assert.equal(projection().turns[0]!.itemTimeline.find(entry => entry.itemId === first.handle)?.firstSeenAt, 42);
-      const pendingHistory = [{
-        threadId: source.id, turnId: "turn", entryKey: first.handle, itemId: first.handle,
-        clientUserMessageId: first.handle, canonicalItemId: null, input: first.input,
-        status: "pending" as const, attemptedAt: 42, resolvedAt: null, error: null, requestId: null,
-      }];
-      // Held steer history replaces its own optimistic copy.
-      controller.select({ thread: withLocalInputs(applySteerHistoryToThread(source, pendingHistory), [second]) });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
-      assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
-      select();
-      assert.equal(inputStates()[1]?.status, "pending", "Admission is not delivery");
-      const publications = states.length;
-      receive({ kind: "text", threadId: "thread", turnId: "turn", itemId: baselineItemId,
-        field: "agentMessageText", index: null, text: " delta", append: true });
-      select();
-      assert.equal(states.length, publications, "Provider text must not republish local input");
-      receive(streamBaseline("thread"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
-      const unsent = correlation === "item" ? "failed" : "interrupted";
-      local = [first, { ...second, status: unsent }];
-      select();
-      assert.equal(inputStates()[2]?.status, unsent);
-
-      const delivered = streamBaseline("thread");
-      assert.ok(delivered.kind === "structure");
-      const deliveredId = correlation === "item" ? first.handle : deliveredItemId;
-      delivered.snapshot.rows.threadItems.push({
-        ...delivered.snapshot.rows.threadItems[0]!,
-        id: 2,
-        public_id: deliveredId,
-        item_position: 1,
-        type: "userMessage",
-      });
-      delivered.snapshot.rows.itemIdentities.push({
-        id: deliveredId,
-        thread_id: "thread",
-      });
-      delivered.snapshot.rows.threadItemUserMessages.push({
-        item_id: 2, item_type: "userMessage", input_kind: "steer", delivery_state: "delivered",
-        client_id: correlation === "client" ? first.handle : null, error_text: null,
-      });
-      delivered.snapshot.rows.threadUserMessageParts.push({
-        item_id: 2, part_index: 0, part_type: "text", text: "same", url: null, path: null, name: null, image_detail: null,
-      });
-      const canonical = projectWorkbenchTranscript(delivered.snapshot);
-      assert.ok(canonical.success);
-      delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
-      receive(delivered);
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, deliveredId, second.handle]);
-      assert.equal(inputStates()[1]?.status, "sent");
-      assert.deepEqual(projection().display.orderedItems.map(item => item.itemId), [baselineItemId, deliveredId]);
-      assert.equal(subscriptions, 1, "Local input changes must not resubscribe");
-
-      const retained = applySteerHistoryToThread(source, [{
-        threadId: source.id, turnId: "turn", entryKey: second.handle, itemId: second.handle,
-        clientUserMessageId: second.handle, canonicalItemId: null, input: second.input,
-        status: unsent, attemptedAt: 42, resolvedAt: 43, error: null, requestId: null,
-      }]);
-      controller.select({ thread: retained });
-      assert.equal(inputStates().at(-1)?.status, unsent);
-      controller.select({ thread: source });
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, deliveredId], "Removing local state must remove its presentation");
-      controller.select({ thread: thread("other") });
-      await flush();
-      receive(streamBaseline("other"));
-      assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId]);
-      assert.deepEqual(errors, []);
-    } finally { await controller.dispose(); }
-  });
 }
 
 for (const incremental of [false, true]) {
@@ -802,6 +692,47 @@ test(`admitted initial input stays before provider output until canonical delive
   await controller.dispose();
 });
 }
+
+test("held steers render pending at the thread tail until their delivered message arrives", async () => {
+  const view = await patchViewer();
+  const heldId = "0b7d6f0e-5d41-4d8c-9a7e-3c1f2a9b8e11";
+  const steerItem = () => view.projection().turns.at(-1)!.items.find(item => item.id === heldId);
+  try {
+    const held = streamBaseline("thread");
+    assert.ok(held.kind === "structure");
+    held.snapshot.rows.threadHeldSteers.push({
+      id: 7, public_id: heldId, thread_id: "thread", turn_id: "turn", entry_key: heldId, request_id: null,
+      client_id: heldId, dispatch_sequence: 1, state: "pending", error_text: null, attempted_at: 5, resolved_at: null,
+    });
+    held.snapshot.rows.threadHeldSteerParts.push({
+      steer_id: 7, part_index: 0, part_type: "text", text: "steer me", url: null, path: null, name: null, image_detail: null,
+    });
+    view.receive(held);
+    const pending = steerItem();
+    assert.ok(pending?.type === "userMessage" && isWorkbenchPendingSteerUserMessage(pending), "Admission shows the held steer at the tail");
+    assert.equal(view.projection().display.segments.flatMap(segment => segment.items).filter(item => item.id === heldId).length, 1);
+
+    const delivered = streamBaseline("thread");
+    assert.ok(delivered.kind === "structure");
+    delivered.snapshot.rows.threadItems.push({
+      ...delivered.snapshot.rows.threadItems[0]!, id: 2, public_id: deliveredItemId, item_position: 1, type: "userMessage",
+    });
+    delivered.snapshot.rows.itemIdentities.push({ id: deliveredItemId, thread_id: "thread" });
+    delivered.snapshot.rows.threadItemUserMessages.push({
+      item_id: 2, item_type: "userMessage", input_kind: "steer", delivery_state: "delivered", client_id: heldId, error_text: null,
+    });
+    delivered.snapshot.rows.threadUserMessageParts.push({
+      item_id: 2, part_index: 0, part_type: "text", text: "steer me", url: null, path: null, name: null, image_detail: null,
+    });
+    const canonical = projectWorkbenchTranscript(delivered.snapshot);
+    assert.ok(canonical.success);
+    delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
+    view.receive(delivered);
+    assert.equal(steerItem(), undefined, "Delivery replaces the held row");
+    assert.deepEqual(view.projection().turns[0]!.items.map(item => item.id), [baselineItemId, deliveredItemId]);
+    assert.deepEqual(view.errors, []);
+  } finally { await view.controller.dispose(); }
+});
 
 test("incremental SQL never reconciles provider-live state and text does not republish the tree", async () => {
   const states: ThreadTranscriptProjectionState[] = [];
