@@ -385,7 +385,7 @@ export default class WorkbenchNetworkController {
     const ownerDevice = forwarded && owner?.hostNodeId === device;
     return {
       deviceNodeId: forwarded ? device as string : null,
-      manageApp: !forwarded || Boolean(ownerDevice),
+      manageApp: true,
       manageNetwork: Boolean(localOwner && (!forwarded || ownerDevice)),
       trustHost: !forwarded || Boolean(this.runtime.host?.nodeId && this.runtime.host.nodeId === device),
     };

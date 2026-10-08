@@ -453,7 +453,7 @@ test("authenticated app access does not grant network management and retired ing
   const configure = f.calls.findLast(command => command.action === "configure");
   assert.ok(configure?.action === "configure" && configure.ingressToken);
   const headers = { "x-workbench-network-token": configure.ingressToken, "x-workbench-network-device": "visitor" };
-  assert.deepEqual(f.owner.ingress(headers), { deviceNodeId: "visitor", manageApp: false, manageNetwork: false, trustHost: false });
+  assert.deepEqual(f.owner.ingress(headers), { deviceNodeId: "visitor", manageApp: true, manageNetwork: false, trustHost: false });
   const ownerHeaders = { ...headers, "x-workbench-network-device": "owner-host" };
   assert.equal(f.owner.ingress(ownerHeaders)?.manageNetwork, true);
   assert.equal(f.owner.ingress(ownerHeaders)?.trustHost, false, "network ownership does not prove this is the app host");
