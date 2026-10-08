@@ -5,26 +5,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyObservationDelta, diffObservationValue } from "./observation-patch";
 import {
-  DaemonWorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceQuerySchema,
-  workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
+  DaemonWorkspaceObservationSchema, DaemonWorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceQuerySchema,
+  daemonObservationShape, workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
 } from "./workspace-observation";
 
 const threadId = "00000001-0000-4000-8000-000000000000";
 const gitArc = (claimedPaths: string[], proposals: Array<{ proposalId: string; status: "proposed" }>) => ({
   phase: "active", checkpointCommit: "a".repeat(40), claimedPaths, stashedPaths: [], proposals,
 });
+const subscriptionId = "00000000-0000-4000-8000-000000000001";
+const entry = (activityAt: number, extra: object = {}) => ({
+  entryKind: "thread", title: "thread", activityAt, waitingOnThreads: [], ...extra,
+  identity: { harness: "codex", threadId },
+  metadata: { archived: false, pinned: false, snoozed: false },
+  lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+});
 const value = (activityAt: number, arc?: ReturnType<typeof gitArc>) => WorkspaceObservationSchema.parse({
-  kind: "projectThreads", subscriptionId: "00000000-0000-4000-8000-000000000001", generation: 1, revision: 1,
+  kind: "projectThreads", subscriptionId, generation: 1, revision: 1,
   phase: "current", failure: null,
   data: {
     rows: [{
       logicalProjectId: null, location: { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" }, hostname: "host", rootPath: "C:/project",
-      entry: {
-        entryKind: "thread", title: "thread", activityAt, waitingOnThreads: [], ...arc ? { gitArc: arc } : {},
-        identity: { harness: "codex", threadId },
-        metadata: { archived: false, pinned: false, snoozed: false },
-        lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-      },
+      entry: entry(activityAt, arc ? { gitArc: arc } : {}),
     }],
     projects: [],
   },
@@ -58,6 +60,28 @@ test("a git arc change ships only the changed claims and proposals, and still va
       collections: { proposals: { update: [{ key: "/p", delta: { set: { status: "bogus" } } }] } },
     } } } } } }] } } } },
   }, shape), /invalid/u, "loose proposal items are still validated through the whole entry");
+});
+
+test("a resolved questionnaire ships its one history row, not the whole history", () => {
+  const history = (count: number) => Array.from({ length: count }, (_, index) => ({
+    itemId: null, requestKey: `request-${index}`, turnId: "turn", threadId, resolvedAt: index,
+    insertAfterItemId: null, insertAfterItemIndex: null, response: { answers: {} },
+    request: { id: `request-${index}`, submitLabel: "", summary: "", title: "",
+      questions: [{ allowOther: false, header: "", id: "q", isSecret: false, options: [], question: "?" }] },
+  }));
+  const observation = (count: number) => DaemonWorkspaceObservationSchema.parse({
+    kind: "thread", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+    data: {
+      entries: [entry(1, { questionnaireHistory: history(count) })], error: null, freshness: "fresh", projectId: "project",
+      revision: 1, subscriptionId, target: { kind: "provider", threadId }, updateKind: "threadObservation", version: 2,
+    },
+  });
+  const shape = daemonObservationShape("thread");
+  const delta = diffObservationValue(observation(2), observation(3), shape)!;
+  assert.deepEqual(delta.objects?.data?.collections?.entries?.update?.[0]?.delta, {
+    collections: { questionnaireHistory: { add: [{ key: "request-2", item: history(3)[2]! }] } },
+  });
+  assert.deepEqual(applyObservationDelta(observation(2), delta, shape), observation(3));
 });
 
 test("sidebar row protocol v2 is explicit while legacy rows conform compacting to false", () => {

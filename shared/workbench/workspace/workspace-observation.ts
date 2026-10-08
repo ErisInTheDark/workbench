@@ -392,7 +392,11 @@ const gitArcPlanShape = observationShape.object({ fields: {
   scopePaths: pathList,
   members: observationShape.keyed(gitArcMemberKey, z.json(), { fields: { scopePaths: pathList } }),
 } });
-const entryFields = { gitArc: gitArcShape, gitArcPlan: gitArcPlanShape };
+// Questionnaire history only grows, and a long-lived thread's history reaches hundreds of KB.
+const entryFields = {
+  gitArc: gitArcShape, gitArcPlan: gitArcPlanShape,
+  questionnaireHistory: observationShape.keyed((entry: { requestKey: string }) => entry.requestKey, z.json()),
+};
 const entryShape: ObservationShape = { fields: entryFields };
 // Thread-state revision counters bump on background passes with no visible change; they ride along only with real changes.
 const sidebarRowsShape = observationShape.object({
