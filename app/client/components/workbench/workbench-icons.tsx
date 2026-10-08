@@ -19,7 +19,7 @@
  * - DiscardDraftIcon/SettleThreadIcon/RestoreThreadIcon/UnsnoozeThreadIcon/SnoozedThreadIcon: sidebar action glyphs.
  * - BinIcon: discard glyph.
  * - ZoomInIcon: text-size control.
- * - BackArrowIcon: mobile back navigation.
+ * - ChevronLeftIcon/BackArrowIcon: left chevron and its mobile back-navigation alias.
  * - SidebarCollapseIcon/SidebarExpandIcon: sidebar visibility controls.
  * - PanelMinimizeIcon/PanelExpandIcon/PanelCloseIcon: mosaic panel controls.
  * - HomeIcon/StatsIcon/GearIcon: main navigation glyphs.
@@ -28,13 +28,13 @@
  * - ReloadIcon: runtime reload glyph.
  * - StopIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: execution status and alert glyphs.
  * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: folder and ownership glyphs.
- * - FlagIcon: goal glyph.
+ * - PennantIcon: goal and claim pennant.
  * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
  * - WrapTextIcon/PreviewIcon: code display controls.
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
  * - AsteriskIcon/AsteriskOffIcon/PlusIcon: amend, disabled-amend and fresh-commit choices.
  * - SparkleIcon: creation glyph.
- * - FileAddIcon/FileDeleteIcon/FileMoveIcon: file-change glyphs.
+ * - SquareSparkleIcon/SquareDashedXIcon/SquareArrowRightIcon, with FileAddIcon/FileDeleteIcon/FileMoveIcon aliases: file-change glyphs.
  * - FileUpdateIcon: file-change alias.
  * - FlaskConicalIcon: dedicated-test line-count glyph.
  * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: token input, cache and output glyphs.
@@ -50,13 +50,14 @@
  * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
  * - SquarePenIcon/CheckCheckIcon/AlarmClockIcon/ZzzIcon: editing and status glyphs.
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
- * - CompactIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
- * - FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon: thread workflow glyphs.
+ * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
+ * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - GitArcIcon: select the glyph for a Git arc action.
  * - GitArcProposalIcon: commit proposal with its message summary.
  * - GitArcStackIcon/GitArcUnstackIcon: lucide layers and layers-arrow-up glyphs for sealing and reopening stack layers.
- * - GitArcClaimIcon/GitArcCleanClaimIcon/GitArcDirtyClaimIcon/GitArcPlannedClaimIcon: live and planned claim glyphs.
- * - GitArcUnclaimedIcon/GitArcConflictIcon/GitArcWaitIcon: unclaimed, conflicting and waiting claim glyphs.
+ * - PennantIcon/PennantDashedIcon/PennantOffIcon, aliased by GitArcClaimIcon/GitArcPlanClaimIcon/GitArcUnclaimIcon: solid, dashed and discontinued claim pennants.
+ * - GitArcCleanClaimIcon/GitArcDirtyClaimIcon: clean and dirty claim glyphs.
+ * - GitArcWaitIcon, with SquareXIcon/GitArcConflictIcon: waiting and conflict glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  * - ShieldAlertIcon: skip-approvals mode glyph.
@@ -352,7 +353,7 @@ export function ZoomInIcon(props: IconProps) {
   );
 }
 
-export function BackArrowIcon(props: IconProps) {
+export function ChevronLeftIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="m15 18-6-6 6-6" /></OutlinedIcon>;
 }
 
@@ -551,7 +552,7 @@ export function ArrowUpIcon(props: IconProps) { return <OutlinedIcon {...props}>
 export function AlarmClockIcon(props: IconProps) { return <OutlinedIcon {...props}><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2" /><path d="M5 3 2 6" /><path d="m22 6-3-3" /><path d="M6.38 18.7 4 21" /><path d="M17.64 18.67 20 21" /></OutlinedIcon>; }
 export function ZzzIcon(props: IconProps) { return <OutlinedIcon {...props}><path d="M4 11h8l-8 10h8" /><path d="M15 4h5l-5 8h5" /></OutlinedIcon>; }
 
-export function FlagIcon(props: IconProps) {
+export function PennantIcon(props: IconProps) {
   return (
     <OutlinedIcon {...props}>
       <path d="M6 22V2.8a.8.8 0 0 1 1.17-.71l11.38 5.69a.8.8 0 0 1 0 1.44L6 15.5" />
@@ -678,15 +679,16 @@ export function FilePlusIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function FileAddIcon(props: IconProps) {
+export function SquareSparkleIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
-    <path d="M13 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-8" />
-    <path d="M12 7 13.28 10.72 17 12 13.28 13.28 12 17 10.72 13.28 7 12 10.72 10.72 12 7Z" />
-    <path d="M19.5 2 20.15 3.85 22 4.5 20.15 5.15 19.5 7 18.85 5.15 17 4.5 18.85 3.85 19.5 2Z" />
+    <path d="M11 15H7" />
+    <path d="M15.41 2.49a.6.6 0 0 1 1.18 0l.63 3.334a1.2 1.2 0 0 0 .956.955l3.334.631a.6.6 0 0 1 0 1.18l-3.334.63a1.2 1.2 0 0 0-.955.956l-.631 3.334a.6.6 0 0 1-1.18 0l-.63-3.334a1.2 1.2 0 0 0-.956-.955L10.49 8.59a.6.6 0 0 1 0-1.18l3.334-.63a1.2 1.2 0 0 0 .955-.956z" />
+    <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+    <path d="M9 13v4" />
   </OutlinedIcon>;
 }
 
-export function FileDeleteIcon(props: IconProps) {
+export function SquareDashedXIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" />
     <path d="M9 3h1" /><path d="M9 21h1" /><path d="M14 3h1" /><path d="M14 21h1" /><path d="M3 9v1" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M21 14v1" />
@@ -694,7 +696,7 @@ export function FileDeleteIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function FileMoveIcon(props: IconProps) {
+export function SquareArrowRightIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" /><path d="m12 16 4-4-4-4" />
   </OutlinedIcon>;
@@ -745,7 +747,7 @@ export function CompactIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function QuestionnaireListIcon(props: IconProps) {
+export function ListIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M3 5h.01" /><path d="M3 12h.01" /><path d="M3 19h.01" />
     <path d="M8 5h13" /><path d="M8 12h13" /><path d="M8 19h7" />
@@ -763,28 +765,24 @@ export function FeatherIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function FoldWorkedRunIcon(props: IconProps) {
+export function FoldVerticalIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3-3-3 3" /><path d="m15 5-3 3-3-3" />
   </OutlinedIcon>;
 }
 
-export function UnfoldWorkedRunIcon(props: IconProps) {
+export function UnfoldVerticalIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3 3-3-3" /><path d="m15 5-3-3-3 3" />
   </OutlinedIcon>;
 }
 
-export function ReapplyTitleIcon(props: IconProps) {
+export function Undo2Icon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" /></OutlinedIcon>;
 }
 
-export function TitleCommandIcon(props: IconProps) {
+export function FlagIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" /></OutlinedIcon>;
-}
-
-export function GitArcClaimIcon(props: IconProps) {
-  return <FlagIcon {...props} />;
 }
 
 export function GitArcCleanClaimIcon(props: IconProps) {
@@ -799,13 +797,13 @@ export function GitArcDirtyClaimIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function GitArcPlannedClaimIcon(props: IconProps) {
+export function PennantDashedIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M6 6V3l2.7 1.3" /><path d="m11.15 5.48 2.7 1.3" /><path d="m16.3 7.95 2.7 1.3-2.7 1.3" /><path d="m13.85 11.73-2.7 1.3" /><path d="m8.7 14.2-2.7 1.3v-3" /><path d="M6 9.78V8.72" /><path d="M6 22v-3.75" />
   </OutlinedIcon>;
 }
 
-export function GitArcUnclaimedIcon(props: IconProps) {
+export function PennantOffIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M7.5 22V7.5" />
     <path d="m12.83 12.83-5.33 2.67" />
@@ -814,7 +812,7 @@ export function GitArcUnclaimedIcon(props: IconProps) {
   </OutlinedIcon>;
 }
 
-export function GitArcConflictIcon(props: IconProps) {
+export function SquareXIcon(props: IconProps) {
   return <OutlinedIcon {...props}><rect height="18" rx="2" ry="2" width="18" x="3" y="3" /><path d="m15 9-6 6" /><path d="m9 9 6 6" /></OutlinedIcon>;
 }
 
@@ -891,3 +889,16 @@ export const OpenThreadIcon = ArrowRightIcon;
 export const PreviewIcon = EyeIcon;
 export const StatsIcon = ChartNoAxesCombinedIcon;
 export const FileUpdateIcon = SquarePenIcon;
+export const FileAddIcon = SquareSparkleIcon;
+export const FileDeleteIcon = SquareDashedXIcon;
+export const FileMoveIcon = SquareArrowRightIcon;
+export const BackArrowIcon = ChevronLeftIcon;
+export const QuestionnaireListIcon = ListIcon;
+export const FoldWorkedRunIcon = FoldVerticalIcon;
+export const UnfoldWorkedRunIcon = UnfoldVerticalIcon;
+export const ReapplyTitleIcon = Undo2Icon;
+export const TitleCommandIcon = FlagIcon;
+export const GitArcConflictIcon = SquareXIcon;
+export const GitArcClaimIcon = PennantIcon;
+export const GitArcUnclaimIcon = PennantOffIcon;
+export const GitArcPlanClaimIcon = PennantDashedIcon;

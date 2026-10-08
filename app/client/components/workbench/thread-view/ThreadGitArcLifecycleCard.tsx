@@ -17,7 +17,7 @@ import PrimaryButton from "../PrimaryButton";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { BinIcon, ResetIcon } from "../workbench-icons";
-import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimedIcon } from "./GitArcIcon";
+import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimIcon } from "./GitArcIcon";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -250,14 +250,14 @@ export default function ThreadGitArcLifecycleCard ({
                             onClick={() => void runAction("unclaim")}
                             pendingHalo={activeAction === "unclaim"}
                           >
-                            <GitArcUnclaimedIcon className="mr-1.5" size={14} />
+                            <GitArcUnclaimIcon className="mr-1.5" size={14} />
                             {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                           </PrimaryButton>
                         </>
                       )
                     ) : phase === "active" && changeState === "clean" ? (
                       <PrimaryButton className="!px-3 !py-1.5 !text-[0.76rem]" disabled={activeAction !== null} onClick={() => void runAction("unclaim")} pendingHalo={activeAction === "unclaim"}>
-                        <GitArcUnclaimedIcon className="mr-1.5" size={14} />
+                        <GitArcUnclaimIcon className="mr-1.5" size={14} />
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                       </PrimaryButton>
                     ) : phase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}

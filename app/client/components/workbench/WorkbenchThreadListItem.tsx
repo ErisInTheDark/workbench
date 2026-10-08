@@ -20,7 +20,7 @@ import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
   ArchiveIcon,
   DiscardDraftIcon,
-  FlagIcon,
+  PennantIcon,
   ImageIcon,
   MoreVerticalIcon,
   PinIcon,
@@ -64,7 +64,7 @@ function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
 function ClaimedPathsPanel({ label, paths, projectId, title }: { label?: ReactNode; paths: readonly string[]; projectId: ProjectId; title?: string }) {
   const flag = (
     <span className="inline-flex size-5 shrink-0 items-center justify-center text-fg/muted" aria-hidden="true">
-      <FlagIcon size={16} />
+      <PennantIcon size={16} />
     </span>
   );
   return (

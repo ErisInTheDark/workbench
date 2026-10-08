@@ -8,7 +8,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 
 import { WORKBENCH_THREAD_GOAL_MAX_LENGTH, type WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
-import { FlagIcon } from "../workbench-icons";
+import { PennantIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadSkillPills from "./ThreadSkillPills";
 
@@ -128,7 +128,7 @@ export default function ThreadGoalControl ({
           title={isOpen ? "Hide thread goal" : "Show thread goal"}
           onClick={() => setIsOpen((current) => !current)}
         >
-          <FlagIcon size={16} />
+          <PennantIcon size={16} />
         </button>
         {skillPills({ before: true, after: false })}
         {children ? <span className="text-[0.84em] text-fg/muted" aria-hidden="true">|</span> : null}

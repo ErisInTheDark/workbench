@@ -10,8 +10,8 @@ import {
   GitArcClaimIcon,
   GitArcCleanClaimIcon,
   GitArcDirtyClaimIcon,
-  GitArcPlannedClaimIcon,
-  GitArcUnclaimedIcon,
+  GitArcPlanClaimIcon,
+  GitArcUnclaimIcon,
 } from "./GitArcIcon";
 import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -21,8 +21,8 @@ export type ThreadClaimMarker = "claimed" | "clean" | "dirty" | "planned" | "unc
 export function ThreadClaimMarkerIcon({ marker }: { marker: ThreadClaimMarker }) {
   if (marker === "clean") return <GitArcCleanClaimIcon size={20} />;
   if (marker === "dirty") return <GitArcDirtyClaimIcon size={20} />;
-  if (marker === "planned") return <GitArcPlannedClaimIcon size={20} />;
-  if (marker === "unclaimed") return <GitArcUnclaimedIcon size={20} />;
+  if (marker === "planned") return <GitArcPlanClaimIcon size={20} />;
+  if (marker === "unclaimed") return <GitArcUnclaimIcon size={20} />;
   return <GitArcClaimIcon size={20} />;
 }
 

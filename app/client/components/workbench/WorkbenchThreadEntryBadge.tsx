@@ -4,10 +4,10 @@
  */
 "use client";
 
-import { ArchiveIcon, ComposerDraftIcon, FlagIcon, GitArcProposalIcon } from "./workbench-icons";
+import { ArchiveIcon, ComposerDraftIcon, GitArcProposalIcon, PennantIcon } from "./workbench-icons";
 
 function FileCount({ count, kind }: { count: number; kind: "claimed" | "stashed" }) {
-  const Icon = kind === "stashed" ? ArchiveIcon : FlagIcon;
+  const Icon = kind === "stashed" ? ArchiveIcon : PennantIcon;
   return (
     <span
       aria-label={`${count} ${kind} ${count === 1 ? "file" : "files"}`}
