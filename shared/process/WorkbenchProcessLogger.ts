@@ -1,6 +1,7 @@
 /*
- * Default export:
- * - WorkbenchProcessLogger: frame timestamped process and scoped browser lines while preserving producer styling.
+ * Exports:
+ * - logTimestampColor/logDomainColors: ANSI colours of log timestamps and fixed domains, for views matching log styling.
+ * - default WorkbenchProcessLogger: frame timestamped process and scoped browser lines while preserving producer styling.
  */
 const ANSI_CYAN = "\u001b[36m";
 const ANSI_GRAY = "\u001b[90m";
@@ -20,12 +21,13 @@ interface WorkbenchProcessLoggerOptions {
   writeOutput?: (value: string) => void;
 }
 
-const domainColors: Record<FixedLogDomain, string> = {
+export const logTimestampColor = ANSI_GRAY;
+export const logDomainColors: Readonly<Record<FixedLogDomain, string>> = Object.freeze({
   app: ANSI_GREEN,
   client: ANSI_PURPLE,
   daemon: ANSI_CYAN,
   host: ANSI_GRAY,
-};
+});
 
 function timestamp(now: Date) {
   return [now.getHours(), now.getMinutes(), now.getSeconds()]
@@ -93,8 +95,8 @@ export default class WorkbenchProcessLogger {
     const content = this.color ? formattedMessage : formattedMessage.replace(ANSI_PATTERN, "");
     return content.split(/\r\n|\n|\r/u).map((line) => {
       if (!this.color) return `${timestamp(this.now())} ${domain} ${line}\n`;
-      const domainColor = domain.startsWith("browser:") ? ANSI_PURPLE : domainColors[domain as FixedLogDomain];
-      return `${ANSI_GRAY}${timestamp(this.now())}${ANSI_RESET} ${domainColor}${domain}${ANSI_RESET} ${line}\n`;
+      const domainColor = domain.startsWith("browser:") ? ANSI_PURPLE : logDomainColors[domain as FixedLogDomain];
+      return `${logTimestampColor}${timestamp(this.now())}${ANSI_RESET} ${domainColor}${domain}${ANSI_RESET} ${line}\n`;
     }).join("");
   }
 }

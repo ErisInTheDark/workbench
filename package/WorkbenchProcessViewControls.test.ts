@@ -36,6 +36,7 @@ function fixture() {
     close: async () => { calls.push("close-app"); },
     subscribe: () => () => {},
     getSnapshot: () => ({ ready: appState.ready, instanceId: appState.instanceId }),
+    origin: async () => "http://127.0.0.1:45409",
     quit: async () => { calls.push("quit"); },
   };
   const controls = createWorkbenchProcessViewControls({
@@ -45,6 +46,7 @@ function fixture() {
     createHostClient: () => host,
     createAppClient: () => app,
     startApp: async () => { calls.push("start-app"); },
+    openUrl: async url => { calls.push(`open ${url}`); },
   });
   return { controls, requests, calls, hostState, appState };
 }
@@ -90,14 +92,17 @@ test("host controls reject while the host is unavailable", async () => {
   await assert.rejects(controls.killHost(), /host is not running/u);
 });
 
-test("kill app and start app follow app availability", async () => {
+test("kill app, open app and start app follow app availability", async () => {
   const f = fixture();
   const controls = await f.controls;
   await assert.rejects(controls.startApp(), /already running/u);
+  await controls.openApp();
+  assert.ok(f.calls.includes("open http://127.0.0.1:45409"));
   await controls.killApp();
   assert.ok(f.calls.includes("quit"));
   f.appState.ready = false;
   await assert.rejects(controls.killApp(), /app is not running/u);
+  await assert.rejects(controls.openApp(), /app is not running/u);
   await controls.startApp();
   assert.ok(f.calls.includes("start-app"));
 });

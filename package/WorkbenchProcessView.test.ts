@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect detachable key handling, always-on logging and lifecycle intent routing.
+ * No production exports. Protect detachable key handling, always-on logging and lifecycle/open intent routing.
  */
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
@@ -23,7 +23,7 @@ function deferred() {
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
 
-const LIFECYCLE_CALLS = ["daemon", "host", "force", "app", "start"];
+const LIFECYCLE_CALLS = ["daemon", "host", "force", "app", "start", "open"];
 
 function fixture(options: {
   snapshot?: ProcessViewControlsSnapshot;
@@ -47,6 +47,7 @@ function fixture(options: {
     forceStopHost: async () => { calls.push("force"); },
     killApp: async () => { calls.push("app"); },
     startApp: async () => { calls.push("start"); },
+    openApp: async () => { calls.push("open"); },
     close: async () => { calls.push("close-controls"); },
   };
   const view = new WorkbenchProcessView({
@@ -106,16 +107,16 @@ test("a failing control connection still leaves logs running", async () => {
   await running;
 });
 
-test("d, h, a and s route to the matching control without detaching", async () => {
+test("d, h, o, a and s route to the matching control without detaching", async () => {
   const f = fixture();
   const running = f.view.run();
   await f.attached.promise;
-  for (const key of ["d", "h", "a"]) f.input.write(key);
+  for (const key of ["d", "h", "o", "a"]) f.input.write(key);
   await flush();
   f.snapshot.app = false;
   f.input.write("s");
   await flush();
-  assert.deepEqual(f.calls.filter(call => LIFECYCLE_CALLS.includes(call)), ["daemon", "host", "app", "start"]);
+  assert.deepEqual(f.calls.filter(call => LIFECYCLE_CALLS.includes(call)), ["daemon", "host", "open", "app", "start"]);
   assert.equal(f.input.isRaw, true);
   f.view.detach();
   await running;
@@ -125,7 +126,7 @@ test("unavailable lifecycle keys warn instead of acting", async () => {
   const f = fixture({ snapshot: { host: false, daemon: false, app: false } });
   const running = f.view.run();
   await f.attached.promise;
-  for (const key of ["d", "h", "a"]) f.input.write(key);
+  for (const key of ["d", "h", "a", "o"]) f.input.write(key);
   await flush();
   assert.ok(!f.calls.some(call => LIFECYCLE_CALLS.includes(call)));
   assert.match(f.notices.join("\n"), /unavailable/u);

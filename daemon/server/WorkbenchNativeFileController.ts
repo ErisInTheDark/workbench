@@ -2,10 +2,10 @@
  * Exports:
  * - default WorkbenchNativeFileController: own validated editor, file-manager, and external-link-root OS operations.
  */
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { spawnDetached } from "workbench-shared/process/spawn-detached";
 import { resolveExternalFileLinkRoot, resolveProjectFilePath } from "./lib/project";
 import type {
   OpenFileInEditorRequest,
@@ -17,14 +17,6 @@ import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogCon
 function isLocalAbsolutePath(filePath: string) {
   const normalized = filePath.replace(/\\/gu, "/");
   return /^[A-Za-z]:\//u.test(normalized) || (normalized.startsWith("/") && !normalized.startsWith("//"));
-}
-
-async function spawnDetached(command: string, args: string[], detached = process.platform !== "win32") {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { detached, shell: false, stdio: "ignore", windowsHide: true });
-    child.once("error", reject);
-    child.once("spawn", () => { child.unref(); resolve(); });
-  });
 }
 
 export default class WorkbenchNativeFileController {

@@ -3,12 +3,13 @@
  * - ProcessViewControlsSnapshot/ProcessViewControls: live host, daemon and app availability plus lifecycle intent.
  * - ProcessViewHostClient/ProcessViewAppClient: minimal seams each owner must satisfy.
  * - WorkbenchProcessViewControlsOptions: data, launch and test seams.
- * - default createWorkbenchProcessViewControls: compose host service, app control and desktop start owners.
+ * - default createWorkbenchProcessViewControls: compose host service, app control, desktop start and browser-open owners.
  */
 import path from "node:path";
 import WorkbenchDesktopLauncher from "../app/server/WorkbenchDesktopLauncher.ts";
 import type { WorkbenchServiceResponse } from "../shared/http/workbench-service.ts";
 import WorkbenchServiceClient from "../shared/process/WorkbenchServiceClient.ts";
+import { openUrl } from "../shared/process/spawn-detached.ts";
 import WorkbenchAppControlClient from "./WorkbenchAppControlClient.ts";
 
 export interface ProcessViewControlsSnapshot {
@@ -41,6 +42,7 @@ export interface ProcessViewAppClient {
   close(): Promise<void>;
   subscribe(listener: () => void): () => void;
   getSnapshot(): { ready: boolean; instanceId: string | null };
+  origin(): Promise<string>;
   quit(): Promise<void>;
 }
 
@@ -52,6 +54,7 @@ export interface ProcessViewControls {
   forceStopHost(): Promise<void>;
   killApp(): Promise<void>;
   startApp(): Promise<void>;
+  openApp(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -62,6 +65,7 @@ export interface WorkbenchProcessViewControlsOptions {
   createHostClient?: (options: { endpointPath: string; warn(message: string): void }) => ProcessViewHostClient;
   createAppClient?: (options: { endpointPath: string; warn(message: string): void }) => ProcessViewAppClient;
   startApp?: () => Promise<void>;
+  openUrl?: (url: string) => Promise<void>;
 }
 
 export default async function createWorkbenchProcessViewControls(
@@ -127,6 +131,10 @@ export default async function createWorkbenchProcessViewControls(
     async startApp() {
       if (app.getSnapshot().ready) throw new Error("The Workbench app is already running.");
       await startApp();
+    },
+    async openApp() {
+      if (!app.getSnapshot().ready) throw new Error("The Workbench app is not running, so that control is unavailable.");
+      await (options.openUrl ?? openUrl)(await app.origin());
     },
     async close() {
       if (closed) return;

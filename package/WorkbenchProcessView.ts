@@ -1,30 +1,34 @@
 /*
  * Exports:
- * - default WorkbenchProcessView: own the detachable terminal log view, pinned keybind legend and lifecycle controls.
+ * - default WorkbenchProcessView: own the detachable terminal log view, pinned log-coloured keybind legend, lifecycle controls and open-in-browser.
  */
 import type { ReadStream } from "node:tty";
 import WorkbenchLogFollower from "../shared/process/WorkbenchLogFollower.ts";
+import { logDomainColors, logTimestampColor } from "../shared/process/WorkbenchProcessLogger.ts";
 import ProcessViewStatusLine from "./ProcessViewStatusLine.ts";
 import type { ProcessViewControls, ProcessViewControlsSnapshot } from "./WorkbenchProcessViewControls.ts";
 
 type ViewInput = Pick<ReadStream, "isTTY" | "isRaw" | "setRawMode" | "on" | "off" | "resume" | "pause">;
 type ViewStatusLine = Pick<ProcessViewStatusLine, "enabled" | "install" | "update" | "notice" | "close">;
 
-const ANSI_DIM = "\u001b[2m";
-const ANSI_DIM_OFF = "\u001b[22m";
+const ANSI_BOLD = "\u001b[1m";
+const ANSI_BOLD_OFF = "\u001b[22m";
+const ANSI_FOREGROUND_OFF = "\u001b[39m";
 
 const UNAVAILABLE: ProcessViewControlsSnapshot = { host: false, daemon: false, app: false };
 
+/** Lit keys are bold with their label in the log domain colour they act on; unavailable keys use the timestamp grey. */
 function renderLegend(snapshot: ProcessViewControlsSnapshot, forceArmed: boolean) {
-  const entry = (key: string, label: string, enabled: boolean) => enabled
-    ? `${key} ${label}`
-    : `${ANSI_DIM}${key} ${label}${ANSI_DIM_OFF}`;
+  const entry = (key: string, label: string, enabled: boolean, color = "") => enabled
+    ? `${ANSI_BOLD}${key}${ANSI_BOLD_OFF} ${color}${label}${ANSI_FOREGROUND_OFF}`
+    : `${logTimestampColor}${key} ${label}${ANSI_FOREGROUND_OFF}`;
   return [
-    "q exit",
-    entry("d", "kill daemon", snapshot.host && snapshot.daemon),
-    forceArmed ? "h FORCE HALT" : entry("h", "kill host", snapshot.host && snapshot.app),
-    entry("a", "kill app", snapshot.app),
-    entry("s", "start app", !snapshot.app),
+    entry("q", "exit", true),
+    entry("d", "kill daemon", snapshot.host && snapshot.daemon, logDomainColors.daemon),
+    entry("h", forceArmed ? "FORCE HALT" : "kill host", forceArmed || (snapshot.host && snapshot.app), logDomainColors.host),
+    entry("a", "kill app", snapshot.app, logDomainColors.app),
+    entry("s", "start app", !snapshot.app, logDomainColors.app),
+    entry("o", "open app", snapshot.app, logDomainColors.app),
   ].join("  ");
 }
 
@@ -124,6 +128,7 @@ export default class WorkbenchProcessView {
       case "h": this.enqueue(() => this.act("host")); break;
       case "a": this.enqueue(() => this.act("app")); break;
       case "s": this.enqueue(() => this.act("start")); break;
+      case "o": this.enqueue(() => this.act("open")); break;
       default: break;
     }
   }
@@ -138,7 +143,7 @@ export default class WorkbenchProcessView {
     });
   }
 
-  private async act(kind: "daemon" | "host" | "app" | "start") {
+  private async act(kind: "daemon" | "host" | "app" | "start" | "open") {
     const controls = this.controls;
     if (!controls) { this.notice("Process controls are unavailable."); return; }
     const snapshot = controls.snapshot();
@@ -157,6 +162,9 @@ export default class WorkbenchProcessView {
       } else if (kind === "app") {
         if (!snapshot.app) { this.notice("Kill app is unavailable: the app is not running."); return; }
         await controls.killApp();
+      } else if (kind === "open") {
+        if (!snapshot.app) { this.notice("Open app is unavailable: the app is not running."); return; }
+        await controls.openApp();
       } else {
         if (snapshot.app) { this.notice("Start app is unavailable: the app is already running."); return; }
         await controls.startApp();

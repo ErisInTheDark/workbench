@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchAppControlSnapshot: live app-control readiness and process identity.
  * - WorkbenchAppControlClientOptions: publication, transport and test seams.
- * - default WorkbenchAppControlClient: follow the private app publication and admit process-bound Quit.
+ * - default WorkbenchAppControlClient: follow the private app publication, report its verified origin and admit process-bound Quit.
  */
 import { watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
@@ -67,6 +67,11 @@ export default class WorkbenchAppControlClient {
       .then(() => this.read())
       .catch(error => { if (!this.closed) this.report(error); });
     return this.queue;
+  }
+
+  /** The live app's verified browser origin. */
+  async origin(): Promise<string> {
+    return (await this.current()).origin;
   }
 
   async quit(): Promise<void> {
