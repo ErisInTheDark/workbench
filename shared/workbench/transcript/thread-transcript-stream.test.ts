@@ -93,4 +93,12 @@ test("a current-turn structural update leaves historical render inputs stable", 
   assert.deepEqual(removed.turns[1]?.items, []);
   assert.equal(removed.display.segments[0], changed.display.segments[0]);
   assert.deepEqual(removed.display.segments[1]?.items, []);
+
+  // A delivered steer replaces its held entry under the same public id: the incoming item survives its own removal.
+  const redelivered = applyTranscriptStructure(changed, {
+    kind: "structure", reset: false, snapshot: changedSnapshot,
+    removedItemIds: [removedId], layout: {}, hasPreviousTurns: false,
+  }, layout);
+  assert.equal(redelivered.turns[1]?.items[0]?.id, removedId);
+  assert.equal(redelivered.display.segments[1]?.items[0]?.id, removedId);
 });

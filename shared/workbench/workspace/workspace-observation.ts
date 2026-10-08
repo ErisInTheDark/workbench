@@ -37,7 +37,7 @@ import {
   WorkbenchProjectThreadSummarySchema, WorkbenchThreadSidebarEntrySchema,
   WorkbenchThreadSidebarSnapshotSchema, WorkbenchThreadObservationSnapshotSchema,
   WorkbenchProjectThreadSummaryCountsSchema, WorkbenchPinnedThreadSummaryEntrySchema,
-  WorkbenchProjectThreadSummaryEntrySchema,
+  WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema,
 } from "../thread/thread-state";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity";
 import { PresentationSnapshotSchema } from "../../state/workbench-presentation-state";
@@ -56,7 +56,6 @@ import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-c
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
-import { ThreadRuntimeRecordSchema, ThreadRuntimeSchema } from "../thread/thread-context-usage";
 import { ProviderKeySchema } from "../provider/provider-key";
 import {
   WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,

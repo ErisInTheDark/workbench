@@ -87,7 +87,6 @@ export interface MountedWorkbenchClient {
   projectNavigator: WorkbenchProjectNavigation;
   routeIntents: WorkbenchRouteIntentController;
   voice: WorkbenchVoiceClient;
-  getThreadController: ThreadClient["getThreadController"];
   getThreadStore: ThreadClient["getThreadStore"];
   threadOwnerFor(threadId: string): {
     daemonId: DaemonId; projectId: ProjectId; hostname: string; rootPath: string; displayPath: string;
@@ -758,9 +757,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     createThreadDraftAt: createDraft,
     getSelectedThreadDraft: () => navigation.readPinnedDraft((projectId, draftId) =>
       sidebar.getDraft(ProjectIdSchema.parse(projectId), DraftIdSchema.parse(draftId))),
-    readThread: (id, ...args) => rendererForThread(id).readThread(id, ...args),
     sendThreadMessage: async (thread, input, options = {}) => {
-      if (!thread.isDraft) return rendererForThread(thread.id).sendThreadMessage(thread, input, options);
+      if (!thread.isDraft) throw new Error("Existing threads send through their thread store.");
       const saved = presentation.draft(thread.id);
       if (!saved) throw new Error("Save this draft before starting it.");
       const route = navigation.getSnapshot().route;
@@ -779,11 +777,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       return null;
     },
-    compactThread: thread => rendererForThread(thread.id).compactThread(thread),
-    stopThread: thread => rendererForThread(thread.id).stopThread(thread),
-    resendSteer: (threadId, itemId) => rendererForThread(threadId).resendSteer(threadId, itemId),
-    dismissSteer: (threadId, itemId) => rendererForThread(threadId).dismissSteer(threadId, itemId),
-    stopShell: (threadId, itemId) => rendererForThread(threadId).stopShell(threadId, itemId),
     threadAction,
     setThreadTitle: async request => {
       const { data: owner } = await daemon.threads.resolveIdentity({ threadId: ThreadReferenceSchema.parse(request.threadId) });
@@ -819,7 +812,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       observeArchived();
       emit();
     },
-    submitPendingUserInputRequest: (id, ...args) => rendererForThread(id).submitPendingUserInputRequest(id, ...args),
     listModels: (...args) => threadClient.listModels(...args),
     watchRateLimits: () => threadClient.watchRateLimits(),
     setEditorFontSize: () => {},
@@ -919,7 +911,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   presentation.start();
   void network.start().catch(error => warn("Network settings could not start.", error));
   void runtime.open().catch(error => warn("Runtime observation could not start.", error));
-  threadClient.activateThreadControllers();
   emit();
 
   return {
@@ -934,12 +925,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     threadRuntime, threadSidebar: sidebar,
     get threadTextPresentation() { return threadClient.textPresentation; },
     threadTextPresentationFor: id => rendererForThread(id).textPresentation,
-    getThreadController: (projectId, target) => {
-      const id = target.kind === "draft" ? target.draftId
-        : target.kind === "subagent" ? target.parentThreadId : target.threadId;
-      const location = locationForThread(id) ?? localDraftLocations.get(id);
-      return rendererForThread(id).getThreadController(location?.projectId ?? projectId, target);
-    },
     getThreadStore: (projectId, target) => {
       const id = target.kind === "draft" ? target.draftId
         : target.kind === "subagent" ? target.parentThreadId : target.threadId;

@@ -50,12 +50,15 @@ function fixture() {
     connect: async () => {},
     createTranscript: (state: typeof onState) => {
       onState = state;
+      // Like the real controller, availability publishes during construction.
+      state({ status: "idle" });
       return { controller: { select: (selection: (typeof selections)[number]) => { selections.push(selection); }, dispose: async () => {} }, stopAvailability: () => {} };
     },
     presentText: () => {},
     messageContext: () => ({}),
     normalizeInput: (input: unknown[]) => input,
     readRateLimits: () => null,
+    watchRateLimits: () => {},
     subscribeRateLimits: () => () => {},
     updateThreadStateWithAcceptance: async () => true,
     reportError: () => {},

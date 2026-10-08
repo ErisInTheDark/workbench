@@ -236,7 +236,6 @@ function createClient(
       workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
-      getThreadController: () => { throw new Error("Unexpected thread view during command rendering."); },
       getThreadStore: () => { throw new Error("Unexpected thread view during command rendering."); },
       threadOwnerFor: () => ({
         ...ownerLocation, hostname: "local", rootPath: "/project", displayPath: "project",

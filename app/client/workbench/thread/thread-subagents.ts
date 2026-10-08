@@ -7,7 +7,6 @@
  * - sortWorkbenchSubagents: order children by lifecycle, Lock, and activity.
  * - SubagentTabOrder/reconcileSubagentTabOrder: stable tab order that only promotes new or unsettled children.
  * - getSubagentTabLayout: partition visible and collapsed child tabs.
- * - getNextSubagentHydrationBatch: select bounded child-body hydration work.
  * - getSubagentThreadIds: derive direct-child thread IDs.
  * - mergeWorkbenchSubagentSummaries: merge pushed child metadata.
  * - reconcileWorkbenchSubagentPage: reconcile paged children with retained summaries.
@@ -43,7 +42,6 @@ export interface WorkbenchSubagentCommandDisplayTarget {
 
 type ThreadAgentIdentity = Pick<ThreadPayload, "agentNickname" | "agentRole">;
 const SUBAGENT_HUE_ROTATION_DEGREES = 1080 / 23;
-const SUBAGENT_BACKGROUND_BATCH_SIZE = 4;
 
 function normalizeLabel(value: string | null | undefined) {
   return value?.trim() || null;
@@ -118,20 +116,6 @@ export function getSubagentTabLayout(
     (isSettled && !revealedThreadIds.has(subagent.threadId) ? collapsed : visible).push(subagent);
   }
   return { collapsed, visible };
-}
-
-export function getNextSubagentHydrationBatch({
-  loadedThreadIds,
-  loadingThreadIds,
-  threadIds,
-}: {
-  loadedThreadIds: ReadonlySet<string>;
-  loadingThreadIds: ReadonlySet<string>;
-  threadIds: readonly string[];
-}) {
-  return threadIds
-    .filter((threadId) => !loadedThreadIds.has(threadId) && !loadingThreadIds.has(threadId))
-    .slice(0, SUBAGENT_BACKGROUND_BATCH_SIZE);
 }
 
 export function getSubagentThreadIds(subagents: readonly WorkbenchSubagentSummary[]) {

@@ -5,9 +5,7 @@
 import assert from "node:assert/strict";
 import ThreadObservationController, { getThreadObservationKey } from "../../workbench/thread/ThreadObservationController";
 import WorkbenchThreadRuntimeStore from "../../workbench/WorkbenchThreadRuntimeStore";
-import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
-import ThreadStore from "../../workbench/thread/ThreadStore";
-import createLegacyThreadSource from "../../workbench/thread/LegacyThreadSource";
+import ThreadStore, { EMPTY_THREAD_STORE_STATE, type ThreadStoreActions } from "../../workbench/thread/ThreadStore";
 import { test } from "node:test";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -70,7 +68,6 @@ async function renderDetails(
     sidebarStore?: WorkbenchThreadSidebarStore | null;
     disconnected?: boolean;
     observationPending?: boolean;
-    awaitingDocument?: boolean;
     ownerLocation?: ProjectLocationReference;
   } = {},
 ) {
@@ -105,23 +102,25 @@ async function renderDetails(
     pendingUserInputRequestsByThreadId: request ? { thread: request } : {},
     rateLimits: null, subagents: [], threadDocuments: { documentsByKey: {}, keysByThreadId: {}, selectedThreadKey: "" }, threads: [], threadsError: "",
   });
-  const thread = new WorkbenchThreadController("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, {
-    observations: owner,
-    getChild: () => { throw new Error("Unexpected child."); },
-    releaseHistoricalTurns: () => null,
-    controls: {} as NonNullable<WorkbenchClientController["controls"]>,
-    readNative: () => ({ document: null, pendingQuestionnaire: request, approvalEntries: [], rateLimits: null }),
-    subscribeNative: client.mounted!.threadRuntime.subscribe,
-    read: async () => { throw new Error("Tooltip rendering must not load the transcript."); },
-    createTranscript: () => { throw new Error("Tooltip rendering must not subscribe to SQLite."); },
-    reportError: message => { throw new Error(message); },
+  // The tooltip reads the thread store's summary and questionnaire; mirror the fixture observation into them.
+  const store = new ThreadStore("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, publish => {
+    const sync = () => {
+      const observed = owner.getSnapshot(key);
+      const entry = observed.observation?.entries.find(candidate => candidate.entryKind !== "draft" && candidate.identity.threadId === "thread");
+      publish({
+        summary: {
+          ...EMPTY_THREAD_STORE_STATE.summary,
+          status: observed.status === "failed" ? "failed" : entry ? "ready" : "loading", error: observed.error,
+          entry: entry && entry.entryKind !== "draft" ? entry : null,
+        },
+        questionnaire: { pending: request },
+      });
+    };
+    const stop = owner.subscribe(sync);
+    sync();
+    return { feed: "observed", actions: {} as ThreadStoreActions, acquire: () => () => {}, recover: async () => {}, dispose: stop };
   });
-  const releaseThread = thread.acquire("summary");
-  const releaseRoute = options.awaitingDocument ? thread.acquire("route") : null;
-  if (options.awaitingDocument || options.observationPending) assert.equal(thread.getSnapshot().status, "loading");
-  client.mounted!.getThreadController = () => thread;
-  const store = new ThreadStore("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
-    publish => createLegacyThreadSource(thread, publish, () => undefined));
+  if (options.observationPending) assert.equal(store.getSlice("summary").status, "loading");
   client.mounted!.getThreadStore = () => store;
   const html = renderWithClient(
     createElement(WorkbenchThreadTooltipDetails, {
@@ -138,11 +137,8 @@ async function renderDetails(
   );
   admit();
   await loaded;
-  releaseRoute?.();
   consumer.release();
-  releaseThread();
   store.dispose();
-  thread.dispose();
   owner.dispose();
   return html;
 }
@@ -159,7 +155,6 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
-      getThreadController: () => { throw new Error("Unexpected thread view during static rendering."); },
       getThreadStore: () => { throw new Error("Unexpected thread view during static rendering."); },
       threadOwnerFor: () => ({
         ...source, hostname: "local", rootPath: "/project", displayPath: "project",
@@ -309,7 +304,7 @@ test("known questionnaire gets its own busy section before the request is admitt
 });
 
 test("transcript readiness does not hide admitted questionnaire and proposal details", async () => {
-  const html = await renderDetails(true, "C:/workspace", true, { awaitingDocument: true });
+  const html = await renderDetails(true, "C:/workspace", true);
   assert.match(html, /data-thread-tooltip-questionnaire="preview"/u);
   assert.match(html, /data-thread-tooltip-proposal="preview"/u);
 });

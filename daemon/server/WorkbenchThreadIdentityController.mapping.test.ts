@@ -683,15 +683,10 @@ test("socket reload preserves canonical publications without resolving their ide
     const item: ThreadItem = { type: "reasoning", id: "native-reasoning", summary: ["title"], content: [] };
     const [admitted] = await admitProviderThreadItems(owners, native, [item]);
     controller = create(controller.detachForReload());
-    // Thread-scoped provider events only reach connections observing that thread.
-    controller["transcriptSubscriptions"].set("view", {
-      client, connectionId: "connection", subscriptionId: "view", threadId: parent.threadId, turnLimit: 1,
-    });
+    // The canonical publication carries Workbench identities; thread content reaches browsers through the transcript stream.
     const publication = new CodexProviderObservations(owners).native({ method: "item/reasoning/textDelta",
       params: { threadId: native.nativeThreadId, turnId: native.nativeTurnId, itemId: item.id, delta: "native-parent is text" } });
-    await controller.sendJsonToClient(client, { ...publication.notification, workbenchHarness: "codex" });
-    const event = emitted.find((message) => message.method === "item/reasoning/textDelta");
-    assert.deepEqual(event?.params, { threadId: parent.threadId, turnId: turn.turnId, itemId: admitted!.id, delta: "native-parent is text" });
+    assert.deepEqual(publication.notification.params, { threadId: parent.threadId, turnId: turn.turnId, itemId: admitted!.id, delta: "native-parent is text" });
     const lookup = t.mock.method(owners.threads, "resolve", async () => {
       throw new Error("Canonical thread-state delivery must not resolve provider identities");
     });

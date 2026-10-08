@@ -7,7 +7,7 @@ import {
   DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema, daemonObservationShape,
   type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
-import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-context-usage";
+import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";

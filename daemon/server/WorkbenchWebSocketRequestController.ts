@@ -73,6 +73,8 @@ import WebSocketTrafficBuffer, {
 import { randomUUID } from "node:crypto";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
+/** Thread-scoped provider events browsers still consume; everything else about a thread rides its observation or transcript. */
+const THREAD_EVENTS_FOR_BROWSERS = new Set(["thread/goal/updated", "thread/goal/cleared", "thread/skills/updated"]);
 /** A keyed delta for one busy thread is hundreds of bytes; pushes past this name themselves in the log. */
 const WORKSPACE_PUSH_WARNING_BYTES = 32 * 1024;
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -347,8 +349,9 @@ export default class WorkbenchWebSocketRequestController {
   }
 
   /**
-   * Provider events about one thread only go to connections observing it (a workspace thread observation or a
-   * transcript subscription); thread-less events (account, models) go everywhere.
+   * Thread-less provider events (account, models) go everywhere. Thread content, usage, status and questions reach
+   * browsers through the thread observation and transcript stream, so of a thread's own events only goal and skill
+   * changes are forwarded, and only to connections observing that thread.
    */
   private wantsProviderEvent(client: BridgeClient, envelope: Record<string, unknown> | null) {
     if (!envelope || !ProviderKeySchema.safeParse(envelope[WORKBENCH_HARNESS_FIELD]).success) return true;
@@ -357,6 +360,7 @@ export default class WorkbenchWebSocketRequestController {
     const threadId = typeof params?.threadId === "string" ? params.threadId
       : typeof thread?.id === "string" ? thread.id : null;
     if (!threadId) return true;
+    if (typeof envelope.method !== "string" || !THREAD_EVENTS_FOR_BROWSERS.has(envelope.method)) return false;
     for (const subscription of this.transcriptSubscriptions.values()) {
       if (subscription.client === client && subscription.threadId === threadId) return true;
     }

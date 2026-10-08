@@ -155,6 +155,10 @@ export default class ThreadObservationController {
     if (observation.state.observation?.subscriptionId === next.subscriptionId
       && next.revision <= observation.state.observation.revision) return;
     if (next.target.kind === "provider" && next.entries.length) observation.target = next.target;
+    // The observation owns its failure: report each new one once, whoever is (still) looking.
+    if (next.error && next.error !== observation.state.error) {
+      console.warn(`Thread observation failed: ${next.error.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500)}`);
+    }
     observation.state = {
       status: next.freshness === "loading" ? "loading" : next.error ? "failed" : next.entries.length ? "ready" : "absent",
       observation: next,

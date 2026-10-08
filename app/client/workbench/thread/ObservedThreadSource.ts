@@ -8,8 +8,7 @@ import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/Workbe
 import { createWorkbenchTextInput, type WorkbenchMessageContext, type WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
-import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-context-usage";
-import type { WorkbenchThreadRouteTarget, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadRuntime, WorkbenchThreadRouteTarget, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -44,6 +43,8 @@ export interface ObservedThreadSourcePorts {
   messageContext: (options: { workflowIds: readonly string[]; instructionInjections?: Record<string, string>; activatedSkillPaths?: readonly string[] }) => WorkbenchMessageContext;
   normalizeInput: (input: UserInput[]) => UserInput[];
   readRateLimits: (harness: WorkbenchHarness) => WorkbenchRateLimitSnapshot | null;
+  /** Demand the provider's account limits while a view shows them (idempotent). */
+  watchRateLimits: (harness: WorkbenchHarness) => void;
   subscribeRateLimits: (listener: () => void) => () => void;
   readGitArcProposal?: (input: { cwd: string; harness: WorkbenchHarness; proposalId: string; rootId?: string; threadId: string }) => Promise<GitCheckpointProposal>;
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
@@ -84,6 +85,16 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
   };
 }
 
+/** The thread's open question: a durable questionnaire on the entry, else a live approval prompt from the runtime. */
+function pendingOf(entry: ThreadEntry | null, runtime: ThreadRuntime | undefined): WorkbenchPendingUserInputRequest | null {
+  if (!entry) return null;
+  const pending = entry.pendingQuestionnaire ?? runtime?.pendingApproval ?? null;
+  return pending ? {
+    harness: entry.identity.harness, threadId: entry.identity.threadId,
+    itemId: pending.itemId, request: pending.request, requestKey: pending.requestKey, turnId: pending.turnId,
+  } : null;
+}
+
 function sanitize(message: string) {
   return message.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
 }
@@ -100,6 +111,8 @@ export default function createObservedThreadSource(
   let observation: ReturnType<ThreadObservationController["acquire"]> | null = null;
   let stopRateLimits: (() => void) | null = null;
   let transcript: ReturnType<ObservedThreadSourcePorts["createTranscript"]> | null = null;
+  /** The projection controller reports availability while it is constructed, before `transcript` is assigned. */
+  let creatingTranscript = false;
   let transcriptState: ThreadTranscriptProjectionState = { status: "idle" };
   let turnLimit = TURN_WINDOW_STEP;
   let olderLoad: { previous: ReadonlySet<string>; resolve: (turnIds: readonly string[] | null) => void } | null = null;
@@ -170,9 +183,12 @@ export default function createObservedThreadSource(
     const { state, entry } = readEntry();
     const failure = state.status === "failed" || (!entry && (state.status === "absent" || state.status === "ready"))
       ? state.error || "This thread is no longer available." : null;
-    if (entry && views && !transcript) {
-      // Selecting can publish synchronously (and re-enter sync); everything below reads the result.
-      transcript = ports.createTranscript(acceptTranscript, presentText);
+    if (entry && views) ports.watchRateLimits(entry.identity.harness);
+    if (entry && views && !transcript && !creatingTranscript) {
+      // Creation and selection publish synchronously (re-entering sync); everything below reads the result.
+      creatingTranscript = true;
+      try { transcript = ports.createTranscript(acceptTranscript, presentText); }
+      finally { creatingTranscript = false; }
       select(entry);
     }
     const runtime = state.observation?.runtime ?? {};
@@ -182,15 +198,12 @@ export default function createObservedThreadSource(
     const subagents: WorkbenchSubagentSummary[] = ports.observations.getSubagents(observationKey);
     const relatedHeads = Object.fromEntries((state.observation?.entries ?? []).flatMap(candidate =>
       candidate.entryKind === "subagent" ? [[candidate.identity.threadId, headOf(candidate, runtime[candidate.identity.threadId], candidate.cwd)]] : []));
-    const durable = entry?.pendingQuestionnaire ?? null;
-    const pendingQuestionnaire: WorkbenchPendingUserInputRequest | null = entry && durable
-      ? { harness: entry.identity.harness, threadId, itemId: durable.itemId, request: durable.request, requestKey: durable.requestKey, turnId: durable.turnId }
-      : null;
+    const pendingQuestionnaire = pendingOf(entry, runtime[threadId]);
     publish({
       summary: {
         status: failure ? "failed" : entry ? "ready" : "loading", error: failure, head, entry,
         subagents, rateLimits: entry ? ports.readRateLimits(entry.identity.harness) : null,
-        gitArcProposals: gitArc.proposals, relatedHeads, legacyDocument: null,
+        gitArcProposals: gitArc.proposals, relatedHeads, draftDocument: null,
       },
       turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns)),
       questionnaire: { pending: pendingQuestionnaire },
@@ -211,6 +224,10 @@ export default function createObservedThreadSource(
     const { entry } = readEntry();
     if (!entry) throw new Error("This thread is not admitted yet.");
     return entry;
+  };
+  const readPending = () => {
+    const { state, entry } = readEntry();
+    return pendingOf(entry, state.observation?.runtime?.[threadId]);
   };
 
   return {
@@ -263,7 +280,7 @@ export default function createObservedThreadSource(
         const entry = requireEntry();
         const activeTurn = projection()?.turns.at(-1);
         const turnId = activeTurn?.status === "inProgress" ? activeTurn.id : null;
-        const requestKey = entry.pendingQuestionnaire?.requestKey ?? null;
+        const requestKey = readPending()?.requestKey ?? null;
         if (!turnId && !requestKey) return;
         await ports.daemon.threads.stop({
           threadId: entry.identity.threadId, intent: "stop",
@@ -278,8 +295,7 @@ export default function createObservedThreadSource(
         catch (error) { throw new Error(`The command could not be stopped: ${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
       },
       async submitQuestionnaire(response, options = {}) {
-        const entry = requireEntry();
-        const durable = entry.pendingQuestionnaire;
+        const durable = readPending();
         if (!durable) throw new Error("There is no pending question for this thread.");
         if (isWorkbenchApprovalRequest(durable.request) && !hasWorkbenchApprovalDecisionSelection(durable.request, response)) {
           throw new Error("Choose one of the approval options before submitting.");
@@ -355,7 +371,7 @@ export default function createObservedThreadSource(
           observation?.release();
           observation = null;
           publish({ summary: { status: "loading", error: null, head: null, entry: null, subagents: [], rateLimits: null,
-            gitArcProposals: {}, relatedHeads: {}, legacyDocument: null } });
+            gitArcProposals: {}, relatedHeads: {}, draftDocument: null } });
         } else sync();
       };
     },

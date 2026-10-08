@@ -25,7 +25,6 @@ import {
 } from "../../../workbench/project/project-file-path";
 import type { ProjectTreeFileCandidate } from "workbench-shared/workbench/project/ProjectTreeFileIndex";
 import CooperativeRebuildQueue from "../../../workbench/state/CooperativeRebuildQueue";
-import type { ThreadChildFamily } from "../../../workbench/WorkbenchThreadController";
 import {
   buildInlineMentionCandidates,
   buildInlineMentionCandidatesCooperatively,
@@ -82,7 +81,6 @@ import {
   ThreadScrollViewportContext,
   useThreadScrollViewportContext,
 } from "./thread-scroll-viewport-context";
-import { isThreadScrollAtEnd } from "./thread-scroll-snap";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
@@ -624,45 +622,6 @@ export default memo(function ThreadViewContent ({
     };
   }, [daemon, projectId, activeProvider]);
 
-  // Legacy feed only: one child family per document owner; id changes update it in place so still-visible
-  // children keep their in-flight reads. Observed feeds read child heads from the family observation.
-  const rootLegacyOwner = rootThread.store?.legacyOwner ?? null;
-  const subagentFamilyRef = useRef<ThreadChildFamily | null>(null);
-  useEffect(() => {
-    const family = rootLegacyOwner?.acquireChildren([]) ?? null;
-    subagentFamilyRef.current = family;
-    return () => {
-      family?.release();
-      if (subagentFamilyRef.current === family) subagentFamilyRef.current = null;
-    };
-  }, [rootLegacyOwner]);
-  useEffect(() => { subagentFamilyRef.current?.update(visibleSubagentThreadIds); },
-    [rootLegacyOwner, visibleSubagentThreadIds]);
-
-  // Legacy feed only: the document owner retains history while the view sits at its end.
-  const activeLegacyOwner = active.store?.legacyOwner ?? null;
-  useEffect(() => {
-    const owner = activeLegacyOwner;
-    const viewport = scrollViewportRef.current;
-    if (!owner || !viewport) return;
-    const surface = owner.acquireHistorySurface();
-    const report = () => surface.setAtEnd(isThreadScrollAtEnd({
-      clientHeight: viewport.clientHeight,
-      scrollHeight: viewport.scrollHeight,
-      scrollTop: viewport.scrollTop,
-    }));
-    const resizeObserver = new ResizeObserver(report);
-    resizeObserver.observe(viewport);
-    if (threadViewRef.current) resizeObserver.observe(threadViewRef.current);
-    viewport.addEventListener("scroll", report, { passive: true });
-    report();
-    return () => {
-      viewport.removeEventListener("scroll", report);
-      resizeObserver.disconnect();
-      surface.release();
-    };
-  }, [activeLegacyOwner, scrollViewportRef]);
-
   // Reconcile after every parent commit, including SQL's later prepend and skeleton removal.
   useLayoutEffect(() => {
     historyPagingBindingsRef.current = {
@@ -827,19 +786,20 @@ export default memo(function ThreadViewContent ({
       throw new ThreadMessageNotSentError();
     }
     // Pass 1: legacy feeds (and drafts) still send through the document flow.
-    const legacyDocument = active.legacyDocument;
-    if (legacyDocument) {
-      await onSendMessage(composerProfileController.resolveThread(activeProfileSlot, legacyDocument), input, {
+    // A draft launches its thread through the app's saved-draft flow.
+    const draftDocument = active.draftDocument;
+    if (draftDocument) {
+      await onSendMessage(composerProfileController.resolveThread(activeProfileSlot, draftDocument), input, {
         ...options,
         composerProfileSlot: activeProfileSlot,
-        selectThread: legacyDocument.id === thread.id,
+        selectThread: draftDocument.id === thread.id,
       });
       return;
     }
     // The daemon starts turns with the persisted profile selection, so a pending selection lands first.
     if (!isThreadStatusActive(resolvedActiveThread.status)) await composerProfileController.waitForSelection(activeProfileSlot);
     await active.actions.send(input, options);
-  }, [active.actions, active.legacyDocument, activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
+  }, [active.actions, active.draftDocument, activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
 
   const handleStopThread = useCallback(async () => {
     await active.actions.stop();
@@ -1240,7 +1200,8 @@ export default memo(function ThreadViewContent ({
             threadId={activeThread.id}
           />
         ) : null}
-        {hoistedGitArc && activeThread && activeGitArcSelection ? (
+        {/* Observed heads learn the working directory with the transcript; the card's Git requests need it. */}
+        {hoistedGitArc && activeThread?.cwd && activeGitArcSelection ? (
           <ThreadGitArcLifecycleCard
             claim={hoistedGitArc}
             commitActions={checkpointCommitActions}

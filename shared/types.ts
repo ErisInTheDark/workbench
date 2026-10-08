@@ -1233,26 +1233,18 @@ export interface WorkbenchControls {
   createThreadDraftAt: (location: ProjectLocationReference, harness: WorkbenchHarness,
     options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
-  readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
   /** Show the selected (or default) provider's daemon-pushed limits; the daemon decides when they are reread. */
   watchRateLimits: () => void;
   refreshProjectCatalog: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;
+  /** Launch a draft's thread with its first message; existing threads send through their thread store. */
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],
     options?: WorkbenchSendThreadMessageOptions,
   ) => Promise<ThreadPayload | null>;
-  compactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  stopThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
-  /** Submit an undelivered steer's input again; the undelivered copy is retired. */
-  resendSteer: (threadId: string, itemId: string) => Promise<void>;
-  /** The user's final word on an undelivered steer: it is hidden for good. */
-  dismissSteer: (threadId: string, itemId: string) => Promise<void>;
-  /** Kill one running wb shell call; the agent receives the user's stop as the command's result. */
-  stopShell: (threadId: string, itemId: string) => Promise<void>;
   threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
   threadGoals: WorkbenchThreadGoalControls;
@@ -1262,11 +1254,6 @@ export interface WorkbenchControls {
    * of the selected projects (merged into `logicalThreads`); null releases them.
    */
   setArchivedThreadLimit: (limit: number | null) => void;
-  submitPendingUserInputRequest: (
-    threadId: string,
-    response: WorkbenchUserInputResponse,
-    options?: WorkbenchSubmitUserInputRequestOptions,
-  ) => Promise<void>;
   setEditorFontSize: (fontSize: number) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;

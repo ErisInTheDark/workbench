@@ -38,7 +38,7 @@ import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCo
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
 import WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
-import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-context-usage";
+import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -146,6 +146,11 @@ function createWorkbenchCoreFeature(
   const admission = new WorkbenchThreadAdmissionController();
   /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
   const runtimeListeners = new Set<(threadId: string, change: Partial<ThreadRuntime> | null) => void>();
+  /** The thread's shown approval prompt; approvals are live provider facts, never durable thread state. */
+  const readPendingApproval = (threadId: string): ThreadRuntime["pendingApproval"] => {
+    const request = approvals.list().find(candidate => candidate.threadId === threadId);
+    return request ? { itemId: request.itemId, request: request.request, requestKey: request.requestKey, turnId: request.turnId } : null;
+  };
   const compaction = new WorkbenchThreadCompactionController(admission, {
     record: transcript.record.bind(transcript),
     setCompacting: (threadId, compacting) => threadState?.controller.setThreadCompactionState(threadId, compacting),
@@ -173,11 +178,6 @@ function createWorkbenchCoreFeature(
     },
     publish: (target, willAutoCompact) => {
       for (const listener of runtimeListeners) listener(target.threadId, { willAutoCompact });
-      // Pass 1 keeps the document UI live; pass 2 removes this broadcast with the document pipeline.
-      context.broadcastProviderNotification(target.harness, {
-        method: "thread/autoCompact/updated",
-        params: { threadId: target.threadId, willAutoCompact },
-      });
     },
     now: Date.now,
     warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
@@ -493,6 +493,10 @@ function createWorkbenchCoreFeature(
     observeLifecycle: async (harness, threadId, event) => {
       await threadState.controller.observeLifecycle(harness, threadId, event);
     },
+    pendingChanged: threadId => {
+      const pendingApproval = readPendingApproval(threadId);
+      for (const listener of runtimeListeners) listener(threadId, { pendingApproval });
+    },
     recordOutcome: async entry => {
       await database.recordApprovalOutcome(entry);
       transcript.acceptApprovalOutcome(entry);
@@ -673,6 +677,7 @@ function createWorkbenchCoreFeature(
     read: async (threadId, harness) => ({
       tokenUsage: await readTokenUsage(threadId),
       willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
+      pendingApproval: readPendingApproval(threadId),
     }),
     readTokenUsage,
     subscribe: listener => {

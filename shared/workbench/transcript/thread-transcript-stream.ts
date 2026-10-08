@@ -148,11 +148,14 @@ export function applyTranscriptStructure(
   const turns = new Map((retained?.turns ?? []).map(turn => [turn.id, turn]));
   const history = new Map((retained?.turnHistory ?? []).map(turn => [turn.turnId, turn]));
   const browse = new Map((retained?.browseResultEntries ?? []).map(entry => [entry.entryKey, entry]));
-  for (const projection of [retained, incoming]) {
-    for (const turn of projection?.turns ?? []) {
-      for (const item of turn.items) if (!removed.has(item.id)) items.set(item.id, item);
-      for (const entry of turn.itemTimeline) if (!removed.has(entry.itemId)) timelines.set(entry.itemId, entry);
-    }
+  // Removal drops retained items only: an incoming item may reuse a removed id (a delivered steer replaces its held entry).
+  for (const turn of retained?.turns ?? []) {
+    for (const item of turn.items) if (!removed.has(item.id)) items.set(item.id, item);
+    for (const entry of turn.itemTimeline) if (!removed.has(entry.itemId)) timelines.set(entry.itemId, entry);
+  }
+  for (const turn of incoming.turns) {
+    for (const item of turn.items) items.set(item.id, item);
+    for (const entry of turn.itemTimeline) timelines.set(entry.itemId, entry);
   }
   for (const turn of incoming.turns) turns.set(turn.id, turn);
   for (const turn of incoming.turnHistory) history.set(turn.turnId, turn);

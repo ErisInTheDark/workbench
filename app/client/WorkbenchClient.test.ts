@@ -496,7 +496,6 @@ test("a thread owner uses its projected folder label", async context => {
       socket.reply(request, { data: [] });
     }
   }
-  assert.ok(warnings.some(message => message.includes("source read unavailable")));
 });
 
 test("a resolved existing thread starts its observation while catalogue metadata remains pending", async context => {
@@ -533,7 +532,6 @@ test("a resolved existing thread starts its observation while catalogue metadata
       socket.reply(request, { data: [] });
     }
   }
-  assert.ok(warnings.some(message => message.includes("source read unavailable")));
 });
 
 test("a thread viewed from another project keeps demand for its owning project rows", async context => {
@@ -583,7 +581,6 @@ test("a thread viewed from another project keeps demand for its owning project r
       socket.reply(request, { data: [] });
     }
   }
-  assert.ok(warnings.some(message => message.includes("source read unavailable")));
 });
 
 test("source-scoped renderers never reuse another daemon's provider model cache", async context => {

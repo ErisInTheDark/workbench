@@ -39,6 +39,8 @@ export interface WorkbenchApprovalControllerOptions {
   deliver(harness: WorkbenchHarness, input: { threadId: WorkbenchThreadId; requestKey: string; decision: WorkbenchApprovalDecision }): Promise<boolean>;
   logError(message: string): void;
   observeLifecycle(harness: WorkbenchHarness, threadId: WorkbenchThreadId, event: LifecycleEvent): Promise<void>;
+  /** The thread's shown approval changed (shown or resolved); observers reread `list()`. */
+  pendingChanged(threadId: WorkbenchThreadId): void;
   recordOutcome(entry: WorkbenchApprovalOutcomeEntry): Promise<void>;
   resolveProject(threadId: WorkbenchThreadId): Promise<ProjectId | null>;
   /** The thread's applied approval mode; only daemon-project threads ever carry a non-default mode. */
@@ -204,6 +206,7 @@ export default class WorkbenchApprovalController {
       method: "questionnaire/requested",
       params: { threadId: entry.threadId, turnId: entry.turnId, itemId: entry.itemId, requestKey: entry.requestKey, request: entry.request },
     });
+    this.options.pendingChanged(entry.threadId);
     await this.observe(entry, { kind: "pendingInput", questionnaire: null, requestKey: entry.requestKey, turnId: entry.turnId });
     return isCurrent() ? { kind: "shown" } : { kind: "closed" };
   }
@@ -293,7 +296,9 @@ export default class WorkbenchApprovalController {
       // Thread state is retiring with this owner; provider transports re-open what they still hold.
       this.options.broadcast(entry.harness, { method: "questionnaire/resolved", params: { threadId: entry.threadId, requestKey: entry.requestKey } });
     }
+    const threadIds = new Set([...this.pending.values()].map(entry => entry.threadId));
     this.pending.clear();
+    for (const threadId of threadIds) this.options.pendingChanged(threadId);
   }
 
   /**
@@ -362,6 +367,7 @@ export default class WorkbenchApprovalController {
     this.options.broadcast(entry.harness, {
       method: "questionnaire/resolved", params: { threadId: entry.threadId, requestKey: entry.requestKey },
     });
+    this.options.pendingChanged(entry.threadId);
     void this.observe(entry, { kind: "inputResolved", requestKey: entry.requestKey, ...(answered ? { answered: true as const } : {}) });
   }
 

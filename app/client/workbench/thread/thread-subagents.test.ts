@@ -6,7 +6,6 @@ import { test } from "node:test";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import {
-  getNextSubagentHydrationBatch,
   getSubagentSummary,
   getSubagentHarness,
   getSubagentThreadIds,
@@ -229,13 +228,4 @@ test("tab order stays put through activity and only promotes new or unsettled ch
     getSubagentTabLayout([child("old", 1), child("mid", 2, true), child("new", 3)], { order: ["old", "mid", "new"] }).visible.map(({ threadId }) => threadId),
     ["old", "new"],
   );
-});
-
-test("caps body hydration to four threads", () => {
-  const ids = ["one", "two", "three", "four", "five", "six"];
-  assert.deepEqual(getNextSubagentHydrationBatch({
-    loadedThreadIds: new Set(["one"]),
-    loadingThreadIds: new Set(["two"]),
-    threadIds: ids,
-  }), ["three", "four", "five", "six"]);
 });

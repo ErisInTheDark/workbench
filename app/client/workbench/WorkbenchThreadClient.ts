@@ -13,7 +13,9 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
-import WorkbenchThreadController, { type ThreadControllerTarget } from "./WorkbenchThreadController";
+import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
+
+type ThreadControllerTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" }>;
 import type { WorkbenchClientNotification } from "workbench-shared/workbench/WorkbenchSocketClient";
 import { WORKBENCH_RELOAD_DIRT_UPDATED_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -84,8 +86,8 @@ import {
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
-import ThreadStore, { readThreadFeed } from "./thread/ThreadStore";
-import createLegacyThreadSource from "./thread/LegacyThreadSource";
+import ThreadStore from "./thread/ThreadStore";
+import createDraftThreadSource from "./thread/DraftThreadSource";
 import createObservedThreadSource from "./thread/ObservedThreadSource";
 import WorkbenchAccountClient from "./WorkbenchAccountClient";
 import ThreadHistoryReads from "./ThreadHistoryReads";
@@ -150,10 +152,8 @@ export interface WorkbenchThreadClientOptions {
 interface WorkbenchThreadClient {
   connect: () => Promise<void>;
   threadObservations: ThreadObservationController;
-  getThreadController: (projectId: string, target: ThreadControllerTarget) => WorkbenchThreadController;
   getThreadStore: (projectId: string, target: ThreadControllerTarget) => ThreadStore;
-  recoverThreadControllers: () => Promise<void>;
-  activateThreadControllers: () => void;
+  recoverThreadStores: () => Promise<void>;
   applyAcceptedThreadTitle: (threadId: WorkbenchThreadId, harness: WorkbenchHarness, title: string) => boolean;
   clearThreadSelection: () => void;
   createThread: (harness: WorkbenchHarness, threadId?: DraftId, options?: { project?: WorkbenchThreadProject; select?: boolean }) => ThreadPayload<DraftId>;
@@ -169,7 +169,9 @@ interface WorkbenchThreadClient {
   }) => void;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   subscribeModelUpdates: (listener: (harness: WorkbenchHarness) => void) => () => void;
-  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchThreadProject; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<ThreadPayloadFetchOutcome>;
+  openThread: (threadId: string, options?: { harness?: WorkbenchHarness; project?: WorkbenchThreadProject; source?: "open" | "reload"; isCurrent?: () => boolean }) => Promise<
+    Exclude<ThreadPayloadFetchOutcome, { kind: "success" }> | { kind: "opened" }
+  >;
   onReconnect: (listener: () => void) => () => void;
   onConnectionOpen: (listener: () => void) => () => void;
   onDisconnect: (listener: () => void) => () => void;
@@ -661,7 +663,6 @@ function WorkbenchThreadClient(
     areDocumentsEquivalent: areThreadPayloadsEquivalent,
   });
   const documentControllers = new Map<string, ThreadDocumentController>();
-  const threadControllers = new Map<string, WorkbenchThreadController>();
   const textPresentation = new ThreadTextPresentationController();
   function getDocumentController(key: string) {
     let controller = documentControllers.get(key);
@@ -706,121 +707,48 @@ function WorkbenchThreadClient(
     },
     update: (key, updater) => findDocumentController(key)?.updateSource(updater) ?? false,
   };
-  function getThreadController(projectId: string, target: ThreadControllerTarget) {
-    const threadId = target.kind === "draft" ? target.draftId : target.threadId;
-    const key = `${projectId}\0${threadId}`;
-    let controller = threadControllers.get(key);
-    if (!controller) {
-      const harness = target.kind === "draft"
-        ? defaultProviderKey
-        : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
-      controller = new WorkbenchThreadController(projectId, target, {
-        controls: {
-          compactThread, stopThread, resendSteer, dismissSteer, stopShell, setCurrentThreadAgent, setCurrentThreadModel,
-          setCurrentThreadReasoningEffort, setCurrentThreadServiceTier, setCurrentThreadComposerSettings,
-          submitPendingUserInputRequest,
-          updateThreadStateWithAcceptance: request => {
-            if (!options.updateThreadStateWithAcceptance) throw new Error("Thread state mutations are not connected.");
-            return options.updateThreadStateWithAcceptance(request);
-          },
-        },
-        document: getDocumentController(getThreadStateKey(harness, threadId)),
-        observations: threadObservations,
-        readGitArcProposal: async input => await daemon.git.arc.proposal.read({
-          ...input,
-          includeNewer: false,
-        }),
-        getChild: subagent => getThreadController(projectId, {
-          kind: "subagent", harness: subagent.harness, parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
-        }),
-        releaseHistoricalTurns: turnIds => releaseHistoricalTurns(
-          target.kind === "draft" ? defaultProviderKey : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey,
-          threadId,
-          turnIds,
-        ),
-        readNative: () => {
-          const document = threadDocuments.getDocumentByThreadId(threadId);
-          return {
-            document,
-            pendingQuestionnaire: state.pendingUserInputRequestsByThreadId.get(threadId) ?? null,
-            approvalEntries: state.approvalEntriesByThreadId.get(threadId) ?? EMPTY_APPROVAL_ENTRIES,
-            rateLimits: account.getRateLimits(document?.harness ?? (target.kind === "draft" ? defaultProviderKey : target.harness ?? defaultProviderKey)),
-          };
-        },
-        subscribeNative: listener => subscribe(listener),
-        subscribeGitArcProposalRefresh: listener => {
-          window.addEventListener("focus", listener);
-          return () => window.removeEventListener("focus", listener);
-        },
-        reconcile: async readOptions => {
-          const result = await daemon.threads.reconcile({
-            threadId, target: readOptions.cursor ? { mode: "previous", beforeTurnId: readOptions.cursor } : { mode: "latest" },
-            refresh: false,
-          });
-          // Only an explicit "nothing changed" skips the reread; older daemons omit the flag.
-          return result.changed !== false;
-        },
-        read: async (readOptions, beforeCommit, selectionBound, recover) => {
-          await beforeCommit();
-          const observed = target.kind === "draft" ? null : threadObservations.getSnapshot(getThreadObservationKey(projectId, target))
-            .observation?.entries.find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
-          const harness = observed && observed.entryKind !== "draft" ? observed.identity.harness
-            : target.kind === "draft" ? defaultProviderKey : target.harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
-          const cwd = observed?.entryKind === "subagent" ? observed.cwd
-            : (options.getProjectForThread?.(threadId) ?? options.getProjectById?.(projectId))?.rootPath;
-          readOptions = { ...(cwd ? { cwd } : {}), ...readOptions };
-          const outcome = await fetchThreadPayload(threadId, harness, readOptions, payload => selectedThreadProjectContext?.projectId === projectId && selectedThreadProjectContext.rootThreadId === threadId && selectedThreadProjectContext.isCurrent()
-            ? (setCurrentThread(payload), state.currentThread)
-            : upsertThreadDocument(payload, { emitChange: true }), {
-              selectionBound, beforeCommit, ownerIsCurrent: controller!.captureLifetime(), recover,
-            });
-          if (outcome.kind === "failure") throw new ThreadPayloadReadError(outcome.failure);
-          return outcome.kind === "success" ? outcome.payload : null;
-        },
-        createTranscript: publish => {
-          const projection = new ThreadTranscriptProjectionController({
-            onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
-            onStateChange: publish,
-            onText: (update, canonicalText) => {
-              const sourceKey = getThreadStateKey(getThreadHarness(update.threadId), update.threadId);
-              const key = presentationKey(sourceKey, update.threadId, update.turnId, update.itemId, update.field, update.index, "sqlite");
-              textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
-              if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
-            },
-            readOptimisticInitials: thread => optimisticInputs.getInitialProjections(getThreadStateKey(thread.harness, thread.id)),
-            transcripts: {
-              subscribe: (params, listener, streamListener, streamFailure, stateListener) =>
-                transcripts.subscribe(params, listener, streamListener, streamFailure, stateListener),
-              unsubscribe: async params => {
-                try { await transcripts.unsubscribe(params); }
-                catch (error) {
-                  console.warn("Transcript subscription release failed.",
-                    error instanceof Error ? error.message.slice(0, 500) : "Workspace release failed.");
-                  throw error;
-                }
-              },
-            },
-            turnLimit: 4,
-          });
-          return { controller: projection, stopAvailability: transcripts.onAvailabilityChange(available => projection.setAvailable(available)) };
-        },
-        reportError: message => emitStatusMessage(message),
-      });
-      threadControllers.set(key, controller);
-    }
-    return controller;
+  /** Resolves once the selected family observation admits the thread; a newer selection or a failure rejects. */
+  function waitForSelectedAdmission(projectId: string, target: Extract<ThreadControllerTarget, { kind: "provider" }>) {
+    const key = getThreadObservationKey(projectId, target);
+    return new Promise<void>((resolve, reject) => {
+      let stop = () => {};
+      const check = () => {
+        const observed = threadObservations.getSnapshot(key);
+        // A newer selection releases this observation (idle) before it replaces the selected key.
+        if (selectedObservation?.key !== key || observed.status === "idle") {
+          stop();
+          reject(new Error("Thread opening was cancelled."));
+          return;
+        }
+        const entry = observed.observation?.entries.find(candidate => candidate.entryKind !== "draft" && candidate.identity.threadId === target.threadId);
+        if (observed.status === "failed" || observed.status === "absent" || (observed.status === "ready" && !entry)) {
+          stop();
+          reject(new Error(observed.error || "This thread is no longer available."));
+        } else if (entry) {
+          stop();
+          resolve();
+        }
+      };
+      stop = threadObservations.subscribe(check);
+      check();
+    });
   }
   const threadStores = new Map<string, ThreadStore>();
-  /** One store per thread; drafts stay on the legacy feed until draft binding moves into the store. */
+  /** One store per thread: drafts read their local draft document, existing threads the daemon's channels. */
   function getThreadStore(projectId: string, target: ThreadControllerTarget) {
     const threadId = target.kind === "draft" ? target.draftId : target.threadId;
-    const feed = target.kind === "draft" ? "legacy" : readThreadFeed();
-    const key = `${projectId}\0${threadId}\0${feed}`;
+    const key = `${projectId}\0${threadId}`;
     let store = threadStores.get(key);
     if (!store) {
-      store = new ThreadStore(projectId, target, publish => target.kind === "draft" || feed === "legacy"
-        ? createLegacyThreadSource(getThreadController(projectId, target), publish,
-          (subagents, id) => subagents.find(subagent => subagent.threadId === id))
+      store = new ThreadStore(projectId, target, publish => target.kind === "draft"
+        ? createDraftThreadSource({
+          draftId: target.draftId,
+          readDraft: () => threadDocuments.getDocumentByThreadId(target.draftId),
+          subscribe,
+          readRateLimits: harness => account.getRateLimits(harness),
+          watchRateLimits: harness => account.watchRateLimits(harness),
+          controls: { setCurrentThreadAgent, setCurrentThreadModel, setCurrentThreadReasoningEffort, setCurrentThreadServiceTier, setCurrentThreadComposerSettings },
+        }, publish)
         : createObservedThreadSource({
           projectId, target, observations: threadObservations, daemon,
           connect: () => workspace.connect(cancellation.signal),
@@ -842,6 +770,7 @@ function WorkbenchThreadClient(
           }),
           normalizeInput: input => normalizeThreadMessageInput(input),
           readRateLimits: harness => account.getRateLimits(harness),
+          watchRateLimits: harness => account.watchRateLimits(harness),
           subscribeRateLimits: listener => subscribe(listener),
           readGitArcProposal: async input => await daemon.git.arc.proposal.read({ ...input, includeNewer: false }),
           subscribeGitArcProposalRefresh: listener => {
@@ -967,7 +896,8 @@ function WorkbenchThreadClient(
     const observationKey = projectId && target.kind === "provider" ? getThreadObservationKey(projectId, target) : null;
     if (selectedObservation?.key !== observationKey) {
       selectedObservation?.release();
-      selectedObservation = observationKey ? { key: observationKey, release: getThreadController(projectId, target).acquire("summary") } : null;
+      selectedObservation = observationKey && target.kind === "provider"
+        ? { key: observationKey, release: threadObservations.acquire(projectId, target, reconcileObservedSubagents).release } : null;
     }
     if (selectedThreadProjectContext?.projectId !== projectId
       || selectedThreadProjectContext.harness !== harness
@@ -1037,7 +967,7 @@ function WorkbenchThreadClient(
   function resetProjectThreadState({ emitChange = true }: { emitChange?: boolean } = {}) {
     selectedObservation?.release();
     selectedObservation = null;
-    const retainedThreadIds = new Set<string>([...threadControllers.values()].filter(controller => controller.hasConsumers).map(controller => controller.threadId));
+    const retainedThreadIds = new Set<string>([...threadStores.values()].filter(store => store.hasConsumers).map(store => store.threadId));
     const retainedKeys = new Set(Object.entries(threadDocuments.getSnapshot().documentsByKey)
       .filter(([, document]) => document && retainedThreadIds.has(document.id)).map(([key]) => key));
     projectContextGeneration += 1;
@@ -3865,30 +3795,29 @@ function WorkbenchThreadClient(
     if (!isCurrent()) return { kind: "superseded" } as const;
     const resolvedHarness = harness ?? getKnownThreadHarness(threadId) ?? defaultProviderKey;
     const nextProjectId = project?.id ?? state.projectId;
-    const selectedProjectId = selectedThreadProjectContext?.projectId ?? state.projectId;
-    const reuseCurrent = (
-      source === "open"
-      && state.currentThread?.id === threadId
-      && state.currentThread.harness === resolvedHarness
-      && nextProjectId === selectedProjectId
-    );
     installSelectedThreadProjectContext({ kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) }, project, isCurrent);
 
     try {
-      const owner = getThreadController(nextProjectId, { kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) });
-      if (reuseCurrent) {
-        await owner.waitForAdmission();
-        if (!isCurrent() || intentRevision !== messageAdmissionIntentRevision || state.currentThread?.id !== threadId) return { kind: "superseded" } as const;
-        return { kind: "success", payload: state.currentThread } as const;
-      }
-      const payload = await owner.read({}, { selectionBound: source === "open" });
+      // The thread view reads its own store; opening only waits for the thread to be admitted.
+      await waitForSelectedAdmission(nextProjectId, { kind: "provider", harness: resolvedHarness, threadId: ThreadReferenceSchema.parse(threadId) });
       if (!isCurrent() || (source === "open" && (
-        selectedThreadProjectContext?.projectId !== nextProjectId
+        intentRevision !== messageAdmissionIntentRevision
+        || selectedThreadProjectContext?.projectId !== nextProjectId
         || selectedThreadProjectContext.harness !== resolvedHarness
         || selectedThreadProjectContext.rootThreadId !== threadId
       ))) return { kind: "superseded" } as const;
-      return payload ? { kind: "success", payload } as const : { kind: "superseded" } as const;
+      if (state.currentThread?.id !== threadId) {
+        threadDocuments.selectDocumentKey("");
+        state.currentThreadId = threadId;
+        state.currentThread = null;
+        emit();
+      }
+      return { kind: "opened" } as const;
     } catch (error) {
+      // A newer selection releases this open's observation; that cancellation is supersession, not failure.
+      if (!isCurrent() || (source === "open" && (
+        intentRevision !== messageAdmissionIntentRevision || selectedThreadProjectContext?.rootThreadId !== threadId
+      ))) return { kind: "superseded" } as const;
       return { kind: "failure", failure: error instanceof ThreadPayloadReadError ? error.failure : {
         harness: resolvedHarness, transientRollout: false,
         message: error instanceof Error ? error.message : "Unable to open thread.",
@@ -4715,8 +4644,6 @@ function WorkbenchThreadClient(
     disposed = true;
     for (const store of threadStores.values()) store.dispose();
     threadStores.clear();
-    for (const controller of threadControllers.values()) controller.dispose();
-    threadControllers.clear();
     threadObservations.dispose();
     resetProjectThreadState({ emitChange: false });
     listeners.clear();
@@ -4729,16 +4656,13 @@ function WorkbenchThreadClient(
     lifecycle.dispose();
   }
 
-  async function recoverThreadControllers() {
-    const results = await Promise.allSettled([
-      ...[...threadControllers.values()].map(controller => controller.recover()),
-      ...[...threadStores.values()].filter(store => store.feed === "observed").map(store => store.recover()),
-    ]);
+  async function recoverThreadStores() {
+    const results = await Promise.allSettled([...threadStores.values()].map(store => store.recover()));
     const failed = results.find(result => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
   }
   lifecycle.addUnsubscribe(onReconnect(() => {
-    void recoverThreadControllers().catch(error => {
+    void recoverThreadStores().catch(error => {
       console.warn("Unable to refresh thread views after reconnect.",
         error instanceof Error ? error.name : "Unknown failure.");
     });
@@ -4746,14 +4670,8 @@ function WorkbenchThreadClient(
 
   return {
     threadObservations,
-    getThreadController,
     getThreadStore,
-    recoverThreadControllers,
-    activateThreadControllers: () => {
-      for (const controller of threadControllers.values()) {
-        void controller.activate().catch(() => { /* The thread owner publishes and reports activation failures. */ });
-      }
-    },
+    recoverThreadStores,
     applyAcceptedThreadTitle,
     connect: () => workspace.connect(cancellation.signal),
     clearThreadSelection,

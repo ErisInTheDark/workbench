@@ -180,11 +180,13 @@ test("a mismatched reply cannot install a different project's state", async t =>
   owner.dispose();
 });
 
-test("a recovered publication clears a source failure without replacing its read interest", async () => {
+test("a recovered publication clears a source failure without replacing its read interest", async t => {
+  const warnings = t.mock.method(console, "warn", () => {});
   const { owner, opens, releases, snapshot } = fixture();
   const lease = owner.acquire("project", target);
   await opens[0]!.resolve({ observation: { ...snapshot(0, 1), freshness: "partial", error: "Provider state unavailable." } });
   assert.equal(owner.getSnapshot(lease.key).status, "failed");
+  assert.equal(warnings.mock.callCount(), 1);
   owner.accept(snapshot(0, 2));
   assert.deepEqual(releases, []);
   assert.equal(opens.length, 1);

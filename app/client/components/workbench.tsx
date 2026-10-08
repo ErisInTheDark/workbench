@@ -483,7 +483,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }), [explorer.projects, selectionProjectIds]);
   const currentThread = threads.current;
   const threadDocuments = threads.documents;
-  const harnessUserInputRequestsByThreadId = threads.pendingQuestionnairesByThreadId;
   const [localSelectionError, setSelectionError] = useState("");
   useEffect(() => {
     if (navigationState?.phase === "ready") setSelectionError("");
@@ -1651,7 +1650,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const threadShellStatusLabel = threadShellActivityTimestampMs
     ? <WorkbenchRelativeTime label="Last activity" timestampMs={threadShellActivityTimestampMs} />
     : null;
-  const isThreadViewReady = showThreadView && Boolean(threadForThreadView);
+  // Existing threads load inside their own view (thread store); only drafts and new threads wait for a document.
+  const isThreadViewReady = showThreadView && (Boolean(threadForThreadView)
+    || effectiveThreadTarget?.kind === "provider" || effectiveThreadTarget?.kind === "subagent");
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
   const threadViewInstanceKey = threadForThreadView ? getThreadViewInstanceKey(threadForThreadView) : effectiveThreadId;
@@ -1660,7 +1661,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : effectiveSelectedThreadId;
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
-  const visibleUserInputRequestsByThreadId = harnessUserInputRequestsByThreadId;
   const threadAttentionLabelsById = useMemo(() => {
     const labels: Record<string, string> = {};
     for (const project of projectThreadSummaries.projects) {
@@ -1672,12 +1672,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     for (const project of projectThreadSidebars.projects) {
       for (const entry of project.entries) {
-        if (entry.entryKind !== "draft" && entry.pendingQuestionnaire) labels[entry.identity.threadId] = getQuestionnaireTitle(entry.pendingQuestionnaire.request);
+        if (entry.entryKind === "draft") continue;
+        if (entry.pendingQuestionnaire) labels[entry.identity.threadId] = getQuestionnaireTitle(entry.pendingQuestionnaire.request);
+        // Live approval prompts are not durable; their lifecycle still says the thread waits on input.
+        else if (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput") labels[entry.identity.threadId] = "Questionnaire";
       }
     }
-    for (const [threadId, pending] of Object.entries(visibleUserInputRequestsByThreadId)) labels[threadId] = getQuestionnaireTitle(pending.request);
     return labels;
-  }, [projectThreadSidebars.projects, projectThreadSummaries.projects, visibleUserInputRequestsByThreadId]);
+  }, [projectThreadSidebars.projects, projectThreadSummaries.projects]);
   const pendingQuestionnaireThreadIds = useMemo(
     () => new Set(Object.keys(threadAttentionLabelsById)),
     [threadAttentionLabelsById],

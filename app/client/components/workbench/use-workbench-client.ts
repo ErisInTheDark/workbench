@@ -35,11 +35,8 @@ import type {
   WorkbenchControls,
   WorkbenchHarness,
   WorkbenchModelOption,
-  WorkbenchReadThreadOptions,
-  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadRuntimeSnapshot,
   WorkbenchThreadSidebarStore,
-  WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type {
@@ -506,27 +503,6 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     (listener: (harness: WorkbenchHarness) => void) => scoped?.subscribeModelUpdates(listener) ?? (() => {}),
     [scoped],
   );
-  const pendingQuestionnaire = useCallback(
-    (threadId: string) => runtime.pendingUserInputRequestsByThreadId[threadId] ?? null,
-    [runtime.pendingUserInputRequestsByThreadId],
-  );
-  const read = useCallback(async (
-    threadId: string,
-    harness?: WorkbenchHarness,
-    options?: WorkbenchReadThreadOptions,
-  ) => (
-    await (scoped?.readThread(threadId, harness, options)
-      ?? controls?.readThread(threadId, harness, options)) ?? null
-  ), [controls, scoped]);
-  const submitQuestionnaire = useCallback(async (
-    threadId: string,
-    response: WorkbenchUserInputResponse,
-    options?: WorkbenchSubmitUserInputRequestOptions,
-  ) => {
-    if (!controls) throw new Error("Workbench controls are not ready.");
-    if (scoped) await scoped.submitPendingUserInputRequest(threadId, response, options);
-    else await controls.submitPendingUserInputRequest(threadId, response, options);
-  }, [controls, scoped]);
   const updateState = useCallback(async (request: WorkbenchThreadStateRequest) => {
     if (!controls) throw new Error("Workbench controls are not ready.");
     if (scoped) await scoped.requestWorkbench(request.method, request);
@@ -541,11 +517,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     skills: scoped?.threadSkills ?? controls?.threadSkills ?? null,
     listModels,
     subscribeModelUpdates,
-    pendingQuestionnaire,
-    pendingQuestionnairesByThreadId: runtime.pendingUserInputRequestsByThreadId,
     rateLimits: runtime.rateLimits,
-    read,
-    submitQuestionnaire,
     updateState,
   }), [
     controls?.threadGoals,
@@ -554,10 +526,7 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     document,
     listModels,
     subscribeModelUpdates,
-    pendingQuestionnaire,
-    read,
     runtime,
-    submitQuestionnaire,
     updateState,
   ]);
 }

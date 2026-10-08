@@ -449,17 +449,19 @@ test("socket spy merges daemon frames with the answering app's frames and report
   controller.dispose();
 });
 
-test("provider events for threads a connection does not observe are not sent; account events always are", async () => {
+test("thread events reach only observers and only for goals and skills; account events always do", async () => {
   const sent: Array<Record<string, unknown>> = [];
   const client = createClient((data, callback) => { sent.push(JSON.parse(data) as Record<string, unknown>); callback?.(); });
   const { controller } = createController({ clock: new FakeClock() });
   observeThread(controller, client, "watched");
   for (const threadId of ["watched", "elsewhere"]) {
+    // Thread content rides the transcript stream, never provider events.
     await controller.sendJsonToClient(client, { method: "item/started", params: { threadId, item: {} }, workbenchHarness: "codex" });
+    await controller.sendJsonToClient(client, { method: "thread/goal/updated", params: { threadId, goal: {} }, workbenchHarness: "codex" });
   }
   await controller.sendJsonToClient(client, { method: "account/rateLimits/updated", params: { rateLimits: {} }, workbenchHarness: "codex" });
   assert.deepEqual(sent.map(message => [message.method, (message.params as { threadId?: string }).threadId]),
-    [["item/started", "watched"], ["account/rateLimits/updated", undefined]]);
+    [["thread/goal/updated", "watched"], ["account/rateLimits/updated", undefined]]);
   controller.dispose();
 });
 
@@ -476,8 +478,8 @@ test("sequences provider events and consumes browser receipts without harness ro
   observeThread(controller, client, "thread");
 
   await controller.sendJsonToClient(client, {
-    method: "item/agentMessage/delta",
-    params: { delta: "secret commentary", itemId: "item", threadId: "thread", turnId: "turn" },
+    method: "thread/goal/updated",
+    params: { goal: { objective: "secret commentary" }, threadId: "thread" },
     workbenchHarness: "codex",
   });
   assert.equal(sent.length, 1);
@@ -486,7 +488,7 @@ test("sequences provider events and consumes browser receipts without harness ro
 
   await controller.handleMessage(client, "connection-1", notificationFrame("workbench/event-stream/ack", { sequence: 1 }), false);
   assert.equal(controller.readEventStreamHealth().unacknowledgedEvents, 0);
-  assert.ok(lines.some(line => line.includes("out codex:item/agentMessage/delta")));
+  assert.ok(lines.some(line => line.includes("out codex:thread/goal/updated")));
   assert.ok(!lines.some(line => line.includes("in wb:event-stream/ack") || line.includes("secret commentary")));
   controller.dispose();
 });

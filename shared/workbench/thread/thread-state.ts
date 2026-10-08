@@ -5,6 +5,8 @@
  * - WorkbenchGitArcLifecycleStateSchema/WorkbenchGitArcLifecycleState: active, stashed, and resolved Git work.
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
+ * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live provider facts (token usage, auto-compaction, pending approval) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
  * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
@@ -43,7 +45,7 @@
 
 import { z } from "zod";
 import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
-import { ThreadRuntimeRecordSchema } from "./thread-context-usage.ts";
+import { ThreadTokenUsageSchema } from "./thread-context-usage.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
@@ -403,6 +405,36 @@ export const WorkbenchDurableQuestionnaireSchema = z.object({
   turnId: z.string().brand<"WorkbenchTurnId">().nullable(),
 }).strict();
 export type WorkbenchDurableQuestionnaire = z.infer<typeof WorkbenchDurableQuestionnaireSchema>;
+
+const CommandActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("read"), command: z.string(), name: z.string(), path: z.string() }).strict(),
+  z.object({ type: z.literal("listFiles"), command: z.string(), path: z.string().nullable() }).strict(),
+  z.object({ type: z.literal("search"), command: z.string(), query: z.string().nullable(), path: z.string().nullable() }).strict(),
+  z.object({ type: z.literal("unknown"), command: z.string() }).strict(),
+]);
+/** A live approval prompt: never durable, it exists only while its provider request waits. */
+export const WorkbenchPendingApprovalSchema = z.object({
+  itemId: z.string().nullable(),
+  request: WorkbenchUserInputRequestSchema.extend({
+    approval: z.object({
+      command: z.object({
+        command: z.string(), commandActions: z.array(CommandActionSchema), cwd: z.string(),
+        justification: z.string().optional(), networkTarget: z.string().optional(),
+      }).strict().optional(),
+    }).strict().optional(),
+  }).strict(),
+  requestKey: z.string().min(1),
+  turnId: z.string().nullable(),
+}).strict();
+
+/** Live provider facts per family thread that thread state does not own; unknown keys are dropped so older browsers survive newer servers. */
+export const ThreadRuntimeSchema = z.object({
+  tokenUsage: ThreadTokenUsageSchema.nullable(),
+  willAutoCompact: z.boolean().nullable(),
+  pendingApproval: WorkbenchPendingApprovalSchema.nullable().optional(),
+});
+export type ThreadRuntime = z.infer<typeof ThreadRuntimeSchema>;
+export const ThreadRuntimeRecordSchema = z.record(z.string().min(1), ThreadRuntimeSchema);
 
 export const WorkbenchQuestionnaireHistoryEntrySchema = WorkbenchDurableQuestionnaireSchema.extend({
   insertAfterItemId: z.string().nullable(),

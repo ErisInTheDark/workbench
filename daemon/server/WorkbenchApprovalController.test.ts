@@ -41,6 +41,7 @@ function harness(options: {
     },
     broadcast: (_harness: WorkbenchHarness, notification) => { events.push(notification.method); },
     collectAnswerContext: async () => { events.push("context"); },
+    pendingChanged: () => {},
     commandApprovals: {
       match: async () => options.saved ? { id: "6ec53578-a9ef-44df-8f4b-bb62f2d8ae4a", projectId, workdir: "c:/repo", prefix } : null,
       save: async (_project, _workdir, selected) => {

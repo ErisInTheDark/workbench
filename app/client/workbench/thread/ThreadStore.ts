@@ -8,7 +8,7 @@
  * - ThreadStoreActions: id-based thread actions.
  * - ThreadStoreSource: one feed that publishes slices and owns actions (legacy document owner or observed daemon channels).
  * - ThreadInterest: how much of a thread one consumer needs.
- * - ThreadFeed/readThreadFeed: which feed new stores use (`?threadFeed=observed|legacy` in the URL, remembered per browser).
+ * - ThreadFeed: which feed backs a store (observed daemon channels, or a local draft document).
  * - default ThreadStore: per-thread slice cache with per-slice listeners and consumer leases over one source.
  */
 import type {
@@ -27,7 +27,6 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
 import type { ThreadGitArcProposalObservation } from "./ThreadGitArcProposalObserver";
-import type WorkbenchThreadController from "../WorkbenchThreadController";
 
 export type ThreadHead = ThreadHeadFields & ({ id: DraftId; isDraft: true } | { id: WorkbenchThreadId; isDraft: false });
 
@@ -63,8 +62,8 @@ export interface ThreadSummarySlice {
   gitArcProposals: Record<string, ThreadGitArcProposalObservation>;
   /** Child heads by thread id, for subagent tab labels and linked items. */
   relatedHeads: Record<string, ThreadHead>;
-  /** Pass 1 only: the legacy document, for draft and send flows that are not yet id-based. */
-  legacyDocument: ThreadPayload | null;
+  /** Drafts only: the local draft document the app launches a thread from on first send. */
+  draftDocument: ThreadPayload | null;
 }
 
 export interface ThreadTurnsSlice {
@@ -127,38 +126,23 @@ export interface ThreadStoreActions {
   observeGitArcProposal(proposalId: string): () => void;
 }
 
-export type ThreadFeed = "legacy" | "observed";
+export type ThreadFeed = "draft" | "observed";
 export type ThreadInterest = "summary" | "view" | "route";
 
 export interface ThreadStoreSource {
   readonly feed: ThreadFeed;
   readonly actions: ThreadStoreActions;
-  /** Pass 1 only: the document owner behind a legacy feed, for its history retention and child hydration. */
-  readonly legacyOwner?: WorkbenchThreadController;
-  /** `view` consumers need turn content; `summary` consumers only the summary slice; `route` is a view the legacy route selection already opened. */
+  /** `view` consumers need turn content; `summary` consumers only the summary slice; `route` is the route's own view. */
   acquire(interest: ThreadInterest): () => void;
   /** Retries a failed open. */
   recover(): Promise<void>;
   dispose(): void;
 }
 
-const THREAD_FEED_STORAGE_KEY = "workbench:thread-feed";
-
-/** The URL flag wins and is remembered, so one `?threadFeed=observed` visit switches this browser until reset. */
-export function readThreadFeed(): ThreadFeed {
-  if (typeof window === "undefined") return "legacy";
-  const requested = new URLSearchParams(window.location.search).get("threadFeed");
-  if (requested === "observed" || requested === "legacy") {
-    window.localStorage.setItem(THREAD_FEED_STORAGE_KEY, requested);
-    return requested;
-  }
-  return window.localStorage.getItem(THREAD_FEED_STORAGE_KEY) === "observed" ? "observed" : "legacy";
-}
-
 export const EMPTY_THREAD_STORE_STATE: ThreadStoreState = {
   summary: {
     status: "loading", error: null, head: null, entry: null, subagents: [], rateLimits: null,
-    gitArcProposals: {}, relatedHeads: {}, legacyDocument: null,
+    gitArcProposals: {}, relatedHeads: {}, draftDocument: null,
   },
   turns: { transcript: { status: "idle" }, turns: NO_TURNS, canLoadOlder: false },
   questionnaire: { pending: null },
@@ -192,7 +176,6 @@ export default class ThreadStore {
   get threadId() { return this.target.kind === "draft" ? this.target.draftId : this.target.threadId; }
   get feed() { return this.#source.feed; }
   get actions() { return this.#source.actions; }
-  get legacyOwner() { return this.#source.legacyOwner ?? null; }
   get hasConsumers() { return this.#consumers > 0; }
 
   getSlice<Name extends ThreadSliceName>(name: Name): ThreadStoreState[Name] {

@@ -105,7 +105,7 @@ export default function WorkbenchThreadPanel ({
   }, [onCreateDraftThread, thread?.id, threadId]);
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
-  const threadDisplaySource = panelThread.legacyDocument ?? thread ?? fallbackSummary;
+  const threadDisplaySource = panelThread.draftDocument ?? thread ?? fallbackSummary;
   // Observed feeds have no document: the thread entry carries the title and activity.
   const threadActivityTimestampMs = threadDisplaySource
     ? resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary)
