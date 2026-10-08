@@ -1,11 +1,10 @@
 /*
  * Exports:
  * - defineGoSidecar: describe one repository-owned Go sidecar and its isolated build cache.
- * - currentSidecarPlatform: map this host to a publishable artifact platform, or null.
  * - readGoOption: read the optional `--go <binary>` toolchain override.
  * - runSidecarGo: execute the selected Go toolchain inside a sidecar package with isolated caches.
  * - sidecarSourceHash: fingerprint production Go sources through the shared runtime verifier.
- * - publishSidecar: build, validate and atomically publish one platform artifact plus its manifest receipt.
+ * - publishSidecar: build, validate and atomically publish every supported platform artifact.
  */
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -31,11 +30,6 @@ export function defineGoSidecar(sidecar) {
     sourcePath: path.join(root, sidecar.source),
     cache: path.join(root, `.workbench/tmp/${sidecar.label}-build`),
   });
-}
-
-export function currentSidecarPlatform() {
-  if (process.arch !== "x64" || !["win32", "linux"].includes(process.platform)) return null;
-  return process.platform === "win32" ? "windows-x64" : "linux-x64";
 }
 
 export async function runSidecarGo(sidecar, args, executable = process.env.GO_BINARY || "go", environment = {}) {
@@ -77,11 +71,14 @@ export async function sidecarSourceHash(sidecar) {
   }
 }
 
-/**
- * Cross-target builds must stay CGO-free; the caller owns which targets it may publish from this host.
- * @param {"windows-x64" | "linux-x64"} platform
- */
-export async function publishSidecar(sidecar, platform, executable) {
+export async function publishSidecar(sidecar, executable) {
+  // Repository sidecars stay CGO-free so one host can keep every platform receipt aligned.
+  for (const platform of Object.keys(targets)) {
+    await publishSidecarTarget(sidecar, platform, executable);
+  }
+}
+
+async function publishSidecarTarget(sidecar, platform, executable) {
   const target = targets[platform];
   const name = `${sidecar.executable}${target.extension}`;
   const label = capitalize(sidecar.label);
