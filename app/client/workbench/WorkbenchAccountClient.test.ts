@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect provider model caching and rate-limit lifecycle ownership.
+ * - No production exports; Node tests protect provider model caching and watched rate-limit observations.
  */
 
 import assert from "node:assert/strict";
@@ -11,25 +11,7 @@ import type {
   WorkbenchAccountLimits,
   WorkbenchRateLimitSnapshot,
 } from "workbench-shared/workbench/provider/provider-account";
-import WorkbenchAccountClient from "./WorkbenchAccountClient.ts";
-import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
-
-test("retired account reads ignore owned interruption but still report unexpected failure", async () => {
-  for (const interruption of [true, false]) {
-    const pending = Promise.withResolvers<WorkbenchAccountLimits>();
-    const errors: string[] = [];
-    const client = new WorkbenchAccountClient({
-      listModels: async () => [], readRateLimits: () => pending.promise,
-      reportError: message => { errors.push(message); },
-    });
-    const reading = client.refresh("codex");
-    client.dispose();
-    pending.reject(interruption ? new WorkbenchRpcRequestInterruptedError("disposed", true)
-      : new Error("unexpected storage failure"));
-    await reading;
-    assert.equal(errors.length, interruption ? 0 : 1);
-  }
-});
+import WorkbenchAccountClient, { type WorkbenchAccountClientOptions } from "./WorkbenchAccountClient.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -79,12 +61,16 @@ function rateLimits(limitName: string): WorkbenchAccountLimits {
   };
 }
 
+const unusedLimits: WorkbenchAccountClientOptions["observeRateLimits"] = () => {
+  throw new Error("Unexpected rate-limit observation.");
+};
+
 test("model reads reuse the owned cache until force refresh", async () => {
   const reads: WorkbenchModelOption[][] = [[model("first")], [model("second")]];
   let readCount = 0;
   const client = new WorkbenchAccountClient({
     listModels: async () => reads[readCount++]!,
-    readRateLimits: async () => rateLimits("unused"),
+    observeRateLimits: unusedLimits,
   });
 
   assert.equal((await client.listModels("codex"))[0]?.id, "first");
@@ -99,7 +85,7 @@ test("model demand coalesces and a retired source response cannot replace the ne
   let reads = 0;
   const client = new WorkbenchAccountClient({
     listModels: async () => ++reads === 1 ? old.promise : [model("new source")],
-    readRateLimits: async () => rateLimits("unused"),
+    observeRateLimits: unusedLimits,
   });
   try {
     const first = client.listModels("codex");
@@ -123,7 +109,7 @@ test("provider model invalidation retires an empty in-flight read without touchi
     listModels: async harness => harness === "opencode"
       ? ++opencodeReads === 1 ? old.promise : [model("ready")]
       : (++codexReads, [model("codex")]),
-    readRateLimits: async () => rateLimits("unused"),
+    observeRateLimits: unusedLimits,
   });
   try {
     await client.listModels("codex");
@@ -142,7 +128,7 @@ test("an invalidated model read without a replacement reports expected supersess
   const pending = deferred<WorkbenchModelOption[]>();
   const client = new WorkbenchAccountClient({
     listModels: () => pending.promise,
-    readRateLimits: async () => rateLimits("unused"),
+    observeRateLimits: unusedLimits,
   });
   try {
     const old = client.listModels("opencode");
@@ -152,136 +138,48 @@ test("an invalidated model read without a replacement reports expected supersess
   } finally { client.dispose(); }
 });
 
-test("automatic rate-limit reads coalesce and throttle while explicit reads remain fresh", async () => {
-  let now = 1_000;
-  const reads = [deferred<WorkbenchAccountLimits>(), deferred<WorkbenchAccountLimits>()];
-  let readCount = 0;
-  const client = new WorkbenchAccountClient({
-    listModels: async () => [],
-    now: () => now,
-    readRateLimits: async () => reads[readCount++]!.promise,
-  });
-
-  const first = client.refreshIfStale("codex");
-  const coalesced = client.refreshIfStale("codex");
-  assert.equal(readCount, 1);
-  reads[0]!.resolve(rateLimits("cached"));
-  await Promise.all([first, coalesced]);
-
-  now += 1_000;
-  await client.refreshIfStale("codex");
-  assert.equal(readCount, 1);
-  const explicit = client.refresh("codex");
-  assert.equal(readCount, 2);
-  assert.equal(client.getRateLimits("codex")?.limitName, "cached");
-  reads[1]!.resolve(rateLimits("explicit"));
-  await explicit;
-  assert.equal(client.getRateLimits("codex")?.limitName, "explicit");
-});
-
-test("notification refreshes replace the published rate-limit snapshot", async () => {
-  const responses = [rateLimits("read"), rateLimits("notification")];
-  let readCount = 0;
-  let publishes = 0;
-  const client = new WorkbenchAccountClient({
-    listModels: async () => [],
-    readRateLimits: async () => responses[readCount++]!,
-  });
-  client.subscribe(() => {
-    publishes += 1;
-  });
-
-  await client.refresh("codex");
-  const readSnapshot = client.getSnapshot();
-  await client.refresh("codex", "notification");
-
-  assert.equal(readSnapshot.rateLimitsByHarness.get("codex")?.limitName, "read");
-  assert.equal(client.getSnapshot().rateLimitsByHarness.get("codex")?.limitName, "notification");
-  assert.equal(publishes, 2);
-});
-
-test("sparse rate-limit updates merge into the cached snapshot without another read", async () => {
-  let readCount = 0;
-  const client = new WorkbenchAccountClient({
-    listModels: async () => [],
-    readRateLimits: async () => {
-      readCount += 1;
-      return { ...rateLimits("plan"), rateLimits: { ...rateLimits("plan").rateLimits, planType: "pro" } };
-    },
-  });
-  // With nothing cached yet, the update can only trigger a read.
-  await client.applyUpdate("codex", { limitId: "codex", primary: { usedPercent: 10, windowDurationMins: 60, resetsAt: 1 } });
-  assert.equal(readCount, 1);
-  await client.applyUpdate("codex", {
-    limitId: "codex", limitName: null, planType: null,
-    primary: { usedPercent: 18, windowDurationMins: 60, resetsAt: 1 },
-  });
-  assert.equal(readCount, 1);
-  const merged = client.getRateLimits("codex");
-  assert.equal(merged?.primary?.usedPercent, 18);
-  // Null metadata in a rolling update keeps what the last read observed.
-  assert.equal(merged?.planType, "pro");
-  assert.equal(merged?.limitName, "plan");
-});
-
-test("independent harness refreshes cannot invalidate each other", async () => {
-  const reads = new Map<WorkbenchHarness, ReturnType<typeof deferred<WorkbenchAccountLimits>>>([
-    ["codex", deferred<WorkbenchAccountLimits>()],
-    ["opencode", deferred<WorkbenchAccountLimits>()],
-  ]);
-  const client = new WorkbenchAccountClient({
-    listModels: async () => [],
-    readRateLimits: async harness => reads.get(harness)!.promise,
-  });
-
-  const codexRefresh = client.refresh("codex");
-  const opencodeRefresh = client.refresh("opencode");
-  reads.get("opencode")!.resolve(rateLimits("opencode"));
-  await opencodeRefresh;
-  reads.get("codex")!.resolve(rateLimits("codex"));
-  await codexRefresh;
-
-  assert.equal(client.getRateLimits("codex")?.limitName, "codex");
-  assert.equal(client.getRateLimits("opencode")?.limitName, "opencode");
-});
-
-test("failed rate-limit refreshes retain the last known snapshot without publication", async () => {
-  let shouldFail = false;
-  let publishes = 0;
+test("watched providers hold one daemon observation each, keep the last limits through failures, and release on reset", () => {
+  const observations: Array<{ harness: WorkbenchHarness; changed: () => void; released: boolean;
+    fact: { failure: string | null; limits: WorkbenchAccountLimits | null } }> = [];
   const errors: string[] = [];
+  let publishes = 0;
   const client = new WorkbenchAccountClient({
     listModels: async () => [],
     reportError: message => errors.push(message),
-    readRateLimits: async () => {
-      if (shouldFail) throw new Error("temporarily unavailable");
-      return rateLimits("cached");
+    observeRateLimits: (harness, changed) => {
+      const observation = { harness, changed, released: false, fact: { failure: null, limits: null } as { failure: string | null; limits: WorkbenchAccountLimits | null } };
+      observations.push(observation);
+      return { getSnapshot: () => observation.fact, release: () => { observation.released = true; } };
     },
   });
-  client.subscribe(() => {
-    publishes += 1;
-  });
+  client.subscribe(() => { publishes += 1; });
+  client.watchRateLimits("codex");
+  client.watchRateLimits("codex");
+  client.watchRateLimits("opencode");
+  assert.equal(observations.length, 2, "watching again reuses the provider's observation");
+  const [codex, opencode] = observations as [typeof observations[number], typeof observations[number]];
 
-  await client.refresh("codex");
-  shouldFail = true;
-  await client.refresh("codex");
-
-  assert.equal(client.getRateLimits("codex")?.limitName, "cached");
+  codex.fact = { failure: null, limits: rateLimits("pushed") };
+  codex.changed();
+  assert.equal(client.getRateLimits("codex")?.limitName, "pushed");
+  assert.equal(client.getRateLimits("opencode"), null, "providers are independent");
   assert.equal(publishes, 1);
-  assert.deepEqual(errors, ["Unable to refresh codex account limits: temporarily unavailable"]);
-});
 
-test("reset rejects a late rate-limit result from the previous project context", async () => {
-  const pending = deferred<WorkbenchAccountLimits>();
-  const client = new WorkbenchAccountClient({
-    listModels: async () => [],
-    readRateLimits: async () => pending.promise,
-  });
+  codex.fact = { failure: "temporarily unavailable", limits: rateLimits("pushed") };
+  codex.changed();
+  codex.changed();
+  assert.equal(client.getRateLimits("codex")?.limitName, "pushed");
+  assert.deepEqual(errors, ["Unable to refresh codex account limits: temporarily unavailable"], "a failure reports once");
 
-  const refresh = client.refresh("codex");
   client.reset();
-  pending.resolve(rateLimits("stale"));
-  await refresh;
-
+  assert.ok(codex.released && opencode.released);
   assert.equal(client.getRateLimits("codex"), null);
-  assert.equal(client.getSnapshot().rateLimitsByHarness.size, 0);
+  codex.fact = { failure: null, limits: rateLimits("stale") };
+  codex.changed();
+  assert.equal(client.getRateLimits("codex"), null, "a retired observation cannot write after reset");
+
+  client.watchRateLimits("codex");
+  assert.equal(observations.length, 3);
+  client.dispose();
+  assert.ok(observations[2]!.released);
 });

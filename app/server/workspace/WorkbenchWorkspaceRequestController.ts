@@ -517,6 +517,9 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
       }
+      case "accountLimits":
+        interest.stop.push(this.options.sources.subscribe(refresh));
+        break;
       case "workingTreeSummary": {
         const source = this.options.sources.get(request.query.location.daemonId);
         if (source) interest.thread = {
@@ -586,6 +589,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "threadRow": return { ...base, kind: "threadRow", data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
+      case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", claimsPhase: "pending", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
     }
@@ -673,6 +677,21 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "projectTree", sourceGeneration: fact?.value?.generation ?? 0,
           phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
           data: fact?.value?.kind === "projectTree" ? fact.value.project : null });
+        return;
+      }
+      case "accountLimits": {
+        // A null daemon follows the attached daemon, so the source is re-chosen whenever sources change.
+        const source = query.daemonId ? this.options.sources.get(query.daemonId) : this.options.sources.attached;
+        const key = source ? `${source.id}/${query.provider}` : null;
+        if (interest.thread?.key !== key) {
+          interest.thread?.observation.release();
+          interest.thread = source && key ? {
+            key, observation: source.observe({ kind: "accountLimits", provider: query.provider }, () => this.refresh(interest)),
+          } : null;
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        this.update(interest, { kind: "accountLimits", phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
+          data: fact?.value?.kind === "accountLimits" ? fact.value.limits : null });
         return;
       }
       case "workingTreeSummary": {

@@ -9,6 +9,7 @@
 import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
@@ -86,8 +87,6 @@ import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptP
 import WorkbenchAccountClient from "./WorkbenchAccountClient";
 import ThreadHistoryReads from "./ThreadHistoryReads";
 
-const RATE_LIMIT_REFRESH_TASK_ID = "rate-limit-refresh";
-const RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const AUTO_REFRESH_REQUEST_SOURCE = "autoRefresh";
 const DEFAULT_WORKFLOW_IDS = ["default"] as const;
 const SUBAGENT_WORKFLOW_IDS = ["subagent"] as const;
@@ -180,8 +179,8 @@ interface WorkbenchThreadClient {
   acceptSourceGeneration: (generation: number) => void;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   selectThreadPayload: (thread: ThreadPayload) => void;
-  refreshRateLimits: () => Promise<void>;
-  refreshRateLimitsIfStale: () => Promise<void>;
+  /** Show the selected (or default) provider's daemon-pushed limits. */
+  watchRateLimits: () => void;
   sendThreadMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -634,7 +633,19 @@ function WorkbenchThreadClient(
   const account = new WorkbenchAccountClient({
     listModels: async (harness) => (await daemon.models.list(harness)).data,
     reportError: message => emitStatusMessage(message),
-    readRateLimits: async (harness) => await daemon.account.limits(harness),
+    observeRateLimits: (harness, changed) => {
+      const handle = workspace.observe({
+        kind: "accountLimits", provider: ProviderKeySchema.parse(harness),
+        daemonId: (options.location ?? options.getLocation?.())?.daemonId ?? null,
+      }, changed);
+      return {
+        getSnapshot: () => {
+          const fact = handle.getSnapshot();
+          return { failure: fact.failure, limits: fact.value?.data ?? null };
+        },
+        release: () => handle.release(),
+      };
+    },
   });
   const modelUpdateListeners = new Set<(harness: WorkbenchHarness) => void>();
   function subscribeModelUpdates(listener: (harness: WorkbenchHarness) => void) {
@@ -1595,14 +1606,13 @@ function WorkbenchThreadClient(
     if (selectionChanged) {
     }
     if (publishRuntime) emit();
-    if (selectionChanged) scheduleActiveTurnRateLimitRefresh();
 
     if (!nextThread) {
       return;
     }
 
     if (selectionChanged) {
-      void account.refreshIfStale(nextThread.harness);
+      account.watchRateLimits(nextThread.harness);
     }
   }
 
@@ -1744,29 +1754,6 @@ function WorkbenchThreadClient(
     });
 
     return changed ? { ...thread, turns } : thread;
-  }
-
-  function scheduleActiveTurnRateLimitRefresh() {
-    const harness = state.currentThread?.harness;
-    if (!harness || !getCurrentInProgressTurn(state.currentThread)) {
-      lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
-      return;
-    }
-
-    if (lifecycle.has(RATE_LIMIT_REFRESH_TASK_ID)) {
-      return;
-    }
-
-    void account.refreshIfStale(harness);
-
-    lifecycle.scheduleRepeat(RATE_LIMIT_REFRESH_TASK_ID, RATE_LIMIT_REFRESH_INTERVAL_MS, () => {
-      if (disposed || state.currentThread?.harness !== harness || !getCurrentInProgressTurn(state.currentThread)) {
-        lifecycle.cancel(RATE_LIMIT_REFRESH_TASK_ID);
-        return;
-      }
-
-      return account.refreshIfStale(harness);
-    });
   }
 
   function setCurrentThread(
@@ -2976,12 +2963,8 @@ function WorkbenchThreadClient(
     return null;
   }
 
-  async function refreshRateLimits(harness = state.currentThread?.harness ?? defaultProviderKey) {
-    await account.refresh(harness);
-  }
-
-  async function refreshRateLimitsIfStale(harness = state.currentThread?.harness ?? defaultProviderKey) {
-    await account.refreshIfStale(harness);
+  function watchRateLimits(harness = state.currentThread?.harness ?? defaultProviderKey) {
+    account.watchRateLimits(harness);
   }
 
   function normalizeThreadMessageInput(input: UserInput[] | string) {
@@ -4482,8 +4465,7 @@ function WorkbenchThreadClient(
     }
 
     if (notification.method === "account/rateLimits/updated") {
-      // The update carries the values; rereading would cost a provider round trip per agent token update.
-      void account.applyUpdate(harness, notification.params.rateLimits);
+      // The daemon's limits observation already rereads on provider activity; this push carries nothing more.
       return;
     }
 
@@ -4739,8 +4721,7 @@ function WorkbenchThreadClient(
     resetConnectionState,
     acceptSourceGeneration,
     selectThreadPayload,
-    refreshRateLimits,
-    refreshRateLimitsIfStale,
+    watchRateLimits,
     sendThreadMessage,
     compactThread,
     stopThread,

@@ -37,6 +37,7 @@ import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
 import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -659,6 +660,14 @@ function createWorkbenchCoreFeature(
     },
     transitions: worktreeGitTransitions,
   });
+  const accountLimits = new WorkbenchAccountLimitsController({
+    read: harness => {
+      const key = installedProviderKeys.find(candidate => candidate === harness);
+      return key ? providers.get(key).account?.limits.read() ?? null : null;
+    },
+    record: (harness, limits) => stats.observeAccountLimits(harness, limits),
+    warn: message => logThreadStateWarning(message),
+  });
   const projectStore = new WorkbenchProjectStore({
     execute: command => database.executeProjectStore(command),
     readDeviceIdentity,
@@ -727,6 +736,7 @@ function createWorkbenchCoreFeature(
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
     threadContextRollover,
     workingTree,
+    accountLimits,
     turnRecoveryFailures: {
       report: async (cwd, harness, threadId) => {
         const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });
@@ -739,6 +749,7 @@ function createWorkbenchCoreFeature(
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
         stats.observeProviderNotification(harness, facts);
+        accountLimits.noteActivity(harness);
         const observation = await threadState!.observeProviderNotification(harness, facts);
         if (!lease.isCurrent()) return null;
         const lifecycle = observation?.lifecycle ?? null;
@@ -795,6 +806,7 @@ function createWorkbenchCoreFeature(
       await transcriptReconciliation.dispose();
       reportPhase("working-tree disposal");
       await workingTree.dispose();
+      accountLimits.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();
       reportPhase("subagent queue disposal");

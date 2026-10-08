@@ -7,6 +7,7 @@ import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thre
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import { toThreadPayload } from "workbench-shared/codex/thread-adapter";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSteerHistoryEntry, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
+import type { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import { workbenchTranscriptNotifications } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
@@ -306,6 +307,10 @@ async function installProjectThreadState(
   });
 }
 
+/** Daemon-pushed account limits the fake workspace serves, by provider, and their open observations. */
+const accountLimitFacts = new Map<string, WorkbenchAccountLimits>();
+const accountLimitListeners = new Map<string, Set<() => void>>();
+
 async function withClient(
   run: (client: ReturnType<typeof WorkbenchThreadClient>, socket: FakeWebSocket, reconnect: () => number) => Promise<void>,
   clientOptions: Partial<Parameters<typeof WorkbenchThreadClient>[0]> = {},
@@ -314,6 +319,8 @@ async function withClient(
   const originalWebSocket = globalThis.WebSocket;
   let socket: FakeWebSocket | null = null;
   FakeWebSocket.intercept = null;
+  accountLimitFacts.clear();
+  accountLimitListeners.clear();
   globalThis.window = {
     cancelAnimationFrame: (handle: number) => globalThis.clearTimeout(handle),
     clearTimeout: globalThis.clearTimeout,
@@ -366,6 +373,19 @@ async function withClient(
     releaseThread: async (subscriptionId: string) => {
       await request("workbench/thread-state/release", { subscriptionId });
     },
+    // Only daemon-pushed account limits are observed through this facade in renderer tests.
+    observe: (query: { kind: string; provider?: string }, changed: () => void) => {
+      if (query.kind !== "accountLimits" || !query.provider) throw new Error(`Unexpected ${query.kind} observation.`);
+      const provider = query.provider;
+      const listeners = accountLimitListeners.get(provider) ?? new Set();
+      accountLimitListeners.set(provider, listeners);
+      listeners.add(changed);
+      return {
+        getSnapshot: () => ({ phase: "current", failure: null,
+          value: { kind: "accountLimits", data: accountLimitFacts.get(provider) ?? null } }),
+        release: () => { listeners.delete(changed); },
+      };
+    },
   } as unknown as WorkbenchWorkspaceClient;
   const client = WorkbenchThreadClient({
     workspace,
@@ -378,7 +398,6 @@ async function withClient(
   try {
     await transport.connect();
     client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), root: "repo", rootPath: "C:/repo" });
-    await client.refreshRateLimits();
     assert.ok(socket);
     await run(client, socket, () => {
       for (const listener of reconnectListeners) listener();
@@ -2584,89 +2603,34 @@ test("project reset suppresses stale reconciliation failure warnings", async () 
   }, { onStatusMessage: (message) => statusMessages.push(message) });
 });
 
-test("thread selection reuses cached rate limits while automatic reads are throttled", async () => withClient(async (client, socket) => {
-  const pendingRequests: SocketRequest[] = [];
+test("selected providers show daemon-pushed limits without reads, and a connection reset clears them", async () => withClient(async (client, socket) => {
+  const reads: SocketRequest[] = [];
   FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "account/limits/read") {
-      pendingRequests.push(request);
-      return true;
-    }
+    if (request.method === "account/limits/read") reads.push(request);
     return false;
   };
-  const respondWithRateLimits = (request: SocketRequest, limitName: string) => {
+  const pushLimits = (limitName: string) => {
     const snapshot = {
       credits: null, individualLimit: null, limitId: "codex", limitName, planType: null,
-      primary: null, rateLimitReachedType: null, secondary: null,
+      primary: null, rateLimitReachedType: null, secondary: null, spendControlReached: null,
     };
-    socket.respond(request.id, {
-      rateLimitResetCredits: null,
-      rateLimits: snapshot,
-      rateLimitsByLimitId: { codex: snapshot },
-    });
+    accountLimitFacts.set("codex", { preferredLimitId: null, rateLimits: snapshot, rateLimitsByLimitId: { codex: snapshot } });
+    for (const changed of accountLimitListeners.get("codex") ?? []) changed();
   };
-
-  const seedRefresh = client.refreshRateLimits();
-  await waitForCondition(() => pendingRequests.length === 1, "Expected the seed rate-limit read.");
-  respondWithRateLimits(pendingRequests[0]!, "cached");
-  await seedRefresh;
 
   client.selectThreadPayload(activeThread("codex", "first", "completed"));
   client.selectThreadPayload(activeThread("codex", "second", "completed"));
-  assert.equal(client.getSnapshot().rateLimits?.limitName, "cached");
-  assert.equal(pendingRequests.length, 1);
-
-  const explicitRefresh = client.refreshRateLimits();
-  await waitForCondition(() => pendingRequests.length === 2, "Expected an explicit rate-limit read.");
-  assert.equal(client.getSnapshot().rateLimits?.limitName, "cached");
-  respondWithRateLimits(pendingRequests[1]!, "explicit");
-  await explicitRefresh;
-  assert.equal(client.getSnapshot().rateLimits?.limitName, "explicit");
-
+  assert.equal(accountLimitListeners.get("codex")?.size, 1, "selection watches the provider once");
+  pushLimits("pushed");
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "pushed");
   socket.notify("account/rateLimits/updated", { rateLimits: { limitId: "codex", limitName: "notification" } });
-  await waitForCondition(
-    () => client.getSnapshot().rateLimits?.limitName === "notification",
-    "Expected the account update to merge into cached rate limits.",
-  );
-  // The update carries its values, so it never costs another provider read.
-  assert.equal(pendingRequests.length, 2);
-}));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(client.getSnapshot().rateLimits?.limitName, "pushed", "the daemon owns limits; client pushes are not merged");
+  assert.equal(reads.length, 0, "showing limits never reads them");
 
-test("project changes retain daemon account limits while connection reset fences late reads", async () => withClient(async (client, socket) => {
-  const pendingRequests: SocketRequest[] = [];
-  FakeWebSocket.intercept = (_target, request) => {
-    if (request.method === "account/limits/read") {
-      pendingRequests.push(request);
-      return true;
-    }
-    return false;
-  };
-  const staleRefresh = client.refreshRateLimits();
-  await waitForRequest(socket, "account/limits/read", 1);
-  client.setProjectContext({ projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("other"), root: "other", rootPath: "C:/other" });
-  client.selectThreadPayload(activeThread());
-  const staleSnapshot = {
-    credits: null, individualLimit: null, limitId: "codex", limitName: "same account", planType: null,
-    primary: null, rateLimitReachedType: null, secondary: null,
-  };
-  socket.respond(pendingRequests[0]!.id, {
-    rateLimitResetCredits: null,
-    rateLimits: staleSnapshot,
-    rateLimitsByLimitId: { codex: staleSnapshot },
-  });
-  await staleRefresh;
-  assert.equal(client.getSnapshot().rateLimits?.limitName, "same account");
-  await client.refreshRateLimitsIfStale();
-  assert.equal(pendingRequests.length, 1);
-  const lateRefresh = client.refreshRateLimits();
-  await waitForCondition(() => pendingRequests.length === 2, "Expected explicit refresh after folder change.");
   client.resetConnectionState();
-  socket.respond(pendingRequests[1]!.id, {
-    rateLimitResetCredits: null,
-    rateLimits: { ...staleSnapshot, limitName: "disconnected" },
-    rateLimitsByLimitId: { codex: { ...staleSnapshot, limitName: "disconnected" } },
-  });
-  await lateRefresh;
   assert.equal(client.getSnapshot().rateLimits, null);
+  assert.equal(accountLimitListeners.get("codex")?.size, 0, "a connection reset releases the observation");
 }));
 
 test("provider catalogue events invalidate only their model cache and notify mounted consumers", async () => withClient(async (client, socket) => {

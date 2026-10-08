@@ -215,7 +215,6 @@ import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
 
-const MOSAIC_RATE_LIMIT_REFRESH_INTERVAL_MS = 15_000;
 const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
   mono: "font-mono",
   sans: "font-sans",
@@ -1969,18 +1968,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const isDirectMobileThreadSurface = isMobile && isDirectThreadSurface;
 
   useEffect(() => {
-    if (!showMosaicView || !controls) {
-      return;
-    }
-
-    void controls.refreshRateLimits();
-    const intervalId = window.setInterval(() => {
-      void controls.refreshRateLimits();
-    }, MOSAIC_RATE_LIMIT_REFRESH_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
+    if (showMosaicView) controls?.watchRateLimits();
   }, [controls, showMosaicView]);
 
   const updateMainLayout = useCallback((nextLayout: WorkbenchMainLayoutState) => {

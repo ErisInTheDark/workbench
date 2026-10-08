@@ -21,6 +21,7 @@ import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotC
 import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import type WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchStatsInvalidation } from "./stats/WorkbenchStatsObservation";
 
@@ -86,6 +87,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
+    accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
     publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
@@ -150,6 +152,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           this.update(observation, { kind: "projectTree", phase: project ? "stale" : "failed", failure: message, project });
         });
         break;
+      case "accountLimits": {
+        const limits = this.owners.accountLimits;
+        if (!limits) {
+          this.update(observation, { kind: "accountLimits", phase: "unavailable", failure: "Account limits are unavailable.", limits: null });
+          break;
+        }
+        // Opening may answer synchronously (an unsupported provider); the value below covers that.
+        let handle: ReturnType<typeof limits.observe> | null = null;
+        handle = limits.observe(request.query.provider, () => {
+          if (handle) this.update(observation, { kind: "accountLimits", ...handle.read() });
+        });
+        const opened = handle;
+        observation.stopTree = () => opened.release();
+        this.update(observation, { kind: "accountLimits", ...opened.read() });
+        break;
+      }
       case "workingTreeSummary": {
         const projectId = request.query.projectId;
         const changedPaths = (update: WorkbenchProjectStateUpdate | null) => update ? Object.keys(update.snapshot.changes).sort().join("\0") : null;
@@ -284,6 +302,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       };
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
+      case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, claimsPhase: "pending", data: null };
     }
   }

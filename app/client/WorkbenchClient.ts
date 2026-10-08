@@ -820,7 +820,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     },
     submitPendingUserInputRequest: (id, ...args) => rendererForThread(id).submitPendingUserInputRequest(id, ...args),
     listModels: (...args) => threadClient.listModels(...args),
-    refreshRateLimits: () => threadClient.refreshRateLimits(),
+    watchRateLimits: () => threadClient.watchRateLimits(),
     setEditorFontSize: () => {},
     setCurrentThreadModel: (id, model) => rendererForThread(id).setCurrentThreadModel(id, model),
     setCurrentThreadAgent: (id, agent) => rendererForThread(id).setCurrentThreadAgent(id, agent),

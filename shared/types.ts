@@ -1235,7 +1235,8 @@ export interface WorkbenchControls {
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   readThread: (threadId: string, harness?: WorkbenchHarness, options?: WorkbenchReadThreadOptions) => Promise<ThreadPayload | null>;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
-  refreshRateLimits: () => Promise<void>;
+  /** Show the selected (or default) provider's daemon-pushed limits; the daemon decides when they are reread. */
+  watchRateLimits: () => void;
   refreshProjectCatalog: () => Promise<void>;
   listModels: (harness: WorkbenchHarness, options?: WorkbenchListModelsOptions) => Promise<WorkbenchModelOption[]>;
   moveThreadDraft: (sourceProjectId: ProjectId, destinationProjectId: ProjectId, draftId: DraftId) => Promise<void>;

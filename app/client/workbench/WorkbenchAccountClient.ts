@@ -1,11 +1,11 @@
 /*
  * Exports:
  * - WorkbenchAccountSnapshot: immutable provider model and rate-limit cache projection.
+ * - WorkbenchRateLimitObservation: one provider's daemon-owned limits observation.
  * - WorkbenchAccountClientOptions: provider account transport and diagnostic ports.
  * - WorkbenchModelReadSupersededError: expected retirement of an obsolete model read.
- * - default WorkbenchAccountClient: own model caches, rate-limit refresh lifecycle, and sparse provider rate-limit updates by harness.
+ * - default WorkbenchAccountClient: own model caches and watched providers' daemon-pushed rate limits by harness.
  */
-import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import type {
   WorkbenchHarness,
   WorkbenchListModelsOptions,
@@ -17,24 +17,24 @@ import type {
 } from "workbench-shared/workbench/provider/provider-account";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 
-const AUTO_REFRESH_INTERVAL_MS = 15_000;
-
-type RateLimitEntry = {
-  generation: number;
-  snapshot: WorkbenchRateLimitSnapshot | null;
-  source: "notification" | "read";
-};
-
 export interface WorkbenchAccountSnapshot {
   modelsByHarness: ReadonlyMap<WorkbenchHarness, readonly WorkbenchModelOption[]>;
   rateLimitsByHarness: ReadonlyMap<WorkbenchHarness, WorkbenchRateLimitSnapshot | null>;
 }
 
+/** One provider's daemon-owned limits observation; `changed` fires on every new fact. */
+export type WorkbenchRateLimitObservation = {
+  getSnapshot(): { failure: string | null; limits: WorkbenchAccountLimits | null };
+  release(): void;
+};
+
+type RateLimitWatch = { observation: WorkbenchRateLimitObservation | null; failure: string | null };
+
 export interface WorkbenchAccountClientOptions {
   listModels: (harness: WorkbenchHarness) => Promise<WorkbenchModelOption[]>;
   now?: () => number;
   reportError?: (message: string) => void;
-  readRateLimits: (harness: WorkbenchHarness) => Promise<WorkbenchAccountLimits>;
+  observeRateLimits: (harness: WorkbenchHarness, changed: () => void) => WorkbenchRateLimitObservation;
 }
 
 export class WorkbenchModelReadSupersededError extends Error {
@@ -95,15 +95,14 @@ function selectRateLimits(
 
 export default class WorkbenchAccountClient {
   private contextGeneration = 0;
-  private readonly generations = new Map<WorkbenchHarness, number>();
   private readonly listeners = new Set<() => void>();
   private readonly models = new Map<WorkbenchHarness, WorkbenchModelOption[]>();
   private readonly modelReads = new Map<WorkbenchHarness, Promise<WorkbenchModelOption[]>>();
   private readonly now: () => number;
   private readonly options: WorkbenchAccountClientOptions;
-  private readonly rateLimits = new Map<WorkbenchHarness, RateLimitEntry>();
-  private readonly refreshStartedAt = new Map<WorkbenchHarness, number>();
-  private readonly refreshes = new Map<WorkbenchHarness, Promise<void>>();
+  private readonly rateLimits = new Map<WorkbenchHarness, WorkbenchRateLimitSnapshot | null>();
+  /** Watched providers' daemon observations; the daemon decides when limits are reread. */
+  private readonly rateLimitObservations = new Map<WorkbenchHarness, RateLimitWatch>();
   private snapshot: WorkbenchAccountSnapshot = {
     modelsByHarness: new Map(),
     rateLimitsByHarness: new Map(),
@@ -127,11 +126,11 @@ export default class WorkbenchAccountClient {
   }
 
   getRateLimits(harness: WorkbenchHarness | null | undefined) {
-    return harness ? this.rateLimits.get(harness)?.snapshot ?? null : null;
+    return harness ? this.rateLimits.get(harness) ?? null : null;
   }
 
   hasRateLimits() {
-    return [...this.rateLimits.values()].some(entry => entry.snapshot !== null);
+    return [...this.rateLimits.values()].some(snapshot => snapshot !== null);
   }
 
   async listModels(harness: WorkbenchHarness, options: WorkbenchListModelsOptions = {}) {
@@ -165,78 +164,38 @@ export default class WorkbenchAccountClient {
     this.publish();
   }
 
-  async refreshIfStale(harness: WorkbenchHarness) {
-    const active = this.refreshes.get(harness);
-    if (active) return await active;
-    const startedAt = this.refreshStartedAt.get(harness);
-    const elapsed = startedAt === undefined ? null : this.now() - startedAt;
-    if (elapsed !== null && elapsed >= 0 && elapsed < AUTO_REFRESH_INTERVAL_MS) return;
-    await this.refresh(harness);
-  }
-
-  async refresh(harness: WorkbenchHarness, source: RateLimitEntry["source"] = "read") {
-    const active = this.refreshes.get(harness);
-    if (active) return await active;
-    this.refreshStartedAt.set(harness, this.now());
-    const contextGeneration = this.contextGeneration;
-    const generation = (this.generations.get(harness) ?? 0) + 1;
-    this.generations.set(harness, generation);
-    let task: Promise<void>;
-    task = this.options.readRateLimits(harness)
-      .then((response) => {
-        if (
-          this.disposed
-          || contextGeneration !== this.contextGeneration
-          || generation < (this.generations.get(harness) ?? 0)
-        ) return;
-        const previous = this.rateLimits.get(harness);
-        const next = selectRateLimits(response, previous?.snapshot ?? null);
-        if (previous && generation === previous.generation && previous.source === "notification" && source === "read") return;
-        if (isRegressive(previous?.snapshot ?? null, next, this.now())) return;
-        this.rateLimits.set(harness, { generation, snapshot: next, source });
-        this.publish();
-      })
-      .catch((error: unknown) => {
-        if (error instanceof WorkbenchRpcRequestInterruptedError
-          && (this.disposed || contextGeneration !== this.contextGeneration)) return;
-        const detail = error instanceof Error ? error.message : "unknown failure";
-        this.options.reportError?.(`Unable to refresh ${harness} account limits: ${detail.slice(0, 500)}`);
-      })
-      .finally(() => {
-        if (this.refreshes.get(harness) === task) this.refreshes.delete(harness);
-      });
-    this.refreshes.set(harness, task);
-    await task;
-  }
-
   /**
-   * Merge a provider's sparse rolling update into the cached snapshot: present values win, nulls mean "not
-   * reported" and keep the last read. Without a matching cached snapshot there is nothing to merge into, so it
-   * falls back to the throttled read.
+   * Show a provider's limits: holds its daemon observation until reset or disposal. The daemon rereads on demand,
+   * while the provider is active and slowly when idle, so watching again is free.
    */
-  async applyUpdate(harness: WorkbenchHarness, update: Partial<WorkbenchRateLimitSnapshot>) {
-    const previous = this.rateLimits.get(harness);
-    const base = previous?.snapshot;
-    if (!base || (update.limitId && base.limitId && update.limitId !== base.limitId)) {
-      await this.refreshIfStale(harness);
-      return;
-    }
-    const next = { ...base };
-    for (const [key, value] of Object.entries(update) as [keyof WorkbenchRateLimitSnapshot, unknown][]) {
-      if (value !== null && value !== undefined && key in base) (next as Record<string, unknown>)[key] = value;
-    }
-    if (isRegressive(base, next, this.now())) return;
-    // Take the newest read generation: a read already in flight then yields to this newer update.
-    const generation = this.generations.get(harness) ?? previous!.generation;
-    this.rateLimits.set(harness, { generation, snapshot: next, source: "notification" });
-    this.publish();
+  watchRateLimits(harness: WorkbenchHarness) {
+    if (this.disposed || this.rateLimitObservations.has(harness)) return;
+    // Opening may answer synchronously, so the entry exists before its observation does.
+    const entry: RateLimitWatch = { observation: null, failure: null };
+    const accept = () => {
+      const current = this.rateLimitObservations.get(harness);
+      if (this.disposed || !current || current !== entry) return;
+      const fact = current.observation?.getSnapshot();
+      if (!fact) return;
+      if (fact.failure && fact.failure !== current.failure) {
+        this.options.reportError?.(`Unable to refresh ${harness} account limits: ${fact.failure.slice(0, 500)}`);
+      }
+      current.failure = fact.failure;
+      if (!fact.limits) return;
+      const previous = this.rateLimits.get(harness) ?? null;
+      const next = selectRateLimits(fact.limits, previous);
+      if (isRegressive(previous, next, this.now())) return;
+      this.rateLimits.set(harness, next);
+      this.publish();
+    };
+    this.rateLimitObservations.set(harness, entry);
+    entry.observation = this.options.observeRateLimits(harness, accept);
+    accept();
   }
 
   reset() {
     this.contextGeneration += 1;
-    this.generations.clear();
-    this.refreshes.clear();
-    this.refreshStartedAt.clear();
+    this.releaseRateLimitObservations();
     this.models.clear();
     this.modelReads.clear();
     this.rateLimits.clear();
@@ -246,18 +205,20 @@ export default class WorkbenchAccountClient {
   dispose() {
     this.disposed = true;
     this.contextGeneration += 1;
-    this.generations.clear();
-    this.refreshes.clear();
+    this.releaseRateLimitObservations();
     this.modelReads.clear();
     this.listeners.clear();
+  }
+
+  private releaseRateLimitObservations() {
+    for (const { observation } of this.rateLimitObservations.values()) observation?.release();
+    this.rateLimitObservations.clear();
   }
 
   private publish() {
     this.snapshot = {
       modelsByHarness: new Map(this.models),
-      rateLimitsByHarness: new Map(
-        [...this.rateLimits].map(([harness, entry]) => [harness, entry.snapshot]),
-      ),
+      rateLimitsByHarness: new Map(this.rateLimits),
     };
     for (const listener of this.listeners) listener();
   }
