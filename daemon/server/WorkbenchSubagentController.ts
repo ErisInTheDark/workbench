@@ -36,6 +36,10 @@ interface PendingQuestionnaireList {
 }
 
 const POLL_INTERVAL_MS = 1_000;
+// Settle rechecks readiness because stop and turn completion reach thread state
+// asynchronously; a settle issued right after can observe stale non-terminal state.
+// The deadline still fails fast for a genuinely working child instead of waiting open-ended.
+const SETTLE_READY_TIMEOUT_MS = 30_000;
 const PARENT_AGENT_NAME = "parent agent";
 type WorkbenchSubagentControllerStore = Pick<
   WorkbenchSubagentStore,
@@ -83,18 +87,18 @@ function requiredThreadIds(record: Record<string, unknown>) {
   return threadIds;
 }
 
-function delay(ms: number, signal: AbortSignal) {
+function delay(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason);
+    if (signal?.aborted) return reject(signal.reason);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal.reason);
+      reject(signal?.reason);
     };
     const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -524,12 +528,21 @@ export default class WorkbenchSubagentController {
     if (!this.threadState) throw new Error("Subagent lifecycle state is unavailable.");
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
-    for (const record of records) {
-      const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
-      if (entry?.entryKind !== "subagent" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped")) {
-        throw new Error(`Subagent ${record.name} can be settled only after it is Completed or Stopped.`);
+    const unsettleable = async () => {
+      for (const record of records) {
+        const entry = await this.threadState!.getEntry(record.projectId, record.harness, record.threadId);
+        if (entry?.entryKind !== "subagent" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped")) return record;
       }
+      return null;
+    };
+    const deadline = Date.now() + SETTLE_READY_TIMEOUT_MS;
+    let blocked = await unsettleable();
+    while (blocked && Date.now() < deadline) {
+      await delay(POLL_INTERVAL_MS);
+      if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
+      blocked = await unsettleable();
     }
+    if (blocked) throw new Error(`Subagent ${blocked.name} can be settled only after it is Completed or Stopped.`);
     for (const record of records) {
       await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
     }
