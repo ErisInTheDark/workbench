@@ -476,6 +476,9 @@ export function workspaceObservationShape(kind: WorkspaceObservation["kind"]): O
   return shape;
 }
 
+// Startup resolves projects one at a time; each step drops one pending id instead of resending the shrinking list.
+const pendingProjectIds = observationShape.keyed((projectId: string) => projectId, ProjectIdSchema);
+
 function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): ObservationShape {
   const schema = memberSchema(DaemonWorkspaceObservationSchema, kind);
   switch (kind) {
@@ -483,6 +486,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
       projects: byProject(projectRows, { schema: projectRows, fields: { sidebar: sidebarRowsShape } }),
     } };
     case "summaries": return { schema, fields: {
+      pendingProjectIds,
       projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"],
         fields: {
           unsettledThreads: observationShape.keyed(summaryEntryKey, WorkbenchProjectThreadSummaryEntrySchema),
@@ -491,6 +495,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     } };
     case "catalogue": return { schema, fields: { catalogue: catalogueShape, locations: locationsShape } };
     case "projectPlacement": return { schema, fields: {
+      pendingProjectIds,
       projects: byProject(z.object({ projectId: ProjectIdSchema, hasUnarchivedWork: z.boolean() }).strict()),
     } };
     case "archivedThreads": return { schema, fields: {

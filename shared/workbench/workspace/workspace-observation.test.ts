@@ -84,6 +84,22 @@ test("a resolved questionnaire ships its one history row, not the whole history"
   assert.deepEqual(applyObservationDelta(observation(2), delta, shape), observation(3));
 });
 
+test("each resolved startup project drops one pending id instead of resending the pending list", () => {
+  const placement = (resolved: number) => {
+    const ids = ["p1", "p2", "p3"];
+    return DaemonWorkspaceObservationSchema.parse({
+      kind: "projectPlacement", subscriptionId, generation: 1, revision: 1, phase: "pending", failure: null, failures: [],
+      projects: ids.slice(0, resolved).map(projectId => ({ projectId, hasUnarchivedWork: false })),
+      pendingProjectIds: ids.slice(resolved),
+    });
+  };
+  const shape = daemonObservationShape("projectPlacement");
+  const delta = diffObservationValue(placement(1), placement(2), shape)!;
+  assert.deepEqual(delta.collections?.pendingProjectIds, { remove: ["p2"] });
+  assert.equal(delta.set, undefined);
+  assert.deepEqual(applyObservationDelta(placement(1), delta, shape), placement(2));
+});
+
 test("sidebar row protocol v2 is explicit while legacy rows conform compacting to false", () => {
   assert.deepEqual(WorkspaceQuerySchema.parse({
     kind: "projectThreads", projects: null, sidebarRowVersion: 2,
