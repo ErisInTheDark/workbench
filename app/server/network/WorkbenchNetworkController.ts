@@ -12,6 +12,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import WorkbenchServiceClient from "workbench-shared/process/WorkbenchServiceClient";
 import type { WorkbenchServiceIntent } from "workbench-shared/process/WorkbenchServiceClient";
 import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
+import type { WorkbenchDaemonDiscovery, WorkbenchDaemonIdentity } from "workbench-shared/http/workbench-daemon-discovery";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import detectHostCertificatePlatform from "workbench-shared/network/host-certificate-platform";
@@ -142,9 +143,32 @@ export default class WorkbenchNetworkController {
     const service = this.client?.getSnapshot();
     return {
       current: service?.phase === "ready",
-      attached: service?.snapshot?.identity ?? null,
+      attached: this.displayIdentity(service?.snapshot?.identity, this.runtime.host?.nodeId) ?? null,
       localOrigin: service?.phase === "ready" ? service.snapshot?.daemonOrigin ?? null : null,
       discovery: this.discovery(null),
+    };
+  }
+
+  private displayHostname(hostNodeId: string | null | undefined, fallback: string) {
+    if (!hostNodeId) return fallback;
+    return this.configurationValue?.members.find(member => member.hostNodeId === hostNodeId)?.label ?? fallback;
+  }
+
+  private displayIdentity(identity: WorkbenchDaemonIdentity | undefined, hostNodeId: string | null | undefined) {
+    if (!identity) return undefined;
+    const hostname = this.displayHostname(hostNodeId, identity.hostname);
+    return hostname === identity.hostname ? identity : { ...identity, hostname };
+  }
+
+  private displayDiscovery(discovery: WorkbenchDaemonDiscovery): WorkbenchDaemonDiscovery {
+    return {
+      ...discovery,
+      peers: discovery.peers.map(peer => {
+        const hostname = this.displayHostname(peer.peerId, peer.hostname);
+        if (peer.phase !== "verified") return hostname === peer.hostname ? peer : { ...peer, hostname };
+        const identity = this.displayIdentity(peer.identity, peer.peerId)!;
+        return hostname === peer.hostname && identity === peer.identity ? peer : { ...peer, hostname, identity };
+      }),
     };
   }
 
@@ -224,6 +248,7 @@ export default class WorkbenchNetworkController {
 
   snapshot(): WorkbenchNetworkSnapshot {
     const target = this.options.readTarget();
+    const service = this.client?.getSnapshot().snapshot;
     return structuredClone({
       configuration: this.configuration, runtime: this.runtime, executable: this.executable,
       hostPlatform: this.hostPlatform, busy: this.operation !== null, failure: this.failure,
@@ -232,8 +257,8 @@ export default class WorkbenchNetworkController {
       change: this.change ? {
         phase: this.change.phase, sourceOrigin: this.change.sourceOrigin, destinationOrigin: this.change.destinationOrigin,
       } : null,
-      daemon: this.client?.getSnapshot().snapshot?.identity,
-      daemonFailure: this.client?.getSnapshot().snapshot?.failure ?? null,
+      daemon: this.displayIdentity(service?.identity, this.runtime.host?.nodeId),
+      daemonFailure: service?.failure ?? null,
     });
   }
 
@@ -253,7 +278,9 @@ export default class WorkbenchNetworkController {
   }
 
   discovery(deviceNodeId: string | null) {
-    const discovery = this.client?.getSnapshot().snapshot?.discovery ?? { refreshing: false, peers: [] };
+    const discovery = this.displayDiscovery(
+      this.client?.getSnapshot().snapshot?.discovery ?? { refreshing: false, peers: [] },
+    );
     if (!this.configurationValue) return { refreshing: true, peers: [] };
     const group = this.configuration.group;
     if (!group || group.access === "all") return discovery;

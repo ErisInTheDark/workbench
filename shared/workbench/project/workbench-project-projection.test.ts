@@ -180,11 +180,12 @@ test("a daemon's own project shows its host instead of its hidden workspace and 
     projects: [{ id: localId, matchKey: `daemon://${first}`, label: "tower-of-floof" }],
     locations: [{
       target: { daemonId: first, projectId: ProjectIdSchema.parse("daemon") }, logicalProjectId: localId,
-      identityKey: `daemon://${first}`, name: "tower-of-floof", rootPath: "C:/data/daemon/workspace",
+      identityKey: `daemon://${first}`, name: "nixos", rootPath: "C:/data/daemon/workspace",
     }],
     defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
   };
   const projects = projectLogicalProjects(snapshot, new Map());
+  assert.equal(projects[0]?.label, "tower-of-floof");
   assert.equal(projects[0]?.displayName, "tower-of-floof");
   assert.equal(projects[0]?.displayPath, null);
   assert.equal(projects[0]?.locations[0]?.displayPath, "tower-of-floof");

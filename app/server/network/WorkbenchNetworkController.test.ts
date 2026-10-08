@@ -20,6 +20,10 @@ function fixture(privateIssue?: () => string | null) {
   let beforePortUpdate = async () => {};
   let registration: WorkbenchServiceRegistration | null = null;
   let hostStarted = false;
+  let identityHostname = "fixture";
+  let discovery: WorkbenchServiceSnapshot["discovery"] = { refreshing: false, peers: [] };
+  let networkOverride: WorkbenchServiceSnapshot["network"] | null = null;
+  let serviceChanged = () => {};
   const host = new ServiceNetworkController({
     root: ".", stateDirectory: ".", warn: () => {},
     repository: { read: () => structuredClone(configuration), write: next => { configuration = structuredClone(next); } },
@@ -49,8 +53,8 @@ function fixture(privateIssue?: () => string | null) {
     },
   });
   const snapshot = (): WorkbenchServiceSnapshot => ({
-    identity: { protocol: 1, daemonId: "67e323d5-949a-4c41-956f-1fa28905f034", hostname: "fixture", state: "ready", wakeEnabled: false },
-    daemonOrigin: target.daemonOrigin, failure: null, network: host.snapshot(), discovery: { refreshing: false, peers: [] },
+    identity: { protocol: 1, daemonId: "67e323d5-949a-4c41-956f-1fa28905f034", hostname: identityHostname, state: "ready", wakeEnabled: false },
+    daemonOrigin: target.daemonOrigin, failure: null, network: networkOverride ?? host.snapshot(), discovery,
   });
   const currentPort = () => ({
     appOrigin: target.appOrigin,
@@ -75,6 +79,7 @@ function fixture(privateIssue?: () => string | null) {
       let ready = false;
       const listeners = new Set<() => void>();
       const emit = () => { for (const listener of listeners) listener(); };
+      serviceChanged = emit;
       const unsubscribe = host.subscribe(emit);
       return {
         start: async () => {
@@ -110,6 +115,9 @@ function fixture(privateIssue?: () => string | null) {
   };
   return { owner, host, calls, start, publish: (runtime: WorkbenchNetworkRuntime) => status(runtime),
     get configuration() { return configuration; }, get starts() { return starts; }, get closes() { return closes; },
+    discovery: (next: WorkbenchServiceSnapshot["discovery"]) => { discovery = structuredClone(next); serviceChanged(); },
+    identityHostname: (next: string) => { identityHostname = next; serviceChanged(); },
+    network: (next: WorkbenchServiceSnapshot["network"]) => { networkOverride = structuredClone(next); serviceChanged(); },
     target: (port: number) => { target = { ...target, appOrigin: `http://127.0.0.1:${port}` }; },
     result: (next: WorkbenchNetworkResult) => { result = next; },
     fail: (action: string | null) => { rejectedAction = action; },
@@ -119,6 +127,55 @@ function fixture(privateIssue?: () => string | null) {
     portUpdate: (callback: () => Promise<void>) => { beforePortUpdate = callback; },
   };
 }
+
+test("network member labels name attached and discovered daemons without another peer discovery", async context => {
+  const f = fixture();
+  context.after(() => f.owner.close());
+  f.seed({
+    mode: "tailnet-service", hostServe: { enabled: true, port: 8080 },
+    privateAccess: { role: "authority", label: "noisybox", enabled: true },
+    members: [
+      { nodeId: "local-app", hostNodeId: "local-host", label: "noisybox", addresses: ["100.80.0.1"], keyFingerprint: "a".repeat(64) },
+      { nodeId: "remote-app", hostNodeId: "remote-host", label: "tower-of-floof", addresses: ["100.80.0.2"], keyFingerprint: "b".repeat(64) },
+    ],
+    group: {
+      id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1,
+      ownerNodeId: "local-app", dnsNodeId: "local-app", access: "all", grants: [],
+    },
+  });
+  await f.start();
+  f.identityHostname("nixos");
+  assert.equal(f.owner.snapshot().daemon?.hostname, "nixos", "a missing host identity must keep the raw daemon name");
+  f.publish({ ...f.owner.snapshot().runtime, host: { hostname: "nixos", address: "100.80.0.1", nodeId: "local-host" } });
+  f.discovery({ refreshing: false, peers: [
+    {
+      peerId: "remote-host", hostname: "nixos", phase: "verified",
+      identity: {
+        protocol: 1, daemonId: "9c65e34b-b601-41db-b0f8-eb916d2bf5f6",
+        hostname: "nixos", state: "ready", wakeEnabled: true,
+      },
+      origin: "http://100.80.0.2:52739",
+    },
+    { peerId: "unmapped-host", hostname: "raw-peer", phase: "pending" },
+  ] });
+
+  assert.equal(f.owner.snapshot().daemon?.hostname, "noisybox");
+  assert.equal(f.owner.daemonSources().attached?.hostname, "noisybox");
+  const peers = f.owner.discovery(null).peers;
+  assert.equal(peers[0]?.hostname, "tower-of-floof");
+  assert.equal(peers[0]?.phase === "verified" ? peers[0].identity.hostname : null, "tower-of-floof");
+  assert.equal(peers[1]?.hostname, "raw-peer");
+
+  const renamed = structuredClone(f.host.snapshot());
+  renamed.configuration.members = renamed.configuration.members.map(member => (
+    member.hostNodeId === "local-host" ? { ...member, label: "noisybox-renamed" }
+      : member.hostNodeId === "remote-host" ? { ...member, label: "floof-renamed" } : member
+  ));
+  f.network(renamed);
+
+  assert.equal(f.owner.snapshot().daemon?.hostname, "noisybox-renamed");
+  assert.equal(f.owner.discovery(null).peers[0]?.hostname, "floof-renamed");
+});
 
 test("a legacy local-port update owns the same mutation boundary as combined settings", async context => {
   const f = fixture();

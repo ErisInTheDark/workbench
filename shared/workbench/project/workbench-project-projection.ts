@@ -566,7 +566,7 @@ export function projectLogicalProjects(
       matchKey: project.matchKey,
       label,
       storedLabel: project.label,
-      displayName: remote?.parts.at(-1) ?? preferred?.name ?? project.label,
+      displayName: daemonProject ? project.label : remote?.parts.at(-1) ?? preferred?.name ?? project.label,
       displayPath,
       locations: projectLocations,
       ...(observed.length ? { observedLocations: observed } : {}),
