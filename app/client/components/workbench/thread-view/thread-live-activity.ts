@@ -12,7 +12,7 @@ import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbenc
 import { WorkbenchShellInputSchema, WorkbenchShellResultSchema } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { ThreadPayload, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
+import { isPendingInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
   getThreadCommandDisplay, getThreadCommandBlockDisplay, getThreadCommandExecutionOutcome,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, getWorkbenchCommandRouteSummaryDisplay,

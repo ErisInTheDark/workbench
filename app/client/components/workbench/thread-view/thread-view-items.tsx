@@ -44,7 +44,7 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
-import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/ThreadOptimisticInputStore";
+import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
   readWorkbenchAgentMessageInput,
   readWorkbenchAgentMessageItem,

@@ -40,9 +40,6 @@ function snapshot(currentThread = thread("selected")): WorkbenchThreadRuntimeSna
   return {
     currentThread,
     currentThreadId: currentThread.id,
-    isLoading: false,
-    pendingUserInputRequestsByThreadId: {},
-    rateLimits: null,
     subagents: [],
     threadDocuments: {
       documentsByKey: {},
@@ -77,59 +74,15 @@ test("thread runtime publishes meaningful background state without replacing rou
   assert.equal(runtime.getSnapshot().currentThread?.id, "selected");
   assert.equal(runtime.getSnapshot().threadDocuments, backgroundDocuments);
   assert.equal(notifications, 1);
-
-  const pendingQuestionnaire = {
-    harness: "codex" as const,
-    itemId: "item",
-    request: {
-      id: "request",
-      questions: [{
-        allowOther: false,
-        header: "Route",
-        id: "route",
-        isSecret: false,
-        options: [{ description: "Continue", label: "Approve" }],
-        question: "Continue?",
-      }],
-      submitLabel: "Send",
-      summary: "Choose",
-      title: "Questionnaire",
-    },
-    requestKey: "request",
-    threadId: "selected",
-    turnId: "turn",
-  };
-  runtime.accept({
-    ...runtime.getSnapshot(),
-    pendingUserInputRequestsByThreadId: { selected: pendingQuestionnaire },
-  });
-
-  assert.equal(runtime.getSnapshot().currentThread?.id, "selected");
-  assert.equal(runtime.getSnapshot().pendingUserInputRequestsByThreadId.selected, pendingQuestionnaire);
-  assert.equal(notifications, 2);
 });
 
-test("equivalent account projections retain the complete runtime snapshot", () => {
-  const limits = {
-    credits: null,
-    individualLimit: null,
-    limitId: "default",
-    limitName: null,
-    planType: "test",
-    primary: { resetsAt: 2, usedPercent: 20, windowDurationMins: 60 },
-    rateLimitReachedType: null,
-    secondary: null,
-    spendControlReached: null,
-  };
-  const initial = { ...snapshot(), rateLimits: limits };
+test("an equivalent selected thread retains the complete runtime snapshot", () => {
+  const initial = snapshot();
   const runtime = WorkbenchThreadRuntimeStore(initial);
   let notifications = 0;
   runtime.subscribe(() => { notifications += 1; });
 
-  runtime.accept({
-    ...initial,
-    rateLimits: structuredClone(limits),
-  });
+  runtime.accept({ ...initial, currentThread: structuredClone(initial.currentThread) });
 
   assert.equal(runtime.getSnapshot(), initial);
   assert.equal(notifications, 0);

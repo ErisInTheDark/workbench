@@ -17,9 +17,6 @@ function areWorkbenchThreadRuntimeSnapshotsEquivalent(
 ) {
   return left.currentThreadId === right.currentThreadId
     && areDeeplyEqual(left.currentThread, right.currentThread)
-    && left.isLoading === right.isLoading
-    && areDeeplyEqual(left.pendingUserInputRequestsByThreadId, right.pendingUserInputRequestsByThreadId)
-    && areDeeplyEqual(left.rateLimits, right.rateLimits)
     && left.subagents === right.subagents
     && left.threadDocuments === right.threadDocuments
     && left.threads === right.threads

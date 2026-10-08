@@ -133,9 +133,6 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
 const EMPTY_THREAD_RUNTIME_SNAPSHOT: WorkbenchThreadRuntimeSnapshot = {
   currentThread: null,
   currentThreadId: "",
-  isLoading: false,
-  pendingUserInputRequestsByThreadId: {},
-  rateLimits: null,
   subagents: [],
   threadDocuments: {
     documentsByKey: {},
@@ -517,7 +514,6 @@ export function useWorkbenchThreads(explicitClient?: WorkbenchClientController, 
     skills: scoped?.threadSkills ?? controls?.threadSkills ?? null,
     listModels,
     subscribeModelUpdates,
-    rateLimits: runtime.rateLimits,
     updateState,
   }), [
     controls?.threadGoals,

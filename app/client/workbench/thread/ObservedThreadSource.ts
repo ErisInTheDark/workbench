@@ -21,7 +21,7 @@ import type ThreadObservationController from "./ThreadObservationController";
 import { getThreadObservationKey } from "./ThreadObservationController";
 import type ThreadTranscriptProjectionController from "../transcript/ThreadTranscriptProjectionController";
 import type { ThreadTranscriptLocalThread, ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
-import { createOptimisticItem } from "./ThreadOptimisticInputStore";
+import { createOptimisticItem } from "./thread-optimistic-items";
 import ThreadGitArcProposalObserver from "./ThreadGitArcProposalObserver";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
@@ -41,7 +41,6 @@ export interface ObservedThreadSourcePorts {
   ) => { controller: ThreadTranscriptProjectionController; stopAvailability: () => void };
   presentText: (harness: WorkbenchHarness, update: TranscriptTextUpdate, canonicalText: string) => void;
   messageContext: (options: { workflowIds: readonly string[]; instructionInjections?: Record<string, string>; activatedSkillPaths?: readonly string[] }) => WorkbenchMessageContext;
-  normalizeInput: (input: UserInput[]) => UserInput[];
   readRateLimits: (harness: WorkbenchHarness) => WorkbenchRateLimitSnapshot | null;
   /** Demand the provider's account limits while a view shows them (idempotent). */
   watchRateLimits: (harness: WorkbenchHarness) => void;
@@ -93,6 +92,33 @@ function pendingOf(entry: ThreadEntry | null, runtime: ThreadRuntime | undefined
     harness: entry.identity.harness, threadId: entry.identity.threadId,
     itemId: pending.itemId, request: pending.request, requestKey: pending.requestKey, turnId: pending.turnId,
   } : null;
+}
+
+/** Trims each input part and drops the empty ones; the daemon rejects blank parts. */
+function normalizeInput(input: readonly UserInput[]): UserInput[] {
+  return input.flatMap((entry): UserInput[] => {
+    switch (entry.type) {
+      case "text": {
+        const text = entry.text.trim();
+        return text ? [createWorkbenchTextInput(text)] : [];
+      }
+      case "image": {
+        const url = entry.url.trim();
+        return url ? [{ type: "image", url }] : [];
+      }
+      case "localImage": {
+        const path = entry.path.trim();
+        return path ? [{ type: "localImage", path }] : [];
+      }
+      case "skill":
+      case "mention": {
+        const name = entry.name.trim();
+        const path = entry.path.trim();
+        return name && path ? [{ type: entry.type, name, path }] : [];
+      }
+    }
+    return [];
+  });
 }
 
 function sanitize(message: string) {
@@ -235,7 +261,7 @@ export default function createObservedThreadSource(
     actions: {
       async send(input, options = {}) {
         const entry = requireEntry();
-        const normalized = ports.normalizeInput(input);
+        const normalized = normalizeInput(input);
         if (!normalized.length) throw new Error("Message input cannot be empty.");
         await ports.connect();
         if (disposed) throw new ThreadMessageNotSentError();

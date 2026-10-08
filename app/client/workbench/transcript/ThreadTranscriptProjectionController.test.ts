@@ -10,7 +10,8 @@ import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { withWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { getWorkbenchInputState, withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { applySteerHistoryToThread, isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
-import ThreadOptimisticInputStore from "../thread/ThreadOptimisticInputStore";
+import { projectWorkbenchThreadItemTimelines } from "workbench-shared/workbench/thread/thread-item-timeline";
+import { createOptimisticItem, type OptimisticInputPlacement, type OptimisticInputStatus } from "../thread/thread-optimistic-items";
 import {
   transcriptSnapshotTables,
   type WorkbenchTranscriptSnapshot,
@@ -78,6 +79,31 @@ function thread(id: string, turnIds = ["turn"]): Extract<ThreadPayload, { isDraf
     })),
     updatedAt: 2,
   };
+}
+
+interface LocalInput {
+  handle: string;
+  input: Array<{ type: "text"; text: string; text_elements: [] }>;
+  placement: OptimisticInputPlacement;
+  status: OptimisticInputStatus;
+}
+
+function localInput(placement: OptimisticInputPlacement, text: string): LocalInput {
+  return { handle: crypto.randomUUID(), input: [{ type: "text", text, text_elements: [] }], placement, status: "pending" };
+}
+
+/** The selection a view makes with local inputs: initials lead the turn, steers trail it, each first seen at 42. */
+function withLocalInputs(source: ThreadPayload, inputs: readonly LocalInput[], turnId = "turn"): ThreadPayload {
+  const items = inputs.map(input => createOptimisticItem({ ...input, clientUserMessageId: input.handle }));
+  const initials = items.filter((_item, index) => inputs[index]!.placement === "initial");
+  const steers = items.filter((_item, index) => inputs[index]!.placement === "steer");
+  const placed = {
+    ...source,
+    turns: source.turns.map(turn => turn.id === turnId ? { ...turn, items: [...initials, ...turn.items, ...steers] } : turn),
+  };
+  return projectWorkbenchThreadItemTimelines(placed, turn => turn.id === turnId ? items.map(item => ({
+    completedAt: null, firstSeenAt: 42, itemId: item.id, lastSeenAt: null, startedAt: null,
+  })) : []);
 }
 
 function emptyRows(): WorkbenchTranscriptSnapshotRows {
@@ -456,9 +482,8 @@ test("patch previews appear before admission, grow immutably and become one cano
 
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
-    const steer = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "keep this input", text_elements: [] }]);
-    view.controller.select({ thread: inputs.apply(source, []) });
+    const steer = localInput("steer", "keep this input");
+    view.controller.select({ thread: withLocalInputs(source, [steer]) });
     assert.deepEqual(fileItems()[0]!.changes, grown.changes);
     const admitted = patchBaseline("inProgress", baseline.snapshot);
     view.receive(admitted);
@@ -485,9 +510,8 @@ test("server withdrawal removes only the transient tail and preserves canonical 
     view.receive(view.patch("+canonical"));
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
-    const steer = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "keep input", text_elements: [] }]);
-    view.controller.select({ thread: inputs.apply(source, []) });
+    const steer = localInput("steer", "keep input");
+    view.controller.select({ thread: withLocalInputs(source, [steer]) });
     const draft = view.patch("+draft", "preview");
     view.receive(draft);
     view.receive({ ...draft, changes: [] });
@@ -593,8 +617,10 @@ for (const correlation of ["item", "client"] as const) {
     });
     const source = thread("thread");
     source.turns[0] = { ...source.turns[0]!, status: "inProgress" };
-    const inputs = ThreadOptimisticInputStore({ now: () => 42 });
-    const select = () => controller.select({ thread: inputs.apply(source, []) });
+    const first = localInput("steer", "same");
+    const second = localInput("steer", "same");
+    let local: LocalInput[] = [];
+    const select = () => controller.select({ thread: withLocalInputs(source, local) });
     const projection = () => {
       const state = states.at(-1)!;
       assert.ok(state.status === "ready");
@@ -606,8 +632,7 @@ for (const correlation of ["item", "client"] as const) {
       await flush();
       receive(streamBaseline("thread"));
       const canonicalSegment = projection().display.segments[0]!.id;
-      const first = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
-      const second = inputs.enqueueSteer(source, "turn", [{ type: "text", text: "same", text_elements: [] }]);
+      local = [first, second];
       select();
       assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
@@ -620,12 +645,10 @@ for (const correlation of ["item", "client"] as const) {
         clientUserMessageId: first.handle, canonicalItemId: null, input: first.input,
         status: "pending" as const, attemptedAt: 42, resolvedAt: null, error: null, requestId: null,
       }];
-      controller.select({
-        thread: inputs.apply(applySteerHistoryToThread(source, pendingHistory), pendingHistory),
-      });
+      // Held steer history replaces its own optimistic copy.
+      controller.select({ thread: withLocalInputs(applySteerHistoryToThread(source, pendingHistory), [second]) });
       assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       assert.ok(projection().turns[0]!.items.slice(1).every(item => item.type === "userMessage" && isWorkbenchPendingSteerUserMessage(item)));
-      assert.ok(inputs.movePending(first.handle, "turn"));
       select();
       assert.equal(inputStates()[1]?.status, "pending", "Admission is not delivery");
       const publications = states.length;
@@ -636,7 +659,7 @@ for (const correlation of ["item", "client"] as const) {
       receive(streamBaseline("thread"));
       assert.deepEqual(projection().turns[0]!.items.map(item => item.id), [baselineItemId, first.handle, second.handle]);
       const unsent = correlation === "item" ? "failed" : "interrupted";
-      inputs.transition(second.handle, unsent);
+      local = [first, { ...second, status: unsent }];
       select();
       assert.equal(inputStates()[2]?.status, unsent);
 
@@ -698,22 +721,13 @@ test(`admitted initial input stays before provider output until canonical delive
     durationMs: null,
     status: "inProgress",
   };
-  const inputs = ThreadOptimisticInputStore({ now: () => 42 });
-  const initial = inputs.enqueueInitial(source, "turn", [{
-    text: "hello",
-    text_elements: [],
-    type: "text",
-  }], {
-    clientUserMessageId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-    status: "sent",
-  });
+  const initial = { ...localInput("initial", "hello"), handle: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "sent" as const };
   const states: ThreadTranscriptProjectionState[] = [];
   let receive!: (update: TranscriptStreamUpdate) => void;
   let subscriptions = 0;
   const controller = new ThreadTranscriptProjectionController({
     available: true,
     onStateChange: state => states.push(state),
-    readOptimisticInitials: () => inputs.getInitialProjections("codex:thread"),
     transcripts: {
       subscribe: async (_params, listener, stream) => {
         subscriptions++;
@@ -732,7 +746,7 @@ test(`admitted initial input stays before provider output until canonical delive
     return state.projection;
   };
 
-  controller.select({ thread: inputs.apply(source, []) });
+  controller.select({ thread: withLocalInputs(source, [initial]) });
   await flush();
   receive(streamBaseline("thread"));
   assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, baselineItemId]);
@@ -740,22 +754,6 @@ test(`admitted initial input stays before provider output until canonical delive
     projection().display.segments.flatMap(segment => segment.items.map(({ id }) => id)),
     [initial.handle, baselineItemId],
   );
-
-  const nativeInitial = {
-    clientId: initial.handle,
-    content: [{ text: "hello", text_elements: [], type: "text" as const }],
-    id: "native-initial",
-    type: "userMessage" as const,
-  };
-  inputs.confirmCanonicalUserMessage("codex:thread", "turn", nativeInitial);
-  source.turns[0] = {
-    ...source.turns[0]!,
-    items: [nativeInitial, ...source.turns[0]!.items],
-  };
-  const nativeProjected = inputs.apply(source, []);
-  assert.equal(nativeProjected.turns[0]!.items.some(item => item.id === initial.handle), false);
-  controller.select({ thread: nativeProjected });
-  assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [initial.handle, baselineItemId]);
 
   const delivered = streamBaseline("thread");
   assert.ok(delivered.kind === "structure");
@@ -797,7 +795,8 @@ test(`admitted initial input stays before provider output until canonical delive
   delivered.layout = createTranscriptLayoutPatch(null, createTranscriptLayout(canonical.data));
   receive(delivered);
   assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [deliveredItemId, baselineItemId]);
-  controller.select({ thread: nativeProjected });
+  // The owner drops its overlay once the transcript delivers the input.
+  controller.select({ thread: source });
   assert.deepEqual(projection().turns[0]!.items.map(({ id }) => id), [deliveredItemId, baselineItemId]);
   assert.equal(subscriptions, 1);
   await controller.dispose();
@@ -1377,52 +1376,6 @@ test("selection stays inert until capability and reconnect capability creates a 
   assert.ok(events[1]?.startsWith("subscribe:"));
   assert.notEqual(events[0], events[1]);
   controller.dispose();
-});
-
-test("retained optimistic placement replaces a stale pending-turn copy", async () => {
-  const optimisticId = "35439acf-3a80-4895-8a93-bf74091b5c21";
-  const optimisticItem = withWorkbenchInputState({
-    clientId: optimisticId,
-    content: [{ text: "hello", text_elements: [], type: "text" as const }],
-    id: optimisticId,
-    type: "userMessage",
-  }, {
-    kind: "optimistic",
-    placement: "initial",
-    status: "sent",
-  });
-  const source = thread("thread", ["pending", "started"]);
-  source.status = "active";
-  source.turns = source.turns.map((turn, index) => withWorkbenchTurnAdmission({
-    ...turn,
-    completedAt: null,
-    durationMs: null,
-    items: index === 0 ? [optimisticItem] : [],
-    status: "inProgress",
-  }, index === 0 ? "providerPending" : "connecting"));
-  const states: ThreadTranscriptProjectionState[] = [];
-  let receive!: (snapshot: WorkbenchTranscriptSnapshot | null) => void;
-  const controller = new ThreadTranscriptProjectionController({
-    available: true,
-    onStateChange: state => states.push(state),
-    readOptimisticInitials: () => [{ item: optimisticItem, turnId: "started" }],
-    transcripts: {
-      subscribe: async (_params, listener) => { receive = listener; },
-      unsubscribe: async () => {},
-    },
-    turnLimit: 4,
-  });
-
-  controller.select({ thread: source });
-  await flush();
-  receive(emptySnapshot("thread"));
-
-  const state = states.at(-1)!;
-  assert.equal(state.status, "ready");
-  assert.deepEqual(state.projection.display.segments.flatMap(segment => (
-    segment.items.map(item => ({ id: item.id, turnId: segment.turnId }))
-  )), [{ id: optimisticId, turnId: "started" }]);
-  await controller.dispose();
 });
 
 test("display planning failures stay source-local and a valid selection recovers", async () => {

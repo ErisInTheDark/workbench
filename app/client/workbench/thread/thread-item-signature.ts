@@ -2,10 +2,8 @@
  * Exports:
  * - getThreadItemRenderSignature: bounded signature for rendered thread item content.
  * - getThreadItemsRenderChunkSignature: bounded signature for one render chunk.
- * - getTurnRenderSignature: bounded signature for turn metadata and item order/content.
  */
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
@@ -159,17 +157,4 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
 
 export function getThreadItemsRenderChunkSignature(items: readonly ThreadItem[]) {
   return items.map((item) => getThreadItemRenderSignature(item)).join("\n");
-}
-
-export function getTurnRenderSignature(turn: Turn) {
-  return [
-    turn.id,
-    turn.status,
-    turn.itemsView,
-    turn.startedAt ?? "",
-    turn.completedAt ?? "",
-    turn.durationMs ?? "",
-    stableStringify(turn.error),
-    getThreadItemsRenderChunkSignature(turn.items),
-  ].join("\n");
 }

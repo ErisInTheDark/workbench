@@ -56,7 +56,6 @@ function fixture() {
     },
     presentText: () => {},
     messageContext: () => ({}),
-    normalizeInput: (input: unknown[]) => input,
     readRateLimits: () => null,
     watchRateLimits: () => {},
     subscribeRateLimits: () => () => {},

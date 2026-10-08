@@ -24,10 +24,7 @@ import {
   applyTranscriptLayoutPatch, applyTranscriptStructure, readTranscriptText, writeTranscriptText,
   type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate, type TranscriptToolPatchUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
-import {
-  isUndeliveredInitialOptimisticInputItem,
-  type OptimisticInitialInputProjection,
-} from "../thread/ThreadOptimisticInputStore";
+import { isUndeliveredInitialOptimisticInputItem } from "../thread/thread-optimistic-items";
 
 /** The only thread facts the projection reads: identity plus locally projected turns and their timing. */
 export type ThreadTranscriptLocalThread = Pick<ThreadPayload, "id" | "harness" | "turns" | "turnHistory">;
@@ -119,21 +116,9 @@ function localSteers(thread: ThreadTranscriptLocalThread | undefined) {
   });
 }
 
-function localInitials(
-  thread: ThreadTranscriptLocalThread | undefined,
-  retained: readonly OptimisticInitialInputProjection[] = [],
-) {
-  const retainedById = new Map(retained.map(projection => [projection.item.id, projection]));
+function localInitials(thread: ThreadTranscriptLocalThread | undefined) {
   return (thread?.turns ?? []).flatMap(turn => {
-    const itemsById = new Map(turn.items
-      .filter(item => item.type === "userMessage"
-        && isUndeliveredInitialOptimisticInputItem(item)
-        && (retainedById.get(item.id)?.turnId ?? turn.id) === turn.id)
-      .map(item => [item.id, item]));
-    for (const projection of retained) {
-      if (projection.turnId === turn.id) itemsById.set(projection.item.id, projection.item);
-    }
-    const items = [...itemsById.values()];
+    const items = turn.items.filter(item => item.type === "userMessage" && isUndeliveredInitialOptimisticInputItem(item));
     if (!items.length) return [];
     const ids = new Set(items.map(item => item.id));
     return [{
@@ -148,7 +133,6 @@ interface ThreadTranscriptProjectionControllerOptions {
   onError?: (error: Error) => void;
   onStateChange?: (state: ThreadTranscriptProjectionState) => void;
   onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
-  readOptimisticInitials?: (thread: ThreadTranscriptLocalThread) => readonly OptimisticInitialInputProjection[];
   transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">;
   turnLimit: number;
 }
@@ -158,7 +142,6 @@ export default class ThreadTranscriptProjectionController {
   readonly #onError: NonNullable<ThreadTranscriptProjectionControllerOptions["onError"]>;
   readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
   readonly #onText: NonNullable<ThreadTranscriptProjectionControllerOptions["onText"]>;
-  readonly #readOptimisticInitials: NonNullable<ThreadTranscriptProjectionControllerOptions["readOptimisticInitials"]>;
   readonly #transcripts: ThreadTranscriptProjectionControllerOptions["transcripts"];
   readonly #turnLimit: number;
   #activeSubscriptionId: string | null = null;
@@ -182,14 +165,12 @@ export default class ThreadTranscriptProjectionController {
     onError = (error) => console.error("Workbench transcript projection failed.", error),
     onStateChange = () => undefined,
     onText = () => undefined,
-    readOptimisticInitials = () => [],
     transcripts,
     turnLimit,
   }: ThreadTranscriptProjectionControllerOptions) {
     this.#onError = onError;
     this.#onStateChange = onStateChange;
     this.#onText = onText;
-    this.#readOptimisticInitials = readOptimisticInitials;
     this.#available = available;
     this.#transcripts = transcripts;
     this.#turnLimit = turnLimit;
@@ -241,9 +222,7 @@ export default class ThreadTranscriptProjectionController {
     { publishState = true }: { publishState?: boolean } = {},
   ) {
     if (this.#disposed) return;
-    const nextLocalInitials = selection
-      ? localInitials(selection.thread, this.#readOptimisticInitials(selection.thread))
-      : [];
+    const nextLocalInitials = selection ? localInitials(selection.thread) : [];
     const previousThreadId = this.#selection?.thread.id ?? null;
     const nextThreadId = selection?.thread.id ?? null;
     const previousIds = durableTurnIds(this.#selection?.thread.turns);

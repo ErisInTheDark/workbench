@@ -1196,9 +1196,6 @@ export interface WorkbenchThreadSidebarStore {
 export interface WorkbenchThreadRuntimeSnapshot {
   currentThread: ThreadPayload | null;
   currentThreadId: string;
-  isLoading: boolean;
-  pendingUserInputRequestsByThreadId: Record<string, WorkbenchPendingUserInputRequest>;
-  rateLimits: RateLimitSnapshot | null;
   subagents: WorkbenchSubagentSummary[];
   threadDocuments: WorkbenchThreadDocumentSnapshot;
   threads: ThreadSummary[];

@@ -214,13 +214,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
 
   function createRenderer(location: ProjectLocationReference | null, observe = true) {
     const client = WorkbenchThreadClient({
-      workspace, clientStateController: state, ...(location ? { location } : {}),
+      workspace, ...(location ? { location } : {}),
       observeProviderEvents: location !== null,
-      getProjectForThread: id => threadProject(locationForThread(id) ?? localDraftLocations.get(id)),
-      getProjectById: id => catalogueFor(location?.daemonId).data.find(project => project.id === id),
       resolveThreadIdentity: async request => (await daemon.threads.resolveIdentity(request)).data,
       updateThreadStateWithAcceptance: request => mutateThread(request),
-      onStatusMessage: message => warn(message), onThreadStarted: () => emit(),
+      onStatusMessage: message => warn(message),
     });
     const source = location ? projectFacts()?.sources.find(source => source.daemonId === location.daemonId) : null;
     if (source) client.acceptSourceGeneration(source.generation);
@@ -657,7 +655,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         harness: data.identity.harness, project, isCurrent: context.isCurrent,
       });
       if (!context.isCurrent() || outcome.kind === "superseded") return { ok: false };
-      if (outcome.kind === "failure") return { ok: false, error: outcome.failure.message };
+      if (outcome.kind === "failure") return { ok: false, error: outcome.message };
       activePath = "";
       const canonical = {
         ...withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
@@ -790,7 +788,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         reportClientSchemaError("Rejected workspace thread title", parsed.error);
         throw new Error("Invalid thread title response.");
       }
-      rendererForThread(request.threadId).applyAcceptedThreadTitle(parsed.data.identity.threadId, parsed.data.identity.harness, parsed.data.title);
+      // The thread's observation carries the accepted title to every view.
       return parsed.data.title;
     },
     threadGoals: {

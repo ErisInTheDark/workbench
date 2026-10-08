@@ -98,9 +98,7 @@ async function renderDetails(
   const client = createClient(options.sidebarStore ?? null, options.ownerLocation);
   client.controls = canRead ? {} as NonNullable<WorkbenchClientController["controls"]> : null;
   client.mounted!.threadRuntime = WorkbenchThreadRuntimeStore({
-    currentThread: null, currentThreadId: "", isLoading: false,
-    pendingUserInputRequestsByThreadId: request ? { thread: request } : {},
-    rateLimits: null, subagents: [], threadDocuments: { documentsByKey: {}, keysByThreadId: {}, selectedThreadKey: "" }, threads: [], threadsError: "",
+    currentThread: null, currentThreadId: "", subagents: [], threadDocuments: { documentsByKey: {}, keysByThreadId: {}, selectedThreadKey: "" }, threads: [], threadsError: "",
   });
   // The tooltip reads the thread store's summary and questionnaire; mirror the fixture observation into them.
   const store = new ThreadStore("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] }, publish => {
