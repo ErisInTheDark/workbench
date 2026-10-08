@@ -2,74 +2,56 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkingTreeRead } from "workbench-shared/workbench/git/working-tree-contracts";
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import WorkbenchWorkingTreeState from "./WorkbenchWorkingTreeState";
+import WorkbenchWorkingTreeState, { type WorkingTreeSummarySource } from "./WorkbenchWorkingTreeState";
 
 const repositoryData = (): WorkingTreeRead => ({ errors: [], repositories: [{
   rootId: "r", label: "repo", cwd: "/repo", head: "a".repeat(40), tree: "b".repeat(40), branch: "main",
   message: "old message", amendReason: null, blockedReason: null, owners: [], files: [],
 }] });
 
-test("sidebar demand uses only summary and unobserved providers do not scan", async () => {
+test("sidebar demand holds the pushed summary without reading, and only a source-less state falls back to scans", async () => {
   let fullReads = 0;
-  let summaries = 0;
-  const state = new WorkbenchWorkingTreeState("project", {
+  const port = {
     read: async () => { fullReads++; return repositoryData(); },
-    summary: async () => { summaries++; return { repositories: [{ rootId: "r", label: "repo", dirty: true }], errors: [] }; },
-    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
-    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
-    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
+    diff: async (request: { identity: string }) => ({ identity: request.identity, patch: "", unavailable: null }),
+    preview: async (request: { identity: string }) => ({ identity: request.identity, before: null, after: null, encoding: "text" as const, mime: "text/plain", unavailable: null }),
+    mutate: async () => ({ status: "complete" as const, commit: null, stash: null, message: "", warnings: [] }),
+  };
+  let opens = 0;
+  let releases = 0;
+  let changed = () => {};
+  let fact: ReturnType<ReturnType<WorkingTreeSummarySource>["getSnapshot"]> = { phase: "pending", failure: null, summary: null };
+  const state = new WorkbenchWorkingTreeState("project", port, listener => {
+    opens++;
+    changed = listener;
+    return { getSnapshot: () => fact, release: () => { releases++; } };
   });
   state.setVisible(true);
-  assert.equal(fullReads, 0);
   const release = state.acquireDemand("summary");
-  await state.refreshSummary();
-  assert.equal(summaries, 1);
-  assert.equal(fullReads, 0);
+  assert.equal(opens, 1);
+  assert.equal(state.getSnapshot().summaryStatus, "loading");
+  fact = { phase: "current", failure: null, summary: { repositories: [{ rootId: "r", label: "repo", dirty: true }], errors: [] } };
+  changed();
+  assert.equal(state.getSnapshot().summaryStatus, "ready");
+  assert.equal(state.getSnapshot().summary.repositories[0]?.dirty, true);
+  state.refreshDemanded();
+  assert.equal(fullReads, 0, "a pushed summary needs no read, not even on focus");
   release();
+  assert.equal(releases, 1);
   const releaseFull = state.acquireDemand("full");
   await state.refresh();
   assert.equal(fullReads, 1);
   releaseFull();
   state.dispose();
-});
 
-test("a late sidebar summary cannot replace newer full review status", async () => {
-  let finishSummary!: (value: { repositories: { rootId: string; label: string; dirty: boolean }[]; errors: [] }) => void;
-  const data = repositoryData();
-  data.repositories[0]!.files.push({
-    path: "changed.txt", oldPath: null, identity: "changed", status: "M",
-    baseBlob: null, blob: null, baseMode: "100644", mode: "100644",
-    additions: 1, deletions: 1, binary: false, partial: true, ownerIds: [],
-  });
-  const state = new WorkbenchWorkingTreeState("project", {
-    read: async () => data,
-    summary: async () => await new Promise(resolve => { finishSummary = resolve; }),
-    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
-    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
-    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
-  });
-  const old = state.refreshSummary();
-  await state.refresh();
-  finishSummary({ repositories: [{ rootId: "r", label: "repo", dirty: false }], errors: [] });
-  await old;
-  assert.equal(state.getSnapshot().summary.repositories[0]?.dirty, true);
-  state.dispose();
-});
-
-test("an older daemon keeps the sidebar live through the full-read fallback", async () => {
-  let reads = 0;
-  const state = new WorkbenchWorkingTreeState("project", {
-    read: async () => { reads++; return repositoryData(); },
-    summary: async () => { throw new WorkbenchDaemonRequestError("Unknown method", -32601); },
-    diff: async request => ({ identity: request.identity, patch: "", unavailable: null }),
-    preview: async request => ({ identity: request.identity, before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
-    mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
-  });
-  await state.refreshSummary();
-  assert.equal(reads, 1);
-  assert.equal(state.getSnapshot().summaryStatus, "ready");
-  state.dispose();
+  const sourceless = new WorkbenchWorkingTreeState("project", port);
+  sourceless.activate();
+  sourceless.setVisible(true);
+  const releaseSourceless = sourceless.acquireDemand("summary");
+  await sourceless.refresh();
+  assert.equal(sourceless.getSnapshot().summaryStatus, "ready");
+  releaseSourceless();
+  sourceless.dispose();
 });
 
 test("operation failure survives a successful refresh and is not retried", async () => {

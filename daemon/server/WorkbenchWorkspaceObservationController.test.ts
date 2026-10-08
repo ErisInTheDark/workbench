@@ -230,6 +230,48 @@ test("two tree observations release only their own subscriptions", context => {
   assert.deepEqual(stops, [a, b]);
 });
 
+test("a working-tree summary rereads only when changed paths or claims move, never on thread activity", async context => {
+  let reads = 0;
+  let dirty = true;
+  let publishTree!: (update: Parameters<Parameters<Owners["projects"]["observe"]>[1]>[0]) => void;
+  let current: WorkbenchThreadSidebarSnapshot = { ...sidebar(a), entries: [thread(1)] };
+  const tree = (paths: string[]) => ({ projectId: a, revision: 1, updateKind: "project" as const, snapshot: {
+    projectId: a, root: "C:/a", rootPath: "C:/a", roots: [], workbenchStorageRootPath: "C:/a/.workbench", tree: [],
+    changes: Object.fromEntries(paths.map(path => [path, { additions: 1, deletions: 0 }])),
+  } });
+  let stopped = 0;
+  const f = fixture(context, {
+    projects: { getCurrentUpdate: () => tree(["a.ts"]), observe: (_projectId, publish) => {
+      publishTree = publish;
+      publish(tree(["a.ts"]));
+      return () => { stopped++; };
+    } },
+    workingTree: { summary: async () => { reads++; return { repositories: [{ rootId: "r", label: "a", dirty }], errors: [] }; } },
+  });
+  f.owners.threads.peekProject = () => current;
+  const opened = f.observe({ kind: "workingTreeSummary", projectId: a });
+  await f.wait(value => value.kind === "workingTreeSummary" && value.summary !== null);
+  assert.equal(reads, 1, "opening reads once, even though the tree publishes its current value on subscribe");
+  current = { ...current, entries: [thread(1, { activityAt: 99_999 })] };
+  f.projectChanged(a);
+  publishTree({ ...tree(["a.ts"]), revision: 2 });
+  await Promise.resolve();
+  assert.equal(reads, 1, "thread activity and tree-only changes publish nothing and read nothing");
+  dirty = false;
+  current = { ...current, entries: [thread(1, { gitArc: {
+    phase: "active", checkpointCommit: "a".repeat(40), intentDescription: "", intentName: "arc", claimedPaths: ["a.ts"],
+    stashedPaths: [], proposals: [], updatedAt: "now",
+  } })] };
+  f.projectChanged(a);
+  await f.wait(value => value.kind === "workingTreeSummary" && value.summary?.repositories[0]?.dirty === false);
+  assert.equal(reads, 2, "a claim change rereads");
+  publishTree(tree(["a.ts", "b.ts"]));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 3, "a new changed path rereads");
+  f.owner.release("connection", { subscriptionId: opened.subscriptionId, generation: opened.generation });
+  assert.equal(stopped, 1);
+});
+
 test("identity admission during a pending lookup is visible even if that lookup returns absence", async context => {
   const f = fixture(context);
   const read = Promise.withResolvers<WorkbenchThreadIdentityRecord | null>();

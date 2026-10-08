@@ -20,20 +20,6 @@ test("auto-compact replies validate daemon thresholds without leaking rejected v
   assert.ok(!diagnostics[0]!.includes("private-value"));
 });
 
-test("working-tree summary validates remote status without exposing rejected paths", async context => {
-  const diagnostics: string[] = [];
-  context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });
-  const client = new WorkbenchDaemonClient({
-    request: async <TResponse>(method: string) => {
-      assert.equal(method, "git/working-tree/summary");
-      return { repositories: [{ rootId: "root", label: "private-path", dirty: "yes" }], errors: [] } as TResponse;
-    },
-  });
-  await assert.rejects(client.git.workingTree.summary({ projectId: "project" }));
-  assert.equal(diagnostics.length, 1);
-  assert.ok(!diagnostics[0]!.includes("private-path"));
-});
-
 test("command approval responses reject malformed permissions without leaking their values", async context => {
   const diagnostics: string[] = [];
   context.mock.method(console, "error", (message: string) => { diagnostics.push(message); });

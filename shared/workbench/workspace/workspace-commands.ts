@@ -86,7 +86,6 @@ export const workspaceCommandRoutes = {
   "voice/cancel": "session",
   "repo/runtime/read": "installation",
   "git/working-tree/read": "folder",
-  "git/working-tree/summary": "folder",
   "git/working-tree/diff": "folder",
   "git/working-tree/preview": "folder",
   "git/working-tree/mutate": "folder",

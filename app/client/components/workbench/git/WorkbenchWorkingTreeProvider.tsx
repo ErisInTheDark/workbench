@@ -6,8 +6,9 @@
  */
 "use client";
 import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react";
-import WorkbenchWorkingTreeState from "../../../workbench/git/WorkbenchWorkingTreeState";
-import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
+import WorkbenchWorkingTreeState, { type WorkingTreeSummarySource } from "../../../workbench/git/WorkbenchWorkingTreeState";
+import WorkbenchWorkspaceContext, { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
+import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 
 const Context = createContext<WorkbenchWorkingTreeState | null>(null);
@@ -35,14 +36,29 @@ export default function WorkbenchWorkingTreeProvider({ projectId, children, sour
   const reuse = Boolean(inheritedState && inheritedState.projectId === projectId
     && inheritedDaemonId === (sourceDaemonId ?? null)
     && daemon === inheritedDaemon);
-  const state = useMemo(() => reuse && inheritedState
-    ? inheritedState : new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null),
-  [daemon, inheritedState, projectId, reuse]);
+  const workspace = useContext(WorkbenchWorkspaceContext);
+  const daemonId = sourceDaemonId ?? null;
+  const state = useMemo(() => {
+    if (reuse && inheritedState) return inheritedState;
+    const location = daemonId && projectId
+      ? { daemonId: DaemonIdSchema.parse(daemonId), projectId: ProjectIdSchema.parse(projectId) } : null;
+    const summary: WorkingTreeSummarySource | null = workspace && location ? changed => {
+      const handle = workspace.observe({ kind: "workingTreeSummary", location }, changed);
+      return {
+        getSnapshot: () => {
+          const fact = handle.getSnapshot();
+          return { phase: fact.phase, failure: fact.failure, summary: fact.value?.data ?? null };
+        },
+        release: () => handle.release(),
+      };
+    } : null;
+    return new WorkbenchWorkingTreeState(projectId, daemon?.git.workingTree ?? null, summary);
+  }, [daemon, daemonId, inheritedState, projectId, reuse, workspace]);
   useEffect(() => {
     if (!daemon || reuse) return;
     state.activate();
     const visibility = () => state.setVisible(!document.hidden);
-    const focus = () => { if (!document.hidden) void state.refresh(); };
+    const focus = () => { if (!document.hidden) state.refreshDemanded(); };
     visibility();
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("focus", focus);

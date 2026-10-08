@@ -517,6 +517,15 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
       }
+      case "workingTreeSummary": {
+        const source = this.options.sources.get(request.query.location.daemonId);
+        if (source) interest.thread = {
+          key: request.query.location.projectId,
+          observation: source.observe({ kind: "workingTreeSummary", projectId: request.query.location.projectId }, refresh),
+        };
+        interest.stop.push(this.options.sources.subscribe(refresh));
+        break;
+      }
       case "thread":
       case "threadOwner":
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
@@ -576,6 +585,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
       case "threadRow": return { ...base, kind: "threadRow", data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
+      case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "stats": return { ...base, kind: "stats", claimsPhase: "pending", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
     }
@@ -663,6 +673,19 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "projectTree", sourceGeneration: fact?.value?.generation ?? 0,
           phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
           data: fact?.value?.kind === "projectTree" ? fact.value.project : null });
+        return;
+      }
+      case "workingTreeSummary": {
+        if (!interest.thread) {
+          const source = this.options.sources.get(query.location.daemonId);
+          if (source) interest.thread = {
+            key: query.location.projectId,
+            observation: source.observe({ kind: "workingTreeSummary", projectId: query.location.projectId }, () => this.refresh(interest)),
+          };
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        this.update(interest, { kind: "workingTreeSummary", phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
+          data: fact?.value?.kind === "workingTreeSummary" ? fact.value.summary : null });
         return;
       }
       case "stats": {

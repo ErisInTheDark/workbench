@@ -7,7 +7,7 @@ import { createWorkspaceClientFixture } from "./workspace-client-fixture";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 
-test("working-tree summary crosses the workspace socket with its folder scope and validates replies", async context => {
+test("working-tree reads cross the workspace socket with their folder scope and validate replies", async context => {
   const fixture = createWorkspaceClientFixture();
   context.after(() => fixture.dispose());
   const socket = await fixture.open();
@@ -16,24 +16,24 @@ test("working-tree summary crosses the workspace socket with its folder scope an
     projectId: ProjectIdSchema.parse("folder"),
   };
   const daemon = fixture.workspace.daemon({ kind: "folder", location });
-  const read = daemon.git.workingTree.summary({ projectId: location.projectId });
-  const rejected = read.catch(error => error);
+  const read = daemon.git.workingTree.read({ projectId: location.projectId });
+  const rejected = read.catch((error: unknown) => error);
   await Promise.resolve();
   const request = socket.sent.find(item => item.method === "workspace/command"
-    && item.params.method === "git/working-tree/summary");
+    && item.params.method === "git/working-tree/read");
   assert.ok(request?.method === "workspace/command");
   assert.deepEqual(request.params.scope, { kind: "folder", location });
-  const summary = { repositories: [{ rootId: "root", label: "folder", dirty: true }], errors: [] };
-  socket.reply(request, summary);
-  assert.deepEqual(await read, summary);
+  const tree = { repositories: [], errors: [] };
+  socket.reply(request, tree);
+  assert.deepEqual(await read, tree);
   await rejected;
 
   const errors: string[] = [];
   context.mock.method(console, "error", (message: string) => errors.push(message));
-  const invalid = daemon.git.workingTree.summary({ projectId: location.projectId });
+  const invalid = daemon.git.workingTree.read({ projectId: location.projectId });
   const invalidResult = assert.rejects(invalid);
   const next = await socket.request("workspace/command", socket.sent.indexOf(request) + 1);
-  socket.reply(next, { repositories: [{ rootId: "root", label: "folder", dirty: "invalid" }], errors: [] });
+  socket.reply(next, { repositories: "invalid", errors: [] });
   await invalidResult;
   assert.ok(errors.length > 0);
 });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners; publish typed keyed deltas after each first value.
+ * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move); publish typed keyed deltas after each first value.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -20,6 +20,8 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
 import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
+import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchStatsInvalidation } from "./stats/WorkbenchStatsObservation";
 
 type Payload = {
@@ -44,6 +46,8 @@ interface Observation<Client extends object> {
   identityRead: Promise<void> | null;
   stopTree: (() => void) | null;
   stats: { invalidate(kind: WorkbenchStatsInvalidation): void; release(): void } | null;
+  /** Last seen inputs of a working-tree summary: changed paths and claims. A summary reruns only when one moves. */
+  summaryInputs: { changes: string | null; claims: string | null } | null;
 }
 
 type ProjectListKind = "summaries" | "projectPlacement" | "projectThreads" | "archivedThreads";
@@ -81,6 +85,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       | "readWorkspaceThread" | "isThreadCompacting">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
+    workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
     publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
@@ -121,7 +126,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const initial = { ...this.initial(request), revision: initialRevision };
     const observation: Observation<Client> = {
       client, connectionId, request, value: initial, opening: true, cancellation: new AbortController(),
-      dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null,
+      dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null, summaryInputs: null,
     };
     this.observations.set(key, observation);
     try { this.start(observation); }
@@ -145,6 +150,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
           this.update(observation, { kind: "projectTree", phase: project ? "stale" : "failed", failure: message, project });
         });
         break;
+      case "workingTreeSummary": {
+        const projectId = request.query.projectId;
+        const changedPaths = (update: WorkbenchProjectStateUpdate | null) => update ? Object.keys(update.snapshot.changes).sort().join("\0") : null;
+        observation.summaryInputs = {
+          changes: changedPaths(this.owners.projects.getCurrentUpdate(projectId)), claims: this.claimsKey(projectId),
+        };
+        // The project snapshot loop already tracks Git changes; a summary rereads only when its changed paths move.
+        observation.stopTree = this.owners.projects.observe(projectId, update => {
+          const changes = changedPaths(update);
+          if (!observation.summaryInputs || observation.summaryInputs.changes === changes) return;
+          observation.summaryInputs.changes = changes;
+          this.readSummary(observation);
+        });
+        this.readSummary(observation);
+        break;
+      }
       case "summaries":
       case "projectPlacement":
       case "projectThreads":
@@ -262,6 +283,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         ...envelope, kind: "threadIdentity", phase: "pending", failure: null, identity: null,
       };
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null };
+      case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, claimsPhase: "pending", data: null };
     }
   }
@@ -372,6 +394,16 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       if (observation.request.query.kind === "thread"
         && this.canonicalProject(observation.request.query.projectId) === projectId) {
         this.readThread(observation);
+        continue;
+      }
+      if (observation.request.query.kind === "workingTreeSummary"
+        && this.canonicalProject(observation.request.query.projectId) === projectId) {
+        // Thread activity also lands here; only a claim change can change which dirty paths are unclaimed.
+        const claims = this.claimsKey(observation.request.query.projectId);
+        if (observation.summaryInputs && observation.summaryInputs.claims !== claims) {
+          observation.summaryInputs.claims = claims;
+          this.readSummary(observation);
+        }
         continue;
       }
       const selected = this.selectedProjects(observation).filter(id => this.canonicalProject(id) === projectId);
@@ -543,6 +575,51 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }, error => {
       observation.work = null;
       if (this.active(observation)) this.owners.warn(`Workspace thread scheduling failed: ${failure(error)}`);
+    });
+  }
+
+  /** Live and stashed claims of the project's threads, as a comparable key; null before the project is loaded. */
+  private claimsKey(projectId: ProjectId) {
+    const sidebar = this.owners.threads.peekProject(projectId);
+    if (!sidebar) return null;
+    return sidebar.entries.flatMap(entry => entry.entryKind === "draft" || !entry.gitArc ? [] : [
+      `${entry.identity.threadId}:${entry.gitArc.phase}:${entry.gitArc.claimedPaths.join("\0")}:${(entry.gitArc.stashedPaths ?? []).join("\0")}`,
+    ]).sort().join("\n");
+  }
+
+  /** One summary read at a time; a trigger during a read reruns once it finishes. */
+  private readSummary(observation: Observation<Client>) {
+    const query = observation.request.query;
+    if (query.kind !== "workingTreeSummary") return;
+    if (!this.owners.workingTree) {
+      this.update(observation, { kind: "workingTreeSummary", phase: "unavailable", failure: "Working tree is unavailable.", summary: null });
+      return;
+    }
+    if (observation.work) { observation.dirty.add(query.projectId); return; }
+    const workingTree = this.owners.workingTree;
+    const work = (async () => {
+      do {
+        observation.dirty.delete(query.projectId);
+        try {
+          const summary = await workingTree.summary(query.projectId);
+          if (!this.active(observation)) return;
+          this.update(observation, { kind: "workingTreeSummary", phase: "current", failure: null, summary });
+        } catch (error) {
+          if (!this.active(observation)) return;
+          const message = failure(error);
+          this.owners.warn(`Workspace working-tree summary failed: ${message}`);
+          const summary = observation.value.kind === "workingTreeSummary" ? observation.value.summary : null;
+          this.update(observation, { kind: "workingTreeSummary", phase: summary ? "stale" : "failed", failure: message, summary });
+        }
+      } while (this.active(observation) && observation.dirty.has(query.projectId));
+    })();
+    observation.work = work;
+    void work.then(() => {
+      if (observation.work === work) observation.work = null;
+      if (this.active(observation) && observation.dirty.has(query.projectId)) this.readSummary(observation);
+    }, error => {
+      observation.work = null;
+      if (this.active(observation)) this.owners.warn(`Workspace working-tree summary scheduling failed: ${failure(error)}`);
     });
   }
 

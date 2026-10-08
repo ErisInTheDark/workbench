@@ -17,11 +17,11 @@ import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestCont
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 
-test("git summary routes through the observed folder's daemon and rejects missing or unobserved scope", async context => {
+test("working-tree reads route through the observed folder's daemon and reject missing or unobserved scope", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
   const location = { daemonId, projectId: ProjectIdSchema.parse("observed-folder") };
   const calls: Array<{ method: string; params: object }> = [];
-  const summary = { repositories: [{ rootId: "root", label: "folder", dirty: true }], errors: [] };
+  const summary = { repositories: [], errors: [] };
   const source = {
     available: true,
     request: async (method: string, params: object) => { calls.push({ method, params }); return summary; },
@@ -39,17 +39,17 @@ test("git summary routes through the observed folder's daemon and rejects missin
     }],
   }));
   assert.deepEqual(await f.owner.command(WorkspaceCommandSchema.parse({
-    method: "git/working-tree/summary", scope: { kind: "folder", location },
+    method: "git/working-tree/read", scope: { kind: "folder", location },
     params: { projectId: "wrong-project" },
   })), summary);
-  assert.deepEqual(calls, [{ method: "git/working-tree/summary", params: { projectId: location.projectId } }]);
+  assert.deepEqual(calls, [{ method: "git/working-tree/read", params: { projectId: location.projectId } }]);
   await assert.rejects(f.owner.command(WorkspaceCommandSchema.parse({
-    method: "git/working-tree/summary",
+    method: "git/working-tree/read",
     scope: { kind: "folder", location: { ...location, projectId: ProjectIdSchema.parse("not-observed") } },
     params: { projectId: location.projectId },
   })), /not observed/);
   await assert.rejects(async () => f.owner.command(WorkspaceCommandSchema.parse({
-    method: "git/working-tree/summary", params: { projectId: location.projectId },
+    method: "git/working-tree/read", params: { projectId: location.projectId },
   })));
   assert.equal(calls.length, 1);
 });

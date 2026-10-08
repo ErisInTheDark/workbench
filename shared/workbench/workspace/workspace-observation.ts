@@ -2,7 +2,7 @@
  * Exports:
  * - WorkspaceSourcePhaseSchema/WorkspaceSourcePhase: independently observed source freshness.
  * - WorkspaceTranscriptStateSchema/WorkspaceTranscriptState: caller-local transcript subscription freshness.
- * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts (incl. the running checkout's `update` position), independent of socket selection.
+ * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts (incl. the running checkout's `update` position and a project's unclaimed working-tree `workingTreeSummary`), independent of socket selection.
  * - DaemonWorkspaceObserveSchema/DaemonWorkspaceObserve: named daemon observation arguments.
  * - DaemonWorkspaceObservationSchema/DaemonWorkspaceObservation: versioned partial daemon results.
  * - WorkspaceProjectReferenceSchema/WorkspaceProjectReference: registered project or explicit observed location.
@@ -54,6 +54,7 @@ import { WorkspaceSearchResponseSchema } from "./workspace-commands";
 import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contract";
 import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
+import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import {
   WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
   WorkbenchThreadSidebarRowVersionSchema, sidebarRowKey,
@@ -93,6 +94,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
     sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
+  z.object({ kind: z.literal("workingTreeSummary"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("stats"), request: WorkbenchStatsReadRequestSchema }).strict(),
@@ -157,6 +159,9 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
     ...envelope, kind: z.literal("projectTree"), project: WorkbenchProjectStateUpdateSchema.nullable(),
   }).strict(),
   z.object({
+    ...envelope, kind: z.literal("workingTreeSummary"), summary: WorkingTreeSummarySchema.nullable(),
+  }).strict(),
+  z.object({
     ...envelope, kind: z.literal("threadIdentity"), identity: WorkbenchThreadIdentityResolutionSchema.nullable(),
   }).strict(),
   z.object({
@@ -186,6 +191,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
+  z.object({ kind: z.literal("workingTreeSummary"), location: ProjectLocationReferenceSchema }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("threadRow"), threadId: ThreadReferenceSchema }).strict(),
@@ -350,6 +356,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("projectThreads"), data: WorkspaceThreadRowsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("projectTree"), sourceGeneration: revision.default(0),
     data: WorkbenchProjectStateUpdateSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("workingTreeSummary"), data: WorkingTreeSummarySchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("threadOwner"), data: WorkspaceThreadOwnerSchema }).strict(),
   z.object({
     ...envelope, kind: z.literal("thread"), owner: WorkspaceThreadOwnerSchema,

@@ -33,6 +33,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         threads: threadState,
         projects: build.get("projectSnapshot"),
         stats: build.get("stats"),
+        workingTree: build.get("workingTree"),
       },
     });
     controller.suspend();
@@ -56,7 +57,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload browser WebSocket routing, request diagnostics, and aggregate event-stream health without restarting sockets.",
   lifecycle: "handoff",
   provides: ["webSocketRequests"],
-  requires: ["voice", "repo", "daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript", "projectCatalog", "projectSnapshot", "installationUpdate"],
+  requires: ["voice", "repo", "daemonRequests", "harnesses", "reloadController", "stats", "threadState", "threadActions", "threadIdentity", "transcriptIdentity", "transcript", "projectCatalog", "projectSnapshot", "installationUpdate", "workingTree"],
   safeAll: true,
   scope: "server:websocket",
 });

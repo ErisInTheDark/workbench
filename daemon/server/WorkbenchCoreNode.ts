@@ -726,6 +726,7 @@ function createWorkbenchCoreFeature(
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
     threadContextRollover,
+    workingTree,
     turnRecoveryFailures: {
       report: async (cwd, harness, threadId) => {
         const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });

@@ -1,13 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchWorkingTreeState: own selected-project refresh, selection freshness and mutation drafts.
+ * - default WorkbenchWorkingTreeState: own selected-project refresh, the pushed unclaimed-changes summary, selection freshness and mutation drafts.
  * - WorkingTreeDraft/WorkingTreeStateSnapshot: observable browser state.
+ * - WorkingTreeSummarySource: opens the daemon-pushed summary observation.
  */
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { WorkingTreeDiff, WorkingTreeMutation, WorkingTreePreview, WorkingTreeRead, WorkingTreeRepository, WorkingTreeResult, WorkingTreeSelection, WorkingTreeSummary } from "workbench-shared/workbench/git/working-tree-contracts";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
 import WorkingTreeContentCache from "./WorkingTreeContentCache";
+import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 
 export interface WorkingTreeDraft { mode: "commit" | "amend" | "stash"; title: string; description: string; targetCommit: string | null }
 export interface WorkingTreeStateSnapshot {
@@ -30,8 +32,12 @@ export interface WorkingTreeStateSnapshot {
   busy: boolean;
   result: WorkingTreeResult | null;
 }
-type Port = Pick<WorkbenchDaemonClient["git"]["workingTree"], "read" | "diff" | "preview" | "mutate">
-  & Partial<Pick<WorkbenchDaemonClient["git"]["workingTree"], "summary">>;
+type Port = Pick<WorkbenchDaemonClient["git"]["workingTree"], "read" | "diff" | "preview" | "mutate">;
+/** Opens the daemon-pushed summary of a project's unclaimed changes; `changed` fires on every new fact. */
+export type WorkingTreeSummarySource = (changed: () => void) => {
+  getSnapshot(): { phase: WorkspaceSourcePhase; failure: string | null; summary: WorkingTreeSummary | null };
+  release(): void;
+};
 const blankDraft = (): WorkingTreeDraft => ({ mode: "commit", title: "", description: "", targetCommit: null });
 
 export default class WorkbenchWorkingTreeState {
@@ -46,7 +52,7 @@ export default class WorkbenchWorkingTreeState {
   private readonly reviews = new Map<string, { repository: WorkingTreeRepository; selections: WorkingTreeSelection[] }>();
   private readonly content: WorkingTreeContentCache | null;
   private refreshWork: { lifetime: object; promise: Promise<void> } | null = null;
-  private summaryWork: { lifetime: object; promise: Promise<void> } | null = null;
+  private summaryObservation: ReturnType<WorkingTreeSummarySource> | null = null;
   private statusRequest: object = {};
   private readonly demands = new Map<object, "summary" | "full">();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -54,7 +60,7 @@ export default class WorkbenchWorkingTreeState {
   private lifetime: object | null = {};
   private contentRequest: object | null = null;
   private previewWork: { token: object; promise: Promise<void> } | null = null;
-  constructor(readonly projectId: string, private readonly port: Port | null) {
+  constructor(readonly projectId: string, private readonly port: Port | null, private readonly summarySource: WorkingTreeSummarySource | null = null) {
     this.content = port ? new WorkingTreeContentCache(port) : null;
   }
   readonly getSnapshot = () => this.snapshot;
@@ -84,40 +90,77 @@ export default class WorkbenchWorkingTreeState {
   acquireDemand(kind: "summary" | "full") {
     const token = {};
     this.demands.set(token, kind);
+    this.syncSummaryObservation();
     this.driveDemand();
     return () => {
       this.demands.delete(token);
+      this.syncSummaryObservation();
       this.scheduleNext();
     };
   }
 
+  private get wantsFull() { return [...this.demands.values()].includes("full"); }
+
+  /** Refresh whatever is demanded now (e.g. on focus); a pushed summary needs no refresh. */
+  refreshDemanded() { this.driveDemand(); }
+
   private driveDemand() {
     if (!this.visible || !this.lifetime || !this.demands.size) return;
-    if ([...this.demands.values()].includes("full")) void this.refresh();
-    else void this.refreshSummary();
+    if (this.wantsFull) void this.refresh();
+    // Without a pushed summary, a full read is the only source of the summary.
+    else if (!this.summarySource) void this.refresh();
+  }
+
+  /** The daemon pushes the summary when changed paths or claims move, so summary demand holds an observation, not a timer. */
+  private syncSummaryObservation() {
+    const wanted = Boolean(this.summarySource && this.lifetime && this.demands.size);
+    if (!wanted) {
+      this.summaryObservation?.release();
+      this.summaryObservation = null;
+      return;
+    }
+    if (this.summaryObservation || !this.summarySource) return;
+    const observation = this.summarySource(() => this.acceptSummary());
+    this.summaryObservation = observation;
+    this.acceptSummary();
+  }
+
+  private acceptSummary() {
+    const fact = this.summaryObservation?.getSnapshot();
+    if (!fact || !this.lifetime) return;
+    const summaryStatus = fact.phase === "unavailable" ? "unavailable" as const
+      : fact.phase === "failed" ? "error" as const
+        : fact.summary ? fact.summary.errors.length ? "error" as const : "ready" as const : "loading" as const;
+    this.publish({
+      summaryStatus,
+      summary: fact.summary ?? (fact.failure
+        ? { ...this.snapshot.summary, errors: [{ rootId: "", message: fact.failure }] } : this.snapshot.summary),
+    });
   }
 
   private scheduleNext() {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     if (!this.visible || !this.lifetime || !this.demands.size || this.snapshot.busy) return;
+    if (!this.wantsFull && this.summarySource) return;
     this.timer = setTimeout(() => { this.timer = null; this.driveDemand(); }, 5_000);
   }
 
   activate() {
     this.lifetime ??= {};
+    this.syncSummaryObservation();
   }
 
   dispose() {
     this.lifetime = null;
     this.visible = false;
     this.demands.clear();
+    this.syncSummaryObservation();
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.contentRequest = null;
     this.content?.clear();
     this.previewWork = null;
-    this.summaryWork = null;
     this.statusRequest = {};
     this.listeners.clear();
   }
@@ -166,45 +209,6 @@ export default class WorkbenchWorkingTreeState {
       if (this.lifetime === lifetime) this.scheduleNext();
     });
     this.refreshWork = { lifetime, promise };
-    await promise;
-  }
-
-  async refreshSummary() {
-    const lifetime = this.lifetime;
-    const port = this.port;
-    if (!lifetime || !port || !this.projectId || this.snapshot.busy) return;
-    if (this.summaryWork) return await this.summaryWork.promise;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
-    const statusRequest = {};
-    this.statusRequest = statusRequest;
-    this.publish({ summaryStatus: this.snapshot.summaryStatus === "idle" ? "loading" : this.snapshot.summaryStatus });
-    const work = async () => {
-      try {
-        if (!port.summary) {
-          await this.refresh();
-          return;
-        }
-        const summary = await port.summary({ projectId: this.projectId });
-        if (this.lifetime !== lifetime || this.statusRequest !== statusRequest) return;
-        this.publish({ summary, summaryStatus: summary.errors.length ? "error" : "ready" });
-      } catch (error) {
-        if (this.lifetime !== lifetime || this.statusRequest !== statusRequest) return;
-        if (error instanceof WorkbenchDaemonRequestError && error.code === -32601) {
-          await this.refresh();
-          return;
-        }
-        this.publish({
-          summaryStatus: "error",
-          summary: { ...this.snapshot.summary, errors: [{ rootId: "", message: error instanceof Error ? error.message : "Unable to read Git status." }] },
-        });
-      }
-    };
-    const promise = work().finally(() => {
-      if (this.summaryWork?.promise === promise) this.summaryWork = null;
-      if (this.lifetime === lifetime) this.scheduleNext();
-    });
-    this.summaryWork = { lifetime, promise };
     await promise;
   }
 

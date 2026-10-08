@@ -91,7 +91,7 @@ type DaemonRequestMethod = Exclude<
 const REQUEST_METHODS = {
   "installation/update/pull": true, "installation/update/failure/dismiss": true,
   "project/tree/refresh": true, "project/entry/create": true, "project/file/delete": true,
-  "git/working-tree/read": true, "git/working-tree/summary": true, "git/working-tree/diff": true,
+  "git/working-tree/read": true, "git/working-tree/diff": true,
   "git/working-tree/preview": true, "git/working-tree/mutate": true,
   "models/context/read": true, "models/list": true, "account/limits/read": true,
   "agents/list": true, "agents/read": true,
@@ -343,12 +343,6 @@ export default class WorkbenchDaemonRequestController {
           if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
           const input = WorkingTreeReadRequestSchema.parse(params);
           result = await this.owners.workingTree.read(input.projectId, input.preferCached);
-          break;
-        }
-        case "git/working-tree/summary": {
-          if (!this.owners.workingTree) throw new Error("Working tree is unavailable.");
-          const input = WorkingTreeReadRequestSchema.parse(params);
-          result = await this.owners.workingTree.summary(input.projectId);
           break;
         }
         case "git/working-tree/diff":

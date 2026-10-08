@@ -281,22 +281,6 @@ function createController(options: {
   };
 }
 
-test("working-tree summary routes without asking for a full snapshot", async () => {
-  let fullReads = 0;
-  const controller = createController({
-    workingTree: {
-      summary: async () => ({ repositories: [{ rootId: "root", label: "repo", dirty: true }], errors: [] }),
-      read: async () => { fullReads++; return { repositories: [], errors: [] }; },
-      diff: async () => ({ identity: "", patch: "", unavailable: null }),
-      preview: async () => ({ identity: "", before: null, after: null, encoding: "text", mime: "text/plain", unavailable: null }),
-      mutate: async () => ({ status: "complete", commit: null, stash: null, message: "", warnings: [] }),
-    } as NonNullable<ConstructorParameters<typeof WorkbenchDaemonRequestController>[0]["workingTree"]>,
-  }).controller;
-  const response = await controller.handle({ id: 1, method: "git/working-tree/summary", params: { projectId: "project" } });
-  assert.deepEqual(response.result, { repositories: [{ rootId: "root", label: "repo", dirty: true }], errors: [] });
-  assert.equal(fullReads, 0);
-});
-
 test("model catalogue includes durable accepted use without a second request", async () => {
   const now: number[] = [];
   const { controller } = createController({

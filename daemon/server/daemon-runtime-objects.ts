@@ -279,6 +279,7 @@ export interface DaemonRuntimeObjects {
   daemonHttp: WorkbenchDaemonHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  workingTree: import("./WorkbenchWorkingTreeController").default;
   projectStore: import("./store/WorkbenchProjectStore").default;
   questionnaires: WorkbenchQuestionnaireController;
   approvals: import("./WorkbenchApprovalController").default;
