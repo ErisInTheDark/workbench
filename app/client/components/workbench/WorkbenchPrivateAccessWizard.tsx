@@ -11,7 +11,8 @@ import PrimaryButton from "../ui/PrimaryButton";
 import Disclosure from "../ui/Disclosure";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
-import { ExternalLinkIcon, LockIcon, RefreshCwIcon } from "./workbench-icons";
+import WorkbenchCertificateTrust from "./WorkbenchCertificateTrust";
+import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
 
 export default function WorkbenchPrivateAccessWizard() {
   const network = useWorkbenchNetwork();
@@ -64,9 +65,14 @@ export default function WorkbenchPrivateAccessWizard() {
     </> : null}
     {step === "trust" && status.rootCertificate ? <>
       <div className="flex flex-wrap items-center gap-2">
-        {snapshot.hostPlatform === "win32" && editable && snapshot.capabilities?.trustHost
-          ? <PrimaryButton disabled={busy} onClick={() => act({ action: "trust-host" })}><LockIcon className="mr-2 size-4" />Trust certificate on this PC</PrimaryButton>
-          : null}
+        <WorkbenchCertificateTrust
+          busy={busy}
+          certificate={status.rootCertificate}
+          enabled={editable && snapshot.capabilities?.trustHost === true}
+          hostPlatform={snapshot.hostPlatform}
+          onCopyFailure={() => setError({ step, message: "Certificate install command could not be copied." })}
+          onTrust={() => act({ action: "trust-host" })}
+        />
         <WorkbenchLinkButton download="workbench-private-root.crt" href={`data:application/x-x509-ca-cert,${encodeURIComponent(status.rootCertificate)}`}>Download certificate</WorkbenchLinkButton>
         <PrimaryButton disabled={busy} pendingHalo={busy} onClick={() => { void run(() => network.client.verify()); }}><RefreshCwIcon className="mr-2 size-4" />Retry HTTPS check</PrimaryButton>
       </div>

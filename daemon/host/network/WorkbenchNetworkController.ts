@@ -16,6 +16,7 @@ import type { NativeArtifactStager } from "../../../shared/process/NativeArtifac
 import type WorkbenchNetworkRepository from "./WorkbenchNetworkRepository.ts";
 import type { WorkbenchDaemonDiscovery } from "../../../shared/http/workbench-daemon-discovery.ts";
 import type { WorkbenchDaemonBrowserEndpoints } from "../../../shared/http/workbench-daemon-discovery.ts";
+import detectHostCertificatePlatform from "../../../shared/network/host-certificate-platform.ts";
 
 export default class WorkbenchNetworkController {
   private configuration!: WorkbenchNetworkConfiguration;
@@ -35,6 +36,7 @@ export default class WorkbenchNetworkController {
   private failure: string | null = null;
   private readonly listeners = new Set<() => void>();
   private discovery: WorkbenchDaemonDiscovery = { refreshing: false, peers: [] };
+  private readonly hostPlatform: string;
 
   constructor(private readonly options: {
     repository: Pick<WorkbenchNetworkRepository, "read" | "write">;
@@ -47,7 +49,9 @@ export default class WorkbenchNetworkController {
     warn(message: string): void;
     inspect?: () => Promise<string>;
     createProcess?: (options: ConstructorParameters<typeof WorkbenchNetworkProcess>[0]) => Pick<WorkbenchNetworkProcess, "request" | "close" | "cancelPending">;
-  }) {}
+  }) {
+    this.hostPlatform = detectHostCertificatePlatform({ warn: options.warn });
+  }
 
   async start() {
     this.closed = false;
@@ -65,7 +69,7 @@ export default class WorkbenchNetworkController {
     const target = this.options.target();
     return structuredClone({
       configuration: this.configuration, runtime: this.runtime, executable: this.executable,
-      hostPlatform: process.platform, busy: this.operation !== null, failure: this.failure,
+      hostPlatform: this.hostPlatform, busy: this.operation !== null, failure: this.failure,
       localUrl: target.appOrigin ? new URL("/launch", target.appOrigin).href : null,
       change: null,
     });

@@ -14,6 +14,7 @@ import type { WorkbenchServiceIntent } from "workbench-shared/process/WorkbenchS
 import { WORKBENCH_DAEMON_TAILNET_PORT } from "workbench-shared/http/workbench-daemon-endpoint";
 import type { WorkbenchAppPortControl } from "../WorkbenchApp.ts";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import detectHostCertificatePlatform from "workbench-shared/network/host-certificate-platform";
 
 type SettingsCaller = { deviceNodeId: string | null; origin: string };
 type ServiceClient = Pick<WorkbenchServiceClient, "start" | "close" | "reconnect" | "request" | "subscribe" | "getSnapshot">;
@@ -72,6 +73,7 @@ export default class WorkbenchNetworkController {
   private registrationFailure: { generation: number; message: string } | null = null;
   private serviceWasReady = false;
   private relaunching: Promise<void> | null = null;
+  private readonly hostPlatform: string;
 
   constructor(private readonly options: {
     endpointPath: string;
@@ -84,7 +86,9 @@ export default class WorkbenchNetworkController {
     warn: (message: string) => void;
     privateIssue?: () => string | null;
     createClient?: () => ServiceClient;
-  }) {}
+  }) {
+    this.hostPlatform = detectHostCertificatePlatform({ warn: options.warn });
+  }
 
   start() {
     if (this.phase === "closed") throw new Error("Network settings have closed.");
@@ -222,7 +226,7 @@ export default class WorkbenchNetworkController {
     const target = this.options.readTarget();
     return structuredClone({
       configuration: this.configuration, runtime: this.runtime, executable: this.executable,
-      hostPlatform: process.platform, busy: this.operation !== null, failure: this.failure,
+      hostPlatform: this.hostPlatform, busy: this.operation !== null, failure: this.failure,
       localUrl: target ? new URL("/launch", target.appOrigin).href : null,
       ...(this.options.appPort?.current?.() ? { localPort: this.options.appPort.current() ?? undefined } : {}),
       change: this.change ? {
