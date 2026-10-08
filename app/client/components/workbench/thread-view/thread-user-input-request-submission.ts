@@ -1,20 +1,20 @@
 /*
  * Exports:
- * - buildPendingUserInputRequestSubmissionOptions: derive durable questionnaire placement from loaded thread state.
+ * - buildPendingUserInputRequestSubmissionOptions: derive durable questionnaire placement from the loaded transcript turns.
  */
 
-import { getCurrentInProgressTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type {
-  ThreadPayload,
   WorkbenchPendingUserInputRequest,
   WorkbenchSubmitUserInputRequestOptions,
 } from "workbench-shared/types";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isSyntheticQuestionnaireHistoryItem } from "workbench-shared/workbench/thread/thread-questionnaire-history";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { isWorkbenchSyntheticSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 
-function isQuestionnaireFallbackAnchorItem(item: ThreadPayload["turns"][number]["items"][number]) {
+function isQuestionnaireFallbackAnchorItem(item: ThreadItem) {
   if (isWorkbenchSyntheticSteerUserMessage(item)) return false;
   switch (item.type) {
     case "agentMessage":
@@ -28,7 +28,7 @@ function isQuestionnaireFallbackAnchorItem(item: ThreadPayload["turns"][number][
   }
 }
 
-function getQuestionnaireFallbackAnchorIndex(items: ThreadPayload["turns"][number]["items"]) {
+function getQuestionnaireFallbackAnchorIndex(items: readonly ThreadItem[]) {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     if (isQuestionnaireFallbackAnchorItem(items[index]!)) return index;
   }
@@ -38,19 +38,20 @@ function getQuestionnaireFallbackAnchorIndex(items: ThreadPayload["turns"][numbe
   return -1;
 }
 
-function isDurableQuestionnairePlacementItem(item: ThreadPayload["turns"][number]["items"][number]) {
+function isDurableQuestionnairePlacementItem(item: ThreadItem) {
   return !isSyntheticQuestionnaireHistoryItem(item)
     && !isWorkbenchSyntheticSteerUserMessage(item);
 }
 
+/** `turns` are the loaded turns with provider items, or null while they are not loaded. */
 export function buildPendingUserInputRequestSubmissionOptions(
-  thread: ThreadPayload | null,
+  turns: readonly Pick<Turn, "id" | "items">[] | null,
   pendingUserInputRequest: WorkbenchPendingUserInputRequest,
 ): WorkbenchSubmitUserInputRequestOptions {
   const insertAfterItemId = isWorkbenchMcpQuestionnaireRequestKey(pendingUserInputRequest.requestKey)
     ? null
     : pendingUserInputRequest.itemId?.trim() || null;
-  if (!thread) {
+  if (!turns) {
     return {
       insertAfterItemId,
       insertAfterItemIndex: null,
@@ -59,8 +60,8 @@ export function buildPendingUserInputRequestSubmissionOptions(
   }
 
   const turn = pendingUserInputRequest.turnId
-    ? thread.turns.find((candidateTurn) => candidateTurn.id === pendingUserInputRequest.turnId) ?? null
-    : getCurrentInProgressTurn(thread) ?? thread.turns.at(-1) ?? null;
+    ? turns.find((candidateTurn) => candidateTurn.id === pendingUserInputRequest.turnId) ?? null
+    : turns.at(-1) ?? null;
   if (!turn) {
     return {
       insertAfterItemId,

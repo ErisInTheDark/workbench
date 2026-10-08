@@ -1319,7 +1319,8 @@ test(`a ${admission} turn stays visible outside durable scope with incremental=$
 
   controller.select({ thread: pending });
   await flush();
-  assert.deepEqual(subscriptions[0]?.turnIds, []);
+  // No durable turns: the daemon owns the window (latest turns), so no turn ids are named.
+  assert.equal(subscriptions[0]?.turnIds, undefined);
   listeners.get(subscriptions[0]!.subscriptionId)?.(emptySnapshot("thread"));
   assert.deepEqual(readyTurnIds.at(-1), [pendingId]);
   assert.deepEqual(readyInputStates.at(-1), {
@@ -1339,7 +1340,7 @@ test(`a ${admission} turn stays visible outside durable scope with incremental=$
   controller.select({ thread: admitted });
   await flush();
   await flush();
-  assert.deepEqual(subscriptions.at(-1)?.turnIds, incremental ? [] : ["provider-turn"]);
+  assert.deepEqual(subscriptions.at(-1)?.turnIds, incremental ? undefined : ["provider-turn"]);
   controller.dispose();
 });
 }

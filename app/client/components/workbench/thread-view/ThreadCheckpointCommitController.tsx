@@ -27,7 +27,7 @@ import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
-import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
+import type { ThreadGitArcProposalObservation } from "../../../workbench/thread/ThreadGitArcProposalObserver";
 
 export interface ThreadCheckpointCommitControllerProps {
   cwd: string | null;

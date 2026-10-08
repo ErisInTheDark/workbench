@@ -14,8 +14,8 @@ import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, ty
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { getCurrentTurn } from "workbench-shared/workbench/thread/thread-runtime-state";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import WorkbenchClientContext from "../workbench-client-context";
 import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchSkillSummary, WorkbenchSubagentSummary, WorkbenchThreadTurnHistoryEntry } from "workbench-shared/types";
 import {
@@ -187,7 +187,7 @@ type CommandBlockItem =
   | Pick<CommandItem, "command" | "commandActions" | "cwd" | "shell">
   | { display: ThreadCommandSummaryDisplay };
 type ReasoningItem = Extract<ThreadItem, { type: "reasoning" }>;
-type RelatedThreadsById = Record<string, ThreadPayload | undefined>;
+type RelatedThreadsById = Record<string, RelatedThread | undefined>;
 
 function getActiveItemStartedAtMs(
   item: { id: string; status?: string },
@@ -1294,7 +1294,7 @@ const SUBAGENT_ACTIVITY_WINDOW_BLOCKS = 24;
 const NO_BLOCKS: ThreadRenderableBlock[] = [];
 
 interface ThreadSubagentActivityWindowProps {
-  fallbackThread: ThreadPayload | undefined;
+  fallbackThread: RelatedThread | undefined;
   inlineMentionSources?: InlineMentionHighlightSources | null;
   knownSkills?: WorkbenchSkillSummary[];
   projectFilePaths?: readonly string[];
@@ -1318,10 +1318,13 @@ function ThreadSubagentActivityWindow (props: ThreadSubagentActivityWindowProps)
 
 function LiveThreadSubagentActivityWindow (props: ThreadSubagentActivityWindowProps & { subagent: WorkbenchSubagentSummary }) {
   const { subagent } = props;
-  const live = useWorkbenchThread(props.projectId ?? "", {
+  const live = useThread(props.projectId ?? "", {
     harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
-  }, undefined, "view");
-  return <ThreadSubagentActivityWindowBody {...props} thread={live.state.document ?? props.fallbackThread} />;
+  }, "view");
+  const { turns } = useThread.turns(live.store);
+  const thread = useMemo(() => live.head && turns.length ? { ...live.head, turns } : props.fallbackThread,
+    [live.head, props.fallbackThread, turns]);
+  return <ThreadSubagentActivityWindowBody {...props} thread={thread} />;
 }
 
 function ThreadSubagentActivityWindowBody ({
@@ -1333,8 +1336,8 @@ function ThreadSubagentActivityWindowBody ({
   relatedThreadsById,
   thread,
   workspaceRoots,
-}: ThreadSubagentActivityWindowProps & { thread: ThreadPayload | undefined }) {
-  const currentTurn = getCurrentTurn(thread);
+}: ThreadSubagentActivityWindowProps & { thread: RelatedThread | undefined }) {
+  const currentTurn = thread?.turns?.at(-1) ?? null;
   const turnItems = currentTurn?.items;
   const cwd = thread?.cwd;
   const recentBlocks = useMemo(

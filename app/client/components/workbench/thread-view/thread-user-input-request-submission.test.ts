@@ -23,11 +23,7 @@ const pendingRequest = {
 } satisfies WorkbenchPendingUserInputRequest;
 
 function threadWithItems(items: ThreadPayload["turns"][number]["items"]) {
-  return {
-    harness: "codex",
-    id: "thread",
-    turns: [{ id: "turn", items, status: "completed" }],
-  } as ThreadPayload;
+  return [{ id: "turn", items }];
 }
 
 test("unloaded questionnaire submissions preserve exact durable ids without inventing an index", () => {

@@ -34,6 +34,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "turnRecoveryFailures",
   "workingTree",
   "accountLimits",
+  "threadRuntime",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {

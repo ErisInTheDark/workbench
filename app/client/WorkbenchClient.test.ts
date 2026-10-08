@@ -489,7 +489,7 @@ test("a thread owner uses its projected folder label", async context => {
   assert.ok(!browsedProjectIds(socket).includes(ProjectIdSchema.parse("other-folder")));
   await client.controls.applyRoute(createHomeRoute());
   await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
-    data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
+    data: null, runtime: {}, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   for (const request of socket.sent) {
     if (request.method === "workspace/command" && request.params.method === "questionnaires/pending/read") {
@@ -525,7 +525,7 @@ test("a resolved existing thread starts its observation while catalogue metadata
   assert.deepEqual(read.params.query, { kind: "thread", threadId });
   await client.controls.applyRoute(createHomeRoute());
   await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
-    data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
+    data: null, runtime: {}, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   assert.equal(client.navigation.getSnapshot().route.view, "home");
   for (const request of socket.sent) {
@@ -576,7 +576,7 @@ test("a thread viewed from another project keeps demand for its owning project r
   const read = await socket.request("workspace/observe", ownerRowOffset, request => request.params.query.kind === "thread");
   await client.controls.applyRoute(createHomeRoute());
   await socket.observation(read, { kind: "thread", phase: "failed", failure: "source read unavailable",
-    data: null, owner: { phase: "unavailable", failure: "source read unavailable" } });
+    data: null, runtime: {}, owner: { phase: "unavailable", failure: "source read unavailable" } });
   await opening;
   for (const request of socket.sent) {
     if (request.method === "workspace/command" && request.params.method === "questionnaires/pending/read") {

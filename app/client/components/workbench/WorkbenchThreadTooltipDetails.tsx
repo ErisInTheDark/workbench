@@ -50,7 +50,7 @@ export default function WorkbenchThreadTooltipDetails({
   const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (
     entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
   ));
-  const entry = questionnaire.thread.state.entry ?? ownerArcEntry ?? sidebarEntry
+  const entry = questionnaire.thread.entry ?? ownerArcEntry ?? sidebarEntry
     ?? (pinnedEntry?.entryKind === "thread" ? pinnedEntry : null);
   const hasStash = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.stashedPaths?.length);
   const hasLiveClaims = Boolean((ownerArcEntry?.gitArc ?? entry?.gitArc)?.claimedPaths.length);
@@ -61,8 +61,8 @@ export default function WorkbenchThreadTooltipDetails({
     || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)
     || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput")
   ));
-  const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.state.canRead);
-  if (questionnaire.thread.state.status === "failed") return null;
+  const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.store);
+  if (questionnaire.thread.status === "failed") return null;
   const intersectionCard = (mode: "plan" | "stashed") => (
     <ThreadGitArcIntersectionCard
       harness={harness}

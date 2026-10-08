@@ -161,6 +161,20 @@ export function applyTranscriptStructure(
     if (entry.commandItemId && (removed.has(entry.commandItemId) || touched.has(entry.commandItemId))) browse.delete(key);
   }
   for (const entry of incoming.browseResultEntries) browse.set(entry.entryKey, entry);
+  // Side history follows its source: an item's entry is replaced when the item is, a held steer when its row is.
+  const heldKeys = new Set(update.snapshot.rows.threadHeldSteers.map(steer => steer.entry_key));
+  const stale = (entry: { itemId?: string | null; entryKey?: string | null }) =>
+    (!!entry.itemId && (removed.has(entry.itemId) || touched.has(entry.itemId)))
+    || (!!entry.entryKey && heldKeys.has(entry.entryKey));
+  const questionnaireEntries = [
+    ...(retained?.questionnaireEntries ?? []).filter(entry => !stale(entry)), ...incoming.questionnaireEntries,
+  ];
+  const steerEntries = [...(retained?.steerEntries ?? []).filter(entry => !stale(entry)), ...incoming.steerEntries];
+  const approvedItems = new Set(incoming.approvalEntries.map(entry => entry.itemId));
+  const approvalEntries = [
+    ...(retained?.approvalEntries ?? []).filter(entry => !approvedItems.has(entry.itemId) && !removed.has(entry.itemId)),
+    ...incoming.approvalEntries,
+  ];
   // A replaced augmentation may remove its timeline entirely.
   for (const id of touched) {
     if (!incoming.turns.some(turn => turn.itemTimeline.some(entry => entry.itemId === id))) timelines.delete(id);
@@ -200,10 +214,16 @@ export function applyTranscriptStructure(
   });
   const loaded = new Map(projectedTurns.map(turn => [turn.id, turn]));
   const previousSegments = new Map((retained?.display.segments ?? []).map(segment => [segment.id, segment]));
+  // A partial update may carry only older turns (or none); the newest turn keeps owning the working directory.
+  const newestTurnIndex = (projection: WorkbenchTranscriptProjection | null) => Math.max(-1, ...(projection?.turns ?? []).map(turn => turn.turnIndex));
   return {
-    thread: incoming.thread,
+    thread: retained && newestTurnIndex(retained) > newestTurnIndex(incoming)
+      ? { ...incoming.thread, cwd: retained.thread.cwd } : incoming.thread,
     hasPreviousTurns: update.hasPreviousTurns,
     browseResultEntries: [...browse.values()],
+    questionnaireEntries,
+    steerEntries,
+    approvalEntries,
     turns: projectedTurns,
     turnHistory: layout.history.flatMap(id => {
       const entry = history.get(id);

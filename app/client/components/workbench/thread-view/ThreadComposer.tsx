@@ -11,6 +11,8 @@ import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
 import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "workbench-shared/workbench/thread/thread-runtime-state";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
 import type {
   ThreadPayload,
   WorkbenchComposerProfileSlot,
@@ -132,6 +134,7 @@ export default function ThreadComposer ({
   knownSkills,
   highlightSources,
   thread,
+  turns,
   threadTarget,
   targetControl,
   controlNotice,
@@ -172,7 +175,9 @@ export default function ThreadComposer ({
   threadComposerDraft: WorkbenchComposerInputDraft | null;
   knownSkills: WorkbenchSkillSummary[];
   highlightSources: InlineMentionHighlightSources;
-  thread: ThreadPayload;
+  thread: ThreadHead;
+  /** Loaded turns without side-history items, newest last. */
+  turns: readonly Turn[];
   threadTarget?: WorkbenchThreadTarget | null;
   targetControl?: ReactNode;
   /** Short alert shown at the left of the control row, such as a mode that cannot work yet. */
@@ -184,7 +189,8 @@ export default function ThreadComposer ({
     : threadTarget?.kind === "subagent" && threadTarget.threadId === thread.id ? threadTarget
     : { kind: "provider", harness: thread.harness, threadId: thread.id }, onQuestionnaireError);
   const threadController = questionnaire.thread;
-  const sidebarEntry = threadController.state.entry;
+  const sidebarEntry = threadController.entry;
+  const threadState = useMemo(() => ({ status: thread.status, turns: [...turns] }), [thread.status, turns]);
   const threadLifecycle = sidebarEntry?.lifecycle ?? null;
   const pendingUserInputRequest = questionnaire.request;
   const threadQuestionnaireDraft = questionnaire.draft;
@@ -227,11 +233,11 @@ export default function ThreadComposer ({
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const composerInputRef = useRef<PlaintextEditableHandle>(null);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
-  const isThreadStateBroken = hasStaleApprovalState(thread);
-  const isApprovalBlocked = isCurrentTurnWaitingOnApproval(thread);
-  const isActiveThread = getCurrentInProgressTurn(thread) !== null;
+  const isThreadStateBroken = hasStaleApprovalState(threadState);
+  const isApprovalBlocked = isCurrentTurnWaitingOnApproval(threadState);
+  const isActiveThread = getCurrentInProgressTurn(threadState) !== null;
   const hasEffectiveProfile = !profileSlot || Boolean(resolvedComposerSettings?.model);
-  const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(thread, threadLifecycle, hasPendingUserInputRequest, controlsMode);
+  const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(threadState, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
   useLayoutEffect(() => {
     if (autoFocusOnEntry && !isInputDisabled && !showQuestionnairePanel
@@ -659,7 +665,7 @@ export default function ThreadComposer ({
                     await questionnaire.submit(
                       response,
                       {
-                        ...buildPendingUserInputRequestSubmissionOptions(thread, visiblePendingUserInputRequest),
+                        ...buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest),
                         ...(activatedSkillPaths?.length ? { activatedSkillPaths } : {}),
                         ...(supplementalInput?.length ? { supplementalInput } : {}),
                       },

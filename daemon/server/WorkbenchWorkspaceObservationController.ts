@@ -7,6 +7,7 @@ import {
   DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema, daemonObservationShape,
   type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-context-usage";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -88,6 +89,12 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
+    /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
+    runtime?: {
+      read(threadId: string, harness: string): Promise<ThreadRuntime>;
+      readTokenUsage(threadId: string): Promise<ThreadRuntime["tokenUsage"]>;
+      subscribe(listener: (threadId: string, change: Partial<ThreadRuntime> | null) => void): () => void;
+    };
     publish(client: Client, observation: DaemonWorkspaceObservation, change: DaemonObservationChange): void;
     warn(message: string): void;
     cooperate?: () => Promise<void>;
@@ -110,6 +117,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       owners.catalogue.subscribe(() => this.catalogueChanged()),
       owners.identities.subscribe(threadId => this.identityChanged(threadId)),
       owners.threads.subscribeProjects(projectId => this.projectChanged(projectId)),
+      ...(owners.runtime ? [owners.runtime.subscribe((threadId, change) => this.runtimeChanged(threadId, change))] : []),
     ];
   }
 
@@ -300,7 +308,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "threadIdentity": return {
         ...envelope, kind: "threadIdentity", phase: "pending", failure: null, identity: null,
       };
-      case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null };
+      case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null, runtime: {} };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, claimsPhase: "pending", data: null };
@@ -561,6 +569,47 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
+  /** Runtime for each family thread: kept for threads already read, read once for newly listed ones. */
+  private async familyRuntime(observation: Observation<Client>, entries: readonly { entryKind: string; identity?: { harness: string; threadId: string } }[]) {
+    const previous = observation.value.kind === "thread" ? observation.value.runtime : {};
+    const runtime: Record<string, ThreadRuntime> = {};
+    for (const entry of entries) {
+      if (entry.entryKind === "draft" || !entry.identity) continue;
+      const { threadId, harness } = entry.identity;
+      runtime[threadId] = previous[threadId] ?? await this.readRuntime(threadId, harness);
+    }
+    return runtime;
+  }
+
+  private async readRuntime(threadId: string, harness: string): Promise<ThreadRuntime> {
+    if (!this.owners.runtime) return { tokenUsage: null, willAutoCompact: null };
+    try { return await this.owners.runtime.read(threadId, harness); }
+    catch (error) {
+      this.owners.warn(`Workspace thread runtime read failed: ${failure(error)}`);
+      return { tokenUsage: null, willAutoCompact: null };
+    }
+  }
+
+  /** A family thread's runtime changed: apply pushed values, or reread its token usage, for each observation listing it. */
+  private runtimeChanged(threadId: string, change: Partial<ThreadRuntime> | null) {
+    const runtime = this.owners.runtime;
+    if (!runtime) return;
+    const listing = [...this.observations.values()].filter(observation =>
+      observation.value.kind === "thread" && threadId in observation.value.runtime);
+    if (!listing.length) return;
+    const apply = (patch: Partial<ThreadRuntime>) => {
+      for (const observation of listing) {
+        if (!this.active(observation) || observation.value.kind !== "thread") continue;
+        const current = observation.value.runtime[threadId];
+        if (!current) continue;
+        this.update(observation, { ...observation.value, runtime: { ...observation.value.runtime, [threadId]: { ...current, ...patch } } });
+      }
+    };
+    if (change) { apply(change); return; }
+    void runtime.readTokenUsage(threadId).then(tokenUsage => apply({ tokenUsage }),
+      error => this.owners.warn(`Workspace thread token usage read failed: ${failure(error)}`));
+  }
+
   private readThread(observation: Observation<Client>) {
     const query = observation.request.query;
     if (query.kind !== "thread") return;
@@ -576,14 +625,17 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
             projectId: query.projectId, subscriptionId: observation.request.subscriptionId,
             target: { kind: "provider", threadId: identity.threadId },
           });
-          this.update(observation, { kind: "thread", phase: "current", failure: null,
+          const runtime = await this.familyRuntime(observation, data.entries);
+          if (!this.active(observation)) return;
+          this.update(observation, { kind: "thread", phase: "current", failure: null, runtime,
             data: { ...data, entries: data.entries.map(entry => ({ ...entry, activityAt: coarseActivity(entry.activityAt) })) } });
         } catch (error) {
           if (!this.active(observation)) return;
           const message = failure(error);
           this.owners.warn(`Workspace thread observation failed: ${message}`);
-          const data = observation.value.kind === "thread" ? observation.value.data : null;
-          this.update(observation, { kind: "thread", phase: data ? "stale" : "failed", failure: message, data });
+          const value = observation.value.kind === "thread" ? observation.value : null;
+          this.update(observation, { kind: "thread", phase: value?.data ? "stale" : "failed", failure: message,
+            data: value?.data ?? null, runtime: value?.runtime ?? {} });
         }
       } while (this.active(observation) && observation.dirty.has(query.projectId));
     })();

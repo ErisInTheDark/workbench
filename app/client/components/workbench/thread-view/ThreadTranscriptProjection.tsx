@@ -14,6 +14,7 @@ import type {
 } from "workbench-shared/types";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import { isWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
@@ -76,7 +77,7 @@ export default function ThreadTranscriptProjection({
   projectRootPath: string;
   presentationSource: ThreadTextPresentationSource;
   projection: WorkbenchTranscriptProjection;
-  relatedThreadsById: Record<string, ThreadPayload | undefined>;
+  relatedThreadsById: Record<string, RelatedThread | undefined>;
   subagents: readonly WorkbenchSubagentSummary[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {

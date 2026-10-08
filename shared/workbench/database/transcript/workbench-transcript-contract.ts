@@ -13,6 +13,7 @@
  * - WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION/WorkbenchTranscriptCapabilities: supported wire protocol.
  */
 import { coreTables } from "../schema/core-schema.ts";
+import type { WorkbenchApprovalOutcomeEntry } from "../../provider/provider-approval.ts";
 import { ToolPatchPreviewFileSchema } from "../../thread/tool-patch-preview.ts";
 import { evidenceTables } from "../schema/evidence-schema.ts";
 import { interactionTables } from "../schema/interaction-schema.ts";
@@ -99,6 +100,8 @@ export interface WorkbenchTranscriptConformanceReport {
 }
 
 export interface WorkbenchTranscriptSnapshot {
+  /** Approval outcomes of tool items in the loaded turns; a live update may carry only new ones. */
+  approvalOutcomes?: WorkbenchApprovalOutcomeEntry[];
   hasPreviousTurns: boolean;
   loadedTurnIds: string[];
   rows: WorkbenchTranscriptSnapshotRows;
@@ -108,6 +111,16 @@ export interface WorkbenchTranscriptSnapshot {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Rows for a snapshot that carries no table changes (e.g. a live update with only approval outcomes). */
+export function emptyTranscriptSnapshotRows(): WorkbenchTranscriptSnapshotRows {
+  return Object.fromEntries(Object.keys(transcriptSnapshotTables).map(name => [name, []])) as unknown as WorkbenchTranscriptSnapshotRows;
+}
+
+function isApprovalOutcome(value: unknown): value is WorkbenchApprovalOutcomeEntry {
+  return isRecord(value) && typeof value.threadId === "string" && typeof value.turnId === "string"
+    && typeof value.itemId === "string" && typeof value.outcome === "string" && typeof value.resolvedAt === "number";
 }
 
 function invalidValue(path: DatabaseConformancePath): DatabaseConformanceIssue {
@@ -123,7 +136,10 @@ export function conformWorkbenchTranscriptSnapshot(
 
   const repairedPaths: DatabaseConformancePath[] = [];
   const issues: DatabaseConformanceIssue[] = [];
-  const knownRootKeys = new Set(["thread", "turns", "loadedTurnIds", "hasPreviousTurns", "rows"]);
+  const knownRootKeys = new Set(["thread", "turns", "loadedTurnIds", "hasPreviousTurns", "rows", "approvalOutcomes"]);
+  const approvalOutcomes = value.approvalOutcomes === undefined ? undefined
+    : Array.isArray(value.approvalOutcomes) && value.approvalOutcomes.every(isApprovalOutcome) ? value.approvalOutcomes
+      : (issues.push(invalidValue(["approvalOutcomes"])), undefined);
   for (const key of Object.keys(value)) if (!knownRootKeys.has(key)) repairedPaths.push([key]);
 
   const thread = conformSelectedRow(coreTables.workbenchThreads, value.thread, ["thread"]);
@@ -171,6 +187,7 @@ export function conformWorkbenchTranscriptSnapshot(
       loadedTurnIds: loadedTurnIds as string[],
       hasPreviousTurns: value.hasPreviousTurns as boolean,
       rows: rows as WorkbenchTranscriptSnapshotRows,
+      ...(approvalOutcomes ? { approvalOutcomes } : {}),
     },
     repairedPaths,
     success: true,

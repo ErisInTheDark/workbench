@@ -2,7 +2,10 @@
  * Exports:
  * - default WorkbenchTranscriptLiveController: retain active text and patch previews independently of viewers, buffer settlements for views still reading their baseline, and publish commit-scoped presentation.
  */
-import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import {
+  emptyTranscriptSnapshotRows, type WorkbenchTranscriptSnapshot,
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import {
   projectWorkbenchTranscript,
   type WorkbenchProjectedTranscriptItem,
@@ -39,6 +42,7 @@ interface Opening {
   settlements: BufferedSettlement[];
 }
 interface View {
+  thread: WorkbenchTranscriptSnapshot["thread"];
   projection: WorkbenchTranscriptProjection;
   items: Map<string, WorkbenchProjectedTranscriptItem>;
   layout: TranscriptLayout;
@@ -101,6 +105,7 @@ export default class WorkbenchTranscriptLiveController {
     if (!projected.success) throw new Error("Transcript baseline could not be projected.");
     const layout = createTranscriptLayout(projected.data);
     const view: View = {
+      thread: snapshot.thread,
       layout,
       projection: projected.data,
       items: new Map(projected.data.turns.flatMap(turn => turn.items.map(item => [item.id, item] as const))),
@@ -123,6 +128,25 @@ export default class WorkbenchTranscriptLiveController {
       this.#settleOpenView(view, change, completed);
     }
     return false;
+  }
+
+  /** Approval outcomes live outside transcript settlements; each recorded one reaches its thread's views as its own update. */
+  acceptApprovalOutcome(entry: WorkbenchApprovalOutcomeEntry) {
+    for (const view of this.#views.values()) {
+      if (view.thread.id !== entry.threadId) continue;
+      const snapshot: WorkbenchTranscriptSnapshot = {
+        thread: view.thread, turns: [], loadedTurnIds: [], hasPreviousTurns: view.projection.hasPreviousTurns,
+        rows: emptyTranscriptSnapshotRows(), approvalOutcomes: [entry],
+      };
+      const update = {
+        kind: "structure" as const, reset: false, snapshot, removedItemIds: [], layout: {},
+        hasPreviousTurns: view.projection.hasPreviousTurns,
+      };
+      try {
+        view.projection = applyTranscriptStructure(view.projection, update, view.layout);
+        view.publish(update);
+      } catch (error) { this.#reportFailure(error); }
+    }
   }
 
   close(id: string) {
@@ -283,6 +307,7 @@ export default class WorkbenchTranscriptLiveController {
 
   #settleView(view: View, change: SettlementChange) {
     const { snapshot, removedItemIds } = change;
+    view.thread = snapshot.thread;
     const incoming = projectWorkbenchTranscript(snapshot);
     if (!incoming.success) throw new Error("Committed transcript structure could not be projected.");
     if (!snapshot.rows.threadItems.length && !removedItemIds.length && !snapshot.turns.length

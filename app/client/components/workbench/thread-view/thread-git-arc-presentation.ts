@@ -15,7 +15,7 @@ import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectedTranscriptTurn } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
-import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
+import type { ThreadGitArcProposalObservation } from "../../../workbench/thread/ThreadGitArcProposalObserver";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import {
   getGitArcMatcherAction,

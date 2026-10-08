@@ -5,11 +5,12 @@
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
-import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { isTranscriptSideEntryItem, projectTranscriptSideEntries } from "workbench-shared/workbench/transcript/transcript-side-entries";
 import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
-import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError } from "workbench-shared/workbench/thread/thread-actions";
+import { WorkbenchTranscriptRecoveryRequiredError } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -29,40 +30,6 @@ export interface WorkbenchTranscriptReaderOptions {
     entry: WorkbenchThreadSidebarEntry | null;
     harness: WorkbenchHarness;
   }>;
-}
-
-type SnapshotRows = WorkbenchTranscriptSnapshot["rows"];
-
-function heldSteerInput(part: SnapshotRows["threadHeldSteerParts"][number]): UserInput {
-  const required = <Value>(value: Value | null) => {
-    if (value === null) throw new Error("Stored held steer part is incomplete.");
-    return value;
-  };
-  const detail = part.image_detail ? { detail: part.image_detail } : {};
-  switch (part.part_type) {
-    case "text": return { type: "text", text: required(part.text), text_elements: [] };
-    case "image": return { type: "image", url: required(part.url), ...detail };
-    case "localImage": return { type: "localImage", path: required(part.path), ...detail };
-    case "audio": return { type: "audio", url: required(part.url) };
-    case "localAudio": return { type: "localAudio", path: required(part.path) };
-    case "skill":
-    case "mention": return { type: part.part_type, name: required(part.name), path: required(part.path) };
-  }
-}
-
-/** Held steers sit outside the transcript; history offers every one the user has not dismissed. */
-function heldSteerEntries(snapshot: WorkbenchTranscriptSnapshot): WorkbenchThreadPageResult["steerEntries"] {
-  const partsBySteer = new Map<number, SnapshotRows["threadHeldSteerParts"]>();
-  for (const part of snapshot.rows.threadHeldSteerParts) {
-    partsBySteer.set(part.steer_id, [...partsBySteer.get(part.steer_id) ?? [], part]);
-  }
-  return snapshot.rows.threadHeldSteers.flatMap(steer => steer.state === "dismissed" ? [] : [{
-    threadId: snapshot.thread.id, turnId: steer.turn_id, itemId: steer.public_id, entryKey: steer.entry_key,
-    input: (partsBySteer.get(steer.id) ?? []).sort((left, right) => left.part_index - right.part_index).map(heldSteerInput),
-    status: steer.state, attemptedAt: steer.attempted_at, resolvedAt: steer.resolved_at, requestId: steer.request_id,
-    canonicalItemId: null, clientUserMessageId: steer.client_id, dispatchSequence: steer.dispatch_sequence,
-    error: steer.error_text,
-  }]);
 }
 
 export default class WorkbenchTranscriptReader {
@@ -159,49 +126,11 @@ export default class WorkbenchTranscriptReader {
       const detail = projected.issues.slice(0, 5).map(issue => `${issue.code} in ${issue.table}`).join(", ");
       throw new Error(`Canonical SQLite transcript projection failed: ${detail.slice(0, 500)}`);
     }
-    const questionnaireEntries: WorkbenchThreadPageResult["questionnaireEntries"] = [];
-    const steerEntries: WorkbenchThreadPageResult["steerEntries"] = [];
-    const roots = new Map(snapshot.rows.threadItems.map(root => [root.public_id, root]));
-    const inputs = new Map(snapshot.rows.threadItemUserMessages.map(row => [row.item_id, row]));
-    const turns = projected.data.turns.map(turn => {
-      const items: ThreadItem[] = [];
-      const excluded = new Set(turn.items.filter(item => "requestKey" in item
-        || (item.type === "generic" && item.nativeType === "workbenchSteer")).map(item => item.id));
-      const order = snapshot.contextItemOrder?.find(entry => entry.turnId === turn.id)?.itemIds;
-      for (const item of turn.items) {
-        if ("requestKey" in item) {
-          const predecessors = order?.slice(0, order.indexOf(item.id)).filter(id => !excluded.has(id))
-            ?? items.map(item => item.id);
-          questionnaireEntries.push({
-            threadId: snapshot.thread.id, turnId: turn.id, itemId: item.id, requestKey: item.requestKey,
-            request: item.request, response: item.response, resolvedAt: item.resolvedAt,
-            insertAfterItemId: predecessors.at(-1) ?? null, insertAfterItemIndex: predecessors.length - 1,
-          });
-          continue;
-        }
-        if (item.type === "generic" && item.nativeType === "workbenchSteer") {
-          const retained = workbenchThreadActions["thread/steers/read"].result.safeParse({ data: [item.safeValue] });
-          if (!retained.success) throw new Error("Stored Workbench steer history is invalid.");
-          const entry = retained.data.data[0]!;
-          // Audio steers are retained as generic payloads; a dismissed one stays out of history like any other.
-          if (entry.status !== "dismissed") steerEntries.push({ ...entry, itemId: item.id, threadId: snapshot.thread.id, turnId: turn.id });
-          continue;
-        }
-        items.push(item);
-        const root = roots.get(item.id);
-        const input = root ? inputs.get(root.id) : undefined;
-        if (item.type === "userMessage" && root && input?.input_kind === "steer") {
-          steerEntries.push({
-            threadId: snapshot.thread.id, turnId: turn.id, itemId: item.id, entryKey: item.id,
-            input: item.content, status: "sent",
-            attemptedAt: root.created_at, resolvedAt: root.updated_at, requestId: null,
-            canonicalItemId: item.id, clientUserMessageId: input.client_id, error: null,
-          });
-        }
-      }
-      return { ...turn, items };
-    });
-    steerEntries.push(...heldSteerEntries(snapshot));
+    const { questionnaireEntries, steerEntries } = projectTranscriptSideEntries(snapshot, projected.data.turns,
+      turnId => snapshot.contextItemOrder?.find(entry => entry.turnId === turnId)?.itemIds);
+    const turns = projected.data.turns.map(turn => ({
+      ...turn, items: turn.items.filter(item => !isTranscriptSideEntryItem(item)) as ThreadItem[],
+    }));
     return {
       turns, turnHistory: projected.data.turnHistory, questionnaireEntries, steerEntries,
       browseResultEntries: projected.data.browseResultEntries,

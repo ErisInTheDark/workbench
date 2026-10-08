@@ -5,6 +5,7 @@
 import type { MouseEvent } from "react";
 
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
@@ -15,7 +16,7 @@ import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
 import { CompletedThreadIcon, LockIcon, MessagesCircleIcon, NeedsAttentionThreadIcon, RestoreThreadIcon, SettleThreadIcon, StoppedThreadIcon, UnlockIcon, WorkingThreadIcon } from "../workbench-icons";
 import { getThreadAgentAccentHue } from "../../../workbench/thread/thread-subagents";
 import type { IdentityAccentStyle } from "../../../workbench/identity-accent-color";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
 import ThreadAgentName from "./ThreadAgentName";
 
 interface SubagentTab {
@@ -24,7 +25,7 @@ interface SubagentTab {
   isLoading: boolean;
   subagent: WorkbenchSubagentSummary | null;
   suffix: string;
-  thread: ThreadPayload | null;
+  thread: RelatedThread | null;
 }
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
@@ -183,8 +184,8 @@ export default function ThreadAgentTabs ({
   projectId: string;
   tabs: readonly SubagentTab[];
 }) {
-  const mainThread = useWorkbenchThread(projectId, { kind: "provider", harness: mainThreadHarness, threadId: ThreadReferenceSchema.parse(mainThreadId) });
-  const mainThreadLifecycle = mainThread.state.entry?.lifecycle ?? null;
+  const mainThread = useThread(projectId, { kind: "provider", harness: mainThreadHarness, threadId: ThreadReferenceSchema.parse(mainThreadId) });
+  const mainThreadLifecycle = mainThread.entry?.lifecycle ?? null;
   if (!tabs.length && !hasSettledSubagents) return null;
   const unsettledTabs = tabs.filter((tab) => !tab.subagent?.lifecycle?.settled);
   const settledTabs = tabs.filter((tab) => tab.subagent?.lifecycle?.settled);

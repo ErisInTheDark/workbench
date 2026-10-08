@@ -37,7 +37,7 @@ const thread: ThreadPayload = {
 function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentThread = thread) {
   return renderToStaticMarkup(createElement(ThreadContextStatus, {
     lifecycle,
-    onCompactThread: async () => thread,
+    onCompactThread: async () => {},
     snoozed,
     thread: currentThread,
   }));

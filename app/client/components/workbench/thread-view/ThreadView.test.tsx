@@ -10,6 +10,7 @@ import type { ExplorerSnapshot } from "workbench-shared/types";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
 import ThreadView from "./ThreadView";
+import { EMPTY_THREAD_STORE_STATE } from "../../../workbench/thread/ThreadStore";
 
 test("an unresolved existing-thread route shows its failure and retained owner", () => {
   const props = {
@@ -33,17 +34,15 @@ test("an unresolved existing-thread route shows its failure and retained owner",
   assert.match(html, /desktop \/repo/u);
 });
 
-test("a retained thread document does not turn pending project ownership into a failure", () => {
+test("a retained thread head does not turn pending project ownership into a failure", () => {
   const client = {
     controls: null,
     explorer: {} as ExplorerSnapshot,
     mounted: {
-      getThreadController: () => ({
-        getSnapshot: () => ({
-          status: "ready", error: null, document: {}, entry: null,
-          gitArcProposals: {}, pendingQuestionnaire: null, rateLimits: null,
-          subagents: [], relatedDocuments: {}, transcript: { status: "idle" },
-        }),
+      getThreadStore: () => ({
+        getSlice: (name: keyof typeof EMPTY_THREAD_STORE_STATE) => name === "summary"
+          ? { ...EMPTY_THREAD_STORE_STATE.summary, status: "ready", head: { id: "thread", isDraft: false } }
+          : EMPTY_THREAD_STORE_STATE[name],
         subscribe: () => () => undefined,
         acquire: () => () => undefined,
       }),

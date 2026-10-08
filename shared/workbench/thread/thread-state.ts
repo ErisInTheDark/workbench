@@ -43,6 +43,7 @@
 
 import { z } from "zod";
 import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
+import { ThreadRuntimeRecordSchema } from "./thread-context-usage.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
@@ -579,6 +580,8 @@ export const WorkbenchThreadObservationSnapshotSchema = z.object({
   freshness: z.enum(["loading", "fresh", "partial"]),
   projectId: z.string().min(1).brand<"ProjectId">(),
   revision: z.number().int().nonnegative(),
+  /** Live provider facts per listed thread, keyed by thread id; the app adds them from its observation's runtime. */
+  runtime: ThreadRuntimeRecordSchema.optional(),
   subscriptionId: CanonicalUuidSchema,
   target: WorkbenchObservedThreadTargetSchema,
   updateKind: z.literal("threadObservation"),

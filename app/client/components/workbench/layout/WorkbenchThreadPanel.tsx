@@ -10,7 +10,8 @@ import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
+import { normalizeWorkbenchTimestampMs } from "workbench-shared/workbench/thread/thread-state";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { WorkbenchOperationsContext as WorkbenchDaemonClientContext, WorkbenchDaemonAssetOriginContext, useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import WorkbenchWorkingTreeProvider from "../git/WorkbenchWorkingTreeProvider";
@@ -88,7 +89,7 @@ export default function WorkbenchThreadPanel ({
   const ownerMetadata = threadViewProps.threadTarget?.kind === "provider"
     || threadViewProps.threadTarget?.kind === "subagent"
     ? client.mounted?.threadOwnerFor(threadId) : null;
-  const threadController = useWorkbenchThread(threadViewProps.projectId, threadViewProps.threadTarget, undefined, threadViewProps.routeOwned ? "route" : "summary");
+  const panelThread = useThread(threadViewProps.projectId, threadViewProps.threadTarget, threadViewProps.routeOwned ? "route" : "summary");
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const initializedNewRef = useRef(false);
@@ -104,9 +105,12 @@ export default function WorkbenchThreadPanel ({
   }, [onCreateDraftThread, thread?.id, threadId]);
 
   const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
-  const threadDisplaySource = threadController.state.document ?? thread ?? fallbackSummary;
-  const threadActivityTimestampMs = resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary);
-  const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : "";
+  const threadDisplaySource = panelThread.legacyDocument ?? thread ?? fallbackSummary;
+  // Observed feeds have no document: the thread entry carries the title and activity.
+  const threadActivityTimestampMs = threadDisplaySource
+    ? resolveThreadActivityTimestampMs(threadDisplaySource, fallbackSummary)
+    : panelThread.entry ? normalizeWorkbenchTimestampMs(panelThread.entry.activityAt) : null;
+  const threadLabel = threadDisplaySource ? getThreadTitle(threadDisplaySource) : panelThread.entry?.title ?? "";
   const threadStatusLabel = threadActivityTimestampMs
     ? <WorkbenchRelativeTime label="Last activity" timestampMs={threadActivityTimestampMs} />
     : null;

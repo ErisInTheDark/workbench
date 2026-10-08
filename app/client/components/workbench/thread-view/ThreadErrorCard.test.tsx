@@ -27,10 +27,8 @@ function turn(id: string, message: string | null): Turn {
 
 test("current system errors render the provider turn message as plain text", () => {
   const html = renderToStaticMarkup(createElement(ThreadErrorCard, {
-    thread: {
-      status: "systemError",
-      turns: [turn("failed", "provider failed <before> recovery")],
-    },
+    status: "systemError",
+    lastTurn: turn("failed", "provider failed <before> recovery"),
   }));
 
   assert.match(html, /data-thread-error-card="true"/u);
@@ -39,10 +37,8 @@ test("current system errors render the provider turn message as plain text", () 
 
 test("older turn failures do not leave a stale current-error card", () => {
   const html = renderToStaticMarkup(createElement(ThreadErrorCard, {
-    thread: {
-      status: "systemError",
-      turns: [turn("failed", "old failure"), turn("recovered", null)],
-    },
+    status: "systemError",
+    lastTurn: [turn("failed", "old failure"), turn("recovered", null)].at(-1)!,
   }));
 
   assert.equal(html, "");

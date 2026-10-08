@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default ThreadView: render the shared thread owner's loading, failure or admitted content.
+ * - default ThreadView: render the shared thread store's loading, failure or admitted content.
  */
 "use client";
 
 import { useEffect, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
 import ThreadViewContent from "./ThreadViewContent";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 
@@ -26,13 +26,12 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
     setSelectedId(props.selectedThreadId ?? rootId);
   }, [props.selectedThreadId, rootId, props.viewInstanceKey]);
   const interest = routeOwned ? "route" : "view";
-  const thread = useWorkbenchThread(props.projectId, target, undefined, interest);
-  const child = thread.state.subagents.find(candidate => candidate.threadId === selectedId);
-  const active = useWorkbenchThread(props.projectId, selectedId && selectedId !== rootId
-    ? thread.state.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
-    : target, undefined, selectedId !== rootId ? "view" : interest);
-  const error = thread.state.error ?? active.state.error
-    ?? (!thread.state.document ? routeError : "");
+  const thread = useThread(props.projectId, target, interest);
+  const child = thread.subagents.find(candidate => candidate.threadId === selectedId);
+  const active = useThread(props.projectId, selectedId && selectedId !== rootId
+    ? thread.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
+    : target, selectedId !== rootId ? "view" : interest);
+  const error = thread.error ?? active.error ?? (!thread.head ? routeError : "");
   if (error) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center px-6 py-8">
@@ -44,7 +43,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
       </div>
     );
   }
-  if (!props.projectId || !target || target.kind === "new" || thread.state.status !== "ready" || !thread.state.document || active.state.status !== "ready" || !active.state.document) return <ThreadLoadingSkeleton />;
+  if (!props.projectId || !target || target.kind === "new" || thread.status !== "ready" || !thread.head || active.status !== "ready" || !active.head) return <ThreadLoadingSkeleton />;
   return <ThreadViewContent {...props} rootTarget={target} selectedThreadId={selectedId} onSelectedThreadChange={id => {
     setSelectedId(id);
     props.onSelectedThreadChange?.(id);

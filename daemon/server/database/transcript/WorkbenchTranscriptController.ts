@@ -17,6 +17,7 @@ import WorkbenchTranscriptCaptureGapController from "./WorkbenchTranscriptCaptur
 import WorkbenchTranscriptRecorder from "./WorkbenchTranscriptRecorder.ts";
 import WorkbenchTranscriptLiveController from "./WorkbenchTranscriptLiveController.ts";
 import type { TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import WorkbenchTranscriptSubscriptionController, {
   type WorkbenchTranscriptSubscription,
 } from "./WorkbenchTranscriptSubscriptionController.ts";
@@ -382,6 +383,11 @@ export default class WorkbenchTranscriptController {
 
   acceptLiveUpdate(update: TranscriptLiveUpdate) {
     if (!this.#disposed) this.#live.acceptLiveUpdate(update);
+  }
+
+  /** Publish a durably recorded approval outcome to its thread's live views. */
+  acceptApprovalOutcome(entry: WorkbenchApprovalOutcomeEntry) {
+    if (!this.#disposed) this.#live.acceptApprovalOutcome(entry);
   }
 
   #publishSettlement(

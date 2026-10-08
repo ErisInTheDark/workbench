@@ -7,6 +7,7 @@
  * - OptimisticInitialInputProjection: read-only initial input evidence for source-specific presentation.
  * - isPendingInitialOptimisticInputItem: derive pre-admission connecting state from optimistic item truth.
  * - isUndeliveredInitialOptimisticInputItem: detect visible initial input awaiting canonical transcript delivery.
+ * - createOptimisticItem: the visible user-message item for one optimistic input.
  * - ThreadOptimisticInputStore: owner for optimistic input identity, status, placement, and canonical correlation.
  * - default ThreadOptimisticInputStore: create the optimistic input owner.
  */
@@ -102,7 +103,7 @@ export function isUndeliveredInitialOptimisticInputItem(item: ThreadItem) {
     && (input.status === "pending" || input.status === "sent");
 }
 
-function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "clientUserMessageId">): UserMessageItem {
+export function createOptimisticItem(entry: Pick<OptimisticInputEntry, "handle" | "input" | "placement" | "status" | "clientUserMessageId">): UserMessageItem {
   return withWorkbenchInputState({
     clientId: entry.clientUserMessageId,
     content: entry.input.map(cloneUserInput),

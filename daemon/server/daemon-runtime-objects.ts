@@ -173,6 +173,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
 
 export interface DaemonTranscriptRegistration {
   acceptLiveUpdate?(update: TranscriptLiveUpdate): void;
+  acceptApprovalOutcome(entry: import("workbench-shared/workbench/provider/provider-approval").WorkbenchApprovalOutcomeEntry): void;
   assertReady(): void;
   captureProviderGap(threadId: string, error: unknown): Promise<Error>;
   dispose(): void;
@@ -281,6 +282,13 @@ export interface DaemonRuntimeObjects {
   projectSnapshot: WorkbenchProjectSnapshotController;
   workingTree: import("./WorkbenchWorkingTreeController").default;
   accountLimits: import("./WorkbenchAccountLimitsController").default;
+  /** Per-thread live provider facts for thread observations. */
+  threadRuntime: {
+    read(threadId: string, harness: string): Promise<import("workbench-shared/workbench/thread/thread-context-usage").ThreadRuntime>;
+    readTokenUsage(threadId: string): Promise<import("workbench-shared/workbench/thread/thread-context-usage").ThreadRuntime["tokenUsage"]>;
+    /** `change` carries pushed values; null means token usage may have changed and must be reread. */
+    subscribe(listener: (threadId: string, change: Partial<import("workbench-shared/workbench/thread/thread-context-usage").ThreadRuntime> | null) => void): () => void;
+  };
   projectStore: import("./store/WorkbenchProjectStore").default;
   questionnaires: WorkbenchQuestionnaireController;
   approvals: import("./WorkbenchApprovalController").default;

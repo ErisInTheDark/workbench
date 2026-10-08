@@ -10,16 +10,17 @@ import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbe
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { clearQuestionnaireDraft, saveQuestionnaireDraft } from "../../workbench/state/draft-persistence";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
-import { useWorkbenchThread } from "./use-workbench-thread";
+import { useThread } from "./use-thread";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
 
 export default function useWorkbenchQuestionnaire(projectId: string, target: WorkbenchThreadTarget | null, onError?: (message: string) => void) {
-  const thread = useWorkbenchThread(projectId, target);
+  const thread = useThread(projectId, target);
+  const { pending: request } = useThread.questionnaire(thread.store);
+  const { transcript, turns } = useThread.turns(thread.store);
   const clientState = useWorkbenchClientStateSnapshot();
   const client = useWorkbenchClientController();
   const store = useWorkbenchClientStateController();
-  const request = thread.state.pendingQuestionnaire;
   const threadId = target && "threadId" in target ? target.threadId : null;
   const rootThreadId = target?.kind === "provider" ? target.threadId
     : target?.kind === "subagent" ? target.parentThreadId : null;
@@ -60,18 +61,18 @@ export default function useWorkbenchQuestionnaire(projectId: string, target: Wor
   }, [store, resolveDraftIdentity, threadId, onError]);
   const submit = useCallback(async (response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions) => {
     if (!request) throw new Error("The questionnaire is no longer available.");
-    const source = thread.state.document ?? await thread.actions.read();
+    const loaded = "projection" in transcript && transcript.projection ? turns : null;
     const supplementalInput = options?.supplementalInput
       ? await Promise.all(options.supplementalInput.map(async item => item.type === "image"
         ? { ...item, url: await store.resolveDraftAttachmentUrl(item.url) }
         : item))
       : undefined;
     await thread.actions.submitQuestionnaire(response, {
-      ...buildPendingUserInputRequestSubmissionOptions(source, request),
+      ...buildPendingUserInputRequestSubmissionOptions(loaded, request),
       ...options,
       ...(supplementalInput ? { supplementalInput } : {}),
     });
-  }, [request, store, thread.state.document, thread.actions.read, thread.actions.submitQuestionnaire]);
+  }, [request, store, transcript, turns, thread.actions]);
   return {
     thread,
     request,

@@ -13,7 +13,7 @@ import { deriveThreadMessageBoardHistory, type ThreadMessageBoardMessage } from 
 import { getSubagentSummary, resolveWorkbenchSubagentCommandTargets } from "../../../workbench/thread/thread-subagents";
 import { describeThreadEntry } from "../thread-entry-presentation";
 import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import { ArrowRightIcon } from "../workbench-icons";
@@ -113,20 +113,21 @@ function ThreadMessageBoardHistory({
   subagent: WorkbenchSubagentSummary;
   subagents: readonly WorkbenchSubagentSummary[];
 }) {
-  const live = useWorkbenchThread(projectId, {
+  const live = useThread(projectId, {
     harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
-  }, undefined, "view");
-  const document = live.state.document;
+  }, "view");
+  const { transcript, turns, canLoadOlder } = useThread.turns(live.store);
+  const projection = "projection" in transcript ? transcript.projection : null;
   const history = useMemo(
-    () => document ? deriveThreadMessageBoardHistory(document.turns, document.turnHistory) : [],
-    [document],
+    () => projection ? deriveThreadMessageBoardHistory(turns, projection.turnHistory) : [],
+    [projection, turns],
   );
   const [loadState, setLoadState] = useState<"idle" | "loading" | "failed">("idle");
   const loadEarlier = async () => {
-    if (!document?.nextPageCursor || loadState === "loading") return;
+    if (!canLoadOlder || loadState === "loading") return;
     setLoadState("loading");
     try {
-      await live.actions.read(subagent.harness, { cursor: document.nextPageCursor, cwd: subagent.cwd });
+      await live.actions.loadOlder();
       setLoadState("idle");
     } catch (error) {
       setLoadState("failed");
@@ -140,7 +141,7 @@ function ThreadMessageBoardHistory({
     // A reversed column scrolls from the bottom, so the newest message starts in view and older pages grow upward.
     <div className="scrollbar-hover-reveal flex max-h-[60vh] flex-col-reverse overflow-y-auto px-4 py-3">
       <div className="min-w-0">
-        {document?.nextPageCursor ? (
+        {canLoadOlder ? (
           <div className="flex justify-center pb-2">
             <button
               type="button"
@@ -152,12 +153,12 @@ function ThreadMessageBoardHistory({
             </button>
           </div>
         ) : null}
-        {!document ? (
-          <p className="m-0 py-2 text-[0.88em] text-fg/muted">{live.state.error ?? "Loading messages…"}</p>
+        {!projection ? (
+          <p className="m-0 py-2 text-[0.88em] text-fg/muted">{live.error ?? "Loading messages…"}</p>
         ) : history.length ? history.map((message) => (
           <ThreadMessageBoardBubble
             key={message.id}
-            markdownProps={{ ...markdownProps, threadCwdPath: document.cwd }}
+            markdownProps={{ ...markdownProps, threadCwdPath: live.head?.cwd ?? subagent.cwd }}
             message={message}
             subagent={subagent}
             subagents={subagents}

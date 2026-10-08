@@ -84,6 +84,9 @@ import {
     isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
+import ThreadStore, { readThreadFeed } from "./thread/ThreadStore";
+import createLegacyThreadSource from "./thread/LegacyThreadSource";
+import createObservedThreadSource from "./thread/ObservedThreadSource";
 import WorkbenchAccountClient from "./WorkbenchAccountClient";
 import ThreadHistoryReads from "./ThreadHistoryReads";
 
@@ -148,6 +151,7 @@ interface WorkbenchThreadClient {
   connect: () => Promise<void>;
   threadObservations: ThreadObservationController;
   getThreadController: (projectId: string, target: ThreadControllerTarget) => WorkbenchThreadController;
+  getThreadStore: (projectId: string, target: ThreadControllerTarget) => ThreadStore;
   recoverThreadControllers: () => Promise<void>;
   activateThreadControllers: () => void;
   applyAcceptedThreadTitle: (threadId: WorkbenchThreadId, harness: WorkbenchHarness, title: string) => boolean;
@@ -805,6 +809,54 @@ function WorkbenchThreadClient(
       threadControllers.set(key, controller);
     }
     return controller;
+  }
+  const threadStores = new Map<string, ThreadStore>();
+  /** One store per thread; drafts stay on the legacy feed until draft binding moves into the store. */
+  function getThreadStore(projectId: string, target: ThreadControllerTarget) {
+    const threadId = target.kind === "draft" ? target.draftId : target.threadId;
+    const feed = target.kind === "draft" ? "legacy" : readThreadFeed();
+    const key = `${projectId}\0${threadId}\0${feed}`;
+    let store = threadStores.get(key);
+    if (!store) {
+      store = new ThreadStore(projectId, target, publish => target.kind === "draft" || feed === "legacy"
+        ? createLegacyThreadSource(getThreadController(projectId, target), publish,
+          (subagents, id) => subagents.find(subagent => subagent.threadId === id))
+        : createObservedThreadSource({
+          projectId, target, observations: threadObservations, daemon,
+          connect: () => workspace.connect(cancellation.signal),
+          createTranscript: (onState, onText) => {
+            const projection = new ThreadTranscriptProjectionController({
+              onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
+              onStateChange: onState, onText, transcripts, turnLimit: 4,
+            });
+            return { controller: projection, stopAvailability: transcripts.onAvailabilityChange(available => projection.setAvailable(available)) };
+          },
+          presentText: (harness, update, canonicalText) => {
+            const key = presentationKey(getThreadStateKey(harness, update.threadId), update.threadId, update.turnId, update.itemId, update.field, update.index, "sqlite");
+            textPresentation.acceptDelta({ key, canonicalText, delta: update.append ? update.text : canonicalText });
+            if (!update.append) textPresentation.complete(key, canonicalText, { snap: true });
+          },
+          messageContext: ({ workflowIds, instructionInjections, activatedSkillPaths }) => ({
+            workbenchOrigin: readLocalWorkbenchOrigin(), instructionScope: "full", instructionInjections,
+            workflowIds: [...workflowIds], activatedSkillPaths: activatedSkillPaths ? [...activatedSkillPaths] : undefined,
+          }),
+          normalizeInput: input => normalizeThreadMessageInput(input),
+          readRateLimits: harness => account.getRateLimits(harness),
+          subscribeRateLimits: listener => subscribe(listener),
+          readGitArcProposal: async input => await daemon.git.arc.proposal.read({ ...input, includeNewer: false }),
+          subscribeGitArcProposalRefresh: listener => {
+            window.addEventListener("focus", listener);
+            return () => window.removeEventListener("focus", listener);
+          },
+          updateThreadStateWithAcceptance: request => {
+            if (!options.updateThreadStateWithAcceptance) throw new Error("Thread state mutations are not connected.");
+            return options.updateThreadStateWithAcceptance(request);
+          },
+          reportError: message => emitStatusMessage(message),
+        }, publish));
+      threadStores.set(key, store);
+    }
+    return store;
   }
   const optimisticInputs = ThreadOptimisticInputStore();
   let disposed = false;
@@ -4661,6 +4713,8 @@ function WorkbenchThreadClient(
 
   function dispose() {
     disposed = true;
+    for (const store of threadStores.values()) store.dispose();
+    threadStores.clear();
     for (const controller of threadControllers.values()) controller.dispose();
     threadControllers.clear();
     threadObservations.dispose();
@@ -4676,7 +4730,10 @@ function WorkbenchThreadClient(
   }
 
   async function recoverThreadControllers() {
-    const results = await Promise.allSettled([...threadControllers.values()].map(controller => controller.recover()));
+    const results = await Promise.allSettled([
+      ...[...threadControllers.values()].map(controller => controller.recover()),
+      ...[...threadStores.values()].filter(store => store.feed === "observed").map(store => store.recover()),
+    ]);
     const failed = results.find(result => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
   }
@@ -4690,6 +4747,7 @@ function WorkbenchThreadClient(
   return {
     threadObservations,
     getThreadController,
+    getThreadStore,
     recoverThreadControllers,
     activateThreadControllers: () => {
       for (const controller of threadControllers.values()) {

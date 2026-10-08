@@ -4,7 +4,8 @@
  */
 "use client";
 
-import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -13,7 +14,7 @@ interface ThreadSubagentTargetActionEntry {
   fallbackName?: string | null;
   subagent?: WorkbenchSubagentSummary | null;
   targetKey: string;
-  thread?: ThreadPayload | null;
+  thread?: RelatedThread | null;
 }
 
 export default function ThreadSubagentTargetActionItem ({

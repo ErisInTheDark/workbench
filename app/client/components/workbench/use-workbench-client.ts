@@ -68,7 +68,7 @@ import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
 import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
-import { useWorkbenchThread } from "./use-workbench-thread";
+import { useThread } from "./use-thread";
 import type { DaemonId, ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectFileIndexSnapshot } from "../../workbench/project/WorkbenchProjectFileIndexStore";
 import { useWorkbenchWorkspace } from "./WorkbenchWorkspaceContext";
@@ -423,8 +423,8 @@ export function useWorkbenchProjectThreadSidebars(explicitClient?: WorkbenchClie
 
 export function useWorkbenchThreadTitleHistory(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
   const client = useWorkbenchClientController();
-  const thread = useWorkbenchThread(projectId, { kind: "provider", harness, threadId });
-  const entry = thread.state.entry;
+  const thread = useThread(projectId, { kind: "provider", harness, threadId });
+  const entry = thread.entry;
   const reapply = useCallback(async (title: string) => {
     if (!client.controls) throw new Error("Workbench controls are not ready.");
     await client.controls.setThreadTitle({ projectId, harness, threadId, title });

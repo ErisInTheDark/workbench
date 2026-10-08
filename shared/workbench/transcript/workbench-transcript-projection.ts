@@ -1,7 +1,7 @@
 /*
  * WorkbenchProjectedTranscriptTurn/WorkbenchTranscriptProjection: canonical transcript values reconstructed from relational rows.
  * WorkbenchTranscriptProjectionResult: hydration-bounded projection or relational-integrity failure.
- * projectWorkbenchTranscript: reconstruct turns, Browse facts, timing and display segments.
+ * projectWorkbenchTranscript: reconstruct turns, Browse facts, questionnaire and steer history, timing and display segments.
  * projectWorkbenchTranscriptItems: project canonical item rows.
  * WorkbenchProjectedInteractionItem/WorkbenchProjectedGenericItem/WorkbenchProjectedTranscriptItem: projected item variants.
  * WorkbenchTranscriptItemProjectionResult/WorkbenchTranscriptItemProjectionRow: item projection output and rows.
@@ -24,6 +24,8 @@ import {
   planCanonicalTranscriptDisplay,
   type CanonicalTranscriptDisplayPlan,
 } from "./thread-transcript-display-planner.ts";
+import { projectTranscriptSideEntries, type TranscriptSideEntries } from "./transcript-side-entries.ts";
+import type { WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
 
 export {
   projectWorkbenchTranscriptItems,
@@ -41,13 +43,16 @@ export interface WorkbenchProjectedTranscriptTurn extends Omit<Turn, "items"> {
   turnIndex: number;
 }
 
-export interface WorkbenchTranscriptProjection {
+export interface WorkbenchTranscriptProjection extends TranscriptSideEntries {
+  approvalEntries: WorkbenchApprovalOutcomeEntry[];
   browseResultEntries: WorkbenchBrowseResultEntry[];
   display: CanonicalTranscriptDisplayPlan<WorkbenchProjectedTranscriptItem>;
   hasPreviousTurns: boolean;
   thread: {
     activityAt: number;
     createdAt: number;
+    /** Working directory of the newest loaded turn, else the project root. */
+    cwd: string;
     id: string;
     projectId: string;
     projectRoot: string;
@@ -240,12 +245,17 @@ export function projectWorkbenchTranscript(
 
     return {
       data: {
+        ...projectTranscriptSideEntries(snapshot, projectedTurns),
+        approvalEntries: snapshot.approvalOutcomes ?? [],
         browseResultEntries: browseEntries(snapshot, itemRootsById),
         display,
         hasPreviousTurns: snapshot.hasPreviousTurns,
         thread: {
           activityAt: snapshot.thread.activity_at,
           createdAt: snapshot.thread.created_at,
+          cwd: snapshot.turns.reduce<typeof snapshot.turns[number] | null>(
+            (latest, turn) => !latest || turn.turn_index > latest.turn_index ? turn : latest, null,
+          )?.native_location ?? snapshot.thread.project_root,
           id: snapshot.thread.id,
           projectId: snapshot.thread.project_id,
           projectRoot: snapshot.thread.project_root,

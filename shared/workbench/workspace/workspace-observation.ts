@@ -56,6 +56,7 @@ import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-c
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
+import { ThreadRuntimeRecordSchema, ThreadRuntimeSchema } from "../thread/thread-context-usage";
 import { ProviderKeySchema } from "../provider/provider-key";
 import {
   WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
@@ -172,6 +173,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({
     ...envelope, kind: z.literal("thread"), data: WorkbenchThreadObservationSnapshotSchema.nullable(),
+    runtime: ThreadRuntimeRecordSchema.default({}),
   }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
   z.object({ ...envelope, kind: z.literal("archivedThreads"), projects: z.array(archivedProject) }).strict(),
@@ -370,6 +372,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({
     ...envelope, kind: z.literal("thread"), owner: WorkspaceThreadOwnerSchema,
     data: WorkbenchThreadObservationSnapshotSchema.nullable(),
+    runtime: ThreadRuntimeRecordSchema.default({}),
   }).strict(),
   z.object({ ...envelope, kind: z.literal("threadRow"), data: WorkspaceThreadRowSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
@@ -461,6 +464,8 @@ const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.
   },
 });
 const threadObservationObject: z.ZodObject = WorkbenchThreadObservationSnapshotSchema;
+// A token-usage tick ships one thread's changed runtime field.
+const runtimeShape = observationShape.record(ThreadRuntimeSchema, { schema: ThreadRuntimeSchema });
 type SummaryEntry = { entryKind?: string; draftId?: string; identity?: { harness: string; threadId: string } };
 const summaryEntryKey = (entry: SummaryEntry) => entry.identity
   ? `${entry.identity.harness}:${entry.identity.threadId}` : `draft:${entry.draftId ?? ""}`;
@@ -519,7 +524,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
         rows: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema, entryShape),
       } }),
     } };
-    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
     default: return { schema };
   }
@@ -544,7 +549,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
         } }),
       },
     }) } };
-    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
+    case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "appState": return { schema, fields: { data: appStateShape() } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
     case "threadRow": return { schema, fields: { data: observationShape.object(threadRowShape) } };

@@ -3,19 +3,21 @@
  * - default ThreadErrorCard: render the latest provider error while a thread remains in system-error state.
  */
 
-import type { ThreadPayload } from "workbench-shared/types";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { CircleAlertIcon } from "../workbench-icons";
 
 export default function ThreadErrorCard({
-  thread,
+  status,
+  lastTurn,
 }: {
-  thread: Pick<ThreadPayload, "status" | "turns">;
+  status: string;
+  lastTurn: Pick<Turn, "error"> | null;
 }) {
-  if (thread.status !== "systemError") {
+  if (status !== "systemError") {
     return null;
   }
 
-  const message = thread.turns.at(-1)?.error?.message.trim();
+  const message = lastTurn?.error?.message.trim();
   if (!message) {
     return null;
   }

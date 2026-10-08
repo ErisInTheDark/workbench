@@ -585,7 +585,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "projectThreads": return { ...base, kind: "projectThreads", data: { rows: [], projects: [] } };
       case "archivedThreads": return { ...base, kind: "archivedThreads", data: { rows: [], projects: [] } };
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
-      case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null };
+      case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null, runtime: {} };
       case "threadRow": return { ...base, kind: "threadRow", data: null };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
@@ -746,8 +746,9 @@ export default class WorkbenchWorkspaceRequestController {
           }
         }
         const fact = interest.thread?.observation.getSnapshot();
+        const value = fact?.value?.kind === "thread" ? fact.value : null;
         this.update(interest, { kind: "thread", owner, phase: fact?.phase ?? phase, failure: fact?.failure ?? failure,
-          data: fact?.value?.kind === "thread" ? fact.value.data : null });
+          data: value?.data ?? null, runtime: value?.runtime ?? {} });
       }
     }
   }

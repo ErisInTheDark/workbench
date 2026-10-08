@@ -3,13 +3,15 @@
  * - default ThreadViewContent: render admitted thread content and source-local transcript state, or the subagent message board in its place.
  */
 "use client";
-import { useWorkbenchThread } from "../use-workbench-thread";
+import { useThread } from "../use-thread";
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
-import type { ThreadPayload, WorkbenchBrowseResultEntry, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -55,12 +57,9 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
-import { getWorkbenchTurnAdmission } from "workbench-shared/workbench/thread/thread-admission";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
-import projectThreadRenderTurns from "./thread-render-turns";
 import getThreadGitArcProposalPresentation, { getHoistedThreadGitArc } from "./thread-git-arc-presentation";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
-import { getThreadVisibleHistoryEntries } from "./thread-visible-history";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import type DraftSessionController from "./DraftSessionController";
@@ -84,12 +83,10 @@ import {
   useThreadScrollViewportContext,
 } from "./thread-scroll-viewport-context";
 import { isThreadScrollAtEnd } from "./thread-scroll-snap";
-import ThreadTranscript from "./ThreadTranscript";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 
 const CODE_BLOCK_COPY_FEEDBACK_MS = 1500;
-const EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS: readonly string[] = [];
-const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
+const EMPTY_TURNS: readonly Turn[] = [];
 const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
@@ -321,9 +318,9 @@ export default memo(function ThreadViewContent ({
   threadTarget: WorkbenchThreadTarget | null;
   viewInstanceKey?: string;
 }) {
-  const rootThreadController = useWorkbenchThread(projectId, rootTarget);
-  // ThreadView admits this subtree only while this owner's document is available.
-  const thread = rootThreadController.state.document!;
+  const rootThread = useThread(projectId, rootTarget);
+  // ThreadView admits this subtree only while the root head is available.
+  const thread = rootThread.head!;
   const ownedFileIndex = useWorkbenchThreadFileIndex(thread.id, useOwnerFileIndex);
   const projectFileCandidates = useOwnerFileIndex ? ownedFileIndex.snapshot.candidates : browseFileCandidates;
   const projectFileIndexId = useOwnerFileIndex ? ownedFileIndex.snapshot.id : browseFileIndexId;
@@ -335,16 +332,16 @@ export default memo(function ThreadViewContent ({
   const threads = useWorkbenchThreads(undefined, thread.id);
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
-  const activeThreadController = useWorkbenchThread(projectId, activeTarget, undefined, "view");
-  const observeGitArcProposal = useCallback(
-    (proposalId: string) => activeThreadController.owner?.observeGitArcProposal(proposalId) ?? (() => {}),
-    [activeThreadController.owner],
-  );
-  const transcriptSource = activeThreadController.state.transcript;
+  const active = useThread(projectId, activeTarget, "view");
+  const activeTurns = useThread.turns(active.store);
+  const { pending: activePendingUserInputRequest } = useThread.questionnaire(active.store);
+  const { entries: activeApprovalEntries } = useThread.approvals(active.store);
+  const observeGitArcProposal = active.actions.observeGitArcProposal;
+  const transcriptSource = activeTurns.transcript;
   const threadGoalControls = threads.goals;
   const threadSkillControls = threads.skills;
   const threadScrollViewport = useThreadScrollViewportContext();
-  const rateLimits = activeThreadController.state.rateLimits;
+  const rateLimits = active.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
   const [checkpointCommitActions] = useState(() => new ThreadCheckpointCommitActions());
   const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
@@ -359,8 +356,8 @@ export default memo(function ThreadViewContent ({
   const codeBlockCopyResetTimersRef = useRef<Map<HTMLButtonElement, number>>(new Map());
   const historyLoadGenerationRef = useRef(0);
   const knownDirectSubagents = useMemo(
-    () => filterSubagentsByParentThreadId(rootThreadController.state.subagents, thread.id),
-    [rootThreadController.state.subagents, thread.id],
+    () => filterSubagentsByParentThreadId(rootThread.subagents, thread.id),
+    [rootThread.subagents, thread.id],
   );
   const pinnedSubagentThreadIdSet = useMemo(
     () => new Set(knownDirectSubagents.filter((subagent) => subagent.pinned).map((subagent) => subagent.threadId)),
@@ -388,8 +385,19 @@ export default memo(function ThreadViewContent ({
   }, [activeThreadId, areSettledSubagentsVisible, subagentTabOrder, subagents, thread.id]);
   const visibleSubagents = subagentTabLayout.visible;
   const visibleSubagentThreadIds = useMemo(() => getSubagentThreadIds(visibleSubagents), [visibleSubagents]);
-  const relatedThreadsById = rootThreadController.state.relatedDocuments;
-  const activeThread = activeThreadController.state.document;
+  const relatedThreadsById = rootThread.relatedHeads;
+  const activeThread = active.head;
+  const usesSqlTranscript = Boolean(activeThread && !activeThread.isDraft);
+  const activeTranscriptSource = usesSqlTranscript
+    && activeThread
+    && "threadId" in transcriptSource
+    && transcriptSource.threadId === activeThread.id
+    ? transcriptSource
+    : null;
+  const activeTranscriptProjection: WorkbenchTranscriptProjection | null = activeTranscriptSource
+    && "projection" in activeTranscriptSource
+    ? activeTranscriptSource.projection
+    : null;
   const entryMotionOwnerKey = activeTarget.kind === "subagent"
     ? `${viewInstanceKey}:subagent:${activeThreadId}`
     : viewInstanceKey;
@@ -399,19 +407,18 @@ export default memo(function ThreadViewContent ({
     key: string;
     seeded: boolean;
   } | null>(null);
+  // Items already present when the turns first arrive are history, not new activity: they never animate in.
+  const motionTurns = activeTranscriptProjection ? activeTurns.turns : null;
+  const motionIdentities = (turns: readonly Turn[]) => turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities));
   if (entryMotionOwnerRef.current?.key !== entryMotionOwnerKey) {
     entryMotionOwnerRef.current = {
-      controller: new ThreadEntryMotionController(
-        activeThread?.turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities)),
-      ),
+      controller: new ThreadEntryMotionController(motionTurns ? motionIdentities(motionTurns) : undefined),
       workedRunController: new ThreadWorkedRunController(),
       key: entryMotionOwnerKey,
-      seeded: Boolean(activeThread),
+      seeded: Boolean(motionTurns),
     };
-  } else if (!entryMotionOwnerRef.current.seeded && activeThread) {
-    entryMotionOwnerRef.current.controller.seed(
-      activeThread.turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities)),
-    );
+  } else if (!entryMotionOwnerRef.current.seeded && motionTurns) {
+    entryMotionOwnerRef.current.controller.seed(motionIdentities(motionTurns));
     entryMotionOwnerRef.current.seeded = true;
   }
   const entryMotionController = entryMotionOwnerRef.current.controller;
@@ -422,7 +429,7 @@ export default memo(function ThreadViewContent ({
     workedRunState: workedRunController,
   }), [entryMotionController, threadScrollViewport, workedRunController]);
   const activeProvider = activeThread?.harness ?? thread.harness;
-  const activeSidebarEntry = activeThreadController.state.entry;
+  const activeSidebarEntry = active.entry;
   const activeThreadSnoozed = activeSidebarEntry?.entryKind === "thread"
     && activeSidebarEntry.metadata.snoozed;
   const activeGitArcSelection = useMemo<{
@@ -448,87 +455,47 @@ export default memo(function ThreadViewContent ({
   useEffect(() => {
     if (activeProfileSlot && projectedProfile !== undefined) composerProfileController.observeSelection(activeProfileSlot, projectedProfile);
   }, [activeProfileSlot, composerProfileController, projectedProfile]);
-  const activeThreadRenderProjection = useMemo(
-    () => activeThread ? projectThreadRenderTurns(activeThread) : null,
-    [activeThread],
-  );
-  const renderActiveThread = activeThreadRenderProjection?.thread ?? null;
-  const usesSqlTranscript = Boolean(activeThread && !activeThread.isDraft);
-  const activeTranscriptSource = usesSqlTranscript
-    && renderActiveThread
-    && "threadId" in transcriptSource
-    && transcriptSource.threadId === renderActiveThread.id
-    ? transcriptSource
-    : null;
-  const activeTranscriptProjection: WorkbenchTranscriptProjection | null = activeTranscriptSource
-    && "projection" in activeTranscriptSource
-    ? activeTranscriptSource.projection
-    : null;
   const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id]);
-  const renderedHistoryTurnIds = useMemo(() => (
-    usesSqlTranscript
-      ? activeTranscriptProjection?.turns ?? []
-      : renderActiveThread?.turns ?? []
-  ).map(({ id }) => id), [activeTranscriptProjection?.turns, renderActiveThread?.turns, usesSqlTranscript]);
-  const loadedTurnIds = useMemo(() => activeThread?.turns.map(({ id }) => id) ?? [], [activeThread?.turns]);
-  const activeThreadBrowseResultEntries = activeThreadRenderProjection?.browseResultEntries ?? EMPTY_BROWSE_RESULT_ENTRIES;
-  const activeHarnessUserInputRequest = activeThread
-    ? activeThreadController.state.pendingQuestionnaire
-    : null;
-  const activePendingUserInputRequest = activeHarnessUserInputRequest;
-  const activeApprovalEntries = activeThreadController.state.approvalEntries;
+  const loadedTurns = activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
+  const renderedHistoryTurnIds = useMemo(() => loadedTurns.map(({ id }) => id), [loadedTurns]);
+  const loadedTurnIds = renderedHistoryTurnIds;
   const activeItemApprovals = useMemo(
     () => deriveThreadItemApprovals(activeThread ? activeApprovalEntries : [], activePendingUserInputRequest),
     [activeApprovalEntries, activePendingUserInputRequest, activeThread],
   );
   const activeItemActions = useMemo<ThreadItemActions>(() => ({
-    resendSteer: itemId => activeThreadController.actions.resendSteer(itemId),
-    dismissSteer: itemId => activeThreadController.actions.dismissSteer(itemId),
-    stopShell: itemId => activeThreadController.actions.stopShell(itemId),
-  }), [activeThreadController.actions]);
+    resendSteer: itemId => active.actions.resendSteer(itemId),
+    dismissSteer: itemId => active.actions.dismissSteer(itemId),
+    stopShell: itemId => active.actions.stopShell(itemId),
+  }), [active.actions]);
   const isDraftThreadView = Boolean(activeThread?.isDraft);
-  const currentTurn = activeThread?.turns.at(-1) ?? null;
-  const activityTurn = useMemo(() => {
-    if (!usesSqlTranscript) return currentTurn;
-    const turn = activeTranscriptProjection?.turns.at(-1);
-    return turn ? {
-      ...turn,
-      items: turn.items.filter((item): item is ThreadPayload["turns"][number]["items"][number] => (
-        item.type !== "generic" && !("requestKey" in item)
-      )),
-    } : null;
-  }, [activeTranscriptProjection, currentTurn, usesSqlTranscript]);
-  const visibleHistoryEntries = useMemo(() => renderActiveThread ? getThreadVisibleHistoryEntries(renderActiveThread) : [], [renderActiveThread]);
-  const pageBoundaryIndex = renderActiveThread?.nextPageCursor
-    ? visibleHistoryEntries.findIndex((entry) => entry.turnId === renderActiveThread.nextPageCursor)
-    : -1;
-  const previousTurnEntry = pageBoundaryIndex > 0
-    ? visibleHistoryEntries[pageBoundaryIndex - 1] ?? null
+  const activityTurn = loadedTurns.at(-1) ?? null;
+  const currentTurn = activityTurn;
+  // The turn just before the loaded window, when the catalog lists one, anchors the older-turn skeleton.
+  const firstLoadedHistoryIndex = activeTranscriptProjection?.turnHistory.findIndex(entry => entry.turnId === loadedTurns[0]?.id) ?? -1;
+  const previousTurnEntry = firstLoadedHistoryIndex > 0
+    ? activeTranscriptProjection?.turnHistory[firstLoadedHistoryIndex - 1] ?? null
     : null;
-  const previousTurnLoadKey = activeThread?.nextPageCursor
-    ? `${activeThread.id}:${activeThread.nextPageCursor}`
+  const canLoadPreviousTurn = activeTurns.canLoadOlder;
+  const previousTurnLoadKey = activeThread && canLoadPreviousTurn
+    ? `${activeThread.id}:${loadedTurns[0]?.id ?? ""}`
     : "";
   const previousTurnLoadStatus = previousTurnLoadKey
     ? previousTurnLoadStates[previousTurnLoadKey]
     : undefined;
-  const canLoadPreviousTurn = Boolean(
-    activeThread?.nextPageCursor,
-  );
-  const hiddenDynamicToolCallItemIds = EMPTY_HIDDEN_DYNAMIC_TOOL_CALL_ITEM_IDS;
   const workspaceFileLinkRoots = useMemo(() => (
     projectFileLinkRoots ?? (projectRoots && projectRoots.length > 1
       ? projectRoots.map((root) => ({ id: root.id, rootPath: root.rootPath }))
       : [])
   ), [projectFileLinkRoots, projectRoots]);
   const terminalContext = useMemo(() => ({
-    cwd: activeThread?.cwd ?? projectRootPath ?? ".",
+    cwd: activeThread?.cwd || projectRootPath || ".",
     knownSkills: workbenchSkills, projectRootPath, workspaceRoots: workspaceFileLinkRoots,
   }), [activeThread?.cwd, projectRootPath, workbenchSkills, workspaceFileLinkRoots]);
   const terminalRetention = useMemo(() => ({
-    itemTimeline: usesSqlTranscript ? activeTranscriptProjection?.turns.at(-1)?.itemTimeline
-      : activeThread?.turnHistory.find(entry => entry.turnId === activityTurn?.id)?.itemTimeline,
+    itemTimeline: activeTranscriptProjection?.turns.at(-1)?.itemTimeline,
     turnStartedAt: activityTurn?.startedAt,
-  }), [usesSqlTranscript, activeTranscriptProjection, activeThread?.turnHistory, activityTurn]);
+  }), [activeTranscriptProjection, activityTurn]);
   const terminalCommands = useMemo(() => getThreadTerminalEntries(
     activityTurn?.status === "inProgress" ? activityTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
     { ...terminalContext, includeOutput: false },
@@ -539,7 +506,7 @@ export default memo(function ThreadViewContent ({
   const inlineMentionSources = useBackgroundInlineMentionSources({
     files: projectFileCandidates,
     filesIdentity: projectFileIndexId,
-    threadCwdPath: activeThread?.cwd,
+    threadCwdPath: activeThread?.cwd || undefined,
     projectRootPath,
     skills: workbenchSkills,
     workspaceRoots: workspaceFileLinkRoots,
@@ -551,16 +518,11 @@ export default memo(function ThreadViewContent ({
   const visibleGitArcProposalPresentation = useMemo(() => getThreadGitArcProposalPresentation({
     knownSkills: workbenchSkills,
     projectRootPath,
-    turns: usesSqlTranscript
-      ? activeTranscriptProjection?.turns ?? []
-      : (renderActiveThread ?? activeThread)?.turns ?? [],
+    turns: activeTranscriptProjection?.turns ?? [],
     workspaceRoots: workspaceFileLinkRoots,
   }), [
-    activeThread?.turns,
     activeTranscriptProjection?.turns,
     projectRootPath,
-    renderActiveThread?.turns,
-    usesSqlTranscript,
     workbenchSkills,
     workspaceFileLinkRoots,
   ]);
@@ -593,7 +555,7 @@ export default memo(function ThreadViewContent ({
   const loadPreviousTurn = useCallback(async ({ retry = false }: { retry?: boolean } = {}) => {
     if (
       !activeThread
-      || !activeThread.nextPageCursor
+      || !canLoadPreviousTurn
       || !previousTurnLoadKey
       || previousTurnLoadStatus === "loading"
       || (previousTurnLoadStatus === "failed" && !retry)
@@ -610,27 +572,20 @@ export default memo(function ThreadViewContent ({
     dispatchPreviousTurnLoad({ type: "start", key: previousTurnLoadKey });
 
     try {
-      const subagentCwd = getSubagentSummary(subagents, targetThreadId)?.cwd.trim();
-      const payload = await activeThreadController.actions.read(targetHarness, {
-        ...(subagentCwd ? { cwd: subagentCwd } : {}),
-        cursor: activeThread.nextPageCursor,
-      });
+      const turnIds = await active.actions.loadOlder();
       if (loadGeneration !== historyLoadGenerationRef.current) {
         return;
       }
-      if (!payload) {
+      if (!turnIds) {
         historyPaging.fail(transaction);
         dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
-        console.error("Previous thread turn load returned no page while its view remained current.", {
+        console.error("Previous thread turn load returned no turns while its view remained current.", {
           threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
-          cursor: activeThread.nextPageCursor?.slice(0, 160),
         });
         return;
       }
 
-      historyPaging.succeed(transaction, payload.turns
-        .filter((turn) => getWorkbenchTurnAdmission(turn) !== "connecting")
-        .map(({ id }) => id));
+      historyPaging.succeed(transaction, turnIds);
       dispatchPreviousTurnLoad({ type: "succeed", key: previousTurnLoadKey });
     } catch (error) {
       if (loadGeneration !== historyLoadGenerationRef.current) {
@@ -640,12 +595,11 @@ export default memo(function ThreadViewContent ({
       dispatchPreviousTurnLoad({ type: "fail", key: previousTurnLoadKey });
       console.error("Previous thread turn load failed.", {
         threadId: targetThreadId.slice(0, 160), harness: targetHarness.slice(0, 80),
-        cursor: activeThread.nextPageCursor?.slice(0, 160),
         reason: (error instanceof Error ? error.message : "Unexpected history read failure")
           .replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 500),
       });
     }
-  }, [activeThread, activeThreadController.actions.read, previousTurnLoadKey, previousTurnLoadStatus, subagents]);
+  }, [activeThread, active.actions, canLoadPreviousTurn, previousTurnLoadKey, previousTurnLoadStatus]);
 
   useEffect(() => {
     historyLoadGenerationRef.current += 1;
@@ -670,21 +624,25 @@ export default memo(function ThreadViewContent ({
     };
   }, [daemon, projectId, activeProvider]);
 
-  // One family per owner; id changes update it in place so still-visible children keep their in-flight reads.
+  // Legacy feed only: one child family per document owner; id changes update it in place so still-visible
+  // children keep their in-flight reads. Observed feeds read child heads from the family observation.
+  const rootLegacyOwner = rootThread.store?.legacyOwner ?? null;
   const subagentFamilyRef = useRef<ThreadChildFamily | null>(null);
   useEffect(() => {
-    const family = rootThreadController.owner?.acquireChildren([]) ?? null;
+    const family = rootLegacyOwner?.acquireChildren([]) ?? null;
     subagentFamilyRef.current = family;
     return () => {
       family?.release();
       if (subagentFamilyRef.current === family) subagentFamilyRef.current = null;
     };
-  }, [rootThreadController.owner]);
+  }, [rootLegacyOwner]);
   useEffect(() => { subagentFamilyRef.current?.update(visibleSubagentThreadIds); },
-    [rootThreadController.owner, visibleSubagentThreadIds]);
+    [rootLegacyOwner, visibleSubagentThreadIds]);
 
+  // Legacy feed only: the document owner retains history while the view sits at its end.
+  const activeLegacyOwner = active.store?.legacyOwner ?? null;
   useEffect(() => {
-    const owner = activeThreadController.owner;
+    const owner = activeLegacyOwner;
     const viewport = scrollViewportRef.current;
     if (!owner || !viewport) return;
     const surface = owner.acquireHistorySurface();
@@ -703,7 +661,7 @@ export default memo(function ThreadViewContent ({
       resizeObserver.disconnect();
       surface.release();
     };
-  }, [activeThreadController.owner, scrollViewportRef]);
+  }, [activeLegacyOwner, scrollViewportRef]);
 
   // Reconcile after every parent commit, including SQL's later prepend and skeleton removal.
   useLayoutEffect(() => {
@@ -868,41 +826,46 @@ export default memo(function ThreadViewContent ({
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
     }
-
-    await onSendMessage(resolvedActiveThread, input, {
-      ...options,
-      composerProfileSlot: activeProfileSlot,
-      selectThread: resolvedActiveThread.id === thread.id,
-    });
-  }, [activeProfileSlot, onSendMessage, resolvedActiveThread, thread.id]);
-
-  const handleStopThread = useCallback(async () => {
-    if (!activeThread) {
+    // Pass 1: legacy feeds (and drafts) still send through the document flow.
+    const legacyDocument = active.legacyDocument;
+    if (legacyDocument) {
+      await onSendMessage(composerProfileController.resolveThread(activeProfileSlot, legacyDocument), input, {
+        ...options,
+        composerProfileSlot: activeProfileSlot,
+        selectThread: legacyDocument.id === thread.id,
+      });
       return;
     }
+    // The daemon starts turns with the persisted profile selection, so a pending selection lands first.
+    if (!isThreadStatusActive(resolvedActiveThread.status)) await composerProfileController.waitForSelection(activeProfileSlot);
+    await active.actions.send(input, options);
+  }, [active.actions, active.legacyDocument, activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
 
-    await activeThreadController.actions.stop(activeThread);
-  }, [activeThread, activeThreadController, thread.id]);
+  const handleStopThread = useCallback(async () => {
+    await active.actions.stop();
+  }, [active.actions]);
 
-  const handleCompactThread = useCallback(async (source: ThreadPayload) => (
-    await activeThreadController.actions.compact(source)
-  ), [activeThreadController]);
+  const handleCompactThread = useCallback(async () => {
+    await active.actions.compact();
+  }, [active.actions]);
 
+  const actionsFor = useCallback((threadId: string) => (threadId === thread.id ? rootThread : active).actions,
+    [active, rootThread, thread.id]);
   const handleThreadModelChange = useCallback((threadId: string, model: string) => {
-    (threadId === thread.id ? rootThreadController : activeThreadController).actions.changeModel(model);
-  }, [rootThreadController, activeThreadController, thread.id]);
+    actionsFor(threadId).changeModel(model);
+  }, [actionsFor]);
 
   const handleThreadAgentChange = useCallback((threadId: string, agentPath: string | null) => {
-    (threadId === thread.id ? rootThreadController : activeThreadController).actions.changeAgent(agentPath);
-  }, [rootThreadController, activeThreadController, thread.id]);
+    actionsFor(threadId).changeAgent(agentPath);
+  }, [actionsFor]);
 
   const handleThreadReasoningEffortChange = useCallback((threadId: string, effort: string | null) => {
-    (threadId === thread.id ? rootThreadController : activeThreadController).actions.changeReasoningEffort(effort);
-  }, [rootThreadController, activeThreadController, thread.id]);
+    actionsFor(threadId).changeReasoningEffort(effort);
+  }, [actionsFor]);
 
   const handleThreadServiceTierChange = useCallback((threadId: string, serviceTier: string | null) => {
-    (threadId === thread.id ? rootThreadController : activeThreadController).actions.changeServiceTier(serviceTier);
-  }, [rootThreadController, activeThreadController, thread.id]);
+    actionsFor(threadId).changeServiceTier(serviceTier);
+  }, [actionsFor]);
 
   const handleThreadSettingsChange = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     onThreadSettingsChange(threadId, settings);
@@ -1055,6 +1018,7 @@ export default memo(function ThreadViewContent ({
         : threadComposerDraftsByThreadId[activeThread.id] ?? null}
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
+      turns={loadedTurns}
       threadTarget={activeThread.isDraft ? threadTarget : activeTarget}
     >
       {isDraftThreadView ? (
@@ -1098,7 +1062,7 @@ export default memo(function ThreadViewContent ({
   const hoistedGitArc = getHoistedThreadGitArc({
     currentTurn,
     gitArc: activeGitArcSelection?.gitArc ?? null,
-    proposalObservations: activeThreadController.state.gitArcProposals,
+    proposalObservations: active.gitArcProposals,
     proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
   const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
@@ -1121,10 +1085,10 @@ export default memo(function ThreadViewContent ({
       disambiguationPaths={projectFilePaths}
     >
       <ThreadGitArcObservationProvider
-        acceptance={activeThreadController.state.entry?.gitArc?.acceptance ?? null}
-        lifecycleProposals={activeThreadController.state.entry?.gitArc?.proposals ?? null}
+        acceptance={active.entry?.gitArc?.acceptance ?? null}
+        lifecycleProposals={active.entry?.gitArc?.proposals ?? null}
         observeProposal={observeGitArcProposal}
-        proposals={activeThreadController.state.gitArcProposals}
+        proposals={active.gitArcProposals}
       >
       <ThreadGitArcPresentationContext.Provider value={{
         gitArcPlan: activeGitArcSelection?.gitArcPlan ?? null,
@@ -1188,7 +1152,7 @@ export default memo(function ThreadViewContent ({
               subagents={subagents}
             />
           ) : <>
-          {activeThread && usesSqlTranscript && renderActiveThread && previousTurnEntry ? (
+          {activeThread && usesSqlTranscript && previousTurnEntry ? (
             previousTurnLoadStatus === "loading" ? (
               <ThreadTurnLoadingSkeleton entry={previousTurnEntry} isLoading />
             ) : previousTurnLoadStatus === "failed" ? (
@@ -1199,7 +1163,7 @@ export default memo(function ThreadViewContent ({
             ) : null
           ) : null}
           {activeThread ? (
-            usesSqlTranscript && renderActiveThread ? (
+            usesSqlTranscript ? (
               activeTranscriptProjection ? (
                 <>
                   {activeTranscriptSource?.status === "failed" ? (
@@ -1239,42 +1203,7 @@ export default memo(function ThreadViewContent ({
                   <ThreadLoadingSkeleton contained />
                 )
               )
-            ) : (
-              <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
-              <ThreadItemActionsContext.Provider value={activeItemActions}>
-              <ThreadTranscript
-                browseResultEntries={activeThreadBrowseResultEntries}
-                canLoadPreviousTurn={canLoadPreviousTurn}
-                currentTurnId={currentTurn?.id ?? null}
-                hiddenDynamicToolCallItemIds={hiddenDynamicToolCallItemIds}
-                hiddenReasoningStep={null}
-                hiddenWebSearchItemIds={liveActivity?.kind === "webSearch" ? liveActivity.hiddenItemIds : undefined}
-                hideFinalAgentMessage={hideFinalAgentMessage}
-                hideTerminalReasoning={activeGitArcSelection?.lifecycle.kind === "completed"}
-                hideWorkbenchControlAgentMessages={hideWorkbenchControlAgentMessages}
-                hideWorkbenchControlUserMessages={hideWorkbenchControlUserMessages}
-                historySentinelRef={setHistorySentinel}
-                inlineMentionSources={inlineMentionSources}
-                knownSkills={workbenchSkills}
-                onRetryPreviousTurn={() => void loadPreviousTurn({ retry: true })}
-                previousTurnEntry={previousTurnEntry}
-                previousTurnLoadStatus={previousTurnLoadStatus}
-                presentationSource={{
-                  kind: "json",
-                  sourceKey: `${(renderActiveThread ?? activeThread).harness}:${(renderActiveThread ?? activeThread).id}`,
-                }}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                relatedThreadsById={relatedThreadsById}
-                subagents={subagents}
-                thread={renderActiveThread ?? activeThread}
-                visibleHistoryEntries={visibleHistoryEntries}
-                workspaceRoots={workspaceFileLinkRoots}
-              />
-              </ThreadItemActionsContext.Provider>
-              </ThreadItemApprovalsContext.Provider>
-            )
+            ) : null
           ) : (
             <div className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-4">
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>
@@ -1291,7 +1220,7 @@ export default memo(function ThreadViewContent ({
             terminalRetention={terminalRetention}
             inlineMentionSources={inlineMentionSources}
             presentationSource={{
-              kind: usesSqlTranscript ? "sqlite" : "json",
+              kind: "sqlite",
               sourceKey: `${activeThread.harness}:${activeThread.id}`,
             }}
             projectFilePaths={projectFilePaths}
@@ -1326,8 +1255,8 @@ export default memo(function ThreadViewContent ({
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
-        {activeThread && !isDraftThreadView ? <ThreadErrorCard thread={activeThread} /> : null}
-        {activeThread && activeThreadController.state.entry && threadGoalControls ? (
+        {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
+        {activeThread && active.entry && threadGoalControls ? (
           <ThreadGoalControl controls={threadGoalControls} skillControls={isDraftThreadView ? null : threadSkillControls} thread={activeThread}>
             {agentTabs}
           </ThreadGoalControl>

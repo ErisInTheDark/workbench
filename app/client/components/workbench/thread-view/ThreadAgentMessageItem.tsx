@@ -8,7 +8,8 @@
 
 import type { ReactNode } from "react";
 
-import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import ThreadAgentName from "./ThreadAgentName";
@@ -20,7 +21,7 @@ interface ThreadAgentMessageTargetProps {
   subagent?: WorkbenchSubagentSummary | null;
   /** The messaged thread, or `parent` of the messaging subagent; shown as a thread button once loaded. */
   target?: { relation: "self" | "parent"; threadId: string } | null;
-  thread?: ThreadPayload | null;
+  thread?: RelatedThread | null;
 }
 
 export function ThreadAgentMessageTarget({

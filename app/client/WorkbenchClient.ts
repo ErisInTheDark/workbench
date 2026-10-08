@@ -88,6 +88,7 @@ export interface MountedWorkbenchClient {
   routeIntents: WorkbenchRouteIntentController;
   voice: WorkbenchVoiceClient;
   getThreadController: ThreadClient["getThreadController"];
+  getThreadStore: ThreadClient["getThreadStore"];
   threadOwnerFor(threadId: string): {
     daemonId: DaemonId; projectId: ProjectId; hostname: string; rootPath: string; displayPath: string;
   } | null;
@@ -938,6 +939,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         : target.kind === "subagent" ? target.parentThreadId : target.threadId;
       const location = locationForThread(id) ?? localDraftLocations.get(id);
       return rendererForThread(id).getThreadController(location?.projectId ?? projectId, target);
+    },
+    getThreadStore: (projectId, target) => {
+      const id = target.kind === "draft" ? target.draftId
+        : target.kind === "subagent" ? target.parentThreadId : target.threadId;
+      const location = locationForThread(id) ?? localDraftLocations.get(id);
+      return rendererForThread(id).getThreadStore(location?.projectId ?? projectId, target);
     },
     threadOwnerFor,
     threadDraftIdentityFor: id => {

@@ -66,7 +66,7 @@ function renderItems(
 ) {
   const turns = [turn("turn", 0, items)];
   const projection: WorkbenchTranscriptProjection = {
-    browseResultEntries: [],
+    browseResultEntries: [], questionnaireEntries: [], steerEntries: [], approvalEntries: [],
     display: planCanonicalTranscriptDisplay({
       items: items.slice(0, durableItemCount).map((payload, itemIndex) => ({
         itemId: payload.id,
@@ -86,6 +86,7 @@ function renderItems(
       createdAt: 1_000,
       id: "thread",
       projectId: "project",
+      cwd: "C:/project",
       projectRoot: "C:/project",
       title: "Thread",
       updatedAt: 3_000,
@@ -253,7 +254,7 @@ test("SQLite projection preserves canonical order with initially closed Browse d
     turnId: "turn-two",
   }];
   const projection: WorkbenchTranscriptProjection = {
-    browseResultEntries,
+    browseResultEntries, questionnaireEntries: [], steerEntries: [], approvalEntries: [],
     display: planCanonicalTranscriptDisplay<WorkbenchProjectedTranscriptItem>({
       items: [
         { itemId: first.id, itemIndex: 0, payload: first, turnId: "turn-one" },
@@ -268,6 +269,7 @@ test("SQLite projection preserves canonical order with initially closed Browse d
       createdAt: 1_000,
       id: "thread",
       projectId: "project",
+      cwd: "C:/project",
       projectRoot: "C:/project",
       title: "Thread",
       updatedAt: 3_000,

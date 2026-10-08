@@ -16,7 +16,9 @@ import {
   useThreadArcEntry, useThreadClaimIntersections, useThreadCollisionEntries,
   useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory,
 } from "./use-workbench-client";
-import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
+import WorkbenchThreadController, { type ThreadControllerTarget } from "../../workbench/WorkbenchThreadController";
+import ThreadStore from "../../workbench/thread/ThreadStore";
+import createLegacyThreadSource from "../../workbench/thread/LegacyThreadSource";
 import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
@@ -63,6 +65,20 @@ const globalStore = {
   getSnapshot: () => null,
   subscribe: () => () => undefined,
 } satisfies WorkbenchThreadSidebarStore;
+const staticThreadController = (projectId: string, target: ThreadControllerTarget) => new WorkbenchThreadController(projectId, target, {
+  getChild: () => { throw new Error("Unexpected child."); },
+  observations: new ThreadObservationController({
+    observe: async () => { throw new Error("Unexpected observation during static rendering."); },
+    release: async () => {},
+  }),
+  releaseHistoricalTurns: () => null,
+  controls: {} as NonNullable<WorkbenchClientController["controls"]>,
+  readNative: () => ({ document: null, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
+  subscribeNative: () => () => {},
+  read: async () => null,
+  createTranscript: () => { throw new Error("Unexpected transcript during static rendering."); },
+  reportError: message => { throw new Error(message); },
+});
 const client = {
   controls: null,
   explorer: {} as WorkbenchClientController["explorer"],
@@ -72,20 +88,9 @@ const client = {
     workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
     voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
     projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
-    getThreadController: (projectId, target) => new WorkbenchThreadController(projectId, target, {
-      getChild: () => { throw new Error("Unexpected child."); },
-      observations: new ThreadObservationController({
-        observe: async () => { throw new Error("Unexpected observation during static rendering."); },
-        release: async () => {},
-      }),
-      releaseHistoricalTurns: () => null,
-      controls: {} as NonNullable<WorkbenchClientController["controls"]>,
-      readNative: () => ({ document: null, pendingQuestionnaire: null, approvalEntries: [], rateLimits: null }),
-      subscribeNative: () => () => {},
-      read: async () => null,
-      createTranscript: () => { throw new Error("Unexpected transcript during static rendering."); },
-      reportError: message => { throw new Error(message); },
-    }),
+    getThreadController: staticThreadController,
+    getThreadStore: (projectId, target) => new ThreadStore(projectId, target,
+      publish => createLegacyThreadSource(staticThreadController(projectId, target), publish, () => undefined)),
     threadOwnerFor: () => null,
     threadDraftIdentityFor: () => null,
     threadContextFor: () => null,

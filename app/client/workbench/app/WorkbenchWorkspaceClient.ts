@@ -125,7 +125,7 @@ export default class WorkbenchWorkspaceClient {
     const projected = () => {
       const fact = observation.getSnapshot();
       const data = fact.value?.data;
-      return data ? { ...data, subscriptionId: request.subscriptionId, revision,
+      return data ? { ...data, runtime: fact.value?.runtime ?? {}, subscriptionId: request.subscriptionId, revision,
         freshness: fact.phase === "current" ? data.freshness : "loading" as const,
         error: fact.failure ?? data.error } : null;
     };

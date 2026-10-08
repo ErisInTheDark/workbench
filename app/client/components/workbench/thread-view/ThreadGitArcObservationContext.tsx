@@ -8,7 +8,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
-import type { ThreadGitArcProposalObservation } from "../../../workbench/WorkbenchThreadController";
+import type { ThreadGitArcProposalObservation } from "../../../workbench/thread/ThreadGitArcProposalObserver";
 
 type ThreadGitArcAcceptance = NonNullable<WorkbenchGitArcLifecycleState["acceptance"]>;
 

@@ -38,6 +38,7 @@ import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCo
 import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
 import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
 import WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
+import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-context-usage";
 import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -110,7 +111,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled" | "acceptApprovalOutcome">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -143,6 +144,8 @@ function createWorkbenchCoreFeature(
   let threadState: WorkbenchThreadStateFeature | null = null;
   let stats: WorkbenchStatsController | null = null;
   const admission = new WorkbenchThreadAdmissionController();
+  /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
+  const runtimeListeners = new Set<(threadId: string, change: Partial<ThreadRuntime> | null) => void>();
   const compaction = new WorkbenchThreadCompactionController(admission, {
     record: transcript.record.bind(transcript),
     setCompacting: (threadId, compacting) => threadState?.controller.setThreadCompactionState(threadId, compacting),
@@ -169,6 +172,8 @@ function createWorkbenchCoreFeature(
       }, `${key}: auto-compact status`);
     },
     publish: (target, willAutoCompact) => {
+      for (const listener of runtimeListeners) listener(target.threadId, { willAutoCompact });
+      // Pass 1 keeps the document UI live; pass 2 removes this broadcast with the document pipeline.
       context.broadcastProviderNotification(target.harness, {
         method: "thread/autoCompact/updated",
         params: { threadId: target.threadId, willAutoCompact },
@@ -488,7 +493,10 @@ function createWorkbenchCoreFeature(
     observeLifecycle: async (harness, threadId, event) => {
       await threadState.controller.observeLifecycle(harness, threadId, event);
     },
-    recordOutcome: entry => database.recordApprovalOutcome(entry),
+    recordOutcome: async entry => {
+      await database.recordApprovalOutcome(entry);
+      transcript.acceptApprovalOutcome(entry);
+    },
     resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
     resolveApprovalMode: async threadId => {
       const identity = await threadIdentity.resolve({ threadId });
@@ -660,6 +668,20 @@ function createWorkbenchCoreFeature(
     },
     transitions: worktreeGitTransitions,
   });
+  const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
+  const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
+    read: async (threadId, harness) => ({
+      tokenUsage: await readTokenUsage(threadId),
+      willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
+    }),
+    readTokenUsage,
+    subscribe: listener => {
+      runtimeListeners.add(listener);
+      // Token usage commits through the transcript; only usage is reread for committed threads.
+      const stopSettled = transcript.subscribeSettled(threadIds => { for (const threadId of threadIds) listener(threadId, null); });
+      return () => { runtimeListeners.delete(listener); stopSettled(); };
+    },
+  };
   const accountLimits = new WorkbenchAccountLimitsController({
     read: harness => {
       const key = installedProviderKeys.find(candidate => candidate === harness);
@@ -737,6 +759,7 @@ function createWorkbenchCoreFeature(
     threadContextRollover,
     workingTree,
     accountLimits,
+    threadRuntime,
     turnRecoveryFailures: {
       report: async (cwd, harness, threadId) => {
         const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });

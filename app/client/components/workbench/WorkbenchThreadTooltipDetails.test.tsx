@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import ThreadObservationController, { getThreadObservationKey } from "../../workbench/thread/ThreadObservationController";
 import WorkbenchThreadRuntimeStore from "../../workbench/WorkbenchThreadRuntimeStore";
 import WorkbenchThreadController from "../../workbench/WorkbenchThreadController";
+import ThreadStore from "../../workbench/thread/ThreadStore";
+import createLegacyThreadSource from "../../workbench/thread/LegacyThreadSource";
 import { test } from "node:test";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -118,6 +120,9 @@ async function renderDetails(
   const releaseRoute = options.awaitingDocument ? thread.acquire("route") : null;
   if (options.awaitingDocument || options.observationPending) assert.equal(thread.getSnapshot().status, "loading");
   client.mounted!.getThreadController = () => thread;
+  const store = new ThreadStore("project", { kind: "provider", harness: "codex", threadId: fixtureIdentityValues.WorkbenchThreadId["thread"] },
+    publish => createLegacyThreadSource(thread, publish, () => undefined));
+  client.mounted!.getThreadStore = () => store;
   const html = renderWithClient(
     createElement(WorkbenchThreadTooltipDetails, {
       cwd,
@@ -136,6 +141,7 @@ async function renderDetails(
   releaseRoute?.();
   consumer.release();
   releaseThread();
+  store.dispose();
   thread.dispose();
   owner.dispose();
   return html;
@@ -154,6 +160,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
       getThreadController: () => { throw new Error("Unexpected thread view during static rendering."); },
+      getThreadStore: () => { throw new Error("Unexpected thread view during static rendering."); },
       threadOwnerFor: () => ({
         ...source, hostname: "local", rootPath: "/project", displayPath: "project",
       }),

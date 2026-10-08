@@ -29,8 +29,13 @@ import {
   type OptimisticInitialInputProjection,
 } from "../thread/ThreadOptimisticInputStore";
 
+/** The only thread facts the projection reads: identity plus locally projected turns and their timing. */
+export type ThreadTranscriptLocalThread = Pick<ThreadPayload, "id" | "harness" | "turns" | "turnHistory">;
+
 export interface ThreadTranscriptProjectionSelection {
-  thread: ThreadPayload;
+  thread: ThreadTranscriptLocalThread;
+  /** Latest-window size when the thread names no durable turns; raising it loads older turns. */
+  turnLimit?: number;
 }
 
 export type ThreadTranscriptProjectionState =
@@ -64,7 +69,7 @@ function sameDurableTurnIds(
     && leftIds.every((turnId, index) => turnId === rightIds[index]);
 }
 
-function liveItemTimelines(thread: ThreadPayload | null | undefined) {
+function liveItemTimelines(thread: ThreadTranscriptLocalThread | null | undefined) {
   return (thread?.turnHistory ?? []).map(entry => ({
     itemTimeline: entry.itemTimeline ?? [],
     turnId: entry.turnId,
@@ -73,7 +78,7 @@ function liveItemTimelines(thread: ThreadPayload | null | undefined) {
 
 function overlayLiveItemTimelines(
   projection: WorkbenchTranscriptProjection,
-  thread: ThreadPayload,
+  thread: ThreadTranscriptLocalThread,
 ) {
   const liveByTurnId = new Map(thread.turnHistory.map(entry => [entry.turnId, entry.itemTimeline ?? []]));
   let changed = false;
@@ -102,7 +107,7 @@ function overlayLiveItemTimelines(
   };
 }
 
-function localSteers(thread: ThreadPayload | undefined) {
+function localSteers(thread: ThreadTranscriptLocalThread | undefined) {
   return (thread?.turns ?? []).flatMap(turn => {
     const items = turn.items.flatMap(item => item.type === "userMessage" && isWorkbenchSyntheticSteerUserMessage(item) ? [item] : []);
     if (!items.length) return [];
@@ -115,7 +120,7 @@ function localSteers(thread: ThreadPayload | undefined) {
 }
 
 function localInitials(
-  thread: ThreadPayload | undefined,
+  thread: ThreadTranscriptLocalThread | undefined,
   retained: readonly OptimisticInitialInputProjection[] = [],
 ) {
   const retainedById = new Map(retained.map(projection => [projection.item.id, projection]));
@@ -143,7 +148,7 @@ interface ThreadTranscriptProjectionControllerOptions {
   onError?: (error: Error) => void;
   onStateChange?: (state: ThreadTranscriptProjectionState) => void;
   onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
-  readOptimisticInitials?: (thread: ThreadPayload) => readonly OptimisticInitialInputProjection[];
+  readOptimisticInitials?: (thread: ThreadTranscriptLocalThread) => readonly OptimisticInitialInputProjection[];
   transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">;
   turnLimit: number;
 }
@@ -244,8 +249,8 @@ export default class ThreadTranscriptProjectionController {
     const previousIds = durableTurnIds(this.#selection?.thread.turns);
     const nextIds = durableTurnIds(selection?.thread.turns);
     const appendedOnly = nextIds.length >= previousIds.length && previousIds.every((id, index) => nextIds[index] === id);
-    const loadedTurnsChanged = !sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns)
-      && !(this.#incremental && appendedOnly);
+    const loadedTurnsChanged = (!sameDurableTurnIds(this.#selection?.thread.turns, selection?.thread.turns)
+      && !(this.#incremental && appendedOnly)) || this.#selection?.turnLimit !== selection?.turnLimit;
     const localPendingChanged = !areDeeplyEqual(
       this.#selection?.thread.turns.filter(isLocallyProjectedTurn) ?? [],
       selection?.thread.turns.filter(isLocallyProjectedTurn) ?? [],
@@ -675,12 +680,14 @@ export default class ThreadTranscriptProjectionController {
         if (this.#disposed || !this.#available || generation !== this.#generation || !selection) return;
         const subscriptionId = `${this.#subscriptionPrefix}:${generation}`;
         this.#activeSubscriptionId = subscriptionId;
+        // Without durable turn ids the daemon owns the window: the latest `turnLimit` turns.
+        const turnIds = durableTurnIds(selection.thread.turns);
         await this.#transcripts.subscribe({
           toolPatchPreviews: true,
           subscriptionId,
           threadId: selection.thread.id,
-          turnIds: durableTurnIds(selection.thread.turns),
-          turnLimit: this.#turnLimit,
+          ...(turnIds.length ? { turnIds } : {}),
+          turnLimit: selection.turnLimit ?? this.#turnLimit,
         }, (snapshot) => this.#receiveSnapshot(generation, snapshot),
         update => this.#receiveStream(generation, update),
         error => this.#failStream(error, generation),

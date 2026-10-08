@@ -14,6 +14,7 @@ import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThrea
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadContextUsageRepository from "./WorkbenchThreadContextUsageRepository.ts";
+import WorkbenchApprovalOutcomeRepository from "./WorkbenchApprovalOutcomeRepository.ts";
 import { usageTables } from "workbench-shared/workbench/database/schema/usage-schema";
 import { transcriptIdentityTables } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 import { codexTranscriptTables } from "workbench-shared/workbench/database/schema/codex-transcript-schema";
@@ -117,6 +118,8 @@ interface SettlementChanges {
   /** Latest observed time of rows this settlement newly admitted, per thread. */
   itemActivityAt: Map<string, number>;
   compactionCompletions: WorkbenchTranscriptCompactionCompletion[];
+  /** Turns whose held steers changed; live views receive those turns' held-steer rows. */
+  heldSteerTurnIds: Set<string>;
 }
 
 type TranscriptSettlementMode = "live" | "canonicalImport" | "providerRecovery";
@@ -142,6 +145,7 @@ export default class WorkbenchTranscriptRepository {
   readonly #identity: WorkbenchThreadIdentityRepository;
   readonly #itemIdentity: WorkbenchTranscriptIdentityRepository;
   readonly #contextUsage: WorkbenchThreadContextUsageRepository;
+  readonly #approvalOutcomes: WorkbenchApprovalOutcomeRepository;
   #settlementChanges: SettlementChanges | null = null;
 
   constructor(database: Database.Database, identity = new WorkbenchThreadIdentityRepository(database)) {
@@ -149,6 +153,7 @@ export default class WorkbenchTranscriptRepository {
     this.#identity = identity;
     this.#itemIdentity = new WorkbenchTranscriptIdentityRepository(database);
     this.#contextUsage = new WorkbenchThreadContextUsageRepository(database);
+    this.#approvalOutcomes = new WorkbenchApprovalOutcomeRepository(database);
   }
 
   readContextUsage(threadId: string) {
@@ -174,7 +179,7 @@ export default class WorkbenchTranscriptRepository {
     const changedThreadIds = new Set<string>();
     const affected: SettlementChanges = {
       itemIds: new Set(), completedItemIds: new Set(), turnIds: new Set(), removedItems: new Map(), itemActivityAt: new Map(),
-      compactionCompletions: [],
+      compactionCompletions: [], heldSteerTurnIds: new Set(),
     };
     try {
       this.#settlementChanges = affected;
@@ -201,7 +206,14 @@ export default class WorkbenchTranscriptRepository {
           })));
         }
         for (const item of items) affected.turnIds.add(item.turn_id);
+        for (const turnId of affected.heldSteerTurnIds) affected.turnIds.add(turnId);
         const turns = this.#all(selectRows(coreTables.threadTurns, { whereIn: { id: [...affected.turnIds] } }));
+        const heldSteers = this.#all(selectRows(heldSteerTables.threadHeldSteers, {
+          whereIn: { turn_id: [...affected.heldSteerTurnIds] }, orderBy: [{ column: "id" }],
+        }));
+        const heldSteerParts = this.#all(selectRows(heldSteerTables.threadHeldSteerParts, {
+          whereIn: { steer_id: heldSteers.map(({ id }) => id) },
+        }));
         const changes = [...changedThreadIds].map(threadId => {
           const changedTurns = turns.filter(turn => turn.thread_id === threadId);
           return {
@@ -214,7 +226,8 @@ export default class WorkbenchTranscriptRepository {
               turns: changedTurns,
               loadedTurnIds: changedTurns.filter(turn => this.#isTurnMaterialized(threadId, turn.id)).map(turn => turn.id),
               hasPreviousTurns: false,
-              rows: this.#readRows(threadId, items.filter(item => item.thread_id === threadId)),
+              rows: this.#withHeldSteers(this.#readRows(threadId, items.filter(item => item.thread_id === threadId)),
+                heldSteers.filter(steer => steer.thread_id === threadId), heldSteerParts),
             },
           };
         });
@@ -343,6 +356,7 @@ export default class WorkbenchTranscriptRepository {
         hasPreviousTurns: firstLoadedTurnIndex !== undefined
           && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex),
         rows,
+        approvalOutcomes: this.#approvalOutcomes.read(threadId, loadedTurnIds),
         ...(contextItemOrder ? { contextItemOrder } : {}),
       };
     })();
@@ -1258,7 +1272,12 @@ export default class WorkbenchTranscriptRepository {
         allowUnmaterializedTurn: mode !== "live",
         canonicalIndex,
       });
-      if (held) this.#run(deleteRows(heldSteerTables.threadHeldSteers, { id: held.id }));
+      if (held) {
+        this.#run(deleteRows(heldSteerTables.threadHeldSteers, { id: held.id }));
+        // Live views drop the held entry by its public id once the delivered item replaces it.
+        const removed = this.#settlementChanges?.removedItems;
+        if (removed) removed.set(held.thread_id, new Set([...removed.get(held.thread_id) ?? [], held.public_id]));
+      }
       return observation.entry.threadId;
     }
     if (observation.kind === "browse") {
@@ -1495,6 +1514,7 @@ export default class WorkbenchTranscriptRepository {
       })).lastInsertRowid);
     }
     this.#runAll(heldSteerPartMutations(entry, steerId!));
+    this.#settlementChanges?.heldSteerTurnIds.add(entry.turnId);
   }
 
   /** A turn that ends can no longer deliver the steers it still holds; they become undelivered, not lost. */
@@ -1502,6 +1522,17 @@ export default class WorkbenchTranscriptRepository {
     this.#run(updateRows(heldSteerTables.threadHeldSteers, {
       state: "interrupted", resolved_at: endedAt,
     }, { turn_id: turnId, state: "pending" }));
+    this.#settlementChanges?.heldSteerTurnIds.add(turnId);
+  }
+
+  #withHeldSteers(
+    rows: WorkbenchTranscriptSnapshotRows,
+    steers: WorkbenchTranscriptSnapshotRows["threadHeldSteers"],
+    parts: WorkbenchTranscriptSnapshotRows["threadHeldSteerParts"],
+  ): WorkbenchTranscriptSnapshotRows {
+    if (!steers.length) return rows;
+    const ids = new Set(steers.map(({ id }) => id));
+    return { ...rows, threadHeldSteers: steers, threadHeldSteerParts: parts.filter(part => ids.has(part.steer_id)) };
   }
 
   /** The thread's running compactions in creation order, wherever their turns are; manual compaction can follow a settled turn. */

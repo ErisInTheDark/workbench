@@ -6,7 +6,8 @@
 
 import { useId, useState, type ReactNode } from "react";
 
-import type { ThreadPayload, WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { WorkbenchSubagentSummary } from "workbench-shared/types";
+import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 
 import ThreadAgentName from "./ThreadAgentName";
@@ -21,7 +22,7 @@ interface ThreadSubagentWaitEntry {
   fallbackName?: string | null;
   subagent?: WorkbenchSubagentSummary | null;
   targetKey: string;
-  thread?: ThreadPayload | null;
+  thread?: RelatedThread | null;
 }
 
 export default function ThreadSubagentWaitItem ({

@@ -8,7 +8,7 @@ import type { ComponentProps, ReactNode } from "react";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { describeThreadEntry } from "./thread-entry-presentation";
-import { useWorkbenchThread } from "./use-workbench-thread";
+import { useThread } from "./use-thread";
 import { ThreadTooltipContent } from "./WorkbenchThreadListItem";
 import WorkbenchTooltip from "./WorkbenchTooltip";
 
@@ -16,9 +16,9 @@ interface ThreadIdentity { harness: WorkbenchHarness; projectId: ProjectId; thre
 
 /** Mounted only while the tooltip is open, so hovering is what acquires the thread's summary interest. */
 function LoadedThreadTooltip({ agentName, harness, projectId, threadId, title }: ThreadIdentity & { agentName?: ReactNode; title: string }) {
-  const thread = useWorkbenchThread(projectId, { harness, kind: "provider", threadId });
-  const entry = thread.state.entry;
-  if (!entry) return <p className="m-0 text-[0.8rem] text-fg/muted">{thread.state.status === "loading" ? `Loading ${title}…` : title}</p>;
+  const thread = useThread(projectId, { harness, kind: "provider", threadId });
+  const entry = thread.entry;
+  if (!entry) return <p className="m-0 text-[0.8rem] text-fg/muted">{thread.status === "loading" ? `Loading ${title}…` : title}</p>;
   const shown = describeThreadEntry(entry);
   return (
     <ThreadTooltipContent

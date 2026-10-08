@@ -16,6 +16,7 @@ import type {
   ThreadPayload,
 } from "workbench-shared/types";
 import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
+import type { ThreadHead } from "../thread/ThreadStore";
 import type { ComposerProfilePersistence, ComposerProfileTargetPersistence } from "./composer-profile-api";
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadDraft } from "workbench-shared/workbench/thread/thread-state";
@@ -179,9 +180,11 @@ export default class WorkbenchComposerProfileController {
     return selection.settings ? cloneSettings(definition ?? selection.settings) : null;
   }
 
-  resolveThread(slot: WorkbenchComposerProfileSlot, thread: ThreadPayload) {
+  /** Overlays the slot's selected settings on a thread head or document; a draft's provider source follows its selection. */
+  resolveThread<Thread extends ThreadHead | ThreadPayload>(slot: WorkbenchComposerProfileSlot, thread: Thread): Thread {
     const settings = this.resolveSettings(slot);
-    return settings ? {
+    if (!settings) return { ...thread, agentPath: null, model: null, reasoningEffort: null, serviceTier: null, contextWindowTokens: null };
+    return {
       ...thread,
       agentPath: settings.agentPath,
       harness: settings.harness,
@@ -189,8 +192,8 @@ export default class WorkbenchComposerProfileController {
       reasoningEffort: settings.reasoningEffort,
       serviceTier: settings.serviceTier,
       contextWindowTokens: settings.contextWindowTokens ?? null,
-      source: thread.isDraft ? settings.harness : thread.source,
-    } : { ...thread, agentPath: null, model: null, reasoningEffort: null, serviceTier: null, contextWindowTokens: null };
+      ...("source" in thread && thread.isDraft ? { source: settings.harness } : {}),
+    };
   }
 
   async createProfile(input: Omit<WorkbenchComposerProfile, "createdAt" | "id" | "updatedAt">) {

@@ -6,8 +6,8 @@
 
 import { useState } from "react";
 
-import type { ThreadPayload } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 import { CompactIcon } from "../workbench-icons";
 
@@ -33,7 +33,7 @@ function formatContextStatusTitle ({
   return `Last reported context usage: ${formatTokenCount(remainingTokens)} tokens left of ${formatTokenCount(contextWindow)}. ${formatTokenCount(contextTokens)} used.`;
 }
 
-function isThreadActive (thread: ThreadPayload) {
+function isThreadActive (thread: ThreadHead) {
   return thread.status === "active" || thread.status.startsWith("active:");
 }
 
@@ -44,9 +44,9 @@ export default function ThreadContextStatus ({
   thread,
 }: {
   lifecycle?: WorkbenchThreadLifecycle;
-  onCompactThread: (thread: ThreadPayload) => Promise<ThreadPayload | null>;
+  onCompactThread: () => Promise<void>;
   snoozed?: boolean;
-  thread: ThreadPayload;
+  thread: ThreadHead;
 }) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [error, setError] = useState("");
@@ -100,7 +100,7 @@ export default function ThreadContextStatus ({
 
               setError("");
               setIsCompacting(true);
-              void onCompactThread(thread)
+              void onCompactThread()
                 .catch((compactError) => {
                   setError(compactError instanceof Error ? compactError.message : "Unable to compact context.");
                 })
