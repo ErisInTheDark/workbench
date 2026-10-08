@@ -126,8 +126,7 @@ class FakeProvider {
       if (this.failTurnStart) throw new Error("Turn failed to start.");
       return { kind: "started", turnId: `${input.threadId}-admitted` };
     },
-    interrupt: async (threadId, options) => {
-      assert.equal(options?.preserveGoal, true);
+    interrupt: async threadId => {
       this.calls.push({ harness: "codex", method: "interrupt", params: { threadId }, promptContext: null });
     },
     rename: async () => {}, list: this.unused, admitTurn: this.unused,

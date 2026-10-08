@@ -26,7 +26,7 @@ import type {
 import type { Turn } from "./workbench-thread-turn.ts";
 import { WorkbenchThreadCreationProfileSchema } from "./thread-profile.ts";
 import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../provider/provider-input.ts";
-import { WorkbenchProviderGoalSchema, WorkbenchProviderGoalUpdateSchema } from "../provider/provider-goal.ts";
+import { WorkbenchThreadGoalObjectiveSchema, WorkbenchThreadGoalSchema } from "./thread-goal.ts";
 import { WORKBENCH_APPROVAL_OUTCOMES, type WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
 import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
@@ -158,7 +158,7 @@ export const WorkbenchThreadPageResultSchema = z.custom<WorkbenchThreadPageResul
   value => pageEnvelope.safeParse(value).success,
 );
 const ok = z.object({ ok: z.literal(true) });
-const goalResult = z.object({ goal: WorkbenchProviderGoalSchema.nullable() });
+const goalResult = z.object({ goal: WorkbenchThreadGoalSchema.nullable() });
 const skillsResult = z.object({ skills: z.array(WorkbenchThreadSkillSchema) });
 const questionnaireRequest = WorkbenchDurableQuestionnaireSchema.shape.request.extend({
   questions: z.array(WorkbenchDurableQuestionnaireSchema.shape.request.shape.questions.element),
@@ -214,9 +214,8 @@ export const workbenchThreadActions = {
   "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
-  "thread/goal/read": { params: WorkbenchThreadTargetSchema, result: goalResult },
-  "thread/goal/update": { params: WorkbenchProviderGoalUpdateSchema, result: goalResult },
-  "thread/goal/remove": { params: WorkbenchThreadTargetSchema, result: ok },
+  "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },
+  "thread/goal/clear": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },
 } as const;

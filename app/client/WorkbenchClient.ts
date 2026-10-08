@@ -791,20 +791,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       // The thread's observation carries the accepted title to every view.
       return parsed.data.title;
     },
-    threadGoals: {
-      clear: id => rendererForThread(id).threadGoals.clear(id),
-      getSnapshot: id => rendererForThread(id).threadGoals.getSnapshot(id),
-      load: id => rendererForThread(id).threadGoals.load(id),
-      refresh: id => rendererForThread(id).threadGoals.refresh(id),
-      subscribe: (id, listener) => rendererForThread(id).threadGoals.subscribe(id, listener),
-      updateObjective: (id, objective) => rendererForThread(id).threadGoals.updateObjective(id, objective),
-    },
-    threadSkills: {
-      deactivate: (id, path) => rendererForThread(id).threadSkills.deactivate(id, path),
-      getSnapshot: id => rendererForThread(id).threadSkills.getSnapshot(id),
-      load: id => rendererForThread(id).threadSkills.load(id),
-      subscribe: (id, listener) => rendererForThread(id).threadSkills.subscribe(id, listener),
-    },
     setArchivedThreadLimit: limit => {
       archivedLimit = limit === null ? null : Math.min(Math.max(1, Math.floor(limit)), 500);
       observeArchived();

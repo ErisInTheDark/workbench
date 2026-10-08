@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, questionnaire snooze and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, goals, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
@@ -28,6 +28,7 @@ import type WorkbenchThreadStateController from "./WorkbenchThreadStateControlle
 import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
+import type WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
@@ -54,6 +55,7 @@ export interface WorkbenchThreadActionOwners {
     "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
   >;
   skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
+  goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
   /** Record skills an accepted submission activated. */
   recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
   warn(message: string): void;
@@ -185,18 +187,9 @@ export default class WorkbenchThreadActionController {
       await this.snoozeQuestionnaire(await this.target(input.threadId), input.requestKey, connectionId ?? "");
       return { ok: true };
     },
-    "thread/goal/read": async input => {
-      const target = await this.target(input.threadId);
-      return { goal: await target.provider.goals?.read(target.identity.threadId) ?? null };
-    },
-    "thread/goal/update": async input => {
-      const target = await this.target(input.threadId);
-      if (!target.provider.goals) throw new Error("This provider does not support native goals.");
-      return { goal: await target.provider.goals.update({ ...input, threadId: target.identity.threadId }) };
-    },
-    "thread/goal/remove": async input => {
-      const target = await this.target(input.threadId);
-      await target.provider.goals?.clear(target.identity.threadId);
+    "thread/goal/set": async input => ({ goal: await this.owners.goals.set(input.threadId, input.objective) }),
+    "thread/goal/clear": async input => {
+      await this.owners.goals.clear(input.threadId);
       return { ok: true };
     },
     "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
@@ -300,8 +293,7 @@ export default class WorkbenchThreadActionController {
   async stopThread(threadId: WorkbenchThreadId) {
     const target = await this.target(threadId);
     const turn = await target.provider.threads.latestTurn(target.identity.threadId);
-    // Agent stops keep the thread's goal; composer Stop is the user's call to clear it.
-    if (turn?.status === "inProgress") await this.interruptThread(target, { preserveGoal: true });
+    if (turn?.status === "inProgress") await this.interruptThread(target);
     const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
     const requestKey = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire?.requestKey : undefined;
     await this.markStopped(target, requestKey, "");
@@ -314,11 +306,8 @@ export default class WorkbenchThreadActionController {
     return { ok: true };
   }
 
-  private async interruptThread(
-    { identity, provider }: ActionTarget,
-    options?: { preserveGoal: true },
-  ) {
-    await provider.threads.interrupt(identity.threadId, options);
+  private async interruptThread({ identity, provider }: ActionTarget) {
+    await provider.threads.interrupt(identity.threadId);
     // A turn whose runtime died with an earlier daemon has nobody left to settle it.
     const turn = await provider.threads.latestTurn(identity.threadId);
     if (turn?.status === "inProgress") await this.owners.settlement.settleIfOrphaned(identity.threadId, turn.id);

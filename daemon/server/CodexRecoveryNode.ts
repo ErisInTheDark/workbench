@@ -61,7 +61,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
     });
     return {
-      hasPendingWork: () => owner.hasPendingWork(),
       registrations: { codexRecovery: owner },
       start: () => undefined,
       beginRuntimeDrain: () => owner.beginRuntimeDrain(),

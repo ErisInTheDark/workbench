@@ -73,8 +73,6 @@ import WebSocketTrafficBuffer, {
 import { randomUUID } from "node:crypto";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
-/** Thread-scoped provider events browsers still consume; everything else about a thread rides its observation or transcript. */
-const THREAD_EVENTS_FOR_BROWSERS = new Set(["thread/goal/updated", "thread/goal/cleared", "thread/skills/updated"]);
 /** A keyed delta for one busy thread is hundreds of bytes; pushes past this name themselves in the log. */
 const WORKSPACE_PUSH_WARNING_BYTES = 32 * 1024;
 const DEFAULT_PENDING_THRESHOLD_MS = 2_000;
@@ -349,22 +347,14 @@ export default class WorkbenchWebSocketRequestController {
   }
 
   /**
-   * Thread-less provider events (account, models) go everywhere. Thread content, usage, status and questions reach
-   * browsers through the thread observation and transcript stream, so of a thread's own events only goal and skill
-   * changes are forwarded, and only to connections observing that thread.
+   * Thread-less provider events (account, models) go everywhere. Everything about one thread reaches browsers
+   * through its observation and transcript stream, so a thread's own provider events are never forwarded.
    */
-  private wantsProviderEvent(client: BridgeClient, envelope: Record<string, unknown> | null) {
+  private wantsProviderEvent(envelope: Record<string, unknown> | null) {
     if (!envelope || !ProviderKeySchema.safeParse(envelope[WORKBENCH_HARNESS_FIELD]).success) return true;
     const params = asRecord(envelope.params);
     const thread = asRecord(params?.thread);
-    const threadId = typeof params?.threadId === "string" ? params.threadId
-      : typeof thread?.id === "string" ? thread.id : null;
-    if (!threadId) return true;
-    if (typeof envelope.method !== "string" || !THREAD_EVENTS_FOR_BROWSERS.has(envelope.method)) return false;
-    for (const subscription of this.transcriptSubscriptions.values()) {
-      if (subscription.client === client && subscription.threadId === threadId) return true;
-    }
-    return this.workspace?.observedThreadIds(client).has(threadId) ?? false;
+    return typeof params?.threadId !== "string" && typeof thread?.id !== "string";
   }
 
   private observeStats() {
@@ -642,7 +632,7 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const signal = this.generation.signal;
     const envelope = asRecord(message);
-    if (!this.wantsProviderEvent(client, envelope)) return;
+    if (!this.wantsProviderEvent(envelope)) return;
     const eventMethod = typeof envelope?.method === "string" ? envelope.method : null;
     const eventHarness = envelope?.[WORKBENCH_HARNESS_FIELD];
     const responseId = readResponseId(message);

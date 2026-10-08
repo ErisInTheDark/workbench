@@ -47,6 +47,9 @@ export function getCodexAppServerArgs() {
     "features.multi_agent_v2=false",
     "--config",
     "agents.enabled=false",
+    // Workbench owns thread goals; Codex's native goals and their auto-continuation stay off.
+    "--config",
+    "features.goals=false",
     "--config",
     "features.apply_patch_streaming_events=true",
     "--config",

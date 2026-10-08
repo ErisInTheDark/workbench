@@ -221,20 +221,6 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
-  /** Threads this client observes: requested references plus every thread in each observed family. */
-  observedThreadIds(client: Client) {
-    const ids = new Set<string>();
-    for (const observation of this.observations.values()) {
-      if (observation.client !== client || observation.request.query.kind !== "thread") continue;
-      ids.add(observation.request.query.threadId);
-      if (observation.value.kind !== "thread") continue;
-      for (const entry of observation.value.data?.entries ?? []) {
-        if (entry.entryKind !== "draft") ids.add(entry.identity.threadId);
-      }
-    }
-    return ids;
-  }
-
   captureInterests() {
     return [...this.observations.values()].map(({ client, connectionId, request, value }) => ({
       client, connectionId, request, revision: value.revision,

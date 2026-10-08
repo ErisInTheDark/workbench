@@ -40,7 +40,7 @@ const ISOLATION_CONFIG = [
   "skills.include_instructions=false", "include_apps_instructions=false",
   "include_collaboration_mode_instructions=false", "features.apps=false", "features.plugins=false",
   "features.multi_agent=false", "features.multi_agent_v2=false", "agents.enabled=false",
-  "features.shell_tool=false", "features.hooks=false", 'web_search="disabled"',
+  "features.shell_tool=false", "features.hooks=false", "features.goals=false", 'web_search="disabled"',
 ];
 
 export default function createCodexIsolatedTransport({

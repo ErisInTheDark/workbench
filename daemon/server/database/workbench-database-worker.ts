@@ -40,6 +40,7 @@ import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactS
 import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOutcomeRepository.ts";
 import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
 import WorkbenchThreadSkillStore from "./skills/WorkbenchThreadSkillStore.ts";
+import WorkbenchThreadGoalStore from "./goals/WorkbenchThreadGoalStore.ts";
 import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 
@@ -271,6 +272,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "threadSkills") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadSkills", result: new WorkbenchThreadSkillStore(database).execute(request.command) });
+    return;
+  }
+  if (request.type === "threadGoals") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "threadGoals", result: new WorkbenchThreadGoalStore(database).execute(request.command) });
     return;
   }
   if (request.type === "projectStore") {

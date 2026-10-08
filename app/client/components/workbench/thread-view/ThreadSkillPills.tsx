@@ -4,9 +4,9 @@
  */
 "use client";
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useState } from "react";
 
-import type { WorkbenchThreadSkillControls } from "workbench-shared/types";
+import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
 import { XIcon } from "../workbench-icons";
 
@@ -15,33 +15,41 @@ function RowSeparator () {
 }
 
 export default function ThreadSkillPills ({
-  controls,
+  skills,
+  onDeactivate,
   separatorAfter = false,
   separatorBefore = false,
-  threadId,
 }: {
-  controls: WorkbenchThreadSkillControls;
+  skills: readonly WorkbenchThreadSkill[];
+  onDeactivate: (path: string) => Promise<void>;
   /** Row separators render only while pills do, so an empty skill list leaves no stray divider. */
   separatorAfter?: boolean;
   separatorBefore?: boolean;
-  threadId: string;
 }) {
-  const subscribe = useCallback((listener: () => void) => controls.subscribe(threadId, listener), [controls, threadId]);
-  const getSnapshot = useCallback(() => controls.getSnapshot(threadId), [controls, threadId]);
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const [pendingPaths, setPendingPaths] = useState<readonly string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void controls.load(threadId);
-  }, [controls, threadId]);
+  if (!skills.length && !error) return null;
 
-  if (!snapshot.skills.length && !snapshot.error) return null;
+  // The thread observation drops a deactivated skill; until then its pill stays dimmed.
+  const deactivate = async (path: string) => {
+    setError(null);
+    setPendingPaths(current => [...current, path]);
+    try {
+      await onDeactivate(path);
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Unable to update the thread skills.");
+    } finally {
+      setPendingPaths(current => current.filter(candidate => candidate !== path));
+    }
+  };
 
   return (
     <>
       {separatorBefore ? <RowSeparator /> : null}
       <ul aria-label="Active skills" className="m-0 flex list-none flex-wrap items-center gap-1 p-0">
-        {snapshot.skills.map((skill) => {
-          const pending = snapshot.pendingPaths.includes(skill.path);
+        {skills.map((skill) => {
+          const pending = pendingPaths.includes(skill.path);
           return (
             <li
               key={skill.path}
@@ -74,7 +82,7 @@ export default function ThreadSkillPills ({
                   disabled:cursor-not-allowed motion-reduce:transition-none
                 `}
                 disabled={pending}
-                onClick={() => { void controls.deactivate(threadId, skill.path); }}
+                onClick={() => { void deactivate(skill.path); }}
               >
                 <XIcon size={12} />
               </button>
@@ -82,7 +90,7 @@ export default function ThreadSkillPills ({
           );
         })}
       </ul>
-      {snapshot.error ? <span className="ml-1 text-[0.72em] text-danger" role="alert">{snapshot.error}</span> : null}
+      {error ? <span className="ml-1 text-[0.72em] text-danger" role="alert">{error}</span> : null}
       {separatorAfter ? <RowSeparator /> : null}
     </>
   );

@@ -108,60 +108,29 @@ for (const fails of [false, true]) {
   });
 }
 
-for (const fails of [false, true]) {
-  test(`Codex interruption awaits goal clearing and ${fails ? "retains its failure" : "translates WB identities"}`, async () => {
-    const entered = Promise.withResolvers<void>();
-    const gate = Promise.withResolvers<void>();
-    const requests: JsonRpcRequest[] = [];
-    const fixture = await threadFixture(async request => {
-      requests.push(request);
-      if (request.method === "thread/goal/clear") {
-        entered.resolve();
-        await gate.promise;
-        if (fails) throw new Error("goal clear failed");
-      }
-      return request.method === "thread/read"
-        ? { thread: threadMetadata({ type: "active", activeFlags: [] }) } : {};
-    });
-    const stopping = fixture.operations.interrupt(fixture.threadId);
-    await entered.promise;
-    assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear"]);
-    gate.resolve();
-    if (fails) {
-      await assert.rejects(stopping, /goal clear failed/);
-      assert.equal(requests.length, 1);
-    } else {
-      await stopping;
-      assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear", "thread/read", "turn/interrupt"]);
-      assert.deepEqual(requests[2].params, { threadId: "native-thread", turnId: "" });
-    }
-  });
-}
-
-test("subagent interruption preserves its goal policy without selecting a turn", async () => {
+test("Codex interruption translates WB identities and interrupts without selecting a turn", async () => {
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => {
     requests.push(request);
     return request.method === "thread/read"
       ? { thread: threadMetadata({ type: "active", activeFlags: [] }) } : {};
   });
-  await fixture.operations.interrupt(fixture.threadId, { preserveGoal: true });
+  await fixture.operations.interrupt(fixture.threadId);
   assert.deepEqual(requests.map(({ method, params }) => ({ method, params })), [
     { method: "thread/read", params: { threadId: "native-thread", includeTurns: false } },
     { method: "turn/interrupt", params: { threadId: "native-thread", turnId: "" } },
   ]);
 });
 
-test("stopping an inactive Codex thread clears its goal without interrupting a cold runtime", async () => {
+test("stopping an inactive Codex thread does not interrupt a cold runtime", async () => {
   const requests: JsonRpcRequest[] = [];
   const fixture = await threadFixture(async request => {
     requests.push(request);
-    if (request.method === "thread/goal/clear") return {};
     assert.equal(request.method, "thread/read");
     return { thread: threadMetadata({ type: "idle" }) };
   });
   await fixture.operations.interrupt(fixture.threadId);
-  assert.deepEqual(requests.map(request => request.method), ["thread/goal/clear", "thread/read"]);
+  assert.deepEqual(requests.map(request => request.method), ["thread/read"]);
 });
 
 test("Codex thread interruption propagates native cancellation failure", async () => {

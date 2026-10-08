@@ -106,21 +106,9 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       if (!provider.threads.delete) throw new Error(`Provider ${this.key} does not support deleting its threads.`);
       return provider.threads.delete(threadId);
     }, `${this.key}: threads.delete`),
-    interrupt: (threadId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.interrupt(threadId, options), `${this.key}: threads.interrupt`),
+    interrupt: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.interrupt(threadId), `${this.key}: threads.interrupt`),
     isTurnLive: (threadId, turnId) => this.run(providerRegistrations[this.key], provider => provider.threads.isTurnLive(threadId, turnId), `${this.key}: threads.isTurnLive`),
     materialize: (threadId, turnIds, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.materialize(threadId, turnIds, signal), `${this.key}: threads.materialize`),
-  };
-
-  readonly goals: NonNullable<WorkbenchProvider["goals"]> = {
-    read: threadId => this.run(providerRegistrations[this.key], provider => {
-      if (!provider.goals) return null;
-      return provider.goals.read(threadId);
-    }, `${this.key}: goals.read`),
-    update: input => this.run(providerRegistrations[this.key], provider => {
-      if (!provider.goals) throw new Error(`Provider ${this.key} does not support goals.`);
-      return provider.goals.update(input);
-    }, `${this.key}: goals.update`),
-    clear: threadId => this.run(providerRegistrations[this.key], provider => provider.goals?.clear(threadId), `${this.key}: goals.clear`),
   };
 
   readonly recovery: NonNullable<WorkbenchProvider["recovery"]> = {

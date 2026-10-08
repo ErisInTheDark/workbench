@@ -138,9 +138,6 @@
  * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary.
  * - WorkbenchRouteLoadResult: route-load result.
  * - WorkbenchControls: top-level Workbench command surface.
- * - WorkbenchThreadGoalSnapshot: thread goal state.
- * - WorkbenchThreadGoalControls: thread goal command surface.
- * - WorkbenchThreadSkillSnapshot/WorkbenchThreadSkillControls: thread active-skill state and command surface.
  * - WorkbenchBindings: Workbench UI bindings contract.
  * - FilePayload: file-read payload.
  * - CreateEntryPayload: project entry creation payload.
@@ -169,7 +166,6 @@ import type {
   WorkbenchProjectThreadSummaryEntry,
 } from "./workbench/thread/thread-state.ts";
 import type { CommandAction } from "./workbench/thread/workbench-thread-items.ts";
-import type { WorkbenchProviderGoal as ThreadGoal } from "./workbench/provider/provider-goal.ts";
 import type { ThreadTokenUsage } from "./workbench/thread/thread-context-usage.ts";
 import type { Turn } from "./workbench/thread/workbench-thread-turn.ts";
 import type { UserInput } from "./workbench/thread/workbench-thread-items.ts";
@@ -1244,8 +1240,6 @@ export interface WorkbenchControls {
   ) => Promise<ThreadPayload | null>;
   threadAction: (threadId: WorkbenchThreadId, intent: WorkbenchThreadIntent) => Promise<boolean>;
   setThreadTitle: (request: WorkbenchThreadTitleRequest) => Promise<string>;
-  threadGoals: WorkbenchThreadGoalControls;
-  threadSkills: WorkbenchThreadSkillControls;
   /**
    * Archived rows load only while someone shows them: a positive limit observes the newest archived threads
    * of the selected projects (merged into `logicalThreads`); null releases them.
@@ -1310,38 +1304,6 @@ export interface WorkbenchControls {
   ) => Promise<void>;
   setDraftThreadHarness: (harness: WorkbenchHarness) => void;
   setDraftThreadHarnessAt: (location: ProjectLocationReference, harness: WorkbenchHarness) => void;
-}
-
-export interface WorkbenchThreadGoalSnapshot {
-  error: string | null;
-  goal: ThreadGoal | null;
-  isLoaded: boolean;
-  isLoading: boolean;
-  pendingAction: "clear" | "update" | null;
-}
-
-export interface WorkbenchThreadGoalControls {
-  clear: (threadId: string) => Promise<void>;
-  getSnapshot: (threadId: string) => WorkbenchThreadGoalSnapshot;
-  load: (threadId: string) => Promise<void>;
-  refresh: (threadId: string) => Promise<void>;
-  subscribe: (threadId: string, listener: () => void) => () => void;
-  updateObjective: (threadId: string, objective: string) => Promise<void>;
-}
-
-export interface WorkbenchThreadSkillSnapshot {
-  error: string | null;
-  isLoaded: boolean;
-  /** Skill paths whose deactivation is awaiting the daemon. */
-  pendingPaths: readonly string[];
-  skills: readonly import("./workbench/thread/thread-skill-state.ts").WorkbenchThreadSkill[];
-}
-
-export interface WorkbenchThreadSkillControls {
-  deactivate: (threadId: string, path: string) => Promise<void>;
-  getSnapshot: (threadId: string) => WorkbenchThreadSkillSnapshot;
-  load: (threadId: string) => Promise<void>;
-  subscribe: (threadId: string, listener: () => void) => () => void;
 }
 
 export interface WorkbenchBindings {

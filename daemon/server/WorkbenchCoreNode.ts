@@ -47,6 +47,7 @@ import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-r
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
+import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -243,13 +244,25 @@ function createWorkbenchCoreFeature(
       }, () => settings.readLocalCapabilities());
     },
     publish: (target, text) => agentContext.publish(target, text),
-    broadcast: (target, skills) => context.broadcastProviderNotification(target.harness, {
-      method: "thread/skills/updated", params: { threadId: target.threadId, skills },
-    }),
+    broadcast: (target, skills) => {
+      for (const listener of runtimeListeners) listener(target.threadId, { skills: [...skills] });
+    },
     warn: message => { console.warn("[thread-skills]", message.slice(0, 500)); },
   });
+  const threadGoals = new WorkbenchThreadGoalController({
+    store: command => database.executeThreadGoals(command),
+    target: async threadId => {
+      const resolved = await threadSkillTarget(threadId);
+      return resolved ? { harness: resolved.harness, threadId: resolved.identity.threadId } : null;
+    },
+    publish: (target, text) => agentContext.publish(target, text),
+    changed: (threadId, goal) => {
+      for (const listener of runtimeListeners) listener(threadId, { goal });
+    },
+    warn: message => { console.warn("[thread-goal]", message.slice(0, 500)); },
+  });
   const agentContext = new WorkbenchAgentContextController({
-    sources: [threadSkills.contextSource],
+    sources: [threadSkills.contextSource, threadGoals.contextSource],
     inject: async (target, text, signal) => {
       if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
       return await providers.get(target.harness).context?.inject({ threadId: target.threadId, text }, signal) ?? "unsupported";
@@ -522,17 +535,9 @@ function createWorkbenchCoreFeature(
   const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
   const unsubscribeCompaction = transcript.subscribeContextCompaction(async completion => {
     if (!lease.isCurrent()) return;
-    const tokenUsage = completion.usage?.tokenUsage;
-    const harness = (await threadIdentity.resolve({
-      threadId: ThreadReferenceSchema.parse(completion.threadId),
-    }))?.bindings[0]?.harness;
-    if (tokenUsage && harness && lease.isCurrent()) {
-      context.broadcastProviderNotification(WorkbenchHarnessSchema.parse(harness), {
-        method: "thread/tokenUsage/updated",
-        params: { threadId: completion.threadId, turnId: completion.turnId, tokenUsage },
-      });
-    }
-    if (lease.isCurrent()) await threadSkills.observeCompaction(completion.threadId);
+    // Observers reread token usage when the transcript settles; agents get their skills and goal re-sent.
+    await threadSkills.observeCompaction(completion.threadId);
+    if (lease.isCurrent()) await threadGoals.observeCompaction(completion.threadId);
   });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
@@ -626,7 +631,7 @@ function createWorkbenchCoreFeature(
     settlement: turnSettlement,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
-    skills: threadSkills, recordSkillActivations,
+    skills: threadSkills, goals: threadGoals, recordSkillActivations,
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
@@ -674,11 +679,24 @@ function createWorkbenchCoreFeature(
   });
   const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
   const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
-    read: async (threadId, harness) => ({
-      tokenUsage: await readTokenUsage(threadId),
-      willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
-      pendingApproval: readPendingApproval(threadId),
-    }),
+    read: async (threadId, harness) => {
+      // Goal and skills are optional facts: one failing read must not drop the thread's usage.
+      const optional = async <Value>(label: string, read: () => Promise<Value>) => {
+        try { return await read(); } catch (error) {
+          logThreadStateWarning(`Thread runtime ${label} read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+          return undefined;
+        }
+      };
+      const goal = await optional("goal", () => threadGoals.read(threadId));
+      const skills = await optional("skills", () => threadSkills.read(threadId));
+      return {
+        tokenUsage: await readTokenUsage(threadId),
+        willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
+        pendingApproval: readPendingApproval(threadId),
+        ...(goal !== undefined ? { goal } : {}),
+        ...(skills !== undefined ? { skills } : {}),
+      };
+    },
     readTokenUsage,
     subscribe: listener => {
       runtimeListeners.add(listener);

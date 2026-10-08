@@ -24,7 +24,7 @@ function projection(turns: Array<{ id: string; status?: string; clientIds?: stri
   } as unknown as WorkbenchTranscriptProjection;
 }
 
-function fixture() {
+function fixture(runtime: Record<string, object> = {}) {
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const submits: Array<{ clientMessageId: string }> = [];
   let onState!: (state: ThreadTranscriptProjectionState) => void;
@@ -40,7 +40,7 @@ function fixture() {
     target: { kind: "provider", harness: "codex", threadId },
     observations: {
       acquire: () => ({ key: "key", release: () => {} }),
-      getSnapshot: () => ({ status: "ready", error: null, observation: { entries: [entry], runtime: {} } }),
+      getSnapshot: () => ({ status: "ready", error: null, observation: { entries: [entry], runtime } }),
       getSubagents: () => [],
     },
     daemon: { threads: { message: async (input: { clientMessageId: string }) => {
@@ -73,6 +73,19 @@ function fixture() {
 }
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test("the thread head shows the goal and active skills its observation runtime carries", () => {
+  const goal = { objective: "ship the port", updatedAt: 3 };
+  const skills = [{ path: "skills/react/SKILL.md", name: "react", source: "user" as const, activatedAt: 1 }];
+  const f = fixture({ [threadId]: { tokenUsage: null, willAutoCompact: null, goal, skills } });
+  assert.deepEqual(f.published.summary?.head?.goal, goal);
+  assert.deepEqual(f.published.summary?.head?.skills, skills);
+  f.release();
+  const bare = fixture({ [threadId]: { tokenUsage: null, willAutoCompact: null } });
+  assert.equal(bare.published.summary?.head?.goal, null, "a daemon without goals shows none");
+  assert.deepEqual(bare.published.summary?.head?.skills, []);
+  bare.release();
+});
 
 test("an optimistic input stays local until the transcript delivers it, then leaves no duplicate", async () => {
   const f = fixture();

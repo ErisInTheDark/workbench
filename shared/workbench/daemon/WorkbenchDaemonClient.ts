@@ -248,9 +248,8 @@ class WorkbenchDaemonClient {
       stop: (params: WorkbenchDaemonParams<"thread/shell/stop">) => this.request("thread/shell/stop", params),
     },
     goal: {
-      read: (params: WorkbenchDaemonParams<"thread/goal/read">) => this.request("thread/goal/read", params),
-      update: (params: WorkbenchDaemonParams<"thread/goal/update">) => this.request("thread/goal/update", params),
-      clear: (params: WorkbenchDaemonParams<"thread/goal/remove">) => this.request("thread/goal/remove", params),
+      set: (params: WorkbenchDaemonParams<"thread/goal/set">) => this.request("thread/goal/set", params),
+      clear: (params: WorkbenchDaemonParams<"thread/goal/clear">) => this.request("thread/goal/clear", params),
     },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),

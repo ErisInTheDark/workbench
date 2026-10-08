@@ -18,6 +18,7 @@ const unavailableActions: ThreadStoreActions = {
   stopShell: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable, changeAgent: unavailable,
   changeModel: unavailable, changeReasoningEffort: unavailable, changeServiceTier: unavailable, changeSettings: unavailable,
   loadOlder: unavailable, observeGitArcProposal: () => () => {},
+  setGoal: unavailable, clearGoal: unavailable, deactivateSkill: unavailable,
 };
 
 function useSlice<Name extends ThreadSliceName>(store: ThreadStore | null, name: Name): ThreadStoreState[Name] {

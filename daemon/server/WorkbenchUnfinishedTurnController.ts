@@ -34,7 +34,7 @@ export default class WorkbenchUnfinishedTurnController {
   observe(harness: WorkbenchHarness, facts: WorkbenchProviderObservation, lifecycle: WorkbenchThreadLifecycle | null) {
     const event = facts.lifecycle?.event;
     if (!facts.lifecycle || event?.kind !== "turnCompleted" || event.status !== "completed") return;
-    if (this.generation.signal.aborted || !this.options.coordinator.shouldContinue(lifecycle, false)) return;
+    if (this.generation.signal.aborted || !this.options.coordinator.shouldContinue(lifecycle)) return;
     const target = { threadId: facts.lifecycle.threadId, turnId: event.turnId };
     const label = `unfinished-turn continuation ${harness}:${target.threadId}`;
     const task = new AbortController();
@@ -54,7 +54,7 @@ export default class WorkbenchUnfinishedTurnController {
   private async continue(harness: WorkbenchHarness, target: WorkbenchUnfinishedTurnTarget, signal: AbortSignal) {
     const current = await this.options.readLifecycle(harness, target.threadId);
     // A newer user message, stop or completion moved the thread on while this waited.
-    if (!current || signal.aborted || !this.options.coordinator.shouldContinue(current.lifecycle, false)) return;
+    if (!current || signal.aborted || !this.options.coordinator.shouldContinue(current.lifecycle)) return;
     try {
       await this.options.continueUnfinished(harness, target);
     } catch (error) {

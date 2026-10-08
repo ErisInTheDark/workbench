@@ -19,6 +19,8 @@ import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
+import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
+import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -45,6 +47,9 @@ interface ThreadHeadFields {
   tokenUsage: ThreadTokenUsage | null;
   contextWindowTokens?: number | null;
   willAutoCompact?: boolean;
+  /** The user-set Workbench goal; drafts have none. */
+  goal?: WorkbenchThreadGoal | null;
+  skills?: readonly WorkbenchThreadSkill[];
 }
 
 /** A child or linked thread as renderers see it: its head, plus turns when they are loaded. */
@@ -124,6 +129,9 @@ export interface ThreadStoreActions {
   loadOlder(): Promise<readonly string[] | null>;
   /** Demands one Git arc proposal card until released. */
   observeGitArcProposal(proposalId: string): () => void;
+  setGoal(objective: string): Promise<void>;
+  clearGoal(): Promise<void>;
+  deactivateSkill(path: string): Promise<void>;
 }
 
 export type ThreadFeed = "draft" | "observed";

@@ -494,7 +494,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const client = await this.options.acquire();
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     if (continuation && (!continuation() || !entry || entry.entryKind === "draft"
-      || !this.options.recovery.shouldContinue(entry.lifecycle, false))) throw supersededContinuation;
+      || !this.options.recovery.shouldContinue(entry.lifecycle))) throw supersededContinuation;
     let session = this.sessions.get(binding.nativeThreadId);
     if (!session || !execution.turn) {
       const [freshSession, inbox, stored] = await Promise.all([
@@ -560,7 +560,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     if (continuation && input.context) {
       const fresh = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
       if (!continuation() || !fresh || fresh.entryKind === "draft"
-        || !this.options.recovery.shouldContinue(fresh.lifecycle, false)) throw supersededContinuation;
+        || !this.options.recovery.shouldContinue(fresh.lifecycle)) throw supersededContinuation;
     }
     let resolvePromptOwner!: (owner: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null) => void;
     const promptOwner = new Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null>(resolve => {
@@ -1033,7 +1033,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         const native = await this.native(threadId);
         const entry = await this.options.state.controller.getCanonicalThreadEntry(native.identity.projectId, threadId);
         if (!current() || !entry || entry.entryKind === "draft"
-          || !this.options.recovery.shouldContinue(entry.lifecycle, false)) return;
+          || !this.options.recovery.shouldContinue(entry.lifecycle)) return;
         await this.submitNative({
           threadId, clientMessageId: createWorkbenchThreadRecoveryId(`opencode:${completion.eventID}`),
           input: createWorkbenchUnfinishedTurnInput(), intent: "newTurn", context: execution.context,

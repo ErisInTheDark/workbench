@@ -81,6 +81,8 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     contextWindowTokens: settings?.contextWindowTokens ?? null,
     tokenUsage: runtime?.tokenUsage ?? null,
     ...(runtime?.willAutoCompact != null ? { willAutoCompact: runtime.willAutoCompact } : {}),
+    goal: runtime?.goal ?? null,
+    skills: runtime?.skills ?? [],
   };
 }
 
@@ -371,6 +373,10 @@ export default function createObservedThreadSource(
         sync();
         return release;
       },
+      // The observation's runtime carries the resulting goal and skills.
+      async setGoal(objective) { await ports.daemon.threads.goal.set({ threadId, objective }); },
+      async clearGoal() { await ports.daemon.threads.goal.clear({ threadId }); },
+      async deactivateSkill(path) { await ports.daemon.threads.skills.deactivate({ threadId, path }); },
     },
     acquire(interest) {
       if (disposed) throw new Error("The thread store is disposed.");

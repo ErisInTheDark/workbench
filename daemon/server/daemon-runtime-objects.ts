@@ -144,6 +144,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readApprovalOutcomes: import("./database/WorkbenchDatabaseController").default["readApprovalOutcomes"];
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
   executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
+  executeThreadGoals: import("./database/WorkbenchDatabaseController").default["executeThreadGoals"];
   executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
   reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
   readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];

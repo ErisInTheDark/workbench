@@ -46,6 +46,8 @@
 import { z } from "zod";
 import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
 import { ThreadTokenUsageSchema } from "./thread-context-usage.ts";
+import { WorkbenchThreadGoalSchema } from "./thread-goal.ts";
+import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
@@ -432,6 +434,9 @@ export const ThreadRuntimeSchema = z.object({
   tokenUsage: ThreadTokenUsageSchema.nullable(),
   willAutoCompact: z.boolean().nullable(),
   pendingApproval: WorkbenchPendingApprovalSchema.nullable().optional(),
+  /** The user-set Workbench goal; absent from daemons that predate goals. */
+  goal: WorkbenchThreadGoalSchema.nullable().optional(),
+  skills: z.array(WorkbenchThreadSkillSchema).optional(),
 });
 export type ThreadRuntime = z.infer<typeof ThreadRuntimeSchema>;
 export const ThreadRuntimeRecordSchema = z.record(z.string().min(1), ThreadRuntimeSchema);

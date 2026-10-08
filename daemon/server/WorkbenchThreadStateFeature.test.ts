@@ -401,7 +401,7 @@ test("questionnaire completion interrupts current work rather than its historica
       const response = await h.complete();
       assert.equal("result" in response && (response.result as { accepted: boolean }).accepted, true);
       assert.deepEqual(h.requests.map(request => request.method), newer
-        ? ["thread/turns/list", "thread/goal/clear", "turn/interrupt"] : ["thread/turns/list"]);
+        ? ["thread/turns/list", "turn/interrupt"] : ["thread/turns/list"]);
       assert.deepEqual(h.releases, [h.questionnaire.requestKey]);
       if (newer) assert.equal((h.requests.at(-1)?.params as { turnId: string }).turnId, "native:new-turn");
     } finally { await h.feature.dispose(); }

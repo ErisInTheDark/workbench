@@ -336,8 +336,6 @@ export default memo(function ThreadViewContent ({
   const { entries: activeApprovalEntries } = useThread.approvals(active.store);
   const observeGitArcProposal = active.actions.observeGitArcProposal;
   const transcriptSource = activeTurns.transcript;
-  const threadGoalControls = threads.goals;
-  const threadSkillControls = threads.skills;
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = active.rateLimits;
   const [areSettledSubagentsVisible, setAreSettledSubagentsVisible] = useState(false);
@@ -1217,8 +1215,15 @@ export default memo(function ThreadViewContent ({
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
-        {activeThread && active.entry && threadGoalControls ? (
-          <ThreadGoalControl controls={threadGoalControls} skillControls={isDraftThreadView ? null : threadSkillControls} thread={activeThread}>
+        {activeThread && active.entry ? (
+          <ThreadGoalControl
+            goal={active.head?.goal ?? null}
+            skills={isDraftThreadView ? null : active.head?.skills ?? []}
+            threadId={activeThread.id}
+            onSetGoal={active.actions.setGoal}
+            onClearGoal={active.actions.clearGoal}
+            onDeactivateSkill={active.actions.deactivateSkill}
+          >
             {agentTabs}
           </ThreadGoalControl>
         ) : agentTabs ? (

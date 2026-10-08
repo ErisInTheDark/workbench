@@ -3,7 +3,7 @@
  * - WorkbenchThreadClientOptions: workspace transport, daemon location and app-owned thread adapters.
  * - WorkbenchThreadProject: renderer context independent of live catalogue availability.
  * - WorkbenchThreadOpenOutcome: result of selecting an existing thread.
- * - default WorkbenchThreadClient: one daemon's thread renderer: thread stores, route selection, local drafts, account limits and models, goals and skills.
+ * - default WorkbenchThreadClient: one daemon's thread renderer: thread stores, route selection, local drafts, account limits and models.
  */
 
 import type WorkbenchWorkspaceClient from "./app/WorkbenchWorkspaceClient";
@@ -17,8 +17,7 @@ import type { WorkbenchThreadIdentityResolution, WorkbenchThreadIdentityResolveR
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DraftId } from "workbench-shared/workbench/identity";
 import type {
   ThreadPayload, ThreadSummary, WorkbenchComposerSettings, WorkbenchControls, WorkbenchHarness, WorkbenchListModelsOptions,
-  WorkbenchModelOption, WorkbenchProjectOption, WorkbenchSubagentSummary, WorkbenchThreadGoalControls,
-  WorkbenchThreadRuntimeSnapshot, WorkbenchThreadSkillControls,
+  WorkbenchModelOption, WorkbenchProjectOption, WorkbenchSubagentSummary, WorkbenchThreadRuntimeSnapshot,
 } from "workbench-shared/types";
 import { normalizeWorkbenchAgentPath } from "workbench-shared/workbench/agent-paths";
 import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
@@ -28,8 +27,6 @@ import WorkbenchTranscriptClient from "./database/transcript/WorkbenchTranscript
 import LifecycleScope from "./state/LifecycleScope";
 import ThreadDocumentStore from "./state/ThreadDocumentStore";
 import ThreadObservationController, { getThreadObservationKey } from "./thread/ThreadObservationController";
-import ThreadGoalController from "./thread/ThreadGoalController";
-import ThreadSkillController from "./thread/ThreadSkillController";
 import ThreadTextPresentationController from "./thread/ThreadTextPresentationController";
 import { createThreadDocumentKeyForThread } from "./thread/thread-document-keys";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
@@ -78,8 +75,6 @@ interface WorkbenchThreadClient {
   acceptSourceGeneration: (generation: number) => void;
   /** Show the selected draft's (or the default) provider's daemon-pushed limits. */
   watchRateLimits: () => void;
-  threadGoals: WorkbenchThreadGoalControls;
-  threadSkills: WorkbenchThreadSkillControls;
   setCurrentThreadAgent: (threadId: string, agentPath: string | null) => void;
   setCurrentThreadComposerSettings: (threadId: string, settings: WorkbenchComposerSettings) => void;
   setCurrentThreadModel: (threadId: string, model: string) => void;
@@ -156,15 +151,6 @@ function WorkbenchThreadClient(
       onNotification: (listener) => workspace.onWorkbenchNotification(listener),
       request: async (method, params) => await requestWorkbench<unknown>(method, params),
     },
-  });
-  const threadGoals = new ThreadGoalController({
-    clear: params => daemon.threads.goal.clear(params),
-    get: params => daemon.threads.goal.read(params),
-    set: params => daemon.threads.goal.update(params),
-  });
-  const threadSkills = new ThreadSkillController({
-    read: params => daemon.threads.skills.read(params),
-    deactivate: params => daemon.threads.skills.deactivate(params),
   });
   const account = new WorkbenchAccountClient({
     listModels: async (harness) => (await daemon.models.list(harness)).data,
@@ -459,18 +445,13 @@ function WorkbenchThreadClient(
     });
   }));
 
-  // Thread content rides the observation and transcript channels; provider events only invalidate shared catalogues.
+  // Thread facts ride the observation and transcript channels; provider events only invalidate shared catalogues.
   if (options.observeProviderEvents !== false) {
     lifecycle.addUnsubscribe(workspace.onThreadEvent((notification, harness, daemonId) => {
       if (daemonId && options.location && daemonId !== options.location.daemonId) return;
-      if (notification.method === "models/updated") {
-        account.invalidateModels(harness);
-        for (const listener of modelUpdateListeners) listener(harness);
-      } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
-        threadGoals.observeNotification(notification);
-      } else if (notification.method === "thread/skills/updated") {
-        threadSkills.observeNotification(notification);
-      }
+      if (notification.method !== "models/updated") return;
+      account.invalidateModels(harness);
+      for (const listener of modelUpdateListeners) listener(harness);
     }));
   }
 
@@ -491,8 +472,6 @@ function WorkbenchThreadClient(
     threadObservations.dispose();
     listeners.clear();
     transcripts.dispose();
-    threadGoals.dispose();
-    threadSkills.dispose();
     account.dispose();
     modelUpdateListeners.clear();
     textPresentation.dispose();
@@ -517,8 +496,6 @@ function WorkbenchThreadClient(
     requestWorkbench,
     acceptSourceGeneration,
     watchRateLimits: () => account.watchRateLimits(drafts.getSelectedDocument()?.harness ?? defaultProviderKey),
-    threadGoals,
-    threadSkills,
     setCurrentThreadAgent,
     setCurrentThreadComposerSettings,
     setCurrentThreadModel,

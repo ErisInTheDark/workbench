@@ -10,16 +10,14 @@ import type { ThreadPayload, WorkbenchUserInputRequest } from "../../types.ts";
 import type { WorkbenchDurableQuestionnaire, WorkbenchLifecycleEvent } from "../thread/thread-state.ts";
 import type { FileUpdateChange, ThreadItem } from "../thread/workbench-thread-items.ts";
 import type { ThreadStatus, Turn } from "../thread/workbench-thread-turn.ts";
-import type { WorkbenchProviderGoal } from "./provider-goal.ts";
 import type { WorkbenchRateLimitSnapshot } from "./provider-account.ts";
 import type { ThreadTokenUsage } from "../thread/thread-context-usage.ts";
-import type { WorkbenchThreadSkill } from "../thread/thread-skill-state.ts";
 
 type ItemReference = { threadId: string; turnId: string; itemId: string };
 const publicMethods = new Set<string>([
   "thread/started", "thread/status/changed", "thread/name/updated", "thread/tokenUsage/updated",
   "thread/autoCompact/updated",
-  "thread/goal/updated", "thread/goal/cleared", "thread/skills/updated", "account/updated", "account/rateLimits/updated", "models/updated",
+  "account/updated", "account/rateLimits/updated", "models/updated",
   "turn/started", "turn/completed", "item/started", "item/completed",
   "item/agentMessage/delta", "item/plan/delta", "item/commandExecution/outputDelta",
   "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "item/reasoning/summaryTextDelta",
@@ -41,9 +39,6 @@ export type WorkbenchTranscriptNotification =
   | { method: "account/updated"; params: object }
   | { method: "account/rateLimits/updated"; params: { rateLimits: WorkbenchRateLimitSnapshot } }
   | { method: "models/updated"; params: Record<string, never> }
-  | { method: "thread/goal/updated"; params: { threadId: string; turnId?: string | null; goal: WorkbenchProviderGoal } }
-  | { method: "thread/goal/cleared"; params: { threadId: string; turnId?: string | null } }
-  | { method: "thread/skills/updated"; params: { threadId: string; skills: WorkbenchThreadSkill[] } }
   | { method: "turn/started"; params: { threadId: string; turn: Turn } }
   | { method: "turn/completed"; params: { threadId: string; turn: Turn } }
   | { method: "item/started"; params: { threadId: string; turnId: string; item: ThreadItem; startedAtMs: number } }

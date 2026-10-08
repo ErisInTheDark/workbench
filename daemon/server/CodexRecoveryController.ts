@@ -16,7 +16,6 @@ import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryControl
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 
 export interface CodexObservedTurnCandidate {
-  goalOwned?: boolean;
   harness: WorkbenchHarness;
   key: string;
   request: JsonRpcRequest;
@@ -34,8 +33,6 @@ export interface CodexRecoveryControllerState {
   candidates: CodexObservedTurnCandidate[];
   /** Last completed turn per thread, awaiting Workbench core's unfinished-turn decision. */
   completedTurns?: CodexObservedTurnCandidate[];
-  goalOwnedThreads: string[];
-  activeGoalThreads?: string[];
   resumeRequests: Array<[string, JsonRpcRequest]>;
 }
 
@@ -78,7 +75,6 @@ function createCodexTurnRecoveryResumeRequest(request: JsonRpcRequest, threadId:
 export default class CodexRecoveryController {
   private readonly candidates = new Map<string, CodexObservedTurnCandidate>();
   private readonly completedTurns = new Map<string, CodexObservedTurnCandidate>();
-  private readonly goalOwnedThreads = new Map<string, boolean>();
   private readonly resumeRequests = new Map<string, JsonRpcRequest>();
   private acceptingRecovery = true;
   private recoveryGeneration = new AbortController();
@@ -86,9 +82,6 @@ export default class CodexRecoveryController {
     const { state } = options;
     for (const candidate of state?.candidates ?? []) this.candidates.set(candidate.key, structuredClone(candidate));
     for (const candidate of state?.completedTurns ?? []) this.completedTurns.set(candidate.key, structuredClone(candidate));
-    for (const threadId of state?.goalOwnedThreads ?? []) {
-      this.goalOwnedThreads.set(threadId, state?.activeGoalThreads?.includes(threadId) ?? true);
-    }
     for (const [threadId, request] of state?.resumeRequests ?? []) this.resumeRequests.set(threadId, structuredClone(request));
   }
 
@@ -112,17 +105,10 @@ export default class CodexRecoveryController {
       this.resumeRequests.set(threadId, structuredClone(request));
       return;
     }
-    if (harness === "codex" && request.method === "thread/goal/set" && threadId) {
-      this.goalOwnedThreads.set(threadId, true);
-      const candidate = this.candidates.get(`${harness}:${threadId}`);
-      if (candidate) candidate.goalOwned = true;
-    }
-    if (harness === "codex" && request.method === "thread/goal/clear" && threadId) this.goalOwnedThreads.delete(threadId);
     if (request.method !== "turn/start" || !threadId) return;
     const key = `${harness}:${threadId}`;
     this.completedTurns.delete(key);
     this.candidates.set(key, {
-      goalOwned: this.goalOwnedThreads.has(threadId),
       harness,
       key,
       recoveryId: createWorkbenchThreadRecoveryId(`${harness}:${threadId}:${String(request.id ?? now)}`),
@@ -155,22 +141,11 @@ export default class CodexRecoveryController {
       this.candidates.delete(key);
       if (turn?.status === "completed") this.completedTurns.set(key, candidate);
     }
-    if (harness === "codex" && notification.method === "thread/goal/cleared") this.goalOwnedThreads.delete(threadId);
-    if (harness === "codex" && notification.method === "thread/goal/updated") {
-      const goal = record(params?.goal);
-      const status = goal?.status;
-      if (status === "active" || status === "paused" || status === "blocked" || status === "usageLimited" || status === "budgetLimited") {
-        this.goalOwnedThreads.set(threadId, status === "active");
-        if (candidate) candidate.goalOwned = true;
-      } else {
-        this.goalOwnedThreads.delete(threadId);
-      }
-    }
   }
 
   /**
-   * Replay the last completed turn's exact start request with the hidden unfinished-turn input. Goal-owned threads
-   * continue through Codex goals instead; a newer turn start or another continuation supersedes the turn quietly.
+   * Replay the last completed turn's exact start request with the hidden unfinished-turn input;
+   * a newer turn start or another continuation supersedes the turn quietly.
    */
   async continueUnfinished(
     target: WorkbenchUnfinishedTurnTarget,
@@ -193,7 +168,6 @@ export default class CodexRecoveryController {
     const candidate = this.completedTurns.get(key);
     if (signal.aborted || !candidate) return;
     this.completedTurns.delete(key);
-    if (candidate.goalOwned) return;
 
     const continuationId = createWorkbenchThreadRecoveryId(`unfinished:${candidate.recoveryId}`);
     const paramsRecord = record(candidate.request.params) ?? {};
@@ -249,13 +223,9 @@ export default class CodexRecoveryController {
     return {
       candidates: structuredClone([...this.candidates.values()]),
       completedTurns: structuredClone([...this.completedTurns.values()]),
-      goalOwnedThreads: [...this.goalOwnedThreads.keys()],
-      activeGoalThreads: [...this.goalOwnedThreads].filter(([, active]) => active).map(([threadId]) => threadId),
       resumeRequests: [...this.resumeRequests].map(([threadId, request]) => [threadId, structuredClone(request)]),
     };
   }
-
-  hasPendingWork() { return [...this.goalOwnedThreads.values()].some(active => active); }
 
   listRuntimeDrainPending(now = Date.now()) {
     return this.options.coordinator.listRuntimeDrainPending(now, this.recoveryGeneration.signal);

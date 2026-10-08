@@ -160,21 +160,6 @@ test("project row v2 exposes current compaction while legacy projection omits it
   assert.equal(currentEntry?.entryKind === "thread" ? currentEntry.compacting : null, true);
 });
 
-test("only a client's thread observations make it demand that thread's provider events", async context => {
-  const f = fixture(context);
-  const family = { projectId: a, revision: 1, subscriptionId: randomUUID(), updateKind: "threadObservation" as const, version: 2 as const,
-    error: null, freshness: "fresh" as const, target: { kind: "provider" as const, threadId },
-    entries: [thread(0, { identity: { harness: "codex", threadId } })] };
-  f.owners.identities.findThread = () => ({ threadId, projectId: a, projectRoot: "C:/a", bindings: [] });
-  f.owners.threads.readWorkspaceThread = async () => family;
-  const viewer = { id: "viewer" };
-  f.owner.observe(viewer, "viewer", { subscriptionId: randomUUID(), generation: 1,
-    query: { kind: "thread", projectId: a, threadId: ThreadReferenceSchema.parse(threadId) } });
-  await f.wait(value => value.kind === "thread" && value.phase === "current");
-  assert.ok(f.owner.observedThreadIds(viewer).has(threadId));
-  assert.equal(f.owner.observedThreadIds({ id: "other" }).size, 0);
-});
-
 test("one held project read does not block a different caller's selected project", async context => {
   const f = fixture(context);
   const held = Promise.withResolvers<WorkbenchThreadSidebarSnapshot>();

@@ -6,7 +6,6 @@
 import type { WorkbenchModelContextCapability, WorkbenchModelOption } from "workbench-shared/types";
 import type { WorkbenchProviderRegistration } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
-import type { WorkbenchProviderGoals } from "workbench-shared/workbench/provider/provider-goal";
 import type { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderInteractions } from "workbench-shared/workbench/provider/provider-interaction";
 import type { WorkbenchProviderTools } from "./provider-execution";
@@ -28,7 +27,6 @@ export default interface WorkbenchProvider {
     review(state: string, signal: AbortSignal): Promise<ApprovalReviewVerdict>;
   };
   readonly threads: WorkbenchProviderThreads;
-  readonly goals?: WorkbenchProviderGoals;
   readonly interactions?: WorkbenchProviderInteractions;
   readonly tools?: WorkbenchProviderTools;
   readonly browse?: WorkbenchProviderBrowse;

@@ -16,8 +16,8 @@ export default class WorkbenchTurnRecoveryController {
     private readonly runTask: (label: string, task: () => Promise<void>) => Promise<void> = async (_label, task) => task(),
   ) {}
 
-  shouldContinue(lifecycle: WorkbenchThreadLifecycle | null, goalOwned: boolean) {
-    return !goalOwned && lifecycle?.kind === "needsAttention" && lifecycle.reason === "noActiveTurn";
+  shouldContinue(lifecycle: WorkbenchThreadLifecycle | null) {
+    return lifecycle?.kind === "needsAttention" && lifecycle.reason === "noActiveTurn";
   }
 
   schedule(label: string, signal: AbortSignal, cancel: () => void, operation: () => Promise<void>) {

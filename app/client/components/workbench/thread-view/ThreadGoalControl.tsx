@@ -1,80 +1,59 @@
 /*
  * Exports:
- * - default ThreadGoalControl: render the Codex goal flag, objective card, compact editor, and clear confirmation around an active-skill and agent-tab row.
+ * - default ThreadGoalControl: render the Workbench goal flag, objective card, compact editor, and clear confirmation around an active-skill and agent-tab row.
  */
 "use client";
 
-import { useCallback, useEffect, useId, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
-import type { ThreadPayload, WorkbenchThreadGoalControls, WorkbenchThreadSkillControls } from "workbench-shared/types";
+import { WORKBENCH_THREAD_GOAL_MAX_LENGTH, type WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
+import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import { FlagIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadSkillPills from "./ThreadSkillPills";
 
-const MAX_GOAL_OBJECTIVE_LENGTH = 4_000;
-
-const statusLabels = {
-  blocked: "Blocked",
-  budgetLimited: "Budget limited",
-  complete: "Complete",
-  paused: "Paused",
-  usageLimited: "Usage limited",
-} as const;
-
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-function formatTokenCount(value: number) {
-  return `${new Intl.NumberFormat().format(value)} ${value === 1 ? "token" : "tokens"}`;
-}
-
-function formatElapsedTime(totalSeconds: number) {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours) return `${hours}h ${minutes}m elapsed`;
-  if (minutes) return `${minutes}m elapsed`;
-  return `${seconds}s elapsed`;
 }
 
 const quietButtonClassName = "rounded-lg px-2.5 py-1.5 text-[0.76em] font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-50";
 
 export default function ThreadGoalControl ({
   children,
-  controls,
-  skillControls,
-  thread,
+  goal,
+  skills,
+  threadId,
+  onSetGoal,
+  onClearGoal,
+  onDeactivateSkill,
 }: {
   children?: ReactNode;
-  controls: WorkbenchThreadGoalControls;
-  /** Active skill pills sit between the goal flag and the agent tabs. */
-  skillControls?: WorkbenchThreadSkillControls | null;
-  thread: Pick<ThreadPayload, "id">;
+  goal: WorkbenchThreadGoal | null;
+  /** Active skill pills sit between the goal flag and the agent tabs; null hides them (drafts). */
+  skills: readonly WorkbenchThreadSkill[] | null;
+  threadId: string;
+  onSetGoal: (objective: string) => Promise<void>;
+  onClearGoal: () => Promise<void>;
+  onDeactivateSkill: (path: string) => Promise<void>;
 }) {
   const panelId = useId();
-  const subscribe = useCallback((listener: () => void) => controls.subscribe(thread.id, listener), [controls, thread.id]);
-  const getSnapshot = useCallback(() => controls.getSnapshot(thread.id), [controls, thread.id]);
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const [isOpen, setIsOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isConfirmingClear, setIsConfirmingClear] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"clear" | "update" | null>(null);
   const [draft, setDraft] = useState("");
   const [localError, setLocalError] = useState("");
-  const goal = snapshot.goal;
-  const isPending = snapshot.pendingAction !== null;
+  const isPending = pendingAction !== null;
   const objective = draft.trim();
-  const objectiveIsValid = objective.length > 0 && draft.length <= MAX_GOAL_OBJECTIVE_LENGTH;
-  const exceptionalStatus = goal?.status === "active" ? null : goal ? statusLabels[goal.status] : null;
+  const objectiveIsValid = objective.length > 0 && draft.length <= WORKBENCH_THREAD_GOAL_MAX_LENGTH;
 
   useEffect(() => {
-    void controls.load(thread.id);
     setIsOpen(false);
     setIsEditing(false);
     setIsConfirmingClear(false);
     setLocalError("");
     setDraft("");
-  }, [controls, thread.id]);
+  }, [threadId]);
 
   useEffect(() => {
     if (!goal) {
@@ -86,49 +65,53 @@ export default function ThreadGoalControl ({
       return;
     }
     if (!isEditing) setDraft(goal.objective);
-  }, [goal?.objective, isEditing, thread.id]);
+  }, [goal?.objective, isEditing, threadId]);
 
-  const skills = skillControls
+  const skillPills = skills
     ? (separators: { before: boolean; after: boolean }) => (
-      <ThreadSkillPills controls={skillControls} separatorAfter={separators.after} separatorBefore={separators.before} threadId={thread.id} />
+      <ThreadSkillPills skills={skills} onDeactivate={onDeactivateSkill} separatorAfter={separators.after} separatorBefore={separators.before} />
     )
     : () => null;
 
-  if (!snapshot.isLoaded || !goal) {
-    if (!children && !skillControls) return null;
+  if (!goal) {
+    if (!children && !skills?.length) return null;
     // Pills render nothing for a thread without active skills; the row then collapses with its margin.
     return (
       <div className="mt-6 has-[>div:empty]:hidden">
         <div className="flex flex-wrap items-center gap-2">
-          {skills({ before: false, after: Boolean(children) })}
+          {skillPills({ before: false, after: Boolean(children) })}
           {children}
         </div>
       </div>
     );
   }
 
-  const save = async () => {
-    if (!objectiveIsValid) {
-      setLocalError(objective ? `Goal objectives cannot exceed ${MAX_GOAL_OBJECTIVE_LENGTH.toLocaleString()} characters.` : "Goal objectives cannot be empty.");
-      return;
-    }
+  const run = async (action: "clear" | "update", operation: () => Promise<void>, fallback: string) => {
     setLocalError("");
+    setPendingAction(action);
     try {
-      await controls.updateObjective(thread.id, objective);
-      setIsEditing(false);
+      await operation();
+      return true;
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : "Unable to update the thread goal.");
+      setLocalError(error instanceof Error ? error.message : fallback);
+      return false;
+    } finally {
+      setPendingAction(null);
     }
   };
 
+  const save = async () => {
+    if (!objectiveIsValid) {
+      setLocalError(objective ? `Goal objectives cannot exceed ${WORKBENCH_THREAD_GOAL_MAX_LENGTH.toLocaleString()} characters.` : "Goal objectives cannot be empty.");
+      return;
+    }
+    if (await run("update", () => onSetGoal(objective), "Unable to update the thread goal.")) setIsEditing(false);
+  };
+
   const clear = async () => {
-    setLocalError("");
-    try {
-      await controls.clear(thread.id);
+    if (await run("clear", onClearGoal, "Unable to clear the thread goal.")) {
       setIsConfirmingClear(false);
       setIsEditing(false);
-    } catch (error) {
-      setLocalError(error instanceof Error ? error.message : "Unable to clear the thread goal.");
     }
   };
 
@@ -141,16 +124,13 @@ export default function ThreadGoalControl ({
           aria-expanded={isOpen}
           aria-pressed={isOpen}
           aria-label={isOpen ? "Hide thread goal" : "Show thread goal"}
-          className={joinClasses(
-            "inline-flex size-8 items-center justify-center rounded-full text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft",
-            goal && "text-text",
-          )}
+          className="inline-flex size-8 items-center justify-center rounded-full text-text transition hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           title={isOpen ? "Hide thread goal" : "Show thread goal"}
           onClick={() => setIsOpen((current) => !current)}
         >
           <FlagIcon size={16} />
         </button>
-        {skills({ before: true, after: false })}
+        {skillPills({ before: true, after: false })}
         {children ? <span className="text-[0.84em] text-fg/muted" aria-hidden="true">|</span> : null}
         {children}
       </div>
@@ -162,15 +142,8 @@ export default function ThreadGoalControl ({
           className="mt-3 rounded-2xl bg-fg/4 px-4 py-3.5"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <h3 className="m-0 text-[0.82em] font-semibold text-text">Goal</h3>
-              {exceptionalStatus ? (
-                <span className="rounded-full bg-fg/7 px-2 py-1 text-[0.68em] font-medium text-fg/muted">
-                  {exceptionalStatus}
-                </span>
-              ) : null}
-            </div>
-            {goal && !isEditing && !isConfirmingClear ? (
+            <h3 className="m-0 text-[0.82em] font-semibold text-text">Goal</h3>
+            {!isEditing && !isConfirmingClear ? (
               <button type="button" className={quietButtonClassName} disabled={isPending} onClick={() => {
                 setDraft(goal.objective);
                 setLocalError("");
@@ -200,7 +173,7 @@ export default function ThreadGoalControl ({
                   />
                 </div>
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                  <span className={joinClasses("text-[0.68em] text-fg/muted", draft.length > MAX_GOAL_OBJECTIVE_LENGTH && "text-danger")}>{draft.length.toLocaleString()} / {MAX_GOAL_OBJECTIVE_LENGTH.toLocaleString()}</span>
+                  <span className={joinClasses("text-[0.68em] text-fg/muted", draft.length > WORKBENCH_THREAD_GOAL_MAX_LENGTH && "text-danger")}>{draft.length.toLocaleString()} / {WORKBENCH_THREAD_GOAL_MAX_LENGTH.toLocaleString()}</span>
                   <div className="flex items-center gap-1">
                     <button type="button" className={quietButtonClassName} disabled={isPending} onClick={() => {
                       setDraft(goal.objective);
@@ -208,33 +181,27 @@ export default function ThreadGoalControl ({
                       setIsEditing(false);
                     }}>Cancel</button>
                     <button type="button" className={quietButtonClassName} disabled={isPending || !objectiveIsValid || objective === goal.objective} onClick={() => { void save(); }}>
-                      {snapshot.pendingAction === "update" ? "Saving..." : "Save"}
+                      {pendingAction === "update" ? "Saving..." : "Save"}
                     </button>
                   </div>
                 </div>
             </div>
           ) : (
-            <>
-              <p className="m-0 mt-3 whitespace-pre-wrap text-[0.88em] leading-[1.65] text-text">{goal.objective}</p>
-              <p className="m-0 mt-2 text-[0.7em] text-fg/muted">{formatTokenCount(goal.tokensUsed)} <span aria-hidden="true">·</span> {formatElapsedTime(goal.timeUsedSeconds)}</p>
-            </>
+            <p className="m-0 mt-3 whitespace-pre-wrap text-[0.88em] leading-[1.65] text-text">{goal.objective}</p>
           )}
 
-          {localError || snapshot.error ? (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[0.74em] text-danger" role="alert">
-              <span>{localError || snapshot.error}</span>
-              {snapshot.error && !isPending ? <button type="button" className={quietButtonClassName} onClick={() => { void controls.refresh(thread.id); }}>Retry</button> : null}
-            </div>
+          {localError ? (
+            <div className="mt-3 text-[0.74em] text-danger" role="alert">{localError}</div>
           ) : null}
 
-          {goal && !isEditing ? (
+          {!isEditing ? (
             <div className="mt-3 flex flex-wrap items-center justify-end gap-1">
               {isConfirmingClear ? (
                 <>
-                  <span className="mr-auto text-[0.72em] text-fg/muted">Clear this goal and stop its automatic continuation?</span>
+                  <span className="mr-auto text-[0.72em] text-fg/muted">Clear this goal?</span>
                   <button type="button" className={quietButtonClassName} disabled={isPending} onClick={() => setIsConfirmingClear(false)}>Cancel</button>
                   <button type="button" className={quietButtonClassName} disabled={isPending} onClick={() => { void clear(); }}>
-                    {snapshot.pendingAction === "clear" ? "Clearing..." : "Clear goal"}
+                    {pendingAction === "clear" ? "Clearing..." : "Clear goal"}
                   </button>
                 </>
               ) : (

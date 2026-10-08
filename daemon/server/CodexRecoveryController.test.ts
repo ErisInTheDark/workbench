@@ -26,20 +26,6 @@ function observe(controller: CodexRecoveryController, harness = "codex", threadI
   controller.observeNotification(harness, { method: "turn/started", params: { threadId, turn: { id: "turn" } } });
 }
 
-test("active goals retain execution between turns while paused goals preserve only recovery ownership", () => {
-  const owner = createRecovery();
-  owner.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
-  assert.equal(owner.hasPendingWork(), true);
-  owner.observeNotification("codex", { method: "thread/goal/updated", params: { threadId: "thread", goal: { status: "paused" } } });
-  assert.equal(owner.hasPendingWork(), false);
-  const restored = createRecovery({ state: owner.captureReloadState() });
-  assert.equal(restored.hasPendingWork(), false);
-  restored.observeNotification("codex", { method: "thread/goal/updated", params: { threadId: "thread", goal: { status: "active" } } });
-  assert.equal(restored.hasPendingWork(), true);
-  restored.observeNotification("codex", { method: "thread/goal/cleared", params: { threadId: "thread" } });
-  assert.equal(restored.hasPendingWork(), false);
-});
-
 test("explicit refresh validates an observed started turn and uses the lifecycle scheduler", async () => {
   let execute!: () => void;
   let finishTask = Promise.resolve();
@@ -57,7 +43,6 @@ test("explicit refresh validates an observed started turn and uses the lifecycle
   controller.observeRequest("codex", { id: "early", method: "turn/start", params: { threadId: "thread", input: [] } });
   await assert.rejects(controller.requestResume("codex", "thread"), /not started/);
   observe(controller);
-  controller.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
   await controller.requestResume("codex", "thread");
   assert.equal(received.length, 0);
   assert.equal(controller.listRuntimeDrainPending().length, 1);
@@ -177,7 +162,7 @@ test("a completed turn continues once, across a reload, with its exact request c
   });
 });
 
-test("stopped, failed, superseded and goal-owned turns never continue", async () => {
+test("stopped, failed and superseded turns never continue", async () => {
   const never = async () => assert.fail("this turn must not continue");
   for (const status of ["interrupted", "failed"]) {
     const controller = createRecovery({ resolveThread });
@@ -190,12 +175,6 @@ test("stopped, failed, superseded and goal-owned turns never continue", async ()
   superseded.observeNotification("codex", completed());
   observe(superseded, "codex", "thread", "user-message");
   await superseded.continueUnfinished(target, never);
-  const goal = createRecovery({ resolveThread });
-  observe(goal);
-  goal.observeRequest("codex", { method: "thread/goal/set", params: { threadId: "thread" } });
-  goal.observeRequest("codex", { method: "thread/goal/clear", params: { threadId: "thread" } });
-  goal.observeNotification("codex", completed());
-  await goal.continueUnfinished(target, never);
 });
 
 test("failed unfinished continuation throws to its caller and retires its own replacement", async () => {

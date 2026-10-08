@@ -28,7 +28,6 @@ test("shared recovery schedules provider-owned work and expires it through its o
 
 test("shared continuation policy leaves completed, blocked and pending-input ownership intact", () => {
   const controller = new WorkbenchTurnRecoveryController(() => undefined);
-  assert.equal(controller.shouldContinue(null, false), false);
-  assert.equal(controller.shouldContinue({ kind: "needsAttention", reason: "noActiveTurn", settled: false }, false), true);
-  assert.equal(controller.shouldContinue({ kind: "needsAttention", reason: "noActiveTurn", settled: false }, true), false);
+  assert.equal(controller.shouldContinue(null), false);
+  assert.equal(controller.shouldContinue({ kind: "needsAttention", reason: "noActiveTurn", settled: false }), true);
 });

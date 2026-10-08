@@ -3385,13 +3385,13 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
     await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "providerSystemError" });
     let entry = await readEntry(fixtureThreadIds["questionnaire"]);
     assert.equal(waitingRequestKey(entry), question.requestKey);
-    assert.equal(recovery.shouldContinue(entry.lifecycle, false), false);
+    assert.equal(recovery.shouldContinue(entry.lifecycle), false);
 
     // A completed turn must not walk it there either, and the question stays answerable.
     await controller.observeLifecycle("codex", fixtureThreadIds["questionnaire"], { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds["turn"] });
     entry = await readEntry(fixtureThreadIds["questionnaire"]);
     assert.equal(waitingRequestKey(entry), question.requestKey);
-    assert.equal(recovery.shouldContinue(entry.lifecycle, false), false);
+    assert.equal(recovery.shouldContinue(entry.lifecycle), false);
     assert.equal(entry.pendingQuestionnaire?.requestKey, question.requestKey);
 
     // A question observed without an owning turn still asserts the waiting state.
@@ -3401,7 +3401,7 @@ test("a held questionnaire never leaves the thread in the automatic recovery sta
     });
     const turnlessEntry = await readEntry(fixtureThreadIds["retained"]);
     assert.equal(waitingRequestKey(turnlessEntry), turnless.requestKey);
-    assert.equal(recovery.shouldContinue(turnlessEntry.lifecycle, false), false);
+    assert.equal(recovery.shouldContinue(turnlessEntry.lifecycle), false);
   } finally {
     await controller.dispose();
   }

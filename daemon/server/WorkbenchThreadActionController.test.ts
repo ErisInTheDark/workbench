@@ -15,7 +15,7 @@ function fixture(providerWarning?: string) {
   const messages: object[] = [];
   const connections: string[] = [];
   const warnings: string[] = [];
-  const stops: Array<{ threadId: string; options: Parameters<WorkbenchProvider["threads"]["interrupt"]>[1] }> = [];
+  const stops: string[] = [];
   const mutations: object[] = [];
   const stopOrder: string[] = [];
   let interruptFailure = false;
@@ -29,10 +29,10 @@ function fixture(providerWarning?: string) {
       create: unused, list: unused, read: unused,
       submit: async input => { messages.push(input); return { kind: "steered", turnId: "wb-turn", ...(providerWarning ? { warning: providerWarning } : {}) }; },
       rename: unused, compact: unused,
-      interrupt: async (threadId, options) => {
+      interrupt: async threadId => {
         stopOrder.push("interrupt");
         if (interruptFailure) throw new Error("interruption failed");
-        stops.push({ threadId, options });
+        stops.push(threadId);
       },
       isTurnLive: unused,
       materialize: unused,
@@ -60,6 +60,7 @@ function fixture(providerWarning?: string) {
     }) },
     profiles: { captureCreationProfile: unused, captureCreationProfileForProject: unused },
     skills: { read: unused, deactivate: unused },
+    goals: { set: unused, clear: unused },
     recordSkillActivations: async () => undefined,
     state: {
       acceptProviderIntent: async (_project, _harness, acceptedThread, acceptedTurn) => {
@@ -183,7 +184,7 @@ test("missing targets identify durable identity resolution and the requested thr
   const f = fixture();
   f.owners.identities.resolve = async () => null;
   await assert.rejects(
-    f.controller.handle("thread/goal/read", { threadId: "missing-thread" }),
+    f.controller.handle("thread/compact", { threadId: "missing-thread" }),
     /durable Workbench identity.*missing-thread/iu,
   );
 });
@@ -264,7 +265,7 @@ test("questionnaire-only stop interrupts provider work before dismissing the que
   await f.controller.handle("thread/stop", {
     threadId: "wb-thread", intent: "stop", requestKey: "preserved-question",
   });
-  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+  assert.deepEqual(f.stops, ["wb-thread"]);
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
 });
 
@@ -275,7 +276,7 @@ for (const turn of [null, { id: "wb-turn", status: "interrupted" }]) {
     await f.controller.handle("thread/stop", {
       threadId: "wb-thread", intent: "stop", requestKey: "held-question",
     });
-    assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+    assert.deepEqual(f.stops, ["wb-thread"]);
     assert.deepEqual(f.stopOrder, ["interrupt", "mutation"]);
   });
 }
@@ -285,10 +286,7 @@ test("repeated stop does not need the previous turn's identity", async () => {
   await f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop" });
   f.provider.threads.latestTurn = async () => ({ id: "wb-turn", status: "interrupted" }) as never;
   await f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop" });
-  assert.deepEqual(f.stops, [
-    { threadId: "wb-thread", options: undefined },
-    { threadId: "wb-thread", options: undefined },
-  ]);
+  assert.deepEqual(f.stops, ["wb-thread", "wb-thread"]);
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation", "interrupt", "mutation"]);
 });
 
@@ -298,7 +296,7 @@ test("failed post-interruption turn lookup does not dismiss the pending question
   await assert.rejects(f.controller.handle("thread/stop", {
     threadId: "wb-thread", intent: "stop", requestKey: "seen-question",
   }), /turn metadata unavailable/);
-  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+  assert.deepEqual(f.stops, ["wb-thread"]);
   assert.deepEqual(f.mutations, []);
 });
 
@@ -316,7 +314,7 @@ test("stop retains the caller's questionnaire identity instead of selecting a re
   await f.controller.handle("thread/stop", {
     threadId: "wb-thread", turnId: "obsolete-turn", intent: "stop", requestKey: "seen-question",
   });
-  assert.deepEqual(f.stops, [{ threadId: "wb-thread", options: undefined }]);
+  assert.deepEqual(f.stops, ["wb-thread"]);
   assert.equal(f.mutations.length, 1);
   assert.ok("requestKey" in f.mutations[0]);
   assert.equal(f.mutations[0].requestKey, "seen-question");
@@ -341,11 +339,11 @@ test("interrupt snoozes the questionnaire it names without stopping the thread",
 
 function agentStopFixture(turnStatus: "inProgress" | "interrupted") {
   const f = fixture();
-  const interrupts: object[] = [];
+  const interrupts: string[] = [];
   f.provider.threads.latestTurn = async () => ({ id: "wb-turn", status: turnStatus }) as never;
-  f.provider.threads.interrupt = async (threadId, options) => {
+  f.provider.threads.interrupt = async threadId => {
     f.stopOrder.push("interrupt");
-    interrupts.push({ threadId, options });
+    interrupts.push(threadId);
   };
   f.owners.state.getCanonicalThreadEntry = async () => ({ pendingQuestionnaire: { requestKey: "waiting-question" } }) as never;
   return { ...f, interrupts };
@@ -354,7 +352,7 @@ function agentStopFixture(turnStatus: "inProgress" | "interrupted") {
 test("parent-agent stop interrupts the live turn, then dismisses the questionnaire it retained", async () => {
   const f = agentStopFixture("inProgress");
   await f.controller.stopThread(WorkbenchThreadIdSchema.parse("wb-thread"));
-  assert.deepEqual(f.interrupts, [{ threadId: "wb-thread", options: { preserveGoal: true } }]);
+  assert.deepEqual(f.interrupts, ["wb-thread"]);
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
   assert.ok("requestKey" in f.mutations[0]!);
   assert.equal(f.mutations[0].requestKey, "waiting-question");

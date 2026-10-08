@@ -19,7 +19,6 @@ import type {
 } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchThreadMessageResultSchema } from "workbench-shared/workbench/thread/thread-actions";
-import { WorkbenchProviderGoalSchema, type WorkbenchProviderGoalUpdate } from "workbench-shared/workbench/provider/provider-goal";
 
 import { NativeThreadIdSchema, ThreadReferenceSchema, TurnReferenceSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import { admitProviderNotifications, admitProviderThreads, mapProviderThread } from "./CodexProviderIdentity";
@@ -100,8 +99,6 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
       return questionnaires.interruptRetainingQuestionnaire(threadId, input.requestKey, async () => {
         if (!await isCurrent()) return false;
         if (!input.turnId) return true;
-        await this.clearGoal(input.threadId);
-        if (!await isCurrent()) return false;
         await this.mapped({ method: "turn/interrupt", params: { threadId: input.threadId, turnId: input.turnId } });
         return isCurrent();
       });
@@ -433,35 +430,12 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     await this.mapped({ id: 0, method: "thread/delete", params: { threadId } });
   }
 
-  async readGoal(threadId: string) {
-    const result = record(await this.mapped({ id: 0, method: "thread/goal/get", params: { threadId } }));
-    return this.goal(threadId, result?.goal);
-  }
-
-  async updateGoal(input: WorkbenchProviderGoalUpdate) {
-    const result = record(await this.mapped({ id: 0, method: "thread/goal/set", params: input }));
-    return this.goal(input.threadId, result?.goal);
-  }
-
-  async clearGoal(threadId: string) {
-    await this.mapped({ id: 0, method: "thread/goal/clear", params: { threadId } });
-  }
-
-  private goal(threadId: string, value: unknown) {
-    if (value === null || value === undefined) return null;
-    return {
-      ...WorkbenchProviderGoalSchema.parse(value),
-      threadId: this.owners.identities.threads.knownThread(ThreadReferenceSchema.parse(threadId)).threadId,
-    };
-  }
-
   /** Codex runs at most one turn per thread; a restarted app-server reports threads it no longer runs as inactive. */
   async isTurnLive(threadId: string, _turnId: string) {
     return isThreadStatusActive((await this.read(threadId, { background: true })).status);
   }
 
-  async interrupt(threadId: string, options?: { preserveGoal?: boolean }) {
-    if (!options?.preserveGoal) await this.mapped({ id: 0, method: "thread/goal/clear", params: { threadId } });
+  async interrupt(threadId: string) {
     if (!isThreadStatusActive((await this.read(threadId)).status)) return;
     // Codex's empty-id path interrupts the current task and acknowledges submission, not final settlement.
     await this.mapped({ id: 0, method: "turn/interrupt", params: { threadId, turnId: "" } });
