@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - ThreadSubagentCoordinationRole/findThreadSubagentCoordinationSpans: identify two-way subagent coordination runs.
+ * - ThreadSubagentCoordinationRole/findThreadSubagentCoordinationSpans: identify qualifying subagent coordination runs.
  * - readThreadSubagentCoordinationOutgoingMessage: read one visible CLI or MCP outgoing message.
  * - readThreadSubagentCoordinationWait: read one CLI or MCP wait with its targets and outcome.
+ * - readThreadSubagentCoordinationClaimAction: read a successful subagent-targeted claim transfer.
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -11,6 +12,7 @@ import {
   getThreadCommandExecutionOutcome,
   getThreadSubagentWaitMcpOutcome,
   getWorkbenchMcpCommandRoute,
+  parseGitArcCommand,
   parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   type CommandShell,
@@ -21,6 +23,7 @@ import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/
 
 export interface ThreadSubagentCoordinationRole {
   incoming: boolean;
+  itemCount: number;
   outgoing: boolean;
 }
 
@@ -37,6 +40,12 @@ export interface ThreadSubagentCoordinationWait {
   outcome: ThreadCommandExecutionOutcome;
   targetKeys: string[];
   targets: WorkbenchSubagentCommandTarget[];
+}
+
+export interface ThreadSubagentCoordinationClaimAction {
+  action: "adopt" | "release";
+  paths: string[];
+  target: { kind: "id" | "name"; value: string };
 }
 
 function getCommandDisplay(item: Extract<ThreadItem, { type: "commandExecution" }>) {
@@ -101,6 +110,50 @@ export function readThreadSubagentCoordinationWait(item: ThreadItem): ThreadSuba
       : null;
 }
 
+export function readThreadSubagentCoordinationClaimAction(
+  item: ThreadItem,
+): ThreadSubagentCoordinationClaimAction | null {
+  const operation = item.type === "commandExecution"
+    ? (() => {
+      const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+      return outcome === "completed" || outcome === "inProgress"
+        ? parseGitArcCommand(getCommandDisplay(item).unwrappedCommand)
+        : null;
+    })()
+    : item.type === "mcpToolCall" && item.status !== "failed" && !item.error
+      ? (() => {
+        const route = getWorkbenchMcpCommandRoute({
+          argumentsValue: item.arguments,
+          server: item.server,
+          tool: item.tool,
+        });
+        return route?.kind === "specialized" && route.operation.kind === "gitArc"
+          ? route.operation.operation
+          : null;
+      })()
+      : null;
+  if (operation?.action === "release" && operation.toSubagent) {
+    return {
+      action: "release",
+      paths: operation.paths,
+      target: { kind: "name", value: operation.toSubagent },
+    };
+  }
+  if (operation?.action !== "adopt") return null;
+  if (operation.source?.threadId) {
+    return {
+      action: "adopt",
+      paths: operation.paths,
+      target: { kind: "id", value: operation.source.threadId },
+    };
+  }
+  return operation.source?.name ? {
+    action: "adopt",
+    paths: operation.paths,
+    target: { kind: "name", value: operation.source.name },
+  } : null;
+}
+
 export function findThreadSubagentCoordinationSpans(
   roles: readonly (ThreadSubagentCoordinationRole | null)[],
 ): Array<{ end: number; start: number }> {
@@ -112,14 +165,16 @@ export function findThreadSubagentCoordinationSpans(
       continue;
     }
     const start = index;
+    let itemCount = 0;
     let incoming = false;
     let outgoing = false;
     while (index < roles.length && roles[index]) {
+      itemCount += roles[index]!.itemCount;
       incoming ||= roles[index]!.incoming;
       outgoing ||= roles[index]!.outgoing;
       index += 1;
     }
-    if (incoming && outgoing) spans.push({ end: index, start });
+    if (itemCount >= 3 || incoming && outgoing) spans.push({ end: index, start });
   }
   return spans;
 }

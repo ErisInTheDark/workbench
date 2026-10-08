@@ -3,7 +3,7 @@
  * - CommandItem/CommandSequenceItem/ThreadRenderableBlock/HiddenThreadItemIds: shared render-plan shapes.
  * - IncomingAgentMessageItem: an attributed cross-agent message item.
  * - AgentCommentaryItem: a non-final agent message grouped into a commentary sequence block.
- * - buildRenderableBlocks: group visible provider items, preserve wait folds, then give qualifying two-way subagent coordination one outer render block.
+ * - buildRenderableBlocks: group visible provider items, preserve wait folds, then give qualifying subagent coordination one outer render block.
  * - SubagentWaitItem: a settled subagent wait as a CLI command or wb MCP call.
  * - IncomingAgentMessageRun/groupIncomingAgentMessageRuns: bundle every same-sender, same-state incoming message in a group into one bubble.
  * - getUserMessageDeliveryState: classify held (pending or undelivered) user-message input.
@@ -54,6 +54,7 @@ import {
 } from "./thread-subagent-wait-groups";
 import {
   findThreadSubagentCoordinationSpans,
+  readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationRole,
@@ -329,7 +330,9 @@ function splitCoordinationCommandSequence(
   block: Extract<ThreadRenderableBlock, { kind: "commandSequence" }>,
 ): ThreadRenderableBlock[] {
   const segments = buildCommandSequenceRenderSegments({ items: block.items });
-  if (!segments.some(segment => segment.kind === "message" || segment.kind === "subagentWait")) return [block];
+  if (!segments.some(segment => segment.kind === "message"
+    || segment.kind === "subagentWait"
+    || segment.kind === "gitArc" && readThreadSubagentCoordinationClaimAction(segment.item))) return [block];
   return segments.map(segment => {
     if (segment.kind === "approval" || segment.kind === "commands") {
       return { items: segment.items, kind: "commandSequence" };
@@ -343,24 +346,34 @@ function splitCoordinationCommandSequence(
 
 function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentCoordinationRole | null {
   if (block.kind === "agentMessageSequence") {
-    return block.state === "delivered" ? { incoming: true, outgoing: false } : null;
+    return block.state === "delivered" ? { incoming: true, itemCount: block.items.length, outgoing: false } : null;
   }
   if (block.kind === "subagentWaitExchange") {
-    return { incoming: block.messages.length > 0, outgoing: false };
+    return { incoming: block.messages.length > 0, itemCount: block.items.length, outgoing: false };
   }
   if (block.kind === "commandSequence" && block.items.length) {
     const segments = buildCommandSequenceRenderSegments({ items: block.items });
     if (segments.length !== 1) return null;
     const [segment] = segments;
     if (segment?.kind === "message") return readThreadSubagentCoordinationOutgoingMessage(segment.item)
-      ? { incoming: false, outgoing: true }
+      ? { incoming: false, itemCount: 1, outgoing: true }
       : null;
-    if (segment?.kind === "subagentWait") return { incoming: false, outgoing: false };
+    if (segment?.kind === "subagentWait") return {
+      incoming: false,
+      itemCount: segment.group.entries.length,
+      outgoing: false,
+    };
+    if (segment?.kind === "gitArc") return readThreadSubagentCoordinationClaimAction(segment.item)
+      ? { incoming: false, itemCount: 1, outgoing: false }
+      : null;
     return null;
   }
   if (block.kind !== "item") return null;
-  if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, outgoing: true };
-  return readThreadSubagentCoordinationWait(block.item) ? { incoming: false, outgoing: false } : null;
+  if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, itemCount: 1, outgoing: true };
+  if (readThreadSubagentCoordinationClaimAction(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
+  return readThreadSubagentCoordinationWait(block.item)
+    ? { incoming: false, itemCount: 1, outgoing: false }
+    : null;
 }
 
 function coalesceCommandSequences(blocks: ThreadRenderableBlock[]) {
@@ -379,7 +392,7 @@ function coalesceCommandSequences(blocks: ThreadRenderableBlock[]) {
   return coalesced;
 }
 
-/** Preserve existing folds, then replace qualifying two-way activity with one higher-priority coordination block. */
+/** Preserve existing folds, then replace qualifying activity with one higher-priority coordination block. */
 function foldSubagentCoordination(blocks: ThreadRenderableBlock[]): ThreadRenderableBlock[] {
   const expanded = blocks.flatMap(block => block.kind === "commandSequence"
     ? splitCoordinationCommandSequence(block)

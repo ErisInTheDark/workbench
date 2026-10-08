@@ -37,7 +37,8 @@
  * - SquareSparkleIcon/SquareDashedXIcon/SquareArrowRightIcon, with FileAddIcon/FileDeleteIcon/FileMoveIcon aliases: file-change glyphs.
  * - FileUpdateIcon: file-change alias.
  * - FlaskConicalIcon: dedicated-test line-count glyph.
- * - SquareArrowRightEnterIcon/SquareEqualIcon/SquareArrowRightExitIcon: token input, cache and output glyphs.
+ * - SquareArrowRightEnterIcon/SquareArrowRightExitIcon: directional transfer glyphs.
+ * - SquareEqualIcon: cache glyph.
  * - SendHorizontalIcon: outlined send glyph.
  * - SquareIcon: outlined square.
  * - PanelLeftCloseIcon/PanelLeftOpenIcon: panel visibility glyphs.

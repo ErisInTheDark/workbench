@@ -17,6 +17,7 @@ import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/gi
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
+import { SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -373,6 +374,16 @@ export default function ThreadGitArcItem ({
       setIsOpen(true);
     }
   }
+  const leadingIcon = commandIntent.action === "release" && commandIntent.toSubagent
+    ? <SquareArrowRightEnterIcon size={16} />
+    : commandIntent.action === "adopt" && (commandIntent.source?.name || commandIntent.source?.threadId)
+      ? <SquareArrowRightExitIcon className="-scale-x-100" size={16} />
+      : <GitArcIcon action={commandIntent.action} size={16} />;
+  const leadingLabel = commandIntent.action === "release" && commandIntent.toSubagent
+    ? "release claims to subagent"
+    : commandIntent.action === "adopt" && (commandIntent.source?.name || commandIntent.source?.threadId)
+      ? "adopt claims from subagent"
+      : `${commandIntent.action} git arc`;
 
   return (
     <article
@@ -382,8 +393,8 @@ export default function ThreadGitArcItem ({
     >
       <ThreadDisclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
-        leading={<GitArcIcon action={commandIntent.action} size={16} />}
-        leadingLabel={`${commandIntent.action} git arc`}
+        leading={leadingIcon}
+        leadingLabel={leadingLabel}
         onToggle={(event) => setIsOpen(event.currentTarget.open)}
         open={isOpen}
         summary={(

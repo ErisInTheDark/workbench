@@ -10,7 +10,10 @@
  */
 "use client";
 
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  memo, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  type ComponentProps, type ReactElement, type ReactNode,
+} from "react";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -120,6 +123,7 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSentAgentMessageItem, {
   ThreadAgentMessageBubble,
+  ThreadAgentMessageClaimRelease,
   ThreadAgentMessageTarget,
 } from "./ThreadAgentMessageItem";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
@@ -150,6 +154,7 @@ import {
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
 import {
+  readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
 } from "./thread-subagent-coordination";
@@ -754,6 +759,15 @@ function getCoordinationParticipants(
       });
       continue;
     }
+    const claimAction = readThreadSubagentCoordinationClaimAction(item);
+    if (claimAction) {
+      add({
+        fallbackName: claimAction.target.value,
+        kind: claimAction.target.kind,
+        value: claimAction.target.value,
+      });
+      continue;
+    }
     const wait = readThreadSubagentCoordinationWait(item);
     if (wait) {
       for (const target of wait.targets) {
@@ -770,12 +784,14 @@ function getCoordinationParticipants(
 }
 
 function ThreadCoordinationOutgoingMessage({
+  claimRelease,
   item,
   relatedThreadsById,
   subagents,
   threadId,
   ...markdownProps
 }: ThreadMessageMarkdownProps & {
+  claimRelease?: ReactNode;
   item: ThreadItem;
   relatedThreadsById: RelatedThreadsById;
   subagents: readonly WorkbenchSubagentSummary[];
@@ -802,14 +818,17 @@ function ThreadCoordinationOutgoingMessage({
   );
   return (
     <ThreadAgentMessageBubble recipient={recipient}>
-      <ThreadAgentMessageBody
-        {...markdownProps}
-        parts={[{
-          markdown: outgoing.message,
-          userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion,
-        }]}
-        threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
-      />
+      <>
+        <ThreadAgentMessageBody
+          {...markdownProps}
+          parts={[{
+            markdown: outgoing.message,
+            userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion,
+          }]}
+          threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
+        />
+        {claimRelease}
+      </>
     </ThreadAgentMessageBubble>
   );
 }
@@ -818,6 +837,7 @@ function ThreadSubagentCoordination({
   block,
   itemTimeline,
   relatedThreadsById,
+  renderClaimActionBlock,
   subagents,
   threadId,
   ...markdownProps
@@ -825,6 +845,7 @@ function ThreadSubagentCoordination({
   block: Extract<ThreadRenderableBlock, { kind: "subagentCoordination" }>;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   relatedThreadsById: RelatedThreadsById;
+  renderClaimActionBlock: (block: ThreadRenderableBlock) => ReactElement | null;
   subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
 }) {
@@ -845,12 +866,12 @@ function ThreadSubagentCoordination({
       durationMs={timing?.durationMs}
       participants={getCoordinationParticipants(block.items, relatedThreadsById, subagents)}
     >
-      {block.blocks.map((conversationBlock) => {
+      {block.blocks.flatMap((conversationBlock, blockIndex) => {
         const incomingItems = conversationBlock.kind === "agentMessageSequence"
           ? conversationBlock.items
           : conversationBlock.kind === "subagentWaitExchange" ? conversationBlock.messages : null;
         if (incomingItems?.length) {
-          return (
+          return [(
             <ThreadIncomingAgentMessageRuns
               {...markdownProps}
               itemTimeline={itemTimeline}
@@ -858,11 +879,36 @@ function ThreadSubagentCoordination({
               key={getRenderableBlockKey(conversationBlock)}
               subagents={subagents}
             />
-          );
+          )];
         }
-        return getRenderableBlockItems(conversationBlock).map(item => (
+        const items = getRenderableBlockItems(conversationBlock);
+        const claimAction = items.length === 1
+          ? readThreadSubagentCoordinationClaimAction(items[0]!)
+          : null;
+        if (claimAction) {
+          const previousBlock = block.blocks[blockIndex - 1];
+          const followsOutgoingMessage = claimAction.action === "release"
+            && previousBlock
+            && getRenderableBlockItems(previousBlock).some(readThreadSubagentCoordinationOutgoingMessage);
+          return followsOutgoingMessage ? [] : [renderClaimActionBlock(conversationBlock)];
+        }
+        const nextBlock = block.blocks[blockIndex + 1];
+        const nextItems = nextBlock ? getRenderableBlockItems(nextBlock) : [];
+        const nextClaimAction = nextItems.length === 1
+          ? readThreadSubagentCoordinationClaimAction(nextItems[0]!)
+          : null;
+        return items.map(item => (
           <ThreadCoordinationOutgoingMessage
             {...markdownProps}
+            claimRelease={nextClaimAction?.action === "release" ? (
+              <ThreadAgentMessageClaimRelease
+                paths={nextClaimAction.paths}
+                projectFilePaths={markdownProps.projectFilePaths}
+                projectId={markdownProps.projectId}
+                projectRootPath={markdownProps.projectRootPath}
+                workspaceRoots={markdownProps.workspaceRoots}
+              />
+            ) : undefined}
             item={item}
             key={item.id}
             relatedThreadsById={relatedThreadsById}
@@ -2300,6 +2346,32 @@ function ThreadRenderableBlockViewComponent ({
         projectId={projectId}
         projectRootPath={projectRootPath}
         relatedThreadsById={relatedThreadsById}
+        renderClaimActionBlock={(claimActionBlock) => (
+          <ThreadRenderableBlockViewComponent
+            animateEntries={animateEntries}
+            block={claimActionBlock}
+            browseResultEntries={browseResultEntries}
+            finalAgentMessageId={finalAgentMessageId}
+            inlineMentionSources={inlineMentionSources}
+            isMostRecentBlock={false}
+            itemTimeline={itemTimeline}
+            knownSkills={knownSkills}
+            presentationSource={presentationSource}
+            primaryUserBlock={primaryUserBlock}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            turnCompletedAt={turnCompletedAt}
+            turnId={turnId}
+            turnStartedAt={turnStartedAt}
+            turnStatus={turnStatus}
+            workspaceRoots={workspaceRoots}
+          />
+        )}
         subagents={subagents}
         threadId={threadId}
         threadCwdPath={threadCwdPath}

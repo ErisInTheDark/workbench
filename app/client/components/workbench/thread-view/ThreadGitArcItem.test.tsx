@@ -39,9 +39,10 @@ function renderCard (
   action: GitArcCommandAction,
   result: GitArcReceipt | null = null,
   operationSummaryRows: readonly ThreadFileChangeListChange[] = [],
+  intentValues: Partial<GitArcCommandIntent> = {},
 ) {
   return renderToStaticMarkup(createElement(ThreadGitArcItem, {
-    commandIntent: intent(action),
+    commandIntent: { ...intent(action), ...intentValues },
     durationMs: 12,
     operationSummaryRows,
     outcome: "completed",
@@ -49,6 +50,19 @@ function renderCard (
     receipt: result,
   }));
 }
+
+test("subagent claim-transfer cards expose their transfer direction", () => {
+  const release = renderCard("release", null, [], {
+    paths: ["src/released.ts"],
+    toSubagent: "mira",
+  });
+  const adopt = renderCard("adopt", null, [], {
+    source: { name: "mira" },
+  });
+
+  assert.match(release, /aria-label="release claims to subagent"/u);
+  assert.match(adopt, /aria-label="adopt claims from subagent"/u);
+});
 
 test("status and unknown Git arc cards start open while operation cards start closed", () => {
   for (const action of ["status", "unknown"] as const) {

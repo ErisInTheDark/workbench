@@ -199,11 +199,13 @@ test("settled MCP waits ping-ponging with delivered messages fold into one excha
     mcpWait("lone", ["Rose"]), note("lone-reply", "Rose"), mcpWait("live", ["Rose"], "inProgress"),
   ]);
   assert.deepEqual(blocks.map(blockShape), [
-    ["subagentWaitExchange", ["w1", "m1", "w2", "m2", "w3", "m3"]],
+    ["subagentCoordination", ["w1", "m1", "w2", "m2", "w3", "m3"]],
     ["item", ["boundary"]],
-    ["item", ["lone"]], ["agent:delivered", ["lone-reply"]], ["item", ["live"]],
+    ["subagentCoordination", ["lone", "lone-reply", "live"]],
   ]);
-  const exchange = blocks[0]!;
+  const coordination = blocks[0]!;
+  assert.ok(coordination.kind === "subagentCoordination");
+  const exchange = coordination.blocks[0]!;
   assert.ok(exchange.kind === "subagentWaitExchange");
   assert.deepEqual(exchange.targets.map(target => target.value), ["Rose", "Iris", "Daisy"]);
   assert.deepEqual(exchange.messages.map(item => item.id), ["m1", "m2", "m3"]);
@@ -213,13 +215,13 @@ test("settled MCP waits ping-ponging with delivered messages fold into one excha
 test("CLI waits fold only from blocks that are nothing but waits, and held messages never join an exchange", () => {
   const cliWait = (id: string, names: string[]) => command(id, `wb subagent wait ${names.map(name => `--name ${name}`).join(" ")}`);
   const folded = buildRenderableBlocks([cliWait("c1", ["Rose"]), note("m1", "Rose"), cliWait("c2", ["Rose", "Iris"]), note("m2", "Iris")]);
-  assert.deepEqual(folded.map(blockShape), [["subagentWaitExchange", ["c1", "m1", "c2", "m2"]]]);
+  assert.deepEqual(folded.map(blockShape), [["subagentCoordination", ["c1", "m1", "c2", "m2"]]]);
 
   const apart = buildRenderableBlocks([
     cliWait("mixed", ["Rose"]), command("pwd"), note("m1", "Rose"), cliWait("after", ["Rose"]), note("m2", "Rose"),
   ]);
   assert.deepEqual(apart.map(blockShape), [
-    ["commandSequence", ["mixed", "pwd"]], ["agent:delivered", ["m1"]], ["commandSequence", ["after"]], ["agent:delivered", ["m2"]],
+    ["commandSequence", ["mixed", "pwd"]], ["subagentCoordination", ["m1", "after", "m2"]],
   ]);
 
   const held = buildRenderableBlocks([mcpWait("w1", ["Rose"]), note("held", "Rose", "pending"), mcpWait("w2", ["Rose"])]);
@@ -252,12 +254,17 @@ test("two-way messaging gets priority over existing wait exchanges and absorbs a
   assert.deepEqual(getWorkedBlockRows(coordination).map(row => row.eligible), [false]);
 });
 
-test("the priority fold leaves one-way and held-message runs on their existing render paths", () => {
+test("three one-way coordination items fold while shorter and held-message runs keep their render paths", () => {
   const oneWay = buildRenderableBlocks([
     mcpMessage("outgoing", "Iris"), mcpWait("wait", ["Iris"]), mcpMessage("outgoing-again", "Iris"),
   ]);
-  assert.deepEqual(oneWay.map(blockShape), [
-    ["item", ["outgoing"]], ["item", ["wait"]], ["item", ["outgoing-again"]],
+  assert.deepEqual(oneWay.map(blockShape), [[
+    "subagentCoordination", ["outgoing", "wait", "outgoing-again"],
+  ]]);
+  assert.deepEqual(buildRenderableBlocks([
+    mcpMessage("outgoing", "Iris"), mcpWait("wait", ["Iris"]),
+  ]).map(blockShape), [
+    ["item", ["outgoing"]], ["item", ["wait"]],
   ]);
 
   const held = buildRenderableBlocks([
@@ -265,6 +272,20 @@ test("the priority fold leaves one-way and held-message runs on their existing r
   ]);
   assert.deepEqual(held.map(blockShape), [
     ["item", ["outgoing"]], ["item", ["wait"]], ["agent:held", ["held"]],
+  ]);
+});
+
+test("subagent claim transfers join adjacent coordination runs without absorbing ordinary arc actions", () => {
+  const release = { ...mcp("release", "git_arc_release", { paths: ["src/one.ts"], toSubagent: "Iris" }), server: "wbex" };
+  const adopt = { ...mcp("adopt", "git_arc_adopt", { name: "Iris", paths: ["src/two.ts"] }), server: "wbex" };
+  const status = { ...mcp("status", "git_arc_status", {}), server: "wbex" };
+  const blocks = buildRenderableBlocks([
+    mcpMessage("message", "Iris"), release, adopt, status,
+  ]);
+
+  assert.deepEqual(blocks.map(blockShape), [
+    ["subagentCoordination", ["message", "release", "adopt"]],
+    ["item", ["status"]],
   ]);
 });
 
