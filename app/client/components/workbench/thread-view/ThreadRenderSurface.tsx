@@ -76,11 +76,13 @@ export default function ThreadRenderSurface({
     itemTimeline: sql ? projectedTurn?.itemTimeline : render?.thread.turnHistory.find(entry => entry.turnId === activityTurn?.id)?.itemTimeline,
     turnStartedAt: activityTurn?.startedAt,
   }), [sql, projectedTurn, render, activityTurn]);
+  // A standalone surface has no thread lifecycle to consult; its newest turn's own status stands in.
+  const liveTurn = activityTurn?.status === "inProgress" ? activityTurn : null;
   const commands = getThreadTerminalEntries(
-    activityTurn?.status === "inProgress" ? activityTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
+    liveTurn ? liveTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
     { ...terminalContext, includeOutput: false },
   );
-  const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: activityTurn, commands });
+  const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: liveTurn, commands });
   const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` } : null);
   const turnsById = new Map(render?.thread.turns.map(turn => [turn.id, turn]));
   const style = {
@@ -104,6 +106,7 @@ export default function ThreadRenderSurface({
           {sql.projection ? (
             <ThreadTranscriptProjection
               projection={sql.projection}
+              liveTurnId={liveTurn?.id ?? null}
               canLoadPreviousTurn={false}
               historySentinelRef={null}
               knownSkills={knownSkills}
@@ -130,10 +133,10 @@ export default function ThreadRenderSurface({
           presentationSource={turn.status === "inProgress" ? presentationSource : null}
         /> : <ThreadTurnLoadingSkeleton key={entry.turnId} entry={entry} />;
       }) : <p className="text-fg/muted">{emptyMessage}</p>}
-      {flags.showLiveActivity !== false && activityTurn?.status === "inProgress" ? <ThreadLiveActivity
-        key={`${threadId}:${activityTurn.id}`} activity={activity} items={activityTurn.items}
+      {flags.showLiveActivity !== false && liveTurn ? <ThreadLiveActivity
+        key={`${threadId}:${liveTurn.id}`} activity={activity} items={liveTurn.items}
         terminalContext={terminalContext} terminalRetention={terminalRetention}
-        threadId={threadId} turnId={activityTurn.id} threadCwdPath={thread?.cwd ?? cwd}
+        threadId={threadId} turnId={liveTurn.id} threadCwdPath={thread?.cwd ?? cwd}
         presentationSource={presentationSource} projectRootPath={cwd} projectId={context.projectId}
         inlineMentionSources={context.inlineMentionSources} projectFilePaths={context.projectFilePaths} workspaceRoots={workspaceRoots}
       /> : null}

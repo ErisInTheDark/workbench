@@ -10,7 +10,7 @@ import type ThreadStore from "../../workbench/thread/ThreadStore";
 import {
   EMPTY_THREAD_STORE_STATE, type ThreadInterest, type ThreadSliceName, type ThreadStoreActions, type ThreadStoreState,
 } from "../../workbench/thread/ThreadStore";
-import { useWorkbenchClientController } from "./workbench-client-context";
+import { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 
 function unavailable(): never { throw new Error("The thread is not ready."); }
 const unavailableActions: ThreadStoreActions = {
@@ -27,8 +27,8 @@ function useSlice<Name extends ThreadSliceName>(store: ThreadStore | null, name:
   return useSyncExternalStore(subscribe, read, read);
 }
 
-function useThreadStore(projectId: string, target: WorkbenchThreadRouteTarget | null, interest: ThreadInterest) {
-  const client = useWorkbenchClientController();
+function useThreadStore(projectId: string, target: WorkbenchThreadRouteTarget | null, interest: ThreadInterest, explicitClient?: WorkbenchClientController) {
+  const client = useWorkbenchClientController(explicitClient);
   const bindable = target && target.kind !== "new"
     && (target.kind === "draft" || projectId || target.kind === "provider" || target.kind === "subagent") ? target : null;
   const store = bindable ? client.mounted?.getThreadStore(projectId, bindable) ?? null : null;
@@ -44,8 +44,8 @@ function useThreadStore(projectId: string, target: WorkbenchThreadRouteTarget | 
 }
 
 /** `view` interest opens the thread's turn content; `summary` only its entry and head. */
-export function useThread(projectId: string, target: WorkbenchThreadRouteTarget | null, interest: ThreadInterest = "summary") {
-  const { store, summary } = useThreadStore(projectId, target, interest);
+export function useThread(projectId: string, target: WorkbenchThreadRouteTarget | null, interest: ThreadInterest = "summary", explicitClient?: WorkbenchClientController) {
+  const { store, summary } = useThreadStore(projectId, target, interest, explicitClient);
   return useMemo(() => ({
     ...summary,
     store,

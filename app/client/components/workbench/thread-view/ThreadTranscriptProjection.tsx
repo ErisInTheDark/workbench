@@ -63,6 +63,7 @@ export default function ThreadTranscriptProjection({
   projectRootPath,
   presentationSource,
   projection,
+  liveTurnId,
   relatedThreadsById,
   subagents,
   workspaceRoots,
@@ -77,20 +78,25 @@ export default function ThreadTranscriptProjection({
   projectRootPath: string;
   presentationSource: ThreadTextPresentationSource;
   projection: WorkbenchTranscriptProjection;
+  /** The turn the thread is working on, or null; providers' own turn statuses never mark a turn live. */
+  liveTurnId: string | null;
   relatedThreadsById: Record<string, RelatedThread | undefined>;
   subagents: readonly WorkbenchSubagentSummary[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
   const [initialInactive, setInitialInactive] = useState(() => ({
     threadId: projection.thread.id,
-    itemIds: new Set(projection.turns.filter(turn => turn.status !== "inProgress").flatMap(turn => turn.items.map(item => item.id))),
+    itemIds: new Set(projection.turns.filter(turn => turn.id !== liveTurnId).flatMap(turn => turn.items.map(item => item.id))),
   }));
   if (initialInactive.threadId !== projection.thread.id) {
     setInitialInactive({
       threadId: projection.thread.id,
-      itemIds: new Set(projection.turns.filter(turn => turn.status !== "inProgress").flatMap(turn => turn.items.map(item => item.id))),
+      itemIds: new Set(projection.turns.filter(turn => turn.id !== liveTurnId).flatMap(turn => turn.items.map(item => item.id))),
     });
   }
+  // A turn renders live only while the thread works on it; an orphaned provider status renders settled.
+  const displayStatus = (turn: WorkbenchTranscriptProjection["turns"][number]) => turn.id === liveTurnId ? "inProgress" as const
+    : turn.status === "inProgress" ? "completed" as const : turn.status;
   const turnsById = useMemo(
     () => new Map(projection.turns.map((turn) => [turn.id, turn])),
     [projection.turns],
@@ -144,7 +150,7 @@ export default function ThreadTranscriptProjection({
                   projectFilePaths={projectFilePaths}
                   projectId={projectId}
                   projectRootPath={projectRootPath}
-                  presentationSource={turn.status === "inProgress" ? presentationSource : null}
+                  presentationSource={turn.id === liveTurnId ? presentationSource : null}
                   relatedThreadsById={relatedThreadsById}
                   subagents={subagents}
                   threadCwdPath={projection.thread.projectRoot}
@@ -152,7 +158,7 @@ export default function ThreadTranscriptProjection({
                   turnCompletedAt={turn.completedAt}
                   turnId={turn.id}
                   turnStartedAt={turn.startedAt}
-                  turnStatus={turn.status}
+                  turnStatus={displayStatus(turn)}
                   workspaceRoots={workspaceRoots}
                 />
               </section>

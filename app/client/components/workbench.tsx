@@ -64,7 +64,8 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import { createDraftTitle, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, normalizeWorkbenchTimestampMs, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { useThread } from "./workbench/use-thread";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
@@ -1312,11 +1313,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         },
       }
       : submittedOptions;
-    const resolvedInput = thread.isDraft ? input : await Promise.all(input.map(async item => item.type === "image"
-      ? { ...item, url: await clientStateController.resolveDraftAttachmentUrl(item.url) }
-      : item));
-    return await controls.sendThreadMessage(thread, resolvedInput, materializedOptions);
-  }, [clientStateController, composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
+    // Drafts launch with their saved attachments; existing threads send through their own store.
+    return await controls.sendThreadMessage(thread, input, materializedOptions);
+  }, [composerProfileController, controls, navigateToRoute, profileControllerFor, workbenchClient.mounted, workspaceController]);
 
   const activeSidebarDraftId = route.view === "thread" && route.threadTarget?.kind === "draft"
     ? route.threadTarget.draftId
@@ -1642,9 +1641,22 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createThreadRoute(activeProjectId, target)
         : createPinnedThreadRoute(activeProjectId, ownerProjectId, target));
   }, [activeProjectId, effectiveThreadTarget, navigateToRoute, route, threadForThreadView?.harness]);
+  const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
+    ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
+  // The root thread's own entry names it even when the browse folder's sidebar does not list it.
+  const shellRootTarget: WorkbenchThreadTarget | null = !showThreadView ? null
+    : effectiveThreadTarget?.kind === "subagent"
+      ? { kind: "provider", harness: effectiveThreadTarget.harness, threadId: effectiveThreadTarget.parentThreadId }
+      : effectiveThreadTarget?.kind === "provider" ? effectiveThreadTarget : null;
+  const shellRootEntry = useThread(threadProjectId, shellRootTarget, undefined, workbenchClient).entry;
   const threadSummaryForThreadView = showThreadView ? threadSummariesById.get(effectiveThreadId) ?? null : null;
-  const threadShellSource = threadForThreadView ?? threadSummaryForThreadView;
-  const threadShellActivityTimestampMs = resolveThreadActivityTimestampMs(threadShellSource, threadSummaryForThreadView);
+  const threadShellSource = threadForThreadView ?? threadSummaryForThreadView ?? (shellRootEntry ? {
+    harness: shellRootEntry.identity.harness, id: shellRootEntry.identity.threadId,
+    name: shellRootEntry.title, preview: shellRootEntry.title,
+  } : null);
+  const threadShellActivityTimestampMs = threadForThreadView || threadSummaryForThreadView
+    ? resolveThreadActivityTimestampMs(threadForThreadView ?? threadSummaryForThreadView!, threadSummaryForThreadView)
+    : shellRootEntry ? normalizeWorkbenchTimestampMs(shellRootEntry.activityAt) : null;
   const isThreadShellTitleLoading = showThreadView && !threadShellSource;
   const threadShellTitle = threadShellSource ? getThreadTitle(threadShellSource) : "";
   const threadShellStatusLabel = threadShellActivityTimestampMs
@@ -1684,8 +1696,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     () => new Set(Object.keys(threadAttentionLabelsById)),
     [threadAttentionLabelsById],
   );
-  const threadProjectId = routeThreadContext?.project.id ?? routeDraftContext?.project.id
-    ?? (route.view === "thread" ? route.threadOwnerProjectId || route.projectId : route.projectId || activeProjectId);
   const threadSurfaceKey = `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
   const threadFileScope = useMemo(() => ({
     daemon: selectedDaemon,

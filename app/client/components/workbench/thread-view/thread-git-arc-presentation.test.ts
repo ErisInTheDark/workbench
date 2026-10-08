@@ -139,43 +139,43 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
   const currentProposalTurns = new Map([["proposal", currentTurn.id]]);
 
   assert.equal(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc(),
     proposalObservations: {},
     proposalTurnIds: oldProposalTurns,
   }), null, "invalid or filtered proposals leave no card");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: { proposal: { status: "loading" } },
     proposalTurnIds: oldProposalTurns,
   }), "loading proposals hoist from durable lifecycle state");
   assert.equal(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: observed(proposal("proposal", "unavailable")),
     proposalTurnIds: oldProposalTurns,
   }), null, "loaded invalid proposals do not hoist");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: oldProposalTurns,
   }), "old pending proposals remain actionable");
   assert.equal(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: oldProposalTurns,
   }), null, "old accepted-only proposals stop hoisting");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: currentProposalTurns,
   }), "current accepted-only proposals remain visible");
   assert.deepEqual(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({
       claimedPaths: ["src/one.ts"],
       proposals: [{ proposalId: "proposal", status: "committed" }],
@@ -184,7 +184,7 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalTurnIds: oldProposalTurns,
   })?.proposals, [{ proposalId: "proposal", status: "committed" }], "live claims show durable proposal rows while hydration loads");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: gitArc({
       proposals: [
         { proposalId: "accepted", status: "committed" },
@@ -198,7 +198,7 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalTurnIds: new Map([["accepted", "old"], ["pending", "old"]]),
   }), "any pending proposal keeps a mixed lifecycle visible");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn: { ...currentTurn, status: "inProgress" },
+    currentTurnId: currentTurn.id, running: true,
     gitArc: gitArc({
       claimedPaths: ["src/one.ts"],
       proposals: [{ proposalId: "proposal", status: "proposed" }],
@@ -207,13 +207,13 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalTurnIds: currentProposalTurns,
   }), "pending proposals hoist while the turn is still running");
   assert.deepEqual(getHoistedThreadGitArc({
-    currentTurn: { ...currentTurn, status: "inProgress" },
+    currentTurnId: currentTurn.id, running: true,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: currentProposalTurns,
   })?.proposals, [{ proposalId: "proposal", status: "committed" }], "landed proposals stay in the lifecycle card while the turn runs");
   assert.deepEqual(getHoistedThreadGitArc({
-    currentTurn: { ...currentTurn, status: "inProgress" },
+    currentTurnId: currentTurn.id, running: true,
     gitArc: gitArc({
       proposals: [
         { proposalId: "accepted", status: "committed" },
@@ -227,7 +227,7 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     { proposalId: "pending", status: "proposed" },
   ], "a running turn keeps landed proposals beside pending ones, so acceptance never relocates cards");
   assert.equal(getHoistedThreadGitArc({
-    currentTurn: { ...currentTurn, status: "inProgress" },
+    currentTurnId: currentTurn.id, running: true,
     gitArc: gitArc({ claimedPaths: ["src/one.ts"] }),
     proposalObservations: {},
     proposalTurnIds: currentProposalTurns,
@@ -239,25 +239,25 @@ test("a stashed arc stays hoisted while its proposals are no longer actionable",
   const oldProposalTurns = new Map([["proposal", "old"]]);
 
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
     proposalObservations: observed(proposal("proposal", "unavailable")),
     proposalTurnIds: oldProposalTurns,
   }), "stashed files stay recoverable while their proposal is invalid");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: stashedGitArc([{ proposalId: "proposal", status: "committed" }]),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: oldProposalTurns,
   }), "stashed files stay recoverable after their proposal is accepted");
   assert.equal(getHoistedThreadGitArc({
-    currentTurn: { ...currentTurn, status: "inProgress" },
+    currentTurnId: currentTurn.id, running: true,
     gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
     proposalObservations: observed(proposal("proposal", "unavailable")),
     proposalTurnIds: oldProposalTurns,
   }), null, "a running turn hoists no stash-only resolution");
   assert.ok(getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn.id, running: false,
     gitArc: { ...stashedGitArc(), phase: "resolved" },
     proposalObservations: {},
     proposalTurnIds: new Map(),

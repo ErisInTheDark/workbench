@@ -54,6 +54,8 @@ export interface WorkbenchThreadClientOptions {
   observeProviderEvents?: boolean;
   updateThreadStateWithAcceptance?: WorkbenchControls["updateThreadStateWithAcceptance"];
   onStatusMessage?: (message: string) => void;
+  /** Turns a saved composer attachment URL back into the image the daemon reads. */
+  resolveAttachmentUrl?: (url: string) => Promise<string>;
   resolveThreadIdentity?: (request: WorkbenchThreadIdentityResolveRequest) => Promise<WorkbenchThreadIdentityResolution | null>;
 }
 
@@ -430,6 +432,7 @@ function WorkbenchThreadClient(
             return options.updateThreadStateWithAcceptance(request);
           },
           reportError: message => options.onStatusMessage?.(message),
+          resolveAttachmentUrl: async url => await options.resolveAttachmentUrl?.(url) ?? url,
         }, publish));
       threadStores.set(key, store);
     }

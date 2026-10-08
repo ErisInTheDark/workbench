@@ -77,8 +77,9 @@ export function getThreadReasoningSteps(items: readonly ReasoningItem[]): Thread
   });
 }
 
+/** `turn` is the thread's live turn (null when the thread is not working); its own status is not consulted. */
 export function getCurrentThreadReasoningActivity(turn: Turn | null) {
-  if (!turn || turn.status !== "inProgress") return null;
+  if (!turn) return null;
 
   let latestActivityItemIndex = turn.items.length - 1;
   while (

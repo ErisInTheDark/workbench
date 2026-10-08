@@ -24,7 +24,8 @@ function projection(turns: Array<{ id: string; status?: string; clientIds?: stri
   } as unknown as WorkbenchTranscriptProjection;
 }
 
-function fixture(runtime: Record<string, object> = {}) {
+function fixture(runtime: Record<string, object> = {}, lifecycle: object = { kind: "needsAttention", reason: "noActiveTurn", settled: false }) {
+  const stops: object[] = [];
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const submits: Array<{ clientMessageId: string }> = [];
   let onState!: (state: ThreadTranscriptProjectionState) => void;
@@ -33,7 +34,7 @@ function fixture(runtime: Record<string, object> = {}) {
   const entry = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId },
     metadata: { archived: false, pinned: false, snoozed: false },
-    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    lifecycle,
   };
   const ports = {
     projectId: "project",
@@ -43,10 +44,13 @@ function fixture(runtime: Record<string, object> = {}) {
       getSnapshot: () => ({ status: "ready", error: null, observation: { entries: [entry], runtime } }),
       getSubagents: () => [],
     },
-    daemon: { threads: { message: async (input: { clientMessageId: string }) => {
-      submits.push(input);
-      return await new Promise(resolve => { resolveSubmit = resolve; });
-    } } },
+    daemon: { threads: {
+      message: async (input: { clientMessageId: string }) => {
+        submits.push(input);
+        return await new Promise(resolve => { resolveSubmit = resolve; });
+      },
+      stop: async (input: object) => { stops.push(input); return { ok: true }; },
+    } },
     connect: async () => {},
     createTranscript: (state: typeof onState) => {
       onState = state;
@@ -61,11 +65,13 @@ function fixture(runtime: Record<string, object> = {}) {
     subscribeRateLimits: () => () => {},
     updateThreadStateWithAcceptance: async () => true,
     reportError: () => {},
+    resolveAttachmentUrl: async (url: string) => url.startsWith("/api/workbench-client-state/attachment?")
+      ? "data:image/png;base64,c2F2ZWQ=" : url,
   } as unknown as ObservedThreadSourcePorts;
   const source = createObservedThreadSource(ports, next => { published = { ...published, ...next }; });
   const release = source.acquire("view");
   return {
-    source, release, selections, submits,
+    source, release, selections, submits, stops,
     publish: (value: WorkbenchTranscriptProjection) => onState({ status: "ready", threadId, projection: value }),
     resolveSubmit: (result: Parameters<typeof resolveSubmit>[0]) => resolveSubmit(result),
     get published() { return published; },
@@ -87,6 +93,30 @@ test("the thread head shows the goal and active skills its observation runtime c
   bare.release();
 });
 
+test("only a working thread has a live turn, whatever status the provider left on its turns", () => {
+  const idle = fixture();
+  idle.publish(projection([{ id: "turn-1", status: "inProgress" }]));
+  assert.equal(idle.published.turns?.liveTurnId, null, "an orphaned inProgress turn is not activity");
+  idle.release();
+  const working = fixture({}, { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } });
+  working.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "completed" }]));
+  assert.equal(working.published.turns?.liveTurnId, "turn-2");
+  working.release();
+});
+
+test("stop reaches the daemon whenever the thread is working, and not when it is idle", async () => {
+  const working = fixture({}, { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } });
+  working.publish(projection([{ id: "turn-1", status: "completed" }]));
+  await working.source.actions.stop();
+  assert.deepEqual(working.stops, [{ threadId, intent: "stop" }]);
+  working.release();
+  const idle = fixture();
+  idle.publish(projection([{ id: "turn-1", status: "inProgress" }]));
+  await idle.source.actions.stop();
+  assert.deepEqual(idle.stops, []);
+  idle.release();
+});
+
 test("an optimistic input stays local until the transcript delivers it, then leaves no duplicate", async () => {
   const f = fixture();
   f.publish(projection([{ id: "turn-1" }]));
@@ -106,6 +136,20 @@ test("an optimistic input stays local until the transcript delivers it, then lea
   f.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "inProgress", clientIds: [clientId] }]));
   assert.equal(f.selections.length, selectionsBeforeDelivery + 1);
   assert.deepEqual(f.selections.at(-1)!.thread.turns, []);
+  f.release();
+});
+
+test("sending resolves saved attachment URLs into image data before the daemon sees them", async () => {
+  const f = fixture();
+  f.publish(projection([{ id: "turn-1" }]));
+  const sending = f.source.actions.send([
+    { type: "text", text: "look", text_elements: [] },
+    { type: "image", url: "/api/workbench-client-state/attachment?id=saved" },
+  ]);
+  await flush();
+  assert.deepEqual((f.submits[0] as unknown as { input: unknown[] }).input.at(-1), { type: "image", url: "data:image/png;base64,c2F2ZWQ=" });
+  f.resolveSubmit({ kind: "steered", turnId: "turn-1" });
+  await sending;
   f.release();
 });
 

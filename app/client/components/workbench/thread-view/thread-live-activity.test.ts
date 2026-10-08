@@ -100,11 +100,11 @@ test("unmatched MCP calls remain visible before results and retain raw invocatio
   assert.equal(failed[0]!.status, "failed");
 });
 
-test("partial output keeps commands running and terminal turns do not show a live status", () => {
+test("partial output keeps commands running and an idle thread (no live turn) shows no live status", () => {
   const item = { ...command("stream"), aggregatedOutput: "partial" };
   const entries = getThreadTerminalEntries([item], { cwd: "/project" });
   assert.equal(entries[0]!.status, "inProgress");
-  assert.equal(getLiveThreadActivity({ commands: entries, turn: { ...turn([item]), status: "completed" }, pendingUserInputRequest: null }), null);
+  assert.equal(getLiveThreadActivity({ commands: entries, turn: null, pendingUserInputRequest: null }), null);
 });
 
 test("an explicit compaction status suppresses redundant connecting activity", () => {

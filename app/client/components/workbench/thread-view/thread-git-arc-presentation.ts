@@ -103,18 +103,20 @@ export function readThreadGitArcMcpProposalTranscriptItem(
 }
 
 export function getHoistedThreadGitArc({
-  currentTurn,
+  currentTurnId,
+  running,
   gitArc,
   proposalObservations,
   proposalTurnIds,
 }: {
-  currentTurn: Pick<ThreadPayload["turns"][number], "id" | "status"> | null;
+  currentTurnId: string | null;
+  /** Whether the thread is working (its lifecycle), not any turn's status. */
+  running: boolean;
   gitArc: WorkbenchGitArcLifecycleState | null;
   proposalObservations: Readonly<Record<string, ThreadGitArcProposalObservation>>;
   proposalTurnIds: ReadonlyMap<string, string>;
 }) {
   if (!gitArc) return null;
-  const running = currentTurn?.status === "inProgress";
   // The lifecycle card owns every interactive proposal card, so landed proposals stay hoisted even mid-turn.
   const proposals = gitArc.proposals.flatMap((proposal) => {
     const observation = proposalObservations[proposal.proposalId];
@@ -131,8 +133,8 @@ export function getHoistedThreadGitArc({
   if (!running && (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed")) return visibleGitArc;
   if (!proposals.length) return null;
   if (proposals.some(({ status }) => status === "proposed")) return visibleGitArc;
-  return currentTurn && proposals.some(({ proposalId }) => (
-    proposalTurnIds.get(proposalId) === currentTurn.id
+  return currentTurnId && proposals.some(({ proposalId }) => (
+    proposalTurnIds.get(proposalId) === currentTurnId
   )) ? visibleGitArc : null;
 }
 

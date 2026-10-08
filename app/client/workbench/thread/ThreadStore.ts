@@ -76,13 +76,15 @@ export interface ThreadTurnsSlice {
   /** The loaded turns with provider thread items only; generic and questionnaire items render from the projection. */
   turns: readonly Turn[];
   canLoadOlder: boolean;
+  /** The newest turn while the thread itself is working, else null. A turn's own status is a provider detail, never activity. */
+  liveTurnId: string | null;
 }
 
 const NO_TURNS: readonly Turn[] = [];
 const threadTurnsByProjection = new WeakMap<WorkbenchTranscriptProjection, readonly Turn[]>();
 
 /** One turns slice per transcript state; the provider-item turns are derived once per projection. */
-export function createThreadTurnsSlice(transcript: ThreadTranscriptProjectionState, canLoadOlder: boolean): ThreadTurnsSlice {
+export function createThreadTurnsSlice(transcript: ThreadTranscriptProjectionState, canLoadOlder: boolean, working: boolean): ThreadTurnsSlice {
   const projection = "projection" in transcript ? transcript.projection : null;
   let turns = projection ? threadTurnsByProjection.get(projection) : NO_TURNS;
   if (!turns && projection) {
@@ -92,7 +94,7 @@ export function createThreadTurnsSlice(transcript: ThreadTranscriptProjectionSta
     }));
     threadTurnsByProjection.set(projection, turns);
   }
-  return { transcript, turns: turns ?? NO_TURNS, canLoadOlder };
+  return { transcript, turns: turns ?? NO_TURNS, canLoadOlder, liveTurnId: working ? projection?.turns.at(-1)?.id ?? null : null };
 }
 
 export interface ThreadQuestionnaireSlice {
@@ -152,7 +154,7 @@ export const EMPTY_THREAD_STORE_STATE: ThreadStoreState = {
     status: "loading", error: null, head: null, entry: null, subagents: [], rateLimits: null,
     gitArcProposals: {}, relatedHeads: {}, draftDocument: null,
   },
-  turns: { transcript: { status: "idle" }, turns: NO_TURNS, canLoadOlder: false },
+  turns: { transcript: { status: "idle" }, turns: NO_TURNS, canLoadOlder: false, liveTurnId: null },
   questionnaire: { pending: null },
   approvals: { entries: [] },
 };

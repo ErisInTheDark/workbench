@@ -52,6 +52,8 @@ export interface ObservedThreadSourcePorts {
     identity: ThreadEntry["identity"]; requestKey: string;
   }) => Promise<boolean>;
   reportError: (message: string) => void;
+  /** Saved composer attachments are app URLs; the daemon needs the image itself. */
+  resolveAttachmentUrl: (url: string) => Promise<string>;
 }
 
 /** The newest-turn window size; loading older turns raises it by the same step. */
@@ -233,7 +235,7 @@ export default function createObservedThreadSource(
         subagents, rateLimits: entry ? ports.readRateLimits(entry.identity.harness) : null,
         gitArcProposals: gitArc.proposals, relatedHeads, draftDocument: null,
       },
-      turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns)),
+      turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns), entry?.lifecycle.kind === "working"),
       questionnaire: { pending: pendingQuestionnaire },
       approvals: { entries: current?.approvalEntries ?? [] },
     });
@@ -263,7 +265,8 @@ export default function createObservedThreadSource(
     actions: {
       async send(input, options = {}) {
         const entry = requireEntry();
-        const normalized = normalizeInput(input);
+        const normalized = await Promise.all(normalizeInput(input).map(async part => part.type === "image"
+          ? { ...part, url: await ports.resolveAttachmentUrl(part.url) } : part));
         if (!normalized.length) throw new Error("Message input cannot be empty.");
         await ports.connect();
         if (disposed) throw new ThreadMessageNotSentError();
@@ -304,15 +307,13 @@ export default function createObservedThreadSource(
           throw error;
         }
       },
+      // The thread's lifecycle, not a provider turn status, decides whether there is anything to stop.
       async stop() {
         const entry = requireEntry();
-        const activeTurn = projection()?.turns.at(-1);
-        const turnId = activeTurn?.status === "inProgress" ? activeTurn.id : null;
         const requestKey = readPending()?.requestKey ?? null;
-        if (!turnId && !requestKey) return;
+        if (entry.lifecycle.kind !== "working" && !requestKey) return;
         await ports.daemon.threads.stop({
-          threadId: entry.identity.threadId, intent: "stop",
-          ...(turnId ? { turnId } : {}), ...(requestKey ? { requestKey } : {}),
+          threadId: entry.identity.threadId, intent: "stop", ...(requestKey ? { requestKey } : {}),
         });
       },
       async compact() { await ports.daemon.threads.compact({ threadId: requireEntry().identity.threadId }); },

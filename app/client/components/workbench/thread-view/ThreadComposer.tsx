@@ -10,7 +10,7 @@ import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider
 
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
-import { getCurrentInProgressTurn, hasStaleApprovalState, isCurrentTurnWaitingOnApproval } from "workbench-shared/workbench/thread/thread-runtime-state";
+import { hasStaleApprovalState, isCurrentTurnWaitingOnApproval, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
 import type {
@@ -235,7 +235,8 @@ export default function ThreadComposer ({
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(threadState);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(threadState);
-  const isActiveThread = getCurrentInProgressTurn(threadState) !== null;
+  // The thread's own status (from its lifecycle) says whether it is working; turn statuses are provider detail.
+  const isActiveThread = isThreadStatusActive(thread.status);
   const hasEffectiveProfile = !profileSlot || Boolean(resolvedComposerSettings?.model);
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(threadState, threadLifecycle, hasPendingUserInputRequest, controlsMode);
   const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;

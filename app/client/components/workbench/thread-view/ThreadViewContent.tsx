@@ -467,6 +467,8 @@ export default memo(function ThreadViewContent ({
   const isDraftThreadView = Boolean(activeThread?.isDraft);
   const activityTurn = loadedTurns.at(-1) ?? null;
   const currentTurn = activityTurn;
+  // The thread's lifecycle decides liveness; a provider's turn status never does.
+  const liveTurn = activityTurn && activityTurn.id === activeTurns.liveTurnId ? activityTurn : null;
   // The turn just before the loaded window, when the catalog lists one, anchors the older-turn skeleton.
   const firstLoadedHistoryIndex = activeTranscriptProjection?.turnHistory.findIndex(entry => entry.turnId === loadedTurns[0]?.id) ?? -1;
   const previousTurnEntry = firstLoadedHistoryIndex > 0
@@ -493,12 +495,12 @@ export default memo(function ThreadViewContent ({
     turnStartedAt: activityTurn?.startedAt,
   }), [activeTranscriptProjection, activityTurn]);
   const terminalCommands = useMemo(() => getThreadTerminalEntries(
-    activityTurn?.status === "inProgress" ? activityTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
+    liveTurn ? liveTurn.items.filter(item => "status" in item && item.status === "inProgress") : [],
     { ...terminalContext, includeOutput: false },
-  ), [activityTurn, terminalContext]);
+  ), [liveTurn, terminalContext]);
   const liveActivity = useMemo(() => getLiveThreadActivity({
-    pendingUserInputRequest: activePendingUserInputRequest, turn: activityTurn, commands: terminalCommands,
-  }), [activePendingUserInputRequest, activityTurn, terminalCommands]);
+    pendingUserInputRequest: activePendingUserInputRequest, turn: liveTurn, commands: terminalCommands,
+  }), [activePendingUserInputRequest, liveTurn, terminalCommands]);
   const inlineMentionSources = useBackgroundInlineMentionSources({
     files: projectFileCandidates,
     filesIdentity: projectFileIndexId,
@@ -1018,12 +1020,13 @@ export default memo(function ThreadViewContent ({
     />
   ) : null;
   const hoistedGitArc = getHoistedThreadGitArc({
-    currentTurn,
+    currentTurnId: currentTurn?.id ?? null,
+    running: liveTurn !== null,
     gitArc: activeGitArcSelection?.gitArc ?? null,
     proposalObservations: active.gitArcProposals,
     proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
-  const showPlanConflicts = currentTurn?.status !== "inProgress" || Boolean(activePendingUserInputRequest);
+  const showPlanConflicts = !liveTurn || Boolean(activePendingUserInputRequest);
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message
     : activeTranscriptSource?.status === "absent"
@@ -1145,6 +1148,7 @@ export default memo(function ThreadViewContent ({
                       sourceKey: `${activeThread.harness}:${activeTranscriptProjection.thread.id}`,
                     }}
                     projection={activeTranscriptProjection}
+                    liveTurnId={activeTurns.liveTurnId}
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
@@ -1169,11 +1173,11 @@ export default memo(function ThreadViewContent ({
           )}
           </>}
         </div>
-        {activeThread && activityTurn?.status === "inProgress" && !isMessageBoardOpen ? (
+        {activeThread && liveTurn && !isMessageBoardOpen ? (
           <ThreadLiveActivity
-            key={`${activeThread.id}:${activityTurn.id}`}
+            key={`${activeThread.id}:${liveTurn.id}`}
             activity={liveActivity}
-            items={activityTurn.items}
+            items={liveTurn.items}
             terminalContext={terminalContext}
             terminalRetention={terminalRetention}
             inlineMentionSources={inlineMentionSources}
@@ -1186,7 +1190,7 @@ export default memo(function ThreadViewContent ({
             projectRootPath={projectRootPath}
             threadCwdPath={activeThread.cwd}
             threadId={activeThread.id}
-            turnId={activityTurn.id}
+            turnId={liveTurn.id}
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
@@ -1208,7 +1212,7 @@ export default memo(function ThreadViewContent ({
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
-            running={currentTurn?.status === "inProgress"}
+            running={liveTurn !== null}
             threadId={activeThread.id}
             threadLifecycle={activeGitArcSelection.lifecycle}
             workspaceRoots={workspaceFileLinkRoots}

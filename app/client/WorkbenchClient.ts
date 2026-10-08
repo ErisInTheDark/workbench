@@ -219,6 +219,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       resolveThreadIdentity: async request => (await daemon.threads.resolveIdentity(request)).data,
       updateThreadStateWithAcceptance: request => mutateThread(request),
       onStatusMessage: message => warn(message),
+      ...(state ? { resolveAttachmentUrl: (url: string) => state.resolveDraftAttachmentUrl(url) } : {}),
     });
     const source = location ? projectFacts()?.sources.find(source => source.daemonId === location.daemonId) : null;
     if (source) client.acceptSourceGeneration(source.generation);

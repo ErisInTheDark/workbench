@@ -63,8 +63,9 @@ function renderItems(
   items: ThreadItem[],
   hiddenReasoningStep: ThreadReasoningStepReference | null = null,
   durableItemCount = items.length,
+  { status = "completed", liveTurnId = null }: { status?: WorkbenchProjectedTranscriptTurn["status"]; liveTurnId?: string | null } = {},
 ) {
-  const turns = [turn("turn", 0, items)];
+  const turns = [{ ...turn("turn", 0, items), status }];
   const projection: WorkbenchTranscriptProjection = {
     browseResultEntries: [], questionnaireEntries: [], steerEntries: [], approvalEntries: [],
     display: planCanonicalTranscriptDisplay({
@@ -106,6 +107,7 @@ function renderItems(
       projectRootPath="C:/project"
       presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
+      liveTurnId={liveTurnId}
       relatedThreadsById={{}}
       subagents={[]}
       workspaceRoots={[]}
@@ -288,6 +290,7 @@ test("SQLite projection preserves canonical order with initially closed Browse d
       projectRootPath="C:/project"
       presentationSource={{ kind: "sqlite", sourceKey: "codex:thread" }}
       projection={projection}
+      liveTurnId={null}
       relatedThreadsById={{}}
       subagents={[]}
       workspaceRoots={[]}
@@ -332,6 +335,15 @@ test("SQLite normal projection keeps commands closed and opens latest reasoning"
   }]);
   assert.match(staticHtml, /Reasoned:\s*<\/span><span[^>]*>Static title/u);
   assert.doesNotMatch(staticHtml, /<details/u);
+});
+
+test("only the thread's live turn renders live; a provider's leftover inProgress turn renders settled", () => {
+  // A status-less compaction (older daemons) is active exactly while its turn is live.
+  const compaction = { id: "compaction", type: "contextCompaction" } as ThreadItem;
+  const orphaned = renderItems([compaction], null, 1, { status: "inProgress", liveTurnId: null });
+  assert.doesNotMatch(orphaned, /Context compacting/u, "an idle thread's leftover inProgress turn renders settled");
+  const live = renderItems([compaction], null, 1, { status: "completed", liveTurnId: "turn" });
+  assert.match(live, /Context compacting/u, "the working thread's turn renders live whatever its provider status");
 });
 
 test("SQLite normal projection removes only the newest live reasoning section", () => {

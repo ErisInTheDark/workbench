@@ -130,10 +130,11 @@ export function getThreadTerminalEntries(items: readonly ThreadItem[], context: 
 
 export function getLiveThreadActivity({ pendingUserInputRequest, turn, commands = [] }: {
   pendingUserInputRequest: WorkbenchPendingUserInputRequest | null;
+  /** The thread's live turn; null when the thread is not working. */
   turn: ThreadPayload["turns"][number] | null;
   commands?: readonly ThreadTerminalEntry[];
 }): LiveThreadActivity | null {
-  if (!turn || turn.status !== "inProgress" || pendingUserInputRequest) return null;
+  if (!turn || pendingUserInputRequest) return null;
   const idle = (title: string): LiveThreadActivity => ({ kind: "reasoning", title, body: null, markdown: null, hiddenStep: null });
   const compacting = turn.items.some(item => item.type === "contextCompaction" && item.status === "inProgress");
   if (turn.items.some(isPendingInitialOptimisticInputItem) && !compacting) return idle("Connecting");
