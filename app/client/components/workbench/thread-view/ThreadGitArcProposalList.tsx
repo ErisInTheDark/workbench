@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses (listing each landed commit's message and totals when nothing is pending) unless a stopped thread has pending proposals, and offers stack-ordered commit all backed by one bulk proposal summary read.
+ * - default ThreadGitArcProposalList: hoisted proposal anchors, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses (listing each landed commit's message and totals when nothing is pending) unless a stopped thread has pending proposals, and offers stack-ordered commit all (whether or not the header is collapsed) backed by one bulk proposal summary read.
  */
 "use client";
 
@@ -153,7 +153,7 @@ export default function ThreadGitArcProposalList({
   // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
   const collapsible = running || !proposedIds.length;
   const open = !collapsible || (canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen);
-  const storedFailure = useStoredProposalCommits({ commitActions, cwd, harness, pendingIds: open ? proposedIds : [], threadId });
+  const storedFailure = useStoredProposalCommits({ commitActions, cwd, harness, pendingIds: proposedIds, threadId });
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);
   const readLayerSnapshot = () => commitActions.isReady(lowestPendingGroup?.pendingIds ?? []);
@@ -162,6 +162,8 @@ export default function ThreadGitArcProposalList({
   // The observed acceptance covers every tab; the local flag covers this tab's request until the fact arrives.
   const remaining = acceptance ? acceptance.queuedIds.length + (acceptance.landingId ? 1 : 0) : 0;
   const committing = committingAll || Boolean(acceptance);
+  // A collapsed header must commit for its hidden cards, so one pending proposal is enough there.
+  const showCommitAll = proposedIds.length > (open ? 1 : 0);
 
   const setOpen = (next: boolean) => {
     if (next === open) return;
@@ -191,7 +193,7 @@ export default function ThreadGitArcProposalList({
   const summary = (
     <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <span>{formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}</span>
-      {open && (proposedIds.length > 1 || committing) ? (
+      {showCommitAll || committing ? (
         <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
           <PrimaryButton
             className="!px-3 !py-1.5 !text-[0.76rem]"
@@ -300,9 +302,10 @@ export default function ThreadGitArcProposalList({
         summary={summary}
         summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
       >
-        {failureRow}
+        {open ? failureRow : null}
         {anchors}
       </ThreadDisclosure>
+      {open ? null : failureRow}
       {open ? null : closedRows}
     </>
   ) : (
