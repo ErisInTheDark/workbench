@@ -106,7 +106,8 @@ export default class WorkbenchWorkspaceRequestController {
       read(browserStateId: string | null): Promise<Extract<WorkspaceObservation, { kind: "appState" }>["data"]>;
       subscribe(browserStateId: string | null, listener: () => void): () => void;
     };
-    publishDelta(delta: WorkspaceObservationDelta): void;
+    /** `thread` names the thread a single-thread observation is about, for traffic logs. */
+    publishDelta(delta: WorkspaceObservationDelta, thread: string | null): void;
     publishVoice(event: VoiceSessionEvent): void;
     publishThreadEvent(notification: WorkbenchClientNotification, harness: WorkbenchHarness, daemonId: DaemonId): void;
     publishTranscript(event: WorkbenchDaemonTranscriptEvent): void;
@@ -877,10 +878,11 @@ export default class WorkbenchWorkspaceRequestController {
     if (!delta) return;
     interest.value = { ...next, revision: previous.revision + 1 };
     if (interest.opening) return;
+    const query = interest.request.query;
     this.options.publishDelta({
       subscriptionId: interest.value.subscriptionId, generation: interest.value.generation, kind: interest.value.kind,
       baseRevision: previous.revision, revision: interest.value.revision, delta,
-    });
+    }, query.kind === "thread" || query.kind === "threadRow" || query.kind === "threadOwner" ? query.threadId : null);
   }
 
   private active(interest: Interest) {

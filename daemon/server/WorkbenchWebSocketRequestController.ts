@@ -98,6 +98,12 @@ export interface WorkbenchWebSocketPendingRequestState {
   startedAt: number;
 }
 
+/** Transcript frames carry only their subscription id; the subscription's thread is what they are about. */
+function transcriptSubject(threadId: string): WebSocketEventSubject | null {
+  const subject = providerEventSubject({ threadId });
+  return subject && { ...subject, kind: "transcript" };
+}
+
 export interface WorkbenchWebSocketDelivery {
   client: BridgeClient;
   request?: { id: RequestId; identity: object };
@@ -875,7 +881,7 @@ export default class WorkbenchWebSocketRequestController {
               subscriptionId: subscription.subscriptionId,
               snapshot: transcriptSnapshotForProtocol(snapshot, subscription.protocolVersion),
             },
-          });
+          }, { eventSubject: transcriptSubject(subscription.threadId) });
         },
         ...(subscription.protocolVersion !== undefined && subscription.protocolVersion >= 3 ? {
           publishStream: (update: import("workbench-shared/workbench/transcript/thread-transcript-stream").TranscriptStreamUpdate) => {
@@ -884,7 +890,7 @@ export default class WorkbenchWebSocketRequestController {
             void this.sendJsonToClient(subscription.client, {
               method: workbenchTranscriptNotifications.streamed.method,
               params: { subscriptionId: subscription.subscriptionId, update },
-            }).catch(error => this.writeLine(`[transcript] stream publication failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
+            }, { eventSubject: transcriptSubject(subscription.threadId) }).catch(error => this.writeLine(`[transcript] stream publication failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
           },
         } : {}),
       });

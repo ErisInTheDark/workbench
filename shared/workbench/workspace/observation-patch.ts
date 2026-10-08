@@ -309,7 +309,7 @@ export function describeObservationDelta(delta: ObservationDelta, limit = 3): st
   return parts.join(" ").slice(0, 400);
 }
 
-const SUBJECT_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu;
+const SUBJECT_IDS = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu;
 // Structural containers whose fields belong to the item around them.
 const SUBJECT_WRAPPERS = new Set(["data", "entry", "sidebar", "snapshot", "project", "summaries"]);
 
@@ -327,7 +327,8 @@ export function observationDeltaSubjects(delta: ObservationDelta): { subjects: s
 /** Returns whether `delta` touched a subject, so an enclosing subject stays out when a deeper one names the change. */
 function collectSubjects(delta: ObservationDelta, subjects: Set<string>, fields: Set<string>): boolean {
   let found = false;
-  const subject = (key: string) => key.match(SUBJECT_ID)?.[0].slice(0, 8) ?? null;
+  // Composite keys (`daemon/project/harness:thread`) name their most specific id last.
+  const subject = (key: string) => [...key.matchAll(SUBJECT_IDS)].at(-1)?.[0].slice(0, 8) ?? null;
   for (const field of Object.keys(delta.set ?? {})) if (field !== "revision") fields.add(field);
   for (const field of delta.unset ?? []) fields.add(`-${field}`);
   for (const [name, nested] of Object.entries(delta.objects ?? {})) {

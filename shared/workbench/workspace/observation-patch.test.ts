@@ -118,4 +118,7 @@ test("subjects name the deepest thread a delta touches, with the fields changed 
     { subjects: [], fields: ["phase", "tree"] }, "a delta about no thread has no subject");
   assert.deepEqual(observationDeltaSubjects({ collections: { pendingProjectIds: { remove: [project] } } }),
     { subjects: ["da2703a3"], fields: ["removed"] });
+  assert.deepEqual(observationDeltaSubjects({ objects: { data: { collections: { rows: { update: [{
+    key: `ad0de42c-aae0-482e-b423-a704ee9d6824/${project}/${thread}`, delta: { objects: { entry: { set: { activityAt: 1 } } } },
+  }] } } } } }), { subjects: ["c6c7f1bd"], fields: ["activityAt"] }, "a composite row key names its thread, not its daemon");
 });

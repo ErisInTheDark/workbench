@@ -75,11 +75,19 @@ function describeFrame(frame: Frame): string {
 type FrameSubject = { subjects: readonly string[]; fields: readonly string[]; kind: string };
 
 /** The threads a frame is about, so traffic logs can say what each thread did instead of listing frames. */
-function frameSubject(frame: Frame): FrameSubject | null {
-  if (frame.kind === "workspaceDelta") return { ...observationDeltaSubjects(frame.delta.delta), kind: frame.delta.kind };
+function frameSubject(frame: Frame, aboutThread: string | null): FrameSubject | null {
+  if (frame.kind === "workspaceDelta") {
+    const found = observationDeltaSubjects(frame.delta.delta);
+    const about = found.subjects.length ? null : threadEventSubject({ threadId: aboutThread });
+    return { subjects: about?.subjects ?? found.subjects, fields: found.fields, kind: frame.delta.kind };
+  }
   if (frame.kind === "threadEvent") {
     const subject = threadEventSubject(frame.notification.params);
     return subject && { ...subject, kind: `${frame.harness}:${frame.notification.method.slice(0, 80)}` };
+  }
+  if (frame.kind === "transcriptSnapshot" || frame.kind === "transcriptStream") {
+    const subject = threadEventSubject({ threadId: (frame.data as { threadId?: unknown }).threadId });
+    return subject && { ...subject, kind: "transcript" };
   }
   return null;
 }
@@ -149,6 +157,8 @@ export default class WorkbenchAppEventSocketController {
     const send = (
       frame: Frame | { id: number | null; result?: Json | object; error?: { code: number; message: string; data?: Json } },
       method = "invalid",
+      /** The thread a frame is about when its own payload does not name one (single-thread observations). */
+      aboutThread: string | null = null,
     ) => {
       const kind = "kind" in frame ? frame.kind : "rpc";
       if (connection.readyState !== WebSocket.OPEN) return;
@@ -181,7 +191,7 @@ export default class WorkbenchAppEventSocketController {
       if (kind === "workspaceDelta" && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
         this.options.logger.error("app", `WS oversized workspace push ${formatWebSocketBytes(payloadBytes)}: ${label}`);
       }
-      const subject = "kind" in frame ? frameSubject(frame) : null;
+      const subject = "kind" in frame ? frameSubject(frame, aboutThread) : null;
       if (subject?.subjects.length) this.recordSubjectTraffic("out", subject, connectionName, payloadBytes);
       else this.recordTraffic("out", label, payloadBytes);
     };
@@ -215,7 +225,7 @@ export default class WorkbenchAppEventSocketController {
             return this.options.state!.subscribeBrowser(browserStateId ?? undefined, listener);
           },
         },
-        publishDelta: delta => send({ kind: "workspaceDelta", delta }),
+        publishDelta: (delta, thread) => send({ kind: "workspaceDelta", delta }, "invalid", thread),
         publishVoice: event => send({ kind: "voice", event }),
         publishThreadEvent: (notification, harness, daemonId) => send({ kind: "threadEvent", notification, harness, daemonId }),
         publishTranscript: event => send(event),
