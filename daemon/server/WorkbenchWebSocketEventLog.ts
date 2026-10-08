@@ -1,12 +1,22 @@
 /*
  * Exports:
+ * - WebSocketEventSubject: the threads one event is about, for subject-grouped lines.
  * - WorkbenchWebSocketEventLogOptions: clock, scheduler and log ports.
- * - default WorkbenchWebSocketEventLog: aggregate traffic logs independently per event type, inner event detail and direction.
+ * - default WorkbenchWebSocketEventLog: aggregate traffic logs per subject when events name one, else per event type, inner event detail and direction.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
 import { webSocketMethodLabel } from "./websocket-log-format";
-import { formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
+import {
+  formatWebSocketEventSummary, formatWebSocketSubjectSummary, webSocketSubjectKey, type WebSocketSubjectWindow,
+} from "workbench-shared/process/websocket-traffic-format";
+
+/** The threads an event is about; `kind` replaces the method label in the subject line (e.g. an observation kind). */
+export interface WebSocketEventSubject {
+  subjects: readonly string[];
+  fields: readonly string[];
+  kind?: string;
+}
 
 type Timer = ReturnType<typeof setTimeout>;
 const DEFAULT_WINDOW_MS = 2_000;
@@ -51,6 +61,7 @@ export default class WorkbenchWebSocketEventLog {
   private timer: Timer | null = null;
   private timerDeadline: number | null = null;
   private readonly windows = new Map<string, EventWindow>();
+  private readonly subjectWindows = new Map<string, WebSocketSubjectWindow & { deadline: number }>();
   private readonly writeLine: NonNullable<WorkbenchWebSocketEventLogOptions["writeLine"]>;
 
   constructor({
@@ -65,14 +76,21 @@ export default class WorkbenchWebSocketEventLog {
     this.writeLine = writeLine;
   }
 
-  /** `detail` names the event inside an envelope; each detail rolls up in its own window. */
+  /**
+   * `detail` names the event inside an envelope; each detail rolls up in its own window. Events naming `subject`
+   * threads instead roll up per subject set, so everything one thread did in a window reads as one line.
+   */
   record(
     direction: "in" | "out", harness: WorkbenchHarness | "unknown" | "workbench", method: string, bytes: number,
-    detail: string | null = null,
+    detail: string | null = null, subject: WebSocketEventSubject | null = null,
   ) {
     if (this.state !== "active") return;
     const methodLabel = webSocketMethodLabel(harness, method);
     if (EXCLUDED_EVENTS.has(`${direction}:${methodLabel}`)) return;
+    if (subject?.subjects.length) {
+      this.recordSubject(direction, subject.kind ?? methodLabel, subject, bytes);
+      return;
+    }
     const label = detail ? `${methodLabel} ${detail}` : methodLabel;
     const key = `${direction}:${label}`;
     const now = this.now();
@@ -96,6 +114,21 @@ export default class WorkbenchWebSocketEventLog {
     this.scheduleNext();
   }
 
+  /** A subject window opens on its first event and logs once when its window ends. */
+  private recordSubject(direction: "in" | "out", kind: string, subject: WebSocketEventSubject, bytes: number) {
+    const key = webSocketSubjectKey(direction, subject.subjects);
+    const window = this.subjectWindows.get(key) ?? {
+      direction, subjects: subject.subjects, kinds: new Set<string>(), fields: new Set<string>(),
+      connections: new Set<string>(), count: 0, bytes: 0, deadline: this.now() + DEFAULT_WINDOW_MS,
+    };
+    window.kinds.add(kind);
+    for (const field of subject.fields) window.fields.add(field);
+    window.count += 1;
+    window.bytes += bytes;
+    this.subjectWindows.set(key, window);
+    this.scheduleNext();
+  }
+
   dispose() {
     if (this.state === "disposed") return;
     this.state = "disposed";
@@ -104,6 +137,8 @@ export default class WorkbenchWebSocketEventLog {
     this.timerDeadline = null;
     for (const window of this.windows.values()) this.flush(window);
     this.windows.clear();
+    for (const window of this.subjectWindows.values()) this.writeLine(formatWebSocketSubjectSummary(window));
+    this.subjectWindows.clear();
   }
 
   suspend() {
@@ -121,9 +156,10 @@ export default class WorkbenchWebSocketEventLog {
   }
 
   private scheduleNext() {
-    if (!this.windows.size || this.state !== "active") return;
+    if ((!this.windows.size && !this.subjectWindows.size) || this.state !== "active") return;
     let deadline = Infinity;
     for (const window of this.windows.values()) deadline = Math.min(deadline, window.deadline);
+    for (const window of this.subjectWindows.values()) deadline = Math.min(deadline, window.deadline);
     if (this.timer !== null) {
       if (this.timerDeadline !== null && this.timerDeadline <= deadline) return;
       this.cancel(this.timer);
@@ -143,6 +179,11 @@ export default class WorkbenchWebSocketEventLog {
           this.flush(window);
           window.deadline = now + window.windowMs;
         }
+      }
+      for (const [key, window] of this.subjectWindows) {
+        if (window.deadline > now) continue;
+        this.subjectWindows.delete(key);
+        this.writeLine(formatWebSocketSubjectSummary(window));
       }
       this.scheduleNext();
     }, Math.max(0, deadline - this.now()));

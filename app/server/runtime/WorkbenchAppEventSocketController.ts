@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs named by the event each frame carries, and socket spy recording.
+ * - default WorkbenchAppEventSocketController: own reloadable app event sockets, grants, delivery, bounded traffic logs grouped by the threads frames are about (else named by the event each frame carries), and socket spy recording.
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -9,8 +9,11 @@ import type WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProce
 import { WORKBENCH_APP_NETWORK_SOCKET_PATH } from "workbench-shared/http/workbench-app-events";
 import { WorkbenchAppRpcRequestSchema, WorkbenchAppRuntimeResponseSchema } from "workbench-shared/http/workbench-app-rpc";
 import type { WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
-import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
-import { formatWebSocketBytes, formatWebSocketEventSummary } from "workbench-shared/process/websocket-traffic-format";
+import { describeObservationDelta, observationDeltaSubjects } from "workbench-shared/workbench/workspace/observation-patch";
+import {
+  formatWebSocketBytes, formatWebSocketEventSummary, formatWebSocketSubjectSummary, threadEventSubject, webSocketSubjectKey,
+  type WebSocketSubjectWindow,
+} from "workbench-shared/process/websocket-traffic-format";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchWorkspaceRequestController from "../workspace/WorkbenchWorkspaceRequestController";
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
@@ -69,6 +72,18 @@ function describeFrame(frame: Frame): string {
   }
 }
 
+type FrameSubject = { subjects: readonly string[]; fields: readonly string[]; kind: string };
+
+/** The threads a frame is about, so traffic logs can say what each thread did instead of listing frames. */
+function frameSubject(frame: Frame): FrameSubject | null {
+  if (frame.kind === "workspaceDelta") return { ...observationDeltaSubjects(frame.delta.delta), kind: frame.delta.kind };
+  if (frame.kind === "threadEvent") {
+    const subject = threadEventSubject(frame.notification.params);
+    return subject && { ...subject, kind: `${frame.harness}:${frame.notification.method.slice(0, 80)}` };
+  }
+  return null;
+}
+
 /** Workspace pushes past this name themselves in the log: the tripwire for snapshot resends. */
 const WORKSPACE_PUSH_WARNING_BYTES = 32 * 1024;
 const MAX_OUTBOUND_FRAME_BYTES = 100 * 1024 * 1024;
@@ -86,6 +101,7 @@ export default class WorkbenchAppEventSocketController {
   private readonly connections = new Map<WebSocket, () => void>();
   private readonly pendingRequests = new Set<Promise<void>>();
   private readonly traffic = new Map<string, { count: number; bytes: number }>();
+  private readonly subjectTraffic = new Map<string, WebSocketSubjectWindow>();
   private trafficTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private suspended = false;
@@ -165,7 +181,9 @@ export default class WorkbenchAppEventSocketController {
       if (kind === "workspaceDelta" && payloadBytes > WORKSPACE_PUSH_WARNING_BYTES) {
         this.options.logger.error("app", `WS oversized workspace push ${formatWebSocketBytes(payloadBytes)}: ${label}`);
       }
-      this.recordTraffic("out", label, payloadBytes);
+      const subject = "kind" in frame ? frameSubject(frame) : null;
+      if (subject?.subjects.length) this.recordSubjectTraffic("out", subject, connectionName, payloadBytes);
+      else this.recordTraffic("out", label, payloadBytes);
     };
     const bindState = (browserStateId: string | null) => {
       if (stateOwner !== undefined && stateOwner !== browserStateId) throw new Error("App state request changed browser owner.");
@@ -362,6 +380,22 @@ export default class WorkbenchAppEventSocketController {
     this.scheduleTraffic();
   }
 
+  /** Frames about the same threads roll into one line per window, whichever views and tabs they went to. */
+  private recordSubjectTraffic(direction: "in" | "out", subject: FrameSubject, connection: string, bytes: number) {
+    const key = webSocketSubjectKey(direction, subject.subjects);
+    const window = this.subjectTraffic.get(key) ?? {
+      direction, subjects: subject.subjects, kinds: new Set<string>(), fields: new Set<string>(),
+      connections: new Set<string>(), count: 0, bytes: 0,
+    };
+    window.kinds.add(subject.kind);
+    for (const field of subject.fields) window.fields.add(field);
+    window.connections.add(connection);
+    window.count++;
+    window.bytes += bytes;
+    this.subjectTraffic.set(key, window);
+    this.scheduleTraffic();
+  }
+
   private scheduleTraffic() {
     if (this.trafficTimer !== null) return;
     this.trafficTimer = setTimeout(() => {
@@ -378,6 +412,8 @@ export default class WorkbenchAppEventSocketController {
       this.options.logger.line("app", formatWebSocketEventSummary(direction === "in" ? "in" : "out", `app:${label}`, count, bytes));
     }
     this.traffic.clear();
+    for (const window of this.subjectTraffic.values()) this.options.logger.line("app", formatWebSocketSubjectSummary(window));
+    this.subjectTraffic.clear();
   }
 
   close() {

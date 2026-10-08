@@ -6,6 +6,7 @@
  * - diffObservationValue: smallest structured delta from one value to the next; null when nothing changed.
  * - applyObservationDelta: apply a delta, validating every touched field and item; throws on invalid deltas.
  * - describeObservationDelta: bounded log summary naming collections, keys and changed fields, never values.
+ * - observationDeltaSubjects: the thread/project ids a delta is about and its changed field names, for subject-grouped logs.
  * - measureObservationDelta: count changed items so senders can name oversized updates.
  */
 import { z } from "zod";
@@ -306,6 +307,63 @@ export function describeObservationDelta(delta: ObservationDelta, limit = 3): st
     parts.push([counts, listed, named.length > limit ? `+${named.length - limit} more` : ""].filter(Boolean).join(" "));
   }
   return parts.join(" ").slice(0, 400);
+}
+
+const SUBJECT_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/iu;
+// Structural containers whose fields belong to the item around them.
+const SUBJECT_WRAPPERS = new Set(["data", "entry", "sidebar", "snapshot", "project", "summaries"]);
+
+/**
+ * What a delta is about, for logs that group traffic by subject: the deepest thread or project ids it touches
+ * (8-char prefixes) and the field names changed under them. Reads only keys and field names, never values.
+ */
+export function observationDeltaSubjects(delta: ObservationDelta): { subjects: string[]; fields: string[] } {
+  const subjects = new Set<string>();
+  const fields = new Set<string>();
+  collectSubjects(delta, subjects, fields);
+  return { subjects: [...subjects].sort(), fields: [...fields] };
+}
+
+/** Returns whether `delta` touched a subject, so an enclosing subject stays out when a deeper one names the change. */
+function collectSubjects(delta: ObservationDelta, subjects: Set<string>, fields: Set<string>): boolean {
+  let found = false;
+  const subject = (key: string) => key.match(SUBJECT_ID)?.[0].slice(0, 8) ?? null;
+  for (const field of Object.keys(delta.set ?? {})) if (field !== "revision") fields.add(field);
+  for (const field of delta.unset ?? []) fields.add(`-${field}`);
+  for (const [name, nested] of Object.entries(delta.objects ?? {})) {
+    const id = subject(name);
+    if (id) {
+      if (!collectSubjects(nested, subjects, fields)) subjects.add(id);
+      found = true;
+    } else if (SUBJECT_WRAPPERS.has(name)) {
+      found = collectSubjects(nested, subjects, fields) || found;
+    } else {
+      // A named value (e.g. gitArc) logs as one field; only its subjects surface.
+      found = collectSubjects(nested, subjects, new Set()) || found;
+      fields.add(name);
+    }
+  }
+  for (const [name, keyed] of Object.entries(delta.collections ?? {})) {
+    let named = false;
+    const touch = (key: string, field: string | null) => {
+      const id = subject(key);
+      if (!id) { named = true; return; }
+      subjects.add(id);
+      if (field) fields.add(field);
+      found = true;
+    };
+    for (const { key, delta: nested } of keyed.update ?? []) {
+      const id = subject(key);
+      if (!id) { named = true; continue; }
+      if (!collectSubjects(nested, subjects, fields)) subjects.add(id);
+      found = true;
+    }
+    for (const { key } of keyed.add ?? []) touch(key, "added");
+    for (const key of keyed.remove ?? []) touch(key, "removed");
+    for (const { key } of keyed.move ?? []) touch(key, "order");
+    if (named) fields.add(name);
+  }
+  return found;
 }
 
 /** Total keyed items touched, for naming oversized deltas. */

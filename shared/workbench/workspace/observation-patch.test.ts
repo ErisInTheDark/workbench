@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
 import {
-  applyObservationDelta, describeObservationDelta, diffObservationValue, observationShape, type ObservationShape,
+  applyObservationDelta, describeObservationDelta, diffObservationValue, observationDeltaSubjects, observationShape,
+  type ObservationShape,
 } from "./observation-patch";
 
 const Row = z.object({ id: z.string(), title: z.string(), activityAt: z.number(), tags: z.array(z.string()).optional() }).strict();
@@ -102,4 +103,19 @@ test("summaries name collections, keys and changed fields without values", () =>
   assert.match(line, /00000001/);
   assert.match(line, /title,activityAt/);
   assert.doesNotMatch(line, /secret/);
+});
+
+test("subjects name the deepest thread a delta touches, with the fields changed around it", () => {
+  const project = "da2703a3-9145-47d7-a10a-21105e7a3db7";
+  const thread = "claude:c6c7f1bd-961b-4832-9d6e-0cbbb147f59d";
+  // A summary change: project counts plus one unsettled thread's status, and a git arc claim edit on the same thread.
+  assert.deepEqual(observationDeltaSubjects({ collections: { projects: { update: [{ key: project, delta: {
+    set: { counts: 1, revision: 2 },
+    collections: { unsettledThreads: { update: [{ key: thread, delta: { set: { status: "working" }, unset: ["waitingFor"],
+      objects: { gitArc: { collections: { claimedPaths: { remove: ["a.ts"] } } } } } }] } },
+  } }] } } }), { subjects: ["c6c7f1bd"], fields: ["counts", "status", "-waitingFor", "gitArc"] });
+  assert.deepEqual(observationDeltaSubjects({ set: { phase: "current" }, objects: { snapshot: { set: { tree: [] } } } }),
+    { subjects: [], fields: ["phase", "tree"] }, "a delta about no thread has no subject");
+  assert.deepEqual(observationDeltaSubjects({ collections: { pendingProjectIds: { remove: [project] } } }),
+    { subjects: ["da2703a3"], fields: ["removed"] });
 });

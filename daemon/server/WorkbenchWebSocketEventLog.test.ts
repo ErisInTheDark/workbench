@@ -165,6 +165,24 @@ test("direction and harness separate matching methods and later traffic opens a 
   logger.dispose();
 });
 
+test("everything one thread did in a window logs as one line while subject-less traffic keeps its own", () => {
+  const { logger, lines, advance } = fixture();
+  const thread = (fields: string[], kind?: string) => ({ subjects: ["c6c7f1bd"], fields, ...kind ? { kind } : {} });
+  logger.record("out", "claude", "steer/history/changed", 200, null, thread([]));
+  logger.record("out", "workbench", "workspace/delta", 370, "thread", thread(["-waitingFor", "orderAt"], "thread"));
+  logger.record("out", "workbench", "workspace/delta", 540, "summaries", thread(["status"], "summaries"));
+  logger.record("out", "workbench", "workspace/delta", 480, "projectThreads", thread(["orderAt"], "projectThreads"));
+  logger.record("out", "workbench", "workspace/delta", 300, "projectTree", { subjects: [], fields: [] });
+  assert.equal(lines.length, 1, "subject lines wait for their window; the fallback logs its first event");
+  assert.match(lines[0]!, /wb:workspace\/delta projectTree/);
+  advance(2_000);
+  assert.equal(lines.length, 2);
+  assert.equal(lines[1]!.replace(/ \(.*$/u, ""),
+    " WS out c6c7f1bd: claude:steer/history/changed, thread, summaries, projectThreads [-waitingFor, orderAt, status]");
+  assert.match(lines[1]!, /count: 4, out: 1\.6KB/);
+  logger.dispose();
+});
+
 test("excluded incoming receipts schedule nothing without hiding other traffic", () => {
   const { logger, lines, timers, advance } = fixture();
   logger.record("in", "workbench", WORKBENCH_EVENT_STREAM_ACK_METHOD, 100);

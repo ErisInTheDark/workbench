@@ -51,11 +51,13 @@ import { WORKBENCH_STATS_IMPORT_UPDATED_METHOD } from "workbench-shared/workbenc
 import WorkbenchWebSocketStreamController, {
   type WorkbenchWebSocketStreamControllerState,
 } from "./WorkbenchWebSocketStreamController";
-import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
+import WorkbenchWebSocketEventLog, { type WebSocketEventSubject } from "./WorkbenchWebSocketEventLog";
 import {
   describeWebSocketEvent, formatWebSocketSendFailure, webSocketMethodLabel as methodLabel,
 } from "./websocket-log-format";
-import { dimWebSocketDetail, formatWebSocketBytes as formatBytes } from "workbench-shared/process/websocket-traffic-format";
+import {
+  dimWebSocketDetail, formatWebSocketBytes as formatBytes, threadEventSubject as providerEventSubject,
+} from "workbench-shared/process/websocket-traffic-format";
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
 import {
@@ -63,7 +65,7 @@ import {
   WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
-import { describeObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import { describeObservationDelta, observationDeltaSubjects } from "workbench-shared/workbench/workspace/observation-patch";
 import WebSocketTrafficBuffer, {
   WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD, WebSocketSpyResultNotificationSchema,
   type WebSocketTrafficQuery, type WebSocketTrafficResult,
@@ -104,6 +106,8 @@ export interface WorkbenchWebSocketDelivery {
   eventHarness: WorkbenchHarness | "workbench" | "unknown";
   /** The event inside the envelope, such as a workspace observation kind and its thread. */
   eventDetail?: string | null;
+  /** The threads the event is about; traffic logs group by these when present. */
+  eventSubject?: WebSocketEventSubject | null;
   outcome: CompletionOutcome;
   processMs: number;
   jsonMs: number;
@@ -331,7 +335,8 @@ export default class WorkbenchWebSocketRequestController {
       } }
       : { method: WORKSPACE_UPDATED_METHOD, params: value };
     const eventDetail = change ? `${value.kind} ${describeObservationDelta(change.delta)}` : `${value.kind} reset=restore`;
-    void this.sendJsonToClient(client, message, { eventDetail, warnAboveBytes: WORKSPACE_PUSH_WARNING_BYTES })
+    const eventSubject = change ? { ...observationDeltaSubjects(change.delta), kind: value.kind } : null;
+    void this.sendJsonToClient(client, message, { eventDetail, eventSubject, warnAboveBytes: WORKSPACE_PUSH_WARNING_BYTES })
       .catch(error => this.reportSendFailure({ method: message.method }, error));
   }
 
@@ -608,7 +613,8 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     if (delivery.outcome === "send-error" && delivery.streamEvent) this.stream.failDelivery(delivery.streamEvent);
     if (delivery.outcome !== "send-error" && delivery.eventMethod) {
-      this.eventLog.record("out", delivery.eventHarness, delivery.eventMethod, delivery.outBytes, delivery.eventDetail ?? null);
+      this.eventLog.record("out", delivery.eventHarness, delivery.eventMethod, delivery.outBytes, delivery.eventDetail ?? null,
+        delivery.eventSubject ?? null);
     }
     const pending = delivery.request ? this.pending.get(delivery.client)?.get(delivery.request.id) : undefined;
     if (pending && pending.identity === delivery.request?.identity) {
@@ -620,7 +626,9 @@ export default class WorkbenchWebSocketRequestController {
    * `eventDetail` replaces the generic envelope description in traffic logs; `warnAboveBytes` names any
    * workspace push over budget, the tripwire for an observation regressing to snapshot resends.
    */
-  async sendJsonToClient(client: BridgeClient, message: unknown, options: { eventDetail?: string; warnAboveBytes?: number } = {}) {
+  async sendJsonToClient(client: BridgeClient, message: unknown, options: {
+    eventDetail?: string; eventSubject?: WebSocketEventSubject | null; warnAboveBytes?: number;
+  } = {}) {
     this.assertActive();
     const signal = this.generation.signal;
     const envelope = asRecord(message);
@@ -678,6 +686,8 @@ export default class WorkbenchWebSocketRequestController {
             // The daemon tags provider events with their harness; every other event it sends is its own.
             eventHarness: ProviderKeySchema.safeParse(eventHarness).success ? eventHarness as WorkbenchHarness : "workbench",
             eventDetail: eventMethod ? options.eventDetail ?? describeWebSocketEvent(envelope?.params) : null,
+            eventSubject: options.eventSubject
+              ?? (eventMethod && trafficHarness !== "workbench" ? providerEventSubject(envelope?.params) : null),
             outcome: error ? "send-error" : responseIsError(message) ? "error" : "ok",
             processMs,
             jsonMs,
