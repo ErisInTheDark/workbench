@@ -32,7 +32,7 @@
  * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
  * - WrapTextIcon/PreviewIcon: code display controls.
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
- * - AsteriskIcon/PlusIcon: amend and fresh-commit choices.
+ * - AsteriskIcon/AsteriskOffIcon/PlusIcon: amend, disabled-amend and fresh-commit choices.
  * - SparkleIcon: creation glyph.
  * - FileAddIcon/FileDeleteIcon/FileMoveIcon: file-change glyphs.
  * - FileUpdateIcon: file-change alias.
@@ -632,6 +632,24 @@ export function AsteriskIcon(props: IconProps) {
       <path d="M12 5v14" />
       <path d="m18.065 8.496-12.125 7" />
       <path d="m5.94 8.504 12.125 7" />
+    </OutlinedIcon>
+  );
+}
+
+export function AsteriskOffIcon(props: IconProps) {
+  return (
+    <OutlinedIcon {...props}>
+      <g transform="translate(-1.286 0.772)">
+        <path d="M12 12v7" />
+        <path d="m12 12-6.06 3.496" />
+        <path d="m5.94 8.504 6.06 3.496" />
+      </g>
+      <path d="M6.064 5.022 14.914 19.772" />
+      <g transform="translate(0.013 0.022)">
+        <path d="M12 5v3" />
+        <path d="M18.065 8.496 13.732 11" />
+        <path d="M18.065 15.504 15.467 14.004" />
+      </g>
     </OutlinedIcon>
   );
 }
