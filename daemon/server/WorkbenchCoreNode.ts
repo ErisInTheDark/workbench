@@ -380,6 +380,8 @@ function createWorkbenchCoreFeature(
       mutate: async (request: WorkbenchThreadStateRequest) => {
         const response = await requireThreadState().controller.handleRequest("subagent-controller", request);
         if ("error" in response) throw new Error(response.error.message);
+        if (!("accepted" in response.result)) throw new Error("The subagent settle mutation returned no acceptance decision.");
+        return { accepted: response.result.accepted };
       },
       subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => requireThreadState().controller.subscribe(listener),
     },

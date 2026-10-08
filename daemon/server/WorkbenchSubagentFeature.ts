@@ -28,7 +28,7 @@ export interface WorkbenchSubagentFeatureContext {
   queueReleaseNote: NonNullable<WorkbenchSubagentControllerOptions["queueReleaseNote"]>;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
-    mutate(request: WorkbenchThreadStateRequest): Promise<void>;
+    mutate(request: WorkbenchThreadStateRequest): Promise<{ accepted: boolean }>;
     subscribe(listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void): () => void;
   };
 }
