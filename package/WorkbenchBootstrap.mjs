@@ -43,6 +43,17 @@ export default class WorkbenchBootstrap {
     }
   }
 
+  async checkoutState(root) {
+    if (await this.checkoutExists(root)) return "usable";
+    try {
+      await fs.lstat(root);
+      return "invalid";
+    } catch (error) {
+      if (error.code === "ENOENT") return "missing";
+      throw error;
+    }
+  }
+
   async readInstallation() {
     try {
       const record = JSON.parse(await fs.readFile(this.registry, "utf8"));
@@ -128,10 +139,11 @@ export default class WorkbenchBootstrap {
     }
     const installed = await this.readInstallation();
     if (installed?.phase === "ready") {
-      if (!await this.checkoutExists(installed.root)) {
+      const state = await this.checkoutState(installed.root);
+      if (state === "usable") return await this.delegate(installed.root, args, humanCommand);
+      if (state === "invalid") {
         throw new Error(`Workbench checkout is unavailable at ${installed.root}. Restore or repair that installation; no replacement was created.`);
       }
-      return await this.delegate(installed.root, args, humanCommand);
     }
     if (managed || !(args.length === 0 || (args.length === 1 && args[0] === "connect"))) {
       throw new Error("Workbench is not installed. Run wb or wb connect in an interactive terminal first.");
@@ -139,7 +151,9 @@ export default class WorkbenchBootstrap {
     await this.requireTool("git");
     await this.requireTool("bash");
     await this.requireTool("vp");
-    const warning = installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
+    const warning = installed?.phase === "ready"
+      ? `\nNote: Previous installation at ${installed.root} no longer exists and will be recreated.`
+      : installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
     const choice = await this.prompt.choose(
       `Workbench is not installed. This command will clone the repository and run build commands. It may take 1-2 minutes. Continue?${warning}`,
       ["Let's go!", "Cancel"],
@@ -164,11 +178,17 @@ export default class WorkbenchBootstrap {
     try {
       // Another invocation may have finished while this one was accepting input.
       const latest = await this.readInstallation();
-      if (latest?.phase === "ready") return await this.delegate(latest.root, args, humanCommand);
+      if (latest?.phase === "ready") {
+        const state = await this.checkoutState(latest.root);
+        if (state === "usable") return await this.delegate(latest.root, args, humanCommand);
+        if (state === "invalid") {
+          throw new Error(`Workbench checkout is unavailable at ${latest.root}. Restore or repair that installation; no replacement was created.`);
+        }
+      }
       if (latest?.root !== installed?.root || latest?.phase !== installed?.phase) {
         throw new Error("The selected Workbench installation changed while setup was open. Run wb again.");
       }
-      if (latest) await this.discardIncomplete(latest);
+      if (latest && latest.phase !== "ready") await this.discardIncomplete(latest);
       await this.requireEmptyDestination(root);
       let record = { version: 1, root, phase: "cloning" };
       await this.writeInstallation(record);

@@ -133,6 +133,40 @@ test("installation records the selected checkout and never clones it again", asy
   assert.equal(f.calls[0].args.at(-1), "view");
 });
 
+test("a deleted ready checkout is reinstalled at its recorded location", async context => {
+  const f = await fixture(context);
+  await f.bootstrap.run([]);
+  await fs.rm(f.checkout, { recursive: true });
+  f.calls.length = 0;
+  f.prompts.length = 0;
+
+  await f.bootstrap.run([]);
+
+  assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 1);
+  assert.equal(f.calls.find(call => call.command === "git" && call.args[0] === "clone")?.args.at(-1), f.checkout);
+  assert.equal(f.prompts.length, 2);
+  assert.equal(f.prompts[1], "location");
+  assert.deepEqual(
+    JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")),
+    { version: 1, root: f.checkout, phase: "ready" },
+  );
+});
+
+test("an invalid ready checkout is preserved rather than replaced", async context => {
+  const f = await fixture(context);
+  await fs.mkdir(f.checkout, { recursive: true });
+  await fs.writeFile(path.join(f.checkout, "keep"), "user");
+  await fs.mkdir(path.join(f.home, ".workbench"));
+  await fs.writeFile(path.join(f.home, ".workbench", "installation.json"),
+    JSON.stringify({ version: 1, root: f.checkout, phase: "ready" }));
+
+  await assert.rejects(f.bootstrap.run([]), /restore or repair/i);
+
+  assert.equal(await fs.readFile(path.join(f.checkout, "keep"), "utf8"), "user");
+  assert.deepEqual(f.prompts, []);
+  assert.deepEqual(f.calls, []);
+});
+
 test("an unrelated destination is never overwritten", async context => {
   const f = await fixture(context);
   await fs.mkdir(f.checkout, { recursive: true });
