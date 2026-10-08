@@ -15,7 +15,7 @@ test("detach waits for hook calls in flight and later hooks reach the next bridg
   const host = new ClaudeSessionHost({ viewsRoot: null });
   let finishFirst!: () => void;
   const detach = host.attach(handlers(() => new Promise(resolve => {
-    finishFirst = () => resolve({ allowed: true, pendingProposals: [], uncoveredPaths: [] });
+    finishFirst = () => resolve({ allowed: true, uncoveredPaths: [] });
   })));
   const first = host.call(current => current.checkFileClaims(request));
   let detached = false;
@@ -25,9 +25,9 @@ test("detach waits for hook calls in flight and later hooks reach the next bridg
   const second = host.call(current => current.checkFileClaims(request));
   finishFirst();
   await detaching;
-  assert.deepEqual(await first, { allowed: true, pendingProposals: [], uncoveredPaths: [] });
-  host.attach(handlers(async () => ({ allowed: false, pendingProposals: [], uncoveredPaths: ["C:/repo/a.ts"] })));
-  assert.deepEqual(await second, { allowed: false, pendingProposals: [], uncoveredPaths: ["C:/repo/a.ts"] });
+  assert.deepEqual(await first, { allowed: true, uncoveredPaths: [] });
+  host.attach(handlers(async () => ({ allowed: false, uncoveredPaths: ["C:/repo/a.ts"] })));
+  assert.deepEqual(await second, { allowed: false, uncoveredPaths: ["C:/repo/a.ts"] });
 });
 
 test("harness disposal closes live processes and fails hooks still waiting for a bridge", async () => {

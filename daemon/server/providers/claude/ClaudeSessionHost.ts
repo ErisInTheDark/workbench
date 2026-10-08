@@ -16,7 +16,6 @@ import {
 import { spawn } from "node:child_process";
 import { lowerAgentProcessPriority } from "../../process-helpers";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
-import type { WorkbenchFileClaimCheckResult } from "../../lib/workbench/file-claim-check";
 import ClaudeConfigView from "./ClaudeConfigView";
 
 export class ClaudePromptQueue implements AsyncIterable<SDKUserMessage> {
@@ -78,7 +77,7 @@ export const ENDED_CLAUDE_SESSION: ClaudeSession = {
 };
 
 export interface ClaudeSessionHandlers {
-  checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<WorkbenchFileClaimCheckResult>;
+  checkFileClaims(request: { cwd: string; threadId: WorkbenchThreadId; paths: string[] }): Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
   recordNativeToolDenial(turnId: WorkbenchTurnId, toolUseId: string): void;
 }
 
