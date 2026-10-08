@@ -33,3 +33,37 @@ test("unproven reassignment, conflicting inputs and cycles cannot change ownersh
   ]), /cycles/);
   assert.deepEqual(existing, [{ alias: "checkout", projectId: testProjectIds.project }]);
 });
+
+test("a previous daemon project ID can resolve to the fixed daemon-local project ID", () => {
+  const alias = "0aa9955c-be42-4f99-a93b-54f45f94eebd";
+  const result = composeProjectAliases([], [{
+    alias,
+    projectId: ProjectIdSchema.parse("daemon"),
+  }]);
+
+  assert.deepEqual(result, {
+    aliases: [{ alias, projectId: "daemon" }],
+    changes: [{ alias, projectId: "daemon" }],
+    removals: [],
+  });
+});
+
+test("a fixed daemon ID replaces its obsolete reverse alias", () => {
+  const old = ProjectIdSchema.parse("0aa9955c-be42-4f99-a93b-54f45f94eebd");
+  const result = composeProjectAliases(
+    [{ alias: "daemon", projectId: old }],
+    [{ alias: old, projectId: ProjectIdSchema.parse("daemon") }],
+  );
+
+  assert.deepEqual(result, {
+    aliases: [{
+      alias: "0aa9955c-be42-4f99-a93b-54f45f94eebd",
+      projectId: "daemon",
+    }],
+    changes: [{
+      alias: "0aa9955c-be42-4f99-a93b-54f45f94eebd",
+      projectId: "daemon",
+    }],
+    removals: ["daemon"],
+  });
+});

@@ -10,6 +10,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import {
     compileWorkbenchDatabaseStatement,
+    deleteRows,
     insertRow,
     selectRows,
     updateRows,
@@ -222,8 +223,8 @@ export default class WorkbenchAppStateRepository {
       where: { id: request.daemonRegistrationId }, limit: 1,
     })).length) throw new Error("Project remap belongs to an unknown daemon registration.");
     const existing = this.readProjectAliases(request.daemonRegistrationId);
-    const { changes: aliases } = composeProjectAliases(existing, request.aliases);
-    if (!aliases.length) return this.currentVersion().revision;
+    const { changes: aliases, removals } = composeProjectAliases(existing, request.aliases);
+    if (!aliases.length && !removals.length) return this.currentVersion().revision;
     return this.commit(revision => {
       const mutations = build(aliases, revision);
       // Deleted parents have no children. Preserve their canonical tombstones too,
@@ -242,6 +243,9 @@ export default class WorkbenchAppStateRepository {
         }
       }
       return [
+        ...removals.map(alias => deleteRows(appStateTables.projectAliases, {
+          daemon_registration_id: request.daemonRegistrationId, alias,
+        })),
         ...aliases.map(alias => existing.some(item => item.alias === alias.alias)
           ? updateRows(appStateTables.projectAliases, { project_id: alias.projectId }, {
             daemon_registration_id: request.daemonRegistrationId, alias: alias.alias,

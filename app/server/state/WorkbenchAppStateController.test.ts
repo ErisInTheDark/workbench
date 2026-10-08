@@ -188,6 +188,78 @@ test("project remap conflicts roll back records and aliases without losing eithe
   } finally { await fixture.controller.close(); }
 });
 
+test("two daemon registrations retain separate state when both canonical projects are daemon", async context => {
+  const fixture = await controllerFixture(context);
+  const daemonProjectId = ProjectIdSchema.parse("daemon");
+  const localOld = ProjectIdSchema.parse("0aa9955c-be42-4f99-a93b-54f45f94eebd");
+  const remoteOld = ProjectIdSchema.parse("2df4a43e-80d8-42e8-b2e0-283f3548bff4");
+  try {
+    const local = await fixture.controller.registerDaemon(
+      "ad0de42c-aae0-482e-b423-a704ee9d6824",
+      true,
+    );
+    const remote = await fixture.controller.registerDaemon(
+      "2bb20acb-7338-4320-ad48-2a3f4938c435",
+      false,
+    );
+
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: local.registrationId,
+      aliases: [{ alias: "daemon", projectId: localOld }],
+    });
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: remote.registrationId,
+      aliases: [{ alias: "daemon", projectId: remoteOld }],
+    });
+
+    await fixture.controller.mutate({ action: "put", record: {
+      kind: "projectPreference",
+      daemonRegistrationId: local.registrationId,
+      projectId: localOld,
+      preference: { key: "theme", enabled: true, value: "winter" },
+    } });
+    await fixture.controller.mutate({ action: "put", record: {
+      kind: "projectPreference",
+      daemonRegistrationId: remote.registrationId,
+      projectId: remoteOld,
+      preference: { key: "theme", enabled: true, value: "magical-girl" },
+    } });
+
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: local.registrationId,
+      aliases: [{ alias: localOld, projectId: daemonProjectId }],
+    });
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: remote.registrationId,
+      aliases: [{ alias: remoteOld, projectId: daemonProjectId }],
+    });
+
+    const preferences = projectedRecords(fixture.controller.read())
+      .filter(record => record.kind === "projectPreference")
+      .sort((left, right) => left.daemonRegistrationId.localeCompare(right.daemonRegistrationId));
+
+    assert.deepEqual(preferences.map(record => ({
+      daemonRegistrationId: record.daemonRegistrationId,
+      projectId: record.projectId,
+      value: record.preference.value,
+    })), [
+      { daemonRegistrationId: local.registrationId, projectId: "daemon", value: "winter" },
+      { daemonRegistrationId: remote.registrationId, projectId: "daemon", value: "magical-girl" },
+    ].sort((left, right) => left.daemonRegistrationId.localeCompare(right.daemonRegistrationId)));
+
+    // Repeating the catalogue aliases proves the obsolete `daemon → old UUID`
+    // rows were deleted rather than left behind to recreate the cycle.
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: local.registrationId,
+      aliases: [{ alias: localOld, projectId: daemonProjectId }],
+    });
+    await fixture.controller.remapProjects({
+      daemonRegistrationId: remote.registrationId,
+      aliases: [{ alias: remoteOld, projectId: daemonProjectId }],
+    });
+  } finally { await fixture.controller.close(); }
+});
+
 test("standalone provider favourites survive repeated saves and controller restart", async context => {
   const fixture = await controllerFixture(context);
   const record = { kind: "modelPreference" as const, harness: "future-provider", modelId: "future-model", favourite: true };
