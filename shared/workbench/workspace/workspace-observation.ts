@@ -376,14 +376,32 @@ export const WorkspaceObservationDeltaSchema = z.object({
 }).strict();
 export type WorkspaceObservationDelta = z.infer<typeof WorkspaceObservationDeltaSchema>;
 
+// A busy arc lists hundreds of claimed paths and proposals, once at the top and again per member; they decompose so
+// one claim or proposal change ships only itself. Inner items stay loose: every patch revalidates the whole entry.
+const pathList = observationShape.keyed((path: string) => path, z.string().min(1));
+const gitArcProposals = observationShape.keyed(
+  (proposal: { proposalId: string; rootId?: string }) => `${proposal.rootId ?? ""}/${proposal.proposalId}`, z.json());
+const gitArcMemberKey = (member: { harness: string; threadId: string }) => `${member.harness}:${member.threadId}`;
+const gitArcShape = observationShape.object({ fields: {
+  claimedPaths: pathList, stashedPaths: pathList, proposals: gitArcProposals,
+  members: observationShape.keyed(gitArcMemberKey, z.json(), {
+    fields: { claimedPaths: pathList, stashedPaths: pathList, proposals: gitArcProposals },
+  }),
+} });
+const gitArcPlanShape = observationShape.object({ fields: {
+  scopePaths: pathList,
+  members: observationShape.keyed(gitArcMemberKey, z.json(), { fields: { scopePaths: pathList } }),
+} });
+const entryFields = { gitArc: gitArcShape, gitArcPlan: gitArcPlanShape };
+const entryShape: ObservationShape = { fields: entryFields };
 // Thread-state revision counters bump on background passes with no visible change; they ride along only with real changes.
 const sidebarRowsShape = observationShape.object({
   schema: WorkbenchThreadSidebarRowSnapshotSchema, incidental: ["revision"],
-  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema) },
+  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema, entryShape) },
 });
 const entriesShape = (schema: z.ZodObject) => observationShape.object({
   schema, incidental: ["revision"],
-  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarEntrySchema) },
+  fields: { entries: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarEntrySchema, entryShape) },
 });
 const catalogueShape = observationShape.object({
   // The payload schema is a transform, so the whole catalogue is validated after a delta applies.
@@ -412,7 +430,7 @@ const byProject = <Item extends { projectId: string }>(item: z.ZodType, shape?: 
 // A row's entry decomposes too, so an activity tick ships its changed fields instead of the whole entry.
 const threadRowShape: ObservationShape = {
   schema: WorkspaceThreadRowSchema,
-  fields: { entry: observationShape.object({ validate: WorkbenchThreadSidebarRowSchema }) },
+  fields: { entry: observationShape.object({ validate: WorkbenchThreadSidebarRowSchema, fields: entryFields }) },
 };
 const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.object({
   schema,
@@ -464,7 +482,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
       projects: byProject(WorkbenchProjectThreadSummarySchema, { schema: WorkbenchProjectThreadSummarySchema, incidental: ["revision"],
         fields: {
           unsettledThreads: observationShape.keyed(summaryEntryKey, WorkbenchProjectThreadSummaryEntrySchema),
-          pinnedThreads: observationShape.keyed(summaryEntryKey, WorkbenchPinnedThreadSummaryEntrySchema),
+          pinnedThreads: observationShape.keyed(summaryEntryKey, WorkbenchPinnedThreadSummaryEntrySchema, entryShape),
         } }),
     } };
     case "catalogue": return { schema, fields: { catalogue: catalogueShape, locations: locationsShape } };
@@ -473,7 +491,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     } };
     case "archivedThreads": return { schema, fields: {
       projects: byProject(archivedProject, { schema: archivedProject, fields: {
-        rows: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema),
+        rows: observationShape.keyed(sidebarRowKey, WorkbenchThreadSidebarRowSchema, entryShape),
       } }),
     } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject) } };
@@ -495,7 +513,9 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
         projects: observationShape.keyed((project: { id: string }) => project.id, logicalProject),
         summaries: observationShape.record(summary, { fields: {
           unsettledThreads: observationShape.keyed(locatedSummaryKey, summary.shape.unsettledThreads.element),
-          pinnedThreads: observationShape.keyed(locatedSummaryKey, summary.shape.pinnedThreads.element),
+          pinnedThreads: observationShape.keyed(locatedSummaryKey, summary.shape.pinnedThreads.element, {
+            fields: { entry: observationShape.object({ fields: entryFields }) },
+          }),
         } }),
       },
     }) } };

@@ -9,15 +9,19 @@ import {
   workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
 } from "./workspace-observation";
 
-const value = (activityAt: number) => WorkspaceObservationSchema.parse({
+const threadId = "00000001-0000-4000-8000-000000000000";
+const gitArc = (claimedPaths: string[], proposals: Array<{ proposalId: string; status: "proposed" }>) => ({
+  phase: "active", checkpointCommit: "a".repeat(40), claimedPaths, stashedPaths: [], proposals,
+});
+const value = (activityAt: number, arc?: ReturnType<typeof gitArc>) => WorkspaceObservationSchema.parse({
   kind: "projectThreads", subscriptionId: "00000000-0000-4000-8000-000000000001", generation: 1, revision: 1,
   phase: "current", failure: null,
   data: {
     rows: [{
       logicalProjectId: null, location: { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" }, hostname: "host", rootPath: "C:/project",
       entry: {
-        entryKind: "thread", title: "thread", activityAt, waitingOnThreads: [],
-        identity: { harness: "codex", threadId: "00000001-0000-4000-8000-000000000000" },
+        entryKind: "thread", title: "thread", activityAt, waitingOnThreads: [], ...arc ? { gitArc: arc } : {},
+        identity: { harness: "codex", threadId },
         metadata: { archived: false, pinned: false, snoozed: false },
         lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       },
@@ -36,6 +40,24 @@ test("an entry field change on an app thread row patches only that field and sti
   assert.throws(() => applyObservationDelta(value(10_000), {
     objects: { data: { collections: { rows: { update: [{ key, delta: { objects: { entry: { set: { activityAt: "soon" } } } } }] } } } },
   }, shape), /invalid/u);
+});
+
+test("a git arc change ships only the changed claims and proposals, and still validates the entry", () => {
+  const shape = workspaceObservationShape("projectThreads");
+  const before = value(1, gitArc(["a.ts", "b.ts"], [{ proposalId: "p", status: "proposed" }]));
+  const after = value(1, gitArc(["a.ts", "c.ts"], [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "proposed" }]));
+  const delta = diffObservationValue(before, after, shape)!;
+  assert.deepEqual(delta.objects?.data?.collections?.rows?.update?.[0]?.delta, { objects: { entry: { objects: { gitArc: { collections: {
+    claimedPaths: { remove: ["b.ts"], add: [{ key: "c.ts", item: "c.ts" }] },
+    proposals: { add: [{ key: "/q", item: { proposalId: "q", status: "proposed" } }] },
+  } } } } } });
+  assert.deepEqual(applyObservationDelta(before, delta, shape), after);
+  const key = workspaceThreadRowKey(before.data.rows[0]!);
+  assert.throws(() => applyObservationDelta(before, {
+    objects: { data: { collections: { rows: { update: [{ key, delta: { objects: { entry: { objects: { gitArc: {
+      collections: { proposals: { update: [{ key: "/p", delta: { set: { status: "bogus" } } }] } },
+    } } } } } }] } } } },
+  }, shape), /invalid/u, "loose proposal items are still validated through the whole entry");
 });
 
 test("sidebar row protocol v2 is explicit while legacy rows conform compacting to false", () => {
