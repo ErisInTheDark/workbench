@@ -7,11 +7,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { WorkbenchFileRemovalExecutionRequestSchema } from "./lib/workbench/commands/file-removal-command-definition";
+import { describePendingProposalDenial, type WorkbenchFileClaimCheckResult } from "./lib/workbench/file-claim-check";
 
 export type WorkbenchFileRemovalClaimCheck = (
   request: { cwd: string; harness: string; threadId: string; paths: string[] },
   signal: AbortSignal,
-) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+) => Promise<WorkbenchFileClaimCheckResult>;
 
 interface RemovalTarget {
   absolute: string;
@@ -81,7 +82,9 @@ export default class WorkbenchFileRemovalController {
       cwd, harness: request.harness, threadId: request.threadId, paths: resolved.map(({ absolute }) => absolute),
     }, signal);
     if (!claims.allowed) {
-      return text(400, [`Unclaimed paths: ${claims.uncoveredPaths.join(", ")}. Claim every path before deleting. Nothing was deleted.`]);
+      return text(400, [claims.uncoveredPaths.length
+        ? `Unclaimed paths: ${claims.uncoveredPaths.join(", ")}. Claim every path before deleting. Nothing was deleted.`
+        : `${describePendingProposalDenial(claims.pendingProposals)} Nothing was deleted.`]);
     }
 
     signal.throwIfAborted();

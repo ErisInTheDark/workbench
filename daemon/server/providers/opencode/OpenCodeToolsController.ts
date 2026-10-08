@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import type { WorkbenchProviderCaller, WorkbenchProviderTools, WorkbenchToolTranscript } from "../../provider-execution";
+import { describePendingProposalDenial } from "../../lib/workbench/file-claim-check";
 import { OpenCodeFileClaimRequestSchema, OpenCodeToolContextSchema, type OpenCodeToolContext } from "./opencode-workbench-rpc";
 import {
   NativeThreadIdSchema, type WorkbenchThreadId, type WorkbenchTurnId,
@@ -118,7 +119,9 @@ export default class OpenCodeToolsController implements WorkbenchProviderTools {
     signal.throwIfAborted();
     return JSON.stringify(result.allowed ? { allowed: true } : {
       allowed: false,
-      reason: `Unclaimed file changes: ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`.slice(0, 1000),
+      reason: (result.uncoveredPaths.length
+        ? `Unclaimed file changes: ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`
+        : describePendingProposalDenial(result.pendingProposals)).slice(0, 1000),
     });
   }
 }

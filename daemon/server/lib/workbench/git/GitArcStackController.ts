@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, arc drift and seal/reopen operations.
- * - GitArcPreparedStackRevision: atomic ref and commit updates for one proposal revision.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, rebases onto HEAD, arc drift and seal/reopen operations.
+ * - GitArcPreparedStackRevision: atomic ref and commit updates for one proposal revision or chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
@@ -20,7 +20,8 @@ import {
   parseMarkedMetadata,
   type StackLayerMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
-import GitArcRegistry, { type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import GitArcRegistry, { REGISTRY_REF, type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type { StoredProposal } from "./GitCheckpointStore";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
@@ -57,6 +58,10 @@ export interface GitArcPreparedStackRevision {
 
 function lifecycleProposalIds(entry: GitArcRegistryEntry) {
   return (entry.phase === "plan" ? entry.retainedArc?.proposalIds : entry.proposalIds) ?? [];
+}
+
+function chainScope(chain: readonly GitArcStackLayer[]) {
+  return [...new Set(chain.flatMap(({ scopePaths }) => scopePaths))];
 }
 
 function ownsLayer(layer: StackLayerMetadata, identity: { harness: string; threadId: string }) {
@@ -148,13 +153,7 @@ export default class GitArcStackController {
     const targetIndex = chain.findIndex(({ layer }) => layer.proposalIds.includes(targetProposalId));
     if (targetIndex < 0) return null;
     const store = this.store();
-    const commits = new Map<string, string>();
-    const updates: GitRefUpdate[] = [];
-    const deletes: Array<{ oldValue: string; ref: string }> = [];
-    const replacedRefs: string[] = [];
-    let parent = chain[targetIndex]!.parent;
-
-    for (const current of chain.slice(targetIndex)) {
+    return await this.rebuildLayers(chain.slice(targetIndex), chain[targetIndex]!.parent, async (current, base, stored) => {
       const proposalIds = current.layer.proposalIds.map(id => id === targetProposalId
         ? replacement.metadata.proposalId
         : id);
@@ -163,7 +162,7 @@ export default class GitArcStackController {
           ? replacement
           : await store.readProposal(current.layer.harness as GitArcHarness, current.layer.threadId, proposalId)
       )));
-      let tree = await this.repository.resolveTree(parent);
+      let tree = await this.repository.resolveTree(base);
       for (const proposal of proposals) {
         tree = await this.repository.writeTreeWithPathsFromSource(tree, proposal.tree, proposal.metadata.paths);
       }
@@ -174,6 +173,69 @@ export default class GitArcStackController {
         proposalId: metadata.proposalId,
         title: metadata.title,
       })));
+      return {
+        metadata: {
+          ...stored,
+          scopePaths: [...new Set(proposals.flatMap(({ metadata }) => metadata.paths))].sort(),
+          stackLayer: { ...stored.stackLayer!, proposalIds, proposals: summaries },
+        },
+        tree,
+      };
+    });
+  }
+
+  /**
+   * Rebuild a pending chain onto fast-forwarded HEAD so new work never builds on history HEAD has moved past. Null when
+   * nothing moved, HEAD left the chain's history, or HEAD changed a sealed path to content no layer holds.
+   */
+  async prepareRebase(entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined, head: string | null) {
+    if (!head || !entry?.stackTip) return null;
+    const chain = await this.readChain(entry.stackTip);
+    if (!chain.length || !await this.chainHasPending(chain)) return null;
+    const root = chain[0]!.parent;
+    if (!root || root === head || !await this.repository.isAncestor(root, head)) return null;
+    // Landed layers put their own sealed content on HEAD; anything else on a sealed path is a real conflict.
+    let unexplained = await this.repository.listChangedPaths(root, head, chainScope(chain));
+    for (const { tipCommit } of chain) {
+      if (!unexplained.length) break;
+      const differing = new Set(await this.repository.listChangedPaths(tipCommit, head, unexplained));
+      unexplained = unexplained.filter(candidate => differing.has(candidate));
+    }
+    if (unexplained.length) return null;
+    return await this.rebuildLayers(chain, head, async (current, base, stored) => ({
+      metadata: stored,
+      tree: await this.repository.writeTreeWithPathsFromSource(base, current.tipCommit, current.scopePaths),
+    }));
+  }
+
+  /** Apply `prepareRebase`, remapping every dependent Workbench ref and registry stack tip. Returns whether tips moved. */
+  async rebaseOntoHead(entry: Pick<GitArcRegistryEntry, "stackTip"> | null | undefined, head: string | null) {
+    const revision = await this.prepareRebase(entry, head);
+    if (!revision) return false;
+    const rewrite = await new GitArcHistoryRewriter(this.repository).prepare(revision.commits, {
+      excludeRefs: [REGISTRY_REF, ...revision.replacedRefs],
+    });
+    if (rewrite.warnings.length) console.warn(`Git arc stack rebase skipped refs: ${rewrite.warnings.slice(0, 5).join("; ")}`);
+    const registryUpdate = await this.registry().prepareCommitRemap(rewrite.commits);
+    await this.repository.updateRefs(
+      [...revision.updates, ...rewrite.updates, ...registryUpdate ? [registryUpdate] : []],
+      [...revision.deletes, ...rewrite.deletes],
+    );
+    return true;
+  }
+
+  /** Recreate `layers` bottom-up on `parent`, each from `rebuild`, replacing their tip refs. */
+  private async rebuildLayers(
+    layers: readonly GitArcStackLayer[],
+    parent: string | null,
+    rebuild: (layer: GitArcStackLayer, base: string | null, stored: CheckpointMetadata) => Promise<{ metadata: CheckpointMetadata; tree: string }>,
+  ): Promise<GitArcPreparedStackRevision> {
+    const store = this.store();
+    const commits = new Map<string, string>();
+    const updates: GitRefUpdate[] = [];
+    const deletes: Array<{ oldValue: string; ref: string }> = [];
+    const replacedRefs: string[] = [];
+    for (const current of layers) {
       const stored = await store.readCheckpoint(
         current.layer.harness as GitArcHarness,
         current.layer.threadId,
@@ -182,17 +244,12 @@ export default class GitArcStackController {
       if (!stored.metadata || stored.metadata.kind !== "stack" || !stored.metadata.stackLayer) {
         throw new Error("The sealed proposal layer is unavailable.");
       }
-      const storedCommit = await this.repository.readCommit(current.tipCommit);
-      const metadata: CheckpointMetadata = {
-        ...stored.metadata,
-        scopePaths: [...new Set(proposals.flatMap(({ metadata }) => metadata.paths))].sort(),
-        stackLayer: { ...stored.metadata.stackLayer, proposalIds, proposals: summaries },
-      };
+      const { metadata, tree } = await rebuild(current, parent, stored.metadata);
       const next = await this.repository.createCommitFromTree(
         tree,
         parent,
         checkpointMessage(metadata),
-        storedCommit,
+        await this.repository.readCommit(current.tipCommit),
       );
       const nextRef = stored.checkpointRef.replace(/-[a-f0-9]{7,64}$/iu, `-${next.slice(0, 8)}`);
       updates.push({ newValue: next, oldValue: "0".repeat(40), ref: nextRef });
@@ -204,18 +261,23 @@ export default class GitArcStackController {
     return { commits, deletes, replacedRefs, updates };
   }
 
-  /** `base` with every sealed path in the chain below `tip` taken from that tip. */
-  async sealedTree(base: string, tip: string) {
-    const paths = [...new Set((await this.readChain(tip)).flatMap(({ scopePaths }) => scopePaths))];
-    return await this.repository.writeTreeWithPathsFromSource(base, tip, paths);
+  /** `base` with every sealed path in the chain below `tip` taken from that tip; with HEAD as `base`, the tip as if rebased. */
+  async sealedTree(base: string | null, tip: string) {
+    return await this.repository.writeTreeWithPathsFromSource(base, tip, chainScope(await this.readChain(tip)));
   }
 
-  /** Paths where HEAD differs from a stack tip, other than those still owned by pending chain proposals. */
+  /**
+   * Sealed paths where HEAD differs from a stack tip, other than those still owned by pending chain proposals. A tip's
+   * unsealed paths are just HEAD content from sealing time, and claims keep other threads off claimed paths, so they never drift.
+   */
   private async tipDrift(tip: string, paths: string[], head: string | null) {
-    const changed = await this.repository.listChangedPaths(tip, head, paths);
+    const chain = await this.readChain(tip);
+    const scope = chainScope(chain);
+    const sealed = paths.filter(candidate => scope.some(scopePath => gitArcPathsOverlap(candidate, scopePath)));
+    const changed = sealed.length ? await this.repository.listChangedPaths(tip, head, sealed) : [];
     if (!changed.length) return [];
     const store = this.store();
-    const pending = await this.storedPendingIds(await this.readChain(tip));
+    const pending = await this.storedPendingIds(chain);
     const pendingPaths = (await Promise.all(pending.flatMap(({ layer, pending: ids }) => ids.map(async id => (
       (await store.readProposal(layer.layer.harness as GitArcHarness, layer.layer.threadId, id)).metadata.paths
     ))))).flat();

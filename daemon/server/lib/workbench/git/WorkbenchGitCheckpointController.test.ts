@@ -1155,6 +1155,23 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
     cwd: source, harness: "codex", includeNewer: false, proposalId: rescindTarget.proposalId, threadId: "partial-thread",
   })).status, "rescinded");
 
+  // Rescind, edit, then amend the rescinded proposal: it returns with its message and paths and retires the original.
+  await fs.writeFile(path.join(source, "two.txt"), "rescind two\nrevived two\n");
+  const revive = async () => await controller.createProposal({
+    amend: true, amendProposalId: rescindTarget.proposalId, cwd: source, description: "", harness: "codex",
+    threadId: "partial-thread", title: "",
+  });
+  const revived = await revive();
+  const [retired, revivedState] = await Promise.all([rescindTarget.proposalId, revived.proposalId].map(async proposalId => (
+    await controller.getProposal({ cwd: source, harness: "codex", includeNewer: false, proposalId, threadId: "partial-thread" })
+  )));
+  assert.deepEqual([retired!.status, retired!.supersededByProposalId], ["superseded", revived.proposalId]);
+  assert.deepEqual([revivedState!.status, revivedState!.title, revived.paths], ["proposed", "rescind target", ["two.txt"]]);
+  assert.match(revivedState!.changes[0]!.diff, /^\+revived two$/mu);
+  await assert.rejects(revive(), (error) => error instanceof GitArcRejectionError
+    && error.rejection.reason === "proposalRequiresCommittedTarget");
+  await controller.rescindProposal({ cwd: source, harness: "codex", proposalId: revived.proposalId, threadId: "partial-thread" });
+
   const committedTarget = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: commitTarget.proposalId, threadId: "partial-thread",
   });
@@ -1213,7 +1230,7 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "two.txt")?.diff ?? "", /rescind two/u);
   assert.deepEqual(
     (await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" }))?.proposalIds,
-    [continuedReplacement.proposalId, amendment.proposalId],
+    [continuedReplacement.proposalId, revived.proposalId, amendment.proposalId],
   );
   const pendingPlan = await controller.createPlan({
     cwd: source, harness: "codex", intentName: "next work", paths: successor.scopePaths, threadId: "partial-thread",

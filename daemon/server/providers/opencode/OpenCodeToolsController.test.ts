@@ -21,7 +21,7 @@ test("native mutation admission checks every resource against the resolved calle
   }) };
   const result = JSON.parse(await controller.patchClaims(input, async value => {
     checked.push(value);
-    return { allowed: false, uncoveredPaths: ["src/new.ts", "removed.ts"] };
+    return { allowed: false, pendingProposals: [], uncoveredPaths: ["src/new.ts", "removed.ts"] };
   }, new AbortController().signal));
   assert.equal(result.allowed, false);
   assert.deepEqual(checked, [{
@@ -44,16 +44,16 @@ test("native admission propagates cancellation and never substitutes caller-supp
     checked++;
     assert.equal(caller.threadId, "real-owner");
     assert.equal(caller.cwd, "/real");
-    return { allowed: true, uncoveredPaths: [] };
+    return { allowed: true, pendingProposals: [], uncoveredPaths: [] };
   }, signal.signal)), { allowed: true });
   await assert.rejects(owner.patchClaims(input, async () => {
     checked++;
     signal.abort(new Error("disposed"));
-    return { allowed: true, uncoveredPaths: [] };
+    return { allowed: true, pendingProposals: [], uncoveredPaths: [] };
   }, signal.signal), /disposed/);
   await assert.rejects(owner.patchClaims(input, async () => {
     checked++;
-    return { allowed: true, uncoveredPaths: [] };
+    return { allowed: true, pendingProposals: [], uncoveredPaths: [] };
   }, signal.signal), /disposed/);
   assert.equal(checked, 2);
 });

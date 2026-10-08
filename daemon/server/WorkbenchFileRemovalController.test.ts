@@ -22,7 +22,7 @@ function claimsCovering(cwd: string, claimed: readonly string[]): WorkbenchFileR
   const covered = new Set(claimed.map(entry => path.resolve(cwd, entry)));
   return async ({ paths }) => {
     const uncoveredPaths = paths.filter(entry => !covered.has(entry));
-    return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
+    return { allowed: uncoveredPaths.length === 0, pendingProposals: [], uncoveredPaths };
   };
 }
 
@@ -49,7 +49,7 @@ test("invalid targets reject before claims are checked or anything is deleted", 
   let checked = false;
   const controller = new WorkbenchFileRemovalController(async ({ paths }) => {
     checked = true;
-    return { allowed: true, uncoveredPaths: paths.slice(0, 0) };
+    return { allowed: true, pendingProposals: [], uncoveredPaths: paths.slice(0, 0) };
   });
   try {
     for (const [paths, recursive] of [[["claimed.ts", "missing.ts"], false], [["folder"], false], [["."], true], [[".."], true]] as const) {

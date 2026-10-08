@@ -27,7 +27,7 @@ const decision = (result: unknown) =>
 test("only native compaction injects narrative recall before summary commands", async () => {
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined,
-    check: async () => ({ allowed: true, uncoveredPaths: [] }),
+    check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
   });
   const hook = hooks.SessionStart[0]!.hooks[0]!;
 
@@ -50,7 +50,7 @@ test("only native compaction injects narrative recall before summary commands", 
 });
 
 test("a claimed path passes without a decision, resolved against the thread cwd", async () => {
-  const { result, denied, checked } = await run(async () => ({ allowed: true, uncoveredPaths: [] }), { file_path: "src/a.ts" });
+  const { result, denied, checked } = await run(async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), { file_path: "src/a.ts" });
   assert.equal(decision(result), undefined);
   assert.deepEqual(checked, [[path.resolve(cwd, "src/a.ts")]]);
   assert.deepEqual(denied, []);
@@ -58,9 +58,18 @@ test("a claimed path passes without a decision, resolved against the thread cwd"
 
 test("an unclaimed path is denied and reported for transcript presentation", async () => {
   const target = path.resolve(cwd, "b.ts");
-  const { result, denied } = await run(async () => ({ allowed: false, uncoveredPaths: [target] }), { file_path: target }, "Write");
+  const { result, denied } = await run(async () => ({ allowed: false, pendingProposals: [], uncoveredPaths: [target] }), { file_path: target }, "Write");
   assert.equal(decision(result), "deny");
   assert.deepEqual(denied, ["tool-1"]);
+});
+
+test("a pending proposal's file is denied without the unclaimed transcript marker", async () => {
+  const target = path.resolve(cwd, "b.ts");
+  const { result, denied } = await run(async () => ({
+    allowed: false, pendingProposals: [{ paths: [target], proposalId: "p1" }], uncoveredPaths: [],
+  }), { file_path: target });
+  assert.equal(decision(result), "deny");
+  assert.deepEqual(denied, []);
 });
 
 test("claim check failures and unreadable paths deny rather than letting the edit through", async context => {
@@ -68,13 +77,13 @@ test("claim check failures and unreadable paths deny rather than letting the edi
   const failed = await run(async () => { throw new Error("git unavailable"); }, { file_path: "c.ts" });
   assert.equal(decision(failed.result), "deny");
   assert.deepEqual(failed.denied, [], "a broken check is not a claim denial");
-  const missing = await run(async () => ({ allowed: true, uncoveredPaths: [] }), { path: "opencode-shape.ts" });
+  const missing = await run(async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }), { path: "opencode-shape.ts" });
   assert.equal(decision(missing.result), "deny");
   assert.deepEqual(missing.checked, []);
 });
 
 test("tools that merely resemble Edit or Write are not judged", async () => {
-  const { result, checked } = await run(async () => ({ allowed: false, uncoveredPaths: [] }), { notebook_path: "a.ipynb" }, "NotebookEdit");
+  const { result, checked } = await run(async () => ({ allowed: false, pendingProposals: [], uncoveredPaths: [] }), { notebook_path: "a.ipynb" }, "NotebookEdit");
   assert.equal(decision(result), undefined);
   assert.deepEqual(checked, []);
 });

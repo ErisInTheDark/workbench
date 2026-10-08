@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
- * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations and history retention.
+ * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations and history retention; admit agent file changes.
  * - WorkspaceGitArcMemberState: active repository plus root identity.
  * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
  * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
@@ -40,6 +40,7 @@ import type { AgentEndpointProjectResolution } from "./lib/workbench/project/age
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import type { GitArcPreparedOperation } from "./lib/workbench/git/GitArcRegistry";
 import type { GitArcAdoptionInput } from "./lib/workbench/git/GitArcOwnershipTransferController";
+import type { WorkbenchFileClaimCheckResult } from "./lib/workbench/file-claim-check";
 
 export class WorkspaceGitArcMemberError extends Error {
   constructor(readonly workspace: NonNullable<GitArcFailure["workspace"]>, cause: unknown) {
@@ -184,11 +185,15 @@ export default class WorkbenchWorkspaceGitArcController {
     harness: WorkbenchHarness,
     threadId: string,
   ) {
-    const values = (await Promise.all(members.map(async (member) => {
+    const values = await this.findMemberLifecycleStates(members, harness, threadId);
+    return values.length ? this.aggregateLifecycle(project, values) : null;
+  }
+
+  private async findMemberLifecycleStates(members: readonly RepoMember[], harness: WorkbenchHarness, threadId: string) {
+    return (await Promise.all(members.map(async (member) => {
       const state = await this.local.findLifecycleState({ cwd: member.repoRoot, harness, threadId });
       return state ? { member, state } : null;
     }))).flatMap((value) => value ? [value] : []);
-    return values.length ? this.aggregateLifecycle(project, values) : null;
   }
 
   async listPlanStates(project: AgentEndpointProjectResolution): Promise<WorkspaceGitArcPlanState[]> {
@@ -220,12 +225,13 @@ export default class WorkbenchWorkspaceGitArcController {
     harness: WorkbenchHarness,
     threadId: string,
     absolutePaths: readonly string[],
-  ) {
+  ): Promise<WorkbenchFileClaimCheckResult> {
     const members = await this.resolveRepoMembers(project);
-    const [lifecycle, ignoredPaths] = await Promise.all([
-      this.findLifecycleStateInMembers(project, members, harness, threadId),
+    const [memberStates, ignoredPaths] = await Promise.all([
+      this.findMemberLifecycleStates(members, harness, threadId),
       this.listIgnoredPatchPaths(project, members, absolutePaths),
     ]);
+    const lifecycle = memberStates.length ? this.aggregateLifecycle(project, memberStates) : null;
     const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
     const claimedPaths = lifecycle?.phase === "active" ? lifecycle.claimedPaths : [];
     // Same rule as arc ownership: an entry covers itself and anything beneath it, whether or not it exists yet.
@@ -237,7 +243,21 @@ export default class WorkbenchWorkspaceGitArcController {
       if (ignoredPaths.has(absolute)) return false;
       return !claims.some((claim) => absolute === claim || isInside(absolute, claim));
     });
-    return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
+    // Agents build on their own pending proposals only through a stack layer, so unsealed proposal files stay frozen.
+    const frozen = memberStates.flatMap(({ member, state }) => {
+      if (state.phase !== "active") return [];
+      const sealed = new Set(state.stackLayers?.flatMap(({ proposalIds }) => proposalIds) ?? []);
+      return state.proposals
+        .filter(({ proposalId, status }) => status === "proposed" && !sealed.has(proposalId))
+        .map(({ paths, proposalId }) => ({ proposalId, scopes: paths.map((filePath) => path.resolve(member.repoRoot, filePath)) }));
+    });
+    const pendingProposals = frozen.flatMap(({ proposalId, scopes }) => {
+      const held = absolutePaths.filter((candidate) => !uncoveredPaths.includes(candidate)
+        && !ignoredPaths.has(comparable(candidate))
+        && scopes.some((scope) => isInside(candidate, scope) || isInside(scope, candidate)));
+      return held.length ? [{ paths: held, proposalId }] : [];
+    });
+    return { allowed: !uncoveredPaths.length && !pendingProposals.length, pendingProposals, uncoveredPaths };
   }
 
   async findPlanClaimCollisions(

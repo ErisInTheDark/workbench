@@ -97,12 +97,12 @@ proposing:
 - Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
 
 rescinding:
-- Use <tool id="git_arc_rescind" /> to rescind one pending unsealed proposal.
+- Use <tool id="git_arc_rescind" /> to rescind one pending unsealed proposal; to revise its content, rescind, edit, then `amend: proposalId` revives it.
 
 amending:
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
 <!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
-- Set `amend: proposalId` to revise a pending proposal or amend a committed proposal. Pending revisions default to the target's paths and message.
+- Set `amend: proposalId` to revise a pending proposal, revive a rescinded one, or amend a committed proposal. Pending revisions and revivals default to the target's paths and message.
 - Use `amend: true` for HEAD; do not pre-check committed targets.
 - The user chooses amend or fresh; Workbench handles impossible amends. Compare against the target.
 - Update title/description for changed scope, or omit both to inherit.
@@ -116,7 +116,8 @@ acceptance:
 sealing a layer:
 - <tool id="git_arc_stack" /> with `title` seals ALL pending unsealed proposals as one layer; their result becomes the arc baseline, claims stay
 - Compare, diff, selected restore and new proposals measure from the top layer; the user commits layers bottom-up
-- Stack before further work that builds on pending proposals; call again per layer
+<!-- Failure: agents piled new edits onto pending proposal files, leaving proposals stale or mixed. Edit hooks now deny unsealed proposal files, so building on them requires a layer. -->
+- Editing files in unsealed pending proposals is denied; stack to build on them, call again per layer
 
 constraints:
 - Do not seal impulsively; know whether seal is necessary yet. Optimal is multiple proposals per layer 

@@ -474,7 +474,7 @@ before(async () => {
     }).patchClaims(input, async ({ paths }) => {
       if (paths.some((filePath) => filePath.endsWith("unavailable.ts"))) throw new Error("claim registry unavailable");
       const uncoveredPaths = paths.filter((filePath) => filePath.endsWith("unclaimed.ts"));
-      return { allowed: uncoveredPaths.length === 0, uncoveredPaths };
+      return { allowed: uncoveredPaths.length === 0, pendingProposals: [], uncoveredPaths };
     }, signal),
     executeBrowseRequest: async () => { throw new Error("unexpected direct Browse dispatch"); },
     executeSessionRequest: async () => { throw new Error("unexpected direct Browse session dispatch"); },

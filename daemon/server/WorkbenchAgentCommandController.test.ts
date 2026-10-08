@@ -308,8 +308,8 @@ test("answers the private apply_patch hook from the active claim owner", async (
         checkedPaths.push(paths);
         checkedThreadIds.push(threadId);
         return paths.some((filePath) => filePath.endsWith("unclaimed.ts"))
-          ? { allowed: false, uncoveredPaths: paths.filter((filePath) => filePath.endsWith("unclaimed.ts")) }
-          : { allowed: true, uncoveredPaths: [] };
+          ? { allowed: false, pendingProposals: [], uncoveredPaths: paths.filter((filePath) => filePath.endsWith("unclaimed.ts")) }
+          : { allowed: true, pendingProposals: [], uncoveredPaths: [] };
       }),
     },
     async () => { throw new Error("claim denial must not wait on marker transport"); },

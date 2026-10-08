@@ -7,6 +7,7 @@ import type { ProviderToolMetadata, WorkbenchProviderTools } from "./provider-ex
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
+import { describePendingProposalDenial } from "./lib/workbench/file-claim-check";
 import {
   createWorkbenchFileChangeFailureSystemMessage, WORKBENCH_UNCLAIMED_FILE_CHANGE_REASON_PREFIX,
 } from "workbench-shared/workbench/thread/workbench-file-change";
@@ -37,6 +38,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       ]);
       signal.throwIfAborted();
       if (result.allowed) return JSON.stringify(allowCodexApplyPatch());
+      if (!result.uncoveredPaths.length) return JSON.stringify(denyCodexApplyPatch(describePendingProposalDenial(result.pendingProposals)));
       const uncoveredPaths = new Set(result.uncoveredPaths);
       const uncoveredChanges = hook.changes.filter(change => uncoveredPaths.has(change.path)
         || (change.kind.type === "update" && !!change.kind.move_path && uncoveredPaths.has(change.kind.move_path)));

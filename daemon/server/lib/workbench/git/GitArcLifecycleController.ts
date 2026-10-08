@@ -172,8 +172,9 @@ export default class GitArcLifecycleController {
       const exposed = dirtyPaths.filter((candidate) => existing.some((scope) => covers(scope, candidate))
         && !scopePaths.some((scope) => covers(scope, candidate)));
       // Unlanded sealed layers differ from HEAD; dropping their claims would leave that content unguarded.
+      const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
       const tipDirty = movement.tip?.pending && exposed.length
-        ? await repository.listWorktreeChangedPaths(movement.tip.commit, exposed) : exposed;
+        ? await repository.listWorktreeChangedPaths(await stack.sealedTree(head, movement.tip.commit), exposed) : exposed;
       if (tipDirty.length) throw new GitCheckpointDirtyPathsError(tipDirty, "Removed claims");
       if (exposed.length) {
         throw new GitArcRejectionError({ reason: "sealedStackContent", paths: exposed }, `Removed claims hold pending stack-layer content: ${exposed.join(", ")}. Keep them until the layer commits, or ask the coordinating thread to move them with a selected adopt.`);

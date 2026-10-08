@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - ClaudeFileClaimCheck: shared claim policy bound to one Claude thread.
- * - createClaudeSessionHooks: inject compact recovery context and deny native edits whose path no active claim covers.
+ * - createClaudeSessionHooks: inject compact recovery context and deny native edits whose path no active claim covers or a pending proposal holds.
  */
 import path from "node:path";
 import type { HookCallbackMatcher, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import { describePendingProposalDenial, type WorkbenchFileClaimCheckResult } from "../../lib/workbench/file-claim-check";
 
-export type ClaudeFileClaimCheck = (paths: string[]) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+export type ClaudeFileClaimCheck = (paths: string[]) => Promise<WorkbenchFileClaimCheckResult>;
 
 const CLAUDE_COMPACTION_RECALL_CONTEXT =
   "Before following any command suggested by the compaction summary above, perform the required narrative recall(s) with `mcp__wb__thread_recall`.";
@@ -47,6 +48,8 @@ export function createClaudeSessionHooks(options: {
         try {
           const result = await options.check([path.resolve(options.cwd, filePath)]);
           if (result.allowed) return {};
+          // Only claim denials carry the transcript's unclaimed-change presentation.
+          if (!result.uncoveredPaths.length) return deny(describePendingProposalDenial(result.pendingProposals));
           options.onDenied(toolUseId ?? input.tool_use_id);
           return deny(`Unclaimed file changes: ${result.uncoveredPaths.join(", ")}. Claim every path before editing.`);
         } catch (error) {

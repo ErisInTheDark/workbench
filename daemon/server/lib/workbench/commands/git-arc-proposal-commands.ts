@@ -29,7 +29,7 @@ const proposalInput = z.object({
 });
 
 const propose = defineWorkbenchAgentCommand({
-  description: "Propose claimed changes, revise a pending proposal, or amend a committed proposal.",
+  description: "Propose claimed changes, revise a pending proposal, revive a rescinded proposal, or amend a committed proposal.",
   helpGroups: ["git-arc"], words: ["git", "arc", "propose"],
   usage: "wb git arc propose [--root <root>] [--amend [<proposal-id>] [--fresh-title <title>] [--fresh-description <description>]] [--title <title>] [--description <description>] [-- <path>...]",
   inputSchema: proposalInput,

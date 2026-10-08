@@ -137,6 +137,32 @@ test("claim and plan changes keep sealed proposals visible, and unstack reopens 
   assert.equal(await repository.run(["show", "HEAD:one.txt"]), "replacement\n");
 });
 
+test("outside commits on unsealed paths never strand work beneath a pending stack", async () => {
+  const { commit, cwd, git, read, state } = branch("sibling");
+  const owner = { cwd, threadId: "owner" };
+  const repository = await WorkbenchGitRepository.open(cwd);
+  await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["two.txt"] });
+  await fs.writeFile(path.join(cwd, "two.txt"), "sibling\nowner\n");
+  await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["three.txt"] });
+  await controller.continueArc(owner);
+  assert.deepEqual((await controller.compare({ ...owner, paths: ["two.txt"] })).changes
+    .map(({ additions, deletions, path: filePath }) => ({ additions, deletions, filePath })),
+  [{ additions: 1, deletions: 0, filePath: "two.txt" }], "the outside commit is not the owner's change");
+
+  const upper = await controller.createProposal({ ...owner, paths: ["two.txt"], title: "owner two", description: "" });
+  const { stackBase } = (await new GitCheckpointStore(repository).readProposal("codex", "owner", upper.proposalId)).metadata;
+  assert.equal((await repository.readCommitAt(stackBase!))?.identity.parents[0], await repository.currentHead(),
+    "the pending stack rebased onto the outside commit");
+  const { diff } = (await read("owner", upper.proposalId)).changes[0]!;
+  assert.match(diff, /^\+owner$/mu);
+  assert.doesNotMatch(diff, /^[-+]sibling$/mu);
+
+  await commit("owner", state.lower, "first");
+  await commit("owner", upper.proposalId, "owner two");
+  assert.equal(await git("show", "HEAD:one.txt"), "first\n");
+  assert.equal(await git("show", "HEAD:two.txt"), "sibling\nowner\n");
+});
+
 test("accepting a sealed amend rewrites the stack onto the amended history", async () => {
   const { commit, cwd, git, state } = branch("amended");
   await controller.commitProposal({

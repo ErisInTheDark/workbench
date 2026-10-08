@@ -138,8 +138,14 @@ class FakeLocalGitArcController {
   private readonly states = new Map<string, {
     checkpointCommit: string; claimedPaths: string[]; harness: string; intentDescription: string; intentName: string;
     phase: "active" | "stashed"; proposals: GitArcLifecycleState["proposals"]; stashedPaths?: string[];
-    threadId: string; updatedAt: string; pendingPlan?: boolean;
+    stackLayers?: GitArcLifecycleState["stackLayers"]; threadId: string; updatedAt: string; pendingPlan?: boolean;
   }>();
+
+  sealProposals(root: string, proposalIds: string[]) {
+    const state = this.states.get(root);
+    if (!state) throw new Error("Missing fake arc.");
+    this.states.set(root, { ...state, stackLayers: [{ layerId: "layer", proposalIds, sealedAt: "2026-08-24T00:00:00.000Z", title: "layer" }] });
+  }
 
   markPendingPlan(root: string) {
     const state = this.states.get(root);
@@ -603,12 +609,16 @@ test("active claims and Git ignore rules cover patch paths across workspace root
   await execFileAsync("git", ["add", "tracked.log"], { cwd: apiRoot });
   await writeFile(path.join(apiRoot, ".gitignore"), "ignored/\n*.log\n", "utf8");
   const project = createWorkspace(apiRoot, webRoot);
+  const local = new FakeLocalGitArcController();
   const controller = new WorkbenchWorkspaceGitArcController(
-    new FakeLocalGitArcController() as unknown as WorkbenchGitCheckpointController,
+    local as unknown as WorkbenchGitCheckpointController,
     new WorkbenchThreadTransitionCoordinator(),
     async (rootPath) => rootPath,
   );
   const identity = { cwd: apiRoot, harness: "opencode" as const, threadId: "claim-thread" };
+  const check = async (paths: string[], threadId: string = identity.threadId) => (
+    await controller.checkActiveClaimPaths(project, identity.harness, threadId, paths)
+  );
   const plan = await controller.execute(project, {
     action: "plan",
     adoptPaths: [],
@@ -636,38 +646,28 @@ test("active claims and Git ignore rules cover patch paths across workspace root
     path.join(apiRoot, "pending", "deep", "x.rs"),
     path.join(webRoot, "claimed.ts"),
   ];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, covered), {
-    allowed: true,
-    uncoveredPaths: [],
-  });
+  const admitted = { allowed: true, pendingProposals: [], uncoveredPaths: [] };
+  assert.deepEqual(await check(covered), admitted);
   if (process.platform === "win32") {
-    assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, covered.map((filePath) => filePath.toLowerCase())), {
-      allowed: true,
-      uncoveredPaths: [],
-    });
+    assert.deepEqual(await check(covered.map((filePath) => filePath.toLowerCase())), admitted);
   }
   const uncovered = [path.join(apiRoot, "sibling.ts"), path.join(apiRoot, "pending.rs"), path.join(webRoot, "destination.ts"), path.join(temporaryRoot, "outside.ts")];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, uncovered), {
-    allowed: false,
-    uncoveredPaths: uncovered,
-  });
+  assert.deepEqual(await check(uncovered), { allowed: false, pendingProposals: [], uncoveredPaths: uncovered });
   const ignored = [path.join(apiRoot, "ignored", "generated.ts"), path.join(apiRoot, "untracked.log")];
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, [...covered, ...ignored]), {
-    allowed: true,
-    uncoveredPaths: [],
-  });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, identity.threadId, [...ignored, trackedIgnored]), {
-    allowed: false,
-    uncoveredPaths: [trackedIgnored],
-  });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, "no-active-arc", ignored), {
-    allowed: true,
-    uncoveredPaths: [],
-  });
-  assert.deepEqual(await controller.checkActiveClaimPaths(project, identity.harness, "no-active-arc", covered), {
-    allowed: false,
-    uncoveredPaths: covered,
-  });
+  assert.deepEqual(await check([...covered, ...ignored]), admitted);
+  assert.deepEqual(await check([...ignored, trackedIgnored]), { allowed: false, pendingProposals: [], uncoveredPaths: [trackedIgnored] });
+  assert.deepEqual(await check(ignored, "no-active-arc"), admitted);
+  assert.deepEqual(await check(covered, "no-active-arc"), { allowed: false, pendingProposals: [], uncoveredPaths: covered });
+
+  // Agents build on their own pending proposals only through stack layers: unsealed proposal files stay frozen.
+  const proposal = await local.createProposal({ cwd: apiRoot, paths: ["src/nested.ts"] });
+  const frozen = (paths: string[]) => [{ paths, proposalId: proposal.proposalId }];
+  assert.deepEqual(await check(covered), { allowed: false, pendingProposals: frozen([covered[0]!]), uncoveredPaths: [] });
+  assert.deepEqual(await check([covered[0]!, uncovered[0]!]), { allowed: false, pendingProposals: frozen([covered[0]!]), uncoveredPaths: [uncovered[0]] });
+  assert.deepEqual(await check([apiSource]), { allowed: false, pendingProposals: frozen([apiSource]), uncoveredPaths: [] },
+    "a claimed folder holding proposal files is frozen too");
+  local.sealProposals(apiRoot, [proposal.proposalId]);
+  assert.deepEqual(await check(covered), admitted);
 
   const native = new OpenCodeToolsController({
     resolveCaller: async () => ({

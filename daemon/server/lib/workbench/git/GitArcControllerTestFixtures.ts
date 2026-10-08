@@ -209,7 +209,7 @@ export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERAT
 export const STACK_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "stack-shared-states",
-  revision: 5,
+  revision: 7,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string, source = repositoryRoot) => {
@@ -265,13 +265,22 @@ export const STACK_OPERATIONS_FIXTURE = {
     const transferUpper = await propose(transfer, "parent", "two.txt", "parent two\n", "parent two");
     await controller.stackArc({ cwd: transfer, threadId: "parent", title: "layer two" });
 
-    for (const root of [sealed, stacked, broken, amended, transfer]) await runGit(["fsck", "--strict"], { cwd: root });
+    // sibling: "first" sealed in "layer one"; then an outside commit changes the unsealed, unclaimed two.txt.
+    const sibling = await fork("sibling");
+    await controller.createAndStartPlan({ cwd: sibling, threadId: "owner", intentName: "stacked work", paths: ["one.txt"] });
+    const siblingLower = await propose(sibling, "owner", "one.txt", "first\n", "first");
+    await controller.stackArc({ cwd: sibling, threadId: "owner", title: "layer one" });
+    await write(sibling, "two.txt", "sibling\n");
+    await runGit(["commit", "--quiet", "-m", "sibling", "--", "two.txt"], { cwd: sibling });
+
+    for (const root of [sealed, stacked, broken, amended, transfer, sibling]) await runGit(["fsck", "--strict"], { cwd: root });
     return {
       sealed: { root: relative(sealed), lower },
       stacked: { root: relative(stacked), lower, upper },
       broken: { root: relative(broken), upper },
       amended: { root: relative(amended), amendment, upper: amendedUpper },
       transfer: { root: relative(transfer), lower: transferLower, upper: transferUpper },
+      sibling: { root: relative(sibling), lower: siblingLower },
     };
   },
 } satisfies GitTestFixtureSpec<object>;

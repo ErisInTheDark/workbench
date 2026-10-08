@@ -799,7 +799,7 @@ export default class GitArcProposalController {
     }
   }
 
-  /** The commit current arc work is measured from: the baseline stack tip, else accepted or checkpoint history. */
+  /** The treeish current arc work is measured from: HEAD with baseline stack tip sealed paths, else accepted or checkpoint history. */
   async logicalBaseline(input: ArcIdentityInput & {
     checkpointCommit: string;
     checkpointParent: string | null;
@@ -813,8 +813,10 @@ export default class GitArcProposalController {
     const harness = normalizeHarness(input.harness);
     if (!input.ignoreStack) {
       const entry = input.entry !== undefined ? input.entry : await this.registry(repository).find({ harness, threadId: input.threadId });
-      const tip = await this.stack(repository).baselineTip(entry, { parent: input.checkpointParent });
-      if (tip) return tip.commit;
+      const stack = this.stack(repository);
+      const tip = await stack.baselineTip(entry, { parent: input.checkpointParent });
+      // Unsealed paths in a tip are stale HEAD content; measure them from HEAD instead.
+      if (tip) return await stack.sealedTree(await repository.headOrNull(), tip.commit);
     }
     const outcome = await this.store(repository).readOutcome(harness, input.threadId, input.checkpointCommit);
     return outcome?.acceptedProposals?.at(-1)?.headSha ?? input.checkpointParent;
@@ -1055,22 +1057,36 @@ export default class GitArcProposalController {
         title,
       });
     }
-    const { active, arc, checkpoint, claimedPaths, harness, metadata: checkpointMetadata, proposalIds, registry, repository } = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
+    let proposable = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
+    // New work builds on a pending stack, so the stack first follows HEAD past commits that left its sealed paths alone.
+    if (await this.stack(proposable.repository).rebaseOntoHead(proposable.active, await proposable.repository.headOrNull())) {
+      proposable = await this.requireProposableArc({ cwd, harness: rawHarness, threadId });
+    }
+    const { active, arc, checkpoint, claimedPaths, harness, metadata: checkpointMetadata, proposalIds, registry, repository } = proposable;
     const store = this.store(repository);
     const stack = this.stack(repository);
     const [baselineTip, sealedIds] = await Promise.all([stack.baselineTip(active, checkpoint), stack.sealedProposalIds(active)]);
     const stackTip = baselineTip?.pending ? baselineTip.commit : null;
     let replacementTarget: StoredProposal | null = null;
     let amendTargetProposal: StoredProposal | null = null;
+    // A rescinded proposal comes back as a new proposal over current work, keeping its message, paths and mode.
+    let revivalTarget: StoredProposal | null = null;
     if (amendProposalId) {
       const target = await store.readProposal(harness, threadId, amendProposalId);
       if (target.metadata.status === "proposed") {
         replacementTarget = target;
         amend = false;
+      } else if (target.metadata.status === "rescinded") {
+        revivalTarget = target;
+        amend = false;
+        if (target.metadata.mode === "amend") {
+          freshTitle ??= target.metadata.freshCommitMessage?.title;
+          freshDescription ??= target.metadata.freshCommitMessage?.description;
+        }
       } else {
         amendTargetProposal = target;
         if (target.metadata.status !== "committed" || !target.metadata.committedSha) {
-          throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted amend requires a pending or committed proposal.");
+          throw new GitArcRejectionError({ reason: "proposalRequiresCommittedTarget" }, "A targeted amend requires a pending, rescinded or committed proposal.");
         }
         if (!freshTitle?.trim()) throw new GitArcRejectionError({ reason: "missingFreshTitle" });
         amend = true;
@@ -1080,13 +1096,14 @@ export default class GitArcProposalController {
       throw new GitArcRejectionError({ reason: "unexpectedFreshMetadata" });
     }
     if (amend && !freshTitle?.trim()) throw new GitArcRejectionError({ reason: "missingFreshTitle" });
-    if (stackTip && amend) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
+    const revivalAmendSha = revivalTarget?.metadata.mode === "amend" ? revivalTarget.metadata.amendTargetSha : null;
+    if (stackTip && (amend || revivalAmendSha)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
     const requestedPaths = rawPaths?.length
       ? repository.normalizePaths(rawPaths)
-      : replacementTarget
-        ? repository.normalizePaths(replacementTarget.metadata.livePaths)
+      : replacementTarget ?? revivalTarget
+        ? repository.normalizePaths((replacementTarget ?? revivalTarget)!.metadata.livePaths)
       : repository.normalizePaths(claimedPaths);
-    if (rawPaths?.length) {
+    if (rawPaths?.length || revivalTarget) {
       const outsideClaim = requestedPaths.filter((candidate) => (
         !claimedPaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
       ));
@@ -1114,11 +1131,11 @@ export default class GitArcProposalController {
       liveBaseCommit = headMovement.currentHead;
     }
     if (amend && liveBaseCommit === null) throw new Error("An amend requires an existing HEAD commit.");
-    const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? (amend ? liveBaseCommit : null);
+    const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? revivalAmendSha ?? (amend ? liveBaseCommit : null);
     let amendTargetSha: string | null = null;
     if (requestedAmendTarget) {
       const publish = new GitArcPublishState(repository);
-      const publishState = amendTargetProposal
+      const publishState = amendTargetProposal || revivalAmendSha
         ? await publish.classifyCommit(requestedAmendTarget)
         : await publish.classifyCurrentHead();
       if (publishState.kind === "pushed" && freshTitle?.trim()) {
@@ -1174,7 +1191,9 @@ export default class GitArcProposalController {
     const paths = amendTargetSha
       ? await repository.listAllChangedPaths(baseCommit, proposalTree)
       : livePaths;
-    const inheritedMessage = amendTargetSha ? parseCommitMessage(await repository.readCommitMessage(amendTargetSha)) : null;
+    const inheritedMessage = revivalTarget
+      ? { description: revivalTarget.metadata.description, title: revivalTarget.metadata.title }
+      : amendTargetSha ? parseCommitMessage(await repository.readCommitMessage(amendTargetSha)) : null;
     const proposalTitle = title.trim() || inheritedMessage?.title || "";
     const proposalDescription = title.trim() ? description.trim() : inheritedMessage?.description ?? description.trim();
     const proposalId = randomUUID();
@@ -1207,8 +1226,15 @@ export default class GitArcProposalController {
     commitMessage(metadata.title, metadata.description);
     const { commit: proposalCommit } = await store.createProposalCommit(proposalTree, metadata);
     await buildProposalFileChanges(this.proposalDiffs, repository, metadata, proposalTree);
-    // New proposals append so every still-pending proposal remains visible to the thread.
-    const nextProposalIds = [...proposalIds, proposalId];
+    // New proposals append so every still-pending proposal remains visible to the thread; a revival retires its original.
+    const nextProposalIds = [...proposalIds.filter(id => id !== revivalTarget?.metadata.proposalId), proposalId];
+    const retiredRevivalTarget = revivalTarget ? {
+      newValue: (await store.createProposalCommit(revivalTarget.tree, {
+        ...revivalTarget.metadata, status: "superseded", supersededByProposalId: proposalId, supersededBySha: null,
+      }, { previous: revivalTarget })).commit,
+      oldValue: revivalTarget.proposalCommit,
+      ref: revivalTarget.proposalRef,
+    } : null;
     const registryMutation = await registry.prepareSet({
       ...active,
       ...(active.phase === "plan" ? {
@@ -1225,6 +1251,7 @@ export default class GitArcProposalController {
     await repository.updateRefs([
       { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
+      ...retiredRevivalTarget ? [retiredRevivalTarget] : [],
     ]);
     return {
       baseCommit,

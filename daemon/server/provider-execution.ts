@@ -14,6 +14,7 @@ import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thre
 import type { WorkbenchThreadId, WorkbenchTurnId, WorkbenchItemId } from "workbench-shared/workbench/identity";
 import type { WorkbenchEscalatingShellInput, WorkbenchShellResult } from "workbench-shared/workbench/commands/workbench-shell-command";
 import type { CodexExecRequest } from "./codex-exec-protocol";
+import type { WorkbenchFileClaimCheckResult } from "./lib/workbench/file-claim-check";
 
 const jsonValue: z.ZodType<JsonValue> = z.lazy(() => z.union([
   z.null(), z.boolean(), z.number(), z.string(), z.array(jsonValue), z.record(z.string(), jsonValue),
@@ -88,7 +89,7 @@ export interface WorkbenchPreparedShell {
 
 export type WorkbenchPatchClaimCheck = (request: {
   cwd: string; harness: string; paths: string[]; threadId: WorkbenchThreadId;
-}) => Promise<{ allowed: boolean; uncoveredPaths: string[] }>;
+}) => Promise<WorkbenchFileClaimCheckResult>;
 
 export interface WorkbenchProviderTools {
   transcript?: WorkbenchToolTranscript;
