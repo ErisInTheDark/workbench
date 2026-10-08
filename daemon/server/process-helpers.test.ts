@@ -154,6 +154,32 @@ test("Windows spawn descriptors preserve spaces, shell metacharacters, quotes, a
     command: process.execPath,
   });
   const result = spawnSync(descriptor.command, descriptor.args, {
+    ...createSpawnOptions(
+      process.cwd(),
+      process.env,
+      true,
+      "prequoted-command-line",
+    ),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout), expected);
+});
+
+test("Windows native spawns let Node quote arguments containing spaces", {
+  skip: process.platform !== "win32",
+}, () => {
+  const expected = [
+    "hooks.PreToolUse=[{matcher='^apply_patch$',hooks=[{type='command',command='wb __hook apply-patch-claim'}]}]",
+  ];
+  const result = spawnSync(process.execPath, [
+    "-e",
+    "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
+    ...expected,
+  ], {
     ...createSpawnOptions(process.cwd(), process.env, true),
     encoding: "utf8",
   });

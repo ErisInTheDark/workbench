@@ -83,13 +83,16 @@ export function createSpawnOptions(
   cwd: string,
   env: NodeJS.ProcessEnv,
   windowsHide: boolean,
+  argumentMode: "native" | "prequoted-command-line" = "native",
 ): SpawnOptionsWithoutStdio {
   return {
     cwd,
     detached: process.platform !== "win32",
     env,
     windowsHide,
-    ...(process.platform === "win32" ? { windowsVerbatimArguments: true } : {}),
+    ...(process.platform === "win32" && argumentMode === "prequoted-command-line"
+      ? { windowsVerbatimArguments: true }
+      : {}),
   };
 }
 
