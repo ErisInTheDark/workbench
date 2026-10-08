@@ -4,6 +4,7 @@
  */
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
@@ -24,18 +25,31 @@ function getWorkbenchProjectFullPath(project: WorkbenchProjectOption) {
 const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   active = false,
   project,
+  source,
   variant = "card",
 }: {
   active?: boolean;
   project: WorkbenchProjectOption | WorkbenchLogicalProject;
+  source?: ProjectLocationReference;
   variant?: "card" | "heading" | "thread";
 }) {
   if ("matchKey" in project) {
-    const location = project.locations.find(item => item.project)
+    const sourceLocation = source ? [
+      ...project.locations,
+      ...(project.observedLocations ?? []),
+    ].find(item => item.daemonId === source.daemonId
+      && ("target" in item ? item.target.projectId : item.projectId) === source.projectId) : null;
+    const location = sourceLocation ?? project.locations.find(item => item.project)
       ?? project.observedLocations?.[0] ?? project.locations[0];
     const name = project.displayName ?? project.label;
     const hasDistinctRemoteLabel = project.matchKey.startsWith("remote://") && project.label !== name;
-    const secondary = hasDistinctRemoteLabel ? project.label : project.displayPath ?? null;
+    const secondary = hasDistinctRemoteLabel
+      ? project.label
+      : sourceLocation
+        ? "displayPath" in sourceLocation && sourceLocation.displayPath
+          ? sourceLocation.displayPath
+          : `${sourceLocation.hostname}:${sourceLocation.rootPath}`
+        : project.displayPath ?? null;
     return (
       <span className="flex min-w-0 items-center gap-2" title={[
         ...project.locations, ...(project.observedLocations ?? []),

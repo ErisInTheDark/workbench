@@ -457,6 +457,7 @@ export default function WorkbenchThreadList ({
           onPointerDown={readOnly ? undefined : onPointerDown}
           project={showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined}
           projectId={sourceProjectId}
+          projectSource={qualified?.location}
           role="tab"
           selected={entryProjectId === selectedOwnerProjectId
             && isWorkbenchThreadTargetSelected(target, currentTarget)}
@@ -561,6 +562,7 @@ export default function WorkbenchThreadList ({
               : onOpenThread(activatedTarget, homeEntry.projectId)}
             project={showProjectEyebrow ? project : undefined}
             projectId={qualified?.location.projectId ?? ProjectIdSchema.parse(homeEntry.projectId)}
+            projectSource={qualified?.location}
             showPinPriorityIcon
             showTooltip={false}
             tabIndex={-1}

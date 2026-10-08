@@ -8,7 +8,10 @@ import { test } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type {
+  ExplorerSnapshot, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption,
+} from "workbench-shared/types";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { getWorkbenchHomeThreadKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import {
@@ -251,6 +254,84 @@ function renderHomeThreads({
     },
   ));
 }
+
+test("logical thread eyebrows use each thread's daemon-qualified location", () => {
+  const desktop = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000101");
+  const laptop = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000102");
+  const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000103");
+  const emptyProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000104");
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("workbench");
+  const locations: WorkbenchLogicalProject["locations"] = [
+    {
+      target: { daemonId: laptop, projectId }, daemonId: laptop, hostname: "laptop",
+      name: "workbench", rootPath: "/srv/wb", displayPath: "laptop:/wb", project: null,
+    },
+    {
+      target: { daemonId: desktop, projectId }, daemonId: desktop, hostname: "desktop",
+      name: "workbench", rootPath: "/home/wb", displayPath: "desktop:/wb", project: null,
+    },
+  ];
+  const project: WorkbenchLogicalProject = {
+    id: logicalProjectId, matchKey: "remote://example.test/workbench",
+    label: "workbench", displayName: "workbench", displayPath: "laptop:/wb", locations,
+  };
+  const emptyProject: WorkbenchLogicalProject = {
+    id: emptyProjectId, matchKey: "local://empty", label: "empty",
+    displayName: "empty", displayPath: null, locations: [],
+  };
+  const rows: WorkbenchLogicalThreadRow[] = locations.map((location, index) => ({
+    entry: createThreadEntry({
+      threadId: index ? "desktop-thread" : "laptop-thread",
+      title: index ? "Desktop thread" : "Laptop thread",
+    }),
+    hostname: location.hostname,
+    location: location.target,
+    logicalProjectId,
+    rootPath: location.rootPath,
+  }));
+  const presentation: PresentationSnapshot = {
+    revision: 1,
+    daemons: [{ id: desktop, hostname: "desktop" }, { id: laptop, hostname: "laptop" }],
+    projects: [
+      { id: logicalProjectId, matchKey: project.matchKey, label: project.label },
+      { id: emptyProjectId, matchKey: emptyProject.matchKey, label: emptyProject.label },
+    ],
+    locations: locations.map(location => ({
+      target: location.target, logicalProjectId, identityKey: project.matchKey,
+      name: location.name, rootPath: location.rootPath,
+    })),
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const html = renderToStaticMarkup(createElement(
+    WorkbenchSidebarPreferencesProvider,
+    {
+      children: () => createElement(WorkbenchClientProvider, {
+        client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+        children: createElement(
+          WorkbenchContextMenuContext.Provider,
+          { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
+          createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+            actions: createActions({ projects: [] }),
+            currentTarget: null,
+            logicalProjects: [project, emptyProject],
+            logicalThreads: rows,
+            onCreateThread: () => undefined,
+            onOpenQualifiedThread: () => undefined,
+            onOpenThread: () => undefined,
+            presentation,
+            projects: [project, emptyProject],
+            selectedOwnerProjectId: "",
+            selectedProjectIds: [logicalProjectId, emptyProjectId],
+          })),
+        ),
+      }),
+      projectId: "",
+    },
+  ));
+  const visibleText = html.replace(/<[^>]+>/gu, "");
+  assert.match(visibleText, /workbenchlaptop:\/wbLaptop thread/u);
+  assert.match(visibleText, /workbenchdesktop:\/wbDesktop thread/u);
+});
 
 function renderThreadItem(
   entry: ThreadEntry,

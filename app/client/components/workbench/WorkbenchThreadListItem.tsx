@@ -10,6 +10,7 @@ import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEve
 
 import type { WorkbenchHarness, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "./ContextMenuCapability";
 import ProjectFilePath from "./ProjectFilePath";
@@ -166,6 +167,7 @@ export default function WorkbenchThreadListItem({
   onKeyDown,
   onPointerDown,
   project,
+  projectSource,
   presentation = "row",
   projectId,
   role,
@@ -200,6 +202,7 @@ export default function WorkbenchThreadListItem({
   onKeyDown?: (event: ReactKeyboardEvent<HTMLAnchorElement>) => void;
   onPointerDown?: (event: PointerEvent<HTMLAnchorElement>) => void;
   project?: WorkbenchProjectOption | WorkbenchLogicalProject;
+  projectSource?: ProjectLocationReference;
   presentation?: "row" | "disclosure-summary";
   projectId: ProjectId;
   role?: "tab" | "option";
@@ -391,7 +394,7 @@ export default function WorkbenchThreadListItem({
           contextMenu={Boolean(contextMenu)}
           eyebrow={project ? (
             <span className="flex min-w-0 items-center gap-2">
-              {project ? <WorkbenchProjectLabel project={project} variant="thread" /> : null}
+              {project ? <WorkbenchProjectLabel project={project} source={projectSource} variant="thread" /> : null}
             </span>
           ) : undefined}
           metadata={(
