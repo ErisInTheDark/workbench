@@ -4,19 +4,18 @@
  */
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
 import { ZapIcon } from "../workbench-icons";
 import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
 import { formatProfileContext, profileContextColour, profileEffortColour } from "./ThreadProfileEditor";
 
 export default function ThreadComposerRibbon({
-  agentLabel,
+  agentControl,
   currentReasoningEffort,
   isFastModeEnabled,
   modelControl,
   modelId,
-  onAgentOpen,
   onFastModeToggle,
   onReasoningEffortChange,
   supportedReasoningEfforts,
@@ -29,12 +28,11 @@ export default function ThreadComposerRibbon({
   showsProfileControl = true,
   showsReasoningEffortControl,
 }: {
-  agentLabel: string;
+  agentControl: ReactNode;
   currentReasoningEffort: string | null;
   isFastModeEnabled: boolean;
   modelControl: ReactNode;
   modelId: string | null;
-  onAgentOpen: (trigger: HTMLElement, ribbon: HTMLElement) => void;
   onFastModeToggle: () => void;
   onReasoningEffortChange: (effort: string) => void;
   supportedReasoningEfforts: string[];
@@ -47,9 +45,8 @@ export default function ThreadComposerRibbon({
   showsProfileControl?: boolean;
   showsReasoningEffortControl: boolean;
 }) {
-  const ribbon = useRef<HTMLDivElement>(null);
   return (
-    <div ref={ribbon} className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
+    <div className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
       {targetControl ? <>{targetControl}<span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /></> : null}
       {showsProfileControl && profileControl ? <>{profileControl}
       {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
@@ -81,14 +78,7 @@ export default function ThreadComposerRibbon({
         </>
       ) : null}
       <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-      <button
-        type="button"
-        className="enabled:cursor-pointer relative isolate min-w-0 truncate bg-transparent px-2.5 py-2 transition before:pointer-events-none before:absolute before:inset-1 before:-z-10 before:rounded-lg before:transition-colors before:content-[''] enabled:hover:before:bg-button-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-        title={agentLabel}
-        onClick={(event) => { if (ribbon.current) onAgentOpen(event.currentTarget, ribbon.current); }}
-      >
-        {agentLabel}
-      </button>
+      {agentControl}
       </> : null}
     </div>
   );

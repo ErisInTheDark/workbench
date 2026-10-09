@@ -48,6 +48,7 @@ import { CompactIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, Snooz
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
+import ThreadAgentQuickPicker from "./ThreadAgentQuickPicker";
 import ThreadComposerRibbon from "./ThreadComposerRibbon";
 import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
@@ -768,7 +769,20 @@ export default function ThreadComposer ({
                       targetControl={targetControl}
                       key={`${projectId}:${thread.id}`}
                       modelId={thread.model}
-                      agentLabel={agentButtonLabel}
+                      agentControl={<ThreadAgentQuickPicker
+                        agents={availableAgents}
+                        label={agentButtonLabel}
+                        selectedAgentPath={currentComposerSettings.agentPath}
+                        onOpen={() => {
+                          profileEditor.close();
+                          void loadAvailableAgents();
+                        }}
+                        onEdit={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
+                        onSelect={(agentPath, agentSource) => applyDirectSettingsChange(
+                          { ...currentComposerSettings, agentPath, agentSource },
+                          () => onThreadAgentChange(thread.id, agentPath),
+                        )}
+                      />}
                       currentReasoningEffort={currentReasoningEffort ?? "default"}
                       isFastModeEnabled={isFastModeEnabled}
                       modelControl={<WorkbenchModelQuickPicker
@@ -801,7 +815,6 @@ export default function ThreadComposer ({
                       selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
                       showsFastModeControl={showsFastModeControl}
                       showsReasoningEffortControl={showsReasoningEffortControl}
-                      onAgentOpen={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
                       onFastModeToggle={() => {
                         const serviceTier = isFastModeEnabled ? null : "fast";
                         applyDirectSettingsChange(
