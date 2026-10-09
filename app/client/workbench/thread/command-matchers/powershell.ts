@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for literal setup, probes, reads, listings, filters, searches, deletes, and web requests. Keywords: thread, command, matcher, powershell, assignment, delete, web, request.
+ * - POWERSHELL_COMMAND_MATCHERS: PowerShell stage matchers for literal setup, probes, reads, listings, filters, searches, deletes, and web requests.
  */
 
 import {
@@ -2507,7 +2507,7 @@ function getPowerShellPositionalPathArgument(parsedStage: ParsedPowerShellStage)
   }
 
   if (matchesRipgrepCommand(parsedStage)) {
-    return RipgrepCommand(parsedStage.tokens.slice(1)).path;
+    return RipgrepCommand(parsedStage.tokens.slice(1))?.path ?? null;
   }
 
   return positionalArguments[0] ?? null;

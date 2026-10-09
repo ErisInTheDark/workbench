@@ -673,6 +673,39 @@ test("typed ripgrep summaries exactly match the shell ripgrep presentation", () 
   }
 });
 
+test("typed ripgrep summaries never mistake supported flag values for search operands", () => {
+  const cases = [
+    { args: ["--max-results", "100", "needle", "src"], pattern: "needle", path: "src" },
+    { args: ["-nd", "3", "needle", "docs"], pattern: "needle", path: "docs" },
+    { args: ["--color", "always", "needle", "shared"], pattern: "needle", path: "shared" },
+  ];
+
+  for (const { args, pattern, path } of cases) {
+    const display = getWorkbenchMcpCommandDisplay({
+      argumentsValue: { args },
+      context: { cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT },
+      server: "wb",
+      tool: "rg",
+    });
+    assert.ok(display);
+    assert.deepEqual(display.summaryParts.filter(part => part.type === "pattern").map(part => part.pattern), [pattern]);
+    assert.deepEqual(pathOperands(display.summaryParts), [path]);
+  }
+});
+
+test("typed ripgrep file summaries never mistake supported flag values for paths", () => {
+  const display = getWorkbenchMcpCommandDisplay({
+    argumentsValue: { args: ["--files", "--max-results", "100", "src"] },
+    context: { cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT },
+    server: "wb",
+    tool: "rg",
+  });
+
+  assert.ok(display);
+  assert.deepEqual(pathOperands(display.summaryParts), ["src"]);
+  assert.equal(display.summaryParts.some(part => part.type === "pattern"), false);
+});
+
 test("typed ripgrep file listings expose their precise target path", () => {
   const target = "C:/git/web/workbench/.workbench/worktrees/convex-lab/webapp/convex";
   const display = getWorkbenchMcpCommandDisplay({

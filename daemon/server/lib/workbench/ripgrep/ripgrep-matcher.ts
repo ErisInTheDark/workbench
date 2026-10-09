@@ -4,7 +4,7 @@
  * - RipgrepLineMatch/RipgrepFileScan: matched (or inverted) lines found in one file.
  * - RipgrepMatcher/compileRipgrepMatcher: compile rg-style patterns into JavaScript regex and scan file text.
  */
-import type { RipgrepQuery } from "./ripgrep-arguments";
+import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
 
 export class RipgrepPatternError extends Error {
   override readonly name = "RipgrepPatternError";

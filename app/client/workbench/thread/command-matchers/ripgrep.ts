@@ -1,7 +1,9 @@
 /*
  * Default export:
- * - RipgrepCommand: parse native ripgrep arguments and build the shared shell/MCP presentation. Keywords: ripgrep, search, files, arguments, rendering.
+ * - RipgrepCommand: build shared shell/MCP presentation from canonical ripgrep arguments.
  */
+import { parseRipgrepArguments } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
+
 import { CommandMatcher } from "./core";
 import {
   buildCommandPathPart,
@@ -14,22 +16,6 @@ import type {
   ThreadCommandDisplayPart,
 } from "./types";
 
-const VALUE_FLAGS = new Set([
-  "-A", "--after-context",
-  "-B", "--before-context",
-  "-C", "--context",
-  "-e", "--regexp",
-  "-f", "--file",
-  "-g", "--glob", "--iglob",
-  "-j", "--threads",
-  "-M", "--max-columns",
-  "-m", "--max-count",
-  "--max-depth", "--max-filesize", "--path-separator",
-  "--pre", "--pre-glob", "--replace", "--sort", "--sortr",
-  "-t", "--type",
-  "-T", "--type-not",
-]);
-
 interface RipgrepCommand {
   readonly operation: "listFiles" | "search";
   readonly path: string | null;
@@ -37,64 +23,15 @@ interface RipgrepCommand {
   readonly syntax: "literal" | "regex";
 }
 
-function matchValueFlag(argument: string) {
-  for (const flag of VALUE_FLAGS) {
-    if (argument === flag) return { flag, value: null };
-    if (flag.startsWith("--") && argument.startsWith(`${flag}=`)) {
-      return { flag, value: argument.slice(flag.length + 1) };
-    }
-    if (flag.length === 2 && argument.startsWith(flag) && argument.length > flag.length) {
-      return { flag, value: argument.slice(flag.length) };
-    }
-  }
-  return null;
-}
-
-function RipgrepCommand(args: readonly string[]): RipgrepCommand {
-  const positional: string[] = [];
-  let explicitQuery: string | null = null;
-  let fixedStrings = false;
-  let searchesFiles = false;
-  let afterTerminator = false;
-  for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index];
-    if (afterTerminator) {
-      positional.push(argument);
-      continue;
-    }
-    if (argument === "--") {
-      afterTerminator = true;
-      continue;
-    }
-    if (argument === "-F" || argument === "--fixed-strings") {
-      fixedStrings = true;
-      continue;
-    }
-    if (argument === "--files") {
-      searchesFiles = true;
-      continue;
-    }
-    const valueFlag = matchValueFlag(argument);
-    if (valueFlag) {
-      const value = valueFlag.value ?? args[index + 1] ?? null;
-      if (valueFlag.value === null && index + 1 < args.length) index += 1;
-      if ((valueFlag.flag === "-e" || valueFlag.flag === "--regexp") && explicitQuery === null) {
-        explicitQuery = value;
-      }
-      continue;
-    }
-    if (argument.startsWith("-")) continue;
-    positional.push(argument);
-  }
+function RipgrepCommand(args: readonly string[]): RipgrepCommand | null {
+  const parsed = parseRipgrepArguments(args);
+  if (parsed.kind === "rejected") return null;
+  const { query } = parsed;
   return {
-    operation: searchesFiles ? "listFiles" : "search",
-    path: searchesFiles
-      ? positional[0] ?? null
-      : explicitQuery
-        ? positional[0] ?? null
-        : positional[1] ?? null,
-    query: searchesFiles ? null : explicitQuery ?? positional[0] ?? null,
-    syntax: fixedStrings ? "literal" : "regex",
+    operation: query.mode === "files" ? "listFiles" : "search",
+    path: query.paths[0] ?? null,
+    query: query.patterns[0] ?? null,
+    syntax: query.fixedStrings ? "literal" : "regex",
   };
 }
 
@@ -111,6 +48,7 @@ namespace RipgrepCommand {
     context: PresentationContext = {},
   ): CommandMatcherResult | null {
     const command = RipgrepCommand(args);
+    if (!command) return null;
     const pathPart = command.path
       ? context.cwd
         ? buildCommandPathPart(command.path, {

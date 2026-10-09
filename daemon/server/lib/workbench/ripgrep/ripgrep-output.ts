@@ -4,7 +4,7 @@
  * - formatRipgrepFile: render one scanned file in rg-compatible heading or flat output.
  * - formatRipgrepSize: render a byte size the way --max-filesize accepts it.
  */
-import type { RipgrepQuery } from "./ripgrep-arguments";
+import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
 import type { RipgrepFileScan, RipgrepLineMatch } from "./ripgrep-matcher";
 
 export interface RipgrepOutputEntry {

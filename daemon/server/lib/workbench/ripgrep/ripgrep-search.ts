@@ -5,7 +5,7 @@
  */
 import fs from "node:fs/promises";
 
-import type { RipgrepQuery } from "./ripgrep-arguments";
+import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
 import type { RipgrepCandidate } from "./ripgrep-candidates";
 import { compileRipgrepMatcher, RipgrepPatternError } from "./ripgrep-matcher";
 import { formatRipgrepFile, formatRipgrepSize, type RipgrepOutputEntry } from "./ripgrep-output";

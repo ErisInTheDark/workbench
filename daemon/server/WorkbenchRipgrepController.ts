@@ -4,10 +4,11 @@
  */
 import { Worker } from "node:worker_threads";
 
+import { parseRipgrepArguments, RIPGREP_HELP_TEXT } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
+import { formatRipgrepTypeList } from "workbench-shared/workbench/ripgrep/ripgrep-file-types";
+
 import { WorkbenchRipgrepExecutionRequestSchema } from "./lib/workbench/commands/ripgrep-command-definition";
-import { parseRipgrepArguments, RIPGREP_HELP_TEXT } from "./lib/workbench/ripgrep/ripgrep-arguments";
 import { collectRipgrepCandidates, type RipgrepHydrate } from "./lib/workbench/ripgrep/ripgrep-candidates";
-import { formatRipgrepTypeList } from "./lib/workbench/ripgrep/ripgrep-file-types";
 import type { RipgrepSearchInput, RipgrepSearchResult } from "./lib/workbench/ripgrep/ripgrep-search";
 import { logError } from "./process-helpers";
 

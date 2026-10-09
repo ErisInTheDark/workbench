@@ -9,8 +9,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { RipgrepQuery } from "./ripgrep-arguments";
-import { createRipgrepPathFilter } from "./ripgrep-globs";
+import type { RipgrepQuery } from "workbench-shared/workbench/ripgrep/ripgrep-arguments";
+import { createRipgrepPathFilter } from "workbench-shared/workbench/ripgrep/ripgrep-globs";
 
 export interface RipgrepCandidate {
   displayPath: string;
