@@ -2,10 +2,14 @@
 
 /*
  * Exports:
+ * - WorkbenchFeedbackReportDisplay: shared titled feedback report display used by stats and command disclosures.
  * - default WorkbenchStatsFeedbackReport: one selectable agent feedback report with its importance flame, and its author's profile, time, and thread in one footer row.
  */
-import { useLayoutEffect, useRef, useState } from "react";
-import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type {
+  WorkbenchFeedbackCategory,
+  WorkbenchFeedbackItem,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import ThreadMarkdown from "../../thread-view/ThreadMarkdown";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import WorkbenchThreadButton from "../../WorkbenchThreadButton";
@@ -15,10 +19,14 @@ import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
 import { statsThreadIdentity } from "../stats-thread-identity";
 
 /** Clamped text only offers expansion when it actually overflows at the current width. */
-function useClampOverflow(expanded: boolean) {
+function useClampOverflow(enabled: boolean, expanded: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   const [overflowing, setOverflowing] = useState(false);
   useLayoutEffect(() => {
+    if (!enabled) {
+      setOverflowing(false);
+      return;
+    }
     const element = ref.current;
     if (!element || expanded) return;
     const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1);
@@ -26,21 +34,64 @@ function useClampOverflow(expanded: boolean) {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [expanded]);
+  }, [enabled, expanded]);
   return { overflowing, ref };
 }
 
-export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle, origin, selected }: {
+export function WorkbenchFeedbackReportDisplay({
+  category,
+  clamp = true,
+  meta,
+  projectId,
+  report,
+  title,
+}: {
+  category: WorkbenchFeedbackCategory;
+  clamp?: boolean;
+  meta?: ReactNode;
+  projectId?: string | null;
+  report: string;
+  title: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { overflowing, ref } = useClampOverflow(clamp, expanded);
+  return (
+    <>
+      <div className="flex min-w-0 items-center gap-2 text-[0.74rem] text-fg/muted">
+        <WorkbenchStatsFeedbackTag category={category} size="compact" />
+        <span className="min-w-0 truncate font-semibold text-text">{title}</span>
+        {meta}
+      </div>
+      <div
+        className={`
+          mt-1 min-w-0 text-[0.84rem] text-text [overflow-wrap:anywhere]
+          ${clamp && !expanded ? "max-h-[6.9em] overflow-hidden" : ""}
+          ${clamp && !expanded && overflowing ? "[mask-image:linear-gradient(to_bottom,black_65%,transparent)]" : ""}
+        `}
+        ref={ref}
+      >
+        <ThreadMarkdown markdown={report} projectId={projectId} />
+      </div>
+      {clamp && (overflowing || expanded) ? (
+        <button
+          className="-ml-1 rounded-md px-1 text-[0.74rem] text-fg/muted hover:bg-fg/7 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+          onClick={() => setExpanded((value) => !value)}
+          type="button"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle, selected }: {
   item: WorkbenchFeedbackItem;
   /** Catalogue display name, or the stored id when the catalogue does not know it. */
   modelName: string | null;
   onToggle: () => void;
-  /** Where the report came from: "Workbench" or the filing project's name. */
-  origin: string;
   selected: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const { overflowing, ref } = useClampOverflow(expanded);
   const thread = statsThreadIdentity(item);
   const importance = Math.round(item.importance * 100);
   // Links and buttons inside the card act on their own; anywhere else toggles the card's selection.
@@ -65,12 +116,11 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle
       role="option"
       tabIndex={0}
     >
-      <div className="flex min-w-0 items-center gap-2 text-[0.74rem] text-fg/muted">
-        <WorkbenchStatsFeedbackTag category={item.category} size="compact" />
-        <span className="min-w-0 truncate">{origin}</span>
-        <span
+      <WorkbenchFeedbackReportDisplay
+        category={item.category}
+        meta={<span
           className={`
-            inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums
+            ml-auto inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums
             ${feedbackImportanceTone(item.importance, item.scored)}
           `}
           title={item.scored
@@ -80,27 +130,11 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle
           {item.scored ? null : <span className="font-normal">unscored model</span>}
           <FlameIcon className={item.scored ? "" : "opacity-60"} size={14} />
           {importance}
-        </span>
-      </div>
-      <div
-        className={`
-          mt-1 min-w-0 text-[0.84rem] text-text [overflow-wrap:anywhere]
-          ${expanded ? "" : "max-h-[6.9em] overflow-hidden"}
-          ${!expanded && overflowing ? "[mask-image:linear-gradient(to_bottom,black_65%,transparent)]" : ""}
-        `}
-        ref={ref}
-      >
-        <ThreadMarkdown markdown={item.report} projectId={item.projectId} />
-      </div>
-      {overflowing || expanded ? (
-        <button
-          className="-ml-1 rounded-md px-1 text-[0.74rem] text-fg/muted hover:bg-fg/7 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-          onClick={() => setExpanded((value) => !value)}
-          type="button"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      ) : null}
+        </span>}
+        projectId={item.projectId}
+        report={item.report}
+        title={item.title}
+      />
       <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[0.72rem] text-fg/muted">
         {item.harness ? <HarnessIcon className="shrink-0" harness={item.harness} size={14} /> : null}
         <span className="min-w-0 shrink truncate">
@@ -112,7 +146,7 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle
         <span className="ml-auto min-w-0 max-w-[60%] text-[0.8rem]">
           {thread ? (
             <WorkbenchThreadButton
-              fallback={<span className="truncate text-fg/muted">{item.title || thread.threadId}</span>}
+              fallback={<span className="truncate text-fg/muted">{thread.threadId}</span>}
               threadId={thread.threadId}
             />
           ) : <span className="text-fg/muted">Thread removed</span>}

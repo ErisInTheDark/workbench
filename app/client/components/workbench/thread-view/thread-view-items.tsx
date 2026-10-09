@@ -79,6 +79,7 @@ import {
   parseGitCheckpointDiffOutput,
   parseGitArcCommand,
   parseGitArcReceipt,
+  parseWorkbenchFeedbackCommand,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -116,6 +117,7 @@ import ThreadGenericItem from "./ThreadGenericItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
+import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadPlanSummary from "./ThreadPlanSummary";
@@ -1711,6 +1713,17 @@ function ThreadCommandExecutionDetails ({
   ), [browseResultEntries, commandDisplay.detailRows, isBrowseCommand, item.aggregatedOutput, item.id, item.status]);
   const shouldHideCommandOutput = commandDisplay.hideCommandOutput
     && (commandDetailRows.length > 0 || !item.aggregatedOutput?.trim());
+  const feedbackCommand = parseWorkbenchFeedbackCommand(commandDisplay.unwrappedCommand);
+  if (feedbackCommand && (commandOutcome === "completed" || commandOutcome === "inProgress")) {
+    return (
+      <ThreadFeedbackCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={feedbackCommand}
+        outcome={commandOutcome}
+        projectId={projectId}
+      />
+    );
+  }
   if (gitArcAction === "propose") {
     return (
       <ThreadGitArcProposalItem
@@ -2672,7 +2685,7 @@ function ThreadRenderableBlockViewComponent ({
       });
       const isMcpFailure = block.item.status === "failed" || Boolean(block.item.error);
       if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
-        threadCwdPath || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
+        threadCwdPath || route.operation.kind === "feedback" || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
       )) {
         return (
           <ThreadWorkbenchCommandItem

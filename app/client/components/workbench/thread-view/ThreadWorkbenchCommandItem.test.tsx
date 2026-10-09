@@ -18,6 +18,7 @@ import type { WorkbenchClientController } from "../workbench-client-context";
 import WorkbenchProjectNavigation from "../../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
+import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadDisclosure from "./ThreadDisclosure";
@@ -28,6 +29,9 @@ type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 // Detail assertions explicitly open only the outer disclosure; nested inventories remain closed.
 function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandItem>) {
   const rendered = ThreadWorkbenchCommandItem(props);
+  if (isValidElement<ComponentProps<typeof ThreadFeedbackCommandItem>>(rendered) && rendered.type === ThreadFeedbackCommandItem) {
+    return cloneElement(ThreadFeedbackCommandItem(rendered.props), { open: true });
+  }
   if (!isValidElement<ComponentProps<typeof ThreadGitArcItem>>(rendered) || rendered.type !== ThreadGitArcItem) return rendered;
   const card = ThreadGitArcItem(rendered.props);
   return cloneElement(card, {}, Children.map(card.props.children, child => (
@@ -36,6 +40,20 @@ function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandIt
       : child
   )));
 }
+
+test("feedback uses its titled category summary and shared report display", () => {
+  const html = renderSpecialized(makeItem("feedback", {
+    category: "bug",
+    channel: "wb",
+    report: "Queue declarations vanished after reload.",
+    title: "Queues vanish after reload",
+  }, "Recorded wb/bug feedback #53. Thanks."));
+  assert.match(html, /Reported/u);
+  assert.match(html, /Bug/u);
+  assert.match(html, /Queues vanish after reload/u);
+  assert.match(html, /Queue declarations vanished after reload\./u);
+  assert.doesNotMatch(html, /Recorded wb\/bug feedback|&quot;channel&quot;/u);
+});
 
 test("status uses the dedicated card without inventing paths for count-only groups", () => {
   const html = renderSpecialized(makeItem("git_arc_status", {}, "Dirty claims: changed-evidence.ts\nClean claims: 8"));

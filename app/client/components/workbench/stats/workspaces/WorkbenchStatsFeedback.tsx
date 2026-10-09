@@ -200,7 +200,6 @@ export default function WorkbenchStatsFeedback() {
                 key={keyOf(item)}
                 modelName={modelName(item.harness, item.model)}
                 onToggle={() => toggleSelected(keyOf(item))}
-                origin={origin(item.channel, item.projectId, item.daemonId)}
                 selected={selectedKeys.has(keyOf(item))}
               />
             ))}

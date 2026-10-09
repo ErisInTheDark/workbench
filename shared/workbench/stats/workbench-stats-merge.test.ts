@@ -81,7 +81,8 @@ test("tools price every tool from the attached catalogue and keep each period's 
 test("feedback merges reports by importance and names the daemon each id belongs to", () => {
   const item = (id: number, importance: number) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id, importance,
-    model: null, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null, title: null,
+    model: null, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null,
+    title: "Stats action fails",
   });
   const feedback = (items: ReturnType<typeof item>[]) => ({ ...EMPTY.feedback, feedback: { counts: [{ category: "bug" as const, count: items.length }], items, total: items.length, workbenchProjectId: null } });
   const merged = merge<"feedback">([source("here", feedback([item(1, 0.2)]), true), source("there", feedback([item(1, 0.9)]))]).feedback;

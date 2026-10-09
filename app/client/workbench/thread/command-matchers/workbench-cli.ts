@@ -5,15 +5,20 @@
  * - WorkbenchSubagentQueueCheckCommand/parseWorkbenchSubagentQueueCheckCommand: parse an exact read-only queue check.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
+ * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type {
+  WorkbenchFeedbackCategory,
+  WorkbenchFeedbackChannel,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
-import { getWorkbenchCommandRendering } from "./workbench-command-rendering";
+import { getWorkbenchCommandRendering, type WorkbenchFeedbackOperation } from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "profiles" | "settle" | "stop" | "wait";
 
@@ -39,6 +44,32 @@ export interface WorkbenchSubagentQueueCheckCommand {
 export interface WorkbenchMessageCommand {
   message: string;
   target: { kind: "name" | "parent" | "thread"; value: string | null };
+}
+
+export function parseWorkbenchFeedbackCommand(command: string): WorkbenchFeedbackOperation | null {
+  const tokens = tokenizeCommand(command.trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "feedback" || tokens.includes("--help")) return null;
+  const separator = tokens.indexOf("--", 2);
+  const optionTokens = separator >= 0 ? tokens.slice(0, separator) : tokens;
+  const flag = (name: string) => {
+    const index = optionTokens.indexOf(name);
+    return index >= 0 ? optionTokens[index + 1] ?? null : null;
+  };
+  const category = flag("--category");
+  const channel = flag("--channel");
+  const title = flag("--title")?.trim();
+  const report = separator >= 0 ? tokens.slice(separator + 1).join(" ").trim() : "";
+  if (
+    !category || !["bug", "waste", "confusion", "opportunity"].includes(category)
+    || !channel || !["wb", "project"].includes(channel)
+    || !title || !report
+  ) return null;
+  return {
+    category: category as WorkbenchFeedbackCategory,
+    channel: channel as WorkbenchFeedbackChannel,
+    report,
+    title,
+  };
 }
 
 export type WorkbenchTaskTitleCommand =
@@ -350,13 +381,13 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     id: "workbench-cli.feedback",
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;
-      const tokens = tokenizeCommand(stage.text.trim());
-      if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "feedback" || tokens.includes("--help")) return null;
-      const flag = (name: string) => {
-        const index = tokens.indexOf(name);
-        return index >= 0 ? tokens[index + 1] ?? null : null;
-      };
-      return getWorkbenchCommandRendering("feedback", { category: flag("--category"), channel: flag("--channel") })?.result ?? null;
+      const operation = parseWorkbenchFeedbackCommand(stage.text);
+      return operation ? getWorkbenchCommandRendering("feedback", {
+        category: operation.category,
+        channel: operation.channel,
+        report: operation.report,
+        title: operation.title,
+      })?.result ?? null : null;
     },
   }),
   CommandMatcher({

@@ -3,6 +3,7 @@
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
  * - GitCheckpointCommitCommandIntent: proposal-card message and explicit or target-resolved commit mode.
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
+ * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -13,6 +14,10 @@
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import type {
+  WorkbenchFeedbackCategory,
+  WorkbenchFeedbackChannel,
+} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
 
 import type { GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
@@ -140,7 +145,15 @@ export interface WorkbenchMessageOperation {
   userVisibleSimpleVersion: string | null;
 }
 
+export interface WorkbenchFeedbackOperation {
+  category: WorkbenchFeedbackCategory;
+  channel: WorkbenchFeedbackChannel;
+  report: string;
+  title: string;
+}
+
 export type WorkbenchSpecializedOperation =
+  | { kind: "feedback"; operation: WorkbenchFeedbackOperation }
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
   | { kind: "gitArcWait"; ref: string | null }
   | { kind: "message"; operation: WorkbenchMessageOperation }
@@ -302,6 +315,24 @@ function primary(text: string): ThreadCommandDisplayPart {
 
 function actionTarget(action: string, target: string): ThreadCommandDisplayPart[] {
   return [CommandMatcher.Text(action), primary(target)];
+}
+
+function readFeedbackOperation(args: Record<string, JsonValue | undefined>): WorkbenchFeedbackOperation | null {
+  const category = readString(args.category);
+  const channel = readString(args.channel);
+  const report = readString(args.report)?.trim();
+  const title = readString(args.title)?.trim();
+  if (
+    !category || !["bug", "waste", "confusion", "opportunity"].includes(category)
+    || !channel || !["wb", "project"].includes(channel)
+    || !report || !title
+  ) return null;
+  return {
+    category: category as WorkbenchFeedbackCategory,
+    channel: channel as WorkbenchFeedbackChannel,
+    report,
+    title,
+  };
 }
 
 function formatBrowseActionLabel(action: string) {
@@ -685,8 +716,21 @@ export function getWorkbenchCommandRoute(
     case "tokens_project":
       return simple("workbench-cli.tokens", actionTarget("Counting ", "project instruction tokens"), actionTarget("Counted ", "project instruction tokens"));
     case "feedback": {
-      const kind = [readString(args.channel), readString(args.category)].filter(Boolean).join(" ") || "agent";
-      return simple("workbench-cli.feedback", actionTarget("Reporting ", `${kind} feedback`), actionTarget("Reported ", `${kind} feedback`));
+      const operation = readFeedbackOperation(args);
+      if (!operation) {
+        const kind = [readString(args.channel), readString(args.category)].filter(Boolean).join(" ") || "agent";
+        return simple("workbench-cli.feedback", actionTarget("Reporting ", `${kind} feedback`), actionTarget("Reported ", `${kind} feedback`));
+      }
+      const summaryRendering = simple(
+        "workbench-cli.feedback",
+        actionTarget("Reporting ", operation.title),
+        actionTarget("Reported ", operation.title),
+      ).rendering;
+      return {
+        kind: "specialized",
+        operation: { kind: "feedback", operation },
+        rendering: summaryRendering,
+      };
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));

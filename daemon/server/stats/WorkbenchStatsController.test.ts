@@ -261,7 +261,7 @@ test("recorded feedback refreshes open observations and failed writes reach the 
   });
   const entry: WorkbenchFeedbackRecord = {
     category: "bug", channel: "wb", harness: "codex", model: null, projectId: testProjectIds.project,
-    reasoningEffort: null, report: "broken", threadId: WorkbenchThreadIdSchema.parse("thread"),
+    reasoningEffort: null, report: "broken", threadId: WorkbenchThreadIdSchema.parse("thread"), title: "Stats action fails",
   };
   try {
     const published: number[] = [];

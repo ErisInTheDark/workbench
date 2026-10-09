@@ -8,7 +8,8 @@ import { feedbackAddressProjectId, formatFeedbackForAgent } from "./stats-feedba
 
 const item = (overrides: Partial<WorkbenchFeedbackItem>): WorkbenchFeedbackItem => ({
   category: "bug", channel: "project", createdAt: 1, daemonId: null, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
-  projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread", title: "fix it", ...overrides,
+  projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread",
+  title: "Stats action fails", ...overrides,
 });
 
 test("wb reports are addressed in the Workbench project, project reports in their own", () => {
@@ -22,7 +23,7 @@ test("the prompt lists every report and ends ready for the user's own message", 
   const prompt = formatFeedbackForAgent([item({}), item({ category: "waste", id: 2, threadId: null })], {
     modelName: () => "Opus 5.5", origin: () => "game",
   });
-  assert.match(prompt, /^## Bug · game\nit broke\n- Author: Opus 5.5 medium · importance 89\n- Thread: fix it \(thread\)/u);
+  assert.match(prompt, /^## Bug · game\nit broke\n- Author: Opus 5.5 medium · importance 89\n- Thread: thread/u);
   assert.match(prompt, /## Waste · game[\s\S]*- Thread: removed/u);
   assert.ok(prompt.endsWith("\n\n=====\n\n"));
 });

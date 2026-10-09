@@ -55,6 +55,7 @@ export default class WorkbenchFeedbackCommandController {
       reasoningEffort: optionalSetting(caller.reasoningEffort, 50),
       report: parsed.data.report,
       threadId: caller.threadId,
+      title: parsed.data.title,
     });
     return new Response(`Recorded ${parsed.data.channel}/${parsed.data.category} feedback #${id}. Thanks.\n`, { headers: TEXT_HEADERS });
   }
@@ -73,10 +74,10 @@ export default class WorkbenchFeedbackCommandController {
     const lines = [`Page ${result.page} of ${result.pages}`, ""];
     for (const row of result.rows) {
       const author = [row.model ?? "unknown model", row.reasoningEffort, row.scored ? null : "unscored"].filter(Boolean).join(" ");
-      const thread = row.threadId ? `${row.title ? oneLine(row.title, 120) : "[title unavailable]"} (${row.threadId})` : "[thread removed]";
+      const thread = row.threadId ?? "[thread removed]";
       const project = allProjects ? `  ${oneLine(this.options.projectName(row.projectId) ?? row.projectId, 120)}` : "";
       lines.push(
-        `${String(Math.round(row.importance * 100)).padStart(3)}  ${formatTime(row.createdAt)}  ${row.channel}/${row.category}  ${author}${project}  ${thread}`,
+        `${String(Math.round(row.importance * 100)).padStart(3)}  ${formatTime(row.createdAt)}  ${row.channel}/${row.category}  ${author}${project}  ${oneLine(row.title, 120)}  ${thread}`,
         `     ${oneLine(row.report)}`,
       );
     }

@@ -54,9 +54,9 @@ export default class WorkbenchFeedbackRepository {
       this.database.prepare("INSERT INTO workbench_harnesses(id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(entry.harness);
       const result = this.database.prepare(`
         INSERT INTO workbench_agent_feedback (
-          project_id, thread_id, harness_id, model, reasoning_effort, channel, category, report, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(projectId, entry.threadId, entry.harness, entry.model, entry.reasoningEffort, entry.channel, entry.category, entry.report, now);
+          project_id, thread_id, harness_id, model, reasoning_effort, channel, category, report, created_at, title
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(projectId, entry.threadId, entry.harness, entry.model, entry.reasoningEffort, entry.channel, entry.category, entry.report, now, entry.title);
       return { id: Number(result.lastInsertRowid) };
     })();
   }
@@ -140,15 +140,12 @@ export default class WorkbenchFeedbackRepository {
   #details(rows: readonly ScoredRow[]) {
     const scored = new Map(rows.map((row) => [row.id, row]));
     const found = this.database.prepare(`
-      SELECT f.id, f.project_id, f.thread_id, f.harness_id, f.model, f.reasoning_effort, f.report,
-        COALESCE(NULLIF(s.title, ''), NULLIF(w.title, '')) title
+      SELECT f.id, f.project_id, f.thread_id, f.harness_id, f.model, f.reasoning_effort, f.report, f.title
       FROM workbench_agent_feedback f
-      LEFT JOIN workbench_threads w ON w.id = f.thread_id
-      LEFT JOIN workbench_thread_states s ON s.thread_id = w.id
       WHERE f.id IN (SELECT value FROM json_each(?))
     `).all(JSON.stringify([...scored.keys()])) as Array<{
       harness_id: WorkbenchHarness; id: number; model: string | null; project_id: string; reasoning_effort: string | null;
-      report: string; thread_id: string | null; title: string | null;
+      report: string; thread_id: string | null; title: string;
     }>;
     return new Map(found.map((row): [number, WorkbenchFeedbackItem] => {
       const score = scored.get(row.id)!;
@@ -165,7 +162,7 @@ export default class WorkbenchFeedbackRepository {
         report: row.report,
         scored: score.scored,
         threadId: row.thread_id,
-        title: row.title ? row.title.slice(0, 500) : null,
+        title: row.title,
       }];
     }));
   }

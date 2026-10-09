@@ -56,7 +56,7 @@ export function formatFeedbackForAgent(items: readonly WorkbenchFeedbackItem[], 
     `## ${FEEDBACK_CATEGORY_PRESENTATION[item.category].label} · ${describe.origin(item)}`,
     item.report.trim(),
     `- Author: ${[describe.modelName(item) ?? "Unknown model", item.reasoningEffort].filter(Boolean).join(" ")} · importance ${Math.round(item.importance * 100)}${item.scored ? "" : " (unscored model)"}`,
-    `- Thread: ${item.threadId ? `${item.title || "Untitled thread"} (${item.threadId})` : "removed"}`,
+    `- Thread: ${item.threadId ?? "removed"}`,
   ].join("\n"));
   return `${blocks.join("\n\n")}\n\n=====\n\n`;
 }

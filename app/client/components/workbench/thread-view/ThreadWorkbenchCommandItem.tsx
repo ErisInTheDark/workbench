@@ -28,6 +28,7 @@ import ThreadGitArcProposalItem from "./ThreadGitArcProposalItem";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadCheckpointDiffItem from "./ThreadCheckpointDiffItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
+import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import {
   createThreadGitArcCompareSummaryRows,
   createThreadGitArcDiffSummaryRows,
@@ -114,6 +115,16 @@ export default function ThreadWorkbenchCommandItem({
   const interruptedBySteer = structured?.kind === "interruptedBySteer";
   const gitArcOutcome = structured?.kind === "failure" || interruptedBySteer || typed?.kind === "invalid" ? "failed" : outcome;
 
+  if (operation.kind === "feedback" && (outcome === "completed" || outcome === "inProgress")) {
+    return (
+      <ThreadFeedbackCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={operation.operation}
+        outcome={outcome}
+        projectId={projectId}
+      />
+    );
+  }
   if (operation.kind === "threadTitle") {
     return <ThreadTitleCommandItem failureText={output} outcome={outcome} title={operation.title} />;
   }

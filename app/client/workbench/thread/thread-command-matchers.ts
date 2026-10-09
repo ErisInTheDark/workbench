@@ -12,7 +12,7 @@
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
  * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
- * - parseWorkbenchMessageCommand/parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb message/subagent/task-title actions and identify standalone title sets.
+ * - parseWorkbenchFeedbackCommand/parseWorkbenchMessageCommand/parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb feedback/message/subagent/task-title actions and identify standalone title sets.
  * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id.
@@ -99,6 +99,7 @@ import type {
 import {
     isWorkbenchTaskStatusMatcherClaim,
     isWorkbenchTaskTitleSetMatcherClaim,
+    parseWorkbenchFeedbackCommand,
     parseWorkbenchMessageCommand,
     parseWorkbenchSubagentCommand,
     parseWorkbenchTaskStatusCommand,
@@ -291,12 +292,12 @@ export {
     parseGitArcCommand,
     parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
-    parseGitCheckpointProposalId, parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
+    parseGitCheckpointProposalId, parseWorkbenchFeedbackCommand, parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
     parseWorkbenchThreadRecallCommand, getWorkbenchThreadRecallSummaryDisplay
 };
 export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay } from "./command-matchers/workbench-command-rendering";
-export type { WorkbenchCommandRoute, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
+export type { WorkbenchCommandRoute, WorkbenchFeedbackOperation, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
 export type {
     CommandShell,
     GitArcCommandAction,

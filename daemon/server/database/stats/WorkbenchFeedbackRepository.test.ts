@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { WorkbenchFeedbackRecord } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
@@ -32,7 +33,29 @@ function setup() {
 
 const report = (overrides: Partial<WorkbenchFeedbackRecord> = {}): WorkbenchFeedbackRecord => ({
   category: "waste", channel: "wb", harness: "codex", model: "claude-opus-5-5", projectId: testProjectIds.project,
-  reasoningEffort: "high", report: "diff printed lockfile churn", threadId, ...overrides,
+  reasoningEffort: "high", report: "diff printed lockfile churn", threadId, title: "Lockfile diff noise", ...overrides,
+});
+
+test("schema migration gives retained feedback a reload-compatible placeholder title", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.threadGoals.version });
+    database.prepare("INSERT INTO workbench_projects (id) VALUES (?)").run(testProjectIds.project);
+    database.prepare("INSERT INTO workbench_harnesses (id) VALUES ('codex')").run();
+    database.prepare(`
+      INSERT INTO workbench_agent_feedback (
+        project_id, harness_id, channel, category, report, created_at
+      ) VALUES (?, 'codex', 'wb', 'bug', 'retained report', 1)
+    `).run(testProjectIds.project);
+
+    installWorkbenchDatabaseSchema(database);
+
+    const migrated = database.prepare("SELECT title FROM workbench_agent_feedback").get() as { title: string };
+    assert.equal(migrated.title, "Feedback report");
+  } finally {
+    database.close();
+  }
 });
 
 test("stats summaries count only the selected projects and period, most important first", () => {
@@ -51,7 +74,7 @@ test("stats summaries count only the selected projects and period, most importan
     const importance = summary.items.map((item) => item.importance);
     assert.deepEqual(importance, [...importance].sort((left, right) => right - left));
     assert.equal(summary.items[0]?.model, "claude-opus-5-5");
-    assert.equal(summary.items[0]?.title, "fix stats header");
+    assert.equal(summary.items[0]?.title, "Lockfile diff noise");
     assert.equal(summary.items.find(({ model }) => model === "unlisted-model")?.scored, false);
 
     assert.equal(repository.summary(null, now - 7 * day, now + 1).total, 4);

@@ -9,6 +9,7 @@ import {
   WorkbenchFeedbackCategorySchema,
   WorkbenchFeedbackChannelSchema,
   WorkbenchFeedbackReportSchema,
+  WorkbenchFeedbackTitleSchema,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
@@ -20,6 +21,8 @@ const inputSchema = z.object({
     .describe("bug: broken behaviour. waste: avoidable tokens, steps, or output. confusion: unclear or conflicting guidance. opportunity: concrete improvement."),
   report: WorkbenchFeedbackReportSchema
     .describe("What you did, why, and what you suggest. Plain and specific."),
+  title: WorkbenchFeedbackTitleSchema
+    .describe("Short single-line title for the issue."),
 }).strict();
 
 export const WorkbenchFeedbackSubmitRequestSchema = inputSchema.extend({
@@ -30,15 +33,20 @@ export const WorkbenchFeedbackSubmitRequestSchema = inputSchema.extend({
 
 const feedback = defineWorkbenchAgentCommand({
   words: ["feedback"],
-  usage: "wb feedback --channel <wb|project> --category <bug|waste|confusion|opportunity> -- <report>",
+  usage: "wb feedback --channel <wb|project> --category <bug|waste|confusion|opportunity> --title <short-title> -- <report>",
   description: "Report avoidable friction once per issue: something broken, wasteful, confusing, or improvable in Workbench or project tooling or instructions.",
   effects: { readOnly: false },
   helpGroups: [],
   mcpCodeModeEligible: true,
   inputSchema,
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { trailing: true, values: ["--channel", "--category"] });
-    return inputSchema.parse({ channel: flags.required("--channel"), category: flags.required("--category"), report: flags.trailing.join(" ") });
+    const flags = new WorkbenchAgentCommandFlags(args, { trailing: true, values: ["--channel", "--category", "--title"] });
+    return inputSchema.parse({
+      channel: flags.required("--channel"),
+      category: flags.required("--category"),
+      report: flags.trailing.join(" "),
+      title: flags.required("--title"),
+    });
   },
   buildRequest(input, context) {
     return postWorkbenchAgentCommand("/internal/feedback", { ...managedWorkbenchAgentCommandBody(context), ...input });

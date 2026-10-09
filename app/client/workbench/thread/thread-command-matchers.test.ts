@@ -32,6 +32,7 @@ import {
   parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
   parseGitArcCommand,
+  parseWorkbenchFeedbackCommand,
   parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   parseWorkbenchTaskStatusCommand,
@@ -185,7 +186,9 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "toc": return { file: "AGENTS.md" };
     case "rg": return { args: ["-n", "needle", "webapp"] };
     case "tokens": return { text: "count me" };
-    case "feedback": return { category: "waste", channel: "wb", report: "diff printed lockfile churn" };
+    case "feedback": return {
+      category: "waste", channel: "wb", report: "diff printed lockfile churn", title: "Lockfile diff noise",
+    };
     case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
     case "task_set": return { title: "Render typed wb tools" };
     case "task_completed":
@@ -286,6 +289,12 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
     profileId: "profile",
     title: "Inspect",
   }).success, false);
+  const feedback = commands.find((definition) => definition.words.join("_") === "feedback");
+  assert.equal(feedback?.inputSchema.safeParse({
+    category: "waste",
+    channel: "wb",
+    report: "diff printed lockfile churn",
+  }).success, false);
   const questionnaire = commands.find((definition) => definition.words.join("_") === "request_user_input");
   assert.deepEqual(questionnaire?.effects, {});
   assert.equal(questionnaire?.mcpCodeModeEligible, true);
@@ -296,6 +305,28 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
     server: "wb",
     tool: "request_user_input",
   })?.omitFromDisplay, true);
+});
+
+test("feedback CLI and MCP routes preserve one titled report intent", () => {
+  const command = 'wb feedback --channel wb --category waste --title "Lockfile diff noise" -- "diff printed lockfile churn"';
+  const expected = {
+    category: "waste",
+    channel: "wb",
+    report: "diff printed lockfile churn",
+    title: "Lockfile diff noise",
+  };
+  assert.deepEqual(parseWorkbenchFeedbackCommand(command), expected);
+  assert.equal(parseWorkbenchFeedbackCommand("wb feedback --channel wb --category waste -- report"), null);
+  assert.equal(parseWorkbenchFeedbackCommand('wb feedback --channel wb --category waste -- "report mentions --title fake"'), null);
+
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: expected,
+    server: "wb",
+    tool: "feedback",
+  });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind !== "specialized" || route.operation.kind !== "feedback") assert.fail("Expected feedback route");
+  assert.deepEqual(route.operation.operation, expected);
 });
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
