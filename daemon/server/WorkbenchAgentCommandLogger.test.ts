@@ -66,7 +66,7 @@ test("quiet commands preserve results and failures without timing logs or timers
     cancel: () => {},
     writeLine: (line) => { lines.push(line); },
   });
-  for (const label of ["wb shell", "wb rg", "wb request user input"]) {
+  for (const label of ["wb shell", "wb rg", "wb request user input", "wb subagent queue"]) {
     const signal = new AbortController().signal;
     const result = { done: true };
     assert.equal(await logger.run(label, signal, async () => result), result);
