@@ -16,7 +16,7 @@ import Database from "better-sqlite3";
 
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
-import { getWorkbenchDatabaseReadLane } from "./workbench-database-protocol";
+import { getWorkbenchDatabaseReadClass, isBackgroundDatabaseReadClass, WORKBENCH_DATABASE_READ_CLASSES } from "./workbench-database-protocol";
 import {
   coreTables,
   projectTables,
@@ -54,16 +54,21 @@ const fixtureIdentityValues = {
   },
 };
 
-test("database read lanes isolate transcript work and stats aggregates from interactive state reads, and history scans from live ingest", () => {
-  assert.equal(getWorkbenchDatabaseReadLane({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }), "core");
-  assert.equal(getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "core");
-  const live = getWorkbenchDatabaseReadLane({ type: "readTranscriptCompactionExecution", input: { harnessId: "codex", nativeLocation: "/repo", nativeThreadId: "thread", nativeTurnId: "turn" } });
-  assert.equal(live, "transcript");
-  assert.notEqual(getWorkbenchDatabaseReadLane({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) }), live);
-  const aggregate = getWorkbenchDatabaseReadLane({ type: "readStats", request: { projectIds: null, range: "365d", section: "tools" } });
-  assert.notEqual(aggregate, getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "stats aggregates never queue ahead of interactive state reads");
-  assert.notEqual(aggregate, live);
-  assert.equal(getWorkbenchDatabaseReadLane({ type: "settleTranscript", observations: [] }), null);
+test("read classes rank live transcript over interactive state, and keep history scans and stats aggregates in the background", () => {
+  const rank = (request: Parameters<typeof getWorkbenchDatabaseReadClass>[0]) => {
+    const readClass = getWorkbenchDatabaseReadClass(request);
+    assert.ok(readClass);
+    return { background: isBackgroundDatabaseReadClass(readClass), rank: WORKBENCH_DATABASE_READ_CLASSES.indexOf(readClass) };
+  };
+  const live = rank({ type: "readTranscriptCompactionExecution", input: { harnessId: "codex", nativeLocation: "/repo", nativeThreadId: "thread", nativeTurnId: "turn" } });
+  const state = rank({ type: "readThreadStateProject", projectId: testProjectIds.project });
+  const history = rank({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) });
+  const aggregate = rank({ type: "readStats", request: { projectIds: null, range: "365d", section: "tools" } });
+  assert.ok(live.rank < state.rank, "live ingest reads run before interactive state reads");
+  assert.deepEqual([live.background, state.background, history.background, aggregate.background], [false, false, true, true]);
+  assert.ok(state.rank < history.rank && state.rank < aggregate.rank);
+  assert.equal(rank({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }).rank, state.rank);
+  assert.equal(getWorkbenchDatabaseReadClass({ type: "settleTranscript", observations: [] }), null);
 });
 
 function seedProviderCursor(databasePath: string, projectId = fixtureIdentityValues.ProjectId.project) {

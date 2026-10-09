@@ -27,11 +27,11 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
 }
 
 test("one sample logs process and database worker memory in one line", async () => {
-  const f = fixture(async () => ({ writer: { used: 88 * MB, total: 120 * MB }, core: { used: 61 * MB, total: 80 * MB }, transcript: null, query: null, stats: null }));
+  const f = fixture(async () => ({ writer: { used: 88 * MB, total: 120 * MB }, readers: [{ used: 61 * MB, total: 80 * MB }, { used: 12 * MB, total: 16 * MB }] }));
   await f.reporter.tick();
   assert.equal(f.logs.length, 1);
   const line = plain(f.logs[0]!);
-  for (const part of ["heap 366/412MB", "rss 1083MB", "external 41MB", "writer 88/120MB", "core 61/80MB", "transcript off", "system free 3.6/28GB"]) {
+  for (const part of ["heap 366/412MB", "rss 1083MB", "external 41MB", "writer 88/120MB", "readers 61/80MB 12/16MB", "system free 3.6/28GB"]) {
     assert.ok(line.includes(part), `${part} missing from ${line}`);
   }
 });
@@ -46,7 +46,7 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
   const f = fixture(async () => {
     reads += 1;
     await new Promise<void>(resolve => { release = resolve; });
-    return { writer: null, core: null, transcript: null, query: null, stats: null };
+    return { writer: null, readers: [] };
   });
   const first = f.reporter.tick();
   await f.reporter.tick();
@@ -58,7 +58,7 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
 });
 
 test("started reporters warn on each long event-loop block and sample each interval's longest delay", async () => {
-  const f = fixture(async () => ({ writer: null, core: null, transcript: null, query: null, stats: null }));
+  const f = fixture(async () => ({ writer: null, readers: [] }));
   assert.equal(f.loop.blocked, null);
   f.reporter.start();
   f.loop.blocked!(4_230);

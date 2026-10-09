@@ -9,13 +9,12 @@
 import os from "node:os";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { dim, yellow } from "workbench-shared/process/terminal-style";
-import { WORKBENCH_DATABASE_READ_LANES, type WorkbenchDatabaseReadLane } from "./database/workbench-database-protocol";
-
-type WorkerHeap = { used: number; total: number } | null;
+type WorkerHeap = { used: number; total: number };
 
 export interface WorkbenchMemoryReporterOptions {
   readProcess?: () => Pick<NodeJS.MemoryUsage, "rss" | "heapUsed" | "heapTotal" | "external" | "arrayBuffers">;
-  readWorkerHeaps(): Promise<{ writer: WorkerHeap } & Record<WorkbenchDatabaseReadLane, WorkerHeap>>;
+  /** The writer is null when it is not running; readers lists the open read pool, in pool order. */
+  readWorkerHeaps(): Promise<{ writer: WorkerHeap | null; readers: readonly WorkerHeap[] }>;
   /** Machine memory, so an incident shows whether RAM ran out rather than leaving it to inference from rss. */
   readSystem?: () => { free: number; total: number };
   log(message: string): void;
@@ -70,7 +69,7 @@ function gigabytes(bytes: number) {
   return (bytes / 1_073_741_824).toFixed(1);
 }
 
-function heap(value: WorkerHeap) {
+function heap(value: WorkerHeap | null) {
   return value ? `${Math.round(value.used / 1_048_576)}/${megabytes(value.total)}` : "off";
 }
 
@@ -121,7 +120,7 @@ export default class WorkbenchMemoryReporter {
         ` MEM heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}, rss ${megabytes(memory.rss)}, `
         + `system free ${gigabytes(system.free)}/${Math.round(system.total / 1_073_741_824)}GB `
         + dim(`(external ${megabytes(memory.external)}, array buffers ${megabytes(memory.arrayBuffers)}, `
-          + `db workers: writer ${heap(workers.writer)}, ${WORKBENCH_DATABASE_READ_LANES.map(lane => `${lane} ${heap(workers[lane])}`).join(", ")}${loopMax})`),
+          + `db workers: writer ${heap(workers.writer)}, readers ${workers.readers.length ? workers.readers.map(reader => heap(reader)).join(" ") : "off"}${loopMax})`),
       );
     } catch (error) {
       if (!this.disposed) this.options.warn(` MEM sample failed ${dim(`(${(error instanceof Error ? error.message : String(error)).slice(0, 300)})`)}`);

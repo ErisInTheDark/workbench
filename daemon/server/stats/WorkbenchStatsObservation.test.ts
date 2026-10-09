@@ -38,14 +38,16 @@ function gate<T>() {
 }
 
 function harness(section: WorkbenchStatsSection = "claims") {
-  const reads = channel<{ renames: number; release: () => void }>();
+  const reads = channel<{ renames: number; release: () => void; signal: AbortSignal }>();
   const walks = channel<(history: WorkbenchClaimRenameRead) => void>();
   const states = channel<WorkbenchStatsObservationState>();
+  const warnings: string[] = [];
   const observation = new WorkbenchStatsObservation({ projectIds: null, range: "7d", section }, {
-    read: async (_request, history) => {
+    read: async (_request, history, signal) => {
       const opened = gate<void>();
-      reads.push({ renames: history.renames.length, release: () => opened.open() });
-      await opened.promise;
+      reads.push({ renames: history.renames.length, release: () => opened.open(), signal });
+      // Like a read still queued for a database reader: an abort rejects it with the abort reason.
+      await Promise.race([opened.promise, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)))]);
       return { generatedAt: reads.all.length, claimHotspots: [] } as unknown as WorkbenchStatsResponse;
     },
     readRenames: async () => {
@@ -53,9 +55,9 @@ function harness(section: WorkbenchStatsSection = "claims") {
       walks.push(walked.open);
       return await walked.promise;
     },
-    warn: () => undefined,
+    warn: (message) => warnings.push(message),
   }, (state) => states.push(state));
-  return { observation, reads, walks, states };
+  return { observation, reads, walks, states, warnings };
 }
 
 test("claim counts publish before rename history, then again with the merged aliases", async () => {
@@ -114,17 +116,18 @@ test("invalidations during a read collapse into one follow-up that reuses known 
   assert.equal(walks.all.length, 1, "usage invalidations never re-walk Git history");
 });
 
-test("released observations stop reading and publishing", async () => {
-  const { observation, reads, walks, states } = harness();
+test("released observations abandon their waiting read and stop reading and publishing, without reporting a failure", async () => {
+  const { observation, reads, walks, states, warnings } = harness();
   const first = reads.next();
   observation.start();
   const pending = await first;
   observation.release();
-  pending.release();
+  assert.equal(pending.signal.aborted, true, "a read still waiting for a database reader is dropped");
   await observation.settled;
   observation.invalidate("claims");
   await observation.settled;
   assert.deepEqual(states.all, []);
+  assert.deepEqual(warnings, []);
   assert.equal(reads.all.length, 1);
   assert.equal(walks.all.length, 0);
 });

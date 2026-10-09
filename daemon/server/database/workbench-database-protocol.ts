@@ -3,8 +3,9 @@
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
  * WorkbenchDatabaseResponse: typed responses returned by the database worker.
- * WORKBENCH_DATABASE_READ_LANES/WorkbenchDatabaseReadLane: isolated reader worker lanes (core, live transcript, history query, stats aggregates).
- * getWorkbenchDatabaseReadLane/isWorkbenchDatabaseReadRequest: route pure reads to their isolated reader lane.
+ * WORKBENCH_DATABASE_READ_CLASSES/WorkbenchDatabaseReadClass: pure-read priority classes, most urgent first (live transcript, interactive state, history query, stats aggregates).
+ * isBackgroundDatabaseReadClass: classes that must leave a reader free for interactive work.
+ * getWorkbenchDatabaseReadClass/isWorkbenchDatabaseReadRequest: classify pure reads for the reader pool.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
@@ -203,7 +204,7 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readThreadStateSnoozeSources", "readThreadStateArchiveEligible", "readSubagents",
   "readOwnedSubagents",
 ]);
-// Stats aggregates scan whole windows of usage and transcript facts; they never queue ahead of interactive reads.
+// Stats aggregates scan whole windows of usage and transcript facts; they never run ahead of interactive reads.
 const STATS_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "readStats", "readStatsClaimedRoots", "readClaimStats", "readStatsImportProgress", "readFeedback",
 ]);
@@ -212,13 +213,18 @@ const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["t
   "readTranscriptContext", "readThreadContextUsage",
   "readTranscriptMaterializedTurnIds",
 ]);
-// Unbounded history scans stay off the transcript lane that live provider ingest awaits.
+// Unbounded history scans never run ahead of the transcript reads live provider ingest awaits.
 const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>(["queryTranscript"]);
 
-export const WORKBENCH_DATABASE_READ_LANES = ["core", "transcript", "query", "stats"] as const;
-export type WorkbenchDatabaseReadLane = typeof WORKBENCH_DATABASE_READ_LANES[number];
+/** Most urgent first: live ingest awaits transcript reads, the UI awaits core reads, and the rest is background. */
+export const WORKBENCH_DATABASE_READ_CLASSES = ["transcript", "core", "query", "stats"] as const;
+export type WorkbenchDatabaseReadClass = typeof WORKBENCH_DATABASE_READ_CLASSES[number];
 
-export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPayload): WorkbenchDatabaseReadLane | null {
+export function isBackgroundDatabaseReadClass(readClass: WorkbenchDatabaseReadClass) {
+  return readClass === "query" || readClass === "stats";
+}
+
+export function getWorkbenchDatabaseReadClass(request: WorkbenchDatabaseRequestPayload): WorkbenchDatabaseReadClass | null {
   return CORE_READ_REQUEST_TYPES.has(request.type) ? "core"
     : TRANSCRIPT_READ_REQUEST_TYPES.has(request.type) ? "transcript"
       : QUERY_READ_REQUEST_TYPES.has(request.type) ? "query"
@@ -226,7 +232,7 @@ export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPa
 }
 
 export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequestPayload): boolean {
-  return getWorkbenchDatabaseReadLane(request) !== null;
+  return getWorkbenchDatabaseReadClass(request) !== null;
 }
 
 export type WorkbenchDatabaseResponse =

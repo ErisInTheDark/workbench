@@ -36,6 +36,8 @@ export interface WorkbenchStatsControllerOptions {
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
     readStats(
       request: WorkbenchStatsReadRequest & { section: WorkbenchStoredStatsSection }, now?: number, renames?: readonly WorkbenchGitClaimRename[], workbenchProjectId?: string | null,
+      /** Abandons the read while it still waits for a database reader. */
+      signal?: AbortSignal,
     ): Promise<WorkbenchStatsResponse>;
     readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number): Promise<WorkbenchClaimedRoot[]>;
     readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
@@ -174,7 +176,7 @@ export default class WorkbenchStatsController {
   observe(request: WorkbenchStatsReadRequest, publish: (state: WorkbenchStatsObservationState) => void) {
     if (!this.active) throw new Error("Stats controller is disposed.");
     const observation = new WorkbenchStatsObservation(request, {
-      read: (scope, history) => this.readSection(scope, history),
+      read: (scope, history, signal) => this.readSection(scope, history, signal),
       readRenames: (scope) => this.readRenames(scope.projectIds, scope.range),
       warn: (message) => this.options.log?.(message),
     }, publish);
@@ -189,23 +191,23 @@ export default class WorkbenchStatsController {
     };
   }
 
-  private async readSection(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead): Promise<WorkbenchStatsResponse> {
+  private async readSection(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead, signal?: AbortSignal): Promise<WorkbenchStatsResponse> {
     switch (request.section) {
       case "status": return await this.readStatus();
       case "usage":
-      case "limits": return await this.readStored({ ...request, section: request.section });
+      case "limits": return await this.readStored({ ...request, section: request.section }, [], null, signal);
       case "feedback": {
         const workbenchProjectId = this.options.resolveWorkbenchProjectId ? await this.options.resolveWorkbenchProjectId() : null;
         if (this.options.resolveWorkbenchProjectId && !workbenchProjectId) {
           this.options.log?.("The Workbench checkout is missing from the project catalogue, so wb agent feedback is hidden.");
         }
-        return await this.readStored({ ...request, section: "feedback" }, [], workbenchProjectId);
+        return await this.readStored({ ...request, section: "feedback" }, [], workbenchProjectId, signal);
       }
       case "claims": return {
-        ...await this.readStored({ ...request, section: "claims" }, history.renames),
+        ...await this.readStored({ ...request, section: "claims" }, history.renames, null, signal),
         historyFailures: history.failures.map(({ message }) => message.replaceAll(/[\r\n]+/gu, " ").slice(0, 500)).slice(-20),
       };
-      case "tools": return await this.withToolCosts(await this.readStored({ ...request, section: "tools" }));
+      case "tools": return await this.withToolCosts(await this.readStored({ ...request, section: "tools" }, [], null, signal));
     }
   }
 
@@ -213,8 +215,9 @@ export default class WorkbenchStatsController {
     request: WorkbenchStatsReadRequest & { section: Section },
     renames: readonly WorkbenchGitClaimRename[] = [],
     workbenchProjectId: string | null = null,
+    signal?: AbortSignal,
   ): Promise<WorkbenchStatsSectionData<Section>> {
-    const result = await this.options.database.readStats(request, undefined, renames, workbenchProjectId);
+    const result = await this.options.database.readStats(request, undefined, renames, workbenchProjectId, signal);
     if (result.section !== request.section) throw new Error(`Statistics answered ${result.section} for a ${request.section} read.`);
     return result as WorkbenchStatsSectionData<Section>;
   }

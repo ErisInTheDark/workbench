@@ -35,11 +35,13 @@ export default class WorkbenchStatsObservation {
   #history: WorkbenchClaimRenameRead | null = null;
   #work: Promise<void> | null = null;
   #released = false;
+  /** Aborted on release, so reads still waiting for a database reader are dropped instead of run for nobody. */
+  readonly #lifetime = new AbortController();
 
   constructor(
     private readonly request: WorkbenchStatsReadRequest,
     private readonly owner: {
-      read(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead): Promise<WorkbenchStatsResponse>;
+      read(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead, signal: AbortSignal): Promise<WorkbenchStatsResponse>;
       readRenames(request: WorkbenchStatsReadRequest): Promise<WorkbenchClaimRenameRead>;
       warn(message: string): void;
     },
@@ -58,7 +60,10 @@ export default class WorkbenchStatsObservation {
     this.#drive();
   }
 
-  release() { this.#released = true; }
+  release() {
+    this.#released = true;
+    this.#lifetime.abort(new Error("The statistics observation was released."));
+  }
 
   #drive() {
     if (this.#work || this.#released) return;
@@ -77,7 +82,7 @@ export default class WorkbenchStatsObservation {
       this.#dirty = { usage: false, claims: false };
       try {
         const known = this.#history ?? NO_RENAMES;
-        const first = await this.owner.read(this.request, known);
+        const first = await this.owner.read(this.request, known, this.#lifetime.signal);
         if (this.#released) return;
         this.#update({ phase: "current", failure: null, refinement: walkClaims ? "pending" : this.#refinement(known), data: first });
         if (!walkClaims) continue;
@@ -85,10 +90,11 @@ export default class WorkbenchStatsObservation {
         if (this.#released) return;
         this.#history = history;
         // Without renames or failures the first read already counted claims correctly.
-        const complete = history.renames.length || history.failures.length ? await this.owner.read(this.request, history) : first;
+        const complete = history.renames.length || history.failures.length ? await this.owner.read(this.request, history, this.#lifetime.signal) : first;
         if (this.#released) return;
         this.#update({ phase: "current", failure: null, refinement: this.#refinement(history), data: complete });
       } catch (error) {
+        // Release aborts queued reads; their rejection is expected and has no reader left to tell.
         if (this.#released) return;
         const failure = failureMessage(error);
         this.owner.warn(`Statistics observation failed: ${failure}`);
