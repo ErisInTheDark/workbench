@@ -2,10 +2,12 @@
  * Exports:
  * - WorkbenchClaimStatsExecutionRequestSchema: validate cwd-owned claim analysis.
  * - WorkbenchFeedbackStatsExecutionRequestSchema: validate cwd-owned feedback reads; only wb-channel reads may span projects.
- * - WORKBENCH_STATS_COMMANDS: CLI-only claim ranking, file-thread reads, and agent feedback reads.
+ * - WorkbenchToolStatsExecutionRequestSchema: validate cwd-owned tool value reads; --all-projects spans every project.
+ * - WORKBENCH_STATS_COMMANDS: CLI-only claim ranking, file-thread reads, agent feedback reads, and tool value ranking.
  */
 import { z } from "zod";
 import { WorkbenchClaimStatsRangeSchema } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
+import { WorkbenchStatsRangeSchema } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import {
   WORKBENCH_FEEDBACK_SORTS,
   WorkbenchFeedbackCategorySchema,
@@ -39,6 +41,15 @@ const feedbackInputSchema = feedbackFields.refine(wbOnlyAcrossProjects, ALL_PROJ
 export const WorkbenchFeedbackStatsExecutionRequestSchema = feedbackFields.extend({ cwd }).strict()
   .refine(wbOnlyAcrossProjects, ALL_PROJECTS_MESSAGE);
 
+const toolsInputSchema = z.object({
+  allProjects: z.boolean().default(false),
+  descending: z.boolean().default(false),
+  range: WorkbenchStatsRangeSchema.default("7d"),
+  sort: z.enum(["value", "calls", "cost", "tool"]).default("value"),
+}).strict();
+export const WorkbenchToolStatsExecutionRequestSchema = toolsInputSchema.extend({ cwd }).strict();
+
+const TOOLS_USAGE = "wb stats tools [--range <7d|14d|30d|90d|365d>] [--sort <value|calls|cost|tool>] [--descending]";
 const FEEDBACK_USAGE = "wb stats feedback [--channel <wb|project>] [--category <bug|waste|confusion|opportunity>] [--sort <importance|newest>] [--range <7d|14d|30d|90d|365d|all>] [--page <n>]";
 
 export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
@@ -85,5 +96,27 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   },
   buildRequest(input, { cwd }) {
     return postWorkbenchAgentCommand("/internal/stats/feedback", { cwd, ...input });
+  },
+}), defineWorkbenchAgentCommand({
+  words: ["stats", "tools"],
+  usage: TOOLS_USAGE,
+  // Tool prompt cost is a Workbench concern, so only the Workbench root advertises the cross-project view.
+  workbenchRootUsage: `${TOOLS_USAGE} [--all-projects]`,
+  description: "Rank wb tools by calls per 100 always-on prompt tokens (spec plus docs), lowest value first, with tool waste per thread.",
+  effects: { readOnly: true, idempotent: true },
+  hideFromMcp: true,
+  helpGroups: ["stats"],
+  inputSchema: toolsInputSchema,
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--all-projects", "--descending"], values: ["--range", "--sort"] });
+    return toolsInputSchema.parse({
+      allProjects: flags.has("--all-projects"),
+      descending: flags.has("--descending"),
+      range: flags.optional("--range") ?? "7d",
+      sort: flags.optional("--sort") ?? "value",
+    });
+  },
+  buildRequest(input, { cwd }) {
+    return postWorkbenchAgentCommand("/internal/stats/tools", { cwd, ...input });
   },
 })] as const;

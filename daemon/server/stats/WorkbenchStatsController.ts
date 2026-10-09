@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchStatsControllerOptions: database, harness, rename, tool catalogue, and warning ports.
- * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed per-section stats observations (rename-aware claims, tool prompt cost, import status), account-limit history, refresh, failures, and disposal.
+ * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed per-section stats observations (rename-aware claims, tool prompt cost, import status), one-shot tool reads for the CLI, account-limit history, refresh, failures, and disposal.
  */
 import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
@@ -272,6 +272,12 @@ export default class WorkbenchStatsController {
 
   private invalidate(kind: WorkbenchStatsInvalidation) {
     for (const observation of this.observations) observation.invalidate(kind);
+  }
+
+  /** One tools section for the CLI, through the same path observations use, so both report the same figures. */
+  async readTools(request: Omit<WorkbenchStatsReadRequest, "section">) {
+    if (!this.active) throw new Error("Stats controller is disposed.");
+    return await this.withToolCosts(await this.readStored({ ...request, section: "tools" }));
   }
 
   async readClaims(request: WorkbenchClaimStatsRequest) {

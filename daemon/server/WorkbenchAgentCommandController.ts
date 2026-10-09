@@ -38,6 +38,7 @@ interface WorkbenchAgentDirectPort {
   executeSocketSpy?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeHeapSnapshot?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -407,6 +408,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/stats/claims" && request.body) {
       if (!this.direct.executeClaimStats) throw new Error("Claim statistics are not configured.");
       return await this.direct.executeClaimStats(request.body, signal);
+    }
+    if (request.path === "/internal/stats/tools" && request.body) {
+      if (!this.direct.executeToolStats) throw new Error("Tool statistics are not configured.");
+      return await this.direct.executeToolStats(request.body, signal);
     }
     if (request.path === "/internal/stats/feedback" && request.body) {
       if (!this.direct.executeFeedbackStats) throw new Error("Feedback statistics are not configured.");

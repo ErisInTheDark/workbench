@@ -18,6 +18,7 @@ import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchTokenCountController from "./WorkbenchTokenCountController";
 import WorkbenchClaimStatsController from "./WorkbenchClaimStatsController";
+import WorkbenchToolStatsCommandController from "./WorkbenchToolStatsCommandController";
 import WorkbenchFeedbackCommandController from "./WorkbenchFeedbackCommandController";
 import WorkbenchFileRemovalController from "./WorkbenchFileRemovalController";
 import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandController";
@@ -59,6 +60,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const claimStats = new WorkbenchClaimStatsController({
       resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Claim statistics" }),
       read: async (request) => await stats.readClaims(request),
+    });
+    const toolStats = new WorkbenchToolStatsCommandController({
+      resolveProject: async (cwd) => {
+        const { project } = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Tool statistics" });
+        // The catalogue owns display names, the same lookup feedback uses.
+        return { id: project.id, name: projectCatalog.getCurrentSnapshot().data.find(({ id }) => id === project.id)?.name ?? project.id };
+      },
+      read: async (request) => await stats.readTools(request),
     });
     const feedback = new WorkbenchFeedbackCommandController({
       resolveCaller: async ({ cwd, harness, threadId }, signal) => {
@@ -213,6 +222,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         );
       },
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
+      executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
       executeFeedbackStats: async (body, signal) => await feedback.read(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),

@@ -7,7 +7,7 @@ import useStats from "../use-stats";
 import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
 import WorkbenchStatsSparkline from "../WorkbenchStatsSparkline";
 import { compactNumber } from "../stats-formatters";
-import { summariseStatsTools } from "./stats-tool-value";
+import { summariseStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tool-value";
 
 function Card({ children, detail, label, primary = false, trend }: {
   children: ReactNode | null;

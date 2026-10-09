@@ -13,7 +13,7 @@ import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName }
 import WorkbenchStatsSparkline from "../WorkbenchStatsSparkline";
 import { compactNumber, formatStatsBucket } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
-import { statsToolValueRows, type StatsToolSort, type StatsToolSortKey, type StatsToolValueRow } from "./stats-tool-value";
+import { statsToolValueRows, type StatsToolSort, type StatsToolSortKey, type StatsToolValueRow } from "workbench-shared/workbench/stats/workbench-stats-tool-value";
 
 const columns = "grid grid-cols-[minmax(0,1fr)_4.5rem] items-center gap-x-5 sm:grid-cols-[minmax(9rem,1fr)_minmax(12rem,2fr)_minmax(8rem,1fr)_6rem]";
 

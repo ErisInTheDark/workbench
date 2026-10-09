@@ -5,7 +5,7 @@
  * - statsToolValueRows: derive and order tool rows.
  * - summariseStatsTools: totals for the tools headline, including the tool tokens a thread carries without using.
  */
-import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tools-contract";
+import type { WorkbenchStatsTools } from "./workbench-stats-tools-contract.ts";
 
 export type StatsToolSortKey = "tool" | "calls" | "cost" | "value";
 export interface StatsToolSort { key: StatsToolSortKey; descending: boolean }

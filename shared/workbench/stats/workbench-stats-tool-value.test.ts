@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tools-contract";
-import { statsToolValueRows, summariseStatsTools } from "./stats-tool-value";
+import type { WorkbenchStatsTools } from "./workbench-stats-tools-contract.ts";
+import { statsToolValueRows, summariseStatsTools } from "./workbench-stats-tool-value.ts";
 
 const row = (tool: string, calls: number, threads: number, specTokens: number | null, docsTokens = 0) => ({
   buckets: [calls], bucketThreads: [], calls, docsTokens, failed: 0, specTokens, threads, tool,
