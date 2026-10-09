@@ -7,7 +7,7 @@ import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/wor
 import { feedbackAddressProjectId, formatFeedbackForAgent } from "./stats-feedback-presentation.ts";
 
 const item = (overrides: Partial<WorkbenchFeedbackItem>): WorkbenchFeedbackItem => ({
-  category: "bug", channel: "project", createdAt: 1, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
+  category: "bug", channel: "project", createdAt: 1, daemonId: null, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
   projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread", title: "fix it", ...overrides,
 });
 

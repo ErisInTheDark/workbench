@@ -15,7 +15,8 @@ import {
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import { useWorkbenchThreads } from "../../use-workbench-client";
 import WorkbenchModeRow from "../../WorkbenchModeRow";
-import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../../WorkbenchWorkspaceContext";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchWorkspaceContext from "../../WorkbenchWorkspaceContext";
 import useStats from "../use-stats";
 import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
 import WorkbenchStatsFeedbackReport from "./WorkbenchStatsFeedbackReport";
@@ -50,39 +51,51 @@ function useModelCatalogues(harnesses: readonly WorkbenchHarness[]) {
 }
 
 export default function WorkbenchStatsFeedback() {
-  const { addressFeedback: onAddress, projectName } = useStats();
+  const { addressFeedback: onAddress, localProject, projectName, scope } = useStats();
   const { data: stats, loading } = useStats.feedback();
-  const daemon = useContext(WorkbenchDaemonClientContext);
+  const workspace = useContext(WorkbenchWorkspaceContext);
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(new Set());
+  // Report ids are only unique per daemon, so selection keys carry the daemon.
+  const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const feedback = stats?.feedback ?? null;
   const items = feedback?.items ?? [];
+  const keyOf = (item: { daemonId?: string | null; id: number }) => `${item.daemonId ?? ""}:${item.id}`;
   // Selection follows the published reports, so deleted or out-of-period reports simply stop counting.
-  const selected = items.filter(({ id }) => selectedIds.has(id));
-  const addressProjectId = feedbackAddressProjectId(selected, feedback?.workbenchProjectId ?? null);
-  const toggleSelected = (id: number) => setSelectedIds((current) => {
+  const selected = items.filter((item) => selectedKeys.has(keyOf(item)));
+  // A new thread runs on this machine, so reports from elsewhere address this machine's folder of their project.
+  const local = selected.map((item) => ({ ...item, projectId: localProject(item.projectId, item.daemonId) }));
+  const addressProjectId = local.every((item) => item.projectId)
+    ? feedbackAddressProjectId(local.map((item) => ({ ...item, projectId: item.projectId! })), feedback?.workbenchProjectId ?? null)
+    : null;
+  const toggleSelected = (key: string) => setSelectedKeys((current) => {
     const next = new Set(current);
-    if (!next.delete(id)) next.add(id);
+    if (!next.delete(key)) next.add(key);
     return next;
   });
   useEffect(() => {
     if (!selected.length) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) setSelectedIds(new Set());
+      if (event.key === "Escape" && !event.defaultPrevented) setSelectedKeys(new Set());
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selected.length]);
   const deleteSelected = async () => {
-    if (!daemon || !selected.length) return;
+    if (!workspace || !selected.length) return;
     setBusy(true);
     setActionError("");
     try {
-      await daemon.stats.deleteFeedback(selected.map(({ id }) => id));
-      setSelectedIds(new Set());
+      // Each daemon deletes its own reports.
+      const byDaemon = Map.groupBy(selected, ({ daemonId }) => daemonId ?? scope.attachedDaemonId);
+      await Promise.all([...byDaemon].map(([daemonId, reports]) => {
+        const daemon = DaemonIdSchema.safeParse(daemonId).data;
+        if (!daemon) throw new Error("Feedback from an unknown machine cannot be deleted.");
+        return workspace.daemon({ kind: "installation", daemonId: daemon }).stats.deleteFeedback(reports.map(({ id }) => id));
+      }));
+      setSelectedKeys(new Set());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Unable to delete the selected feedback.");
     } finally {
@@ -102,16 +115,16 @@ export default function WorkbenchStatsFeedback() {
     const known = harness ? catalogues.get(harness)?.find((option) => matchesWorkbenchModelOption(option, model)) : undefined;
     return known?.displayName ?? model.slice(model.indexOf("/") + 1);
   };
-  const origin = (channel: string, projectId: string) => channel === "project"
-    ? projectName(projectId)
-    : projectId === feedback?.workbenchProjectId ? "Workbench" : `Workbench, from ${projectName(projectId)}`;
+  const origin = (channel: string, projectId: string, daemonId: string | null | undefined) => channel === "project"
+    ? projectName(projectId, daemonId)
+    : projectId === feedback?.workbenchProjectId ? "Workbench" : `Workbench, from ${projectName(projectId, daemonId)}`;
   const address = () => {
     if (!addressProjectId) return;
     onAddress(addressProjectId, formatFeedbackForAgent(selected, {
       modelName: (item) => modelName(item.harness, item.model),
-      origin: (item) => origin(item.channel, item.projectId),
+      origin: (item) => origin(item.channel, item.projectId, item.daemonId),
     }));
-    setSelectedIds(new Set());
+    setSelectedKeys(new Set());
   };
   return (
     <section aria-busy={loading} aria-labelledby="feedback-heading" className={`space-y-3 [--hue-chroma:60%] ${statsReloadingClassName(loading && Boolean(stats))}`}>
@@ -184,11 +197,11 @@ export default function WorkbenchStatsFeedback() {
             {visible.map((item) => (
               <WorkbenchStatsFeedbackReport
                 item={item}
-                key={item.id}
+                key={keyOf(item)}
                 modelName={modelName(item.harness, item.model)}
-                onToggle={() => toggleSelected(item.id)}
-                origin={origin(item.channel, item.projectId)}
-                selected={selectedIds.has(item.id)}
+                onToggle={() => toggleSelected(keyOf(item))}
+                origin={origin(item.channel, item.projectId, item.daemonId)}
+                selected={selectedKeys.has(keyOf(item))}
               />
             ))}
           </ol>
@@ -200,7 +213,9 @@ export default function WorkbenchStatsFeedback() {
         </>
       )}
       <WorkbenchStatsFeedbackSelectionBar
-        addressBlocked={addressProjectId ? null : "The selected feedback belongs to more than one project; address one project at a time."}
+        addressBlocked={addressProjectId ? null : local.some(({ projectId }) => !projectId)
+          ? "Some selected feedback belongs to a project this machine has no folder for."
+          : "The selected feedback belongs to more than one project; address one project at a time."}
         busy={busy}
         error={actionError}
         onAddress={address}

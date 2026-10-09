@@ -1,4 +1,4 @@
-/* No exports. Tests protect project and root ownership of claim file links. */
+/* No exports. Tests protect project and root ownership of claim file links, and that only this machine's files link. */
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import test from "node:test";
@@ -11,8 +11,10 @@ import WorkbenchClaimHotspots from "./WorkbenchClaimHotspots.tsx";
 test("file controls retain the owning project and workspace root instead of the current project", () => {
   const html = renderWithStats(createElement(WorkbenchClaimHotspots), {
     claims: { ...EMPTY_WORKBENCH_STATS_SECTIONS.claims, claimHotspots: [
-      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("workspace"), rootId: "secondary", path: "src/view.ts", threadCount: 3, threads: [] },
-      { projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("ordinary"), rootId: "main", path: "src/view.ts", threadCount: 2, threads: [] },
+      { daemonId: null, logicalProjectId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("workspace"), rootId: "secondary", path: "src/view.ts", threadCount: 3, threads: [] },
+      { daemonId: null, logicalProjectId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("ordinary"), rootId: "main", path: "src/view.ts", threadCount: 2, threads: [] },
+      // Another machine's file is shown but cannot open here.
+      { daemonId: "elsewhere", logicalProjectId: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("ordinary"), rootId: "main", path: "src/remote.ts", threadCount: 1, threads: [] },
     ] },
   }, {
     projects: [
@@ -22,4 +24,6 @@ test("file controls retain the owning project and workspace root instead of the 
   });
   assert.match(html, /data-project-file-project-id="workspace"[^>]*data-project-file-relative-path="secondary:src\/view.ts"/u);
   assert.match(html, /data-project-file-project-id="ordinary"[^>]*data-project-file-relative-path="src\/view.ts"/u);
+  assert.doesNotMatch(html, /data-project-file-project-id="ordinary"[^>]*data-project-file-relative-path="src\/remote.ts"/u);
+  assert.match(html, /remote\.ts/u);
 });

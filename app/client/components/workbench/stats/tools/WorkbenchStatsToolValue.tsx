@@ -5,6 +5,7 @@
  * - default WorkbenchStatsToolValue: every wb tool's calls against its always-on prompt cost, ordered by any column; hovering a tool's trend names the threads behind each period.
  */
 import { useState, type PointerEvent } from "react";
+import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tools-contract";
 import WorkbenchThreadReferenceList from "../../WorkbenchThreadReferenceList";
 import WorkbenchTooltip from "../../WorkbenchTooltip";
@@ -37,6 +38,7 @@ function PeriodDetail({ bucketStarts, index, row, threads, unit }: {
   threads: WorkbenchStatsTools["threads"];
   unit: "day" | "week";
 }) {
+  const { remoteLogicalProject } = useStats();
   const calls = row.buckets[index] ?? 0;
   const callers = row.bucketThreads[index] ?? [];
   const references = callers.flatMap(({ calls: threadCalls, thread }) => {
@@ -44,7 +46,10 @@ function PeriodDetail({ bucketStarts, index, row, threads, unit }: {
     const identity = named ? statsThreadIdentity(named) : null;
     return named && identity ? [{
       detail: <span className="tabular-nums">{compactNumber(threadCalls)}</span>,
-      identity: { harness: identity.harness, threadId: identity.threadId }, projectId: identity.projectId, title: named.title || "Untitled thread",
+      identity: { harness: identity.harness, threadId: identity.threadId },
+      // Another machine's thread opens by id through its logical project.
+      logicalProjectId: LogicalProjectIdSchema.safeParse(remoteLogicalProject(named.projectId, named.daemonId)).data ?? null,
+      projectId: identity.projectId, title: named.title || "Untitled thread",
     }] : [];
   });
   return (

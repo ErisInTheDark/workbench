@@ -1,10 +1,13 @@
 /*
  * Exports:
- * - StatsProjectGroup: one selected project counted on the stats daemon, with all its local physical ids.
- * - StatsProjectScope: the sidebar selection expressed as projects on the daemon that serves statistics.
- * - resolveStatsProjectScope: map selected logical or physical projects onto one daemon's project ids, per-project groups, and names.
+ * - StatsProjectGroup: one selected project, with the references that read it on every machine.
+ * - StatsProjectScope: the sidebar selection as workspace project references, with names and logical owners for stats rows.
+ * - statsLocationKey: the key one daemon's physical project carries in the scope's maps.
+ * - resolveStatsProjectScope: map selected logical or physical projects onto references stats read across every machine.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
 
 export interface StatsProjectGroup {
   /** The selected sidebar id: a logical project id, or a physical one when the sidebar shows physical projects. */
@@ -12,68 +15,78 @@ export interface StatsProjectGroup {
   label: string;
   /** For icons; null when the sidebar knows no project for the id. */
   project: WorkbenchLogicalProject | WorkbenchProjectOption | null;
-  /** Physical ids on the stats daemon, such as one project's worktrees. */
-  projectIds: string[];
+  references: WorkspaceProjectReference[];
 }
 
 export interface StatsProjectScope {
-  /** The daemon whose statistics are observed; null until the app knows it. */
-  daemonId: string | null;
-  /** Physical project ids on the stats daemon, in selection order. */
-  projectIds: string[];
-  /** Selected projects counted here, one label per selected project. */
+  /** The daemon this app is attached to; its files and threads open locally. */
+  attachedDaemonId: string | null;
+  /** References for the whole selection; empty when nothing is selected. */
+  references: WorkspaceProjectReference[];
+  /** One label per selected project. */
   labels: string[];
-  /** Selected projects with no location on the stats daemon; their usage lives elsewhere. */
-  elsewhere: string[];
-  /** Each selected project counted here. */
   groups: StatsProjectGroup[];
+  /** Display names by logical id, by `statsLocationKey`, and by a physical id on the attached daemon. */
   names: ReadonlyMap<string, string>;
+  /** Logical project owning each `statsLocationKey`. */
+  logical: ReadonlyMap<string, string>;
 }
 
-export function resolveStatsProjectScope({ daemonId, logicalProjects, projects, selectedProjectIds }: {
-  daemonId: string | null;
+export function statsLocationKey(daemonId: string | null, projectId: string) {
+  return `${daemonId ?? ""}/${projectId}`;
+}
+
+function locationReference(daemonId: string, projectId: string): WorkspaceProjectReference | null {
+  const daemon = DaemonIdSchema.safeParse(daemonId).data;
+  const project = ProjectIdSchema.safeParse(projectId).data;
+  return daemon && project ? { kind: "location", location: { daemonId: daemon, projectId: project } } : null;
+}
+
+export function resolveStatsProjectScope({ attachedDaemonId, logicalProjects, projects, selectedProjectIds }: {
+  attachedDaemonId: string | null;
   /** Undefined when the sidebar shows physical projects directly. */
   logicalProjects: readonly WorkbenchLogicalProject[] | undefined;
+  /** The attached daemon's catalogue. */
   projects: readonly WorkbenchProjectOption[];
   selectedProjectIds: readonly string[];
 }): StatsProjectScope {
   const names = new Map(projects.map((project) => [project.id as string, project.name]));
+  const logical = new Map<string, string>();
   if (!logicalProjects) {
-    const labels = selectedProjectIds.map((id) => names.get(id) ?? id);
+    const groups = selectedProjectIds.flatMap((id) => {
+      const reference = attachedDaemonId ? locationReference(attachedDaemonId, id) : null;
+      return reference ? [{ id, label: names.get(id) ?? id, project: projects.find((project) => project.id === id) ?? null, references: [reference] }] : [];
+    });
+    for (const project of projects) names.set(statsLocationKey(attachedDaemonId, project.id), project.name);
     return {
-      daemonId, projectIds: [...selectedProjectIds], labels, elsewhere: [], names,
-      groups: selectedProjectIds.map((id, index) => ({
-        id, label: labels[index]!, project: projects.find((project) => project.id === id) ?? null, projectIds: [id],
-      })),
+      attachedDaemonId, groups, labels: groups.map(({ label }) => label), logical, names,
+      references: groups.flatMap(({ references }) => references),
     };
   }
   const label = (project: WorkbenchLogicalProject) => project.displayName ?? project.label;
-  for (const logical of logicalProjects) {
-    const local = logical.locations.filter((location) => location.target.daemonId === daemonId);
-    // Several folders of one project (such as worktrees) are told apart by folder name.
-    for (const location of local) {
-      names.set(location.target.projectId, local.length > 1 && location.name !== label(logical)
-        ? `${label(logical)} · ${location.name}` : label(logical));
+  for (const project of logicalProjects) {
+    names.set(project.id, label(project));
+    const locations = [
+      ...project.locations.map(({ daemonId, name, target }) => ({ daemonId: daemonId as string, name, projectId: target.projectId as string })),
+      ...(project.observedLocations ?? []).map(({ daemonId, project: physical, projectId }) => ({ daemonId: daemonId as string, name: physical.name, projectId: projectId as string })),
+    ];
+    for (const location of locations) {
+      const key = statsLocationKey(location.daemonId, location.projectId);
+      logical.set(key, project.id);
+      // Several folders of one project (such as worktrees) on one machine are told apart by folder name.
+      const siblings = locations.filter(({ daemonId }) => daemonId === location.daemonId).length;
+      const name = siblings > 1 && location.name !== label(project) ? `${label(project)} · ${location.name}` : label(project);
+      names.set(key, name);
+      if (location.daemonId === attachedDaemonId) names.set(location.projectId, name);
     }
   }
-  const projectIds: string[] = [];
-  const labels: string[] = [];
-  const elsewhere: string[] = [];
-  const groups: StatsProjectGroup[] = [];
-  for (const selectedId of selectedProjectIds) {
-    const logical = logicalProjects.find((project) => project.id === selectedId);
-    const local = logical?.locations.filter((location) => location.target.daemonId === daemonId) ?? [];
-    const name = logical ? label(logical) : selectedId;
-    (local.length ? labels : elsewhere).push(name);
-    if (local.length) {
-      groups.push({
-        id: selectedId, label: name, project: logical ?? null,
-        projectIds: [...new Set(local.map((location) => location.target.projectId as string))],
-      });
-    }
-    for (const location of local) {
-      if (!projectIds.includes(location.target.projectId)) projectIds.push(location.target.projectId);
-    }
-  }
-  return { daemonId, projectIds, labels, elsewhere, groups, names };
+  const groups: StatsProjectGroup[] = selectedProjectIds.flatMap((selectedId) => {
+    const project = logicalProjects.find((candidate) => candidate.id === selectedId);
+    const id = LogicalProjectIdSchema.safeParse(selectedId).data;
+    return project && id ? [{ id: selectedId, label: label(project), project, references: [{ kind: "logical" as const, projectId: id }] }] : [];
+  });
+  return {
+    attachedDaemonId, groups, labels: groups.map(({ label: name }) => name), logical, names,
+    references: groups.flatMap(({ references }) => references),
+  };
 }

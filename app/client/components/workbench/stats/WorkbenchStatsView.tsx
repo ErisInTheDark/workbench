@@ -4,7 +4,7 @@
  * Exports:
  * - default WorkbenchStatsView: own the stats store for the view's lifetime, nudge history import and limit refresh, and render the shared controls and the routed tab.
  */
-import { useContext, useEffect, useLayoutEffect, useState, type ComponentType, type MouseEvent } from "react";
+import { useContext, useEffect, useLayoutEffect, useState, type ComponentType } from "react";
 
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
@@ -12,7 +12,7 @@ import WorkbenchWorkspaceContext, { WorkbenchOperationsContext as WorkbenchDaemo
 import type { StatsProjectScope } from "./stats-project-scope";
 import { WorkbenchStatsProvider } from "./use-stats";
 import WorkbenchStatsControls from "./WorkbenchStatsControls";
-import WorkbenchStatsStore from "./WorkbenchStatsStore";
+import WorkbenchStatsStore, { type StatsInputs } from "./WorkbenchStatsStore";
 import WorkbenchStatsToolsTab from "./tools/WorkbenchStatsToolsTab";
 import WorkbenchStatsUsageTab from "./usage/WorkbenchStatsUsageTab";
 import WorkbenchStatsWorkspacesTab from "./workspaces/WorkbenchStatsWorkspacesTab";
@@ -23,10 +23,11 @@ const TABS: Record<WorkbenchStatsTab, ComponentType> = {
   workspaces: WorkbenchStatsWorkspacesTab,
 };
 
-export default function WorkbenchStatsView({ onAddressFeedback, onNavigateThread, projects, scope, tab }: {
+export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, projects, scope, tab, threadRoute }: {
   /** Opens a new thread in the project, its composer seeded with the prompt. */
   onAddressFeedback: (projectId: string, prompt: string) => void;
-  onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
+  onOpenRoute: StatsInputs["openRoute"];
+  threadRoute: StatsInputs["threadRoute"];
   projects: readonly WorkbenchProjectOption[];
   /** The sidebar selection, resolved onto this daemon's projects. */
   scope: StatsProjectScope;
@@ -39,28 +40,31 @@ export default function WorkbenchStatsView({ onAddressFeedback, onNavigateThread
 
   // Panels lease sections during render-time subscription, so app facts must land before they paint.
   useLayoutEffect(() => {
-    store.setInputs({ addressFeedback: onAddressFeedback, navigateThread: onNavigateThread, projects, scope, workspace });
+    store.setInputs({ addressFeedback: onAddressFeedback, openRoute: onOpenRoute, projects, scope, threadRoute, workspace });
   });
   useEffect(() => () => store.dispose(), [store]);
 
-  // Commands only nudge the daemon; their effects stream back through the observations.
+  // Commands only nudge the daemon; their effects stream back through the observations. They run on every
+  // connection, so a cold load waits for the socket instead of failing before it opens.
   useEffect(() => {
-    if (!daemon) return;
+    if (!daemon || !workspace) return;
     let active = true;
     const report = (error: unknown, fallback: string) => {
       if (active) setActionError(error instanceof Error ? error.message : fallback);
     };
-    const start = () => daemon.stats.startImport()
-      .then(() => { if (active) setActionError(""); })
-      .catch((error: unknown) => report(error, "Unable to start history import."));
-    const unsubscribeReconnect = daemon.onReconnect(() => { void start(); });
-    void start();
-    void daemon.stats.refreshRateLimits().catch((error: unknown) => report(error, "Unable to refresh plan limits."));
+    const nudge = () => {
+      void daemon.stats.startImport()
+        .then(() => { if (active) setActionError(""); })
+        .catch((error: unknown) => report(error, "Unable to start history import."));
+      void daemon.stats.refreshRateLimits().catch((error: unknown) => report(error, "Unable to refresh plan limits."));
+    };
+    const unsubscribeOpen = workspace.rpc.onOpen(nudge);
+    if (workspace.rpc.connected) nudge();
     return () => {
       active = false;
-      unsubscribeReconnect();
+      unsubscribeOpen();
     };
-  }, [daemon]);
+  }, [daemon, workspace]);
 
   const Tab = TABS[tab];
   return (

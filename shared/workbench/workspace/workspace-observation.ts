@@ -214,7 +214,12 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("runtime") }).strict(),
   z.object({ kind: z.literal("reloadOperation") }).strict(),
-  z.object({ kind: z.literal("stats"), daemonId: DaemonIdSchema, request: WorkbenchStatsReadRequestSchema }).strict(),
+  /** Merged across every daemon holding the referenced projects; null reads every project on every daemon. */
+  z.object({
+    kind: z.literal("stats"),
+    projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
+    request: WorkbenchStatsReadRequestSchema.omit({ projectIds: true }),
+  }).strict(),
   z.object({
     kind: z.literal("archivedThreads"),
     projects: z.array(WorkspaceProjectReferenceSchema).nullable(),

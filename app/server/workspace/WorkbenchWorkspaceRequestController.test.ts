@@ -128,7 +128,7 @@ function state(revision: number): WorkbenchClientStateResponse {
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
 async function fixture(
   context: TestContext,
-  daemons?: { get(daemonId: string): object | undefined; attached?: object },
+  daemons?: { get(daemonId: string): object | undefined; attached?: object; all?(): object[] },
   owners?: Partial<Pick<WorkbenchWorkspaceThreads, "observe" | "withThread">>,
 ) {
   const temporary = await WorkbenchTemporaryDirectory.create("workspace-request-owner-");
@@ -149,7 +149,9 @@ async function fixture(
   const providerEvents: Array<{ method: string; harness: string; daemonId: string }> = [];
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
-  const requestSources = daemons ? Object.assign(Object.create(sources) as typeof sources, { get: daemons.get }) : sources;
+  const requestSources = daemons
+    ? Object.assign(Object.create(sources) as typeof sources, { get: daemons.get, ...(daemons.all ? { all: daemons.all } : {}) })
+    : sources;
   if (daemons?.attached) Object.defineProperty(requestSources, "attached", { value: daemons.attached });
   const owner = new WorkbenchWorkspaceRequestController({
     workspace, presentation,
@@ -305,35 +307,54 @@ test("a failed app-state refresh retains usable facts and only a new invalidatio
   await f.wait(value => value.kind === "appState" && value.data?.revision === 3);
 });
 
-test("stats observations relay each daemon revision, including refinement, and release with the interest", async context => {
-  let snapshot: { phase: "pending" | "current"; failure: null; value: object | null } = { phase: "pending", failure: null, value: null };
-  let notify = () => {};
-  const observed: object[] = [];
-  let released = 0;
-  const daemonId = DaemonIdSchema.parse(randomUUID());
-  const source = {
-    id: daemonId,
-    observe: (query: object, listener: () => void) => {
-      observed.push(query);
-      notify = listener;
-      return { getSnapshot: () => snapshot, release: () => { released += 1; } };
-    },
-  };
-  const f = await fixture(context, { get: (id) => id === daemonId ? source : undefined });
-  const subscriptionId = randomUUID();
-  const request = { model: null, period: null, projectIds: null, provider: null, range: "7d" as const, section: "claims" as const, tokenTypes: ["input" as const, "output" as const] };
-  const initial = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "stats", daemonId, request } });
-  assert.ok(initial.kind === "stats" && initial.phase === "pending");
-  assert.deepEqual(observed, [{ kind: "stats", request }]);
-  const data = { generatedAt: 7 };
-  for (const refinement of ["pending", "current"] as const) {
-    snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement, data } };
-    notify();
-    const relayed = await f.wait(value => value.kind === "stats" && value.refinement === refinement);
-    assert.ok(relayed.kind === "stats" && relayed.data === data && relayed.phase === "current");
+test("stats fan out to every daemon, merge once all answer, combine refinement, and release every source", async context => {
+  function daemon() {
+    const state = {
+      id: DaemonIdSchema.parse(randomUUID()), observed: [] as object[], released: 0, notify: () => {},
+      snapshot: { phase: "pending", failure: null, value: null } as { phase: "pending" | "current" | "failed"; failure: string | null; value: object | null },
+    };
+    return Object.assign(state, {
+      observe: (query: object, listener: () => void) => {
+        state.observed.push(query);
+        state.notify = listener;
+        return { getSnapshot: () => state.snapshot, release: () => { state.released += 1; } };
+      },
+    });
   }
+  const here = daemon();
+  const there = daemon();
+  const f = await fixture(context, {
+    get: (id) => [here, there].find((candidate) => candidate.id === id), all: () => [here, there], attached: here,
+  });
+  const subscriptionId = randomUUID();
+  const request = { model: null, period: null, provider: null, range: "7d" as const, section: "feedback" as const, tokenTypes: ["input" as const, "output" as const] };
+  const initial = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "stats", projects: null, request } });
+  assert.ok(initial.kind === "stats" && initial.phase === "pending");
+  // Every project on every daemon, including ones no catalogue registers.
+  for (const source of [here, there]) assert.deepEqual(source.observed, [{ kind: "stats", request: { ...request, projectIds: null } }]);
+
+  const feedback = (total: number) => ({
+    section: "feedback", generatedAt: 1, feedback: { counts: [], items: [], total, workbenchProjectId: null },
+  });
+  here.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "current", data: feedback(2) } };
+  there.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "pending", data: feedback(3) } };
+  here.notify();
+  const partial = await f.wait(value => value.kind === "stats" && value.data?.section === "feedback" && value.data.feedback.total === 5);
+  assert.ok(partial.kind === "stats" && partial.phase === "current" && partial.refinement === "pending");
+  there.snapshot = { ...there.snapshot, value: { kind: "stats", refinement: "current", data: feedback(3) } };
+  there.notify();
+  await f.wait(value => value.kind === "stats" && value.refinement === "current");
+  // A daemon that rejects the request (say, an older version) never refines, so it must not hold refinement open.
+  there.snapshot = { phase: "failed", failure: "Workspace observation request is invalid.", value: null };
+  here.snapshot = { ...here.snapshot, value: { kind: "stats", refinement: "pending", data: feedback(2) } };
+  here.notify();
+  await f.wait(value => value.kind === "stats" && value.refinement === "pending" && value.data?.section === "feedback" && value.data.feedback.total === 2);
+  here.snapshot = { ...here.snapshot, value: { kind: "stats", refinement: "current", data: feedback(2) } };
+  here.notify();
+  const settled = await f.wait(value => value.kind === "stats" && value.refinement === "current" && value.data?.section === "feedback" && value.data.feedback.total === 2);
+  assert.ok(settled.kind === "stats" && settled.phase === "stale" && settled.failure?.includes("request is invalid"));
   f.owner.release({ subscriptionId, generation: 1 });
-  assert.equal(released, 1);
+  assert.deepEqual([here.released, there.released], [1, 1]);
 });
 
 test("a thread row observation publishes only that thread's row from its owner project, then patches it", async context => {

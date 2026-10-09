@@ -4,12 +4,15 @@
  * - StatsSectionName: independently observed stats panels; `overview` is usage over the whole range, ignoring a picked period.
  * - StatsSectionSnapshot: one panel's latest data, retained across request changes, with its loading and refinement state.
  * - StatsState: the view's filters, derived scope, and actions.
- * - StatsInputs: app-owned facts the view feeds the store (workspace, project scope, navigation callbacks).
- * - default WorkbenchStatsStore: own stats filters and lease one workspace observation per demanded section request.
+ * - StatsThreadLocation/StatsProjectLocation: where a stats row's thread or project lives once merged across machines.
+ * - StatsInputs: app-owned facts the view feeds the store (workspace, project scope, routes).
+ * - default WorkbenchStatsStore: own stats filters and lease one cross-machine workspace observation per demanded section request.
  */
 import type { MouseEvent } from "react";
 import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
-import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { z } from "zod";
 import {
   STATS_TOKEN_TYPES,
@@ -22,10 +25,25 @@ import {
 import type WorkbenchWorkspaceClient from "../../../workbench/app/WorkbenchWorkspaceClient";
 import type { WorkspaceQueryHandle } from "../../../workbench/app/WorkbenchWorkspaceClient";
 import { nextStatsPeriod, type StatsPeriodSelection } from "./stats-period";
-import type { StatsProjectGroup, StatsProjectScope } from "./stats-project-scope";
+import { statsLocationKey, type StatsProjectGroup, type StatsProjectScope } from "./stats-project-scope";
 
 export type StatsActivityMetric = "cost" | "tokens";
-type SectionRequest = z.output<typeof WorkbenchStatsReadRequestSchema>;
+type SectionRequest = Omit<z.output<typeof WorkbenchStatsReadRequestSchema>, "projectIds">;
+interface StatsQuery { projects: WorkspaceProjectReference[] | null; request: SectionRequest }
+
+/** A stats row's thread, on whichever machine holds it. */
+export interface StatsThreadLocation {
+  readonly daemonId?: string | null;
+  readonly projectId: string;
+  readonly threadId: string;
+}
+
+/** A stats row's project; merged rows name their logical project. */
+export interface StatsProjectLocation {
+  readonly daemonId?: string | null;
+  readonly logicalProjectId?: string | null;
+  readonly projectId: string;
+}
 
 export type StatsSectionName = "overview" | WorkbenchStatsSection;
 type SectionOf<Name extends StatsSectionName> = Name extends "overview" ? "usage" : Name;
@@ -47,12 +65,20 @@ export interface StatsInputs {
   readonly scope: StatsProjectScope;
   readonly projects: readonly Project[];
   readonly addressFeedback: (projectId: string, prompt: string) => void;
-  readonly navigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
+  readonly openRoute: (event: MouseEvent<HTMLAnchorElement>, route: WorkbenchRoute) => void;
+  /** Local threads open in their project; others open by id through their logical project. */
+  readonly threadRoute: (thread: StatsThreadLocation, logicalProjectId: string | null) => WorkbenchRoute;
+}
+
+interface FocusedProject {
+  readonly key: string;
+  readonly label: string;
+  readonly reference: WorkspaceProjectReference;
 }
 
 interface Filters {
   chosenMode: "selected" | "all" | null;
-  focusedProject: string | null;
+  focusedProject: FocusedProject | null;
   metric: StatsActivityMetric;
   model: string | null;
   period: StatsPeriodSelection | null;
@@ -66,13 +92,14 @@ export interface StatsState {
   readonly mode: "selected" | "all";
   readonly range: WorkbenchStatsRange;
   readonly period: StatsPeriodSelection | null;
-  readonly focusedProject: string | null;
+  readonly focusedProject: FocusedProject | null;
   readonly provider: WorkbenchHarness | null;
   readonly model: string | null;
   readonly tokenTypes: readonly StatsTokenType[];
   readonly metric: StatsActivityMetric;
-  /** Null reads every project on the daemon. */
-  readonly projectIds: readonly string[] | null;
+  /** Null reads every project on every machine. */
+  readonly references: readonly WorkspaceProjectReference[] | null;
+  /** The attached daemon's catalogue. */
   readonly projects: readonly Project[];
   readonly scope: StatsProjectScope;
   /** Whether panels break figures down by project. */
@@ -82,19 +109,27 @@ export interface StatsState {
   /** The one project (with all its local folders) the workspaces tab's claims and feedback show. */
   readonly workspaceProject: StatsProjectGroup | null;
   readonly ready: boolean;
-  projectName(projectId: string): string;
+  /** A row's project name; pass the row's daemon when it has one. */
+  projectName(projectId: string, daemonId?: string | null): string;
+  /** Rows from no daemon (unmerged) or the attached one live here, so their files and threads open locally. */
+  isLocal(daemonId: string | null | undefined): boolean;
+  /** The attached daemon's folder of a row's project, for actions that run here; null when this machine lacks it. */
+  localProject(projectId: string, daemonId: string | null | undefined): string | null;
+  /** The logical project another machine's row belongs to, for opening it by id; null for local rows. */
+  remoteLogicalProject(projectId: string, daemonId: string | null | undefined): string | null;
+  threadRoute(thread: StatsThreadLocation): WorkbenchRoute;
+  openThread(event: MouseEvent<HTMLAnchorElement>, thread: StatsThreadLocation): void;
   setMode(mode: "selected" | "all"): void;
   setRange(range: WorkbenchStatsRange): void;
   pickPeriod(startedAt: number, extend: boolean): void;
   clearPeriod(): void;
-  focusProject(projectId: string | null): void;
+  focusProject(project: StatsProjectLocation | null): void;
   setProvider(provider: WorkbenchHarness | null): void;
   setModel(provider: WorkbenchHarness, model: string | null): void;
   setTokenTypes(tokenTypes: StatsTokenType[]): void;
   setMetric(metric: StatsActivityMetric): void;
   setWorkspaceProject(id: string): void;
   addressFeedback(projectId: string, prompt: string): void;
-  navigateThread(event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string): void;
 }
 
 interface Entry {
@@ -103,7 +138,7 @@ interface Entry {
 }
 
 const PENDING: StatsSectionSnapshot = { data: null, failure: null, loading: true, refining: false };
-const EMPTY_SCOPE: StatsProjectScope = { daemonId: null, elsewhere: [], groups: [], labels: [], names: new Map(), projectIds: [] };
+const EMPTY_SCOPE: StatsProjectScope = { attachedDaemonId: null, groups: [], labels: [], logical: new Map(), names: new Map(), references: [] };
 
 function sameSnapshot(left: StatsSectionSnapshot, right: StatsSectionSnapshot) {
   return left.data === right.data && left.failure === right.failure && left.loading === right.loading && left.refining === right.refining;
@@ -119,7 +154,8 @@ export default class WorkbenchStatsStore {
     provider: null, range: "7d", tokenTypes: [...STATS_TOKEN_TYPES], workspaceProject: null,
   };
   #inputs: StatsInputs = {
-    workspace: null, scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {}, navigateThread: () => {},
+    workspace: null, scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {}, openRoute: () => {},
+    threadRoute: () => { throw new Error("Stats threads cannot open before the view supplies routes."); },
   };
   #state: StatsState;
   readonly #listeners = new Set<() => void>();
@@ -148,10 +184,11 @@ export default class WorkbenchStatsStore {
   setInputs(inputs: StatsInputs) {
     const previous = this.#inputs;
     this.#inputs = inputs;
-    const selection = (scope: StatsProjectScope) => `${scope.daemonId}\0${scope.projectIds.join("\0")}`;
+    // References are plain JSON in a fixed order, so their serialisation identifies the selection.
+    const selection = (scope: StatsProjectScope) => `${scope.attachedDaemonId}\0${JSON.stringify(scope.references)}`;
     const changed = previous.workspace !== inputs.workspace || previous.projects !== inputs.projects
       || previous.scope.names !== inputs.scope.names || previous.scope.labels.join("\0") !== inputs.scope.labels.join("\0")
-      || previous.scope.elsewhere.join("\0") !== inputs.scope.elsewhere.join("\0") || selection(previous.scope) !== selection(inputs.scope);
+      || previous.threadRoute !== inputs.threadRoute || selection(previous.scope) !== selection(inputs.scope);
     if (!changed) return;
     // A changed sidebar selection replaces any project drilled into from the old one.
     if (selection(previous.scope) !== selection(inputs.scope)) this.#filters = { ...this.#filters, focusedProject: null };
@@ -201,16 +238,38 @@ export default class WorkbenchStatsStore {
     this.#sync();
   }
 
-  #projectIds(): readonly string[] | null {
+  #references(): readonly WorkspaceProjectReference[] | null {
     const { focusedProject } = this.#filters;
-    if (focusedProject) return [focusedProject];
-    return this.#mode() === "all" ? null : this.#inputs.scope.projectIds;
+    if (focusedProject) return [focusedProject.reference];
+    return this.#mode() === "all" ? null : this.#inputs.scope.references;
   }
 
   #workspaceProjects(): readonly StatsProjectGroup[] {
-    const { groups } = this.#inputs.scope;
-    return groups.length ? groups
-      : this.#inputs.projects.map((project) => ({ id: project.id, label: project.name, project, projectIds: [project.id] }));
+    const { attachedDaemonId, groups } = this.#inputs.scope;
+    if (groups.length) return groups;
+    const daemonId = DaemonIdSchema.safeParse(attachedDaemonId).data;
+    return daemonId ? this.#inputs.projects.map((project) => ({
+      id: project.id, label: project.name, project,
+      references: [{ kind: "location" as const, location: { daemonId, projectId: project.id } }],
+    })) : [];
+  }
+
+  #logicalProject(projectId: string, daemonId: string | null | undefined) {
+    const { attachedDaemonId, logical } = this.#inputs.scope;
+    return logical.get(statsLocationKey(daemonId ?? attachedDaemonId, projectId)) ?? null;
+  }
+
+  /** A merged project row names its logical project; an unmerged one only its folder. */
+  #focus(project: StatsProjectLocation): FocusedProject | null {
+    const daemonId = project.daemonId ?? this.#inputs.scope.attachedDaemonId;
+    const logicalId = LogicalProjectIdSchema.safeParse(project.logicalProjectId ?? this.#logicalProject(project.projectId, daemonId)).data;
+    if (logicalId) return { key: logicalId, label: this.#state.projectName(logicalId), reference: { kind: "logical", projectId: logicalId } };
+    const daemon = DaemonIdSchema.safeParse(daemonId).data;
+    const physical = ProjectIdSchema.safeParse(project.projectId).data;
+    return daemon && physical ? {
+      key: statsLocationKey(daemon, physical), label: this.#state.projectName(physical, daemon),
+      reference: { kind: "location", location: { daemonId: daemon, projectId: physical } },
+    } : null;
   }
 
   /** A chosen project that left the selection falls back to the first one still selected. */
@@ -221,28 +280,47 @@ export default class WorkbenchStatsStore {
 
   #mode(): "selected" | "all" {
     // The selection resolves after project facts load, so only an explicit choice overrides the default.
-    return this.#filters.chosenMode ?? (this.#inputs.scope.projectIds.length ? "selected" : "all");
+    return this.#filters.chosenMode ?? (this.#inputs.scope.references.length ? "selected" : "all");
   }
 
   #buildState(): StatsState {
     const filters = this.#filters;
     const inputs = this.#inputs;
-    const projectIds = this.#projectIds();
-    const projectName = (projectId: string) => inputs.scope.names.get(projectId)
-      ?? inputs.projects.find(({ id }) => id === projectId)?.name ?? projectId;
+    const references = this.#references();
+    const { attachedDaemonId, names } = inputs.scope;
+    const isLocal = (daemonId: string | null | undefined) => !daemonId || daemonId === attachedDaemonId;
+    const projectName = (projectId: string, daemonId?: string | null) => names.get(statsLocationKey(daemonId ?? attachedDaemonId, projectId))
+      ?? names.get(projectId) ?? inputs.projects.find(({ id }) => id === projectId)?.name ?? projectId;
+    const remoteLogicalProject = (projectId: string, daemonId: string | null | undefined) =>
+      isLocal(daemonId) ? null : this.#logicalProject(projectId, daemonId);
+    const threadRoute = (thread: StatsThreadLocation) => inputs.threadRoute(thread, remoteLogicalProject(thread.projectId, thread.daemonId));
     return {
       focusedProject: filters.focusedProject,
       metric: filters.metric,
       mode: this.#mode(),
       model: filters.model,
       period: filters.period,
-      projectIds,
+      references,
       projects: inputs.projects,
       provider: filters.provider,
       range: filters.range,
-      ready: Boolean(inputs.workspace && DaemonIdSchema.safeParse(inputs.scope.daemonId).success),
+      ready: Boolean(inputs.workspace),
       scope: inputs.scope,
-      showProjects: projectIds === null || projectIds.length > 1,
+      showProjects: references === null || references.length > 1 || references.some(({ kind }) => kind === "logical"),
+      isLocal,
+      localProject: (projectId, daemonId) => {
+        if (isLocal(daemonId)) return projectId;
+        const logicalId = this.#logicalProject(projectId, daemonId);
+        if (!logicalId) return null;
+        // The first of this machine's folders of the same project.
+        for (const [key, owner] of inputs.scope.logical) {
+          if (owner === logicalId && key.startsWith(`${attachedDaemonId}/`)) return key.slice(`${attachedDaemonId}/`.length);
+        }
+        return null;
+      },
+      remoteLogicalProject,
+      threadRoute,
+      openThread: (event, thread) => inputs.openRoute(event, threadRoute(thread)),
       tokenTypes: filters.tokenTypes,
       workspaceProject: this.#workspaceProject(),
       workspaceProjects: this.#workspaceProjects(),
@@ -251,34 +329,35 @@ export default class WorkbenchStatsStore {
       setRange: (range) => this.#setFilters({ range, period: null }),
       pickPeriod: (startedAt, extend) => this.#setFilters({ period: nextStatsPeriod(this.#filters.period, startedAt, extend) }),
       clearPeriod: () => this.#setFilters({ period: null }),
-      focusProject: (focusedProject) => this.#setFilters({ focusedProject }),
+      focusProject: (project) => this.#setFilters({ focusedProject: project ? this.#focus(project) : null }),
       setProvider: (provider) => this.#setFilters({ provider, model: null }),
       setModel: (provider, model) => this.#setFilters({ model, provider: model ? provider : this.#filters.provider }),
       setTokenTypes: (tokenTypes) => this.#setFilters({ tokenTypes }),
       setMetric: (metric) => this.#setFilters({ metric }),
       setWorkspaceProject: (workspaceProject) => this.#setFilters({ workspaceProject }),
       addressFeedback: (projectId, prompt) => this.#inputs.addressFeedback(projectId, prompt),
-      navigateThread: (event, projectId, threadId) => this.#inputs.navigateThread(event, projectId, threadId),
     };
   }
 
   /** Provider, model and token types narrow usage only; activity, limits and status always span the whole range. */
-  #request(name: StatsSectionName): SectionRequest | null {
+  #request(name: StatsSectionName): StatsQuery | null {
     if (!this.#state.ready) return null;
     const filters = this.#filters;
     const usage = name === "usage" || name === "overview";
     const wholeRange = name === "overview" || name === "limits" || name === "status";
     // Contention and feedback read as one project's story, so the workspaces tab shows a single project.
     const workspace = name === "claims" || name === "feedback";
-    const projectIds = workspace ? this.#workspaceProject()?.projectIds ?? [] : this.#projectIds();
+    const projects = workspace ? this.#workspaceProject()?.references ?? [] : this.#references();
     return {
-      model: usage ? filters.model : null,
-      period: wholeRange || !filters.period ? null : { from: filters.period.from, to: filters.period.to },
-      projectIds: projectIds === null ? null : [...projectIds],
-      provider: usage ? filters.provider : null,
-      range: filters.range,
-      section: name === "overview" ? "usage" : name,
-      tokenTypes: usage ? [...filters.tokenTypes] : [...STATS_TOKEN_TYPES],
+      projects: projects === null ? null : [...projects],
+      request: {
+        model: usage ? filters.model : null,
+        period: wholeRange || !filters.period ? null : { from: filters.period.from, to: filters.period.to },
+        provider: usage ? filters.provider : null,
+        range: filters.range,
+        section: name === "overview" ? "usage" : name,
+        tokenTypes: usage ? [...filters.tokenTypes] : [...STATS_TOKEN_TYPES],
+      },
     };
   }
 
@@ -293,26 +372,25 @@ export default class WorkbenchStatsStore {
 
   #sync() {
     const workspace = this.#inputs.workspace;
-    const daemonId = DaemonIdSchema.safeParse(this.#inputs.scope.daemonId).data;
-    const desired = new Map<string, SectionRequest>();
+    const desired = new Map<string, StatsQuery>();
     this.#keys.clear();
     for (const [name, leases] of this.#leases) {
       if (!leases) continue;
-      const request = this.#request(name);
-      // Request bodies are plain JSON built in a fixed key order, so their serialisation is a stable identity.
-      const key = request && daemonId ? JSON.stringify([daemonId, request]) : null;
+      const query = this.#request(name);
+      // Queries are plain JSON built in a fixed key order, so their serialisation is a stable identity.
+      const key = query ? JSON.stringify(query) : null;
       this.#keys.set(name, key);
-      if (key && request) desired.set(key, request);
+      if (key && query) desired.set(key, query);
     }
     for (const [key, entry] of this.#entries) {
       if (desired.has(key)) continue;
       entry.stop();
       this.#entries.delete(key);
     }
-    if (workspace && daemonId) {
-      for (const [key, request] of desired) {
+    if (workspace) {
+      for (const [key, { projects, request }] of desired) {
         if (this.#entries.has(key)) continue;
-        const handle = workspace.observe({ kind: "stats", daemonId, request });
+        const handle = workspace.observe({ kind: "stats", projects, request });
         const unsubscribe = handle.subscribe(() => this.#entryChanged(key));
         this.#entries.set(key, { handle, stop: () => { unsubscribe(); handle.release(); } });
       }

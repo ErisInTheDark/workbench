@@ -47,6 +47,7 @@ import {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type WorkbenchAppReloadOrchestrator from "../runtime/WorkbenchAppReloadOrchestrator";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
+import { mergeStatsSections } from "workbench-shared/workbench/stats/workbench-stats-merge";
 
 type Payload = {
   [Kind in WorkspaceObservation["kind"]]: Omit<
@@ -61,7 +62,8 @@ interface Interest {
   /** True while `observe` runs: its return value already carries these changes, so nothing is published. */
   opening: boolean;
   stop: Array<() => void>;
-  sources: Map<DaemonId, { projectIds: ProjectId[]; observation: Observation }>;
+  /** Per-daemon fan-out; stats may read every project on a daemon (null). */
+  sources: Map<DaemonId, { projectIds: ProjectId[] | null; observation: Observation }>;
   owner: ReturnType<WorkbenchWorkspaceThreads["observe"]> | null;
   thread: { key: string; observation: Observation } | null;
 }
@@ -539,8 +541,8 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
         break;
       case "stats":
-        // The daemon may connect after the view asks; projection attaches once the source exists.
-        interest.stop.push(this.options.sources.subscribe(refresh));
+        // Daemons connect and projects gain locations after the view asks; each change re-targets the fan-out.
+        interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
         break;
     }
     try { this.refresh(interest); }
@@ -707,20 +709,7 @@ export default class WorkbenchWorkspaceRequestController {
           data: fact?.value?.kind === "workingTreeSummary" ? fact.value.summary : null });
         return;
       }
-      case "stats": {
-        if (!interest.thread) {
-          const source = this.options.sources.get(query.daemonId);
-          if (source) interest.thread = {
-            key: query.daemonId,
-            observation: source.observe({ kind: "stats", request: query.request }, () => this.refresh(interest)),
-          };
-        }
-        const fact = interest.thread?.observation.getSnapshot();
-        const value = fact?.value?.kind === "stats" ? fact.value : null;
-        this.update(interest, { kind: "stats", phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
-          refinement: value?.refinement ?? "pending", data: value?.data ?? null });
-        return;
-      }
+      case "stats": this.projectStats(interest); return;
       case "threadOwner":
       case "thread": {
         const owner = interest.owner?.getSnapshot() ?? { phase: "pending" as const, failure: null };
@@ -753,8 +742,73 @@ export default class WorkbenchWorkspaceRequestController {
     }
   }
 
+  /**
+   * Each daemon answers for its own projects; the app merges them. Null projects read every project on every
+   * connected daemon, including ones no catalogue registers.
+   */
+  private projectStats(interest: Interest) {
+    const query = interest.request.query;
+    if (query.kind !== "stats") return;
+    const workspace = this.options.workspace.getSnapshot();
+    const targets = new Map<DaemonId, ProjectId[] | null>();
+    if (query.projects === null) for (const source of this.options.sources.all()) targets.set(source.id, null);
+    else for (const [id, ids] of this.rowTargets(query.projects).targets) targets.set(id, [...ids].sort());
+    for (const [id, existing] of interest.sources) {
+      if (targets.has(id) && areDeeplyEqual(targets.get(id), existing.projectIds)) continue;
+      interest.sources.delete(id);
+      existing.observation.release();
+    }
+    for (const [id, projectIds] of targets) {
+      if (interest.sources.has(id)) continue;
+      const source = this.options.sources.get(id);
+      if (!source) continue;
+      interest.sources.set(id, { projectIds, observation: source.observe(
+        { kind: "stats", request: { ...query.request, projectIds } }, () => this.refresh(interest)) });
+    }
+    const hostname = (daemonId: DaemonId) => workspace.sources.find((source) => source.daemonId === daemonId)?.hostname ?? daemonId;
+    const location = (daemonId: string, projectId: string) => {
+      for (const project of workspace.projects) {
+        const found = project.locations.find((item) => item.daemonId === daemonId && item.target.projectId === projectId);
+        if (found) return { logicalProjectId: project.id as string, project: found.project };
+        const observed = project.observedLocations?.find((item) => item.daemonId === daemonId && item.projectId === projectId);
+        if (observed) return { logicalProjectId: project.id as string, project: observed.project };
+      }
+      return null;
+    };
+    const facts = [...interest.sources.entries()].map(([daemonId, { observation }]) => {
+      const fact = observation.getSnapshot();
+      return { daemonId, fact, value: fact.value?.kind === "stats" ? fact.value : null };
+    });
+    // A daemon from another version may answer a different shape; only matching sections merge.
+    const answered = facts.flatMap(({ daemonId, value }) => value?.data?.section === query.request.section
+      ? [{ attached: daemonId === this.options.sources.attached?.id, daemonId, hostname: hostname(daemonId), data: value.data }] : []);
+    let data: ReturnType<typeof mergeStatsSections> = null;
+    let mergeFailure: string | null = null;
+    try {
+      data = mergeStatsSections(answered, {
+        logicalProject: (daemonId, projectId) => location(daemonId, projectId)?.logicalProjectId ?? null,
+        isWorkspace: (daemonId, projectId) => location(daemonId, projectId)?.project?.kind === "workspace",
+      });
+    } catch (error) {
+      mergeFailure = this.failure(error);
+      this.options.warn(`Stats merge failed: ${mergeFailure}`);
+    }
+    const failed = facts.find(({ fact }) => fact.failure);
+    const failure = mergeFailure ?? (failed ? `${hostname(failed.daemonId)}: ${failed.fact.failure}`.slice(0, 512) : null);
+    const complete = facts.length > 0 && facts.every(({ fact }) => fact.phase === "current");
+    // A failed daemon will never refine, so only answering ones decide whether refinement is still running.
+    const refinements = facts.flatMap(({ fact, value }) => fact.failure ? [] : [value?.refinement ?? "pending"]);
+    this.update(interest, {
+      kind: "stats",
+      phase: complete && !mergeFailure ? "current" : data ? "stale" : failure ? "failed" : "pending",
+      failure,
+      refinement: refinements.includes("pending") ? "pending" : refinements.includes("stale") || refinements.includes("failed") ? "stale" : "current",
+      data,
+    });
+  }
+
   /** Concrete daemon projects behind a project-reference selection (null = every known project). */
-  private rowTargets(selected: Extract<WorkspaceObserve["query"], { kind: "projectThreads" | "archivedThreads" }>["projects"]) {
+  private rowTargets(selected: Extract<WorkspaceObserve["query"], { kind: "projectThreads" | "archivedThreads" | "stats" }>["projects"]) {
     const workspace = this.options.workspace.getSnapshot();
     const targets = new Map<DaemonId, Set<ProjectId>>();
     const add = (daemonId: DaemonId, projectId: ProjectId) => {

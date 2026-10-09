@@ -63,8 +63,10 @@ export default function WorkbenchStatsBreakdowns() {
             <WorkbenchStatsShareList
               empty="No project usage."
               rows={rows(metric, stats?.projects ?? null, 8, (item) => ({
-                key: item.projectId, label: filters.projectName(item.projectId), detail: threadCount(item.threadCount),
-                onSelect: () => filters.focusProject(item.projectId), title: "Show only this project",
+                key: item.logicalProjectId ?? `${item.daemonId ?? ""}/${item.projectId}`,
+                label: item.logicalProjectId ? filters.projectName(item.logicalProjectId) : filters.projectName(item.projectId, item.daemonId),
+                detail: threadCount(item.threadCount),
+                onSelect: () => filters.focusProject(item), title: "Show only this project",
               }))}
             />
           </Panel>

@@ -23,6 +23,8 @@ export const WorkbenchStatsToolsSchema = z.object({
   threadCount: count.default(0),
   /** Threads named by `bucketThreads`, referenced by index. */
   threads: z.array(z.object({
+    /** The daemon owning the thread, once merged across machines. */
+    daemonId: z.string().min(1).nullish(),
     harness: z.string().min(1).nullable(),
     projectId: z.string().min(1),
     threadId: z.string().min(1),

@@ -8,7 +8,7 @@ import test from "node:test";
 import { parseWorkbenchRouteFromPath } from "workbench-shared/workbench/navigation/workbench-route";
 import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { renderWithStats, TEST_STATS_DAEMON_ID } from "../stats-test-store";
+import { renderWithStats, testStatsScope } from "../stats-test-store";
 import WorkbenchStatsBreakdowns from "./WorkbenchStatsBreakdowns.tsx";
 
 const share = { threadCount: 1, unpricedTokens: 0 };
@@ -19,7 +19,7 @@ const usage: WorkbenchStatsSectionData<"usage"> = {
     { ...share, costUsd: 1, inferredModelTokens: 0, model: "claude-opus-5-5", provider: "claude", tokens: 40 },
   ],
   topThreads: [{
-    costUsd: 4, harness: null, models: ["claude-opus-5-5", "gpt-6-sol"], projectId: "project/path", providers: ["claude", "codex"],
+    costUsd: 4, daemonId: null, harness: null, models: ["claude-opus-5-5", "gpt-6-sol"], projectId: "project/path", providers: ["claude", "codex"],
     modelShares: [
       { costUsd: 3, model: "gpt-6-sol", provider: "codex", tokens: 60, unpricedTokens: 0 },
       { costUsd: 1, model: "claude-opus-5-5", provider: "claude", tokens: 40, unpricedTokens: 0 },
@@ -30,7 +30,7 @@ const usage: WorkbenchStatsSectionData<"usage"> = {
 };
 
 const render = () => renderWithStats(createElement(WorkbenchStatsBreakdowns), { overview: usage, usage }, {
-  scope: { daemonId: TEST_STATS_DAEMON_ID, elsewhere: [], groups: [], labels: [], names: new Map([["project/path", "Sparkle project"]]), projectIds: [] },
+  scope: testStatsScope({ names: new Map([["project/path", "Sparkle project"]]) }),
 });
 
 test("top threads link through the canonical thread route and name their project", () => {

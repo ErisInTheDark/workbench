@@ -4,6 +4,7 @@
  * Exports:
  * - default WorkbenchClaimHotspots: a cloud of contended file links sized by claiming threads; hovering lists those threads as standard thread rows.
  */
+import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import ProjectFilePath from "../../ProjectFilePath";
 import WorkbenchThreadReferenceList from "../../WorkbenchThreadReferenceList";
@@ -21,13 +22,18 @@ const SKELETON_WORDS = [
   ["w-40", "h-3"], ["w-16", "h-3.5"], ["w-52", "h-7"], ["w-28", "h-3"], ["w-36", "h-4"], ["w-20", "h-3.5"], ["w-32", "h-5"],
 ];
 
-function ClaimantList({ hotspot, path, project }: { hotspot: Hotspot; path: string; project: string | null }) {
+function ClaimantList({ hotspot, isLocal, path, project }: {
+  hotspot: Hotspot; isLocal: (daemonId: string | null | undefined) => boolean; path: string; project: string | null;
+}) {
   // Claimants arrive largest first; only threads Workbench owns can open, the rest are only counted.
-  const references = hotspot.threads.flatMap(({ harness, threadId, title, tokens }) => {
+  const references = hotspot.threads.flatMap(({ daemonId, harness, threadId, title, tokens }) => {
     const thread = statsThreadIdentity({ harness, projectId: hotspot.projectId, threadId });
+    // Another machine's thread opens by id through its logical project.
+    const logicalProjectId = isLocal(daemonId) ? null : LogicalProjectIdSchema.safeParse(hotspot.logicalProjectId).data ?? null;
     return thread ? [{
       detail: <span className="tabular-nums" title="Lifetime tokens">{tokens ? compactNumber(tokens) : "-"}</span>,
-      identity: { harness: thread.harness, threadId: thread.threadId }, projectId: thread.projectId, title: title ?? "Untitled thread",
+      identity: { harness: thread.harness, threadId: thread.threadId }, logicalProjectId,
+      projectId: thread.projectId, title: title ?? "Untitled thread",
     }] : [];
   });
   const unlisted = hotspot.threadCount - references.length;
@@ -46,7 +52,7 @@ function ClaimantList({ hotspot, path, project }: { hotspot: Hotspot; path: stri
 }
 
 export default function WorkbenchClaimHotspots() {
-  const { projectName, projects, showProjects } = useStats();
+  const { isLocal, projectName, projects, showProjects } = useStats();
   const { data: stats, loading, refining } = useStats.claims();
   // Counts arrive before rename history merges renamed files together.
   const pending = refining;
@@ -54,7 +60,7 @@ export default function WorkbenchClaimHotspots() {
   const counts = hotspots.map(({ threadCount }) => threadCount);
   const minimum = Math.min(...counts);
   const span = Math.max(...counts) - minimum || 1;
-  const multipleProjects = showProjects && new Set(hotspots.map(({ projectId }) => projectId)).size > 1;
+  const multipleProjects = showProjects && new Set(hotspots.map(({ logicalProjectId, projectId }) => logicalProjectId ?? projectId)).size > 1;
   // Alphabetical order scatters the big words instead of stacking them all at the start.
   const cloud = [...hotspots].sort((left, right) => left.path.localeCompare(right.path));
   return (
@@ -80,7 +86,8 @@ export default function WorkbenchClaimHotspots() {
         >
           {cloud.map((hotspot) => {
             const weight = (hotspot.threadCount - minimum) / span;
-            const project = projects.find(({ id }) => id === hotspot.projectId);
+            // Only this machine's files open in the editor; another machine's show as plain paths.
+            const project = isLocal(hotspot.daemonId) ? projects.find(({ id }) => id === hotspot.projectId) : undefined;
             const rootKnown = project?.roots.some(({ id }) => id === hotspot.rootId);
             // Only multi-root workspaces need the root to disambiguate a path.
             const qualify = (rootId: string, path: string) => project?.kind === "workspace" ? `${rootId}:${path}` : path;
@@ -94,8 +101,9 @@ export default function WorkbenchClaimHotspots() {
                   content={(
                     <ClaimantList
                       hotspot={hotspot}
+                      isLocal={isLocal}
                       path={qualify(hotspot.rootId, hotspot.path)}
-                      project={multipleProjects ? projectName(hotspot.projectId) : null}
+                      project={multipleProjects ? hotspot.logicalProjectId ? projectName(hotspot.logicalProjectId) : projectName(hotspot.projectId, hotspot.daemonId) : null}
                     />
                   )}
                   interactive

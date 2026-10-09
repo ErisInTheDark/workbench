@@ -846,7 +846,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : browseProjectId;
   const attachedDaemonId = workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId ?? null;
   const statsScope = useMemo(() => resolveStatsProjectScope({
-    daemonId: attachedDaemonId,
+    attachedDaemonId,
     logicalProjects: displayedLogicalProjects,
     projects: explorer.projects,
     selectedProjectIds: selectionProjectIds,
@@ -1057,24 +1057,18 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigateToRoute(statsTabRoute(tab));
   }, [navigateToRoute, statsTabRoute]);
 
-  const openStatsThreadFromLink = useCallback((
-    event: MouseEvent<HTMLAnchorElement>,
-    projectId: string,
-    threadId: string,
-  ) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) {
-      return;
-    }
-
+  const openStatsRouteFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, target: WorkbenchRoute) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    navigateToRoute(createThreadRoute(projectId, threadId));
+    navigateToRoute(target);
   }, [navigateToRoute]);
+  // Threads on another machine open by id through their logical project, which knows every location.
+  const statsThreadRoute = useCallback((thread: { projectId: string; threadId: string }, logicalProjectId: string | null) => {
+    const reference = ThreadReferenceSchema.safeParse(thread.threadId).data;
+    return logicalProjectId && reference
+      ? createLogicalExistingThreadRoute(logicalProjectId, { kind: "provider", threadId: reference })
+      : createThreadRoute(thread.projectId, thread.threadId);
+  }, []);
 
   // The new-thread composer in that project takes the prompt and saves it as an ordinary draft.
   const addressFeedback = useCallback((projectId: string, prompt: string) => {
@@ -2964,7 +2958,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
                     onAddressFeedback={addressFeedback}
-                    onNavigateThread={openStatsThreadFromLink}
+                    onOpenRoute={openStatsRouteFromLink}
+                    threadRoute={statsThreadRoute}
                     projects={explorer.projects}
                     scope={statsScope}
                     tab={statsTab}

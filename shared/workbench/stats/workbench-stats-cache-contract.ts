@@ -20,6 +20,8 @@ export const StatsCacheEfficiencySchema = z.object({
     cacheWriteInputTokens: tokens.optional(),
     inputTokens: tokens.positive(),
     cacheHitPercent: z.number().finite().min(0).max(100),
+    /** The daemon owning the thread, once merged across machines. */
+    daemonId: z.string().min(1).nullish(),
     /** The provider the thread started on, which identifies it alongside its id. */
     harness: ProviderKeySchema.nullable().default(null),
     projectId: z.string().min(1),

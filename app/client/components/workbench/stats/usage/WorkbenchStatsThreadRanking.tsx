@@ -5,7 +5,6 @@
  * - default WorkbenchStatsThreadRanking: top threads with bars split by model; hovering a segment highlights its model, hovering a title shows its thread tooltip.
  */
 import { useState } from "react";
-import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
@@ -22,7 +21,8 @@ export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
   /** Null until usage arrives. */
   threads: readonly Thread[] | null;
 }) {
-  const { metric, navigateThread, projectName, showProjects } = useStats();
+  // Live thread details load from this machine, so hover cards show only for local threads.
+  const { isLocal, metric, openThread, projectName, showProjects, threadRoute } = useStats();
   const projectHref = useWorkbenchProjectNavigation();
   const [hovered, setHovered] = useState<{ thread: string; model: string } | null>(null);
   const measure = (item: { costUsd: number; tokens: number }) => metric === "cost" ? item.costUsd : item.tokens;
@@ -60,17 +60,17 @@ export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
           <li className="list-none rounded-md px-2 pb-2 pt-1.5" key={key}>
             <div className="flex min-w-0 items-baseline justify-between gap-3 text-[0.8rem]">
               <span className="flex min-w-0 items-baseline gap-2">
-                <WorkbenchThreadHoverTooltip thread={statsThreadIdentity(thread)} title={thread.title || thread.threadId}>
+                <WorkbenchThreadHoverTooltip thread={isLocal(thread.daemonId) ? statsThreadIdentity(thread) : null} title={thread.title || thread.threadId}>
                   <a
                     className="min-w-0 truncate rounded-sm font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                    href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
-                    onClick={(event) => navigateThread(event, thread.projectId, thread.threadId)}
+                    href={projectHref(threadRoute(thread))}
+                    onClick={(event) => openThread(event, thread)}
                   >
                     {thread.title || thread.threadId}
                   </a>
                 </WorkbenchThreadHoverTooltip>
                 <span className="min-w-0 shrink-[4] truncate text-[0.72rem] text-fg/muted">
-                  {showProjects ? `${projectName(thread.projectId)} · ` : ""}
+                  {showProjects ? `${projectName(thread.projectId, thread.daemonId)} · ` : ""}
                   {names.map((name, index) => (
                     <span key={`${name}:${index}`}>
                       {index ? ", " : ""}

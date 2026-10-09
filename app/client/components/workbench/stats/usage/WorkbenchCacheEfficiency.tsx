@@ -2,7 +2,6 @@
  * Exports:
  * - default WorkbenchCacheEfficiency: input cache hit rate per period, and the large threads with the lowest hit rates.
  */
-import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
 import useStats from "../use-stats";
@@ -16,7 +15,8 @@ import { statsThreadIdentity } from "../stats-thread-identity";
 const MINIMUM_UNCACHED_FOR_HIT_RATE = 500_000;
 
 export default function WorkbenchCacheEfficiency() {
-  const { navigateThread, projectName, showProjects } = useStats();
+  // Live thread details load from this machine, so hover cards show only for local threads.
+  const { isLocal, openThread, projectName, showProjects, threadRoute } = useStats();
   const { data: stats, loading } = useStats.usage();
   const cache = stats?.cacheEfficiency;
   const projectHref = useWorkbenchProjectNavigation();
@@ -67,17 +67,17 @@ export default function WorkbenchCacheEfficiency() {
               rows={misses.map((thread) => ({
                 key: `${thread.projectId}:${thread.threadId}`,
                 label: (
-                  <WorkbenchThreadHoverTooltip thread={statsThreadIdentity(thread)} title={thread.title || thread.threadId}>
+                  <WorkbenchThreadHoverTooltip thread={isLocal(thread.daemonId) ? statsThreadIdentity(thread) : null} title={thread.title || thread.threadId}>
                     <a
                       className="rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                      href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
-                      onClick={(event) => navigateThread(event, thread.projectId, thread.threadId)}
+                      href={projectHref(threadRoute(thread))}
+                      onClick={(event) => openThread(event, thread)}
                     >
                       {thread.title || thread.threadId}
                     </a>
                   </WorkbenchThreadHoverTooltip>
                 ),
-                detail: `${showProjects ? `${projectName(thread.projectId)} · ` : ""}${compactNumber(thread.uncached)} uncached`,
+                detail: `${showProjects ? `${projectName(thread.projectId, thread.daemonId)} · ` : ""}${compactNumber(thread.uncached)} uncached`,
                 share: thread.cacheHitPercent / 100,
                 value: formatPercent(thread.cacheHitPercent),
               }))}

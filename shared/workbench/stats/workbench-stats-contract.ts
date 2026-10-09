@@ -125,6 +125,9 @@ const UsageShareSchema = {
   tokens: finiteNonNegative,
   unpricedTokens: finiteNonNegative,
 };
+/** Where a row lives once sections merge across machines; one daemon's own answers omit both. */
+const daemonId = z.string().min(1).nullish();
+const logicalProjectId = z.string().min(1).nullish();
 const section = <Name extends WorkbenchStatsSection, Shape extends z.ZodRawShape>(name: Name, shape: Shape) =>
   z.object({ ...shape, generatedAt: timestamp, section: z.literal(name) }).strict();
 
@@ -152,7 +155,7 @@ const UsageSectionSchema = section("usage", {
   previous: z.object({ costUsd: finiteNonNegative, threadCount: count, tokens: finiteNonNegative, turnCount: count }).strict(),
   pricingCatalogDate: z.iso.date(),
   projectIds: z.array(z.string().min(1)).nullable(),
-  projects: z.array(z.object({ ...UsageShareSchema, projectId: z.string().min(1) }).strict()).max(100),
+  projects: z.array(z.object({ ...UsageShareSchema, daemonId, logicalProjectId, projectId: z.string().min(1) }).strict()).max(100),
   providers: z.array(z.object({ ...UsageShareSchema, provider: harness }).strict()).max(10),
   range: WorkbenchStatsRangeSchema,
   startedAt: timestamp,
@@ -180,6 +183,7 @@ const UsageSectionSchema = section("usage", {
     }).strict()).max(20).default([]),
     /** The provider the thread started on, which identifies it alongside its id. */
     harness: harness.nullable().default(null),
+    daemonId,
     projectId: z.string().min(1),
     providers: z.array(harness).max(10),
     sharePercent: finiteNonNegative.max(100),
@@ -209,12 +213,15 @@ const LimitsSectionSchema = section("limits", {
 
 const ClaimsSectionSchema = section("claims", {
   claimHotspots: z.array(z.object({
+    daemonId,
+    logicalProjectId,
     path: z.string().min(1).max(2_000),
     projectId: z.string().min(1),
     rootId: z.string().min(1),
     threadCount: count,
     /** Claiming threads, largest lifetime token use first. */
     threads: z.array(z.object({
+      daemonId,
       harness: harness.nullable().default(null),
       /** Null for provider threads Workbench cannot open. */
       threadId: z.string().min(1).nullable().default(null),

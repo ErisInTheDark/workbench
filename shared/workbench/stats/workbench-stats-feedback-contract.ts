@@ -35,6 +35,8 @@ export const WorkbenchFeedbackItemSchema = z.object({
   category: WorkbenchFeedbackCategorySchema,
   channel: WorkbenchFeedbackChannelSchema,
   createdAt: z.number().finite().nonnegative(),
+  /** The daemon storing the report, once merged across machines; ids are only unique per daemon. */
+  daemonId: z.string().min(1).nullish(),
   harness: ProviderKeySchema.nullable(),
   /** 0 to 1; how much the author's model and effort make this report worth reading. */
   importance: unit,

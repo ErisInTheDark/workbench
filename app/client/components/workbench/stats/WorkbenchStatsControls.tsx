@@ -65,10 +65,10 @@ export default function WorkbenchStatsControls({ error, tab }: { error: string; 
             onChange={stats.setMode}
             options={[
               {
-                disabled: !scope.projectIds.length, label: `Selected · ${selectedLabel}`,
-                title: scope.labels.join(", ") || "No selected projects on this machine", value: "selected",
+                disabled: !scope.references.length, label: `Selected · ${selectedLabel}`,
+                title: scope.labels.join(", ") || "No selected projects", value: "selected",
               },
-              { label: "All projects", title: "Every project on this machine", value: "all" },
+              { label: "All projects", title: "Every project on every machine", value: "all" },
             ]}
             value={mode}
           />
@@ -81,17 +81,12 @@ export default function WorkbenchStatsControls({ error, tab }: { error: string; 
         />
         <div aria-label="Active filters" className="flex min-h-6 flex-wrap items-center gap-1.5" role="group">
           {periodLabel ? <FilterChip onClear={stats.clearPeriod}>Period: {periodLabel}</FilterChip> : null}
-          {!workspaces && focusedProject ? <FilterChip onClear={() => stats.focusProject(null)}>Project: {stats.projectName(focusedProject)}</FilterChip> : null}
+          {!workspaces && focusedProject ? <FilterChip onClear={() => stats.focusProject(null)}>Project: {focusedProject.label}</FilterChip> : null}
           {usageFilters && provider ? <FilterChip onClear={() => stats.setProvider(null)}>Provider: {providerLabel(provider)}</FilterChip> : null}
           {usageFilters && model && provider ? <FilterChip onClear={() => stats.setModel(provider, null)}>Model: {model}</FilterChip> : null}
         </div>
         <WorkbenchStatsStatus error={error} />
       </div>
-      {!workspaces && mode === "selected" && !focusedProject && scope.elsewhere.length ? (
-        <p className="m-0 text-[0.74rem] text-fg/muted">
-          {scope.elsewhere.join(", ")} {scope.elsewhere.length === 1 ? "lives" : "live"} on another machine and {scope.elsewhere.length === 1 ? "is" : "are"} not counted here.
-        </p>
-      ) : null}
     </div>
   );
 }
