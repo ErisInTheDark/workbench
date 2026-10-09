@@ -196,7 +196,13 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "subagent_settle": return { names: ["Lumi"] };
     case "message":
     case "subagent_message": return { message: "continue", parent: true };
-    case "subagent_create": return { message: "inspect", name: "Lumi", profileId: "profile", title: "Inspect" };
+    case "subagent_create": return {
+      message: "inspect",
+      name: "Lumi",
+      profileId: "profile",
+      title: "Inspect",
+      userVisibleSimpleVersion: "Asked Lumi to inspect.",
+    };
     case "git_arc_mv": return { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } };
     case "browse_run": return { commands: ["snapshot --compact"], session: "rendering" };
     case "browse_stop": return { force: true, session: "rendering" };
@@ -273,6 +279,13 @@ test("every exposed typed wb MCP tool has a semantic route", () => {
   const subagentWait = commands.find((definition) => definition.words.join("_") === "subagent_wait");
   assert.equal(subagentWait?.mcpRuntimeDrainPolicy, "preserve-across-reload");
   assert.equal(subagentWait?.mcpSteerInterruptible, true);
+  const subagentCreate = commands.find((definition) => definition.words.join("_") === "subagent_create");
+  assert.equal(subagentCreate?.inputSchema.safeParse({
+    message: "inspect",
+    name: "Lumi",
+    profileId: "profile",
+    title: "Inspect",
+  }).success, false);
   const questionnaire = commands.find((definition) => definition.words.join("_") === "request_user_input");
   assert.deepEqual(questionnaire?.effects, {});
   assert.equal(questionnaire?.mcpCodeModeEligible, true);
@@ -899,7 +912,7 @@ test("Workbench task completion commands match across command shapes", () => {
 });
 
 test("Workbench subagent create commands expose metadata through PowerShell wrappers", () => {
-  const createCommand = 'wb subagent create --profile "safety-profile" --name Maribel --title "Review bridge reloads" --message "Check cancellation and pending waiters"';
+  const createCommand = 'wb subagent create --profile "safety-profile" --name Maribel --title "Review bridge reloads" --message "Check cancellation and pending waiters" --user-visible-simple-version "Asked Maribel to review bridge reloads."';
   assert.deepEqual(parseWorkbenchSubagentCommand(createCommand), {
     action: "create",
     message: "Check cancellation and pending waiters",
@@ -907,6 +920,7 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
     profileId: "safety-profile",
     targets: [],
     title: "Review bridge reloads",
+    userVisibleSimpleVersion: "Asked Maribel to review bridge reloads.",
   });
   const wrappedCreateDisplay = getThreadCommandDisplay({
     command: `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command '${createCommand}'`,
@@ -915,6 +929,22 @@ test("Workbench subagent create commands expose metadata through PowerShell wrap
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(wrappedCreateDisplay.claimedBy, "workbench-cli.subagent");
+
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: {
+      message: "Check cancellation and pending waiters",
+      name: "Maribel",
+      profileId: "safety-profile",
+      title: "Review bridge reloads",
+      userVisibleSimpleVersion: "Asked Maribel to review bridge reloads.",
+    },
+    server: "wbex",
+    tool: "subagent_create",
+  });
+  assert.equal(route?.kind, "specialized");
+  if (route?.kind === "specialized" && route.operation.kind === "subagent") {
+    assert.equal(route.operation.operation.userVisibleSimpleVersion, "Asked Maribel to review bridge reloads.");
+  }
 });
 
 test("Workbench subagent commands prefer clean semantic actions over escaped PowerShell wrappers", () => {

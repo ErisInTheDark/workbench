@@ -156,6 +156,7 @@ import {
 import {
   groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
+  readThreadSubagentCoordinationCreate,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationTarget,
@@ -770,6 +771,11 @@ function getCoordinationParticipants(
       });
       continue;
     }
+    const create = readThreadSubagentCoordinationCreate(item);
+    if (create) {
+      add({ fallbackName: create.name, kind: "name", value: create.name });
+      continue;
+    }
     const wait = readThreadSubagentCoordinationWait(item);
     if (wait) {
       for (const target of wait.targets) {
@@ -863,9 +869,70 @@ function ThreadCoordinationOutgoingChannel({
   );
 }
 
+function ThreadCoordinationCreate({
+  activeStartedAtMs,
+  item,
+  knownSkills,
+  relatedThreadsById,
+  subagents,
+  threadId,
+  ...markdownProps
+}: ThreadMessageMarkdownProps & {
+  activeStartedAtMs?: number | null;
+  item: Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
+  knownSkills?: WorkbenchSkillSummary[];
+  relatedThreadsById: RelatedThreadsById;
+  subagents: readonly WorkbenchSubagentSummary[];
+  threadId: string;
+}) {
+  if (item.type === "commandExecution") {
+    return (
+      <ThreadCommandExecutionDetails
+        activeStartedAtMs={activeStartedAtMs}
+        inlineMentionSources={markdownProps.inlineMentionSources}
+        item={item}
+        knownSkills={knownSkills}
+        projectFilePaths={markdownProps.projectFilePaths}
+        projectId={markdownProps.projectId}
+        projectRootPath={markdownProps.projectRootPath}
+        relatedThreadsById={relatedThreadsById}
+        subagents={subagents}
+        threadId={threadId}
+        workspaceRoots={markdownProps.workspaceRoots}
+        unwrapSubagentCreate
+      />
+    );
+  }
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: item.arguments,
+    server: item.server,
+    tool: item.tool,
+  });
+  if (route?.kind !== "specialized") return null;
+  return (
+    <ThreadWorkbenchCommandItem
+      activeStartedAtMs={activeStartedAtMs}
+      inlineMentionSources={markdownProps.inlineMentionSources}
+      item={item}
+      projectFilePaths={markdownProps.projectFilePaths}
+      projectId={markdownProps.projectId}
+      projectRootPath={markdownProps.projectRootPath}
+      relatedThreadsById={relatedThreadsById}
+      renderRecallRecord={() => null}
+      route={route}
+      subagents={subagents}
+      threadCwdPath={markdownProps.threadCwdPath}
+      threadId={threadId}
+      workspaceRoots={markdownProps.workspaceRoots}
+      unwrapSubagentCreate
+    />
+  );
+}
+
 function ThreadSubagentCoordination({
   block,
   itemTimeline,
+  knownSkills,
   relatedThreadsById,
   subagents,
   threadId,
@@ -873,6 +940,7 @@ function ThreadSubagentCoordination({
 }: ThreadMessageMarkdownProps & {
   block: Extract<ThreadRenderableBlock, { kind: "subagentCoordination" }>;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
+  knownSkills?: WorkbenchSkillSummary[];
   relatedThreadsById: RelatedThreadsById;
   subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
@@ -907,6 +975,20 @@ function ThreadSubagentCoordination({
               items={run.items}
               key={run.items[0]!.id}
               subagents={subagents}
+            />
+          );
+        }
+        if (run.kind === "create") {
+          return (
+            <ThreadCoordinationCreate
+              {...markdownProps}
+              activeStartedAtMs={getActiveItemStartedAtMs(run.items[0], itemTimeline)}
+              item={run.items[0]}
+              key={run.items[0].id}
+              knownSkills={knownSkills}
+              relatedThreadsById={relatedThreadsById}
+              subagents={subagents}
+              threadId={threadId}
             />
           );
         }
@@ -1533,6 +1615,7 @@ function ThreadCommandExecutionDetails ({
   subagentWaitTiming,
   subagents,
   threadId,
+  unwrapSubagentCreate = false,
   workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
@@ -1548,6 +1631,7 @@ function ThreadCommandExecutionDetails ({
   subagentWaitTiming?: ThreadSubagentWaitTiming;
   subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
+  unwrapSubagentCreate?: boolean;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const commandDisplay = useMemo(() => getThreadCommandDisplay({
@@ -1736,10 +1820,14 @@ function ThreadCommandExecutionDetails ({
         profileId={subagentCommand.profileId}
         fallbackTitle={subagentCommand.title}
         subagent={createdTarget?.subagent}
+        unwrapped={unwrapSubagentCreate}
       >
-        <ThreadMarkdown
+        <ThreadAgentMessageBody
           inlineMentionSources={inlineMentionSources}
-          markdown={subagentCommand.message}
+          parts={[{
+            markdown: subagentCommand.message,
+            userVisibleSimpleVersion: subagentCommand.userVisibleSimpleVersion,
+          }]}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
@@ -2362,6 +2450,7 @@ function ThreadRenderableBlockViewComponent ({
         block={block}
         inlineMentionSources={inlineMentionSources}
         itemTimeline={itemTimeline}
+        knownSkills={knownSkills}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}

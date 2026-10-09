@@ -94,11 +94,25 @@ const create = defineWorkbenchAgentCommand({
   description: "Create and start a direct child, then print its thread ID.",
   helpGroups: ["subagent"],
   words: ["subagent", "create"],
-  usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message>",
-  inputSchema: z.object({ message: requiredText, name: requiredText, profileId: requiredText, title: requiredText }).strict(),
+  usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message> --user-visible-simple-version <text>",
+  inputSchema: z.object({
+    message: requiredText,
+    name: requiredText,
+    profileId: requiredText,
+    title: requiredText,
+    userVisibleSimpleVersion: requiredText.describe("One or two plain sentences summarising the task for the user, without technical detail."),
+  }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { values: ["--profile", "--name", "--title", "--message"] });
-    return { message: flags.required("--message"), name: flags.required("--name"), profileId: flags.required("--profile"), title: flags.required("--title") };
+    const flags = new WorkbenchAgentCommandFlags(args, {
+      values: ["--profile", "--name", "--title", "--message", "--user-visible-simple-version"],
+    });
+    return {
+      message: flags.required("--message"),
+      name: flags.required("--name"),
+      profileId: flags.required("--profile"),
+      title: flags.required("--title"),
+      userVisibleSimpleVersion: flags.required("--user-visible-simple-version"),
+    };
   },
   buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
     return postWorkbenchAgentCommand("/api/subagents", {

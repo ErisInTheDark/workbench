@@ -127,6 +127,7 @@ export interface WorkbenchSubagentOperation {
   profileId: string | null;
   targets: Array<{ kind: "id" | "name"; value: string }>;
   title: string | null;
+  userVisibleSimpleVersion?: string;
 }
 
 export interface WorkbenchMessageOperation {
@@ -568,6 +569,9 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
     || action === "stop"
     || action === "settle"
   ) {
+    const userVisibleSimpleVersion = action === "create"
+      ? readString(args.userVisibleSimpleVersion)
+      : null;
     return specialized("workbench-cli.subagent", {
       kind: "subagent",
       operation: {
@@ -577,6 +581,7 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
         profileId: readString(args.profileId),
         targets,
         title: readString(args.title),
+        ...(userVisibleSimpleVersion ? { userVisibleSimpleVersion } : {}),
       },
     });
   }

@@ -209,7 +209,15 @@ test("creates with the selected profile and delivers attributed initial input", 
   const created = await controller.handleRequest({
     id: 3,
     method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+    params: {
+      callerThreadId,
+      cwd,
+      message: "Inspect the code.",
+      name: "Mimi",
+      profileId: profile().id,
+      title: "Inspect code",
+      userVisibleSimpleVersion: "Asked Mimi to inspect the code.",
+    },
   });
   assert.deepEqual(created, { id: 3, result: { threadId: childThreadId } });
   assert.deepEqual(committed.map(({ threadId }) => threadId), [childThreadId]);
@@ -229,6 +237,7 @@ test("creates with the selected profile and delivers attributed initial input", 
     message: "Inspect the code.",
     senderName: "parent agent",
     senderThreadId: callerThreadId,
+    userVisibleSimpleVersion: "Asked Mimi to inspect the code.",
   });
   const listedAfterCreate = await controller.handleRequest({
     id: 4,
@@ -287,7 +296,15 @@ test("keeps relationship storage independent from lifecycle through create and s
   const created = await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Mimi", profileId: profile().id, title: "Inspect code" },
+    params: {
+      callerThreadId,
+      cwd,
+      message: "Inspect the code.",
+      name: "Mimi",
+      profileId: profile().id,
+      title: "Inspect code",
+      userVisibleSimpleVersion: "Asked Mimi to inspect the code.",
+    },
   });
   assert.deepEqual(created, { id: 2, result: { threadId: childThreadId } });
   const listedAfterCreate = await controller.handleRequest({
@@ -330,7 +347,15 @@ test("keeps a created child durable when its first turn fails to start", async (
   const created = await controller.handleRequest({
     id: 2,
     method: "workbench/subagent/create",
-    params: { callerThreadId, cwd, message: "Inspect the code.", name: "Poppy", profileId: profile().id, title: "Inspect code" },
+    params: {
+      callerThreadId,
+      cwd,
+      message: "Inspect the code.",
+      name: "Poppy",
+      profileId: profile().id,
+      title: "Inspect code",
+      userVisibleSimpleVersion: "Asked Poppy to inspect the code.",
+    },
   });
   assert.match(created.error?.message ?? "", /Turn failed to start.*subagent thread child-thread/u);
 

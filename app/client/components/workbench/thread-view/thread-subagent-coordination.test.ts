@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect two-way coordination span qualification and hard transcript boundaries.
+ * No exports. Tests protect coordination qualification, channel grouping, and hard transcript boundaries.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -159,5 +159,28 @@ test("standalone adoption is an outgoing channel paragraph", () => {
     target: run.kind === "outgoing" ? run.target : undefined,
   })), [
     { ids: ["adopt"], kind: "outgoing", target: { kind: "name", value: "mira" } },
+  ]);
+});
+
+test("subagent creation stays visible as a boundary inside the coordination conversation", () => {
+  const runs = groupThreadSubagentCoordinationConversation([
+    mcp("to-luna", "message", { message: "prepare", name: "luna" }),
+    mcp("create", "subagent_create", {
+      message: "inspect",
+      name: "mira",
+      profileId: "profile",
+      title: "Inspect",
+      userVisibleSimpleVersion: "Asked mira to inspect.",
+    }),
+    mcp("to-luna-again", "message", { message: "continue", name: "luna" }),
+  ], (target) => `${target.kind}:${target.value ?? ""}`);
+
+  assert.deepEqual(runs.map((run) => ({
+    ids: run.items.map((item) => item.id),
+    kind: run.kind,
+  })), [
+    { ids: ["to-luna"], kind: "outgoing" },
+    { ids: ["create"], kind: "create" },
+    { ids: ["to-luna-again"], kind: "outgoing" },
   ]);
 });

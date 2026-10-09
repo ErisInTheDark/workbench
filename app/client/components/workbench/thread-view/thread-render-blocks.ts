@@ -55,6 +55,7 @@ import {
 import {
   findThreadSubagentCoordinationSpans,
   readThreadSubagentCoordinationClaimAction,
+  readThreadSubagentCoordinationCreate,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationRole,
@@ -332,6 +333,7 @@ function splitCoordinationCommandSequence(
   const segments = buildCommandSequenceRenderSegments({ items: block.items });
   if (!segments.some(segment => segment.kind === "message"
     || segment.kind === "subagentWait"
+    || segment.kind === "subagent" && readThreadSubagentCoordinationCreate(segment.item)
     || segment.kind === "gitArc" && readThreadSubagentCoordinationClaimAction(segment.item))) return [block];
   return segments.map(segment => {
     if (segment.kind === "approval" || segment.kind === "commands") {
@@ -366,11 +368,15 @@ function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentC
     if (segment?.kind === "gitArc") return readThreadSubagentCoordinationClaimAction(segment.item)
       ? { incoming: false, itemCount: 1, outgoing: false }
       : null;
+    if (segment?.kind === "subagent") return readThreadSubagentCoordinationCreate(segment.item)
+      ? { incoming: false, itemCount: 1, outgoing: false }
+      : null;
     return null;
   }
   if (block.kind !== "item") return null;
   if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, itemCount: 1, outgoing: true };
   if (readThreadSubagentCoordinationClaimAction(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
+  if (readThreadSubagentCoordinationCreate(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   return readThreadSubagentCoordinationWait(block.item)
     ? { incoming: false, itemCount: 1, outgoing: false }
     : null;

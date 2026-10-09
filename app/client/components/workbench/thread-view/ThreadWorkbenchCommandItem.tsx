@@ -72,6 +72,7 @@ export default function ThreadWorkbenchCommandItem({
   subagents,
   threadCwdPath,
   threadId,
+  unwrapSubagentCreate = false,
   workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
@@ -87,6 +88,7 @@ export default function ThreadWorkbenchCommandItem({
   subagents: readonly WorkbenchSubagentSummary[];
   threadCwdPath?: string;
   threadId: string;
+  unwrapSubagentCreate?: boolean;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const outcome = getThreadMcpToolCallOutcome(item);
@@ -306,10 +308,14 @@ export default function ThreadWorkbenchCommandItem({
         fallbackTitle={subagentCommand.title}
         profileId={subagentCommand.profileId}
         subagent={createdTarget?.subagent}
+        unwrapped={unwrapSubagentCreate}
       >
-        <ThreadMarkdown
+        <ThreadAgentMessageBody
           inlineMentionSources={inlineMentionSources}
-          markdown={subagentCommand.message}
+          parts={[{
+            markdown: subagentCommand.message,
+            userVisibleSimpleVersion: subagentCommand.userVisibleSimpleVersion,
+          }]}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}

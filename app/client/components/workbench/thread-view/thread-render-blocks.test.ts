@@ -453,6 +453,29 @@ test("subagent creation and incoming native messages cannot enter worked groups"
   }
 });
 
+test("successful subagent creation contributes to a qualifying coordination run", () => {
+  const create = mcp("create", "subagent_create", {
+    message: "inspect the renderer",
+    name: "luna",
+    profileId: "profile",
+    title: "Inspect renderer",
+    userVisibleSimpleVersion: "Asked luna to inspect the renderer.",
+  });
+  const blocks = buildRenderableBlocks([
+    create,
+    mcp("wait-one", "subagent_wait", { names: ["luna"] }),
+    mcp("wait-two", "subagent_wait", { names: ["luna"] }),
+  ]);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.kind, "subagentCoordination");
+  assert.deepEqual(blocks[0] && getRenderableBlockItems(blocks[0]).map(item => item.id), [
+    "create",
+    "wait-one",
+    "wait-two",
+  ]);
+});
+
 test("new transcript items retain unrelated blocks but invalidate an extended group or replaced item", () => {
   const first = command("first");
   const second = user("second");

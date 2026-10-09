@@ -9,7 +9,7 @@ Every subagent call must run in the intended project cwd; this is the directory 
 
 - <tool id="subagent_list" /> lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
 - <tool id="subagent_profiles" /> lists profiles available to this thread. Use a profile ID only as the machine value. Tell the user the profile's display name.
-- <tool id="subagent_create" /> creates and starts a direct child. Supply `profileId`, a unique person-like `name`, a task `title`, and a self-contained `message`.
+- <tool id="subagent_create" /> creates and starts a direct child. Supply `profileId`, a unique person-like `name`, task `title`, self-contained `message`, and `userVisibleSimpleVersion`: one or two plain sentences summarising the task for the user without technical detail.
 - <tool id="subagent_stop" /> stops selected direct children.
 - <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names.
 

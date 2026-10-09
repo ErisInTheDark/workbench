@@ -4,6 +4,7 @@
  * - readThreadSubagentCoordinationOutgoingMessage: read one visible CLI or MCP outgoing message.
  * - readThreadSubagentCoordinationWait: read one CLI or MCP wait with its targets and outcome.
  * - readThreadSubagentCoordinationClaimAction: read a successful subagent-targeted claim transfer.
+ * - readThreadSubagentCoordinationCreate: read one visible successful or active subagent creation.
  * - groupThreadSubagentCoordinationConversation: regroup uninterrupted incoming or outgoing items by subagent channel.
  */
 
@@ -36,6 +37,7 @@ export interface ThreadSubagentCoordinationOutgoingMessage {
 }
 
 type CoordinationWaitItem = Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
+type CoordinationCreateItem = Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
 
 export interface ThreadSubagentCoordinationWait {
   item: CoordinationWaitItem;
@@ -50,6 +52,11 @@ export interface ThreadSubagentCoordinationClaimAction {
   target: { kind: "id" | "name"; value: string };
 }
 
+export interface ThreadSubagentCoordinationCreate {
+  item: CoordinationCreateItem;
+  name: string;
+}
+
 export type ThreadSubagentCoordinationTarget = {
   kind: "id" | "name" | "parent";
   value: string | null;
@@ -59,6 +66,7 @@ type IncomingCoordinationItem = Extract<ThreadItem, { type: "functionCallOutput"
 
 export type ThreadSubagentCoordinationConversationRun =
   | { items: IncomingCoordinationItem[]; kind: "incoming" }
+  | { items: [CoordinationCreateItem]; kind: "create" }
   | { items: ThreadItem[]; kind: "outgoing"; target: ThreadSubagentCoordinationTarget };
 
 function getCommandDisplay(item: Extract<ThreadItem, { type: "commandExecution" }>) {
@@ -121,6 +129,39 @@ export function readThreadSubagentCoordinationWait(item: ThreadItem): ThreadSuba
         targets: route.operation.operation.targets,
       }
       : null;
+}
+
+export function readThreadSubagentCoordinationCreate(
+  item: ThreadItem,
+): ThreadSubagentCoordinationCreate | null {
+  if (item.type === "commandExecution") {
+    const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+    if (outcome !== "completed" && outcome !== "inProgress") return null;
+    const operation = parseWorkbenchSubagentCommand(getCommandDisplay(item).unwrappedCommand, item.commandActions);
+    return operation?.action === "create"
+      && operation.message
+      && operation.name
+      && operation.profileId
+      && operation.title
+      ? { item, name: operation.name }
+      : null;
+  }
+  if (item.type !== "mcpToolCall" || item.status === "failed" || item.error) return null;
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: item.arguments,
+    server: item.server,
+    tool: item.tool,
+  });
+  const operation = route?.kind === "specialized" && route.operation.kind === "subagent"
+    ? route.operation.operation
+    : null;
+  return operation?.action === "create"
+    && operation.message
+    && operation.name
+    && operation.profileId
+    && operation.title
+    ? { item, name: operation.name }
+    : null;
 }
 
 export function readThreadSubagentCoordinationClaimAction(
@@ -192,6 +233,12 @@ export function groupThreadSubagentCoordinationConversation(
   };
 
   for (const item of items) {
+    const create = readThreadSubagentCoordinationCreate(item);
+    if (create) {
+      flush();
+      runs.push({ items: [create.item], kind: "create" });
+      continue;
+    }
     const incoming = (item.type === "functionCallOutput" || item.type === "userMessage")
       ? readWorkbenchAgentMessageItem(item)
       : null;

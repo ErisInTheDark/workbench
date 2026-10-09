@@ -298,6 +298,7 @@ export default class WorkbenchSubagentController {
     const name = requiredString(params, "name");
     const title = requiredString(params, "title");
     const userMessage = requiredString(params, "message");
+    const userVisibleSimpleVersion = requiredString(params, "userVisibleSimpleVersion");
     const workbenchOrigin = typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined;
     let result: { threadId: WorkbenchThreadId } | null = null;
     const operation = this.createQueue.catch(() => undefined).then(async () => {
@@ -333,7 +334,12 @@ export default class WorkbenchSubagentController {
         await threads.rename(childId, title);
         const admitted = await threads.messageAgent({
           threadId: childId, cwd: caller.cwd, context: this.buildPromptContext(name, workbenchOrigin),
-          message: { message: userMessage, senderName: PARENT_AGENT_NAME, senderThreadId: caller.callerThreadId },
+          message: {
+            message: userMessage,
+            senderName: PARENT_AGENT_NAME,
+            senderThreadId: caller.callerThreadId,
+            userVisibleSimpleVersion,
+          },
         });
         await this.acceptIntent(caller.project.id, profile.harness, childId, admitted.turnId);
         result = { threadId: childId };

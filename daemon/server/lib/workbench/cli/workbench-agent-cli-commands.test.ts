@@ -1109,6 +1109,7 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
   const create = await parseWorkbenchAgentCliCommand([
     "subagent", "create", "--profile", "profile-1", "--name", "sparkle-scout",
     "--title", "Inspect code", "--message", "Find the bug.",
+    "--user-visible-simple-version", "Asked sparkle-scout to find the bug.",
   ], options);
   assert.equal(create.kind, "request");
   assert.deepEqual(create.request.body, {
@@ -1119,9 +1120,17 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     name: "sparkle-scout",
     profileId: "profile-1",
     title: "Inspect code",
+    userVisibleSimpleVersion: "Asked sparkle-scout to find the bug.",
     workbenchOrigin: "http://localhost:3000",
   });
   assert.equal(create.request.responseKind, "subagent-create");
+
+  const missingCreateSummary = await parseWorkbenchAgentCliCommand([
+    "subagent", "create", "--profile", "profile-1", "--name", "sparkle-scout",
+    "--title", "Inspect code", "--message", "Find the bug.",
+  ], options);
+  assert.equal(missingCreateSummary.kind, "error");
+  assert.match(missingCreateSummary.kind === "error" ? missingCreateSummary.error : "", /--user-visible-simple-version/u);
 
   const globalMessage = await parseWorkbenchAgentCliCommand([
     "message", "--thread", "review-target", "--message", "Please fix the cancellation race.",

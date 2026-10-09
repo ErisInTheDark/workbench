@@ -28,6 +28,7 @@ export interface WorkbenchSubagentCommand {
   profileId: string | null;
   targets: WorkbenchSubagentCommandTarget[];
   title: string | null;
+  userVisibleSimpleVersion?: string;
 }
 
 export interface WorkbenchMessageCommand {
@@ -140,6 +141,9 @@ function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagent
   const actionMatch = normalized.match(/^wb(?:\.cmd)?\s+subagent\s+(list|profiles|create|wait|stop|settle)\b/iu);
   if (!actionMatch) return null;
   const action = actionMatch[1].toLowerCase() as WorkbenchSubagentCommandAction;
+  const userVisibleSimpleVersion = action === "create"
+    ? readFlagValue(normalized, "user-visible-simple-version")
+    : null;
   return {
     action,
     message: readFlagValue(normalized, "message"),
@@ -149,6 +153,7 @@ function parseSingleWorkbenchSubagentCommand(command: string): WorkbenchSubagent
       ? readSubagentTargets(normalized)
       : [],
     title: readFlagValue(normalized, "title"),
+    ...(userVisibleSimpleVersion ? { userVisibleSimpleVersion } : {}),
   };
 }
 
