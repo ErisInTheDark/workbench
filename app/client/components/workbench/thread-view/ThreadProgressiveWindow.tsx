@@ -91,6 +91,7 @@ export default function ThreadProgressiveWindow({
 
   useLayoutEffect(() => {
     controllerRef.current?.reconcile();
+    viewport.stabilizeInitialEnd();
   });
   useEffect(() => {
     const scrollTarget = viewport.getViewport();

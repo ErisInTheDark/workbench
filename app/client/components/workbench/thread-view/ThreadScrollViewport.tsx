@@ -17,7 +17,6 @@ import {
 
 import {
   didThreadScrollReattach,
-  getInitialThreadScrollTop,
   getPreservedThreadScrollTop,
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
@@ -27,6 +26,7 @@ import {
   type ThreadScrollMetrics,
   type ThreadScrollProximity,
 } from "./thread-scroll-snap";
+import ThreadInitialEndPlacementController from "./ThreadInitialEndPlacementController";
 import {
   ThreadScrollViewportContext,
   useThreadScrollViewportContext,
@@ -86,7 +86,8 @@ function ActiveThreadScrollViewport ({
 }: ActiveThreadScrollViewportProps) {
   const directionRef = useRef<ThreadScrollDirection>("down");
   const endTargetRef = useRef<HTMLElement | null>(null);
-  const initialPlacementPendingRef = useRef(true);
+  const initialEndPlacementRef = useRef<ThreadInitialEndPlacementController | null>(null);
+  const initialEndPlacement = initialEndPlacementRef.current ??= new ThreadInitialEndPlacementController();
   const pointerScrollActiveRef = useRef(false);
   const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
@@ -111,11 +112,10 @@ function ActiveThreadScrollViewport ({
   }, []);
 
   const placeInitialViewportAtEnd = useCallback(() => {
-    if (!initialPlacementPendingRef.current) return;
     const viewport = viewportRef.current;
     const endTarget = endTargetRef.current;
     if (!viewport) return;
-    const scrollTop = getInitialThreadScrollTop(
+    const scrollTop = initialEndPlacement.getScrollTop(
       Boolean(endTarget && viewport.contains(endTarget)),
       viewport.scrollHeight,
     );
@@ -123,8 +123,7 @@ function ActiveThreadScrollViewport ({
     viewport.scrollTop = scrollTop;
     previousScrollTopRef.current = viewport.scrollTop;
     syncScrollProximity(viewport);
-    initialPlacementPendingRef.current = false;
-  }, [syncScrollProximity]);
+  }, [initialEndPlacement, syncScrollProximity]);
 
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport;
@@ -139,6 +138,7 @@ function ActiveThreadScrollViewport ({
     workedRunState: null,
     progressiveWindowing: true,
     getViewport: () => viewportRef.current,
+    stabilizeInitialEnd: placeInitialViewportAtEnd,
     observeContent: (element, listener, range = "viewport", preserveReadingPosition = false) => {
       const root = viewportRef.current;
       if (!root) return () => { };
@@ -205,6 +205,7 @@ function ActiveThreadScrollViewport ({
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       const direction = event.deltaY > 0 ? "down" : event.deltaY < 0 ? "up" : null;
       if (!direction) return;
+      initialEndPlacement.release();
       setScrollDirection(direction);
       const distance = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? Math.abs(event.deltaY) * 16
         : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? Math.abs(event.deltaY) * viewport.clientHeight
@@ -215,16 +216,19 @@ function ActiveThreadScrollViewport ({
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       if (isInteractiveScrollKeyTarget(event.target)) return;
       if (THREAD_SCROLL_DOWN_KEYS.has(event.key) || (event.key === " " && !event.shiftKey)) {
+        initialEndPlacement.release();
         setScrollDirection("down");
         onScrollIntent?.("down", viewport.clientHeight);
       }
       if (THREAD_SCROLL_UP_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
+        initialEndPlacement.release();
         setScrollDirection("up");
         onScrollIntent?.("up", viewport.clientHeight);
       }
     };
     const handlePointerDown = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
+      if (event.target === viewport) initialEndPlacement.release();
       pointerScrollActiveRef.current = true;
       pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = viewport.scrollTop;
@@ -257,6 +261,7 @@ function ActiveThreadScrollViewport ({
       );
       setScrollDirection(direction);
       if (currentClientY !== previousClientY) {
+        initialEndPlacement.release();
         onScrollIntent?.(direction, Math.abs(currentClientY - previousClientY));
       }
       touchClientYRef.current = currentClientY;
