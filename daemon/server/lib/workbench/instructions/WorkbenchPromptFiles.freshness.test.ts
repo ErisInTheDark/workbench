@@ -60,7 +60,7 @@ user-owned agent prompt
     const gitOverride = "user git override\n";
     await fs.mkdir(path.join(temporaryLibraryRoot, "custom", "nested"), { recursive: true });
     await Promise.all([
-      fs.writeFile(path.join(temporaryLibraryRoot, "agents", "default.md"), userAgent, "utf8"),
+      fs.writeFile(path.join(temporaryLibraryRoot, "agents", "default.override.md"), userAgent, "utf8"),
       fs.writeFile(path.join(temporaryLibraryRoot, "agents", "agent-note.md"), "imported agent note\n", "utf8"),
       fs.writeFile(path.join(temporaryLibraryRoot, "custom", "root.md"), "base custom root\n", "utf8"),
       fs.writeFile(
@@ -202,7 +202,11 @@ user-owned agent prompt
       await fs.readFile(path.join(temporaryLibraryRoot, "custom", "root.override.md"), "utf8"),
       "custom root override\n{./nested/deep}\n",
     );
-    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "agents", "default.md"), "utf8"), userAgent);
+    assert.equal(await fs.readFile(path.join(temporaryLibraryRoot, "agents", "default.override.md"), "utf8"), userAgent);
+    assert.equal(
+      await fs.readFile(path.join(temporaryLibraryRoot, "agents", "default.md"), "utf8"),
+      "generated agent revision two\n",
+    );
     assert.match(
       await fs.readFile(path.join(temporaryLibraryRoot, "skills", "builtin", "browse", "SKILL.md"), "utf8"),
       /builtin skill revision two/u,

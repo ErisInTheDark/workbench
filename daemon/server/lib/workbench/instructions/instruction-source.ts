@@ -4,7 +4,7 @@
  * - WorkbenchInstructionTombstone: one empty repository marker targeting a retired Workbench Library file. Keywords: instructions, tombstone, retirement.
  * - readWorkbenchInstructionSources: discover and read the complete repository Markdown mirror once. Keywords: instructions, markdown, discovery.
  * - readWorkbenchInstructionTombstones: discover and validate retired instruction markers. Keywords: instructions, tombstone, discovery.
- * - ensureWorkbenchInstructionSourceFiles: refresh generated library files on every call (overlapping calls share one pass) while preserving the user-owned default agent and overrides. Keywords: instructions, emission, freshness.
+ * - ensureWorkbenchInstructionSourceFiles: refresh generated library files on every call (overlapping calls share one pass) while preserving user overrides. Keywords: instructions, emission, freshness.
  */
 
 import fs from "node:fs/promises";
@@ -16,7 +16,6 @@ import {
   workbenchLibraryRoot,
 } from "../../workbench-library-paths";
 
-const DEFAULT_AGENT_PATH = "agents/default.md";
 const MARKDOWN_SUFFIX = ".md";
 const OVERRIDE_SUFFIX = ".override.md";
 const TOMBSTONE_SUFFIX = ".md.tombstone";
@@ -79,7 +78,7 @@ export async function readWorkbenchInstructionTombstones(rootPath = getInstructi
     }
     observeReloadInstructionSource(sourcePath);
     const targetRelativePath = markerRelativePath.slice(0, -".tombstone".length);
-    if (targetRelativePath === DEFAULT_AGENT_PATH || targetRelativePath.endsWith(OVERRIDE_SUFFIX)) {
+    if (targetRelativePath.endsWith(OVERRIDE_SUFFIX)) {
       throw new Error(`Instruction tombstone cannot target a user-owned file: ${targetRelativePath}`);
     }
     return { markerRelativePath, targetRelativePath };
@@ -104,26 +103,10 @@ async function writeGeneratedFile(relativePath: string, content: string) {
   await fs.writeFile(absolutePath, normalizedContent, "utf8");
 }
 
-async function writeFileIfMissing(relativePath: string, content: string) {
-  const absolutePath = safeResolveWorkbenchLibraryPath(relativePath);
-  try {
-    await fs.access(absolutePath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, normalizeContent(content), "utf8");
-}
-
 async function refreshWorkbenchInstructionSourceFiles() {
   await fs.mkdir(workbenchLibraryRoot, { recursive: true });
   const sources = await readWorkbenchInstructionSources();
-  await Promise.all(sources.map((source) => (
-    source.relativePath === DEFAULT_AGENT_PATH
-      ? writeFileIfMissing(source.relativePath, source.content)
-      : writeGeneratedFile(source.relativePath, source.content)
-  )));
+  await Promise.all(sources.map((source) => writeGeneratedFile(source.relativePath, source.content)));
 }
 
 /** Every call mirrors current sources (edits apply on the next prompt build); only overlapping calls share one pass. */

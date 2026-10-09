@@ -4,6 +4,8 @@ agents/default.md defines the default Workbench agent identity.
 
 Edit this file when you want to change the default agent's voice, stance, taste, or personality when no other agent is selected.
 
+Workbench regenerates agents/default.md from its sources. Put your own default agent in agents/default.override.md instead.
+
 Good things to put here:
 
 - visible communication style

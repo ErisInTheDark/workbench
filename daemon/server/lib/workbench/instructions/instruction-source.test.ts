@@ -52,10 +52,10 @@ test("instruction tombstones cannot target user-owned instruction files", async 
   const rootPath = temporary.path;
   try {
     await mkdir(path.join(rootPath, "agents"), { recursive: true });
-    await writeFile(path.join(rootPath, "agents", "default.md.tombstone"), "", "utf8");
+    await writeFile(path.join(rootPath, "agents", "default.override.md.tombstone"), "", "utf8");
     await assert.rejects(
       readWorkbenchInstructionTombstones(rootPath),
-      /cannot target a user-owned file.*agents\/default\.md/u,
+      /cannot target a user-owned file.*agents\/default\.override\.md/u,
     );
   } finally {
     await temporary.dispose();
