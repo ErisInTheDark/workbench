@@ -7,6 +7,7 @@
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcReleaseResult } from "./WorkbenchGitCheckpointController";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
@@ -114,8 +115,9 @@ export default class GitArcOwnershipTransferController {
     // fast-forwards to the releaser's top, unless the skipped layers changed files the child already owns.
     const skippedIndex = targetPendingTip ? sourceChain.findIndex(({ tipCommit }) => tipCommit === targetPendingTip) : -1;
     const targetOwned = target ? getGitArcLiveClaimPaths(target) : [];
+    const targetOwnedSet = new Set(targetOwned);
     const fastForward = Boolean(sourceTip && targetPendingTip && !targetAtSourceTip && skippedIndex >= 0
-      && !sourceChain.slice(skippedIndex + 1).some(({ scopePaths }) => scopePaths.some(scope => targetOwned.includes(scope))));
+      && !sourceChain.slice(skippedIndex + 1).some(({ scopePaths }) => scopePaths.some(scope => targetOwnedSet.has(scope))));
     if (sourceTip && targetPendingTip && !targetAtSourceTip && !fastForward) {
       throw new GitArcRejectionError({ reason: "stackBaseMismatch" }, "The receiving thread builds on a different stack baseline.");
     }
@@ -123,12 +125,14 @@ export default class GitArcOwnershipTransferController {
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
+    const sourceLiveSet = new Set(sourceLive);
     if (selectedPaths && (new Set(requested).size !== selectedPaths.length
-      || requested.some(value => !sourceLive.includes(value)))) {
+      || requested.some(value => !sourceLiveSet.has(value)))) {
       throw new Error("Every selected path must be a distinct live claim owned by the releasing thread.");
     }
     const incoming = selectedPaths ? requested : sourceLive;
-    const remaining = sourceLive.filter(value => !incoming.includes(value));
+    const incomingSet = new Set(incoming);
+    const remaining = sourceLive.filter(value => !incomingSet.has(value));
     const existing = targetOwned;
     if (!incoming.length && !moveStash) throw new Error("The source thread owns no selected live claims or saved stash.");
     if (moveStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
@@ -139,8 +143,9 @@ export default class GitArcOwnershipTransferController {
       if (!paths.length) continue;
       if (!arc) throw new Error("Live claims have no implementation baseline.");
       const checkpoint = await store.readCheckpoint(identity.harness, identity.threadId, arc.checkpointCommit);
+      const scope = new Set(checkpoint.metadata?.scopePaths);
       if (!checkpoint.metadata || !["arc", "implement"].includes(checkpoint.metadata.kind)
-        || paths.some(value => !checkpoint.metadata!.scopePaths.includes(value))) {
+        || paths.some(value => !scope.has(value))) {
         throw new Error("The claim transfer set does not match its implementation checkpoint.");
       }
       const movement = await stack.arcDrift(entry, checkpoint, paths, head);
@@ -151,8 +156,9 @@ export default class GitArcOwnershipTransferController {
     const claimedPaths = [...new Set([...existing, ...incoming])].sort();
     const plan = target?.phase === "plan" || target?.phase === "stashed" && target.retainedArc
       ? await store.readCheckpoint(harness, caller.threadId, target.checkpointCommit) : null;
+    const planScope = new GitArcPathSet(plan?.metadata?.scopePaths);
     if (plan && (!plan.metadata || plan.metadata.kind !== "plan"
-      || claimedPaths.some(value => !plan.metadata!.scopePaths.some(scope => value === scope || value.startsWith(`${scope}/`))))) {
+      || claimedPaths.some(value => !planScope.covers(value)))) {
       throw new Error("The recipient's pending plan does not cover the incoming claims. Revise it before transfer.");
     }
     const updates: GitRefUpdate[] = [];

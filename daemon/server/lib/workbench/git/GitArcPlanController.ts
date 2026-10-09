@@ -9,6 +9,7 @@
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import createGitArcStartDiagnosticError from "./git-arc-start-diagnostics";
 import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import GitArcRegistry, {
@@ -159,23 +160,20 @@ function normalizeHarness(harness: string | undefined): GitArcHarness {
   throw new GitArcRejectionError({ reason: "invalidHarness" }, "A valid checkpoint harness is required.");
 }
 
-function pathIsCoveredBy(candidate: string, scopePath: string) {
-  return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
-}
-
 function collapseScopePaths(paths: string[]) {
   const uniquePaths = [...new Set(paths)].sort((left, right) => left.localeCompare(right));
-  return uniquePaths.filter((candidate) => !uniquePaths.some((scopePath) => (
-    candidate !== scopePath && pathIsCoveredBy(candidate, scopePath)
-  )));
+  const scopes = new GitArcPathSet(uniquePaths);
+  return uniquePaths.filter((candidate) => !scopes.within(candidate));
 }
 
+/** Each overlapping previous/next pair contributes its narrower path. */
 function overlappingBaselinePaths(previousPaths: string[], nextPaths: string[]) {
-  return [...new Set(previousPaths.flatMap((previousPath) => nextPaths.flatMap((nextPath) => {
-    if (pathIsCoveredBy(nextPath, previousPath)) return [nextPath];
-    if (pathIsCoveredBy(previousPath, nextPath)) return [previousPath];
-    return [];
-  })))].sort((left, right) => left.localeCompare(right));
+  const previous = new GitArcPathSet(previousPaths);
+  const next = new GitArcPathSet(nextPaths);
+  return [...new Set([
+    ...nextPaths.filter((nextPath) => previous.covers(nextPath)),
+    ...previousPaths.filter((previousPath) => next.covers(previousPath)),
+  ])].sort((left, right) => left.localeCompare(right));
 }
 
 function liveClaims(entry: GitArcRegistryEntry) {
@@ -283,8 +281,9 @@ export default class GitArcPlanController {
     }
     const inheritedAdoptions = input.inherit ? baselinePlan?.metadata?.adoptedPaths ?? [] : [];
     const paths = applyGitClaimChanges([...new Set([...existing, ...inheritedAdoptions])], changes);
+    const removals = new GitArcPathSet(changes.removePaths);
     const adoptPaths = [...new Set([
-      ...inheritedAdoptions.filter((candidate) => !changes.removePaths.some((removal) => pathIsCoveredBy(candidate, removal))),
+      ...inheritedAdoptions.filter((candidate) => !removals.covers(candidate)),
       ...changes.adoptPaths,
     ])];
     const intentName = input.intentName?.trim() || (input.inherit ? current?.intentName : "");
@@ -296,9 +295,11 @@ export default class GitArcPlanController {
       paths,
       retainedArc: current ? presentation(current) : null,
     };
+    const existingPaths = new Set(existing);
+    const nextPaths = new Set(paths);
     const delta = {
-      addedClaims: paths.filter((candidate) => !existing.includes(candidate)),
-      removedClaims: existing.filter((candidate) => !paths.includes(candidate)),
+      addedClaims: paths.filter((candidate) => !existingPaths.has(candidate)),
+      removedClaims: existing.filter((candidate) => !nextPaths.has(candidate)),
     };
     if (input.start) {
       const prepared = await this.preparePlan(repository, registry, harness, input.threadId, planInput, current?.checkpointCommit, { baselinePlan, skippedIgnoredPaths });
@@ -361,8 +362,8 @@ export default class GitArcPlanController {
 
     const collisions = findGitArcCollisions(await registry.list(), { harness, threadId: input.threadId }, claimPaths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
-    const permittedDirty = [...plan.adoptPaths, ...(retainedArc?.claimedPaths ?? [])];
-    const unexplained = plan.dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
+    const permittedDirty = new GitArcPathSet([...plan.adoptPaths, ...(retainedArc?.claimedPaths ?? [])]);
+    const unexplained = plan.dirtyPaths.filter((candidate) => !permittedDirty.covers(candidate));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "Arc start");
     const activeMetadata: CheckpointMetadata = {
       amendedFrom: plan.prepared.checkpointCommit,
@@ -512,10 +513,11 @@ export default class GitArcPlanController {
     }
     const dirtyPaths = await repository.listChangedPaths(head, currentTree, paths);
     const retainedClaims = current?.phase === "plan" ? current.retainedArc?.claimedPaths ?? [] : [];
-    const permittedDirty = [...adoptedPaths, ...retainedClaims];
-    const unexplained = dirtyPaths.filter((candidate) => !permittedDirty.some((scopePath) => pathIsCoveredBy(candidate, scopePath)));
+    const permittedDirty = new GitArcPathSet([...adoptedPaths, ...retainedClaims]);
+    const unexplained = dirtyPaths.filter((candidate) => !permittedDirty.covers(candidate));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "Arc start");
-    const cleanAdoptions = adoptedPaths.filter((candidate) => !dirtyPaths.some((dirtyPath) => pathIsCoveredBy(dirtyPath, candidate)));
+    const dirty = new GitArcPathSet(dirtyPaths);
+    const cleanAdoptions = adoptedPaths.filter((candidate) => !dirty.has(candidate) && !dirty.contains(candidate));
     if (cleanAdoptions.length) {
       throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Adopted plan paths are clean against current HEAD: ${cleanAdoptions.join(", ")}. Use ordinary addPaths, not adoptPaths.`);
     }
@@ -688,19 +690,18 @@ export default class GitArcPlanController {
     const worktreeTree = await repository.writeWorktreeTree(head);
     const dirtyPaths = scopePaths.length ? await repository.listChangedPaths(head, worktreeTree, scopePaths) : [];
     const entries = await registry.list();
-    const liveOwners = entries.flatMap((entry) => liveClaims(entry));
-    const unexplained = dirtyPaths.filter((dirtyPath) => (
-      !adoptPaths.some((candidate) => pathIsCoveredBy(dirtyPath, candidate))
-      && !liveOwners.some((claim) => pathIsCoveredBy(dirtyPath, claim))
-    ));
+    const liveOwners = new GitArcPathSet(entries.flatMap((entry) => liveClaims(entry)));
+    const adoptedScope = new GitArcPathSet(adoptPaths);
+    const unexplained = dirtyPaths.filter((dirtyPath) => !adoptedScope.covers(dirtyPath) && !liveOwners.covers(dirtyPath));
     if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained);
     const adoptionCollisions = findGitArcCollisions(entries, { harness, threadId }, adoptPaths);
     if (adoptionCollisions.length) throw new GitArcCollisionError(adoptionCollisions);
-    const cleanAdoptions = adoptPaths.filter((candidate) => !dirtyPaths.some((dirtyPath) => pathIsCoveredBy(dirtyPath, candidate)));
+    const dirty = new GitArcPathSet(dirtyPaths);
+    const cleanAdoptions = adoptPaths.filter((candidate) => !dirty.has(candidate) && !dirty.contains(candidate));
     if (cleanAdoptions.length) {
       throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Arc plan adopt paths are clean against current HEAD: ${cleanAdoptions.join(", ")}. Use ordinary addPaths, not adoptPaths.`);
     }
-    const claimedAdoptions = adoptPaths.filter((candidate) => liveOwners.some((claim) => pathIsCoveredBy(candidate, claim) || pathIsCoveredBy(claim, candidate)));
+    const claimedAdoptions = adoptPaths.filter((candidate) => liveOwners.overlaps(candidate));
     if (claimedAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresUnclaimed", paths: claimedAdoptions }, `Arc plan adopt paths must be unclaimed: ${claimedAdoptions.join(", ")}`);
 
     const metadata: CheckpointMetadata = {
@@ -758,7 +759,8 @@ export default class GitArcPlanController {
     const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
     const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;
     const dirtyPaths = await repository.listWorktreeChangedPaths(baseline, retainedArc.claimedPaths);
-    const uncovered = dirtyPaths.filter((dirtyPath) => !planPaths.some((planPath) => pathIsCoveredBy(dirtyPath, planPath)));
+    const plan = new GitArcPathSet(planPaths);
+    const uncovered = dirtyPaths.filter((dirtyPath) => !plan.covers(dirtyPath));
     if (uncovered.length) {
       throw new GitArcRejectionError({ reason: "uncoveredDirtyClaims", paths: uncovered }, `A replacement plan must include every dirty claimed file: ${uncovered.join(", ")}`);
     }

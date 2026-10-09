@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import type { GitArcClaimView } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { type GitArcHarness, normalizeThreadId } from "workbench-shared/workbench/git/git-arc-storage";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitArcProposalController from "./GitArcProposalController";
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
@@ -212,7 +213,8 @@ export default class GitArcClaimViewController {
     await fs.mkdir(directory, { recursive: true });
     const manifestPath = path.join(directory, MANIFEST_NAME);
     const recorded = await readManifest(manifestPath);
-    const inScope = (relative: string) => !scopes.length || scopes.some(scope => relative === scope || relative.startsWith(`${scope}/`));
+    const scope = new GitArcPathSet(scopes);
+    const inScope = (relative: string) => !scopes.length || scope.covers(relative);
     const inBatches = async <T>(items: readonly T[], work: (item: T) => Promise<void>) => {
       for (let offset = 0; offset < items.length; offset += 64) await Promise.all(items.slice(offset, offset + 64).map(work));
     };

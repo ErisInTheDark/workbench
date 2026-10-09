@@ -6,7 +6,7 @@
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
  * - GitArcStackedProposalState: waiting, replayable or broken stacked proposal classification.
  */
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcStackResult } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { GitArcStackedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
@@ -272,16 +272,16 @@ export default class GitArcStackController {
    */
   private async tipDrift(tip: string, paths: string[], head: string | null) {
     const chain = await this.readChain(tip);
-    const scope = chainScope(chain);
-    const sealed = paths.filter(candidate => scope.some(scopePath => gitArcPathsOverlap(candidate, scopePath)));
+    const scope = new GitArcPathSet(chainScope(chain));
+    const sealed = paths.filter(candidate => scope.overlaps(candidate));
     const changed = sealed.length ? await this.repository.listChangedPaths(tip, head, sealed) : [];
     if (!changed.length) return [];
     const store = this.store();
     const pending = await this.storedPendingIds(chain);
-    const pendingPaths = (await Promise.all(pending.flatMap(({ layer, pending: ids }) => ids.map(async id => (
+    const pendingPaths = new GitArcPathSet((await Promise.all(pending.flatMap(({ layer, pending: ids }) => ids.map(async id => (
       (await store.readProposal(layer.layer.harness as GitArcHarness, layer.layer.threadId, id)).metadata.paths
-    ))))).flat();
-    return changed.filter(candidate => !pendingPaths.some(owned => gitArcPathsOverlap(candidate, owned)));
+    ))))).flat());
+    return changed.filter(candidate => !pendingPaths.overlaps(candidate));
   }
 
   /**

@@ -7,6 +7,7 @@
  * - COMMIT_REWRITE_MAP_REF: durable commit alias ref.
  */
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
+import GitObjectReadSession from "./GitObjectReadSession";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { GitArcClaimLossSchema } from "workbench-shared/workbench/git/git-arc-status";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
@@ -49,6 +50,13 @@ export interface GitArcHistoryRewriteOptions {
 
 function replaceCheckpointSuffix(ref: string, shortCommit: string) {
   return ref.replace(/-[a-f0-9]{7,64}$/iu, `-${shortCommit}`);
+}
+
+const COMMIT_TOKEN = /(?<![0-9a-f])(?:[0-9a-f]{64}|[0-9a-f]{40})(?![0-9a-f])/gu;
+
+/** Full commit ids named anywhere in stored metadata text, found without decoding it. */
+function commitTokens(text: string) {
+  return new Set(text.match(COMMIT_TOKEN) ?? []);
 }
 
 export default class GitArcHistoryRewriter {
@@ -113,38 +121,35 @@ export default class GitArcHistoryRewriter {
     };
     const pendingCheckpoints: Array<{
       entry: (typeof checkpointRefs)[number];
-      metadata: CheckpointMetadata | null;
       oldCommit: GitCommitIdentity;
+      /** Every full commit id the message names: a superset of the metadata commits remapping can change. */
+      tokens: Set<string>;
     }> = [];
     for (const entry of checkpointRefs) {
+      await GitObjectReadSession.yieldSlice();
       const oldCommit = commitBatch.commits.get(entry.value);
       if (!oldCommit) {
         warnings.push(`Skipped unreadable checkpoint ref ${entry.ref}: ${commitBatch.errors.get(entry.value) ?? "invalid commit object"}`);
         continue;
       }
       if (oldCommit.parents.length > 1) continue;
-      pendingCheckpoints.push({
-        entry,
-        metadata: parseMarkedMetadata<CheckpointMetadata>(oldCommit.message, CHECKPOINT_METADATA_MARKER),
-        oldCommit,
-      });
+      pendingCheckpoints.push({ entry, oldCommit, tokens: commitTokens(oldCommit.message) });
     }
-    while (pendingCheckpoints.length) {
-      const pendingValues = new Set(pendingCheckpoints.map(({ entry }) => entry.value));
-      const index = pendingCheckpoints.findIndex(({ entry, metadata, oldCommit }) => (
-        [oldCommit.parents[0], metadata?.amendedFrom]
-          .filter((dependency): dependency is string => Boolean(dependency && dependency !== entry.value))
-          .every((dependency) => !pendingValues.has(dependency))
-      ));
-      if (index < 0) break;
-      const [{ entry, metadata, oldCommit }] = pendingCheckpoints.splice(index, 1);
+    // Remapping only changes commits already rewritten, so a message naming none of them needs no decode.
+    const namesRewrittenCommit = (tokens: ReadonlySet<string>) => {
+      for (const token of tokens) if (commits.has(token)) return true;
+      return false;
+    };
+    const rewriteCheckpoint = async ({ entry, oldCommit, tokens }: (typeof pendingCheckpoints)[number]) => {
       const oldParent = oldCommit.parents[0] ?? null;
       const newParent = oldParent === null ? undefined : commits.get(oldParent);
+      if (!newParent && !namesRewrittenCommit(tokens)) return;
+      const metadata = parseMarkedMetadata<CheckpointMetadata>(oldCommit.message, CHECKPOINT_METADATA_MARKER);
       const remappedMetadata = metadata ? remapCheckpointMetadata(metadata, commits) : null;
       const metadataChanged = Boolean(
         metadata && remappedMetadata && checkpointMessage(metadata) !== checkpointMessage(remappedMetadata),
       );
-      if (!newParent && !metadataChanged) continue;
+      if (!newParent && !metadataChanged) return;
       const parent = newParent ?? oldParent;
       let tree = oldCommit.tree;
       if (newParent && oldParent) {
@@ -172,9 +177,39 @@ export default class GitArcHistoryRewriter {
         deletes.push({ oldValue: entry.value, ref: entry.ref });
         updates.push({ newValue: next, oldValue: "0".repeat(40), ref: nextRef });
       }
+    };
+    // Dependency order in one pass (Kahn): a checkpoint waits for every pending checkpoint its parent or message names,
+    // including every ref sharing that commit, so remapping always sees rewritten dependencies.
+    const pendingByValue = new Map<string, number>();
+    for (const { entry } of pendingCheckpoints) pendingByValue.set(entry.value, (pendingByValue.get(entry.value) ?? 0) + 1);
+    const dependents = new Map<string, number[]>();
+    const blockers = pendingCheckpoints.map(({ entry, oldCommit, tokens }, index) => {
+      const dependencies = new Set([oldCommit.parents[0], ...tokens]
+        .filter((dependency): dependency is string => Boolean(dependency && dependency !== entry.value && pendingByValue.has(dependency))));
+      for (const dependency of dependencies) {
+        const waiting = dependents.get(dependency);
+        if (waiting) waiting.push(index);
+        else dependents.set(dependency, [index]);
+      }
+      return dependencies.size;
+    });
+    const ready = blockers.flatMap((count, index) => count ? [] : [index]);
+    for (let cursor = 0; cursor < ready.length; cursor += 1) {
+      await GitObjectReadSession.yieldSlice();
+      const pending = pendingCheckpoints[ready[cursor]!]!;
+      await rewriteCheckpoint(pending);
+      const remaining = pendingByValue.get(pending.entry.value)! - 1;
+      pendingByValue.set(pending.entry.value, remaining);
+      if (remaining) continue;
+      for (const dependent of dependents.get(pending.entry.value) ?? []) {
+        blockers[dependent]! -= 1;
+        if (!blockers[dependent]) ready.push(dependent);
+      }
     }
-    if (pendingCheckpoints.length) {
-      throw new Error(`Checkpoint metadata contains a dependency cycle: ${pendingCheckpoints.map(({ entry }) => entry.ref).join(", ")}`);
+    if (ready.length < pendingCheckpoints.length) {
+      const processed = new Set(ready);
+      const cycle = pendingCheckpoints.filter((_, index) => !processed.has(index)).map(({ entry }) => entry.ref);
+      throw new Error(`Checkpoint metadata contains a dependency cycle: ${cycle.join(", ")}`);
     }
 
     const invalidClaimLossRefs: string[] = [];
@@ -215,6 +250,7 @@ export default class GitArcHistoryRewriter {
     }
 
     for (const entry of proposalRefs) {
+      await GitObjectReadSession.yieldSlice();
       const oldCommit = commitBatch.commits.get(entry.value);
       if (!oldCommit) {
         warnings.push(`Skipped unreadable proposal ref ${entry.ref}: ${commitBatch.errors.get(entry.value) ?? "invalid commit object"}`);
@@ -223,6 +259,7 @@ export default class GitArcHistoryRewriter {
       if (oldCommit.parents.length > 1) continue;
       const oldParent = oldCommit.parents[0] ?? null;
       const newParent = oldParent === null ? undefined : commits.get(oldParent);
+      if (!newParent && !namesRewrittenCommit(commitTokens(oldCommit.message))) continue;
       const metadata = parseMarkedMetadata<ProposalMetadata>(oldCommit.message, PROPOSAL_METADATA_MARKER);
       if (!newParent && !metadata) continue;
       const remapped = metadata ? remapProposalMetadata(metadata, commits) : null;
@@ -243,8 +280,16 @@ export default class GitArcHistoryRewriter {
       updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });
     }
 
-    for (const entry of refs.filter(({ objectType, ref }) => objectType === "blob" && /\/arc-outcomes\//u.test(ref))) {
-      const outcome = JSON.parse(await this.repository.readBlob(entry.value)) as ArcOutcome;
+    const outcomeRefs = refs.filter(({ objectType, ref }) => objectType === "blob" && /\/arc-outcomes\//u.test(ref));
+    const outcomeBlobs = await this.repository.readBlobs(outcomeRefs.map(({ value }) => value));
+    for (const entry of outcomeRefs) {
+      await GitObjectReadSession.yieldSlice();
+      const error = outcomeBlobs.errors.get(entry.value);
+      if (error) throw new Error(error);
+      const contents = outcomeBlobs.blobs.get(entry.value)?.contents;
+      if (contents === undefined) throw new Error(`Git object ${entry.value} is missing.`);
+      if (!namesRewrittenCommit(commitTokens(contents))) continue;
+      const outcome = JSON.parse(contents) as ArcOutcome;
       const remapped = remapArcOutcome(outcome, commits);
       if (areDeeplyEqual(remapped, outcome)) continue;
       const blob = await this.repository.writeBlob(`${JSON.stringify(remapped)}\n`);

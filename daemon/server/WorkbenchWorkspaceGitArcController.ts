@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcRepositoryScope } from "workbench-shared/workbench/git/git-arc-scope-response";
 
@@ -239,26 +240,27 @@ export default class WorkbenchWorkspaceGitArcController {
     const roots = [...project.project.roots].sort((left, right) => right.root.length - left.root.length);
     const claimedPaths = lifecycle?.phase === "active" ? lifecycle.claimedPaths : [];
     // Same rule as arc ownership: an entry covers itself and anything beneath it, whether or not it exists yet.
-    const claims = claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute));
+    const claims = new GitArcPathSet(claimedPaths.map((claimedPath) => comparable(this.parseRootPath(project, claimedPath, project.root.id).absolute)));
     const uncoveredPaths = absolutePaths.filter((candidate) => {
       const absolute = comparable(candidate);
       const insideWorkspace = roots.some((root) => isInside(absolute, root.root));
       if (!insideWorkspace) return true;
       if (ignoredPaths.has(absolute)) return false;
-      return !claims.some((claim) => absolute === claim || isInside(absolute, claim));
+      return !claims.covers(absolute);
     });
+    const uncovered = new Set(uncoveredPaths);
     // Agents build on their own pending proposals only through a stack layer, so unsealed proposal files stay frozen.
     const frozen = memberStates.flatMap(({ member, state }) => {
       if (state.phase !== "active") return [];
       const sealed = new Set(state.stackLayers?.flatMap(({ proposalIds }) => proposalIds) ?? []);
       return state.proposals
         .filter(({ proposalId, status }) => status === "proposed" && !sealed.has(proposalId))
-        .map(({ paths, proposalId }) => ({ proposalId, scopes: paths.map((filePath) => path.resolve(member.repoRoot, filePath)) }));
+        .map(({ paths, proposalId }) => ({ proposalId, scopes: new GitArcPathSet(paths.map((filePath) => comparable(path.resolve(member.repoRoot, filePath)))) }));
     });
     const pendingProposals = frozen.flatMap(({ proposalId, scopes }) => {
-      const held = absolutePaths.filter((candidate) => !uncoveredPaths.includes(candidate)
+      const held = absolutePaths.filter((candidate) => !uncovered.has(candidate)
         && !ignoredPaths.has(comparable(candidate))
-        && scopes.some((scope) => isInside(candidate, scope) || isInside(scope, candidate)));
+        && scopes.overlaps(comparable(candidate)));
       return held.length ? [{ paths: held, proposalId }] : [];
     });
     return { allowed: !uncoveredPaths.length && !pendingProposals.length, pendingProposals, uncoveredPaths };

@@ -6,6 +6,7 @@
  * - GitArcMutationResult: active or resolved publication and acceptance facts.
  * - applyGitClaimChanges: validate subtraction of exact entries or folders containing them, and produce a minimal final scope.
  */
+import GitArcPathSet from "./GitArcPathSet";
 import { GitArcRejectionError } from "./git-arc-rejections";
 
 export interface GitArcClaimChanges {
@@ -58,11 +59,13 @@ export function applyGitClaimChanges(existing: readonly string[], changes: GitAr
   if (removals.length && !changes.inherit) throw new GitArcRejectionError({ reason: "inheritanceRequired" }, "Removing claims requires inheritance.");
   const inherited = changes.inherit ? existing : [];
   // A removed folder drops the file claims it was shorthand for.
-  const removes = (candidate: string) => removals.some((removal) => candidate === removal || candidate.startsWith(`${removal}/`));
-  const unknown = removals.filter((removal) => !inherited.some((candidate) => candidate === removal || candidate.startsWith(`${removal}/`)));
+  const removed = new GitArcPathSet(removals);
+  const inheritedPaths = new GitArcPathSet(inherited);
+  const unknown = removals.filter((removal) => !inheritedPaths.has(removal) && !inheritedPaths.contains(removal));
   if (unknown.length) throw new GitArcRejectionError({ reason: "unclaimedRemoval", paths: unknown }, `Removed paths must match inherited entries or folders containing them: ${unknown.join(", ")}`);
-  const contradictory = [...additions, ...adoptions].filter((candidate) => removals.includes(candidate));
+  const contradictory = [...additions, ...adoptions].filter((candidate) => removed.has(candidate));
   if (contradictory.length) throw new GitArcRejectionError({ reason: "conflictingClaimOperations", paths: [...new Set(contradictory)] }, `Conflicting claim operations: ${[...new Set(contradictory)].join(", ")}`);
-  const candidates = [...new Set([...inherited.filter((candidate) => !removes(candidate)), ...additions, ...adoptions])].sort();
-  return candidates.filter((candidate) => !candidates.some((other) => candidate !== other && candidate.startsWith(`${other}/`)));
+  const candidates = [...new Set([...inherited.filter((candidate) => !removed.covers(candidate)), ...additions, ...adoptions])].sort();
+  const scope = new GitArcPathSet(candidates);
+  return candidates.filter((candidate) => !scope.within(candidate));
 }

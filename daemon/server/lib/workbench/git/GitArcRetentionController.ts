@@ -66,8 +66,8 @@ export default class GitArcRetentionController {
       threadNamespace(checkpointNamespace(harness, storageId)),
       threadNamespace(legacyCheckpointNamespace(storageId)),
     ]))];
-    const refs = (await repository.listRefsWithValues("refs/worktree/agents"))
-      .filter(({ ref }) => prefixes.some((prefix) => ref.startsWith(`${prefix}/`)));
+    // Only the thread's own namespaces; Git matches each prefix up to a slash, never a longer thread id.
+    const refs = await repository.listRefsWithValues(...prefixes);
     const registryMutation = await registry.prepareRelease(
       { harness, threadId },
       entry ? { expectedCheckpointCommit: entry.checkpointCommit } : undefined,

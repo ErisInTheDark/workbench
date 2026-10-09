@@ -148,11 +148,12 @@ export default class GitCheckpointStore {
    */
   private async checkpointIndex(harness: GitArcHarness, threadId: string) {
     const namespaces = await this.checkpointNamespaces(harness, threadId);
-    const { byCommit, commits } = await GitObjectReadSession.memo(`${this.repository.refMemoPrefix()}checkpoint-index:${namespaces.join("|")}`, async () => {
+    const { byCommit, commits, decoded } = await GitObjectReadSession.memo(`${this.repository.refMemoPrefix()}checkpoint-index:${namespaces.join("|")}`, async () => {
       const refs = await this.repository.listRefsWithValues(...namespaces);
       const byCommit = new Map<string, (typeof refs)[number]>();
       for (const ref of refs) if (!byCommit.has(ref.value)) byCommit.set(ref.value, ref);
-      return { byCommit, commits: await this.repository.readCommits([...byCommit.keys()]) };
+      // Checkpoint commits are immutable, so each message is parsed at most once per index.
+      return { byCommit, commits: await this.repository.readCommits([...byCommit.keys()]), decoded: new Map<string, StoredCheckpoint>() };
     });
     return {
       commits: [...byCommit.keys()],
@@ -160,7 +161,13 @@ export default class GitCheckpointStore {
       decode: (commit: string) => {
         const entry = byCommit.get(normalizeCommit(commit));
         const identity = entry && commits.commits.get(entry.value);
-        return entry && identity ? this.decodeCheckpoint(entry.value, entry.ref, identity) : null;
+        if (!entry || !identity) return null;
+        let checkpoint = decoded.get(entry.value);
+        if (!checkpoint) {
+          checkpoint = this.decodeCheckpoint(entry.value, entry.ref, identity);
+          decoded.set(entry.value, checkpoint);
+        }
+        return checkpoint;
       },
     };
   }
@@ -172,6 +179,7 @@ export default class GitCheckpointStore {
     const index = await this.checkpointIndex(harness, threadId);
     let cursor = start;
     for (let depth = 0; depth < 100; depth += 1) {
+      await GitObjectReadSession.yieldSlice();
       if (cursor.checkpointCommit === required) return true;
       const parent = cursor.metadata?.amendedFrom;
       if (!parent) return false;
@@ -191,6 +199,7 @@ export default class GitCheckpointStore {
       [...new Set([checkpoint.checkpointCommit, ...index.commits])].map(commit => outcomeRef(harness, id, commit))
     )));
     while (true) {
+      await GitObjectReadSession.yieldSlice();
       const outcomeRefs = gitArcThreadStorageIds(await this.identity(harness, threadId))
         .map(id => outcomeRef(harness, id, checkpoint.checkpointCommit));
       const ref = outcomeRefs.find(candidate => outcomes.blobs.has(candidate) || outcomes.errors.has(candidate)) ?? outcomeRefs[0]!;
@@ -352,11 +361,11 @@ export default class GitCheckpointStore {
     committedSha: string,
     excludedProposalId?: string,
   ): Promise<StoredProposal | null> {
-    const namespaces = await this.proposalNamespaces(harness, threadId);
-    const refs = (await this.repository.listRefsWithValues("refs/worktree/agents"))
-      .filter(({ ref }) => namespaces.some((namespace) => ref.startsWith(`${namespace}/`)));
+    // Only this thread's proposal namespaces; Git matches each as a whole-segment prefix.
+    const refs = await this.repository.listRefsWithValues(...await this.proposalNamespaces(harness, threadId));
     const commits = await this.repository.readCommits(refs.map(({ value }) => value));
     for (const { ref, value } of refs) {
+      await GitObjectReadSession.yieldSlice();
       const identity = commits.commits.get(value);
       if (!identity) continue;
       const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);

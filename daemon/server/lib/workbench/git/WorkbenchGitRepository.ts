@@ -16,6 +16,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
@@ -147,16 +148,8 @@ function parseNullPaths(output: string) {
 
 function filterPathsByScopes(candidates: string[], scopes: readonly string[]) {
   if (!scopes.length || scopes.includes(".")) return candidates;
-  const scopeSet = new Set(scopes);
-  return candidates.filter((candidate) => {
-    if (scopeSet.has(candidate)) return true;
-    let separator = candidate.lastIndexOf("/");
-    while (separator > 0) {
-      if (scopeSet.has(candidate.slice(0, separator))) return true;
-      separator = candidate.lastIndexOf("/", separator - 1);
-    }
-    return false;
-  });
+  const selection = new GitArcPathSet(scopes);
+  return candidates.filter((candidate) => selection.covers(candidate));
 }
 
 function pathspecInput(paths: readonly string[]) {
@@ -345,12 +338,10 @@ export default class WorkbenchGitRepository {
     );
     if (result.exitCode === 1) return [];
     const ignoredPaths = parseNullPaths(result.stdout);
-    const stagedDeletedPaths = parseNullPaths(await this.run([
+    const stagedDeletedPaths = new GitArcPathSet(parseNullPaths(await this.run([
       "diff", "--cached", "--name-only", "-z", "--diff-filter=D", "--no-renames", "--",
-    ]));
-    return ignoredPaths.filter((ignoredPath) => !stagedDeletedPaths.some((deletedPath) => (
-      deletedPath === ignoredPath || deletedPath.startsWith(`${ignoredPath}/`)
-    )));
+    ])));
+    return ignoredPaths.filter((ignoredPath) => !stagedDeletedPaths.has(ignoredPath) && !stagedDeletedPaths.contains(ignoredPath));
   }
 
   literalPathspec(relativePath: string) {

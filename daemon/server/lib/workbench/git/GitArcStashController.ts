@@ -4,7 +4,7 @@
  */
 import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import type { GitArcStashResult } from "./WorkbenchGitCheckpointController";
 import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError, type GitArcPreparedOperation } from "./GitArcRegistry";
@@ -57,8 +57,9 @@ export default class GitArcStashController {
       if (saved) throw new Error("This thread already has a stash. Restore or discard it before saving another.");
       if (!current || !arc || !live.length) throw new Error("This thread does not own active or plan-retained Git arc claims.");
       const checkpoint = await checkpoints.readCheckpoint(harness, input.threadId, arc.checkpointCommit);
+      const scope = new Set(checkpoint.metadata?.scopePaths);
       if (!checkpoint.metadata || !["arc", "implement"].includes(checkpoint.metadata.kind)
-        || live.some(value => !checkpoint.metadata!.scopePaths.includes(value))) {
+        || live.some(value => !scope.has(value))) {
         throw new Error("The live Git arc does not match its checkpoint claim set.");
       }
       paths = [...live];
@@ -101,7 +102,8 @@ export default class GitArcStashController {
           scopePaths: live, stashedPaths: [], conflictedPaths: [],
         };
       } else {
-        if (paths.some(value => live.some(claim => gitArcPathsOverlap(value, claim)))) {
+        const liveClaims = new GitArcPathSet(live);
+        if (paths.some(value => liveClaims.overlaps(value))) {
           throw new Error("Stashed paths overlap the caller's current live claims.");
         }
         const dirty = await repository.listWorktreeChangedPaths(head, paths);
@@ -111,8 +113,9 @@ export default class GitArcStashController {
         const combined = [...new Set([...live, ...paths])].sort();
         const pendingPlan = current?.phase === "plan" || current?.phase === "stashed" && current.retainedArc
           ? await checkpoints.readCheckpoint(harness, input.threadId, current.checkpointCommit) : null;
+        const planScope = new GitArcPathSet(pendingPlan?.metadata?.scopePaths);
         if (pendingPlan && (!pendingPlan.metadata || pendingPlan.metadata.kind !== "plan"
-          || combined.some(value => !pendingPlan.metadata!.scopePaths.some(scope => value === scope || value.startsWith(`${scope}/`))))) {
+          || combined.some(value => !planScope.covers(value)))) {
           throw new Error("The pending plan does not cover the restored claims. Revise its scope before restoring saved work.");
         }
         if (arc && live.length) {

@@ -1,4 +1,4 @@
-/* Exports: none. Protect the memory breakdown line, stalled-sample marking, start-gated scheduling, failure reporting and disposal. */
+/* Exports: none. Protect the memory breakdown line, stalled-sample marking, start-gated scheduling, event-loop block reporting, failure reporting and disposal. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
@@ -10,6 +10,7 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
   const warnings: string[] = [];
   let stopped = false;
   let scheduled = 0;
+  const loop = { blocked: null as ((blockedMs: number) => void) | null, maxDelays: [37, 4], stopped: false };
   const reporter = new WorkbenchMemoryReporter({
     readProcess: () => ({ rss: 1083 * MB, heapUsed: 366 * MB, heapTotal: 412 * MB, external: 41 * MB, arrayBuffers: 12 * MB }),
     readWorkerHeaps,
@@ -17,8 +18,12 @@ function fixture(readWorkerHeaps: () => Promise<Awaited<ReturnType<ConstructorPa
     log: message => logs.push(message),
     warn: message => warnings.push(message),
     schedule: () => { scheduled += 1; return { stop: () => { stopped = true; } }; },
+    watchEventLoop: (onBlocked) => {
+      loop.blocked = onBlocked;
+      return { takeMaxDelayMs: () => loop.maxDelays.shift() ?? 0, stop: () => { loop.stopped = true; } };
+    },
   });
-  return { reporter, logs, warnings, scheduled: () => scheduled, stopped: () => stopped };
+  return { reporter, logs, warnings, loop, scheduled: () => scheduled, stopped: () => stopped };
 }
 
 test("one sample logs process and database worker memory in one line", async () => {
@@ -50,6 +55,22 @@ test("a sample still pending at the next tick is marked instead of stacked", asy
   release();
   await first;
   assert.equal(f.logs.length, 2);
+});
+
+test("started reporters warn on each long event-loop block and sample each interval's longest delay", async () => {
+  const f = fixture(async () => ({ writer: null, core: null, transcript: null, query: null, stats: null }));
+  assert.equal(f.loop.blocked, null);
+  f.reporter.start();
+  f.loop.blocked!(4_230);
+  assert.match(plain(f.warnings[0]!), /LOOP blocked 4\.2s/u);
+  await f.reporter.tick();
+  await f.reporter.tick();
+  assert.ok(plain(f.logs[0]!).includes("loop max 37ms"));
+  assert.ok(plain(f.logs[1]!).includes("loop max 4ms"));
+  f.reporter.dispose();
+  assert.equal(f.loop.stopped, true);
+  f.loop.blocked!(2_000);
+  assert.equal(f.warnings.length, 1);
 });
 
 test("failed samples warn once each and disposal stops the schedule", async () => {

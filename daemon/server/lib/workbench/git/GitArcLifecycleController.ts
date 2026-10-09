@@ -3,7 +3,7 @@
  * - default GitArcLifecycleController: own current lifecycle reads and combined active scope transitions, keeping live claims as files.
  */
 import { applyGitClaimChanges, type GitArcClaimChanges, type GitArcMutationResult, type GitArcScopeState } from "workbench-shared/workbench/git/git-arc-state";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { CheckpointMetadata, GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError } from "./GitArcRegistry";
 import GitArcProposalController from "./GitArcProposalController";
@@ -27,10 +27,6 @@ interface Identity {
 type ClaimChangeRequest =
   | { kind: "add"; paths: string[] }
   | { kind: "claims"; changes: GitArcClaimChanges };
-
-function covers(scope: string, candidate: string) {
-  return scope === candidate || candidate.startsWith(`${scope}/`);
-}
 
 export default class GitArcLifecycleController {
   private readonly proposals: GitArcProposalController;
@@ -88,8 +84,8 @@ export default class GitArcLifecycleController {
     if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
     if (current.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before continuing or editing claims.");
     if (request?.kind === "add") {
-      const existing = getGitArcLiveClaimPaths(current);
-      const overlapping = request.paths.filter((candidate) => existing.some((claim) => gitArcPathsOverlap(claim, candidate)));
+      const existing = new GitArcPathSet(getGitArcLiveClaimPaths(current));
+      const overlapping = request.paths.filter((candidate) => existing.overlaps(candidate));
       if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
     }
     const changes: GitArcClaimChanges | undefined = request?.kind === "add"
@@ -130,7 +126,9 @@ export default class GitArcLifecycleController {
     const entries = await registry.list();
     const collisions = findGitArcCollisions(entries, { harness, threadId: input.threadId }, scopePaths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
-    const ownedAdoptions = adoptions.paths.filter((candidate) => existing.some((scope) => covers(scope, candidate) || covers(candidate, scope)));
+    const existingClaims = new GitArcPathSet(existing);
+    const nextClaims = new GitArcPathSet(scopePaths);
+    const ownedAdoptions = adoptions.paths.filter((candidate) => existingClaims.overlaps(candidate));
     if (ownedAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresUnclaimed", paths: ownedAdoptions }, `Adoption requires unclaimed paths: ${ownedAdoptions.join(", ")}`);
     const result: GitArcMutationResult = {
       checkpointCommit: checkpoint.checkpointCommit,
@@ -139,8 +137,8 @@ export default class GitArcLifecycleController {
       kind: "arc",
       phase: current.phase === "resolved" ? "resolved" : "active",
       scopePaths: existing,
-      addedClaims: scopePaths.filter((candidate) => !existing.includes(candidate)),
-      removedClaims: existing.filter((candidate) => !scopePaths.includes(candidate)),
+      addedClaims: scopePaths.filter((candidate) => !existingClaims.has(candidate)),
+      removedClaims: existing.filter((candidate) => !nextClaims.has(candidate)),
       adoptedPaths: adoptions.paths,
       acceptedProposals,
       unchanged: true,
@@ -153,7 +151,7 @@ export default class GitArcLifecycleController {
     if (current.phase === "resolved" && !scopePaths.length) return result;
     const headIdentity = await repository.readHead();
     const head = headIdentity?.commit ?? null;
-    const retained = existing.filter((scope) => scopePaths.some((candidate) => covers(scope, candidate) || covers(candidate, scope)));
+    const retained = existing.filter((scope) => nextClaims.overlaps(scope));
     const movement = await new GitArcStackController(repository, this.resolveThreadIdentity).arcDrift(current, checkpoint, retained, head);
     if (current.phase !== "resolved" && movement.incompatible) {
       throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
@@ -169,8 +167,7 @@ export default class GitArcLifecycleController {
     if (changes) {
       const paths = [...new Set([...existing, ...scopePaths])];
       const dirtyPaths = paths.length ? await repository.listWorktreeChangedPaths(head, paths) : [];
-      const exposed = dirtyPaths.filter((candidate) => existing.some((scope) => covers(scope, candidate))
-        && !scopePaths.some((scope) => covers(scope, candidate)));
+      const exposed = dirtyPaths.filter((candidate) => existingClaims.covers(candidate) && !nextClaims.covers(candidate));
       // Unlanded sealed layers differ from HEAD; dropping their claims would leave that content unguarded.
       const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
       const tipDirty = movement.tip?.pending && exposed.length
@@ -179,10 +176,11 @@ export default class GitArcLifecycleController {
       if (exposed.length) {
         throw new GitArcRejectionError({ reason: "sealedStackContent", paths: exposed }, `Removed claims hold pending stack-layer content: ${exposed.join(", ")}. Keep them until the layer commits, or ask the coordinating thread to move them with a selected adopt.`);
       }
-      const unexplained = dirtyPaths.filter((candidate) => !existing.some((scope) => covers(scope, candidate))
-        && !adoptions.paths.some((scope) => covers(scope, candidate)));
+      const adopted = new GitArcPathSet(adoptions.paths);
+      const unexplained = dirtyPaths.filter((candidate) => !existingClaims.covers(candidate) && !adopted.covers(candidate));
       if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "New claims");
-      const cleanAdoptions = adoptions.paths.filter((scope) => !dirtyPaths.some((candidate) => covers(scope, candidate)));
+      const dirty = new GitArcPathSet(dirtyPaths);
+      const cleanAdoptions = adoptions.paths.filter((scope) => !dirty.has(scope) && !dirty.contains(scope));
       if (cleanAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Adoption requires dirty unclaimed paths: ${cleanAdoptions.join(", ")}`);
     }
     if (!result.addedClaims.length && !result.removedClaims.length

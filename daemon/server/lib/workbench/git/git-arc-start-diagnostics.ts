@@ -13,6 +13,7 @@ import {
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import {
   describeGitArcDriftRecovery,
   formatGitArcDriftComparison,
@@ -98,10 +99,6 @@ export function formatGitArcCollisionLines(presentations: readonly GitArcCollisi
   return lines;
 }
 
-function pathIsCoveredBy(candidate: string, scopePath: string) {
-  return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
-}
-
 export default async function createGitArcStartDiagnosticError(input: GitArcStartDiagnosticInput) {
   const {
     adoptedPaths,
@@ -122,11 +119,10 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     tree: currentTree, paths: planPaths, commitPaths: snapshotDrift, netCommittedOnly: true,
   });
   const dirtyPaths = await repository.listChangedPaths(currentHead, currentTree, planPaths);
-  const liveClaimedPaths = registryEntries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
-  const dirtyUnclaimed = dirtyPaths.filter((dirtyPath) => (
-    snapshotDrift.includes(dirtyPath)
-    && !liveClaimedPaths.some((claimedPath) => pathIsCoveredBy(dirtyPath, claimedPath) || pathIsCoveredBy(claimedPath, dirtyPath))
-  ));
+  const liveClaimedPaths = new GitArcPathSet(registryEntries.flatMap((entry) => getGitArcLiveClaimPaths(entry)));
+  const drifted = new Set(snapshotDrift);
+  const dirtyUnclaimed = dirtyPaths.filter((dirtyPath) => drifted.has(dirtyPath) && !liveClaimedPaths.overlaps(dirtyPath));
+  const adopted = new GitArcPathSet(adoptedPaths);
 
   const hasDrift = snapshotDrift.length > 0 || headMovement === "incompatible";
   const lines = [
@@ -152,7 +148,7 @@ export default async function createGitArcStartDiagnosticError(input: GitArcStar
     lines.push("- none");
   } else {
     dirtyUnclaimed.slice(0, MAX_PATHS).forEach((filePath) => {
-      const alreadyAdopted = adoptedPaths.some((adoptedPath) => pathIsCoveredBy(filePath, adoptedPath));
+      const alreadyAdopted = adopted.covers(filePath);
       lines.push(`- ${code(filePath)}${alreadyAdopted ? " (already adopted by this plan)" : ""}`);
     });
     if (dirtyUnclaimed.length > MAX_PATHS) lines.push(`- ... ${dirtyUnclaimed.length - MAX_PATHS} more`);

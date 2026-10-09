@@ -3,6 +3,7 @@
  * - default GitTreeObjects: tree diffs and path surgery in-process, reading through the operation's object reader and writing loose objects.
  * - GitTreeEntry: one raw tree entry; name bytes are kept so untouched entries re-serialise byte-for-byte.
  */
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitObjectReadSession from "./GitObjectReadSession";
 import type GitObjectWriter from "./GitObjectWriter";
 
@@ -32,9 +33,11 @@ function join(prefix: string, name: string) {
   return prefix ? `${prefix}/${name}` : name;
 }
 
-/** Whether a directory may hold paths selected by `scopes` (empty selects everything). */
-function mayContain(directory: string, scopes: readonly string[]) {
-  return !scopes.length || scopes.some(scope => scope === directory || scope.startsWith(`${directory}/`) || directory.startsWith(`${scope}/`));
+/** First entry per name, as `find` would return it. */
+function entriesByName(entries: readonly GitTreeEntry[]) {
+  const byName = new Map<string, GitTreeEntry>();
+  for (const entry of entries) if (!byName.has(entry.name)) byName.set(entry.name, entry);
+  return byName;
 }
 
 export default class GitTreeObjects {
@@ -80,6 +83,8 @@ export default class GitTreeObjects {
    */
   async changedPaths(from: string | null, to: string | null, scopes: readonly string[] = []) {
     const changed: string[] = [];
+    // A directory may hold selected paths when it overlaps a scope; no scopes selects everything.
+    const selection = scopes.length ? new GitArcPathSet(scopes) : null;
     const walk = async (left: string | null, right: string | null, prefix: string): Promise<void> => {
       if (left === right) return;
       const [leftEntries, rightEntries] = await Promise.all([left ? this.readTree(left) : [], right ? this.readTree(right) : []]);
@@ -93,7 +98,7 @@ export default class GitTreeObjects {
         const beforeIsTree = isTree(before);
         const afterIsTree = isTree(after);
         if ((before && !beforeIsTree) || (after && !afterIsTree)) changed.push(entryPath);
-        if ((beforeIsTree || afterIsTree) && mayContain(entryPath, scopes)) {
+        if ((beforeIsTree || afterIsTree) && (!selection || selection.overlaps(entryPath))) {
           nested.push(walk(beforeIsTree ? before!.id : null, afterIsTree ? after!.id : null, entryPath));
         }
       }
@@ -107,19 +112,23 @@ export default class GitTreeObjects {
   async entriesAt(tree: string | null, paths: readonly string[]) {
     const found = new Map<string, GitTreeEdit>(paths.map(candidate => [candidate, null]));
     const walk = async (id: string, prefix: string, wanted: readonly string[]): Promise<void> => {
-      const entries = await this.readTree(id);
+      const entries = entriesByName(await this.readTree(id));
       const nested = new Map<string, string[]>();
       for (const candidate of wanted) {
         const relative = prefix ? candidate.slice(prefix.length + 1) : candidate;
         const separator = relative.indexOf("/");
         const head = separator < 0 ? relative : relative.slice(0, separator);
         if (separator < 0) {
-          const entry = entries.find(item => item.name === head);
+          const entry = entries.get(head);
           if (entry && !isTree(entry)) found.set(candidate, { id: entry.id, mode: entry.mode });
-        } else nested.set(head, [...nested.get(head) ?? [], candidate]);
+        } else {
+          const children = nested.get(head);
+          if (children) children.push(candidate);
+          else nested.set(head, [candidate]);
+        }
       }
       await Promise.all([...nested].map(async ([head, children]) => {
-        const entry = entries.find(item => item.name === head);
+        const entry = entries.get(head);
         if (isTree(entry)) await walk(entry!.id, join(prefix, head), children);
       }));
     };

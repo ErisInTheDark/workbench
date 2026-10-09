@@ -4,9 +4,11 @@
  * - GitObjectReadScope: a shared scope that separate steps of one long operation re-enter until its owner closes it.
  * - GitObjectReadResult: object identity and optional raw contents; null means missing.
  * - GitObjectReadProcess: injectable process boundary for protocol/lifecycle tests.
+ * Notable members: yieldSlice lets loops whose size grows with ref count hand the event loop back between bounded slices.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { setImmediate as nextTurn } from "node:timers/promises";
 
 export type GitObjectReadResult = {
   objectId: string;
@@ -46,7 +48,21 @@ async function closeReaders(scope: Scope) {
 
 const sharedScopes = new WeakMap<GitObjectReadScope, Scope>();
 
+/** Synchronous work a ref-scaling loop may run before handing the event loop back. */
+const SLICE_BUDGET_MS = 16;
+let sliceStartedAt = performance.now();
+
 export default class GitObjectReadSession {
+  /**
+   * Yields one macrotask once the current synchronous slice exceeds its budget. Arc metadata loops scale with a
+   * thread's ref history, so they call this per item to keep any single event-loop block bounded.
+   */
+  static async yieldSlice() {
+    if (performance.now() - sliceStartedAt < SLICE_BUDGET_MS) return;
+    await nextTurn();
+    sliceStartedAt = performance.now();
+  }
+
   /** Opens a scope that `run` can re-enter across steps that yield in between, such as per-layer gate holds. */
   static share(): GitObjectReadScope {
     const scope: Scope = { readers: new Map(), memos: new Map(), closed: false };

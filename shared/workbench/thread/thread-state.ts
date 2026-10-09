@@ -52,7 +52,7 @@ import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provide
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
 
 import { areDeeplyEqual } from "../deep-equality.ts";
-import { gitArcPathsOverlap } from "../git/git-arc-paths.ts";
+import GitArcPathSet from "../git/GitArcPathSet.ts";
 import { GitArcChangeTotalSchema } from "../git/git-arc-receipts.ts";
 import { WorkbenchComposerProfileSelectionSchema, WorkbenchComposerSettingsSchema } from "./composer-profile-selection.ts";
 import { ThreadDisplayLayoutSchema } from "./thread-display-layout.ts";
@@ -801,6 +801,7 @@ export function getWorkbenchThreadClaimIntersections(
     ? owner?.gitArc?.stashedPaths ?? []
     : owner?.gitArcPlan?.scopePaths ?? [];
   if (!scopePaths.length) return EMPTY_WORKBENCH_THREAD_CLAIM_INTERSECTIONS;
+  const scopeIndex = new GitArcPathSet(scopePaths);
   const candidates = entries.filter((entry): entry is TopLevelSidebarRow => (
     entry.entryKind === "thread"
     && (entry.identity.harness !== identity.harness || entry.identity.threadId !== identity.threadId)
@@ -808,7 +809,7 @@ export function getWorkbenchThreadClaimIntersections(
   const intersect = (selectPaths: (entry: TopLevelSidebarRow) => readonly string[]) => (
     orderWorkbenchTopLevelThreadEntries(candidates).flatMap((entry) => {
       const paths = [...new Set(selectPaths(entry).flatMap((candidatePath) => (
-        scopePaths.filter((scopePath) => gitArcPathsOverlap(candidatePath, scopePath))
+        scopeIndex.overlapping(candidatePath)
           .map((scopePath) => candidatePath.length >= scopePath.length ? candidatePath : scopePath)
       )))];
       return paths.length ? [{ entry, paths }] : [];

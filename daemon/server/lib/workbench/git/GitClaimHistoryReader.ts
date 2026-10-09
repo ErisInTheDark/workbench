@@ -11,7 +11,9 @@ import {
   parseMarkedMetadata,
   type CheckpointMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { WorkbenchGitClaimImportDiscovery } from "../../../database/stats/WorkbenchStatsImportRepository";
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 export interface GitClaimHistoryDiscovery {
@@ -43,6 +45,13 @@ function comparable(value: string) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+/** Sorted by comparable form, computing each key once rather than per comparison. */
+function sortComparable(paths: Iterable<string>) {
+  return [...paths].map(value => ({ key: comparable(value), value }))
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .map(({ value }) => value);
+}
+
 function parseGitActorDate(value: string) {
   const match = /^(\d+) [+-]\d{4}$/u.exec(value.trim());
   if (!match) return null;
@@ -66,6 +75,7 @@ export default class GitClaimHistoryReader {
     const candidates: WorkbenchGitClaimImportDiscovery[] = [];
     let unsupported = 0;
     for (const entry of checkpointRefs) {
+      await GitObjectReadSession.yieldSlice();
       const identity = commits.commits.get(entry.value);
       const owner = parseIdentity(entry.ref);
       if (!identity || !owner) {
@@ -114,7 +124,7 @@ export default class GitClaimHistoryReader {
       const relative = relativeWithin(path.resolve(repository.root, repoPath), candidate.workspaceRoot);
       if (relative) paths.add(relative);
     }
-    return [...paths].sort((left, right) => comparable(left).localeCompare(comparable(right)));
+    return sortComparable(paths);
   }
 
   async expandScopes(input: {
@@ -133,13 +143,11 @@ export default class GitClaimHistoryReader {
     scopePaths: string[],
   ) {
     const scopes = repository.normalizePaths(scopePaths);
-    const paths = new Set(await repository.listTreePaths(tree, scopes));
+    const paths = new GitArcPathSet(await repository.listTreePaths(tree, scopes));
     for (const scope of scopes) {
-      const hasExpandedPath = scope === "."
-        ? paths.size > 0
-        : [...paths].some((candidate) => candidate === scope || candidate.startsWith(`${scope}/`));
+      const hasExpandedPath = scope === "." ? paths.size > 0 : paths.has(scope) || paths.contains(scope);
       if (!hasExpandedPath) paths.add(scope);
     }
-    return [...paths].sort((left, right) => comparable(left).localeCompare(comparable(right)));
+    return sortComparable(paths.values());
   }
 }

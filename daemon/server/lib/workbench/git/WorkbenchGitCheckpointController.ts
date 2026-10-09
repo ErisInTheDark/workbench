@@ -33,7 +33,7 @@ import GitArcRegistry, {
   type GitArcCollision,
   type GitArcRegistryEntry,
 } from "./GitArcRegistry";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import { createGitArcDiffPage, type GitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
 import { expandGitArcClaimPaths, expandGitArcMoveClaimPaths } from "./git-arc-claim-expansion";
@@ -186,10 +186,6 @@ function requireArcMetadata(checkpoint: ReadCheckpointResult) {
     throw new GitArcMissingClaimSetError();
   }
   return checkpoint.metadata;
-}
-
-function pathIsCoveredBy(candidate: string, scopePath: string) {
-  return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
 }
 
 async function resolveRepoRoot(cwd: string) {
@@ -422,10 +418,10 @@ export default class WorkbenchGitCheckpointController {
     paths: string[],
   ) {
     const head = await repository.headOrNull();
-    const dirtyPaths = await repository.listWorktreeChangedPaths(head, paths);
+    const dirtyPaths = new GitArcPathSet(await repository.listWorktreeChangedPaths(head, paths));
     return {
-      cleanClaims: paths.filter(claim => !dirtyPaths.some(path => gitArcPathsOverlap(claim, path))),
-      dirtyClaims: paths.filter(claim => dirtyPaths.some(path => gitArcPathsOverlap(claim, path))),
+      cleanClaims: paths.filter(claim => !dirtyPaths.overlaps(claim)),
+      dirtyClaims: paths.filter(claim => dirtyPaths.overlaps(claim)),
     };
   }
 
@@ -821,16 +817,17 @@ export default class WorkbenchGitCheckpointController {
       const claims = current ? getGitArcLiveClaimPaths(current) : [];
       const savedPaths = current?.savedStash?.paths ?? (current?.phase === "stashed" ? current.claimedPaths : []);
       const dirt = await repository.listAllChangedPaths(head, tree);
-      const allClaims = entries.flatMap(getGitArcLiveClaimPaths);
+      const dirtPaths = new GitArcPathSet(dirt);
+      const allClaims = new GitArcPathSet(entries.flatMap(getGitArcLiveClaimPaths));
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
       const proposals = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
         lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
       const status: GitArcStatus = {
         ...proposals,
-        dirtyClaims: claims.filter(claim => dirt.some(file => gitArcPathsOverlap(claim, file))),
-        cleanClaims: claims.filter(claim => !dirt.some(file => gitArcPathsOverlap(claim, file))),
+        dirtyClaims: claims.filter(claim => dirtPaths.overlaps(claim)),
+        cleanClaims: claims.filter(claim => !dirtPaths.overlaps(claim)),
         stashedClaims: savedPaths,
-        unclaimedDirt: dirt.filter(file => !allClaims.some(claim => gitArcPathsOverlap(claim, file))),
+        unclaimedDirt: dirt.filter(file => !allClaims.overlaps(file)),
         recovery: [], unavailableRecovery: [],
       };
       if (claims.length && current?.phase === "active") {
@@ -928,12 +925,11 @@ export default class WorkbenchGitCheckpointController {
       const resolved = await mover.resolve(move);
       // Both sides become file claims; existing folder claims convert alongside them.
       const candidates = await expandGitArcMoveClaimPaths(repository, resolved.mappings);
-      const additionalClaims = candidates.filter((candidate) => (
-        !metadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
-      ));
+      const claimed = new GitArcPathSet(metadata.scopePaths);
+      const additionalClaims = candidates.filter((candidate) => !claimed.covers(candidate));
       const scopePaths = [...new Set([
         ...await expandGitArcClaimPaths(repository, metadata.scopePaths),
-        ...candidates.filter((candidate) => metadata.scopePaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))),
+        ...candidates.filter((candidate) => claimed.covers(candidate)),
         ...additionalClaims,
       ])].sort((left, right) => left.localeCompare(right));
 
@@ -1104,10 +1100,8 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(async () => {
       const inspection = existingInspection ?? await this.createInspectionSnapshot(cwd);
       const changedPaths = await inspection.repository.listAllChangedPaths(inspection.head, inspection.tree);
-      const liveClaims = inspection.entries.flatMap((entry) => getGitArcLiveClaimPaths(entry));
-      const unclaimedPaths = changedPaths.filter((candidate) => (
-        !liveClaims.some((claimedPath) => gitArcPathsOverlap(candidate, claimedPath))
-      ));
+      const liveClaims = new GitArcPathSet(inspection.entries.flatMap((entry) => getGitArcLiveClaimPaths(entry)));
+      const unclaimedPaths = changedPaths.filter((candidate) => !liveClaims.overlaps(candidate));
       return await inspection.repository.listPathsModifiedSince(unclaimedPaths, modifiedSince);
     });
   }

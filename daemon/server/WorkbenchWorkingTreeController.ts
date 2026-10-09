@@ -5,12 +5,17 @@
 import type {
   WorkingTreeFileRequest, WorkingTreeMutation, WorkingTreeRead, WorkingTreeRepository, WorkingTreeSummary,
 } from "workbench-shared/workbench/git/working-tree-contracts";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "./lib/workbench/git/git-arc-thread-identity";
 import WorkbenchWorkingTreeRepository from "./lib/workbench/git/WorkbenchWorkingTreeRepository";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
+
+/** A claim owns a working-tree file when its live paths overlap the file or the file's rename source. */
+function claimsFile(paths: GitArcPathSet, file: { oldPath?: string | null; path: string }) {
+  return paths.overlaps(file.path) || Boolean(file.oldPath && paths.overlaps(file.oldPath));
+}
 
 type RepositoryPort = Pick<WorkbenchWorkingTreeRepository, "git" | "read" | "summary" | "diff" | "preview" | "mutate">;
 interface Options {
@@ -79,18 +84,22 @@ export default class WorkbenchWorkingTreeController {
       : await new GitArcRegistry(git, this.options.resolveIdentity).list();
   }
 
+  /** Each claim with its live paths indexed once, so file checks never scan every claimed path. */
+  private async indexedClaims(git: WorkbenchGitRepository) {
+    return (await this.claims(git)).map(claim => ({ claim, paths: new GitArcPathSet(getGitArcLiveClaimPaths(claim)) }));
+  }
+
   private async attachClaims(snapshot: WorkingTreeRepository, git: WorkbenchGitRepository) {
-    const claims = await this.claims(git);
+    const claims = await this.indexedClaims(git);
     const ownerIds = new Set<string>();
     const files = snapshot.files.map(file => ({
       ...file,
-      ownerIds: claims.filter(claim => getGitArcLiveClaimPaths(claim).some(scope =>
-        gitArcPathsOverlap(scope, file.path) || Boolean(file.oldPath && gitArcPathsOverlap(scope, file.oldPath)),
-      )).map(claim => { ownerIds.add(claim.threadId); return claim.threadId; }),
+      ownerIds: claims.filter(({ paths }) => claimsFile(paths, file))
+        .map(({ claim }) => { ownerIds.add(claim.threadId); return claim.threadId; }),
     }));
     const owners: WorkingTreeRepository["owners"] = [];
     for (const id of ownerIds) {
-      const claim = claims.find(claim => claim.threadId === id)!;
+      const { claim } = claims.find(({ claim }) => claim.threadId === id)!;
       const owner = await this.options.readOwner(id, claim.harness);
       if (owner) owners.push(owner);
     }
@@ -172,8 +181,8 @@ export default class WorkbenchWorkingTreeController {
             const [paths, claims] = await Promise.all([
               root.repository.summary(), this.claims(root.repository.git),
             ]);
-            return paths.some(path => !claims.some(claim => getGitArcLiveClaimPaths(claim)
-              .some(scope => gitArcPathsOverlap(scope, path))));
+            const claimed = new GitArcPathSet(claims.flatMap(claim => getGitArcLiveClaimPaths(claim)));
+            return paths.some(path => !claimed.overlaps(path));
           });
           result.repositories.push({ rootId: root.id, label: root.name, dirty });
         } catch {
@@ -234,13 +243,11 @@ export default class WorkbenchWorkingTreeController {
         try {
           const snapshot = await this.attachClaims(await repository.read(), repository.git);
           const verifyClaims = async () => {
-            const claims = await this.claims(repository.git);
+            const claims = await this.indexedClaims(repository.git);
             for (const selection of request.selections) {
               const file = snapshot.files.find(file => file.path === selection.path);
               if (!file) throw new Error("Selected file no longer exists.");
-              if (claims.some(claim => getGitArcLiveClaimPaths(claim).some(scope =>
-                gitArcPathsOverlap(scope, file.path) || Boolean(file.oldPath && gitArcPathsOverlap(scope, file.oldPath)),
-              ))) throw new Error("Claimed files are inspect-only. Open their owning thread.");
+              if (claims.some(({ paths }) => claimsFile(paths, file))) throw new Error("Claimed files are inspect-only. Open their owning thread.");
             }
           };
           await verifyClaims();

@@ -22,7 +22,7 @@ import {
 import GitArcPublishState from "./GitArcPublishState";
 import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcStackController, { type GitArcStackStatusResolver } from "./GitArcStackController";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitCheckpointStore, {
   type GitArcProposalSummary,
   type StoredCheckpoint,
@@ -241,10 +241,6 @@ function proposalAlreadyCommitted(proposal: StoredProposal) {
   return new GitArcProposalAlreadyCommittedError(commitSha, proposal.metadata.proposalId, proposal.metadata.title);
 }
 
-function pathIsCoveredBy(candidate: string, scopePath: string) {
-  return candidate === scopePath || candidate.startsWith(`${scopePath}/`);
-}
-
 async function prepareAcceptedClaimTransition({
   acceptedHead,
   active,
@@ -287,9 +283,9 @@ async function prepareAcceptedClaimTransition({
   const changedPaths = currentTree
     ? await repository.listChangedPaths(acceptedHead, currentTree, lifecycle.claimedPaths)
     : [];
-  const claimedPaths = lifecycle.claimedPaths.filter((claimedPath) => (
-    changedPaths.some((changedPath) => pathIsCoveredBy(changedPath, claimedPath))
-  ));
+  // A claim stays when a changed path equals or lies beneath it.
+  const changed = new GitArcPathSet(changedPaths);
+  const claimedPaths = lifecycle.claimedPaths.filter((claimedPath) => changed.has(claimedPath) || changed.contains(claimedPath));
   const sourceCheckpoint = commitRemaps?.get(source.checkpointCommit) ?? source.checkpointCommit;
   let successorCheckpoint: string | null = null;
   const updates: GitRefUpdate[] = [];
@@ -707,7 +703,8 @@ export default class GitArcProposalController {
     if (!entry) return [];
     const owned = new Set(lifecycleEntry(entry)?.proposalIds ?? []);
     const { viewed } = acceptedVisibility(entry);
-    return input.proposalIds.filter(id => owned.has(id) && !viewed.includes(id));
+    const viewedIds = new Set(viewed);
+    return input.proposalIds.filter(id => owned.has(id) && !viewedIds.has(id));
   }
 
   /** Record that status showed these accepted proposals to their owner. */
@@ -718,7 +715,8 @@ export default class GitArcProposalController {
     if (!entry) return;
     const owned = new Set(lifecycleEntry(entry)?.proposalIds ?? []);
     const visibility = acceptedVisibility(entry);
-    const added = input.proposalIds.filter(id => owned.has(id) && !visibility.viewed.includes(id));
+    const viewedIds = new Set(visibility.viewed);
+    const added = input.proposalIds.filter(id => owned.has(id) && !viewedIds.has(id));
     if (!added.length) return;
     const mutation = await registry.prepareSet({
       ...entry, acceptedVisibility: { dismissed: visibility.dismissed, viewed: [...visibility.viewed, ...added] },
@@ -1104,9 +1102,8 @@ export default class GitArcProposalController {
         ? repository.normalizePaths((replacementTarget ?? revivalTarget)!.metadata.livePaths)
       : repository.normalizePaths(claimedPaths);
     if (rawPaths?.length || revivalTarget) {
-      const outsideClaim = requestedPaths.filter((candidate) => (
-        !claimedPaths.some((scopePath) => pathIsCoveredBy(candidate, scopePath))
-      ));
+      const claimed = new GitArcPathSet(claimedPaths);
+      const outsideClaim = requestedPaths.filter((candidate) => !claimed.covers(candidate));
       if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
     }
     let liveBaseCommit: string | null;
@@ -1273,15 +1270,16 @@ export default class GitArcProposalController {
     proposalIds: string[],
     livePaths: string[],
   ) {
+    // Each pending proposal checks its own paths against one index; the full overlap list is built only to reject.
+    const requested = new GitArcPathSet(livePaths);
     for (const proposalId of proposalIds) {
       const { proposal } = await resolveProposalState(this.resolveThreadIdentity, repository, harness, threadId, proposalId, {
         includeNewer: false, persistTransitions: false,
       });
       if (proposal.metadata.status !== "proposed") continue;
-      const overlapping = livePaths.filter(candidate => (
-        proposal.metadata.livePaths.some(pending => gitArcPathsOverlap(candidate, pending))
-      ));
-      if (!overlapping.length) continue;
+      if (!proposal.metadata.livePaths.some(pendingPath => requested.overlaps(pendingPath))) continue;
+      const pending = new GitArcPathSet(proposal.metadata.livePaths);
+      const overlapping = livePaths.filter(candidate => pending.overlaps(candidate));
       throw new GitArcRejectionError(
         { reason: "pathsInPendingProposal", paths: overlapping },
         `Proposed paths are already in pending proposal ${proposalId}: ${overlapping.join(", ")}. Stack it to build on it, replace it, rescind it, or propose explicit paths that exclude them.`,
@@ -1294,8 +1292,8 @@ export default class GitArcProposalController {
       repository.listAllChangedPaths(snapshot.head, snapshot.tree),
       this.registry(repository).list(),
     ]);
-    const excluded = [...excludedPaths, ...entries.flatMap(getGitArcLiveClaimPaths)];
-    return changedPaths.filter(candidate => !excluded.some(claim => gitArcPathsOverlap(candidate, claim)));
+    const excluded = new GitArcPathSet([...excludedPaths, ...entries.flatMap(getGitArcLiveClaimPaths)]);
+    return changedPaths.filter(candidate => !excluded.overlaps(candidate));
   }
 
   async getProposal({ cwd, harness: rawHarness, includeNewer, includeUnclaimed, proposalId, threadId }: ArcIdentityInput & { includeNewer: boolean; includeUnclaimed?: boolean; proposalId: string }) {
@@ -1826,9 +1824,10 @@ export default class GitArcProposalController {
   /** Pending proposals whose live paths intersect the given paths. */
   async proposalsCoveringPaths(repository: WorkbenchGitRepository, harness: string, threadId: string, proposalIds: string[], paths: string[]) {
     const store = this.store(repository);
+    const selected = new GitArcPathSet(paths);
     const covering = await Promise.all(proposalIds.map(async (proposalId) => {
       const proposal = await store.readProposal(normalizeHarness(harness), threadId, proposalId);
-      return proposal.metadata.livePaths.some(live => paths.some(candidate => gitArcPathsOverlap(live, candidate))) ? proposalId : null;
+      return proposal.metadata.livePaths.some(live => selected.overlaps(live)) ? proposalId : null;
     }));
     return covering.filter(id => id !== null);
   }
@@ -1844,8 +1843,9 @@ export default class GitArcProposalController {
     }
     const checkpoint = await this.store(repository).readCheckpoint(harness, input.threadId, arc.checkpointCommit);
     const metadata = requireArcMetadata(checkpoint.metadata);
+    const scope = new Set(metadata.scopePaths);
     const claimsMatch = active.phase === "plan"
-      ? arc.claimedPaths.every((claimedPath) => metadata.scopePaths.includes(claimedPath))
+      ? arc.claimedPaths.every((claimedPath) => scope.has(claimedPath))
       : metadata.scopePaths.length === arc.claimedPaths.length
         && metadata.scopePaths.every((scopePath, index) => scopePath === arc.claimedPaths[index]);
     if (!claimsMatch) {

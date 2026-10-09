@@ -17,7 +17,7 @@
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { GitArcSavedStashSchema, type GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import type { DaemonReloadScope } from "workbench-shared/types";
-import { gitArcPathsOverlap } from "workbench-shared/workbench/git/git-arc-paths";
+import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import {
@@ -128,13 +128,13 @@ export function findGitArcCollisions(
   requestedPaths: readonly string[],
 ) {
   const key = identityKey(identity);
+  const requested = new GitArcPathSet(requestedPaths);
   return entries
     .filter((candidate) => identityKey(candidate) !== key)
     .filter((candidate) => getGitArcLiveClaimPaths(candidate).length > 0)
     .map((candidate): GitArcCollision => ({
       entry: candidate,
-      overlaps: getGitArcLiveClaimPaths(candidate).flatMap((claimedPath) => requestedPaths
-        .filter((requestedPath) => gitArcPathsOverlap(claimedPath, requestedPath))
+      overlaps: getGitArcLiveClaimPaths(candidate).flatMap((claimedPath) => requested.overlapping(claimedPath)
         .map((requestedPath) => ({ claimedPath, requestedPath }))),
     }))
     .filter((collision) => collision.overlaps.length > 0);
