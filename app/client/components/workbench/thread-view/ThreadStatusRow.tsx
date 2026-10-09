@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadStatusRow: a thread's persistent status row; its live title opens the live-turn panel and its goal/todo pill opens the todo panel, sliding between the two.
+ * - default ThreadStatusRow: a thread's persistent status row; its live title opens the live-turn panel and its goal/todo pill (led by active skill pills) opens the todo panel, sliding between the two.
  */
 "use client";
 
@@ -15,7 +15,7 @@ type Panel = "live" | "todos";
 
 /** One grid cell holds both panels; the inactive one leaves flow and slides out toward its own side. */
 const panelClassName = `
-  hidden absolute inset-0 col-start-1 row-start-1 min-w-0 overflow-clip opacity-0
+  hidden absolute inset-0 col-start-1 row-start-1 min-h-0 min-w-0 overflow-clip opacity-0
   [transition-behavior:allow-discrete]
   [transition:
     opacity 180ms cubic-bezier(0.2, 0, 0, 1),
@@ -29,8 +29,10 @@ const panelClassName = `
 const liveSlideClassName = "transform-[translateX(-1.5rem)] starting:data-[active=true]:transform-[translateX(-1.5rem)]";
 const todoSlideClassName = "transform-[translateX(1.5rem)] starting:data-[active=true]:transform-[translateX(1.5rem)]";
 
-export default function ThreadStatusRow({ live, todos }: {
+export default function ThreadStatusRow({ live, skills, todos }: {
   live: ThreadLiveActivityView | null;
+  /** Sits just left of the goal/todo pill, such as the thread's active skill pills. */
+  skills?: ReactNode;
   /** Absent where a thread has no goal or todos to manage, such as standalone renders. */
   todos?: { goalSet: boolean; count: number; renderPanel(): ReactNode } | null;
 }) {
@@ -72,9 +74,10 @@ export default function ThreadStatusRow({ live, todos }: {
                 onClick={() => toggle("live")}
                 type="button"
               >
-                <span aria-live="polite" className="min-w-0">{live.title}</span>
+                <span aria-live="polite" className="flex min-w-0 overflow-hidden">{live.title}</span>
               </button>
             ) : <span className="flex-1" />}
+            {skills ? <span className="flex max-w-[60%] shrink-0 items-center">{skills}</span> : null}
             {todos ? (
               <WorkbenchIconButton
                 aria-controls={panelsId}
@@ -95,7 +98,8 @@ export default function ThreadStatusRow({ live, todos }: {
             ) : null}
           </div>
           {open ? (
-            <div className={`relative grid min-w-0 ${panelHeight}`} id={panelsId}>
+            // A zero-minimum row keeps content from growing the cell, so panel scrollers stay bounded.
+            <div className={`relative grid min-w-0 grid-rows-[minmax(0,1fr)] ${panelHeight}`} id={panelsId}>
               {live ? (
                 <div
                   aria-hidden={panel !== "live"}

@@ -79,7 +79,7 @@ export default function useThreadLiveActivity({
   return {
     key: `${threadId}:${turnId}`,
     title: (
-      <span className="inline-flex min-w-0 items-center gap-2">
+      <span className="flex min-w-0 items-center gap-2">
         <LoaderIcon className="shrink-0" />
         <span className={`inline-block truncate ${enterMotionClassName} ${shimmerTextClassName} -mt-0.5`} key={activityTitle}>{activityTitle}</span>
       </span>

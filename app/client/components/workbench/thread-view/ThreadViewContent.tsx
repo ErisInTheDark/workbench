@@ -1199,6 +1199,9 @@ export default memo(function ThreadViewContent ({
           <ThreadStatusRow
             key={activeThread.id}
             live={liveActivityView}
+            skills={active.entry && !isDraftThreadView ? (
+              <ThreadSkillPills onDeactivate={active.actions.deactivateSkill} skills={active.head?.skills ?? []} />
+            ) : null}
             todos={active.entry && !isDraftThreadView ? {
               goalSet: Boolean(active.head?.goal),
               count: active.head?.todos?.length ?? 0,
@@ -1248,18 +1251,9 @@ export default memo(function ThreadViewContent ({
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
-        {(activeThread && active.entry && !isDraftThreadView && active.head?.skills?.length) || agentTabs ? (
+        {agentTabs ? (
           <div className="mt-6">
-            <div className="flex flex-wrap items-center gap-2">
-              {activeThread && active.entry && !isDraftThreadView ? (
-                <ThreadSkillPills
-                  onDeactivate={active.actions.deactivateSkill}
-                  separatorAfter={Boolean(agentTabs)}
-                  skills={active.head?.skills ?? []}
-                />
-              ) : null}
-              {agentTabs}
-            </div>
+            <div className="flex flex-wrap items-center gap-0.5">{agentTabs}</div>
           </div>
         ) : null}
           </div>

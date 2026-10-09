@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSkillPills: render a thread's active skills as pills whose hover, focus, or touch reveals a deactivate button, with optional row separators.
+ * - default ThreadSkillPills: render a thread's active skills as removable pills, up to four, with the rest behind an ellipsis button's tooltip.
  */
 "use client";
 
@@ -8,23 +8,19 @@ import { useState } from "react";
 
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
+import WorkbenchIconButton from "../WorkbenchIconButton";
 import WorkbenchPill from "../WorkbenchPill";
+import WorkbenchTooltip from "../WorkbenchTooltip";
+import { EllipsisIcon } from "../workbench-icons";
 
-function RowSeparator () {
-  return <span className="text-[0.84em] text-fg/muted" aria-hidden="true">|</span>;
-}
+const VISIBLE_SKILLS = 4;
 
 export default function ThreadSkillPills ({
   skills,
   onDeactivate,
-  separatorAfter = false,
-  separatorBefore = false,
 }: {
   skills: readonly WorkbenchThreadSkill[];
   onDeactivate: (path: string) => Promise<void>;
-  /** Row separators render only while pills do, so an empty skill list leaves no stray divider. */
-  separatorAfter?: boolean;
-  separatorBefore?: boolean;
 }) {
   const [pendingPaths, setPendingPaths] = useState<readonly string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -43,27 +39,36 @@ export default function ThreadSkillPills ({
       setPendingPaths(current => current.filter(candidate => candidate !== path));
     }
   };
+  const list = (shown: readonly WorkbenchThreadSkill[], label: string) => (
+    <ul aria-label={label} className="m-0 flex list-none flex-wrap items-center gap-1 p-0">
+      {shown.map((skill) => (
+        <li key={skill.path} className="flex">
+          <WorkbenchPill
+            className={`${getInlineMentionMarkClassName("skill")} text-text`}
+            onRemove={() => { void deactivate(skill.path); }}
+            pending={pendingPaths.includes(skill.path)}
+            removeLabel={`Deactivate the ${skill.name} skill`}
+            title={`/${skill.name}, activated by ${skill.source === "agent" ? "the agent" : "you"}`}
+          >
+            /{skill.name}
+          </WorkbenchPill>
+        </li>
+      ))}
+    </ul>
+  );
+  const hidden = skills.slice(VISIBLE_SKILLS);
 
   return (
-    <>
-      {separatorBefore ? <RowSeparator /> : null}
-      <ul aria-label="Active skills" className="m-0 flex list-none flex-wrap items-center gap-1 p-0">
-        {skills.map((skill) => (
-          <li key={skill.path} className="flex">
-            <WorkbenchPill
-              className={`${getInlineMentionMarkClassName("skill")} text-text`}
-              onRemove={() => { void deactivate(skill.path); }}
-              pending={pendingPaths.includes(skill.path)}
-              removeLabel={`Deactivate the ${skill.name} skill`}
-              title={`/${skill.name}, activated by ${skill.source === "agent" ? "the agent" : "you"}`}
-            >
-              /{skill.name}
-            </WorkbenchPill>
-          </li>
-        ))}
-      </ul>
+    <span className="flex min-w-0 items-center gap-1">
+      {list(skills.slice(0, VISIBLE_SKILLS), "Active skills")}
+      {hidden.length ? (
+        <WorkbenchTooltip content={<div className="max-w-[min(24rem,80vw)]">{list(hidden, "More active skills")}</div>} interactive placement="top">
+          <WorkbenchIconButton display="hover-border" label={`${hidden.length} more active skills`} size="compact" title="">
+            <EllipsisIcon size={14} />
+          </WorkbenchIconButton>
+        </WorkbenchTooltip>
+      ) : null}
       {error ? <span className="ml-1 text-[0.72em] text-danger" role="alert">{error}</span> : null}
-      {separatorAfter ? <RowSeparator /> : null}
-    </>
+    </span>
   );
 }
