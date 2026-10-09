@@ -22,7 +22,7 @@ test("plain reword receipts preserve message-only intent without content amendme
       action: "propose", claimedPaths: [], intentName: null, ref: "a".repeat(40), proposalId: "new-id", version: 1,
     }))])],
   });
-  assert.equal(intents.get("new-id")?.amend, false);
+  assert.equal(intents.get("new-id")?.mode, null);
   assert.deepEqual(intents.get("new-id")?.paths, []);
   assert.equal(intents.get("new-id")?.title, "correct message");
 });
@@ -278,10 +278,10 @@ test("visible proposal intents associate title and description with the proposal
   });
 
   assert.deepEqual(intents.get("proposal-one"), {
-    amend: true,
     description: "Show both fields immediately.",
     freshDescription: "Keep prior history unchanged.",
     freshTitle: "Commit correction separately",
+    mode: "amend",
     paths: ["src/one.ts"],
     title: "Preview hoisted proposal",
   });
@@ -325,8 +325,8 @@ wb git arc propose --replace proposal-one --title \"keep proposal recovery ordin
   });
 
   assert.deepEqual(intents.get("proposal-one"), {
-    amend: false,
     description,
+    mode: null,
     paths: [],
     title: "keep proposal recovery ordinary",
   });
@@ -334,20 +334,20 @@ wb git arc propose --replace proposal-one --title \"keep proposal recovery ordin
 
 test("only proposal intent with an explicit title owns the editable message", () => {
   assert.equal(proposalIntentOwnsMessage({
-    amend: true,
     description: "Ignored without a replacement title",
+    mode: "amend",
     paths: [],
     title: "",
   }), false);
   assert.equal(proposalIntentOwnsMessage({
-    amend: true,
     description: "",
+    mode: "amend",
     paths: [],
     title: "Replacement title",
   }), true);
   assert.equal(proposalIntentOwnsMessage({
-    amend: false,
     description: "",
+    mode: "commit",
     paths: [],
     title: "New commit title",
   }), true);
@@ -381,11 +381,44 @@ test("MCP amend proposal intents preserve both user-selectable messages", () => 
   };
   const { intents } = getThreadGitArcProposalPresentation({ turns: [turn("turn-one", [item])] });
   assert.deepEqual(intents.get("proposal-mcp"), {
-    amend: true,
     description: "Rewrite the accepted message.",
     freshDescription: "Keep accepted history intact.",
     freshTitle: "Add the correction",
+    mode: "amend",
     paths: ["src/one.ts"],
     title: "Amend the correction",
+  });
+});
+
+test("MCP targeted pending proposal revisions do not claim Git amend mode", () => {
+  const item: Extract<ThreadItem, { type: "mcpToolCall" }> = {
+    appContext: null,
+    arguments: {
+      amend: "proposal-original",
+      description: "Keep the pending proposal and include its correction.",
+      title: "Revise the pending proposal",
+    },
+    durationMs: 10,
+    error: null,
+    id: "proposal-revision-mcp",
+    pluginId: null,
+    readOnlyHint: false,
+    result: {
+      _meta: null,
+      content: [{ type: "text", text: "Workbench arc proposal: proposal-revision\n" }],
+      structuredContent: null,
+    },
+    server: "wbex",
+    status: "completed",
+    tool: "git_arc_propose",
+    type: "mcpToolCall",
+  };
+  const { intents } = getThreadGitArcProposalPresentation({ turns: [turn("turn-one", [item])] });
+
+  assert.deepEqual(intents.get("proposal-revision"), {
+    description: "Keep the pending proposal and include its correction.",
+    mode: null,
+    paths: [],
+    title: "Revise the pending proposal",
   });
 });

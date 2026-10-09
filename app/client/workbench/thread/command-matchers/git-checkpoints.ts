@@ -22,7 +22,15 @@ import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import { unwrapLeadingPowerShellLiteralHereStringAssignment } from "./shells";
 import type { CommandMatcherDefinition } from "./types";
-import { getUnknownGitArcCommandRoute, getWorkbenchCommandRendering, type WorkbenchCommandPresentationName, type WorkbenchGitArcOperation } from "./workbench-command-rendering";
+import {
+  getUnknownGitArcCommandRoute,
+  getWorkbenchCommandRendering,
+  type GitCheckpointCommitCommandIntent,
+  type WorkbenchCommandPresentationName,
+  type WorkbenchGitArcOperation,
+} from "./workbench-command-rendering";
+
+export type { GitCheckpointCommitCommandIntent } from "./workbench-command-rendering";
 
 export type GitArcCommandAction = WorkbenchGitArcOperation["action"];
 
@@ -51,16 +59,6 @@ const ARC_MATCHER_IDS = {
 const CHECKPOINT_DIFF_ARTIFACT_PATTERN = /^Full diff artifact:\s*([a-f0-9]{64})\s*$/im;
 const CHECKPOINT_PROPOSAL_PATTERN = /^Workbench arc proposal:\s*([A-Za-z0-9._-]+)\s*$/im;
 const CHECKPOINT_COMPARE_LINE_PATTERN = /^([ADMU])\t\+(\d+)\t-(\d+)\t(.+)$/u;
-
-export interface GitCheckpointCommitCommandIntent {
-  amend: boolean;
-  description: string;
-  freshDescription?: string;
-  freshTitle?: string;
-  paths: string[];
-  rootId?: string;
-  title: string;
-}
 
 export interface GitArcCommandIntent {
   action: GitArcCommandAction;
@@ -341,7 +339,7 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   const reword = tokens[cursor + 1] === "reword";
   cursor += 2;
 
-  let amend = false;
+  let mode: GitCheckpointCommitCommandIntent["mode"] = "commit";
   let description: string | null = null;
   let freshDescription: string | null = null;
   let freshTitle: string | null = null;
@@ -356,21 +354,28 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   for (; cursor < tokens.length && tokens[cursor] !== "--"; cursor += 1) {
     const flag = tokens[cursor];
     if (flag === "--amend") {
-      if (amend) return null;
-      amend = true;
-      if (tokens[cursor + 1] && !tokens[cursor + 1]!.startsWith("-")) cursor += 1;
+      if (mode !== "commit") return null;
+      if (tokens[cursor + 1] && !tokens[cursor + 1]!.startsWith("-")) {
+        replacementProposalId = tokens[cursor + 1]!;
+        mode = null;
+        cursor += 1;
+      } else {
+        mode = "amend";
+      }
       continue;
     }
     const value = tokens[cursor + 1];
     if (reword && flag === "--proposal") {
       if (replacementProposalId || !value) return null;
       replacementProposalId = value;
+      mode = null;
       cursor += 1;
       continue;
     }
     if (flag === "--replace") {
       if (replacementProposalId || !value) return null;
       replacementProposalId = value;
+      mode = null;
       cursor += 1;
       continue;
     }
@@ -409,12 +414,12 @@ export function parseGitCheckpointCommitCommand(command: string): GitCheckpointC
   const paths = tokens[cursor] === "--" ? tokens.slice(cursor + 1) : [];
   title ??= "";
   description ??= "";
-  if (!amend && !title) return null;
+  if (mode === "commit" && !title) return null;
   return {
-    amend,
     description,
     ...(freshDescription !== null ? { freshDescription } : {}),
     ...(freshTitle ? { freshTitle } : {}),
+    mode,
     paths,
     ...(rootId ? { rootId } : {}),
     title,

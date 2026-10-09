@@ -263,6 +263,65 @@ test("hydrating proposal cards show the observed summary instead of skeletons", 
   assert.match(render(false), /aria-busy="true"/u);
 });
 
+test("targeted pending proposal revisions keep the stored commit mode", () => {
+  const proposal: GitCheckpointProposal = {
+    amendTargetMessage: null,
+    amendTargetSha: null,
+    baseCommit: "abcdef1",
+    changes: [{
+      additions: 1,
+      deletions: 0,
+      diff: "diff --git a/src/one.ts b/src/one.ts\n",
+      kind: { move_path: null, type: "update" },
+      path: "src/one.ts",
+    }],
+    committedSha: null,
+    description: "Keep the original proposal.",
+    freshChanges: null,
+    includeNewerAvailable: false,
+    mode: "commit",
+    paths: ["src/one.ts"],
+    proposalId: "proposal-revision",
+    status: "proposed",
+    supersededByProposalId: null,
+    supersededBySha: null,
+    title: "Revise the pending proposal",
+    unavailableReason: null,
+  };
+  const html = renderToStaticMarkup(createElement(ThreadGitArcObservationProvider, {
+    lifecycleProposals: [{
+      proposalId: proposal.proposalId,
+      status: "proposed",
+      summary: {
+        changes: [{ additions: 1, deletions: 0, kind: "update", path: "src/one.ts" }],
+        committedSha: null,
+        description: proposal.description,
+        mode: "commit",
+        title: proposal.title,
+      },
+    }],
+    observeProposal: () => () => {},
+    proposals: { [proposal.proposalId]: { proposal, status: "loaded" } },
+    children: createElement(ThreadCheckpointCommitController, {
+      cwd: "C:/workspace",
+      harness: "codex",
+      intent: {
+        description: proposal.description,
+        mode: null,
+        paths: [],
+        title: proposal.title,
+      },
+      proposalId: proposal.proposalId,
+      sourceItemId: "proposal-item",
+      threadId: "thread-one",
+    }),
+  }));
+
+  assert.match(html, /data-thread-checkpoint-commit-action="true"[\s\S]*?>Commit<\/span><\/button>/u);
+  assert.doesNotMatch(html, /data-thread-checkpoint-commit-action="true"[\s\S]*?>Amend<\/span><\/button>/u);
+  assert.match(html, /1 changed file/u);
+});
+
 test("content amend proposals expose an amend-default fresh commit choice", () => {
   const proposal: GitCheckpointProposal = {
     amendTargetMessage: {

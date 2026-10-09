@@ -1162,16 +1162,16 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assert.deepEqual(parseGitCheckpointCommitCommand(
     'wb git arc propose --title "Polish checkpoint cards" --description "Keep quoted context useful." -- src/one.ts "src/two words.ts"',
   ), {
-    amend: false,
     description: "Keep quoted context useful.",
+    mode: "commit",
     paths: ["src/one.ts", "src/two words.ts"],
     title: "Polish checkpoint cards",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
     "wb git arc propose --root web --title Title -- src/client.ts",
   ), {
-    amend: false,
     description: "",
+    mode: "commit",
     paths: ["src/client.ts"],
     rootId: "web",
     title: "Title",
@@ -1179,20 +1179,26 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   assert.deepEqual(parseGitCheckpointCommitCommand(
     'wb git arc propose --amend --title "Amend title" --description "Amend description" --fresh-title "Fresh title" --fresh-description "Fresh description" -- src/client.ts',
   ), {
-    amend: true,
     description: "Amend description",
     freshDescription: "Fresh description",
     freshTitle: "Fresh title",
+    mode: "amend",
     paths: ["src/client.ts"],
     title: "Amend title",
   });
   assert.deepEqual(parseGitCheckpointCommitCommand(
     'wb git arc propose --amend proposal-one --title "Legacy amend title"',
   ), {
-    amend: true,
     description: "",
+    mode: null,
     paths: [],
     title: "Legacy amend title",
+  });
+  assert.deepEqual(parseGitCheckpointCommitCommand("wb git arc propose --amend proposal-one"), {
+    description: "",
+    mode: null,
+    paths: [],
+    title: "",
   });
   assert.equal(parseGitCheckpointCommitCommand("wb git arc propose -- src/one.ts"), null);
   assert.equal(parseGitCheckpointCommitCommand("wb git checkpoint commit --sha abc --m Title -- src/one.ts"), null);
@@ -1277,8 +1283,8 @@ test("PowerShell-wrapped arc proposals preserve escaped titles, descriptions, an
 
   assert.equal(display.claimedBy, "git-arc.propose");
   assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
-    amend: false,
     description: "Add grouped controls and preserve Chiri's lifecycle status.",
+    mode: "commit",
     paths: [],
     title: "Group thread context menu controls",
   });
@@ -1307,8 +1313,8 @@ wb git arc propose --replace proposal-one --title \"make arc Git transactions co
   assert.deepEqual(display.summaryParts, []);
   assert.deepEqual(display.ongoingSummaryParts, []);
   assert.deepEqual(parseGitCheckpointCommitCommand(display.unwrappedCommand), {
-    amend: false,
     description,
+    mode: null,
     paths: [],
     title: "make arc Git transactions consistent",
   });

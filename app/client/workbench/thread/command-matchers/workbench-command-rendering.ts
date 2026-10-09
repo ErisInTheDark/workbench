@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
+ * - GitCheckpointCommitCommandIntent: proposal-card message and explicit or target-resolved commit mode.
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
@@ -108,17 +109,20 @@ export type WorkbenchGitArcOperation = {
   proposalId?: string | null;
   source?: { name?: string; threadId?: string };
   toSubagent?: string;
-  proposalIntent?: {
-    amend: boolean;
-    description: string;
-    freshDescription?: string;
-    freshTitle?: string;
-    paths: string[];
-    rootId?: string;
-    title: string;
-  } | null;
+  proposalIntent?: GitCheckpointCommitCommandIntent | null;
   ref: string | null;
 };
+
+export interface GitCheckpointCommitCommandIntent {
+  /** Null when the targeted proposal's stored mode is authoritative. */
+  mode: "amend" | "commit" | null;
+  description: string;
+  freshDescription?: string;
+  freshTitle?: string;
+  paths: string[];
+  rootId?: string;
+  title: string;
+}
 
 export interface WorkbenchSubagentOperation {
   action: "create" | "settle" | "stop" | "wait";
@@ -474,6 +478,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
   const freshDescription = readString(args.freshDescription);
   const freshTitle = readString(args.freshTitle);
   const proposalId = readString(args.proposalId) ?? readString(args.amend) ?? readString(args.replace) ?? readString(args.amendProposalId) ?? readString(args.replaceProposalId);
+  const targetsProposal = proposalId !== null;
   const operation: WorkbenchGitArcOperation = {
     action,
     ...(adoptPaths.length ? { adoptPaths } : {}),
@@ -492,7 +497,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(action === "propose"
       ? {
         proposalIntent: {
-          amend: readBoolean(args.amend) || typeof args.amend === "string" || Boolean(args.amendProposalId && paths.length),
+          mode: readBoolean(args.amend) ? "amend" : targetsProposal ? null : "commit",
           description: messages[1] ?? readString(args.description) ?? "",
           ...(freshDescription !== null ? { freshDescription } : {}),
           ...(freshTitle ? { freshTitle } : {}),

@@ -82,20 +82,20 @@ function ThreadCheckpointCommitController({
     changes: GitCheckpointProposal["changes"];
   } | null>(null);
   const intentOwnsMessage = proposalIntentOwnsMessage(intent);
-  const intentOwnsAmend = Boolean(intent?.amend && intentOwnsMessage);
-  const intentOwnsCommit = Boolean(intent?.amend ? intent.freshTitle?.trim() : intentOwnsMessage);
+  const intentOwnsAmend = Boolean(intent?.mode === "amend" && intentOwnsMessage);
+  const intentOwnsCommit = Boolean(intent?.freshTitle?.trim() || (intent?.mode === "commit" && intentOwnsMessage));
   // The observed summary is the stored message, so it fills whatever the intent does not, from the first paint.
   const seedAmend = proposalSummary?.mode === "amend" && !intentOwnsAmend ? proposalSummary : null;
   const seedCommit = proposalSummary?.mode === "commit" && !intentOwnsCommit ? proposalSummary : null;
-  const initialMode = intent ? intent.amend ? "amend" : "commit" : proposalSummary?.mode ?? "commit";
+  const initialMode = intent?.mode ?? proposalSummary?.mode ?? "commit";
   const [commitMode, setCommitMode] = useState<"amend" | "commit">(initialMode);
-  const [amendTitle, setAmendTitle] = useState(seedAmend?.title ?? intent?.title ?? "");
-  const [amendDescription, setAmendDescription] = useState(seedAmend?.description ?? intent?.description ?? "");
+  const [amendTitle, setAmendTitle] = useState(seedAmend?.title ?? (intent?.mode === "amend" ? intent.title : ""));
+  const [amendDescription, setAmendDescription] = useState(seedAmend?.description ?? (intent?.mode === "amend" ? intent.description : ""));
   const [commitTitle, setCommitTitle] = useState(
-    seedCommit?.title ?? (intent?.amend ? intent.freshTitle : intent?.title) ?? "",
+    seedCommit?.title ?? intent?.freshTitle ?? (intent?.mode === "commit" ? intent.title : ""),
   );
   const [commitDescription, setCommitDescription] = useState(
-    seedCommit?.description ?? (intent?.amend ? intent.freshDescription : intent?.description) ?? "",
+    seedCommit?.description ?? (intent?.freshTitle ? intent.freshDescription : intent?.mode === "commit" ? intent.description : "") ?? "",
   );
   const [committing, setCommitting] = useState(false);
   // Synchronous guard so a card click and commit-all cannot both start the same commit.
@@ -130,7 +130,7 @@ function ThreadCheckpointCommitController({
   const commitDescriptionHydrated = useRef(intentOwnsCommit || Boolean(seedCommit));
   const title = commitMode === "amend" ? amendTitle : commitTitle;
   const description = commitMode === "amend" ? amendDescription : commitDescription;
-  const freshCommitAvailable = Boolean(intent?.amend && intent.freshTitle?.trim());
+  const freshCommitAvailable = Boolean(intent?.freshTitle?.trim());
 
   useEffect(() => {
     if (!proposalId || !observeProposal || !observationTarget) return;
@@ -159,7 +159,7 @@ function ThreadCheckpointCommitController({
 
   useEffect(() => {
     if (!intent) return;
-    if (intent.amend) {
+    if (intent.mode === "amend") {
       if (!amendTitleHydrated.current && intent.title.trim()) {
         amendTitleHydrated.current = true;
         setAmendTitle(intent.title);
@@ -178,11 +178,22 @@ function ThreadCheckpointCommitController({
       }
       return;
     }
-    if (!commitTitleHydrated.current && intent.title.trim()) {
+    if (intent.freshTitle?.trim()) {
+      if (!commitTitleHydrated.current) {
+        commitTitleHydrated.current = true;
+        setCommitTitle(intent.freshTitle);
+      }
+      if (!commitDescriptionHydrated.current) {
+        commitDescriptionHydrated.current = true;
+        setCommitDescription(intent.freshDescription ?? "");
+      }
+      return;
+    }
+    if (intent.mode === "commit" && !commitTitleHydrated.current && intent.title.trim()) {
       commitTitleHydrated.current = true;
       setCommitTitle(intent.title);
     }
-    if (!commitDescriptionHydrated.current && intent.title.trim()) {
+    if (intent.mode === "commit" && !commitDescriptionHydrated.current && intent.title.trim()) {
       commitDescriptionHydrated.current = true;
       setCommitDescription(intent.description);
     }
@@ -205,7 +216,7 @@ function ThreadCheckpointCommitController({
       descriptionHydrated.current = true;
       setDescription(summaryDescription);
     }
-    if (!intent) setCommitMode(summaryMode);
+    if (!intent || intent.mode === null) setCommitMode(summaryMode);
   }, [intent, summaryDescription, summaryMode, summaryTitle]);
 
   const acceptProposal = useCallback((proposal: GitCheckpointProposal) => {
@@ -229,10 +240,10 @@ function ThreadCheckpointCommitController({
       commitDescriptionHydrated.current = true;
     }
     loadedModeRef.current = proposal.mode;
-    if (proposal.status !== "proposed") setCommitMode(proposal.mode);
+    if (proposal.status !== "proposed" || intent?.mode === null) setCommitMode(proposal.mode);
     if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
     setState({ proposal, status: "loaded" });
-  }, [includeNewer]);
+  }, [includeNewer, intent?.mode]);
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {
     if (!proposalId) return;
@@ -453,13 +464,14 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
   const harness = props.harness ?? presentation?.harness ?? defaultProviderKey;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
   if (!props.cwd) {
+    const resolvedMode = resolvedIntent?.mode ?? proposalObservation.summary?.mode ?? "commit";
     return (
       <ThreadCheckpointCommitCard
-        commitMode={resolvedIntent?.amend ? "amend" : "commit"}
+        commitMode={resolvedMode}
         committing={false}
         description={resolvedIntent?.description ?? ""}
         embedded={props.embedded}
-        freshCommitAvailable={Boolean(resolvedIntent?.amend && resolvedIntent.freshTitle?.trim())}
+        freshCommitAvailable={Boolean(resolvedIntent?.freshTitle?.trim())}
         includeNewer={false}
         onCommit={() => undefined}
         onCommitModeChange={() => undefined}
