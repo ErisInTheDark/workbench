@@ -96,7 +96,7 @@ test("adopted stash coexists with caller claims and restores without losing call
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "saved child change\n");
 });
 
-test("stash ownership can be declined, adopted alone, and returned alone", async context => {
+test("stash ownership can be declined, adopted alone, and returned onto inherited stack layers", async context => {
   const fixture = await fixtures.copyFresh(CONTROLLER_BASE_FIXTURE);
   context.after(() => fixture.dispose());
   const cwd = fixture.root;
@@ -130,15 +130,36 @@ test("stash ownership can be declined, adopted alone, and returned alone", async
 
   await (await controller.prepareReleaseToChild({
     cwd,
+    threadId: "stacker",
+    source: { harness: "codex", threadId: "parent" },
+    selectedPaths: ["two.txt"],
+    transferStash: false,
+  })).apply();
+  await fs.writeFile(path.join(cwd, "two.txt"), "stacked work\n");
+  await controller.createProposal({ cwd, description: "", threadId: "stacker", title: "stacked work" });
+  await controller.stackArc({ cwd, threadId: "stacker", title: "stacked layer" });
+  await (await controller.prepareReleaseToChild({
+    cwd,
+    threadId: "child",
+    source: { harness: "codex", threadId: "stacker" },
+    selectedPaths: ["two.txt"],
+  })).apply();
+  const registry = new GitArcRegistry(await WorkbenchGitRepository.open(cwd));
+  const inheritedTip = (await registry.find({ harness: "codex", threadId: "child" }))?.stackTip;
+  assert.ok(inheritedTip);
+
+  await (await controller.prepareReleaseToChild({
+    cwd,
     threadId: "child",
     source: { harness: "codex", threadId: "parent" },
     selectedPaths: [],
     transferStash: true,
   })).apply();
 
-  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).cleanClaims, ["two.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).cleanClaims, []);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, []);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
+  assert.equal((await registry.find({ harness: "codex", threadId: "child" }))?.stackTip, inheritedTip);
 });
 
 test("an existing caller stash rejects adoption without transferring source claims or saved work", async context => {

@@ -98,8 +98,9 @@ export default class GitArcOwnershipTransferController {
     const moveStash = Boolean(sourceStash && input.transferStash);
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
-    if (moveStash && targetChain.length && await stack.chainHasPending(targetChain)) {
-      throw new GitArcRejectionError({ reason: "pendingStack" }, "Saved stash cannot move to a thread with pending stack layers.");
+    const targetOwn = stack.ownLayers(targetChain, caller);
+    if (moveStash && targetOwn.length && await stack.chainHasPending(targetOwn)) {
+      throw new GitArcRejectionError({ reason: "pendingStack" }, "Saved stash cannot move to a thread with its own pending stack layers.");
     }
     const sourceOwn = stack.ownLayers(sourceChain, source);
     if (!selectedPaths && sourceOwn.length && await stack.chainHasPending(sourceOwn)) {

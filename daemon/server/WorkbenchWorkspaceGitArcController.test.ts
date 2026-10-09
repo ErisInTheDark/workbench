@@ -127,9 +127,11 @@ class FakeLocalGitArcController {
   readonly undoDiscardCalls: string[] = [];
   readonly adoptionFailureRoots = new Set<string>();
   readonly adoptionCalls: string[] = [];
+  readonly preparedAdoptions: Array<{ cwd: string; transferStash?: boolean }> = [];
   readonly undoAdoptionCalls: string[] = [];
   readonly transferFailureRoots = new Set<string>();
   readonly transferCalls: Array<{ cwd: string; paths: string[] }> = [];
+  readonly preparedTransfers: Array<{ cwd: string; transferStash?: boolean }> = [];
   readonly undoTransferCalls: string[] = [];
   readonly startCalls: string[] = [];
   private nextProposal = 0;
@@ -315,6 +317,7 @@ class FakeLocalGitArcController {
   async prepareAdoption(input: {
     cwd: string; threadId: string; source: { threadId: string }; transferStash?: boolean;
   }) {
+    this.preparedAdoptions.push({ cwd: input.cwd, transferStash: input.transferStash });
     const source = this.states.get(input.cwd);
     if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
     const result = {
@@ -342,6 +345,7 @@ class FakeLocalGitArcController {
   async prepareReleaseToChild(input: {
     cwd: string; threadId: string; source: { threadId: string }; selectedPaths: string[]; transferStash?: boolean;
   }) {
+    this.preparedTransfers.push({ cwd: input.cwd, transferStash: input.transferStash });
     const source = this.states.get(input.cwd);
     if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
     const paths = input.selectedPaths.map(value => path.relative(input.cwd, value).replace(/\\/gu, "/"));
@@ -394,6 +398,12 @@ class FakeLocalGitArcController {
       conflictedPaths: [], intentName: state.intentName, kind: "arc", phase: "stashed" as const,
       repoRoot: input.cwd, scopePaths: [], stashedPaths,
     };
+  }
+
+  addLiveClaimsOverSavedStash(cwd: string, claimedPaths: string[]) {
+    const state = this.states.get(cwd);
+    if (!state?.stashedPaths?.length) throw new Error("Saved work is required before adding successor claims.");
+    this.states.set(cwd, { ...state, claimedPaths, phase: "active" });
   }
 
   async unstashArc(input: { cwd: string }) {
@@ -1208,6 +1218,50 @@ test("selected release leaves other roots claimed and compensates a later transf
   }), /transfer failed/u);
   assert.deepEqual(local.undoTransferCalls, ["C:/repo/api"]);
   assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["api:one.ts", "web:two.ts"]);
+});
+
+test("workspace transfers preserve explicit leave-stash intent for each repository", async () => {
+  for (const route of ["selected adoption", "full adoption", "release"] as const) {
+    const local = new FakeLocalGitArcController();
+    const project = createWorkspace("C:/repo/api", "C:/repo/web");
+    const controller = new WorkbenchWorkspaceGitArcController(
+      local as unknown as WorkbenchGitCheckpointController,
+      new WorkbenchThreadTransitionCoordinator(),
+      async root => root,
+    );
+    await local.createPlan({
+      cwd: "C:/repo/web", harness: "codex", threadId: "parent",
+      paths: ["C:/repo/web/two.ts"], intentName: "saved parent work", intentDescription: "",
+    });
+    await local.startArc({ cwd: "C:/repo/web" });
+    await controller.execute(project, {
+      cwd: project.cwd, harness: "codex", threadId: "parent", action: "arcStash",
+    });
+    local.addLiveClaimsOverSavedStash("C:/repo/web", ["three.ts"]);
+
+    if (route === "release") {
+      await controller.releaseToChild(project, {
+        cwd: project.cwd,
+        destination: { harness: "codex", threadId: "child" },
+        harness: "codex",
+        paths: ["web:three.ts"],
+        threadId: "parent",
+        transferStash: false,
+      });
+      assert.deepEqual(local.preparedTransfers.map(input => ({ ...input, cwd: path.normalize(input.cwd) })),
+        [{ cwd: path.resolve("C:/repo/web"), transferStash: false }], route);
+    } else {
+      await controller.adopt(project, {
+        cwd: project.cwd,
+        harness: "codex",
+        source: { harness: "codex", threadId: "parent" },
+        threadId: "child",
+        transferStash: false,
+      }, undefined, route === "selected adoption" ? ["web:three.ts"] : undefined);
+      assert.deepEqual(local.preparedAdoptions.map(input => ({ ...input, cwd: path.normalize(input.cwd) })),
+        [{ cwd: path.resolve("C:/repo/web"), transferStash: false }], route);
+    }
+  }
 });
 
 test("workspace release transfers saved stash without requiring live claim paths", async () => {

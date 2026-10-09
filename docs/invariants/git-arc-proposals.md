@@ -20,5 +20,5 @@
 - Pending proposal revisions atomically supersede the target, rebuild affected stack layers and remap dependent refs; failure leaves every ref unchanged.
 - Content revision applies only worktree changes beyond represented proposals; later proposal content stays in its original layer.
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
-- Stash, unstash and stack reject when pending stack layers and saved work would coexist.
+- Stash creation and restoration reject while any pending stack layer shapes the thread baseline; stacking rejects while saved work exists. Saved work may transfer onto inherited pending layers, but not onto recipient-owned pending layers.
 - Agent file edits and removals reject paths in the owner's unsealed pending proposals; stacking or rescinding unblocks them. Amend on a rescinded proposal revives it over current work and supersedes the original.

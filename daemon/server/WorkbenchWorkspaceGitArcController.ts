@@ -130,6 +130,10 @@ function comparable(filePath: string) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+function transferStashForMember(requested: boolean | undefined, memberHasStash: boolean) {
+  return requested === true ? memberHasStash : requested;
+}
+
 function isInside(candidate: string, root: string) {
   const value = comparable(candidate);
   const boundary = comparable(root);
@@ -1060,7 +1064,7 @@ export default class WorkbenchWorkspaceGitArcController {
           harness,
           cwd: member.repoRoot,
           selectedPaths: selected.get(member.repoRoot) ?? [],
-          transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
+          transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
         }),
         [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
       );
@@ -1096,7 +1100,7 @@ export default class WorkbenchWorkspaceGitArcController {
         ...input,
         harness,
         cwd: member.repoRoot,
-        transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
+        transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
       }),
       [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
     );
@@ -1150,7 +1154,7 @@ export default class WorkbenchWorkspaceGitArcController {
           threadId: input.destination.threadId,
           source: { harness: input.harness, threadId: input.threadId },
           selectedPaths: paths ?? [],
-          transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
+          transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
         });
         const scope = await this.local.readScope({
           cwd: member.repoRoot, harness: input.harness, threadId: input.threadId,
