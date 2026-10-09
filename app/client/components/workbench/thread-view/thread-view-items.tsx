@@ -2347,21 +2347,6 @@ function ThreadCommandSequence ({
             outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode) as "completed" | "inProgress"}
             status={segment.status}
           />
-        ) : segment.kind === "gitArc" && readThreadSubagentCoordinationClaimAction(segment.item) ? (
-          <ThreadCoordinationOutgoingChannel
-            inlineMentionSources={inlineMentionSources}
-            items={[segment.item]}
-            key={`claim-action:${segment.item.id}`}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            subagents={subagents}
-            target={readThreadSubagentCoordinationClaimAction(segment.item)!.target}
-            threadCwdPath={threadCwdPath}
-            threadId={threadId}
-            workspaceRoots={workspaceRoots}
-          />
         ) : segment.kind === "gitArc" || segment.kind === "message" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             activeStartedAtMs={getActiveItemStartedAtMs(segment.item, itemTimeline)}
@@ -2503,26 +2488,6 @@ function ThreadRenderableBlockViewComponent ({
         workspaceRoots={workspaceRoots}
       />
     );
-  }
-  if (block.kind === "item") {
-    const claimAction = readThreadSubagentCoordinationClaimAction(block.item);
-    if (claimAction) {
-      return (
-        <ThreadCoordinationOutgoingChannel
-          inlineMentionSources={inlineMentionSources}
-          items={[block.item]}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          relatedThreadsById={relatedThreadsById}
-          subagents={subagents}
-          target={claimAction.target}
-          threadCwdPath={threadCwdPath}
-          threadId={threadId}
-          workspaceRoots={workspaceRoots}
-        />
-      );
-    }
   }
   if (block.kind === "agentMessageSequence") {
     return (

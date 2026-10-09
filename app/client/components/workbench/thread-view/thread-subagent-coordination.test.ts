@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatGitArcTextReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 
@@ -81,7 +82,7 @@ test("an unrelated row splits otherwise qualifying coordination", () => {
   ]), []);
 });
 
-test("subagent claim transfers expose their participant and paths for coordination", () => {
+test("subagent claim transfers expose their participant and transferred paths for coordination", () => {
   const release = readThreadSubagentCoordinationClaimAction({
     appContext: null,
     arguments: { paths: ["src/one.ts", "src/two.ts"], toSubagent: "mira" },
@@ -98,17 +99,63 @@ test("subagent claim transfers expose their participant and paths for coordinati
   });
   const adopt = readThreadSubagentCoordinationClaimAction({
     appContext: null,
-    arguments: { paths: ["src/three.ts"], threadId: "child-thread" },
+    arguments: { threadId: "child-thread" },
     durationMs: 1,
     error: null,
     id: "adopt",
     pluginId: null,
     readOnlyHint: null,
-    result: null,
+    result: {
+      _meta: null,
+      content: [],
+      structuredContent: {
+        changes: [],
+        diff: null,
+        kind: "success",
+        receipt: {
+          action: "adopt",
+          additionalClaims: ["src/three.ts"],
+          claimedPaths: [],
+          claimedPathCount: 1,
+          fullScope: false,
+          intentName: null,
+          phase: "active",
+          ref: "a".repeat(40),
+          version: 1,
+        },
+        status: {},
+        version: 1,
+      },
+    },
     server: "wbex",
     status: "completed",
     tool: "git_arc_adopt",
     type: "mcpToolCall",
+  });
+  const cliAdopt = readThreadSubagentCoordinationClaimAction({
+    aggregatedOutput: formatGitArcTextReceipt({
+      action: "adopt",
+      additionalClaims: ["src/four.ts"],
+      claimedPaths: [],
+      claimedPathCount: 1,
+      fullScope: false,
+      intentName: null,
+      phase: "active",
+      ref: "b".repeat(40),
+      version: 1,
+    }),
+    command: "wb git arc adopt --name mira",
+    commandActions: [],
+    cwd: "C:/workspace",
+    durationMs: 1,
+    exitCode: 0,
+    id: "cli-adopt",
+    pluginId: null,
+    processId: null,
+    scriptPath: null,
+    source: "agent",
+    status: "completed",
+    type: "commandExecution",
   });
 
   assert.deepEqual(release, {
@@ -120,6 +167,11 @@ test("subagent claim transfers expose their participant and paths for coordinati
     action: "adopt",
     paths: ["src/three.ts"],
     target: { kind: "id", value: "child-thread" },
+  });
+  assert.deepEqual(cliAdopt, {
+    action: "adopt",
+    paths: ["src/four.ts"],
+    target: { kind: "name", value: "mira" },
   });
 });
 

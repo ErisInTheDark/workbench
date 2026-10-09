@@ -49,13 +49,3 @@ test("a claim action paragraph previews three file links behind one ellipsis tog
   assert.match(html, /aria-expanded="false"/u);
   assert.equal((html.match(/aria-label="Show all released files"/gu) ?? []).length, 1);
 });
-
-test("a pathless adoption still renders its outgoing action paragraph", () => {
-  const html = renderToStaticMarkup(createElement(
-    ThreadAgentMessageClaimAction,
-    { action: "adopt", paths: [] },
-  ));
-
-  assert.match(html, /aria-label="Adopted claims from subagent"/u);
-  assert.match(html, /-scale-x-100/u);
-});

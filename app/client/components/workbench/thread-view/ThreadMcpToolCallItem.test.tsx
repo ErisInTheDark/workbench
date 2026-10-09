@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect generic MCP routing, hidden questionnaire calls, wb MCP details, shell presentation, and mixed command grouping.
+ * - No production exports; tests protect generic MCP routing, hidden questionnaire calls, wb MCP details, claim-transfer placement, shell presentation, and mixed command grouping.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -39,6 +39,37 @@ function makeItem(overrides: Partial<McpItem> = {}): McpItem {
     type: "mcpToolCall",
     ...overrides,
   };
+}
+
+function makeAdoptItem(id: string, path: string): McpItem {
+  return makeItem({
+    arguments: { name: "Iris" },
+    id,
+    result: {
+      _meta: null,
+      content: [],
+      structuredContent: {
+        changes: [],
+        diff: null,
+        kind: "success",
+        receipt: {
+          action: "adopt",
+          additionalClaims: [path],
+          claimedPaths: [],
+          claimedPathCount: 1,
+          fullScope: false,
+          intentName: null,
+          phase: "active",
+          ref: "a".repeat(40),
+          version: 1,
+        },
+        status: {},
+        version: 1,
+      },
+    },
+    server: "wbex",
+    tool: "git_arc_adopt",
+  });
 }
 
 test("unknown MCP calls keep the generic summary with the shared detail surface", () => {
@@ -107,6 +138,39 @@ test("Workbench questionnaire MCP calls stay out of thread command history", () 
 
   assert.doesNotMatch(html, /Waiting for user input/u);
   assert.doesNotMatch(html, /mcp__wb__request_user_input/u);
+});
+
+test("claim transfers use Git arc cards outside coordination and file paragraphs inside it", () => {
+  const render = (items: McpItem[]) => renderToStaticMarkup(createElement(ThreadTurnDetails, {
+    defaultOpenCompletedWork: true,
+    projectFilePaths: ["src/one.ts", "src/two.ts", "src/three.ts"],
+    projectId: "project-one",
+    projectRootPath: "C:/workspace",
+    threadId: "thread-one",
+    turn: {
+      completedAt: null,
+      durationMs: 12,
+      error: null,
+      id: "turn-one",
+      items,
+      itemsView: "full",
+      startedAt: null,
+      status: "completed",
+    },
+  }));
+  const standalone = render([makeAdoptItem("adopt-one", "src/one.ts")]);
+  const coordinated = render([
+    makeAdoptItem("adopt-one", "src/one.ts"),
+    makeAdoptItem("adopt-two", "src/two.ts"),
+    makeAdoptItem("adopt-three", "src/three.ts"),
+  ]);
+
+  assert.match(standalone, /data-thread-git-arc-card="adopt"/u);
+  assert.doesNotMatch(standalone, /Messaged/u);
+  assert.doesNotMatch(coordinated, /data-thread-git-arc-card="adopt"/u);
+  assert.match(coordinated, /data-project-file-relative-path="src\/one\.ts"/u);
+  assert.match(coordinated, /data-project-file-relative-path="src\/two\.ts"/u);
+  assert.match(coordinated, /data-project-file-relative-path="src\/three\.ts"/u);
 });
 
 test("typed ripgrep calls render the shared query and project path presentation", () => {

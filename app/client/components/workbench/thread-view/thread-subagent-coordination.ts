@@ -10,6 +10,8 @@
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
+import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
 import {
   getThreadCommandDisplay,
@@ -17,6 +19,7 @@ import {
   getThreadSubagentWaitMcpOutcome,
   getWorkbenchMcpCommandRoute,
   parseGitArcCommand,
+  parseGitArcReceipt,
   parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   type CommandShell,
@@ -27,6 +30,7 @@ import {
   type WorkbenchSubagentCommandTarget,
 } from "../../../workbench/thread/command-matchers/workbench-cli";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
+import { formatToolCallOutput } from "./format-thread-tool-call";
 
 export interface ThreadSubagentCoordinationRole {
   incoming: boolean;
@@ -221,10 +225,28 @@ export function readThreadSubagentCoordinationClaimAction(
           : null;
       })()
       : null;
+  const isRelease = operation?.action === "release" && operation.toSubagent;
+  const isAdopt = operation?.action === "adopt"
+    && (operation.source?.threadId || operation.source?.name);
+  if (!isRelease && !isAdopt) return null;
+  const receipt = item.type === "commandExecution"
+    ? parseGitArcReceipt(item.aggregatedOutput ?? "")
+    : item.type === "mcpToolCall"
+      ? item.result?.structuredContent !== null && item.result?.structuredContent !== undefined
+        ? (() => {
+          const parsed = readGitArcMcpResult(item.result.structuredContent);
+          if (parsed?.error) reportClientSchemaError("Rejected coordinated Git arc result", parsed.error);
+          return parsed?.kind === "valid" && parsed.result.kind === "success" ? parsed.result.receipt : null;
+        })()
+        : parseGitArcReceipt(formatToolCallOutput({
+          content: item.result?.content,
+          fallback: item.result?._meta,
+        }))
+      : null;
   if (operation?.action === "release" && operation.toSubagent) {
     return {
       action: "release",
-      paths: operation.paths,
+      paths: receipt?.action === "release" ? receipt.removedClaims ?? operation.paths : operation.paths,
       target: { kind: "name", value: operation.toSubagent },
     };
   }
@@ -232,13 +254,13 @@ export function readThreadSubagentCoordinationClaimAction(
   if (operation.source?.threadId) {
     return {
       action: "adopt",
-      paths: operation.paths,
+      paths: receipt?.action === "adopt" ? receipt.additionalClaims ?? operation.paths : operation.paths,
       target: { kind: "id", value: operation.source.threadId },
     };
   }
   return operation.source?.name ? {
     action: "adopt",
-    paths: operation.paths,
+    paths: receipt?.action === "adopt" ? receipt.additionalClaims ?? operation.paths : operation.paths,
     target: { kind: "name", value: operation.source.name },
   } : null;
 }
