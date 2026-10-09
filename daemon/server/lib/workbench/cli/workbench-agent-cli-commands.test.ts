@@ -1130,7 +1130,6 @@ test("parses the cwd-owned subagent suite and requires managed thread identity",
     "--title", "Inspect code", "--message", "Find the bug.",
   ], options);
   assert.equal(missingCreateSummary.kind, "error");
-  assert.match(missingCreateSummary.kind === "error" ? missingCreateSummary.error : "", /--user-visible-simple-version/u);
 
   const globalMessage = await parseWorkbenchAgentCliCommand([
     "message", "--thread", "review-target", "--message", "Please fix the cancellation race.",

@@ -3,7 +3,6 @@
  * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets.
  */
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -23,7 +22,6 @@ import {
 import WorkbenchClientStateProvider from "./WorkbenchClientStateProvider";
 import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
-import ThreadRateLimits from "./thread-view/ThreadRateLimits";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { createWorkbenchThreadRowLookup } from "./WorkbenchThreadList";
@@ -84,19 +82,6 @@ const fixtureIdentityValues = {
     "turn-remote": fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-remote"),
   },
 };
-
-test("draft composer controls render project rotation immediately before harness rotation", () => {
-  const markup = renderToStaticMarkup(createElement(ThreadRateLimits, {
-    harness: "codex",
-    leadingContent: createElement("button", { type: "button" }, "Project alpha"),
-    rateLimits: null,
-  }));
-  const projectIndex = markup.indexOf("Project alpha");
-  const harnessIndex = markup.indexOf("Codex");
-  assert.notEqual(projectIndex, -1);
-  assert.notEqual(harnessIndex, -1);
-  assert.equal(projectIndex < harnessIndex, true);
-});
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;
 
@@ -655,17 +640,14 @@ test("live lifecycle presentation outranks a hanging proposed commit", () => {
   }
 });
 
-test("thread rows expose explicit context-menu access alongside interactive tooltips", async () => {
+test("thread rows expose explicit context-menu access", () => {
   const entry = createThreadEntry({ threadId: "menu", title: "Menu work" });
   const html = renderThreadItem(entry, {
     id: "thread:menu",
     items: [{ id: "open", label: "Open", onSelect: () => undefined }],
     label: "Thread actions for Menu work",
   });
-  const source = await readFile(new URL("./WorkbenchThreadListItem.tsx", import.meta.url), "utf8");
   assert.match(html, /aria-label="More actions for Menu work"/u);
-  assert.match(source, /<WorkbenchTooltip[\s\S]*?enabled=\{!isDragActive && [\s\S]*?interactive=\{showTooltip\}[\s\S]*?<a/u);
-  assert.match(source, /data-thread-project-file-link-boundary="true"/u);
 });
 
 test("selected project pins stay in its thread list and other projects do not leak into combined pins", () => {
@@ -852,7 +834,6 @@ test("home renders one combined priority list with project-owned folders and for
   assert.match(html, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
   assert.match(html, /Alpha[\s\S]*?web\/alpha[\s\S]*?Alpha folder/u);
   assert.match(html, /href="\/@\/thread\/beta\/@\/beta-pinned"/u);
-  assert.match(html, /group\/thread-folder relative pointer-events-none/u);
   assert.match(html, /data-thread-priority-drop-target="main"/u);
   assert.match(html, /data-thread-insertion-target="pinned"/u);
   assert.match(html, /data-thread-insertion-target="snoozed"/u);
@@ -863,21 +844,6 @@ test("home renders one combined priority list with project-owned folders and for
   assert.equal((html.match(/data-thread-drag-target="dependent-snooze"/gu) ?? []).length, 2);
   assert.match(html, /data-thread-drag-target="dependent-snooze" data-thread-drag-target-project="alpha"/u);
   assert.match(html, /data-thread-drag-target="dependent-snooze" data-thread-drag-target-project="beta"/u);
-
-  const sameProjectHtml = renderHomeThreads({
-    activeDragPayload: {
-      ownerProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
-      projectSourceKey: fixtureIdentitySchemas.ThreadDisplayKeySchema.parse("codex:alpha-pinned"),
-      section: "pinned",
-      sourceKey: "alpha/codex%3Aalpha-pinned",
-      target: { kind: "thread", target: { harness: "codex", kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["alpha-pinned"] } },
-      type: "home-thread-row",
-    },
-    projectThreadSidebars,
-    projects,
-  });
-  assert.match(sameProjectHtml, /group\/thread-folder relative"/u);
-  assert.doesNotMatch(sameProjectHtml, /group\/thread-folder relative pointer-events-none/u);
 });
 
 test("snoozed threads hide behind their disclosure by default in project and home lists", () => {

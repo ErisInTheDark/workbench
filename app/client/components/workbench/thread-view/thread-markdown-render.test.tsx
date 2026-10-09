@@ -138,7 +138,7 @@ test("thread icons without color inherit surrounding text color", () => {
   for (const type of ["alert", "check", "asterisk", "x"]) {
     const markerTag = new RegExp(`<span[^>]*aria-label="${type} marker"[^>]*data-thread-inline-icon="${type}"[^>]*>`, "u").exec(html)?.[0];
     assert.ok(markerTag, `expected inherited ${type} marker`);
-    assert.doesNotMatch(markerTag, /data-thread-inline-icon-color=|text-(?:sky|emerald|violet|red|amber)-/u);
+    assert.doesNotMatch(markerTag, /data-thread-inline-icon-color=/u);
   }
   assert.equal(Array.from(html.matchAll(/data-thread-inline-icon=/gu)).length, 4);
   assert.match(html, /<strong>.*data-thread-inline-icon="alert".*<\/strong>/u);

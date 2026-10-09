@@ -10,7 +10,6 @@ import {
   findThreadSubagentCoordinationSpans,
   groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
-  readThreadSubagentCoordinationQueueCheck,
   type ThreadSubagentCoordinationRole,
 } from "./thread-subagent-coordination";
 
@@ -186,7 +185,7 @@ test("subagent creation stays visible as a boundary inside the coordination conv
   ]);
 });
 
-test("read-only queue checks are coordination boundaries without admitting queue mutations", () => {
+test("CLI and MCP queue checks stay visible as conversation boundaries", () => {
   const check = mcp("check", "subagent_queue", { queue: "machine" });
   const cliCheck = {
     aggregatedOutput: "",
@@ -203,22 +202,13 @@ test("read-only queue checks are coordination boundaries without admitting queue
     status: "completed",
     type: "commandExecution",
   } as const satisfies Extract<ThreadItem, { type: "commandExecution" }>;
-  assert.deepEqual(readThreadSubagentCoordinationQueueCheck(check), {
-    item: check,
-    queue: "machine",
-  });
-  assert.deepEqual(readThreadSubagentCoordinationQueueCheck(cliCheck), {
-    item: cliCheck,
-    queue: "machine",
-  });
-  assert.equal(readThreadSubagentCoordinationQueueCheck(
-    mcp("join", "subagent_queue", { description: "tests", queue: "machine" }),
-  ), null);
 
   const runs = groupThreadSubagentCoordinationConversation([
     mcp("to-luna", "message", { message: "prepare", name: "luna" }),
     check,
     mcp("to-luna-again", "message", { message: "continue", name: "luna" }),
+    cliCheck,
+    mcp("to-luna-last", "message", { message: "finish", name: "luna" }),
   ], (target) => `${target.kind}:${target.value ?? ""}`);
   assert.deepEqual(runs.map((run) => ({
     ids: run.items.map((item) => item.id),
@@ -227,5 +217,7 @@ test("read-only queue checks are coordination boundaries without admitting queue
     { ids: ["to-luna"], kind: "outgoing" },
     { ids: ["check"], kind: "queueCheck" },
     { ids: ["to-luna-again"], kind: "outgoing" },
+    { ids: ["cli-check"], kind: "queueCheck" },
+    { ids: ["to-luna-last"], kind: "outgoing" },
   ]);
 });

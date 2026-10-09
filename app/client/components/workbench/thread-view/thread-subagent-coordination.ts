@@ -62,11 +62,6 @@ export interface ThreadSubagentCoordinationCreate {
   name: string;
 }
 
-export interface ThreadSubagentCoordinationQueueCheck {
-  item: CoordinationQueueCheckItem;
-  queue: string;
-}
-
 export type ThreadSubagentCoordinationTarget = {
   kind: "id" | "name" | "parent";
   value: string | null;
@@ -177,7 +172,7 @@ export function readThreadSubagentCoordinationCreate(
 
 export function readThreadSubagentCoordinationQueueCheck(
   item: ThreadItem,
-): ThreadSubagentCoordinationQueueCheck | null {
+): CoordinationQueueCheckItem | null {
   if (item.type === "commandExecution") {
     const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
     if (outcome !== "completed" && outcome !== "inProgress") return null;
@@ -185,7 +180,7 @@ export function readThreadSubagentCoordinationQueueCheck(
       getCommandDisplay(item).unwrappedCommand,
       item.commandActions,
     );
-    return operation ? { item, queue: operation.queue } : null;
+    return operation ? item : null;
   }
   if (item.type !== "mcpToolCall" || item.status === "failed" || item.error || item.tool !== "subagent_queue") {
     return null;
@@ -201,7 +196,7 @@ export function readThreadSubagentCoordinationQueueCheck(
   const mutation = ["description", "after", "before", "name"].some((key) => (
     typeof args[key] === "string" && args[key].trim()
   ));
-  return queue && !mutation ? { item, queue } : null;
+  return queue && !mutation ? item : null;
 }
 
 export function readThreadSubagentCoordinationClaimAction(
@@ -282,7 +277,7 @@ export function groupThreadSubagentCoordinationConversation(
     const queueCheck = readThreadSubagentCoordinationQueueCheck(item);
     if (queueCheck) {
       flush();
-      runs.push({ items: [queueCheck.item], kind: "queueCheck" });
+      runs.push({ items: [queueCheck], kind: "queueCheck" });
       continue;
     }
     const incoming = (item.type === "functionCallOutput" || item.type === "userMessage")

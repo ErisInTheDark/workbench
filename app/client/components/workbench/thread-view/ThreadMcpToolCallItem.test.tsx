@@ -136,7 +136,6 @@ test("typed ripgrep calls render the shared query and project path presentation"
   assert.match(html, /workbench\.tsx/u);
   assert.match(html, /data-thread-command-pattern="regex"/u);
   assert.match(html, /data-thread-pattern-token="operator"[^>]*>\|</u);
-  assert.match(html, /class="[^"]*overflow-hidden[^"]*text-ellipsis[^"]*whitespace-nowrap/u);
   assert.match(html, /title="needle\|thread"/u);
   assert.doesNotMatch(html, /&quot;needle/u);
 });

@@ -275,15 +275,32 @@ test("three one-way coordination items fold while shorter and held-message runs 
   ]);
 });
 
-test("read-only queue checks count toward subagent coordination", () => {
-  const blocks = buildRenderableBlocks([
-    mcp("queue-one", "subagent_queue", { queue: "machine" }),
-    mcp("queue-two", "subagent_queue", { queue: "machine" }),
-    mcp("queue-three", "subagent_queue", { queue: "machine" }),
-  ]);
+test("read-only CLI and MCP queue checks count toward coordination while queue joins do not", () => {
+  const cases = [
+    [
+      mcp("queue-one", "subagent_queue", { queue: "machine" }),
+      mcp("queue-two", "subagent_queue", { queue: "machine" }),
+      mcp("queue-three", "subagent_queue", { queue: "machine" }),
+    ],
+    [
+      command("queue-one", "wb subagent queue machine"),
+      command("queue-two", "wb subagent queue machine"),
+      command("queue-three", "wb subagent queue machine"),
+    ],
+  ];
+  for (const items of cases) {
+    assert.deepEqual(buildRenderableBlocks(items).map(blockShape), [[
+      "subagentCoordination", ["queue-one", "queue-two", "queue-three"],
+    ]]);
+  }
 
-  assert.deepEqual(blocks.map(blockShape), [[
-    "subagentCoordination", ["queue-one", "queue-two", "queue-three"],
+  const joins = buildRenderableBlocks([
+    mcp("join-one", "subagent_queue", { description: "tests", queue: "machine" }),
+    mcp("join-two", "subagent_queue", { description: "tests", queue: "machine" }),
+    mcp("join-three", "subagent_queue", { description: "tests", queue: "machine" }),
+  ]);
+  assert.deepEqual(joins.map(blockShape), [[
+    "commandSequence", ["join-one", "join-two", "join-three"],
   ]]);
 });
 
