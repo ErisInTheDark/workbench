@@ -25,7 +25,7 @@ const TABS: Record<WorkbenchStatsTab, ComponentType> = {
 
 export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, projects, scope, tab, threadRoute }: {
   /** Opens a new thread in the project, its composer seeded with the prompt. */
-  onAddressFeedback: (projectId: string, prompt: string) => void;
+  onAddressFeedback: StatsInputs["addressFeedback"];
   onOpenRoute: StatsInputs["openRoute"];
   threadRoute: StatsInputs["threadRoute"];
   projects: readonly WorkbenchProjectOption[];

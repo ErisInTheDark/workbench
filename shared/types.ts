@@ -180,6 +180,7 @@ import type {
   WorkbenchProjectThreadRowSidebars, WorkbenchThreadSidebarRow, WorkbenchThreadSidebarRowSnapshot,
 } from "./workbench/thread/thread-sidebar-row.ts";
 import type { WorkbenchFrontendGeneration } from "./frontend-generation.ts";
+import type { PresentationDraftReference } from "./state/workbench-presentation-state.ts";
 
 export type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
 import type { ProviderKey as WorkbenchHarness } from "./workbench/provider/provider-key.ts";
@@ -973,6 +974,8 @@ export interface WorkbenchThreadComposerAttachmentDraft {
 
 export interface WorkbenchComposerInputDraft {
   attachments: WorkbenchThreadComposerAttachmentDraft[];
+  /** Feedback and update-issue references; only new-thread drafts keep them. */
+  references?: PresentationDraftReference[];
   text: string;
   updatedAt: number;
 }

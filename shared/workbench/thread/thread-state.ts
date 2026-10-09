@@ -6,7 +6,7 @@
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live provider facts (token usage, auto-compaction, pending approval) on thread observations.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, pending approval, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
  * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
@@ -20,6 +20,7 @@
  * - WorkbenchThreadObservationSnapshotSchema/WorkbenchThreadObservationSnapshot: revisioned full thread-family observation.
  * - WorkbenchThreadObservationResultSchema: initial observation acknowledgement.
  * - WorkbenchThreadDraftAttachmentSchema: typed persisted attachment identity and URL.
+ * - DraftReferenceKindSchema/DraftReferenceKind: composer reference kinds an app draft can carry.
  * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
  * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
@@ -47,6 +48,8 @@ import { z } from "zod";
 import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
 import { ThreadTokenUsageSchema } from "./thread-context-usage.ts";
 import { WorkbenchThreadGoalSchema } from "./thread-goal.ts";
+import { WorkbenchThreadTodoSchema } from "./thread-todo.ts";
+import { WorkbenchThreadAddressedFeedbackSchema } from "./thread-addressed-feedback.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
 import { ProviderKeySchema as WorkbenchHarnessSchema } from "../provider/provider-key.ts";
 import { DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchTurnId } from "../identity.ts";
@@ -141,6 +144,9 @@ export const WorkbenchObservedThreadTargetSchema = z.discriminatedUnion("kind", 
 ]);
 export type WorkbenchObservedThreadTarget = z.infer<typeof WorkbenchObservedThreadTargetSchema>;
 
+export const DraftReferenceKindSchema = z.enum(["feedback", "updateIssue"]);
+export type DraftReferenceKind = z.infer<typeof DraftReferenceKindSchema>;
+
 export const WorkbenchThreadDraftAttachmentSchema = z.object({
   id: z.string(),
   url: z.string(),
@@ -159,6 +165,8 @@ const WorkbenchThreadDraftInputSchema = z.object({
   projectId: ProjectIdSchema,
   prompt: z.string(),
   reasoningEffort: z.string().nullable().optional(),
+  /** Composer reference kinds an app draft carries, for its sidebar glyphs. */
+  referenceKinds: z.array(DraftReferenceKindSchema).optional(),
   serviceTier: z.string().nullable().optional(),
   updatedAt: z.number().int().nonnegative(),
 }).strict();
@@ -186,8 +194,8 @@ export const WorkbenchThreadDraftSchema = WorkbenchThreadDraftInputSchema.transf
 });
 export type WorkbenchThreadDraft = z.infer<typeof WorkbenchThreadDraftSchema>;
 
-export function hasWorkbenchThreadDraftContent(draft: { attachments: readonly unknown[]; prompt: string }) {
-  return Boolean(draft.prompt.trim() || draft.attachments.length);
+export function hasWorkbenchThreadDraftContent(draft: { attachments: readonly unknown[]; prompt: string; references?: readonly unknown[] }) {
+  return Boolean(draft.prompt.trim() || draft.attachments.length || draft.references?.length);
 }
 
 const AgentTurnSchema = z.object({
@@ -437,8 +445,12 @@ export const ThreadRuntimeSchema = z.object({
   /** The user-set Workbench goal; absent from daemons that predate goals. */
   goal: WorkbenchThreadGoalSchema.nullable().optional(),
   skills: z.array(WorkbenchThreadSkillSchema).optional(),
+  /** Follow-up todos; absent from daemons that predate todos. */
+  todos: z.array(WorkbenchThreadTodoSchema).optional(),
+  /** Feedback the thread was launched to address; absent from daemons that predate it. */
+  addressedFeedback: z.array(WorkbenchThreadAddressedFeedbackSchema).optional(),
 });
-export type ThreadRuntime = z.infer<typeof ThreadRuntimeSchema>;
+export type ThreadRuntime =z.infer<typeof ThreadRuntimeSchema>;
 export const ThreadRuntimeRecordSchema = z.record(z.string().min(1), ThreadRuntimeSchema);
 
 export const WorkbenchQuestionnaireHistoryEntrySchema = WorkbenchDurableQuestionnaireSchema.extend({
@@ -558,6 +570,7 @@ const PinnedDraftSummaryEntrySchema = SidebarCommonSchema.extend({
   draftId: CanonicalUuidSchema.brand<"DraftId">(),
   entryKind: z.literal("draft"),
   hasAttachments: z.boolean().default(false),
+  referenceKinds: z.array(DraftReferenceKindSchema).optional(),
   metadata: PinnedMetadataSchema,
   status: z.literal("draft"),
 }).strict();

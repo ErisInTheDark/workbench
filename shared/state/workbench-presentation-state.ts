@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - PresentationDraftReferenceSchema/PresentationDraftReference: a composer reference a new-thread draft keeps.
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
  * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents.
  * - PresentationSnapshotSchema/PresentationSnapshot: combined app state, never a daemon execution response.
@@ -10,6 +11,8 @@ import { z } from "zod";
 import { DaemonIdSchema, LogicalProjectIdSchema } from "../workbench/identity.ts";
 import { ProjectLocationReferenceSchema, WorkbenchProjectLocationsPayloadSchema } from "../workbench/project/project-location.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "../workbench/thread/thread-state.ts";
+import { ComposerReferenceSchema } from "../workbench/thread/composer-reference.ts";
+import { WorkbenchThreadAddressedFeedbackSchema } from "../workbench/thread/thread-addressed-feedback.ts";
 
 const revision = z.number().int().nonnegative();
 export const WorkbenchPresentationRevisionEventSchema = z.object({ revision }).strict();
@@ -45,11 +48,19 @@ const layoutInput = z.object({
   folders: z.array(folder),
   members: z.array(member),
 }).strict();
+/** Feedback reports and failed update issues a new-thread draft hands its agent; todos only exist on threads. */
+export const PresentationDraftReferenceSchema = z.discriminatedUnion("kind", [
+  WorkbenchThreadAddressedFeedbackSchema,
+  ComposerReferenceSchema.options[2],
+]);
+export type PresentationDraftReference = z.infer<typeof PresentationDraftReferenceSchema>;
 export const PresentationDraftInputSchema = z.object({
   id: uuid,
   logicalProjectId: LogicalProjectIdSchema,
   target: ProjectLocationReferenceSchema,
   prompt: z.string(),
+  /** Absent from browsers that predate references; the stored references are then left as they are. */
+  references: z.array(PresentationDraftReferenceSchema).max(200).optional(),
   selection: WorkbenchComposerProfileSelectionSchema,
   updatedAt: revision,
 }).strict();

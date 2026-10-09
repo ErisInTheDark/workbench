@@ -2,7 +2,7 @@
  * Exports:
  * - ClientDraftIdentity: project-qualified client-state address.
  * - ComposerDraftTarget: existing-thread or app-owned unsent destination.
- * - presentationDraftToInput: project saved prompt and image attachments into composer input.
+ * - presentationDraftToInput: project saved prompt, image attachments and references into composer input.
  * - projectComposerDrafts: select only composer records matching each UUID's registered owner.
  * - saveComposerDraft: merge edits and materialise eligible app drafts.
  * - clearComposerDraft: remove only the captured composer destination.
@@ -45,6 +45,7 @@ export function presentationDraftToInput(owner: WorkbenchPresentationClient, id:
   return {
     text: draft.prompt,
     attachments: draft.attachments.map(item => ({ id: item.id, url: owner.attachmentUrl(draft.id, item.id) })),
+    references: draft.references ?? [],
     updatedAt: draft.updatedAt,
   };
 }
@@ -107,19 +108,22 @@ export async function saveComposerDraft(
   else {
     const existing = target.owner.draft(target.draftId);
     const input = { ...update(presentationDraftToInput(target.owner, target.draftId)
-      ?? { text: "", attachments: [], updatedAt: 0 }), updatedAt: Date.now() };
-    if (!hasWorkbenchThreadDraftContent({ attachments: input.attachments, prompt: input.text })) {
+      ?? { text: "", attachments: [], references: [], updatedAt: 0 }), updatedAt: Date.now() };
+    const references = input.references ?? [];
+    if (!hasWorkbenchThreadDraftContent({ attachments: input.attachments, prompt: input.text, references })) {
       if (existing) await target.owner.removeDraft(target.draftId);
       if (existing && !options.detached) target.dematerialize();
       return existing || options.reason !== "autosave" ? input : null;
     }
+    // Attachments and references make a draft worth keeping on their own; bare text waits for a few words.
     if (target.isNew && !existing && options.reason === "autosave"
-      && !input.attachments.length && countDraftPromptTokens(input.text) < 3) return null;
+      && !input.attachments.length && !references.length && countDraftPromptTokens(input.text) < 3) return null;
     await target.owner.putDraft({
       id: target.draftId,
       logicalProjectId: existing?.logicalProjectId ?? target.logicalProjectId,
       target: existing?.target ?? target.location,
       prompt: input.text,
+      references,
       selection: target.selection(),
       updatedAt: input.updatedAt,
     }, target.placement);
@@ -136,7 +140,7 @@ export async function saveComposerDraft(
       });
     }
     if (target.isNew && !options.detached && options.reason !== "retarget") target.materialize();
-    return { ...input, attachments: input.attachments.map(item => ({
+    return { ...input, references, attachments: input.attachments.map(item => ({
       id: item.id, url: target.owner.attachmentUrl(target.draftId, item.id),
     })) };
   }

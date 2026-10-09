@@ -251,6 +251,15 @@ class WorkbenchDaemonClient {
       set: (params: WorkbenchDaemonParams<"thread/goal/set">) => this.request("thread/goal/set", params),
       clear: (params: WorkbenchDaemonParams<"thread/goal/clear">) => this.request("thread/goal/clear", params),
     },
+    todo: {
+      add: (params: WorkbenchDaemonParams<"thread/todo/add">) => this.request("thread/todo/add", params),
+      remove: (params: WorkbenchDaemonParams<"thread/todo/remove">) => this.request("thread/todo/remove", params),
+      setRequired: (params: WorkbenchDaemonParams<"thread/todo/required/set">) => this.request("thread/todo/required/set", params),
+      setText: (params: WorkbenchDaemonParams<"thread/todo/text/set">) => this.request("thread/todo/text/set", params),
+    },
+    addressedFeedback: {
+      clear: (params: WorkbenchDaemonParams<"thread/feedback/addressed/clear">) => this.request("thread/feedback/addressed/clear", params),
+    },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),
       deactivate: (params: WorkbenchDaemonParams<"thread/skills/deactivate">) => this.request("thread/skills/deactivate", params),

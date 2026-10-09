@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadComposer: render thread composer controls, message input, attachments, and questionnaire handoff.
+ * - default ThreadComposer: render thread composer controls, message input, attachments, composer reference pills, and questionnaire handoff.
  */
 "use client";
 
@@ -56,7 +56,12 @@ import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
-import { takeNewThreadPrompt } from "../../../workbench/thread/new-thread-prompt-seeds";
+import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
+import {
+  composerReferenceKey, createComposerReferenceMessage, type ComposerReference,
+} from "workbench-shared/workbench/thread/composer-reference";
+import { workbenchThreadTodoReference, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
+import ComposerReferencePills from "./ComposerReferencePills";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ThreadProfileEditor from "./ThreadProfileEditor";
 import ThreadProfileEditorController, { type ProfileEditorSection } from "./ThreadProfileEditorController";
@@ -140,6 +145,9 @@ export default function ThreadComposer ({
   targetControl,
   controlNotice,
   onDraftSessionChange,
+  selectedTodos,
+  onTodoDeselect,
+  onTodosSent,
 }: {
   autoFocusOnEntry?: boolean;
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
@@ -184,6 +192,11 @@ export default function ThreadComposer ({
   /** Short alert shown at the left of the control row, such as a mode that cannot work yet. */
   controlNotice?: ReactNode;
   onDraftSessionChange?: (session: DraftSessionController<WorkbenchComposerInputDraft> | null) => void;
+  /** Todos the user picked to hand the agent with the next message. */
+  selectedTodos?: readonly WorkbenchThreadTodo[];
+  onTodoDeselect?: (id: number) => void;
+  /** The message carrying these todos was accepted. */
+  onTodosSent?: (ids: readonly number[]) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
   const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? null
@@ -247,27 +260,29 @@ export default function ThreadComposer ({
       composerInputRef.current?.focus();
     }
   }, []);
-  // A one-shot seed, such as feedback being addressed, starts an empty new-thread composer through the normal draft path.
-  const seededCaretRef = useRef<number | null>(null);
+  // A one-shot seed, such as feedback being addressed, joins the new-thread composer's references through the normal draft path.
   useLayoutEffect(() => {
-    if (composerTarget.kind !== "new" || editing.draft.text || editing.draft.attachments.length) return;
-    const seed = takeNewThreadPrompt(projectId);
-    if (!seed) return;
-    seededCaretRef.current = seed.length;
-    editing.session.edit((draft) => ({ ...draft, text: seed }));
+    if (composerTarget.kind !== "new") return;
+    const seed = takeNewThreadReferences(projectId);
+    if (!seed?.length) return;
+    editing.session.edit((draft) => {
+      const current = draft.references ?? [];
+      const known = new Set(current.map(composerReferenceKey));
+      return { ...draft, references: [...current, ...seed.filter(reference => !known.has(composerReferenceKey(reference)))] };
+    });
+    composerInputRef.current?.focus();
   }, [composerTarget.kind, projectId]);
-  useLayoutEffect(() => {
-    const caret = seededCaretRef.current;
-    if (caret === null || value.length < caret) return;
-    seededCaretRef.current = null;
-    composerInputRef.current?.focus(caret);
-  }, [value]);
+  const draftReferences = isSending ? [] : editing.draft.references ?? [];
+  // Selected todos join only thread messages; drafts keep their own durable references.
+  const todoReferences = useMemo(() => thread.isDraft ? [] : (selectedTodos ?? []).map(workbenchThreadTodoReference),
+    [selectedTodos, thread.isDraft]);
+  const references: readonly ComposerReference[] = [...todoReferences, ...draftReferences];
   const isSendDisabled = isInputDisabled || isProviderUnavailable
     || (!isActiveThread && !hasEffectiveProfile);
   const isShiftPressed = useNonTextInputShiftKey({
     allowWhileTextInputFocused: true,
   });
-  const hasSendableInput = Boolean(trimmedValue || attachments.length);
+  const hasSendableInput = Boolean(trimmedValue || attachments.length || references.length);
   const willAutoCompactOnSend = Boolean(thread.willAutoCompact)
     && hasSendableInput
     && !isSendDisabled
@@ -411,15 +426,18 @@ export default function ThreadComposer ({
   }, [activeHarness, editorState.open, loadAvailableModels]);
 
   const submit = async () => {
-    if ((!trimmedValue && !attachments.length) || isSendDisabled) {
+    if (!hasSendableInput || isSendDisabled) {
       return;
     }
 
+    // Drafts launch from their saved references and prompt; thread messages carry selected todos ahead of the text.
+    const text = thread.isDraft ? trimmedValue : createComposerReferenceMessage(todoReferences, trimmedValue);
+    const sentTodoIds = todoReferences.map(({ id }) => id);
     const input: UserInput[] = [];
-    if (trimmedValue) {
+    if (text) {
       input.push({
         type: "text",
-        text: trimmedValue,
+        text,
         text_elements: [],
       });
     }
@@ -437,8 +455,10 @@ export default function ThreadComposer ({
       ...(!thread.isDraft && isShiftPressed ? { skipAutoCompact: true } : {}),
     });
     if (!thread.isDraft) {
-      await editing.session.submitAccepted(async () => await send(),
-        () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
+      await editing.session.submitAccepted(async () => {
+        await send();
+        if (sentTodoIds.length) onTodosSent?.(sentTodoIds);
+      }, () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
       return;
     }
     await editing.session.submit(async (submitted, options) => {
@@ -683,6 +703,20 @@ export default function ThreadComposer ({
               inert={!isComposerPanelActive}
             >
               <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
+              <ComposerReferencePills
+                className="mb-2 px-1"
+                onRemove={(reference) => {
+                  if (reference.kind === "todo") {
+                    onTodoDeselect?.(reference.id);
+                    return;
+                  }
+                  const key = composerReferenceKey(reference);
+                  editing.session.edit((draft) => ({
+                    ...draft, references: (draft.references ?? []).filter(item => composerReferenceKey(item) !== key),
+                  }));
+                }}
+                references={references}
+              />
               <PlaintextEditable
                 ref={composerInputRef}
                 id={`thread-composer:${thread.id}`}

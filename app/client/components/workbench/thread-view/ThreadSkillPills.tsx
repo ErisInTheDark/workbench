@@ -8,7 +8,7 @@ import { useState } from "react";
 
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
-import { XIcon } from "../workbench-icons";
+import WorkbenchPill from "../WorkbenchPill";
 
 function RowSeparator () {
   return <span className="text-[0.84em] text-fg/muted" aria-hidden="true">|</span>;
@@ -48,47 +48,19 @@ export default function ThreadSkillPills ({
     <>
       {separatorBefore ? <RowSeparator /> : null}
       <ul aria-label="Active skills" className="m-0 flex list-none flex-wrap items-center gap-1 p-0">
-        {skills.map((skill) => {
-          const pending = pendingPaths.includes(skill.path);
-          return (
-            <li
-              key={skill.path}
-              className={`group/skill relative ${pending ? "opacity-50" : ""}`}
+        {skills.map((skill) => (
+          <li key={skill.path} className="flex">
+            <WorkbenchPill
+              className={`${getInlineMentionMarkClassName("skill")} text-text`}
+              onRemove={() => { void deactivate(skill.path); }}
+              pending={pendingPaths.includes(skill.path)}
+              removeLabel={`Deactivate the ${skill.name} skill`}
               title={`/${skill.name}, activated by ${skill.source === "agent" ? "the agent" : "you"}`}
             >
-              <span className={`
-                ${getInlineMentionMarkClassName("skill")}
-                inline-flex h-7 items-center rounded-full px-2.5 text-[0.76em] font-medium text-text
-              `}>
-                <span
-                  className={`
-                    max-w-40 truncate
-                    group-hover/skill:[mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)]
-                    group-focus-within/skill:[mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)]
-                    coarse-touch:[mask-image:linear-gradient(to_right,black_calc(100%-1.25rem),transparent)]
-                  `}
-                >
-                  /{skill.name}
-                </span>
-              </span>
-              <button
-                type="button"
-                aria-label={`Deactivate the ${skill.name} skill`}
-                className={`
-                  absolute inset-y-0 right-1 my-auto grid size-5 place-items-center rounded-full text-fg/muted opacity-0 transition
-                  hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] hover:text-text
-                  group-hover/skill:opacity-100 focus-visible:opacity-100 coarse-touch:opacity-100
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
-                  disabled:cursor-not-allowed motion-reduce:transition-none
-                `}
-                disabled={pending}
-                onClick={() => { void deactivate(skill.path); }}
-              >
-                <XIcon size={12} />
-              </button>
-            </li>
-          );
-        })}
+              /{skill.name}
+            </WorkbenchPill>
+          </li>
+        ))}
       </ul>
       {error ? <span className="ml-1 text-[0.72em] text-danger" role="alert">{error}</span> : null}
       {separatorAfter ? <RowSeparator /> : null}

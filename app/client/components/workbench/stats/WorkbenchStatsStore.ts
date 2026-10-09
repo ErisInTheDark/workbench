@@ -16,6 +16,7 @@ import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenc
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { z } from "zod";
 import {
   STATS_TOKEN_TYPES,
@@ -78,7 +79,7 @@ export type StatsFeedbackReportSnapshot =
 export interface StatsInputs {
   readonly scope: StatsProjectScope;
   readonly projects: readonly Project[];
-  readonly addressFeedback: (projectId: string, prompt: string) => void;
+  readonly addressFeedback: (projectId: string, references: readonly WorkbenchThreadAddressedFeedback[]) => void;
   readonly openRoute: (event: MouseEvent<HTMLAnchorElement>, route: WorkbenchRoute) => void;
   /** Local threads open in their project; others open by id through their logical project. */
   readonly threadRoute: (thread: StatsThreadLocation, logicalProjectId: string | null) => WorkbenchRoute;
@@ -143,7 +144,7 @@ export interface StatsState {
   setTokenTypes(tokenTypes: StatsTokenType[]): void;
   setMetric(metric: StatsActivityMetric): void;
   setWorkspaceProject(id: string): void;
-  addressFeedback(projectId: string, prompt: string): void;
+  addressFeedback(projectId: string, references: readonly WorkbenchThreadAddressedFeedback[]): void;
 }
 
 interface Entry {
@@ -463,7 +464,7 @@ export default class WorkbenchStatsStore {
       setTokenTypes: (tokenTypes) => this.#setFilters({ tokenTypes }),
       setMetric: (metric) => this.#setFilters({ metric }),
       setWorkspaceProject: (workspaceProject) => this.#setFilters({ workspaceProject }),
-      addressFeedback: (projectId, prompt) => this.#inputs.addressFeedback(projectId, prompt),
+      addressFeedback: (projectId, references) => this.#inputs.addressFeedback(projectId, references),
     };
   }
 

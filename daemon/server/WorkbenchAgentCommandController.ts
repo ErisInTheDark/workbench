@@ -40,6 +40,7 @@ interface WorkbenchAgentDirectPort {
   executeClaimStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeTodoRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Human-only project store access; command parsing already rejected managed callers. */
@@ -416,6 +417,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/stats/feedback" && request.body) {
       if (!this.direct.executeFeedbackStats) throw new Error("Feedback statistics are not configured.");
       return await this.direct.executeFeedbackStats(request.body, signal);
+    }
+    if (request.path === "/internal/todo" && request.body) {
+      if (!this.direct.executeTodoRequest) throw new Error("Thread todos are not configured.");
+      return await this.direct.executeTodoRequest(request.body, signal);
     }
     if (request.path === "/internal/feedback" && request.body) {
       if (!this.direct.executeFeedbackSubmit) throw new Error("Agent feedback is not configured.");

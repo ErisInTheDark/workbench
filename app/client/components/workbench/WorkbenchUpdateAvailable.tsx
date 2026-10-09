@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
 
 import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
+import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchReloadOperation } from "workbench-shared/reload/workbench-reload";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 import type { WorkbenchAppRuntimeStore, WorkbenchDaemonRuntimeStore } from "workbench-shared/types";
@@ -28,7 +29,7 @@ export function hasVisibleInstallationUpdate(update: InstallationUpdate | null, 
   );
 }
 
-// Prompts are agent-facing, so they carry the detail the button deliberately leaves out.
+// Update-issue references are agent-facing, so they carry the detail the button deliberately leaves out.
 function conflictPrompt(update: InstallationUpdate) {
   const source = update.upstream ?? "upstream";
   return update.conflicts.length
@@ -68,7 +69,7 @@ function useShiftHeld() {
 export default function WorkbenchUpdateAvailable({ appRuntime, daemonRuntime, onAskAgent }: {
   appRuntime: WorkbenchAppRuntimeStore | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore | null;
-  onAskAgent(projectId: string, prompt: string): void;
+  onAskAgent(projectId: string, references: readonly PresentationDraftReference[]): void;
 }) {
   // The app never server-renders; store reads double as server snapshots so static renders show real states.
   const readUpdate = () => daemonRuntime?.getUpdate() ?? null;
@@ -120,8 +121,8 @@ export default function WorkbenchUpdateAvailable({ appRuntime, daemonRuntime, on
   const beginHold = (shiftKey: boolean) => setHoldPullOnly(shiftKey);
   const endHold = () => setHoldPullOnly(null);
 
-  const askAgent = (prompt: string) => {
-    if (update?.projectId) onAskAgent(update.projectId, prompt);
+  const askAgent = (text: string) => {
+    if (update?.projectId) onAskAgent(update.projectId, [{ kind: "updateIssue", text }]);
   };
   // The repair breadcrumb has done its job once an agent has the log.
   const resolveFailedUpdate = (failure: NonNullable<InstallationUpdate["failure"]>) => {

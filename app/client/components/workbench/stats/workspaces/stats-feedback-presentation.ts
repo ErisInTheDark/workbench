@@ -5,13 +5,14 @@
  * - selectFeedbackItems: the reports a viewer sees for a category filter and sort.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
- * - formatFeedbackForAgent: the markdown prompt a new thread starts from when addressing feedback.
+ * - feedbackReference: the composer reference a new thread receives when addressing one report.
  */
 import type {
   WorkbenchFeedbackCategory,
   WorkbenchFeedbackItem,
   WorkbenchFeedbackSort,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 
 /** Hue utilities are listed whole so Tailwind can see them. */
 export const FEEDBACK_CATEGORY_PRESENTATION: Readonly<Record<WorkbenchFeedbackCategory, {
@@ -47,18 +48,18 @@ export function countFeedbackCategories(items: readonly Pick<WorkbenchFeedbackIt
     .filter(({ count }) => count > 0);
 }
 
-/** A new-thread prompt: each report, then a separator after which the user writes their own message. */
-export function formatFeedbackForAgent(items: readonly WorkbenchFeedbackItem[], describe: {
-  modelName(item: WorkbenchFeedbackItem): string | null;
-  origin(item: WorkbenchFeedbackItem): string;
-}) {
-  const blocks = items.map((item) => [
-    `## ${FEEDBACK_CATEGORY_PRESENTATION[item.category].label} · ${describe.origin(item)}`,
-    item.report.trim(),
-    `- Author: ${[describe.modelName(item) ?? "Unknown model", item.reasoningEffort].filter(Boolean).join(" ")} · importance ${Math.round(item.importance * 100)}${item.scored ? "" : " (unscored model)"}`,
-    `- Thread: ${item.threadId ?? "removed"}`,
-  ].join("\n"));
-  return `${blocks.join("\n\n")}\n\n=====\n\n`;
+/** The composer reference a new thread receives for one report; `daemonId` is the machine storing it. */
+export function feedbackReference(item: WorkbenchFeedbackItem, describe: {
+  daemonId: string;
+  modelName: string | null;
+  projectName: string;
+}): WorkbenchThreadAddressedFeedback {
+  return {
+    kind: "feedback", id: item.id, daemonId: describe.daemonId, category: item.category, title: item.title,
+    author: [describe.modelName ?? "Unknown model", item.reasoningEffort].filter(Boolean).join(" "),
+    thread: `${item.threadId ?? "removed thread"} from ${describe.projectName}`,
+    createdAt: Math.round(item.createdAt), report: item.report.trim(),
+  };
 }
 
 export function selectFeedbackItems(

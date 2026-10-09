@@ -26,7 +26,7 @@ async function runtime(
   const source = temporary.path;
   context.after(async () => await temporary.dispose());
   for (const directory of ["app/node_modules", "daemon/node_modules", "shared/node_modules",
-    "instructions", "package", "node_modules", "test/scenarios"]) {
+    "instructions", "package", "installation", "node_modules", "test/scenarios"]) {
     await fs.mkdir(path.join(source, directory), { recursive: true });
   }
   await fs.writeFile(path.join(source, "package.json"), "{}");

@@ -143,7 +143,9 @@ import type DraftSessionController from "./workbench/thread-view/DraftSessionCon
 import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-activity-timestamp";
 import { getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import WorkbenchRelativeTime from "./workbench/WorkbenchRelativeTime";
-import { seedNewThreadPrompt } from "../workbench/thread/new-thread-prompt-seeds";
+import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
+import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
+import WorkbenchDraftTitleIcons from "./workbench/WorkbenchDraftTitleIcons";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
@@ -183,7 +185,7 @@ import {
     DraftThreadIcon,
     ExternalLinkIcon,
     FolderOpenIcon,
-    GearIcon, ImageIcon, ProjectIcon,
+    GearIcon, ProjectIcon,
     SaveIcon,
     SearchIcon,
     SidebarCollapseIcon,
@@ -1070,9 +1072,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       : createThreadRoute(thread.projectId, thread.threadId);
   }, []);
 
-  // The new-thread composer in that project takes the prompt and saves it as an ordinary draft.
-  const addressFeedback = useCallback((projectId: string, prompt: string) => {
-    seedNewThreadPrompt(projectId, prompt);
+  // The new-thread composer in that project takes the references and saves them as an ordinary draft.
+  const askAgentWithReferences = useCallback((projectId: string, references: readonly PresentationDraftReference[]) => {
+    seedNewThreadReferences(projectId, references);
     navigateToRoute(createThreadRoute(projectId, { kind: "new" }));
   }, [navigateToRoute]);
 
@@ -2642,7 +2644,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   <ReloadNecessary
                     appRuntime={appRuntime}
                     daemonRuntime={controls?.daemonRuntime ?? null}
-                    onAskAgent={addressFeedback}
+                    onAskAgent={askAgentWithReferences}
                   />
                 </DropTargetBoundary>
               </div>
@@ -2695,7 +2697,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     {showThreadView && threadForThreadView?.isDraft && !isThreadShellTitleLoading ? (
                       <>
                         <p id="file-path" ref={filePathLabelRef} className="flex min-w-0 items-center gap-1 truncate text-base font-semibold leading-tight">
-                          {activeRouteDraft?.attachments.length ? <ImageIcon className="shrink-0" size={16} /> : null}
+                          <WorkbenchDraftTitleIcons hasImages={Boolean(activeRouteDraft?.attachments.length)} referenceKinds={activeRouteDraft?.referenceKinds} />
                           <span className="truncate">{activeRouteDraft ? createDraftTitle(activeRouteDraft.prompt) : threadShellTitle}</span>
                         </p>
                         <p id="status-line" ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">{threadShellStatusLabel}</p>
@@ -2957,7 +2959,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
-                    onAddressFeedback={addressFeedback}
+                    onAddressFeedback={askAgentWithReferences}
                     onOpenRoute={openStatsRouteFromLink}
                     threadRoute={statsThreadRoute}
                     projects={explorer.projects}

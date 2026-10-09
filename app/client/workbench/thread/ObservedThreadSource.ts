@@ -86,6 +86,8 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     ...(runtime?.willAutoCompact != null ? { willAutoCompact: runtime.willAutoCompact } : {}),
     goal: runtime?.goal ?? null,
     skills: runtime?.skills ?? [],
+    todos: runtime?.todos ?? [],
+    addressedFeedback: runtime?.addressedFeedback ?? [],
   };
 }
 
@@ -379,6 +381,12 @@ export default function createObservedThreadSource(
       async setGoal(objective) { await ports.daemon.threads.goal.set({ threadId, objective }); },
       async clearGoal() { await ports.daemon.threads.goal.clear({ threadId }); },
       async deactivateSkill(path) { await ports.daemon.threads.skills.deactivate({ threadId, path }); },
+      // The observation's runtime carries the resulting todos and addressed feedback.
+      async addTodo(text, required) { await ports.daemon.threads.todo.add({ threadId, text, required }); },
+      async removeTodo(id) { await ports.daemon.threads.todo.remove({ threadId, id }); },
+      async setTodoRequired(id, required) { await ports.daemon.threads.todo.setRequired({ threadId, id, required }); },
+      async setTodoText(id, text) { await ports.daemon.threads.todo.setText({ threadId, id, text }); },
+      async clearAddressedFeedback() { await ports.daemon.threads.addressedFeedback.clear({ threadId }); },
     },
     acquire(interest) {
       if (disposed) throw new Error("The thread store is disposed.");

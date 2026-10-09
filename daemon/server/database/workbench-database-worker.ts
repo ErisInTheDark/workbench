@@ -41,6 +41,8 @@ import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOu
 import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
 import WorkbenchThreadSkillStore from "./skills/WorkbenchThreadSkillStore.ts";
 import WorkbenchThreadGoalStore from "./goals/WorkbenchThreadGoalStore.ts";
+import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
+import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 
@@ -277,6 +279,16 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "threadGoals") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadGoals", result: new WorkbenchThreadGoalStore(database).execute(request.command) });
+    return;
+  }
+  if (request.type === "threadTodos") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "threadTodos", result: new WorkbenchThreadTodoStore(database).execute(request.command) });
+    return;
+  }
+  if (request.type === "threadAddressedFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "threadAddressedFeedback", result: new WorkbenchThreadAddressedFeedbackStore(database).execute(request.command) });
     return;
   }
   if (request.type === "projectStore") {

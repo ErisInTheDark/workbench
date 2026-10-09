@@ -1,12 +1,13 @@
 /*
  * Exports:
  * - WorkbenchLaunchedDraft: the accepted thread identity a draft launch applied.
- * - default WorkbenchWorkspaceDrafts: validate and launch saved app drafts through their durable original owner.
+ * - default WorkbenchWorkspaceDrafts: validate and launch saved app drafts, led by their composer references, through their durable original owner.
  */
 import { randomUUID } from "node:crypto";
 import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbench-shared/types";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { areWorkbenchAgentPathsEqual } from "workbench-shared/workbench/agent-paths";
+import { createComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
@@ -102,8 +103,10 @@ export default class WorkbenchWorkspaceDrafts {
           }
         }
       }
-      const firstInput: UserInput[] = draft.prompt.trim()
-        ? [{ type: "text", text: draft.prompt, text_elements: [] }] : [];
+      const references = draft.references ?? [];
+      const firstText = createComposerReferenceMessage(references, draft.prompt);
+      const firstInput: UserInput[] = firstText ? [{ type: "text", text: firstText, text_elements: [] }] : [];
+      const addressedFeedback = references.filter(reference => reference.kind === "feedback");
       for (const attachment of draft.attachments) {
         const stored = presentation.readAttachment(draftId, attachment.id);
         if (!stored) throw new Error("The saved draft image is unavailable.");
@@ -122,6 +125,7 @@ export default class WorkbenchWorkspaceDrafts {
         launchId, projectId: target.projectId, profile, firstInput,
         clientMessageId: `launch:${launchId}`, creationContext: context, messageContext: context,
         additionalWritableRoots: options.additionalWritableRoots,
+        ...(addressedFeedback.length ? { addressedFeedback } : {}),
       });
       if (!wasSubmitting) {
         presentation.mutate({ kind: "reserveLaunch", draftId, expectedRevision: draft.revision, launchId, selection: profile });

@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default ThreadGitArcLifecycleCard: render ordered proposals and, once the turn stops, claim resolution for one durable Git arc lifecycle.
+ * - default ThreadWorkLifecycleCard: a thread's hoisted work card: Git arc proposals and claim resolution once the turn stops, and addressed feedback to delete once it completes.
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import {
   createGitArcOperationRejected,
@@ -13,8 +13,11 @@ import {
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import PrimaryButton from "../PrimaryButton";
-import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
+import WorkbenchWorkspaceContext, { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
+import ComposerReferencePills from "./ComposerReferencePills";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { BinIcon, ResetIcon } from "../workbench-icons";
 import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimIcon } from "./GitArcIcon";
@@ -33,7 +36,95 @@ type LifecyclePresentation = Omit<WorkbenchGitArcLifecycleState, "phase"> & {
   stashedPaths?: string[];
 };
 
-export default function ThreadGitArcLifecycleCard ({
+interface GitArcLifecycleProps {
+  claim: LifecyclePresentation;
+  commitActions: ThreadCheckpointCommitActions;
+  cwd: string;
+  harness: WorkbenchHarnessId;
+  /** A running turn still owns its claims, so only proposals render. */
+  running: boolean;
+}
+
+interface SharedProps {
+  projectFilePaths?: readonly string[];
+  projectId?: string | null;
+  projectRootPath?: string;
+  threadId: string;
+  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}
+
+export default function ThreadWorkLifecycleCard ({
+  addressedFeedback,
+  gitArc,
+  threadLifecycle,
+  onFeedbackDeleted,
+  ...shared
+}: SharedProps & {
+  addressedFeedback: readonly WorkbenchThreadAddressedFeedback[];
+  gitArc: GitArcLifecycleProps | null;
+  threadLifecycle: WorkbenchThreadLifecycle | null;
+  /** The reports are gone from their machines; the thread forgets them. */
+  onFeedbackDeleted: () => Promise<void>;
+}) {
+  const showFeedback = threadLifecycle?.kind === "completed" && addressedFeedback.length > 0;
+  if (!gitArc && !showFeedback) return null;
+  return (
+    <div className="my-2 w-full has-[>section:empty]:hidden" data-thread-git-arc-lifecycle="true">
+      <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2" data-thread-git-arc-lifecycle-card="true">
+        {gitArc ? <GitArcLifecycleSections {...gitArc} {...shared} /> : null}
+        {showFeedback ? <AddressedFeedbackRow feedback={addressedFeedback} onDeleted={onFeedbackDeleted} /> : null}
+      </section>
+    </div>
+  );
+}
+
+function AddressedFeedbackRow ({ feedback, onDeleted }: {
+  feedback: readonly WorkbenchThreadAddressedFeedback[];
+  onDeleted: () => Promise<void>;
+}) {
+  const workspace = useContext(WorkbenchWorkspaceContext);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const remove = async () => {
+    if (!workspace || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      // Each report is deleted by the machine storing it.
+      await Promise.all([...Map.groupBy(feedback, ({ daemonId }) => daemonId)].map(([daemonId, reports]) => {
+        const daemon = DaemonIdSchema.safeParse(daemonId).data;
+        if (!daemon) throw new Error("Feedback from an unknown machine cannot be deleted.");
+        return workspace.daemon({ kind: "installation", daemonId: daemon }).stats.deleteFeedback(reports.map(({ id }) => id));
+      }));
+      await onDeleted();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Unable to delete the addressed feedback.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="px-3 py-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-[color-mix(in_srgb,var(--text)_10%,transparent)]" data-thread-addressed-feedback="true">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <ComposerReferencePills className="min-w-0" references={feedback} />
+        <PrimaryButton
+          className="!shrink-0 !px-3 !py-1.5 !text-[0.76rem]"
+          disabled={busy || !workspace}
+          holdToConfirmMs={500}
+          onClick={() => void remove()}
+          pendingHalo={busy}
+          tone="danger"
+        >
+          <BinIcon className="mr-1.5" size={14} />
+          Delete
+        </PrimaryButton>
+      </div>
+      {error ? <p className="m-0 mt-1.5 text-[0.74em] text-danger" role="alert">{error}</p> : null}
+    </div>
+  );
+}
+
+function GitArcLifecycleSections ({
   claim,
   commitActions,
   cwd,
@@ -43,22 +134,8 @@ export default function ThreadGitArcLifecycleCard ({
   projectRootPath,
   running,
   threadId,
-  threadLifecycle,
   workspaceRoots,
-}: {
-  claim: LifecyclePresentation;
-  commitActions: ThreadCheckpointCommitActions;
-  cwd: string;
-  harness: WorkbenchHarnessId;
-  projectFilePaths?: readonly string[];
-  projectId?: string | null;
-  projectRootPath?: string;
-  /** A running turn still owns its claims, so only proposals render. */
-  running: boolean;
-  threadId: string;
-  threadLifecycle: WorkbenchThreadLifecycle;
-  workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-}) {
+}: GitArcLifecycleProps & SharedProps) {
   const daemon = useWorkbenchDaemonClient();
   const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
   const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
@@ -159,8 +236,7 @@ export default function ThreadGitArcLifecycleCard ({
   if (!visibleProposals.length && !sections.length) return null;
 
   return (
-    <div className="my-2 w-full" data-thread-git-arc-lifecycle="true">
-      <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2" data-thread-git-arc-lifecycle-card="true">
+    <>
         {visibleProposals.length ? (
           <ThreadGitArcProposalList
             acceptance={claim.acceptance ?? null}
@@ -313,7 +389,6 @@ export default function ThreadGitArcLifecycleCard ({
             ) : null}
           </div>
         ) : null}
-      </section>
-    </div>
+    </>
   );
 }

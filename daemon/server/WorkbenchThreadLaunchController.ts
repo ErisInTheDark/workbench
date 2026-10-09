@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID.
+ * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, recording addressed feedback once accepted.
  */
 import {
   WorkbenchThreadLaunchRequestSchema,
@@ -11,6 +11,7 @@ import {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
+import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import WorkbenchThreadActionController, {
   WorkbenchThreadCreationNotDispatchedError,
 } from "./WorkbenchThreadActionController";
@@ -23,6 +24,7 @@ export default class WorkbenchThreadLaunchController {
     database: Pick<WorkbenchDatabaseController, "reserveThreadLaunch" | "readThreadLaunch" | "advanceThreadLaunch">;
     projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
     actions: Pick<WorkbenchThreadActionController, "handle" | "createForLaunch">;
+    addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "record">;
     warn(message: string): void;
   }) {}
 
@@ -66,6 +68,17 @@ export default class WorkbenchThreadLaunchController {
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Thread launch disposal found unsettled failures.");
   }
 
+  /** The thread already started; losing this record only hides the delete-feedback row, so it warns instead of failing the launch. */
+  private async recordAddressedFeedback(threadId: string, request: WorkbenchThreadLaunchRequest) {
+    if (!request.addressedFeedback?.length) return;
+    try {
+      await this.owners.addressedFeedback.record(threadId, request.addressedFeedback);
+    } catch (error) {
+      this.owners.warn(`Addressed feedback was not recorded for the launched thread: ${
+        error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+    }
+  }
+
   private async run(request: WorkbenchThreadLaunchRequest,
     location: WorkbenchThreadLaunchLocation, initial: WorkbenchThreadLaunchState) {
     let state = initial;
@@ -105,9 +118,11 @@ export default class WorkbenchThreadLaunchController {
         ...(request.messageContext ? { context: request.messageContext } : {}),
       });
       if (result.kind !== "started") throw new Error("First input returned no started turn.");
-      return await this.owners.database.advanceThreadLaunch(request.launchId, "sending", {
+      const accepted = await this.owners.database.advanceThreadLaunch(request.launchId, "sending", {
         phase: "accepted", launchId: request.launchId, threadId: sending.threadId, turnId: result.turn.id,
       });
+      await this.recordAddressedFeedback(sending.threadId, request);
+      return accepted;
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 512) : "Thread launch failed.";
       if (!dispatched) throw error;

@@ -27,6 +27,7 @@ import type { Turn } from "./workbench-thread-turn.ts";
 import { WorkbenchThreadCreationProfileSchema } from "./thread-profile.ts";
 import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../provider/provider-input.ts";
 import { WorkbenchThreadGoalObjectiveSchema, WorkbenchThreadGoalSchema } from "./thread-goal.ts";
+import { WorkbenchThreadTodoSchema, WorkbenchThreadTodoTextSchema } from "./thread-todo.ts";
 import { WORKBENCH_APPROVAL_OUTCOMES, type WorkbenchApprovalOutcomeEntry } from "../provider/provider-approval.ts";
 import { WorkbenchDurableQuestionnaireSchema, WorkbenchQuestionnaireHistoryEntrySchema } from "./thread-state.ts";
 import { WorkbenchThreadSkillSchema } from "./thread-skill-state.ts";
@@ -216,6 +217,18 @@ export const workbenchThreadActions = {
   "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
   "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },
   "thread/goal/clear": { params: WorkbenchThreadTargetSchema, result: ok },
+  "thread/todo/add": {
+    params: WorkbenchThreadTargetSchema.extend({ text: WorkbenchThreadTodoTextSchema, required: z.boolean() }),
+    result: z.object({ todo: WorkbenchThreadTodoSchema }),
+  },
+  "thread/todo/remove": { params: WorkbenchThreadTargetSchema.extend({ id: z.number().int().nonnegative() }), result: ok },
+  "thread/todo/required/set": {
+    params: WorkbenchThreadTargetSchema.extend({ id: z.number().int().nonnegative(), required: z.boolean() }), result: ok,
+  },
+  "thread/todo/text/set": {
+    params: WorkbenchThreadTargetSchema.extend({ id: z.number().int().nonnegative(), text: WorkbenchThreadTodoTextSchema }), result: ok,
+  },
+  "thread/feedback/addressed/clear": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },
 } as const;

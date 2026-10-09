@@ -19,10 +19,17 @@ const request = WorkbenchThreadLaunchRequestSchema.parse({
   } },
 });
 
-function fixture({ failMessage = false, failBeforeCreation = false, unavailableProject = false, initial }: {
+const addressedFeedback = [{
+  kind: "feedback" as const, id: 7, daemonId: "daemon-a", category: "bug" as const, title: "rg drops files",
+  author: "model", thread: "thread", createdAt: 1, report: "report",
+}];
+const feedbackRequest = WorkbenchThreadLaunchRequestSchema.parse({ ...request, addressedFeedback });
+
+function fixture({ failMessage = false, failBeforeCreation = false, unavailableProject = false, initial, launch = request }: {
   failMessage?: boolean; failBeforeCreation?: boolean; unavailableProject?: boolean;
-  initial?: WorkbenchThreadLaunchState;
+  initial?: WorkbenchThreadLaunchState; launch?: typeof request;
 } = {}) {
+  const addressed: Array<{ threadId: string; ids: number[] }> = [];
   let state: WorkbenchThreadLaunchState = initial ?? { phase: "prepared", launchId };
   let recorded = initial !== undefined;
   const location = { rootPath: "/repo", roots: ["/repo"] };
@@ -36,7 +43,7 @@ function fixture({ failMessage = false, failBeforeCreation = false, unavailableP
         recorded = true;
         return state;
       },
-      readThreadLaunch: async () => recorded ? { request, location, state } : null,
+      readThreadLaunch: async () => recorded ? { request: launch, location, state } : null,
       advanceThreadLaunch: async (_id, from, next) => {
         assert.equal(state.phase, from);
         state = next;
@@ -68,9 +75,12 @@ function fixture({ failMessage = false, failBeforeCreation = false, unavailableP
         throw new Error("Unexpected action");
       },
     },
+    addressedFeedback: {
+      record: async (threadId, feedback) => { addressed.push({ threadId, ids: feedback.map(({ id }) => id) }); },
+    },
     warn: message => warnings.push(message),
   });
-  return { controller, get state() { return state; }, get creations() { return creations; }, get messages() { return messages; }, warnings };
+  return { controller, addressed, get state() { return state; }, get creations() { return creations; }, get messages() { return messages; }, warnings };
 }
 
 test("replaying an accepted launch returns the same thread and never repeats native work", async () => {
@@ -108,6 +118,17 @@ test("uncertain first input is recorded and cannot be resent by replay", async (
   assert.equal(owner.creations, 1);
   assert.equal(owner.messages, 1);
   assert.equal(owner.warnings.length, 1);
+});
+
+test("addressed feedback is recorded once, only for an accepted launch", async () => {
+  const accepted = fixture({ launch: feedbackRequest });
+  await accepted.controller.launch(feedbackRequest);
+  await accepted.controller.launch(feedbackRequest);
+  assert.deepEqual(accepted.addressed, [{ threadId: "thread-1", ids: [7] }]);
+
+  const uncertain = fixture({ launch: feedbackRequest, failMessage: true });
+  assert.equal((await uncertain.controller.launch(feedbackRequest)).phase, "unknown");
+  assert.deepEqual(uncertain.addressed, []);
 });
 
 test("a retained created thread sends only its still-unstarted first input", async () => {

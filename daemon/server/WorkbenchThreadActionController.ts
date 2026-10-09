@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, goals, questionnaire snooze and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
@@ -29,6 +29,8 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import type WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import type WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
+import type WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
+import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
@@ -56,6 +58,8 @@ export interface WorkbenchThreadActionOwners {
   >;
   skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
+  todos: Pick<WorkbenchThreadTodoController, "add" | "remove" | "setRequired" | "setText">;
+  addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "clear">;
   /** Record skills an accepted submission activated. */
   recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
   warn(message: string): void;
@@ -190,6 +194,23 @@ export default class WorkbenchThreadActionController {
     "thread/goal/set": async input => ({ goal: await this.owners.goals.set(input.threadId, input.objective) }),
     "thread/goal/clear": async input => {
       await this.owners.goals.clear(input.threadId);
+      return { ok: true };
+    },
+    "thread/todo/add": async input => ({ todo: await this.owners.todos.add(input.threadId, input.text, input.required) }),
+    "thread/todo/remove": async input => {
+      await this.owners.todos.remove(input.threadId, [input.id]);
+      return { ok: true };
+    },
+    "thread/todo/required/set": async input => {
+      await this.owners.todos.setRequired(input.threadId, input.id, input.required);
+      return { ok: true };
+    },
+    "thread/todo/text/set": async input => {
+      await this.owners.todos.setText(input.threadId, input.id, input.text);
+      return { ok: true };
+    },
+    "thread/feedback/addressed/clear": async input => {
+      await this.owners.addressedFeedback.clear(input.threadId);
       return { ok: true };
     },
     "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),

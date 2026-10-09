@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore, type ComponentProps } from "react";
 
 import type { WorkbenchAppRuntimeStore, WorkbenchDaemonRuntimeStore, WorkbenchReloadDirtScope } from "workbench-shared/types";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
@@ -38,7 +38,7 @@ export default function ReloadNecessary ({
 }: {
   appRuntime: WorkbenchAppRuntimeStore | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore | null;
-  onAskAgent(projectId: string, prompt: string): void;
+  onAskAgent: ComponentProps<typeof WorkbenchUpdateAvailable>["onAskAgent"];
 }) {
   const [hoveredScope, setHoveredScope] = useState<string | "all" | null>(null);
   const [requestError, setRequestError] = useState("");

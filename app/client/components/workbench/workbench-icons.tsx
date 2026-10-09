@@ -28,7 +28,7 @@
  * - ReloadIcon: runtime reload glyph.
  * - StopIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: execution status and alert glyphs.
  * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: folder and ownership glyphs.
- * - PennantIcon: goal and claim pennant.
+ * - PennantIcon: claim pennant.
  * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
  * - WrapTextIcon/PreviewIcon: code display controls.
  * - CopyIcon/MoreVerticalIcon/CheckIcon: copy, overflow and confirmation glyphs.
@@ -53,6 +53,9 @@
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
  * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
+ * - FlagFilledIcon: thread goal glyph once a goal is set.
+ * - ClipboardListIcon: thread todo glyph.
+ * - BugIcon/MegaphoneIcon: failed-update-issue and feedback reference glyphs.
  * - GitArcIcon: select the glyph for a Git arc action.
  * - GitArcProposalIcon: commit proposal with its message summary.
  * - GitArcStackIcon/GitArcUnstackIcon: lucide layers and layers-arrow-up glyphs for sealing and reopening stack layers.
@@ -782,8 +785,37 @@ export function Undo2Icon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" /></OutlinedIcon>;
 }
 
+const FLAG_PATH = "M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528";
+
 export function FlagIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" /></OutlinedIcon>;
+  return <OutlinedIcon {...props}><path d={FLAG_PATH} /></OutlinedIcon>;
+}
+
+export function FlagFilledIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={FLAG_PATH} fill="currentColor" /></OutlinedIcon>;
+}
+
+export function ClipboardListIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    <path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" />
+  </OutlinedIcon>;
+}
+
+export function BugIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M12 20v-9" /><path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z" /><path d="M14.12 3.88 16 2" />
+    <path d="M21 21a4 4 0 0 0-3.81-4" /><path d="M21 5a4 4 0 0 1-3.55 3.97" /><path d="M22 13h-4" /><path d="M3 21a4 4 0 0 1 3.81-4" />
+    <path d="M3 5a4 4 0 0 0 3.55 3.97" /><path d="M6 13H2" /><path d="m8 2 1.88 1.88" /><path d="M9 7.13V6a3 3 0 1 1 6 0v1.13" />
+  </OutlinedIcon>;
+}
+
+export function MegaphoneIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+    <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" /><path d="M8 6v8" />
+  </OutlinedIcon>;
 }
 
 export function GitArcCleanClaimIcon(props: IconProps) {

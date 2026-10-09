@@ -68,6 +68,8 @@ import { threadGoalSchemaHistory } from "../lib/workbench/database/schema/thread
 import { threadAutoCompactSchemaHistory } from "../lib/workbench/database/schema/thread-auto-compact-schema.ts";
 import { agentFeedbackSchemaHistory } from "../lib/workbench/database/schema/agent-feedback-schema.ts";
 import { approvalReviewSchemaHistory } from "../lib/workbench/database/schema/approval-review-schema.ts";
+import { threadTodoSchemaHistory } from "../lib/workbench/database/schema/thread-todo-schema.ts";
+import { threadAddressedFeedbackSchemaHistory } from "../lib/workbench/database/schema/thread-addressed-feedback-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -135,6 +137,8 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       threadAutoCompactSchemaHistory,
       agentFeedbackSchemaHistory,
       approvalReviewSchemaHistory,
+      threadTodoSchemaHistory,
+      threadAddressedFeedbackSchemaHistory,
     ],
   });
 }

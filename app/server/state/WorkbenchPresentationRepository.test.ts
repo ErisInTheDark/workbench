@@ -152,6 +152,48 @@ test("only the exact revision from deleting an unlaunched draft can reopen it", 
   }
 });
 
+test("draft references persist, survive reference-blind saves, and leave with the draft at launch", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-references-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    const logicalProjectId = repository.read().projects[0]!.id;
+    const references = [
+      { kind: "feedback" as const, id: 7, daemonId: second, category: "bug" as const, title: "rg drops files",
+        author: "GPT-5.5 high", thread: "Fix rg (abc) from tray", createdAt: 5, report: "report text" },
+      { kind: "updateIssue" as const, text: "update broke" },
+    ];
+    const draft = { id: draftId, logicalProjectId, target: { daemonId: first, projectId }, prompt: "", references, selection, updatedAt: 1 };
+    const saved = repository.mutate({ kind: "putDraft", draft, expectedRevision: null }).drafts[0]!;
+    assert.deepEqual(saved.references, references);
+    assert.equal(repository.mutate({ kind: "putDraft", draft, expectedRevision: saved.revision }).drafts[0]!.revision, saved.revision,
+      "an identical save is a no-op");
+
+    const { references: _omitted, ...blind } = draft;
+    const edited = repository.mutate({ kind: "putDraft", draft: { ...blind, prompt: "go" }, expectedRevision: saved.revision }).drafts[0]!;
+    assert.deepEqual(edited.references, references, "a browser that predates references cannot erase them");
+    const trimmed = repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "go", references: references.slice(1) },
+      expectedRevision: edited.revision }).drafts[0]!;
+    assert.deepEqual(trimmed.references, references.slice(1));
+
+    await repository.close();
+    await repository.start();
+    assert.deepEqual(repository.read().drafts[0]?.references, references.slice(1));
+    const launchId = crypto.randomUUID();
+    const reserved = repository.mutate({ kind: "reserveLaunch", draftId, expectedRevision: trimmed.revision, launchId, selection }).drafts[0]!;
+    assert.deepEqual(reserved.references, references.slice(1), "a submitting draft keeps what its launch sends");
+    repository.mutate({ kind: "completeLaunch", draftId, launchId, threadId: "thread-1" });
+    const database = new Database(path.join(temporary.path, "presentation.sqlite3"), { readonly: true });
+    try {
+      assert.equal((database.prepare("SELECT COUNT(*) AS count FROM presentation_draft_references").get() as { count: number }).count, 0);
+    } finally { database.close(); }
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("new-folder draft placement is atomic and autosaves cannot restore an obsolete folder choice", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-folder-");
   const root = temporary.path;

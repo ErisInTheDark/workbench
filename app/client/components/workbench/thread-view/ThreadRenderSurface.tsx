@@ -12,7 +12,8 @@ import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/t
 import { ThreadTurnDetails, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import ThreadTranscriptProjection from "./ThreadTranscriptProjection";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
-import ThreadLiveActivity from "./ThreadLiveActivity";
+import ThreadStatusRow from "./ThreadStatusRow";
+import useThreadLiveActivity from "./use-thread-live-activity";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import projectThreadRenderTurns from "./thread-render-turns";
 import type { ThreadRenderContext, ThreadRenderFlags } from "./thread-render-lab-options";
@@ -84,6 +85,12 @@ export default function ThreadRenderSurface({
   );
   const activity = getLiveThreadActivity({ pendingUserInputRequest: null, turn: liveTurn, commands });
   const presentationSource = suppliedPresentationSource ?? (sql ? { kind: "sqlite" as const, sourceKey: `${thread?.harness ?? defaultProviderKey}:${threadId}` } : null);
+  const liveView = useThreadLiveActivity({
+    activity, items: liveTurn?.items ?? [], terminalContext, terminalRetention,
+    threadId, turnId: liveTurn?.id ?? null, threadCwdPath: thread?.cwd ?? cwd,
+    presentationSource, projectRootPath: cwd, projectId: context.projectId,
+    inlineMentionSources: context.inlineMentionSources, projectFilePaths: context.projectFilePaths, workspaceRoots,
+  });
   const turnsById = new Map(render?.thread.turns.map(turn => [turn.id, turn]));
   const style = {
     fontSize: `${fontSizeRem}rem`,
@@ -133,13 +140,7 @@ export default function ThreadRenderSurface({
           presentationSource={turn.status === "inProgress" ? presentationSource : null}
         /> : <ThreadTurnLoadingSkeleton key={entry.turnId} entry={entry} />;
       }) : <p className="text-fg/muted">{emptyMessage}</p>}
-      {flags.showLiveActivity !== false && liveTurn ? <ThreadLiveActivity
-        key={`${threadId}:${liveTurn.id}`} activity={activity} items={liveTurn.items}
-        terminalContext={terminalContext} terminalRetention={terminalRetention}
-        threadId={threadId} turnId={liveTurn.id} threadCwdPath={thread?.cwd ?? cwd}
-        presentationSource={presentationSource} projectRootPath={cwd} projectId={context.projectId}
-        inlineMentionSources={context.inlineMentionSources} projectFilePaths={context.projectFilePaths} workspaceRoots={workspaceRoots}
-      /> : null}
+      {flags.showLiveActivity !== false && liveView ? <ThreadStatusRow key={liveView.key} live={liveView} /> : null}
     </div>
     <ThreadScrollViewportEnd />
     </ThreadScrollViewport>

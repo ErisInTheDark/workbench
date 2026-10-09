@@ -14,6 +14,7 @@ import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection,
 import type { WorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
+import { readComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
 import WorkbenchWorkspaceDrafts from "./WorkbenchWorkspaceDrafts";
 
 const daemonId = DaemonIdSchema.parse("10000000-0000-4000-8000-000000000001");
@@ -243,6 +244,33 @@ test("launch reads stored image bytes and disposal drains the accepted operation
   assert.equal(f.retained(), 0);
   assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "codex" });
   assert.equal(f.draft(), undefined);
+});
+
+test("references lead the first message and feedback ones travel as addressed feedback", async context => {
+  const f = await fixture(context);
+  const feedback = {
+    kind: "feedback" as const, id: 7, daemonId: "other-daemon", category: "bug" as const, title: "rg drops files",
+    author: "model", thread: "thread", createdAt: 1_000, report: "report text",
+  };
+  const issue = { kind: "updateIssue" as const, text: "update broke" };
+  const { references: _stored, ...draft } = f.draft();
+  f.presentation.mutate({ kind: "putDraft", expectedRevision: f.draft().revision, draft: {
+    id: draft.id, logicalProjectId: draft.logicalProjectId, target: draft.target, prompt: "", selection: draft.selection,
+    updatedAt: 2, references: [feedback, issue],
+  } });
+  let sent: z.infer<typeof WorkbenchThreadLaunchRequestSchema> | null = null;
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [model] };
+    sent = WorkbenchThreadLaunchRequestSchema.parse(params);
+    return { phase: "accepted", launchId: sent.launchId, threadId: randomUUID(), turnId: randomUUID() };
+  });
+  await f.owner.launch(f.draftId, f.draft().revision);
+  const request = sent as z.infer<typeof WorkbenchThreadLaunchRequestSchema> | null;
+  const text = request?.firstInput[0];
+  assert.deepEqual(readComposerReferenceMessage(text?.type === "text" ? text.text : ""), {
+    references: [{ ...feedback, daemonId: null }, issue], message: "",
+  });
+  assert.deepEqual(request?.addressedFeedback, [feedback]);
 });
 
 test("a linked draft launches with its stored profile's current definition", async context => {

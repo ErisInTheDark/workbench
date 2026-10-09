@@ -21,7 +21,6 @@ import {
   ArchiveIcon,
   DiscardDraftIcon,
   PennantIcon,
-  ImageIcon,
   MoreVerticalIcon,
   PinIcon,
   RestoreThreadIcon,
@@ -32,6 +31,7 @@ import {
 } from "./workbench-icons";
 import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
+import WorkbenchDraftTitleIcons from "./WorkbenchDraftTitleIcons";
 import { useWorkbenchSubagentClaims, type WorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchTooltip from "./WorkbenchTooltip";
@@ -240,8 +240,10 @@ export default function WorkbenchThreadListItem({
   const stashedClaimCount = stashedPaths.length;
   const hasDraftImages = entry.entryKind === "draft"
     && (isPinnedDraftSummaryEntry(entry) ? entry.hasAttachments : entry.draft.attachments.length > 0);
+  const draftReferenceKinds = entry.entryKind !== "draft" ? []
+    : isPinnedDraftSummaryEntry(entry) ? entry.referenceKinds : entry.draft.referenceKinds;
   const titleContent = <span className="inline-flex min-w-0 items-center gap-1">
-    {hasDraftImages ? <ImageIcon className="shrink-0" size={16} /> : null}
+    <WorkbenchDraftTitleIcons hasImages={hasDraftImages} referenceKinds={draftReferenceKinds} />
     <span className="truncate">{entry.title}</span>
   </span>;
   const archived = entry.entryKind === "thread" && group === "archived";

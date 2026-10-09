@@ -1,10 +1,10 @@
 /*
- * No exports. Tests protect where selected feedback is addressed and the prompt's message separator.
+ * No exports. Tests protect where selected feedback is addressed and what reference a report becomes.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import { feedbackAddressProjectId, formatFeedbackForAgent } from "./stats-feedback-presentation.ts";
+import { feedbackAddressProjectId, feedbackReference } from "./stats-feedback-presentation.ts";
 
 const item = (overrides: Partial<WorkbenchFeedbackItem>): WorkbenchFeedbackItem => ({
   category: "bug", channel: "project", createdAt: 1, daemonId: null, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
@@ -19,11 +19,12 @@ test("wb reports are addressed in the Workbench project, project reports in thei
   assert.equal(feedbackAddressProjectId([item({}), item({ id: 2 })], "workbench"), "game");
 });
 
-test("the prompt lists every report and ends ready for the user's own message", () => {
-  const prompt = formatFeedbackForAgent([item({}), item({ category: "waste", id: 2, threadId: null })], {
-    modelName: () => "Opus 5.5", origin: () => "game",
+test("a report's reference names its storing machine, author and filing project, even once its thread is gone", () => {
+  assert.deepEqual(feedbackReference(item({}), { daemonId: "daemon-a", modelName: "Opus 5.5", projectName: "game" }), {
+    kind: "feedback", id: 1, daemonId: "daemon-a", category: "bug", title: "Stats action fails",
+    author: "Opus 5.5 medium", thread: "thread from game", createdAt: 1, report: "it broke",
   });
-  assert.match(prompt, /^## Bug · game\nit broke\n- Author: Opus 5.5 medium · importance 89\n- Thread: thread/u);
-  assert.match(prompt, /## Waste · game[\s\S]*- Thread: removed/u);
-  assert.ok(prompt.endsWith("\n\n=====\n\n"));
+  assert.equal(feedbackReference(item({ threadId: null, reasoningEffort: null }), {
+    daemonId: "daemon-a", modelName: null, projectName: "game",
+  }).thread, "removed thread from game");
 });

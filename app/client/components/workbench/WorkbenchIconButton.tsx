@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchIconButton: circular action or link with shared border, focus, pressed and invalid styling.
+ * - default WorkbenchIconButton: circular or multi-glyph pill action or link with shared border, focus, pressed and invalid styling.
  */
 "use client";
 
@@ -9,6 +9,8 @@ import WorkbenchSpinningBorder from "./WorkbenchSpinningBorder";
 
 type WorkbenchIconButtonProps = {
   label: string;
+  /** A pill holds several glyphs side by side at the circle's height. */
+  shape?: "circle" | "pill";
   size?: "compact" | "small" | "medium" | "font";
   tone?: "default" | "danger";
   display?: "bordered" | "hover-border";
@@ -19,8 +21,13 @@ type WorkbenchIconButtonProps = {
 );
 
 export default function WorkbenchIconButton({
-  label, size = "medium", tone = "default", display = "bordered", pendingHalo = false, className = "", title = label, children, ...props
+  label, shape = "circle", size = "medium", tone = "default", display = "bordered", pendingHalo = false, className = "", title = label, children, ...props
 }: WorkbenchIconButtonProps) {
+  const sizeClassName = shape === "pill"
+    // Each child gets a circle-sized cell, so glyphs sit as far apart as separate buttons would.
+    ? `[&>*]:(flex h-full items-center justify-center) ${size === "font" ? "h-[1.75em] [&>*]:min-w-[1.75em]"
+      : size === "compact" ? "h-6 [&>*]:min-w-6" : size === "small" ? "h-8 [&>*]:min-w-8" : "h-9 [&>*]:min-w-9"}`
+    : size === "font" ? "size-[1.75em]" : size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9";
   const classes = `
       inline-flex shrink-0 items-center justify-center rounded-full border bg-transparent text-fg/muted transition enabled:cursor-pointer
       ${pendingHalo ? "relative isolate" : ""}
@@ -31,7 +38,7 @@ export default function WorkbenchIconButton({
       data-[invalid=true]:hover:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)] data-[invalid=true]:focus-visible:bg-[color-mix(in_srgb,var(--danger)_18%,transparent)]
       [&[data-invalid=true]_.save-icon-slash]:opacity-100 [&[data-invalid=true]_.save-icon-main]:opacity-45
       ${display === "hover-border" ? "border-transparent" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}
-      ${size === "font" ? "size-[1.75em]" : size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9"}
+      ${sizeClassName}
       ${tone === "danger" ? "[&:not(:disabled)]:hover:text-danger" : "[&:not(:disabled)]:hover:text-text"}
       ${className}
     `;

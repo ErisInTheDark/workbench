@@ -21,7 +21,7 @@ import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectio
 import {
   FEEDBACK_CATEGORY_PRESENTATION,
   feedbackAddressProjectId,
-  formatFeedbackForAgent,
+  feedbackReference,
   countFeedbackCategories,
   selectFeedbackItems,
 } from "./stats-feedback-presentation";
@@ -86,15 +86,14 @@ export default function WorkbenchStatsFeedback() {
     if (!next.delete(category)) next.add(category);
     return next;
   });
-  const origin = (channel: string, projectId: string, daemonId: string | null | undefined) => channel === "project"
-    ? projectName(projectId, daemonId)
-    : projectId === feedback?.workbenchProjectId ? "Workbench" : `Workbench, from ${projectName(projectId, daemonId)}`;
   const address = () => {
-    if (!addressProjectId) return;
-    onAddress(addressProjectId, formatFeedbackForAgent(selected, {
-      modelName: (item) => modelName(item.harness, item.model),
-      origin: (item) => origin(item.channel, item.projectId, item.daemonId),
-    }));
+    const attached = scope.attachedDaemonId;
+    if (!addressProjectId || (!attached && selected.some((item) => !item.daemonId))) return;
+    onAddress(addressProjectId, selected.map((item) => feedbackReference(item, {
+      daemonId: item.daemonId ?? attached!,
+      modelName: modelName(item.harness, item.model),
+      projectName: projectName(item.projectId, item.daemonId),
+    })));
     setSelectedKeys(new Set());
   };
   return (

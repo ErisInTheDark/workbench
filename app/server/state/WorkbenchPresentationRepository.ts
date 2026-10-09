@@ -15,7 +15,7 @@ import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-confor
 import { WorkbenchComposerProfileSelectionSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
   PresentationDraftInputSchema, PresentationMutationSchema, PresentationSnapshotSchema,
-  type PresentationMutation, type PresentationSnapshot,
+  type PresentationDraftReference, type PresentationMutation, type PresentationSnapshot,
 } from "workbench-shared/state/workbench-presentation-state";
 import { presentationSchema, type PresentationRows } from "workbench-shared/state/workbench-presentation-schema";
 import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
@@ -127,6 +127,7 @@ export default class WorkbenchPresentationRepository {
       .all() as DraftRow[];
     const attachments = db.prepare("SELECT draft_id, id, media_type, content_hash FROM presentation_draft_attachments ORDER BY draft_id, id")
       .all() as Array<Pick<PresentationRows["attachments"], "draft_id" | "id" | "media_type" | "content_hash">>;
+    const references = this.readReferences();
     const folders = db.prepare("SELECT * FROM presentation_folders ORDER BY scope, position, id")
       .all() as PresentationRows["folders"][];
     const members = db.prepare("SELECT * FROM presentation_layout_members ORDER BY scope, position, id")
@@ -151,7 +152,7 @@ export default class WorkbenchPresentationRepository {
       drafts: drafts.map(row => ({
         id: row.id, logicalProjectId: row.logical_project_id,
         target: { daemonId: row.daemon_id, projectId: row.project_id },
-        prompt: row.prompt, selection: this.selection(row.selection_json),
+        prompt: row.prompt, references: references.get(row.id) ?? [], selection: this.selection(row.selection_json),
         pinned: Boolean(row.pinned), snoozed: Boolean(row.snoozed),
         updatedAt: row.updated_at, revision: row.revision, phase: row.phase,
         launchId: row.launch_id, acceptedThreadId: row.accepted_thread_id,
@@ -395,9 +396,12 @@ export default class WorkbenchPresentationRepository {
     const draft = PresentationDraftInputSchema.parse(input.draft);
     this.requireTarget(draft.target, draft.logicalProjectId);
     const previous = this.draft(draft.id);
+    const referencesChanged = draft.references !== undefined
+      && !areDeeplyEqual(this.readReferences(draft.id).get(draft.id) ?? [], draft.references);
     if (previous?.phase === "unsent" && previous.logical_project_id === draft.logicalProjectId
       && previous.daemon_id === draft.target.daemonId && previous.project_id === draft.target.projectId
-      && previous.prompt === draft.prompt && areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) return;
+      && previous.prompt === draft.prompt && !referencesChanged
+      && areDeeplyEqual(this.selection(previous.selection_json), draft.selection)) return;
     if (input.expectedRevision === null ? Boolean(previous) : previous?.revision !== input.expectedRevision) {
       throw new Error("Draft changed in another browser.");
     }
@@ -425,6 +429,9 @@ export default class WorkbenchPresentationRepository {
         updated_at = excluded.updated_at
     `).run(draft.id, draft.logicalProjectId, draft.target.daemonId, draft.target.projectId,
       draft.prompt, selectionJson, revision, draft.updatedAt);
+    if (draft.references !== undefined && (referencesChanged || !previous || previous.phase !== "unsent")) {
+      this.replaceReferences(draft.id, draft.references);
+    }
     if (placement) {
       const first = db.prepare(`
         SELECT MIN(position) AS position FROM presentation_layout_members
@@ -478,6 +485,7 @@ export default class WorkbenchPresentationRepository {
     if (!draft.launch_id) {
       db.prepare("DELETE FROM presentation_draft_attachments WHERE draft_id = ?").run(input.draftId);
       db.prepare("DELETE FROM presentation_attachment_chunks WHERE draft_id = ?").run(input.draftId);
+      this.replaceReferences(input.draftId, []);
     }
   }
 
@@ -526,6 +534,51 @@ export default class WorkbenchPresentationRepository {
     `).run(draft.daemon_id, draft.project_id, input.threadId, revision, input.draftId);
     db.prepare("DELETE FROM presentation_draft_attachments WHERE draft_id = ?").run(input.draftId);
     db.prepare("DELETE FROM presentation_attachment_chunks WHERE draft_id = ?").run(input.draftId);
+    this.replaceReferences(input.draftId, []);
+  }
+
+  /** References by draft id; one draft when given, else every stored draft. */
+  private readReferences(draftId?: string) {
+    const rows = this.requireDatabase().prepare(`
+      SELECT r.draft_id, r.position, r.kind, r.body, f.daemon_id, f.feedback_id, f.category, f.title, f.author, f.thread_label, f.created_at
+      FROM presentation_draft_references r
+      LEFT JOIN presentation_draft_feedback_references f ON f.draft_id = r.draft_id AND f.position = r.position
+      WHERE ? IS NULL OR r.draft_id = ?
+      ORDER BY r.draft_id, r.position
+    `).all(draftId ?? null, draftId ?? null) as Array<Pick<PresentationRows["references"], "draft_id" | "position" | "kind" | "body">
+      & Partial<Omit<PresentationRows["feedbackReferences"], "draft_id" | "position">>>;
+    const result = new Map<string, PresentationDraftReference[]>();
+    for (const row of rows) {
+      const reference: PresentationDraftReference | null = row.kind === "updateIssue" ? { kind: "updateIssue", text: row.body }
+        : row.daemon_id && row.feedback_id !== undefined && row.category && row.title && row.author && row.thread_label && row.created_at !== undefined
+          ? {
+            kind: "feedback", id: row.feedback_id, daemonId: row.daemon_id, category: row.category, title: row.title,
+            author: row.author, thread: row.thread_label, createdAt: row.created_at, report: row.body,
+          }
+          : null;
+      if (!reference) {
+        this.options.onDiagnostic?.("A stored feedback draft reference has no feedback details; it was skipped.");
+        continue;
+      }
+      result.set(row.draft_id, [...result.get(row.draft_id) ?? [], reference]);
+    }
+    return result;
+  }
+
+  private replaceReferences(draftId: string, references: readonly PresentationDraftReference[]) {
+    const db = this.requireDatabase();
+    db.prepare("DELETE FROM presentation_draft_references WHERE draft_id = ?").run(draftId);
+    const insert = db.prepare("INSERT INTO presentation_draft_references(draft_id, position, kind, body) VALUES (?, ?, ?, ?)");
+    const insertFeedback = db.prepare(`
+      INSERT INTO presentation_draft_feedback_references
+        (draft_id, position, daemon_id, feedback_id, category, title, author, thread_label, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    references.forEach((reference, position) => {
+      insert.run(draftId, position, reference.kind, reference.kind === "feedback" ? reference.report : reference.text);
+      if (reference.kind === "feedback") insertFeedback.run(draftId, position, reference.daemonId, reference.id,
+        reference.category, reference.title, reference.author, reference.thread, reference.createdAt);
+    });
   }
 
   private saveLayout(input: Extract<PresentationMutation, { kind: "saveLayout" }>) {

@@ -61,6 +61,8 @@ function fixture(providerWarning?: string) {
     profiles: { captureCreationProfile: unused, captureCreationProfileForProject: unused },
     skills: { read: unused, deactivate: unused },
     goals: { set: unused, clear: unused },
+    todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
+    addressedFeedback: { clear: unused },
     recordSkillActivations: async () => undefined,
     state: {
       acceptProviderIntent: async (_project, _harness, acceptedThread, acceptedTurn) => {

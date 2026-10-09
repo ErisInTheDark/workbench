@@ -178,6 +178,38 @@ const attachmentChunks = initial(defineTable("presentation_attachment_chunks", {
   chunk_index: integer().notNull().nonNegative(),
   content: blob().notNull(),
 }, table => ({ constraints: [primaryKey([table.draft_id, table.attachment_id, table.chunk_index])] })));
+function added<Table extends TableDefinition>(table: Table) {
+  return defineTableHistory({
+    current: table,
+    versions: [tableVersion({ schemaVersion: releases.draftReferences.version, table, migration: createTable(table) })],
+  });
+}
+// Composer references a new-thread draft hands its agent; feedback ones also keep where the report lives.
+const references = added(defineTable("presentation_draft_references", {
+  draft_id: text().notNull().references("presentation_drafts", "id"),
+  position: integer().notNull().nonNegative(),
+  kind: enumText("feedback", "updateIssue").notNull(),
+  body: text().notNull(),
+}, table => ({ constraints: [primaryKey([table.draft_id, table.position])] })));
+const feedbackReferences = added(defineTable("presentation_draft_feedback_references", {
+  draft_id: text().notNull(),
+  position: integer().notNull().nonNegative(),
+  daemon_id: text().notNull(),
+  feedback_id: integer().notNull().nonNegative(),
+  category: enumText("bug", "waste", "confusion", "opportunity").notNull(),
+  title: text().notNull(),
+  author: text().notNull(),
+  thread_label: text().notNull(),
+  created_at: integer().notNull().nonNegative(),
+}, table => ({
+  constraints: [
+    primaryKey([table.draft_id, table.position]),
+    unique([table.draft_id, table.daemon_id, table.feedback_id]),
+    foreignKey([table.draft_id, table.position], {
+      table: "presentation_draft_references", columns: ["draft_id", "position"], onDelete: "CASCADE",
+    }),
+  ],
+})));
 const folders = initial(defineTable("presentation_folders", {
   id: text().primaryKey(),
   scope: enumText("project", "home", "pinned").notNull(),
@@ -237,6 +269,7 @@ export const presentationTables = Object.freeze({
   metadata: metadata.current, daemons: daemons.current, projects: projects.current,
   locations: locations.current, defaults: defaults.current, drafts: drafts.current,
   attachments: attachments.current, attachmentChunks: attachmentChunks.current,
+  references: references.current, feedbackReferences: feedbackReferences.current,
   folders: folders.current, members: members.current,
   receipts: receipts.current, mappings: mappings.current, importAttachments: importAttachments.current,
   divergences: divergences.current,
@@ -245,6 +278,6 @@ export type PresentationRows = { [Name in keyof typeof presentationTables]: Sele
 export const presentationSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([
     metadata, daemons, projects, locations, defaults, drafts, attachments, attachmentChunks,
-    folders, members, receipts, mappings, importAttachments, divergences,
+    references, feedbackReferences, folders, members, receipts, mappings, importAttachments, divergences,
   ])],
 });

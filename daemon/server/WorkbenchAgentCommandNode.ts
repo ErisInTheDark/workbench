@@ -6,6 +6,7 @@ import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
+import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
@@ -224,6 +225,21 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeClaimStats: async (body, signal) => await claimStats.execute(body, signal),
       executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
+      executeTodoRequest: async (body, signal) => {
+        const parsed = WorkbenchTodoRequestSchema.safeParse(body);
+        if (!parsed.success) {
+          const detail = parsed.error.issues.slice(0, 5).map(({ message, path }) => `${path.map(String).join(".") || "input"}: ${message}`).join("\n");
+          return new Response(`Invalid todo arguments.\n${detail}\n`, { headers: { "Content-Type": "text/plain; charset=utf-8" }, status: 400 });
+        }
+        const request = parsed.data;
+        const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+        signal.throwIfAborted();
+        const todos = build.get("threadTodos");
+        const text = request.action === "list" ? await todos.renderList(identity.threadId)
+          : request.action === "add" ? await todos.renderAdd(identity.threadId, request.text, request.required)
+            : await todos.renderRemove(identity.threadId, request.ids);
+        return new Response(text, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+      },
       executeFeedbackStats: async (body, signal) => await feedback.read(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeProjectStoreRequest: async (body, signal) => {
@@ -287,7 +303,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity"],
   safeAll: true,
   scope: "server:commands",
 });

@@ -180,6 +180,8 @@ import ThreadCommentaryActionRow from "./ThreadCommentaryActionRow";
 import { ThreadMarkdownSectionActionsProvider } from "./ThreadMarkdownSectionActions";
 import { buildThreadCommentaryRuns, type ThreadCommentaryRunActions } from "./thread-commentary-runs";
 import { splitUserMessageBubbles } from "./user-message-bubbles";
+import ComposerReferencePills from "./ComposerReferencePills";
+import { readComposerReferenceMessage, type ComposerReference } from "workbench-shared/workbench/thread/composer-reference";
 import useThreadPresentedText from "./use-thread-presented-text";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
@@ -1089,7 +1091,7 @@ function ThreadUserMessageItem ({
 
   const steerState = getUserMessageDeliveryState(item);
   const isPendingInitial = isUndeliveredInitialOptimisticInputItem(item);
-  const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
+  const { content: displayContent, references } = splitLeadingComposerReferences(unwrapWorkbenchSteerDisplayInput(item.content));
   // `=====` lines split one stored message into several bubbles; the agent still receives the whole message.
   const bubbles = splitUserMessageBubbles(displayContent);
   return (
@@ -1100,6 +1102,8 @@ function ThreadUserMessageItem ({
       {(bubbles.length ? bubbles : [[]]).map((bubble, bubbleIndex) => (
         <div className="group/thread-bubble relative w-fit max-w-[min(100%,42rem)]" key={`${item.id}:bubble:${bubbleIndex}`}>
           <ThreadSteerDecoration className="space-y-2 text-left" state={isPendingInitial ? "pending" : steerState}>
+            {/* References lead the first bubble like its opening paragraph. */}
+            {bubbleIndex === 0 ? <ComposerReferencePills references={references} /> : null}
             {bubble.length ? bubble.map((content, index) => (
               <ThreadUserInputLine
                 key={`${item.id}:content:${bubbleIndex}:${index}:${content.type}`}
@@ -1111,7 +1115,7 @@ function ThreadUserMessageItem ({
                 projectRootPath={projectRootPath}
                 workspaceRoots={workspaceRoots}
               />
-            )) : (
+            )) : references.length ? null : (
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
             )}
           </ThreadSteerDecoration>
@@ -1127,6 +1131,17 @@ function ThreadUserMessageItem ({
       <ThreadMessageTimestamp align="right" className="-mt-1" timestampSeconds={startedAt} />
     </section>
   );
+}
+
+/** References lead a message's first text part; the rest of that part is the user's own words. */
+function splitLeadingComposerReferences(content: UserInput[]): { content: UserInput[]; references: ComposerReference[] } {
+  const [first, ...rest] = content;
+  const read = first?.type === "text" ? readComposerReferenceMessage(first.text) : null;
+  if (!first || first.type !== "text" || !read) return { content, references: [] };
+  return {
+    content: read.message ? [{ ...first, text: read.message, text_elements: [] }, ...rest] : rest,
+    references: read.references,
+  };
 }
 
 function mergeSteerUserMessages(items: Extract<ThreadItem, { type: "userMessage" }>[]) {

@@ -49,6 +49,8 @@ import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
+import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
+import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -264,7 +266,23 @@ function createWorkbenchCoreFeature(
     },
     warn: message => { console.warn("[thread-goal]", message.slice(0, 500)); },
   });
-  const agentContext = new WorkbenchAgentContextController({
+  const resolveCanonicalThread = async (threadId: string) =>
+    (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.threadId ?? null;
+  const threadTodos = new WorkbenchThreadTodoController({
+    store: command => database.executeThreadTodos(command),
+    resolve: resolveCanonicalThread,
+    changed: (threadId, todos) => {
+      for (const listener of runtimeListeners) listener(threadId, { todos });
+    },
+  });
+  const threadAddressedFeedback = new WorkbenchThreadAddressedFeedbackController({
+    store: command => database.executeThreadAddressedFeedback(command),
+    resolve: resolveCanonicalThread,
+    changed: (threadId, addressedFeedback) => {
+      for (const listener of runtimeListeners) listener(threadId, { addressedFeedback });
+    },
+  });
+  const agentContext =new WorkbenchAgentContextController({
     sources: [threadSkills.contextSource, threadGoals.contextSource],
     inject: async (target, text, signal) => {
       if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
@@ -642,7 +660,7 @@ function createWorkbenchCoreFeature(
     settlement: turnSettlement,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
-    skills: threadSkills, goals: threadGoals, recordSkillActivations,
+    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, recordSkillActivations,
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
@@ -670,6 +688,7 @@ function createWorkbenchCoreFeature(
   });
   const launches = new WorkbenchThreadLaunchController({
     database, projects: projectCatalog, actions: threadActions,
+    addressedFeedback: threadAddressedFeedback,
     warn: message => logThreadStateWarning(message),
   });
   const workingTree = new WorkbenchWorkingTreeController({
@@ -691,7 +710,7 @@ function createWorkbenchCoreFeature(
   const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
   const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
     read: async (threadId, harness) => {
-      // Goal and skills are optional facts: one failing read must not drop the thread's usage.
+      // Goal, skills, todos and addressed feedback are optional facts: one failing read must not drop the thread's usage.
       const optional = async <Value>(label: string, read: () => Promise<Value>) => {
         try { return await read(); } catch (error) {
           logThreadStateWarning(`Thread runtime ${label} read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
@@ -700,12 +719,16 @@ function createWorkbenchCoreFeature(
       };
       const goal = await optional("goal", () => threadGoals.read(threadId));
       const skills = await optional("skills", () => threadSkills.read(threadId));
+      const todos = await optional("todos", () => threadTodos.read(threadId));
+      const addressedFeedback = await optional("addressed feedback", () => threadAddressedFeedback.read(threadId));
       return {
         tokenUsage: await readTokenUsage(threadId),
         willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
         pendingApproval: readPendingApproval(threadId),
         ...(goal !== undefined ? { goal } : {}),
         ...(skills !== undefined ? { skills } : {}),
+        ...(todos !== undefined ? { todos } : {}),
+        ...(addressedFeedback !== undefined ? { addressedFeedback } : {}),
       };
     },
     readTokenUsage,
@@ -789,7 +812,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
     threadContextRollover,
     workingTree,
     accountLimits,

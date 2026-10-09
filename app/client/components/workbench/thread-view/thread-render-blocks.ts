@@ -29,6 +29,7 @@ import {
   isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
+import { readComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { readWorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -236,6 +237,9 @@ function getMergeableSteerState(item: UserMessageItem) {
   }
 
   const displayContent = unwrapWorkbenchSteerDisplayInput(item.content);
+  // Merging joins texts, which would bury a steer's leading composer references mid-message.
+  const first = displayContent[0];
+  if (first?.type === "text" && readComposerReferenceMessage(first.text)) return null;
   return displayContent.length > 0
     && displayContent.every((part) => part.type === "text" && part.text_elements.length === 0)
     ? input.status

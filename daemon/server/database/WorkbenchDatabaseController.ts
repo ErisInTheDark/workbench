@@ -10,6 +10,8 @@ import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtif
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
 import type { ThreadSkillCommand } from "./skills/WorkbenchThreadSkillStore";
 import type { ThreadGoalCommand } from "./goals/WorkbenchThreadGoalStore";
+import type { ThreadTodoCommand } from "./todos/WorkbenchThreadTodoStore";
+import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore";
 import type { ProjectStoreCommand } from "./store/WorkbenchProjectStoreRepository";
 import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
@@ -310,6 +312,20 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "threadGoals", command });
     if (response.type !== "threadGoals") throw new WorkbenchDatabaseFailure(`Unexpected thread goal response: ${response.type}`);
+    return response.result;
+  }
+
+  async executeThreadTodos(command: ThreadTodoCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadTodos", command });
+    if (response.type !== "threadTodos") throw new WorkbenchDatabaseFailure(`Unexpected thread todo response: ${response.type}`);
+    return response.result;
+  }
+
+  async executeThreadAddressedFeedback(command: ThreadAddressedFeedbackCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadAddressedFeedback", command });
+    if (response.type !== "threadAddressedFeedback") throw new WorkbenchDatabaseFailure(`Unexpected addressed feedback response: ${response.type}`);
     return response.result;
   }
 

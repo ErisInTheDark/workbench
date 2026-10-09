@@ -15,7 +15,7 @@ import type {
   WorkbenchProjectThreadSummaries, WorkbenchProjectThreadSummaryCounts,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRowSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import { createDraftTitle, WorkbenchThreadDraftSchema } from "workbench-shared/workbench/thread/thread-state";
+import { createDraftTitle, WorkbenchThreadDraftSchema, type DraftReferenceKind } from "workbench-shared/workbench/thread/thread-state";
 import { getThreadSidebarGroup } from "workbench-shared/workbench/thread/thread-state";
 import {
   compareThreadSidebarEntries, getWorkbenchThreadDisplayKey, getWorkbenchThreadDisplaySection,
@@ -27,6 +27,11 @@ import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/
 import {
   getWorkbenchHomeThreadKey, type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
+
+/** Each reference kind once, in first-seen order. */
+function draftReferenceKinds(references: readonly { kind: DraftReferenceKind }[]) {
+  return [...new Set(references.map(({ kind }) => kind))];
+}
 
 function projectDisplayLocations(project: WorkbenchLogicalProject) {
   return [
@@ -186,6 +191,7 @@ export function projectLogicalThreadRows(
         clientUpdatedAt: draft.updatedAt, composerSettings: settings, createdAt: draft.updatedAt,
         draftId: draft.id, profileId: draft.selection.kind === "profile" ? draft.selection.profileId : null,
         projectId: draft.target.projectId, prompt: draft.prompt, updatedAt: draft.updatedAt,
+        ...(draft.references?.length ? { referenceKinds: draftReferenceKinds(draft.references) } : {}),
       });
       return {
         logicalProjectId: draft.logicalProjectId, location: draft.target,
@@ -265,6 +271,7 @@ export function projectLogicalSummaries(
       pinnedThreads.push({ location: draft.target, entry: {
         entryKind: "draft", draftId: DraftIdSchema.parse(draft.id), activityAt: draft.updatedAt,
         hasAttachments: draft.attachments.length > 0, title: createDraftTitle(draft.prompt),
+        ...(draft.references?.length ? { referenceKinds: draftReferenceKinds(draft.references) } : {}),
         metadata: { archived: false, pinned: true, snoozed: false }, status: "draft",
       } });
     }

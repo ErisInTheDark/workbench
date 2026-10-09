@@ -21,6 +21,8 @@ import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/p
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
+import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -50,6 +52,10 @@ interface ThreadHeadFields {
   /** The user-set Workbench goal; drafts have none. */
   goal?: WorkbenchThreadGoal | null;
   skills?: readonly WorkbenchThreadSkill[];
+  /** Follow-up todos; drafts have none. */
+  todos?: readonly WorkbenchThreadTodo[];
+  /** Feedback the thread was launched to address, until the user deletes or clears it. */
+  addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
 }
 
 /** A child or linked thread as renderers see it: its head, plus turns when they are loaded. */
@@ -134,6 +140,11 @@ export interface ThreadStoreActions {
   setGoal(objective: string): Promise<void>;
   clearGoal(): Promise<void>;
   deactivateSkill(path: string): Promise<void>;
+  addTodo(text: string, required: boolean): Promise<void>;
+  removeTodo(id: number): Promise<void>;
+  setTodoRequired(id: number, required: boolean): Promise<void>;
+  setTodoText(id: number, text: string): Promise<void>;
+  clearAddressedFeedback(): Promise<void>;
 }
 
 export type ThreadFeed = "draft" | "observed";

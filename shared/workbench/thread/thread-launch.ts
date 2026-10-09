@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ProjectIdSchema } from "../identity.ts";
 import { WorkbenchMessageContextSchema, WorkbenchUserInputSchema } from "../provider/provider-input.ts";
 import { WorkbenchComposerProfileSelectionSchema } from "./composer-profile-selection.ts";
+import { WorkbenchThreadAddressedFeedbackSchema } from "./thread-addressed-feedback.ts";
 
 export const WorkbenchThreadLaunchRequestSchema = z.object({
   launchId: z.uuid(),
@@ -19,8 +20,10 @@ export const WorkbenchThreadLaunchRequestSchema = z.object({
   creationContext: WorkbenchMessageContextSchema.optional(),
   messageContext: WorkbenchMessageContextSchema.optional(),
   additionalWritableRoots: z.array(z.string().min(1)).optional(),
+  /** Feedback references in the first input; the accepted thread records them as addressed. Sent only when present. */
+  addressedFeedback: z.array(WorkbenchThreadAddressedFeedbackSchema).min(1).optional(),
 }).strict();
-export type WorkbenchThreadLaunchRequest = z.infer<typeof WorkbenchThreadLaunchRequestSchema>;
+export type WorkbenchThreadLaunchRequest= z.infer<typeof WorkbenchThreadLaunchRequestSchema>;
 export const WorkbenchThreadLaunchLocationSchema = z.object({
   rootPath: z.string().min(1),
   roots: z.array(z.string().min(1)).min(1),

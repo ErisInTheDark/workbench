@@ -91,6 +91,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "message", "message wait",
   "subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop",
   "task set", "task get", "task completed", "task blocked",
+  "todo", "todo remove",
   "thread recall", "thread recall search", "thread recall expand",
   "git add", "git unstage", "git commit", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc mv", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
@@ -164,6 +165,11 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     commandOrder: ["subagent list", "subagent profiles", "subagent create", "subagent wait", "subagent stop"],
     footer: ["The current managed thread is always the parent.", "Run commands from the intended project working directory."].join("\n"),
     key: "subagent", usage: "wb subagent <command> [options]", words: ["subagent"],
+  },
+  {
+    commandOrder: ["todo", "todo remove"],
+    footer: "Todos belong to the current managed thread. Neither flag records an optional todo.",
+    key: "todo", usage: "wb todo [remove] [options]", words: ["todo"],
   },
   {
     commandOrder: ["task set", "task get", "task completed", "task blocked"],

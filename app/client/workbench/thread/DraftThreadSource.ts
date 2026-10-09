@@ -72,6 +72,11 @@ export default function createDraftThreadSource(
       setGoal: unsupported("set a goal"),
       clearGoal: unsupported("clear a goal"),
       deactivateSkill: unsupported("deactivate a skill"),
+      addTodo: unsupported("add a todo"),
+      removeTodo: unsupported("remove a todo"),
+      setTodoRequired: unsupported("change a todo"),
+      setTodoText: unsupported("edit a todo"),
+      clearAddressedFeedback: unsupported("clear addressed feedback"),
     },
     acquire() {
       leases++;

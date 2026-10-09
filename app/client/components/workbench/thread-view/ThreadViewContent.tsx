@@ -65,12 +65,15 @@ import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
-import ThreadGoalControl from "./ThreadGoalControl";
+import ThreadSkillPills from "./ThreadSkillPills";
+import ThreadStatusRow from "./ThreadStatusRow";
+import ThreadTodoPanel from "./ThreadTodoPanel";
+import useThreadLiveActivity from "./use-thread-live-activity";
+import useThreadTodoSelection from "./use-thread-todo-selection";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import ThreadGitArcLifecycleCard from "./ThreadGitArcLifecycleCard";
+import ThreadWorkLifecycleCard from "./ThreadWorkLifecycleCard";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
-import ThreadLiveActivity from "./ThreadLiveActivity";
 import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
@@ -509,6 +512,22 @@ export default memo(function ThreadViewContent ({
     skills: workbenchSkills,
     workspaceRoots: workspaceFileLinkRoots,
   });
+  const liveActivityView = useThreadLiveActivity({
+    activity: liveActivity,
+    items: liveTurn?.items ?? [],
+    terminalContext,
+    terminalRetention,
+    inlineMentionSources,
+    presentationSource: activeThread ? { kind: "sqlite", sourceKey: `${activeThread.harness}:${activeThread.id}` } : null,
+    projectFilePaths,
+    projectId,
+    projectRootPath,
+    threadCwdPath: activeThread?.cwd,
+    threadId: activeThread?.id ?? "",
+    turnId: liveTurn?.id ?? null,
+    workspaceRoots: workspaceFileLinkRoots,
+  });
+  const todoSelection = useThreadTodoSelection(activeThread?.id ?? "", active.head?.todos);
   const projectFilePathDisambiguationIndex = useBackgroundProjectFilePathDisambiguationIndex(
     projectFilePaths,
     projectFileIndexId,
@@ -980,6 +999,9 @@ export default memo(function ThreadViewContent ({
       thread={resolvedActiveThread!}
       turns={loadedTurns}
       threadTarget={activeThread.isDraft ? threadTarget : activeTarget}
+      selectedTodos={todoSelection.selected}
+      onTodoDeselect={id => todoSelection.deselect([id])}
+      onTodosSent={todoSelection.deselect}
     >
       {isDraftThreadView ? (
         <ThreadRateLimits
@@ -1173,25 +1195,28 @@ export default memo(function ThreadViewContent ({
           )}
           </>}
         </div>
-        {activeThread && liveTurn && !isMessageBoardOpen ? (
-          <ThreadLiveActivity
-            key={`${activeThread.id}:${liveTurn.id}`}
-            activity={liveActivity}
-            items={liveTurn.items}
-            terminalContext={terminalContext}
-            terminalRetention={terminalRetention}
-            inlineMentionSources={inlineMentionSources}
-            presentationSource={{
-              kind: "sqlite",
-              sourceKey: `${activeThread.harness}:${activeThread.id}`,
-            }}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            threadCwdPath={activeThread.cwd}
-            threadId={activeThread.id}
-            turnId={liveTurn.id}
-            workspaceRoots={workspaceFileLinkRoots}
+        {activeThread && !isMessageBoardOpen && (liveActivityView || (active.entry && !isDraftThreadView)) ? (
+          <ThreadStatusRow
+            key={activeThread.id}
+            live={liveActivityView}
+            todos={active.entry && !isDraftThreadView ? {
+              goalSet: Boolean(active.head?.goal),
+              count: active.head?.todos?.length ?? 0,
+              renderPanel: () => (
+                <ThreadTodoPanel
+                  goal={active.head?.goal ?? null}
+                  selection={todoSelection}
+                  threadId={activeThread.id}
+                  todos={active.head?.todos ?? []}
+                  onAddTodo={active.actions.addTodo}
+                  onClearGoal={active.actions.clearGoal}
+                  onRemoveTodo={active.actions.removeTodo}
+                  onSetGoal={active.actions.setGoal}
+                  onSetTodoRequired={active.actions.setTodoRequired}
+                  onSetTodoText={active.actions.setTodoText}
+                />
+              ),
+            } : null}
           />
         ) : null}
         {activeThread && !isDraftThreadView && showPlanConflicts ? (
@@ -1203,37 +1228,39 @@ export default memo(function ThreadViewContent ({
           />
         ) : null}
         {/* Observed heads learn the working directory with the transcript; the card's Git requests need it. */}
-        {hoistedGitArc && activeThread?.cwd && activeGitArcSelection ? (
-          <ThreadGitArcLifecycleCard
-            claim={hoistedGitArc}
-            commitActions={checkpointCommitActions}
-            cwd={activeThread.cwd}
-            harness={activeThread.harness}
+        {activeThread && !isDraftThreadView ? (
+          <ThreadWorkLifecycleCard
+            addressedFeedback={active.head?.addressedFeedback ?? []}
+            gitArc={hoistedGitArc && activeThread.cwd && activeGitArcSelection ? {
+              claim: hoistedGitArc,
+              commitActions: checkpointCommitActions,
+              cwd: activeThread.cwd,
+              harness: activeThread.harness,
+              running: liveTurn !== null,
+            } : null}
+            onFeedbackDeleted={active.actions.clearAddressedFeedback}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
-            running={liveTurn !== null}
             threadId={activeThread.id}
-            threadLifecycle={activeGitArcSelection.lifecycle}
+            threadLifecycle={activeGitArcSelection?.lifecycle ?? active.entry?.lifecycle ?? null}
             workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
-        {activeThread && active.entry ? (
-          <ThreadGoalControl
-            goal={active.head?.goal ?? null}
-            skills={isDraftThreadView ? null : active.head?.skills ?? []}
-            threadId={activeThread.id}
-            onSetGoal={active.actions.setGoal}
-            onClearGoal={active.actions.clearGoal}
-            onDeactivateSkill={active.actions.deactivateSkill}
-          >
-            {agentTabs}
-          </ThreadGoalControl>
-        ) : agentTabs ? (
+        {(activeThread && active.entry && !isDraftThreadView && active.head?.skills?.length) || agentTabs ? (
           <div className="mt-6">
-            <div className="flex flex-wrap items-center gap-0.5">{agentTabs}</div>
-        </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {activeThread && active.entry && !isDraftThreadView ? (
+                <ThreadSkillPills
+                  onDeactivate={active.actions.deactivateSkill}
+                  separatorAfter={Boolean(agentTabs)}
+                  skills={active.head?.skills ?? []}
+                />
+              ) : null}
+              {agentTabs}
+            </div>
+          </div>
         ) : null}
           </div>
         {activeThread && !isDraftThreadView ? (

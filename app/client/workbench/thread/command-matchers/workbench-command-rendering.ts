@@ -48,6 +48,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "tokens_instructions",
   "tokens_project",
   "feedback",
+  "todo",
+  "todo_remove",
   "request_user_input",
   "message",
   "message_wait",
@@ -739,6 +741,17 @@ export function getWorkbenchCommandRoute(
         operation: { kind: "feedback", operation },
         rendering: summaryRendering,
       };
+    }
+    case "todo": {
+      const text = readString(args.text)?.split("\n")[0]?.trim();
+      if (!text) return simple("workbench-cli.todo", actionTarget("Listing ", "todos"), actionTarget("Listed ", "todos"));
+      const kind = readBoolean(args.required) ? "required todo " : "todo ";
+      return simple("workbench-cli.todo", actionTarget(`Adding ${kind}`, text), actionTarget(`Added ${kind}`, text));
+    }
+    case "todo_remove": {
+      const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is number => typeof id === "number") : [];
+      const target = ids.length ? ids.map(id => `#${id}`).join(", ") : "todos";
+      return simple("workbench-cli.todo", actionTarget("Removing ", target), actionTarget("Removed ", target));
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));

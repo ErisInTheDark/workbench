@@ -145,6 +145,8 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
   executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
   executeThreadGoals: import("./database/WorkbenchDatabaseController").default["executeThreadGoals"];
+  executeThreadTodos: import("./database/WorkbenchDatabaseController").default["executeThreadTodos"];
+  executeThreadAddressedFeedback: import("./database/WorkbenchDatabaseController").default["executeThreadAddressedFeedback"];
   executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
   reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
   readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
@@ -221,6 +223,7 @@ export interface DaemonTranscriptRegistration {
 export interface DaemonRuntimeObjects {
   agentContext: import("./WorkbenchAgentContextController").default;
   threadSkills: import("./WorkbenchThreadSkillsController").default;
+  threadTodos: import("./WorkbenchThreadTodoController").default;
   daemonSleep: WorkbenchDaemonSleepController;
   transcriptReader: import("./WorkbenchTranscriptReader").default;
   transcriptReconciliation: import("./WorkbenchTranscriptReconciliationController").default;
