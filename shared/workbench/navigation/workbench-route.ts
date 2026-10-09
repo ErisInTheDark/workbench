@@ -4,6 +4,7 @@
  * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
+ * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
@@ -33,6 +34,9 @@ const RouteProjectIdSchema = z.string().brand<"ProjectId">();
 
 export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "settings" | "stats" | "git" | "mosaic" | "new-project" | "invalid";
 
+export const WORKBENCH_STATS_TABS = ["usage", "workspaces", "tools"] as const;
+export type WorkbenchStatsTab = typeof WORKBENCH_STATS_TABS[number];
+
 export interface WorkbenchRoute {
   error: string;
   filePath: string;
@@ -41,6 +45,8 @@ export interface WorkbenchRoute {
   mosaicNode: WorkbenchMosaicNode | null;
   projectId: ProjectId | "";
   selectedProjectIds: readonly string[] | null;
+  /** Stats view tab; absent means usage. */
+  statsTab?: WorkbenchStatsTab;
   threadId: string;
   threadOwnerProjectId: ProjectId | "";
   threadTarget: WorkbenchThreadRouteTarget | null;
@@ -108,7 +114,7 @@ export function createToggledProjectSelectionRoute(
   const nextIds = orderedProjectIds.filter(id => next.has(id));
   const ownerProjectId = route.logical?.threadOwnerProjectId || route.threadOwnerProjectId
     || (!route.logical?.location && route.selectedProjectIds?.length === 1 ? route.selectedProjectIds[0] : "");
-  if (route.view === "stats") return withProjectSelection(createStatsRoute(null), nextIds);
+  if (route.view === "stats") return withProjectSelection(createStatsRoute(null, route.statsTab), nextIds);
   return route.view === "thread" && !(projectId === ownerProjectId && selectedProjectIds.includes(projectId))
     ? withProjectSelection(route, nextIds)
     : createProjectSelectionRoute(nextIds);
@@ -342,8 +348,11 @@ export function createNewProjectRoute(): WorkbenchRoute {
   return { ...createSettingsRoute(""), view: "new-project" };
 }
 
-export function createStatsRoute(projectId: string | null = null): WorkbenchRoute {
-  return { ...createProjectRoute(projectId ?? ""), selectedProjectIds: projectId ? [projectId] : null, view: "stats" };
+export function createStatsRoute(projectId: string | null = null, tab: WorkbenchStatsTab = "usage"): WorkbenchRoute {
+  return {
+    ...createProjectRoute(projectId ?? ""), selectedProjectIds: projectId ? [projectId] : null, view: "stats",
+    ...(tab === "usage" ? {} : { statsTab: tab }),
+  };
 }
 
 export function createMosaicRoute(projectId: string, mosaicNode: WorkbenchMosaicNode): WorkbenchRoute {
@@ -531,9 +540,10 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
         : createInvalidWorkbenchRoute("Git routes do not accept extra segments.", projectId);
     }
     if (mode === "stats") {
-      return valueSegments.value.length
-        ? createInvalidWorkbenchRoute(`Unexpected stats route value: ${value}`, projectId)
-        : createStatsRoute(projectId);
+      const tab = WORKBENCH_STATS_TABS.find((candidate) => candidate === value);
+      return !valueSegments.value.length ? createStatsRoute(projectId)
+        : tab && valueSegments.value.length === 1 ? createStatsRoute(projectId, tab)
+          : createInvalidWorkbenchRoute(`Unexpected stats route value: ${value}`, projectId);
     }
     if (mode === "new-project") {
       return valueSegments.value.length
@@ -676,7 +686,7 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
   if (route.view === "new-project") return `${markedPath}/new-project`;
   if (route.view === "git") return `${markedPath}/git`;
   if (route.view === "stats") {
-    return `${markedPath}/stats`;
+    return route.statsTab && route.statsTab !== "usage" ? `${markedPath}/stats/${route.statsTab}` : `${markedPath}/stats`;
   }
   if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
 
@@ -727,6 +737,7 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && left.filePath === right.filePath
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.threadId === right.threadId
+    && (left.statsTab ?? "usage") === (right.statsTab ?? "usage")
     && left.threadOwnerProjectId === right.threadOwnerProjectId
     && areDeeplyEqual(left.logical, right.logical)
     && areDeeplyEqual(left.threadTarget, right.threadTarget)

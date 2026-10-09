@@ -11,12 +11,13 @@ import {
   WORKBENCH_FEEDBACK_CATEGORIES,
   type WorkbenchFeedbackCategory,
   type WorkbenchFeedbackSort,
-  type WorkbenchStatsFeedback as StatsFeedback,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import { useWorkbenchThreads } from "../use-workbench-client";
-import WorkbenchModeRow from "../WorkbenchModeRow";
-import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
+import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
+import { useWorkbenchThreads } from "../../use-workbench-client";
+import WorkbenchModeRow from "../../WorkbenchModeRow";
+import { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../../WorkbenchWorkspaceContext";
+import useStats from "../use-stats";
+import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
 import WorkbenchStatsFeedbackReport from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
 import {
@@ -48,12 +49,9 @@ function useModelCatalogues(harnesses: readonly WorkbenchHarness[]) {
   return catalogues;
 }
 
-export default function WorkbenchStatsFeedback({ onAddress, projectName, stats }: {
-  /** Opens a new thread in the project with the prompt ready to send. */
-  onAddress: (projectId: string, prompt: string) => void;
-  projectName: (projectId: string) => string;
-  stats: { feedback: StatsFeedback } | null;
-}) {
+export default function WorkbenchStatsFeedback() {
+  const { addressFeedback: onAddress, projectName } = useStats();
+  const { data: stats, loading } = useStats.feedback();
   const daemon = useContext(WorkbenchDaemonClientContext);
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
@@ -116,18 +114,30 @@ export default function WorkbenchStatsFeedback({ onAddress, projectName, stats }
     setSelectedIds(new Set());
   };
   return (
-    <section aria-labelledby="feedback-heading" className="space-y-3 [--hue-chroma:60%]">
+    <section aria-busy={loading} aria-labelledby="feedback-heading" className={`space-y-3 [--hue-chroma:60%] ${statsReloadingClassName(loading && Boolean(stats))}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="feedback-heading">Agent feedback</h2>
         {feedback?.total ? (
-          <span className="text-[0.72rem] text-fg/muted">
+          <span className={`text-[0.72rem] text-fg/muted ${statsRevealClassName}`}>
             {feedback.total} {feedback.total === 1 ? "report" : "reports"}
             {newest ? <> · newest <WorkbenchRelativeTime timestampMs={newest} /></> : null}
           </span>
         ) : null}
       </div>
-      {!feedback?.total ? (
-        <p className="m-0 py-1 text-[0.8rem] text-fg/muted">{feedback ? "No agent feedback in this period." : "-"}</p>
+      {!feedback ? (
+        // Category tags, then a few report cards.
+        <div aria-hidden="true" className="space-y-3">
+          <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <WorkbenchStatsSkeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
+          {[0, 1, 2].map((index) => (
+            <div className="space-y-2 py-2" key={index}>
+              <WorkbenchStatsSkeleton className="h-3 w-40" />
+              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${88 - index * 14}%` }} />
+              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${62 - index * 10}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : !feedback.total ? (
+        <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No agent feedback in this period.</p>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -170,7 +180,7 @@ export default function WorkbenchStatsFeedback({ onAddress, projectName, stats }
               />
             </div>
           </div>
-          <ol aria-label="Agent feedback reports" aria-multiselectable className="-mx-3 my-0 grid gap-y-1 p-0" role="listbox">
+          <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
             {visible.map((item) => (
               <WorkbenchStatsFeedbackReport
                 item={item}

@@ -200,7 +200,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         break;
       case "stats":
         if (!this.owners.stats) {
-          this.update(observation, { kind: "stats", phase: "unavailable", failure: "Statistics are unavailable.", claimsPhase: "unavailable", data: null });
+          this.update(observation, { kind: "stats", phase: "unavailable", failure: "Statistics are unavailable.", refinement: "unavailable", data: null });
           break;
         }
         observation.stats = this.owners.stats.observe(request.query.request, state => this.update(observation, { kind: "stats", ...state }));
@@ -297,7 +297,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null, runtime: {} };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
-      case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, claimsPhase: "pending", data: null };
+      case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
     }
   }
 

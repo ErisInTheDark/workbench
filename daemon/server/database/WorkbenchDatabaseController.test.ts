@@ -54,12 +54,15 @@ const fixtureIdentityValues = {
   },
 };
 
-test("database read lanes isolate transcript work from interactive state reads and history scans from live ingest", () => {
+test("database read lanes isolate transcript work and stats aggregates from interactive state reads, and history scans from live ingest", () => {
   assert.equal(getWorkbenchDatabaseReadLane({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }), "core");
   assert.equal(getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "core");
   const live = getWorkbenchDatabaseReadLane({ type: "readTranscriptCompactionExecution", input: { harnessId: "codex", nativeLocation: "/repo", nativeThreadId: "thread", nativeTurnId: "turn" } });
   assert.equal(live, "transcript");
   assert.notEqual(getWorkbenchDatabaseReadLane({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) }), live);
+  const aggregate = getWorkbenchDatabaseReadLane({ type: "readStats", request: { projectIds: null, range: "365d", section: "tools" } });
+  assert.notEqual(aggregate, getWorkbenchDatabaseReadLane({ type: "readThreadStateProject", projectId: testProjectIds.project }), "stats aggregates never queue ahead of interactive state reads");
+  assert.notEqual(aggregate, live);
   assert.equal(getWorkbenchDatabaseReadLane({ type: "settleTranscript", observations: [] }), null);
 });
 
@@ -502,7 +505,8 @@ async function checkClaimStats(controller: WorkbenchDatabaseController) {
       roots: [{ paths: ["src"], rootId: "root" }],
       threadId: "thread",
     });
-    const result = WorkbenchStatsResponseSchema.parse(await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d" }, now));
+    const result = WorkbenchStatsResponseSchema.parse(await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId.project], range: "7d", section: "claims" }, now));
+    assert.ok(result.section === "claims");
     assert.equal(result.claimHotspots[0]?.path, "src");
     assert.equal(result.claimHotspots[0]?.threadCount, 1);
     assert.deepEqual(await controller.readStatsClaimedRoots([fixtureIdentityValues.ProjectId.project], "7d", now), [
@@ -514,7 +518,7 @@ async function checkClaimStats(controller: WorkbenchDatabaseController) {
     assert.equal(claims.kind, "threads");
     if (claims.kind === "threads") assert.deepEqual(claims.rows.map(({ threadId }) => threadId), ["thread"]);
     const renames = [{ projectId: fixtureIdentityValues.ProjectId.project, rootId: "root", from: "src", to: "renamed" }];
-    assert.equal((await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId["project"]], range: "7d" }, now, renames)).claimHotspots[0]?.path, "renamed");
+    assert.equal((await controller.readStats({ projectIds: [fixtureIdentityValues.ProjectId["project"]], range: "7d", section: "claims" }, now, renames)).claimHotspots[0]?.path, "renamed");
     const renamed = await controller.readClaimStats({
       projectId: fixtureIdentityValues.ProjectId["project"], range: "7d", file: { rootId: "root", path: "renamed" }, page: 1,
     }, now, renames);

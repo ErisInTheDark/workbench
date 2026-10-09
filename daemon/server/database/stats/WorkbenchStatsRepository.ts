@@ -1,23 +1,28 @@
 /*
  * Exports:
  * - WorkbenchRateLimitObservation: typed durable rate-limit input.
- * - default WorkbenchStatsRepository: own live claim/rate writes, claimed-root discovery, and bounded SQLite aggregates including agent feedback.
+ * - WorkbenchStoredStatsSection: stats sections SQLite answers (every section but daemon-owned status).
+ * - default WorkbenchStatsRepository: own live claim/rate writes, claimed-root discovery, and one bounded SQLite section read at a time (usage, limits, claims, feedback, tools).
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import {
-  EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
   statsPeriodShape,
   statsRangeShape,
   type WorkbenchStatsReadRequest,
   type WorkbenchStatsResponse,
+  type WorkbenchStatsSection,
+  type WorkbenchStatsSectionData,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { API_PRICING_CATALOG_DATE } from "../../stats/api-pricing.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../../stats/git-claim-observation.ts";
 import WorkbenchUsageStatsRepository from "./WorkbenchUsageStatsRepository.ts";
 import WorkbenchClaimStatsRepository, { type WorkbenchClaimedRoot } from "./WorkbenchClaimStatsRepository.ts";
 import WorkbenchFeedbackRepository from "./WorkbenchFeedbackRepository.ts";
+import WorkbenchToolStatsRepository from "./WorkbenchToolStatsRepository.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
+
+export type WorkbenchStoredStatsSection = Exclude<WorkbenchStatsSection, "status">;
 
 interface RateWindowObservation {
   durationMinutes: number | null;
@@ -122,16 +127,45 @@ export default class WorkbenchStatsRepository {
     return new WorkbenchClaimStatsRepository(this.database).claimedRoots(this.resolveProjects(projectIds), startedAt, now);
   }
 
-  read(request: WorkbenchStatsReadRequest, now = Date.now(), renames: readonly WorkbenchGitClaimRename[] = [], workbenchProjectId: string | null = null): WorkbenchStatsResponse {
-    request = { ...request, projectIds: this.resolveProjects(request.projectIds) };
-    const usage = new WorkbenchUsageStatsRepository(this.database).read(request, now);
+  /** Status is daemon-owned (import progress and capture failures), so SQLite never reads it. */
+  read<Section extends WorkbenchStoredStatsSection>(
+    input: WorkbenchStatsReadRequest & { section: Section },
+    now = Date.now(),
+    renames: readonly WorkbenchGitClaimRename[] = [],
+    workbenchProjectId: string | null = null,
+  ): WorkbenchStatsSectionData<Section> {
+    const request = { ...input, projectIds: this.resolveProjects(input.projectIds) };
     const period = statsPeriodShape(request.range, request.period ?? null, now);
-    const claimHotspots = new WorkbenchClaimStatsRepository(this.database)
-      .hotspots(usage.projectIds, period.startedAt, Math.min(now, period.endedAt - 1), renames);
-    // Provider and model filters describe usage, not feedback authors, so feedback follows only scope and period.
-    const feedback = new WorkbenchFeedbackRepository(this.database).summary(usage.projectIds, period.startedAt, period.endedAt, workbenchProjectId);
-    // Plan limits are account-wide and current, so they always span the whole range.
-    const limitsStartedAt = statsRangeShape(request.range, now).startedAt;
+    const read = (): WorkbenchStatsResponse => {
+      switch (request.section) {
+        case "usage": return {
+          ...new WorkbenchUsageStatsRepository(this.database).read(request, now),
+          generatedAt: now, pricingCatalogDate: API_PRICING_CATALOG_DATE, section: "usage",
+        };
+        case "limits": return { generatedAt: now, rateLimits: this.rateLimits(request.range, now), section: "limits" };
+        case "claims": return {
+          claimHotspots: new WorkbenchClaimStatsRepository(this.database)
+            .hotspots(request.projectIds, period.startedAt, Math.min(now, period.endedAt - 1), renames),
+          generatedAt: now, historyFailures: [], section: "claims",
+        };
+        // Provider and model filters describe usage, not feedback authors, so feedback follows only scope and period.
+        case "feedback": return {
+          feedback: new WorkbenchFeedbackRepository(this.database).summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId),
+          generatedAt: now, section: "feedback",
+        };
+        case "tools": return {
+          generatedAt: now, section: "tools",
+          tools: new WorkbenchToolStatsRepository(this.database).read(request.projectIds, period, now),
+        };
+      }
+      throw new Error(`Stats section ${String(request.section)} is not stored in SQLite.`);
+    };
+    return read() as WorkbenchStatsSectionData<Section>;
+  }
+
+  /** Plan limits are account-wide and current, so they ignore scope and period and always span the whole range. */
+  private rateLimits(range: WorkbenchStatsReadRequest["range"], now: number) {
+    const limitsStartedAt = statsRangeShape(range, now).startedAt;
     const rateBucketMs = Math.max(1, Math.ceil((now - limitsStartedAt + 1) / (MAX_RATE_LIMIT_SAMPLES - 1)));
 
     const rateRows = this.database.prepare(`
@@ -167,7 +201,7 @@ export default class WorkbenchStatsRepository {
       limit_name: string | null; observed_at: number; resets_at: number | null;
       used_basis_points: number | null; window_kind: "primary" | "secondary" | "tertiary" | null;
     }>;
-    const rateSeries = new Map<string, WorkbenchStatsResponse["rateLimits"][number]>();
+    const rateSeries = new Map<string, WorkbenchStatsSectionData<"limits">["rateLimits"][number]>();
     for (const row of rateRows) {
       const key = `${row.harness_id}\0${row.limit_id}`;
       const series = rateSeries.get(key) ?? { harness: row.harness_id, limitId: row.limit_id, limitName: row.limit_name, samples: [] };
@@ -186,18 +220,7 @@ export default class WorkbenchStatsRepository {
       }
       rateSeries.set(key, series);
     }
-
-    return {
-      ...usage,
-      claimHotspots,
-      failures: [],
-      feedback,
-      generatedAt: now,
-      historyImport: EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS,
-      pricingCatalogDate: API_PRICING_CATALOG_DATE,
-      rateLimits: [...rateSeries.values()],
-      version: 3,
-    };
+    return [...rateSeries.values()];
   }
 
   private resolveProjects(projectIds: readonly string[] | null) {

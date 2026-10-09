@@ -6,15 +6,17 @@
  * - WorkbenchStatsHydrationResultSchema/WorkbenchStatsHydrationResult: one harness hydration result.
  * - WorkbenchStatsRangeSchema/WorkbenchStatsRange: bounded selectable stats windows.
  * - STATS_TOKEN_TYPES/StatsTokenType: independently selectable billing categories.
- * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: project-scoped, filtered stats request.
- * - WorkbenchStatsResponseSchema/WorkbenchStatsResponse: tokens, priced cost, breakdowns, limits, claim traffic, and agent feedback for one scope.
+ * - WORKBENCH_STATS_SECTIONS/WorkbenchStatsSectionSchema/WorkbenchStatsSection: independently observed parts of the stats view.
+ * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: one section of a project-scoped, filtered stats request.
+ * - WorkbenchStatsSectionSchemas/WorkbenchStatsResponseSchema/WorkbenchStatsResponse/WorkbenchStatsSectionData: one section's data: usage, limits, claims, feedback, tools, or status.
  * - statsRangeShape: shared UTC day/week window boundaries.
  * - statsPeriodShape: a range's buckets narrowed to a selected period.
  */
 import { z } from "zod";
 import { ProviderKeySchema as harness } from "../provider/provider-key.ts";
 import { StatsCacheEfficiencySchema } from "./workbench-stats-cache-contract.ts";
-import { EMPTY_WORKBENCH_STATS_FEEDBACK, WorkbenchStatsFeedbackSchema } from "./workbench-stats-feedback-contract.ts";
+import { WorkbenchStatsFeedbackSchema } from "./workbench-stats-feedback-contract.ts";
+import { WorkbenchStatsToolsSchema } from "./workbench-stats-tools-contract.ts";
 
 const finiteNonNegative = z.number().finite().nonnegative();
 const timestamp = z.number().finite().nonnegative();
@@ -79,6 +81,11 @@ const StatsTokenTypesSchema = z.preprocess(
   z.array(z.enum(STATS_TOKEN_TYPES)).max(STATS_TOKEN_TYPES.length),
 );
 
+export const WORKBENCH_STATS_SECTIONS = ["usage", "limits", "claims", "feedback", "tools", "status"] as const;
+export const WorkbenchStatsSectionSchema = z.enum(WORKBENCH_STATS_SECTIONS);
+export type WorkbenchStatsSection = z.infer<typeof WorkbenchStatsSectionSchema>;
+
+/** Provider, model and token-type filters narrow usage only; every other section follows scope, range and period. */
 export const WorkbenchStatsReadRequestSchema = z.object({
   model: z.string().trim().min(1).max(200).nullable().default(null),
   /**
@@ -90,6 +97,7 @@ export const WorkbenchStatsReadRequestSchema = z.object({
   projectIds: z.array(z.string().min(1)).max(500).nullable(),
   provider: harness.nullable().default(null),
   range: WorkbenchStatsRangeSchema,
+  section: WorkbenchStatsSectionSchema,
   tokenTypes: StatsTokenTypesSchema.default(() => [...STATS_TOKEN_TYPES]),
 }).strict();
 export type WorkbenchStatsReadRequest = z.input<typeof WorkbenchStatsReadRequestSchema>;
@@ -117,24 +125,12 @@ const UsageShareSchema = {
   tokens: finiteNonNegative,
   unpricedTokens: finiteNonNegative,
 };
+const section = <Name extends WorkbenchStatsSection, Shape extends z.ZodRawShape>(name: Name, shape: Shape) =>
+  z.object({ ...shape, generatedAt: timestamp, section: z.literal(name) }).strict();
 
-export const WorkbenchStatsResponseSchema = z.object({
+const UsageSectionSchema = section("usage", {
   bucketUnit: z.enum(["day", "week"]),
   cacheEfficiency: StatsCacheEfficiencySchema,
-  claimHotspots: z.array(z.object({
-    path: z.string().min(1).max(2_000),
-    projectId: z.string().min(1),
-    rootId: z.string().min(1),
-    threadCount: count,
-    /** Claiming threads, largest lifetime token use first. */
-    threads: z.array(z.object({
-      harness: harness.nullable().default(null),
-      /** Null for provider threads Workbench cannot open. */
-      threadId: z.string().min(1).nullable().default(null),
-      title: z.string().max(500).nullable(),
-      tokens: finiteNonNegative,
-    }).strict()).max(12).default([]),
-  }).strict()).max(20),
   cost: z.object({
     basis: z.object({
       exactModelTokens: finiteNonNegative,
@@ -147,15 +143,6 @@ export const WorkbenchStatsResponseSchema = z.object({
     totalUsd: finiteNonNegative,
     unpricedModels: z.array(z.object({ model: modelName.nullable(), provider: harness, tokens: finiteNonNegative }).strict()).max(50),
   }).strict(),
-  failures: z.array(z.object({
-    harness: z.string().min(1).nullable(),
-    message: boundedText,
-    source: z.enum(["capture", "refresh"]),
-  }).strict()).max(20),
-  /** Agent friction reports in the selected projects and period; older daemons omit it. */
-  feedback: WorkbenchStatsFeedbackSchema.default(EMPTY_WORKBENCH_STATS_FEEDBACK),
-  generatedAt: timestamp,
-  historyImport: WorkbenchStatsImportProgressSchema,
   models: z.array(z.object({
     ...UsageShareSchema,
     inferredModelTokens: finiteNonNegative,
@@ -168,17 +155,6 @@ export const WorkbenchStatsResponseSchema = z.object({
   projects: z.array(z.object({ ...UsageShareSchema, projectId: z.string().min(1) }).strict()).max(100),
   providers: z.array(z.object({ ...UsageShareSchema, provider: harness }).strict()).max(10),
   range: WorkbenchStatsRangeSchema,
-  rateLimits: z.array(z.object({
-    harness,
-    limitId: z.string().min(1),
-    limitName: z.string().nullable(),
-    samples: z.array(z.object({
-      observedAt: timestamp,
-      primary: RateWindowSchema.nullable(),
-      secondary: RateWindowSchema.nullable(),
-      tertiary: RateWindowSchema.nullable(),
-    }).strict()).max(2_000),
-  }).strict()).max(100),
   startedAt: timestamp,
   summary: z.object({
     buckets: z.array(z.object({ startedAt: timestamp, threadCount: count, turnCount: count }).strict()).max(MAX_GRAPH_BUCKETS).default([]),
@@ -214,9 +190,71 @@ export const WorkbenchStatsResponseSchema = z.object({
     models: z.array(modelName).max(100),
     providers: z.array(harness).max(10),
   }).strict(),
-  version: z.literal(3),
-}).strict();
+});
+
+/** Plan limits are account-wide and current, so they ignore scope and period and always span the whole range. */
+const LimitsSectionSchema = section("limits", {
+  rateLimits: z.array(z.object({
+    harness,
+    limitId: z.string().min(1),
+    limitName: z.string().nullable(),
+    samples: z.array(z.object({
+      observedAt: timestamp,
+      primary: RateWindowSchema.nullable(),
+      secondary: RateWindowSchema.nullable(),
+      tertiary: RateWindowSchema.nullable(),
+    }).strict()).max(2_000),
+  }).strict()).max(100),
+});
+
+const ClaimsSectionSchema = section("claims", {
+  claimHotspots: z.array(z.object({
+    path: z.string().min(1).max(2_000),
+    projectId: z.string().min(1),
+    rootId: z.string().min(1),
+    threadCount: count,
+    /** Claiming threads, largest lifetime token use first. */
+    threads: z.array(z.object({
+      harness: harness.nullable().default(null),
+      /** Null for provider threads Workbench cannot open. */
+      threadId: z.string().min(1).nullable().default(null),
+      title: z.string().max(500).nullable(),
+      tokens: finiteNonNegative,
+    }).strict()).max(12).default([]),
+  }).strict()).max(20),
+  /** Committed rename history that could not be read, so renamed files may still count apart. */
+  historyFailures: z.array(boundedText).max(20),
+});
+
+/** Agent friction reports in the selected projects and period. */
+const FeedbackSectionSchema = section("feedback", { feedback: WorkbenchStatsFeedbackSchema });
+
+const ToolsSectionSchema = section("tools", { tools: WorkbenchStatsToolsSchema });
+
+/** Import progress and capture failures are daemon-wide. */
+const StatusSectionSchema = section("status", {
+  failures: z.array(z.object({
+    harness: z.string().min(1).nullable(),
+    message: boundedText,
+    source: z.enum(["capture", "refresh"]),
+  }).strict()).max(20),
+  historyImport: WorkbenchStatsImportProgressSchema,
+});
+
+export const WorkbenchStatsSectionSchemas = {
+  claims: ClaimsSectionSchema,
+  feedback: FeedbackSectionSchema,
+  limits: LimitsSectionSchema,
+  status: StatusSectionSchema,
+  tools: ToolsSectionSchema,
+  usage: UsageSectionSchema,
+} as const satisfies Record<WorkbenchStatsSection, z.ZodObject>;
+
+export const WorkbenchStatsResponseSchema = z.discriminatedUnion("section", [
+  UsageSectionSchema, LimitsSectionSchema, ClaimsSectionSchema, FeedbackSectionSchema, ToolsSectionSchema, StatusSectionSchema,
+]);
 export type WorkbenchStatsResponse = z.infer<typeof WorkbenchStatsResponseSchema>;
+export type WorkbenchStatsSectionData<Section extends WorkbenchStatsSection> = Extract<WorkbenchStatsResponse, { section: Section }>;
 
 export function statsRangeShape(range: WorkbenchStatsRange, now: number) {
   const day = 86_400_000;

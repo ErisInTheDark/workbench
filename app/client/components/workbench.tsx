@@ -58,6 +58,7 @@ import {
     isWorkbenchThreadTargetSelected,
     withProjectSelection,
     type WorkbenchRoute,
+    type WorkbenchStatsTab,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -135,6 +136,7 @@ import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
 import WorkbenchConnectionSpinner from "./workbench/WorkbenchConnectionSpinner";
+import WorkbenchStatsTabs from "./workbench/stats/WorkbenchStatsTabs";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
@@ -1044,6 +1046,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     event.preventDefault();
     navigateToRoute(statsRoute);
   }, [navigateToRoute, statsRoute]);
+
+  const statsTab = route.view === "stats" ? route.statsTab ?? "usage" : "usage";
+  const statsTabRoute = useCallback((tab: WorkbenchStatsTab) => (
+    withProjectSelection(createStatsRoute(null, tab), route.selectedProjectIds)
+  ), [route.selectedProjectIds]);
+  const openStatsTabFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, tab: WorkbenchStatsTab) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateToRoute(statsTabRoute(tab));
+  }, [navigateToRoute, statsTabRoute]);
 
   const openStatsThreadFromLink = useCallback((
     event: MouseEvent<HTMLAnchorElement>,
@@ -2677,7 +2689,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               >
                 <div
                   aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
+                  // Wide views scroll content under the whole header, so their backdrop spans it too.
+                  className={`
+                    pointer-events-none absolute inset-0 -z-10 md:backdrop-blur-none
+                    bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]
+                    ${showStatsView ? "" : "md:mx-auto md:max-w-[58rem]"}
+                  `}
                 />
                 <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                   <div className="order-2 min-w-0 w-full flex-1 md:order-1">
@@ -2704,11 +2721,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       />
                     ) : (
                       <>
-                        <p id="file-path" ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
+                        <p id="file-path" ref={filePathLabelRef} hidden={showStatsView} className="truncate text-base font-semibold leading-tight">
                           {isThreadShellTitleLoading ? (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : showStatsView ? "Usage" : "Select a file"}
+                          ) : routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
                         </p>
+                        {showStatsView ? (
+                          <WorkbenchStatsTabs href={(tab) => projectHref(statsTabRoute(tab))} onSelect={openStatsTabFromLink} tab={statsTab} />
+                        ) : null}
                         <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                           {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
@@ -2947,6 +2967,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onNavigateThread={openStatsThreadFromLink}
                     projects={explorer.projects}
                     scope={statsScope}
+                    tab={statsTab}
                   />
                 ) : null}
                 {showRouteError && !shouldRenderMainLayout ? (

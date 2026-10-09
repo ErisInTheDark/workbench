@@ -4,15 +4,22 @@
  * Exports:
  * - default WorkbenchClaimHotspots: a cloud of contended file links sized by claiming threads; hovering lists those threads as standard thread rows.
  */
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchProjectOption } from "workbench-shared/types";
-import ProjectFilePath from "../ProjectFilePath";
-import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
-import WorkbenchTooltip from "../WorkbenchTooltip";
-import { compactNumber } from "./stats-formatters";
-import { statsThreadIdentity } from "./stats-thread-identity";
+import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import ProjectFilePath from "../../ProjectFilePath";
+import WorkbenchThreadReferenceList from "../../WorkbenchThreadReferenceList";
+import WorkbenchTooltip from "../../WorkbenchTooltip";
+import useStats from "../use-stats";
+import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import { compactNumber } from "../stats-formatters";
+import { statsThreadIdentity } from "../stats-thread-identity";
 
-type Hotspot = WorkbenchStatsResponse["claimHotspots"][number];
+type Hotspot = WorkbenchStatsSectionData<"claims">["claimHotspots"][number];
+
+// A word cloud's worth of placeholder words, sized like a typical spread of claim counts.
+const SKELETON_WORDS = [
+  ["w-24", "h-3.5"], ["w-36", "h-5"], ["w-20", "h-3"], ["w-44", "h-6"], ["w-28", "h-4"], ["w-32", "h-3.5"], ["w-24", "h-4.5"],
+  ["w-40", "h-3"], ["w-16", "h-3.5"], ["w-52", "h-7"], ["w-28", "h-3"], ["w-36", "h-4"], ["w-20", "h-3.5"], ["w-32", "h-5"],
+];
 
 function ClaimantList({ hotspot, path, project }: { hotspot: Hotspot; path: string; project: string | null }) {
   // Claimants arrive largest first; only threads Workbench owns can open, the rest are only counted.
@@ -38,14 +45,11 @@ function ClaimantList({ hotspot, path, project }: { hotspot: Hotspot; path: stri
   );
 }
 
-export default function WorkbenchClaimHotspots({ pending = false, projectName, projects, showProjects, stats }: {
-  /** Counts arrive before rename history merges renamed files together. */
-  pending?: boolean;
-  projectName: (projectId: string) => string;
-  projects: readonly Pick<WorkbenchProjectOption, "id" | "kind" | "roots">[];
-  showProjects: boolean;
-  stats: Pick<WorkbenchStatsResponse, "claimHotspots"> | null;
-}) {
+export default function WorkbenchClaimHotspots() {
+  const { projectName, projects, showProjects } = useStats();
+  const { data: stats, loading, refining } = useStats.claims();
+  // Counts arrive before rename history merges renamed files together.
+  const pending = refining;
   const hotspots = stats?.claimHotspots ?? [];
   const counts = hotspots.map(({ threadCount }) => threadCount);
   const minimum = Math.min(...counts);
@@ -54,17 +58,25 @@ export default function WorkbenchClaimHotspots({ pending = false, projectName, p
   // Alphabetical order scatters the big words instead of stacking them all at the start.
   const cloud = [...hotspots].sort((left, right) => left.path.localeCompare(right.path));
   return (
-    <section aria-labelledby="claims-heading" className="space-y-3" data-thread-project-file-link-boundary="true">
+    <section
+      aria-busy={loading || pending}
+      aria-labelledby="claims-heading"
+      className={`space-y-3 ${statsReloadingClassName(loading && Boolean(stats))}`}
+      data-thread-project-file-link-boundary="true"
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="claims-heading">Contended files</h2>
-        <span aria-live="polite" className="text-[0.72rem] text-fg/muted">
-          {pending && stats ? "following renamed files…" : "bigger files were claimed by more threads; hover to see which"}
-        </span>
+        {pending ? <span aria-live="polite" className="text-[0.72rem] text-fg/muted">following renamed files…</span> : null}
       </div>
-      {!cloud.length ? <p className="m-0 py-1 text-[0.8rem] text-fg/muted">{stats ? pending ? "Reading claims…" : "No claims in this period." : "-"}</p> : (
+      {!stats ? (
+        // Clouds run three to five lines; holding that height keeps the feedback below from jumping.
+        <div aria-hidden="true" className="flex min-h-44 flex-wrap content-center items-center justify-center gap-x-5 gap-y-4 py-2">
+          {SKELETON_WORDS.map(([width, height], index) => <WorkbenchStatsSkeleton className={`${width} ${height}`} key={index} />)}
+        </div>
+      ) : !cloud.length ? <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>{pending ? "Reading claims…" : "No claims in this period."}</p> : (
         <ul
           aria-busy={pending}
-          className={`m-0 flex flex-wrap items-baseline justify-center gap-x-5 gap-y-2 p-0 py-2 transition-opacity [--hue-chroma:40%] ${pending ? "opacity-60" : ""}`}
+          className={`m-0 flex min-h-44 flex-wrap content-center items-baseline justify-center gap-x-5 gap-y-2 p-0 py-2 transition-opacity [--hue-chroma:40%] ${statsRevealClassName} ${pending ? "opacity-60" : ""}`}
         >
           {cloud.map((hotspot) => {
             const weight = (hotspot.threadCount - minimum) / span;
@@ -104,6 +116,11 @@ export default function WorkbenchClaimHotspots({ pending = false, projectName, p
           })}
         </ul>
       )}
+      {stats?.historyFailures.length ? (
+        <p className={`m-0 text-[0.72rem] text-fg/muted ${statsRevealClassName}`} title={stats.historyFailures.join("\n")}>
+          Some rename history could not be read, so a renamed file may still count under its old and new names.
+        </p>
+      ) : null}
     </section>
   );
 }

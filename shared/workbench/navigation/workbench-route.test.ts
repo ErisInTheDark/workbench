@@ -1,14 +1,27 @@
 /*
  * Exports: none.
- * Tests: draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
+ * Tests: stats tabs survive href round trips and selection changes; draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema } from "../identity";
 import {
-  createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createWorkbenchHref, isSameDraftRouteIntent,
-  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withProjectSelection,
+  createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createStatsRoute, createToggledProjectSelectionRoute,
+  createWorkbenchHref, isSameDraftRouteIntent, isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withProjectSelection,
 } from "./workbench-route";
+
+test("stats tabs round-trip through their href, keep through selection changes, and default to usage", () => {
+  for (const tab of ["usage", "workspaces", "tools"] as const) {
+    const route = withProjectSelection(createStatsRoute(null, tab), ["alpha"]);
+    const parsed = parseWorkbenchRouteFromPath(createWorkbenchHref(route));
+    assert.equal(parsed.statsTab ?? "usage", tab);
+    assert.equal(isSameWorkbenchRoute(parsed, route), true);
+    assert.equal(createToggledProjectSelectionRoute(route, ["alpha"], "beta", ["alpha", "beta"]).statsTab ?? "usage", tab);
+  }
+  assert.equal(createWorkbenchHref(createStatsRoute(null, "usage")), "/@/stats");
+  assert.equal(isSameWorkbenchRoute(createStatsRoute(null, "tools"), createStatsRoute(null)), false);
+  assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
+});
 
 test("new project view round-trips through its href with and without a project selection", () => {
   for (const route of [createNewProjectRoute(), withProjectSelection(createNewProjectRoute(), ["alpha", "beta"])]) {

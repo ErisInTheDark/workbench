@@ -1,13 +1,17 @@
-<docs tools="thread_recall thread_recall_search thread_recall_expand">
+<docs tools="thread_recall">
 ## Workbench Thread Recall
 
 - Default <tool id="thread_recall" /> returns newest bounded page of chronological narrative history. 
 - MAY filter with repeatable `--kind <kind>` flags; emitted HTML tag names match available kinds: `user-message`, `user-steer`, `questionnaire`, `commentary`, `final-answer`, `agent-message`, and `plan`. 
 - Pages walk backward from present; oversized records split at stable newline-preferred boundaries. When older narrative exists, output provides exact filtered `--before <cursor>` command for previous non-overlapping page.
+<docs tools="thread_recall_search thread_recall_expand">
 - <tool id="thread_recall_search" />: targeted lookup across all thread history. <tool id="thread_recall_expand" /> expands results
+</docs>
 
+<docs tools="thread_recall thread_recall_search thread_recall_expand">
 Recall includes only user-visible narrative: user messages, steers, questionnaire responses, assistant commentary and final answers, phase-less assistant messages, and plans. 
 Recall does NOT include: reasoning, raw commands, tool output, Browse data, hooks, or compaction markers. DO NOT USE THREAD RECALL TO LOOK FOR TOOL OUTPUT OR WORKBENCH DATA IN ANOTHER THREAD
+</docs>
 
 ### CRITICAL: RECOVER CONTEXT AFTER COMPACTION
 - Your post-compaction summary is compressed working hypotheses; it misses narrative details important to align with user.

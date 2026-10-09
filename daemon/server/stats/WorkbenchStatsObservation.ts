@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchStatsObservationState: one published stats snapshot with usage and claim freshness.
+ * - WorkbenchStatsObservationState: one published stats section with its refinement freshness.
  * - WorkbenchStatsInvalidation: which facts changed; claims also re-walk rename history.
- * - default WorkbenchStatsObservation: own one scope's coalesced two-stage reads, publication, and release.
+ * - default WorkbenchStatsObservation: own one section's coalesced reads (two-stage for claims), publication, and release.
  */
 import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -11,7 +11,8 @@ import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.
 export interface WorkbenchStatsObservationState {
   phase: WorkspaceSourcePhase;
   failure: string | null;
-  claimsPhase: WorkspaceSourcePhase;
+  /** Pending while published data is provisional; only claim hotspots refine (once rename history merges). */
+  refinement: WorkspaceSourcePhase;
   data: WorkbenchStatsResponse | null;
 }
 
@@ -25,11 +26,11 @@ function failureMessage(error: unknown) {
 }
 
 /**
- * Usage publishes as soon as SQLite answers; claim hotspots follow once rename history is merged.
- * Invalidations during a read collapse into one follow-up read, and only claim changes re-walk Git history.
+ * A section publishes as soon as it is read. Claim hotspots publish first from known rename history, then again once
+ * history is re-walked. Invalidations during a read collapse into one follow-up read, and only claim changes re-walk Git history.
  */
 export default class WorkbenchStatsObservation {
-  #state: WorkbenchStatsObservationState = { phase: "pending", failure: null, claimsPhase: "pending", data: null };
+  #state: WorkbenchStatsObservationState = { phase: "pending", failure: null, refinement: "pending", data: null };
   #dirty = { usage: true, claims: true };
   #history: WorkbenchClaimRenameRead | null = null;
   #work: Promise<void> | null = null;
@@ -70,33 +71,34 @@ export default class WorkbenchStatsObservation {
   }
 
   async #run() {
+    const refines = this.request.section === "claims";
     while (!this.#released && (this.#dirty.usage || this.#dirty.claims)) {
-      const walkClaims = this.#dirty.claims || !this.#history;
+      const walkClaims = refines && (this.#dirty.claims || !this.#history);
       this.#dirty = { usage: false, claims: false };
       try {
         const known = this.#history ?? NO_RENAMES;
-        const usage = await this.owner.read(this.request, known);
+        const first = await this.owner.read(this.request, known);
         if (this.#released) return;
-        this.#update({ phase: "current", failure: null, claimsPhase: walkClaims ? "pending" : this.#claimsPhase(known), data: usage });
+        this.#update({ phase: "current", failure: null, refinement: walkClaims ? "pending" : this.#refinement(known), data: first });
         if (!walkClaims) continue;
         const history = await this.owner.readRenames(this.request);
         if (this.#released) return;
         this.#history = history;
-        // Without renames the usage snapshot already counted claims correctly.
-        const complete = history.renames.length || history.failures.length ? await this.owner.read(this.request, history) : usage;
+        // Without renames or failures the first read already counted claims correctly.
+        const complete = history.renames.length || history.failures.length ? await this.owner.read(this.request, history) : first;
         if (this.#released) return;
-        this.#update({ phase: "current", failure: null, claimsPhase: this.#claimsPhase(history), data: complete });
+        this.#update({ phase: "current", failure: null, refinement: this.#refinement(history), data: complete });
       } catch (error) {
         if (this.#released) return;
         const failure = failureMessage(error);
         this.owner.warn(`Statistics observation failed: ${failure}`);
         const data = this.#state.data;
-        this.#update({ phase: data ? "stale" : "failed", failure, claimsPhase: data ? "stale" : "failed", data });
+        this.#update({ phase: data ? "stale" : "failed", failure, refinement: data ? "stale" : "failed", data });
       }
     }
   }
 
-  #claimsPhase(history: WorkbenchClaimRenameRead): WorkspaceSourcePhase {
+  #refinement(history: WorkbenchClaimRenameRead): WorkspaceSourcePhase {
     return history.failures.length ? "stale" : "current";
   }
 

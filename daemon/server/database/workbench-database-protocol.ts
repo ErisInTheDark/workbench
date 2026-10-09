@@ -3,12 +3,13 @@
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
  * WorkbenchDatabaseResponse: typed responses returned by the database worker.
- * WORKBENCH_DATABASE_READ_LANES/WorkbenchDatabaseReadLane: isolated reader worker lanes (core, live transcript, history query).
+ * WORKBENCH_DATABASE_READ_LANES/WorkbenchDatabaseReadLane: isolated reader worker lanes (core, live transcript, history query, stats aggregates).
  * getWorkbenchDatabaseReadLane/isWorkbenchDatabaseReadRequest: route pure reads to their isolated reader lane.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
 import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsRepository.ts";
 import type { WorkbenchClaimedRoot } from "./stats/WorkbenchClaimStatsRepository.ts";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type {
@@ -173,7 +174,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "search"; request: WorkbenchSearchRequest }
   | { type: "recordStatsClaimSnapshot"; snapshot: WorkbenchGitClaimSnapshot }
   | { type: "recordStatsRateLimits"; observation: WorkbenchRateLimitObservation }
-  | { type: "readStats"; request: WorkbenchStatsReadRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[]; workbenchProjectId?: string | null }
+  | { type: "readStats"; request: WorkbenchStatsReadRequest & { section: WorkbenchStoredStatsSection }; now?: number; renames?: readonly WorkbenchGitClaimRename[]; workbenchProjectId?: string | null }
   | { type: "readStatsClaimedRoots"; projectIds: readonly string[] | null; range: WorkbenchStatsRange | "all"; now?: number }
   | { type: "readClaimStats"; request: WorkbenchClaimStatsRequest; now?: number; renames?: readonly WorkbenchGitClaimRename[] }
   | { type: "recordFeedback"; entry: WorkbenchFeedbackRecord; now: number }
@@ -201,6 +202,9 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readThreadStatePinnedImports", "readThreadStateArchiveDeadline", "readThreadStateActivity",
   "readThreadStateSnoozeSources", "readThreadStateArchiveEligible", "readSubagents",
   "readOwnedSubagents",
+]);
+// Stats aggregates scan whole windows of usage and transcript facts; they never queue ahead of interactive reads.
+const STATS_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "readStats", "readStatsClaimedRoots", "readClaimStats", "readStatsImportProgress", "readFeedback",
 ]);
 const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
@@ -211,13 +215,14 @@ const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["t
 // Unbounded history scans stay off the transcript lane that live provider ingest awaits.
 const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>(["queryTranscript"]);
 
-export const WORKBENCH_DATABASE_READ_LANES = ["core", "transcript", "query"] as const;
+export const WORKBENCH_DATABASE_READ_LANES = ["core", "transcript", "query", "stats"] as const;
 export type WorkbenchDatabaseReadLane = typeof WORKBENCH_DATABASE_READ_LANES[number];
 
 export function getWorkbenchDatabaseReadLane(request: WorkbenchDatabaseRequestPayload): WorkbenchDatabaseReadLane | null {
   return CORE_READ_REQUEST_TYPES.has(request.type) ? "core"
     : TRANSCRIPT_READ_REQUEST_TYPES.has(request.type) ? "transcript"
-      : QUERY_READ_REQUEST_TYPES.has(request.type) ? "query" : null;
+      : QUERY_READ_REQUEST_TYPES.has(request.type) ? "query"
+        : STATS_READ_REQUEST_TYPES.has(request.type) ? "stats" : null;
 }
 
 export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequestPayload): boolean {

@@ -1,5 +1,6 @@
 /*
- * No exports. Protect import startup, ordered capture, feedback refresh, claimed-root rename reads, account-limit history, partial refresh, failures, and disposal.
+ * No exports. Protect import startup, ordered capture, feedback refresh, claimed-root rename reads, account-limit history,
+ * partial refresh, failures, tool prompt cost, and disposal.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,10 +9,12 @@ import type {
   WorkbenchStatsImportProgress,
   WorkbenchStatsReadRequest,
   WorkbenchStatsResponse,
+  WorkbenchStatsSection,
+  WorkbenchStatsSectionData,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import {
-  EMPTY_WORKBENCH_STATS_FEEDBACK, type WorkbenchFeedbackRecord,
-} from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
+import type { WorkbenchFeedbackRecord } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import type { WorkbenchStoredStatsSection } from "../database/stats/WorkbenchStatsRepository.ts";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import WorkbenchStatsController from "./WorkbenchStatsController.ts";
 import type { WorkbenchClaimRenameScope } from "./WorkbenchClaimRenameController.ts";
@@ -45,35 +48,8 @@ const importProgress: WorkbenchStatsImportProgress = {
   version: 2,
 };
 
-function emptyStats(): WorkbenchStatsResponse {
-  const tokens = { all: 0, cachedInput: 0, cacheWriteInput: 0, input: 0, output: 0, uncachedInput: 0 };
-  return {
-    bucketUnit: "day",
-    cacheEfficiency: { buckets: [], totals: { cacheHitPercent: null, cachedInputTokens: 0, inputTokens: 0 }, worstThreads: [] },
-    claimHotspots: [],
-    cost: {
-      basis: { exactModelTokens: 0, projectInferredModelTokens: 0, threadInferredModelTokens: 0, unpricedTokens: 0 },
-      buckets: [], byTokenType: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, totalUsd: 0, unpricedModels: [],
-    },
-    failures: [],
-    feedback: EMPTY_WORKBENCH_STATS_FEEDBACK,
-    generatedAt: 1,
-    historyImport: importProgress,
-    models: [],
-    previous: { costUsd: 0, threadCount: 0, tokens: 0, turnCount: 0 },
-    pricingCatalogDate: "2026-10-01",
-    projectIds: null,
-    projects: [],
-    providers: [],
-    range: "7d",
-    rateLimits: [],
-    startedAt: 1,
-    summary: { buckets: [], threadCount: 0, turnCount: 0 },
-    tokens: { buckets: [], totals: tokens },
-    topThreads: [],
-    usageFilters: { models: [], providers: [] },
-    version: 3,
-  };
+function emptyStats(request: { section: WorkbenchStoredStatsSection }, generatedAt = 1): WorkbenchStatsResponse {
+  return { ...EMPTY_WORKBENCH_STATS_SECTIONS[request.section], generatedAt };
 }
 
 function importPorts() {
@@ -104,16 +80,20 @@ const harnesses = {
   listUsageHydrationHarnesses: async () => [],
 };
 
-/** The first snapshot whose claims are no longer pending, then stop observing. */
-function settled(controller: WorkbenchStatsController, request: WorkbenchStatsReadRequest) {
-  return new Promise<WorkbenchStatsResponse>((resolve, reject) => {
+/** The first refined snapshot of one section, then stop observing. */
+function settled<Section extends WorkbenchStatsSection>(
+  controller: WorkbenchStatsController,
+  request: WorkbenchStatsReadRequest & { section: Section },
+) {
+  return new Promise<WorkbenchStatsSectionData<Section>>((resolve, reject) => {
     const handle = controller.observe(request, (state) => {
       if (state.phase === "failed") {
         handle.release();
         reject(new Error(state.failure ?? "Statistics failed."));
-      } else if (state.data && state.claimsPhase !== "pending") {
+      } else if (state.data && state.refinement !== "pending") {
         handle.release();
-        resolve(state.data);
+        assert.equal(state.data.section, request.section);
+        resolve(state.data as WorkbenchStatsSectionData<Section>);
       }
     });
   });
@@ -143,32 +123,32 @@ test("reads walk rename history only for claimed roots from their earliest claim
     database: {
       ...importPorts(),
       readStatsClaimedRoots: async (projectIds, range) => { claimedRequests.push({ projectIds, range }); return claimed; },
-      readStats: async (_request, _now, aliases) => { seen.push(aliases); return emptyStats(); },
+      readStats: async (request, _now, aliases) => { seen.push(aliases); return emptyStats(request); },
       readClaimStats: async (_request, _now, aliases) => { seen.push(aliases); return { kind: "files", page: 1, pages: 1, rows: [] }; },
       recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
     },
     harnesses,
   });
-  const request = { projectIds: [projectId], range: "7d" as const };
+  const request = { projectIds: [projectId], range: "7d" as const, section: "claims" as const };
   const fileRequest = { projectId, range: "all" as const, file: null, page: 1 };
   try {
     await settled(controller, request);
     await controller.readClaims(fileRequest);
     assert.deepEqual(claimedRequests, [{ projectIds: [projectId], range: "7d" }, { projectIds: [projectId], range: "all" }]);
     assert.deepEqual(scopes[0], [{ projectId, rootId: "root", since: 86_400_000 }]);
-    // Usage publishes before history is known, then claims re-read with the aliases.
+    // Counts publish before history is known, then claims re-read with the aliases.
     assert.deepEqual(seen, [[], renames, renames]);
     claimed = [];
-    await settled(controller, { projectIds: null, range: "7d" });
+    await settled(controller, { ...request, projectIds: null });
     assert.deepEqual(scopes.at(-1), [], "unclaimed scopes must not walk any history");
     claimed = [{ projectId, rootId: "root", earliestClaimedDay: 0 }];
     fail = true;
-    assert.equal((await settled(controller, request)).failures.length, 1);
+    assert.deepEqual((await settled(controller, request)).historyFailures, ["History unavailable."]);
     const before = seen.length;
     await assert.rejects(controller.readClaims(fileRequest));
     assert.equal(seen.length, before);
     fail = false;
-    assert.equal((await settled(controller, request)).failures.length, 0);
+    assert.deepEqual((await settled(controller, request)).historyFailures, []);
   } finally { await controller.dispose(); }
   assert.equal(disposed, true);
 });
@@ -184,7 +164,7 @@ test("controller startup begins the resumable import in the background", async (
         starts += 1;
         return importProgress;
       },
-      readStats: async () => emptyStats(),
+      readStats: async (request) => emptyStats(request),
       recordStatsClaimSnapshot: async () => undefined,
       recordStatsRateLimits: async () => undefined,
     },
@@ -197,20 +177,68 @@ test("controller startup begins the resumable import in the background", async (
   await controller.dispose();
 });
 
-test("reads include durable import status", async () => {
+test("the status section carries durable import status without reading SQLite stats", async () => {
   const progress = { ...importProgress, revision: 42 };
   const controller = new WorkbenchStatsController({
     claims,
     providers: providers(),
     database: {
       ...importPorts(), readStatsImportProgress: async () => progress,
-      readStats: async () => emptyStats(),
+      readStats: unused,
       recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
     },
     harnesses,
   });
   try {
-    assert.equal((await settled(controller, { projectIds: null, range: "7d" })).historyImport.revision, 42);
+    assert.equal((await settled(controller, { projectIds: null, range: "7d", section: "status" })).historyImport.revision, 42);
+  } finally { await controller.dispose(); }
+});
+
+test("the tools section lists every catalogued tool with its prompt cost, and still counts calls without a catalogue", async () => {
+  const calls = { ...EMPTY_WORKBENCH_STATS_SECTIONS.tools, tools: {
+    bucketStarts: [10, 20], catalogue: null, threadCount: 2, threads: [],
+    workbench: [
+      { buckets: [3, 1], bucketThreads: [], calls: 4, docsTokens: 0, failed: 1, specTokens: null, threads: 2, tool: "rg" },
+      { buckets: [0, 1], bucketThreads: [], calls: 1, docsTokens: 0, failed: 0, specTokens: null, threads: 1, tool: "retired_tool" },
+    ],
+  } };
+  let catalogueFails = false;
+  const logs: string[] = [];
+  const controller = new WorkbenchStatsController({
+    claims,
+    providers: providers(),
+    database: {
+      ...importPorts(),
+      readStats: async () => calls,
+      recordStatsClaimSnapshot: async () => undefined, recordStatsRateLimits: async () => undefined,
+    },
+    harnesses,
+    log: (message) => logs.push(message),
+    toolCatalogue: {
+      read: async () => {
+        if (catalogueFails) throw new Error("mcp reloading");
+        return {
+          docsTokens: 30, specTokens: 150,
+          tools: new Map([["rg", { docsTokens: 20, specTokens: 100 }], ["git_add", { docsTokens: 10, specTokens: 50 }]]),
+        };
+      },
+    },
+  });
+  const request = { projectIds: null, range: "7d" as const, section: "tools" as const };
+  try {
+    const { tools } = await settled(controller, request);
+    assert.deepEqual(tools.catalogue, { docsTokens: 30, specTokens: 150, tools: 2 });
+    assert.deepEqual(tools.workbench.map(({ calls, specTokens, tool }) => [tool, calls, specTokens]), [
+      ["rg", 4, 100], ["retired_tool", 1, null], ["git_add", 0, 50],
+    ]);
+    assert.deepEqual(tools.workbench.find(({ tool }) => tool === "git_add")?.buckets, [0, 0], "unused tools still chart an empty range");
+
+    catalogueFails = true;
+    const degraded = await settled(controller, request);
+    await settled(controller, request);
+    assert.equal(degraded.tools.catalogue, null);
+    assert.deepEqual(degraded.tools.workbench.map(({ tool }) => tool), ["rg", "retired_tool"]);
+    assert.equal(logs.filter((message) => message.includes("mcp reloading")).length, 1, "a repeated failure warns once");
   } finally { await controller.dispose(); }
 });
 
@@ -222,7 +250,7 @@ test("recorded feedback refreshes open observations and failed writes reach the 
     providers: providers(),
     database: {
       ...importPorts(),
-      readStats: async () => ({ ...emptyStats(), generatedAt: ++reads }),
+      readStats: async (request) => emptyStats(request, ++reads),
       recordFeedback: async () => {
         if (fail) throw new Error("disk full");
         return 7;
@@ -241,8 +269,8 @@ test("recorded feedback refreshes open observations and failed writes reach the 
     let refreshed!: () => void;
     const ready = new Promise<void>((resolve) => { initial = resolve; });
     const refresh = new Promise<void>((resolve) => { refreshed = resolve; });
-    const handle = controller.observe({ projectIds: null, range: "7d" }, (state) => {
-      if (state.data && state.claimsPhase !== "pending") published.push(state.data.generatedAt);
+    const handle = controller.observe({ projectIds: null, range: "7d", section: "feedback" }, (state) => {
+      if (state.data && state.refinement !== "pending") published.push(state.data.generatedAt);
       if (published.length === 1) initial();
       if (published.length === 2) refreshed();
     });
@@ -265,7 +293,7 @@ test("claim writes stay ordered and disposal flushes the queue", async () => {
     providers: providers(),
     database: {
       ...importPorts(),
-      readStats: async () => emptyStats(),
+      readStats: async (request) => emptyStats(request),
       recordStatsClaimSnapshot: async (snapshot) => {
         if (snapshot.roots[0]?.paths[0] === "one") await firstPending;
         writes.push(snapshot.roots[0]?.paths[0] ?? "empty");
@@ -309,7 +337,7 @@ test("rate refresh and read-only account limits record actual windows and retain
     }),
     database: {
       ...importPorts(),
-      readStats: async () => emptyStats(),
+      readStats: async (request) => emptyStats(request),
       recordStatsClaimSnapshot: async () => undefined,
       recordStatsRateLimits: async (observation) => {
         observations.push({
@@ -326,7 +354,7 @@ test("rate refresh and read-only account limits record actual windows and retain
   offline = true;
   await controller.refreshRateLimits();
   assert.deepEqual(observations, [{ harness: "codex", secondary: null }, { harness: "claude", secondary: null }]);
-  const result = await settled(controller, { projectIds: null, range: "7d" });
+  const result = await settled(controller, { projectIds: null, range: "7d", section: "status" });
   assert.match(result.failures[0]?.message ?? "", /offline/u);
   await controller.dispose();
 });
@@ -340,7 +368,7 @@ test("observations publish usage while capture writes are still queued, then ref
     providers: providers(),
     database: {
       ...importPorts(),
-      readStats: async () => ({ ...emptyStats(), generatedAt: ++reads }),
+      readStats: async (request) => emptyStats(request, ++reads),
       recordStatsClaimSnapshot: async () => { await writeBlocked; },
       recordStatsRateLimits: async () => undefined,
     },
@@ -352,8 +380,8 @@ test("observations publish usage while capture writes are still queued, then ref
   let landed!: () => void;
   const usage = new Promise<void>((resolve) => { first = resolve; });
   const refreshed = new Promise<void>((resolve) => { landed = resolve; });
-  const handle = controller.observe({ projectIds: null, range: "7d" }, (state) => {
-    if (state.data && state.claimsPhase !== "pending") published.push(state.data.generatedAt);
+  const handle = controller.observe({ projectIds: null, range: "7d", section: "usage" }, (state) => {
+    if (state.data && state.refinement !== "pending") published.push(state.data.generatedAt);
     if (published.length === 1) first();
     if (published.length === 2) landed();
   });

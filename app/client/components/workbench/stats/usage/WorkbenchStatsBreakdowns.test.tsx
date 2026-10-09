@@ -3,36 +3,35 @@
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import test from "node:test";
 
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { parseWorkbenchRouteFromPath } from "workbench-shared/workbench/navigation/workbench-route";
+import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
+import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { renderWithStats, TEST_STATS_DAEMON_ID } from "../stats-test-store";
 import WorkbenchStatsBreakdowns from "./WorkbenchStatsBreakdowns.tsx";
 
 const share = { threadCount: 1, unpricedTokens: 0 };
-const stats = {
+const usage: WorkbenchStatsSectionData<"usage"> = {
+  ...EMPTY_WORKBENCH_STATS_SECTIONS.usage,
   models: [
     { ...share, costUsd: 3, inferredModelTokens: 0, model: "gpt-6-sol", provider: "codex", tokens: 60 },
     { ...share, costUsd: 1, inferredModelTokens: 0, model: "claude-opus-5-5", provider: "claude", tokens: 40 },
   ],
-  projects: [], providers: [],
   topThreads: [{
-    costUsd: 4, models: ["claude-opus-5-5", "gpt-6-sol"], projectId: "project/path", providers: ["claude", "codex"],
+    costUsd: 4, harness: null, models: ["claude-opus-5-5", "gpt-6-sol"], projectId: "project/path", providers: ["claude", "codex"],
     modelShares: [
       { costUsd: 3, model: "gpt-6-sol", provider: "codex", tokens: 60, unpricedTokens: 0 },
       { costUsd: 1, model: "claude-opus-5-5", provider: "claude", tokens: 40, unpricedTokens: 0 },
     ],
     sharePercent: 75, threadId: "thread-id", title: "Expensive thread", tokens: 100, unpricedTokens: 0,
   }],
-} as unknown as WorkbenchStatsResponse;
+  usageFilters: { models: ["gpt-6-sol", "claude-opus-5-5"], providers: ["claude", "codex"] },
+};
 
-const render = () => renderToStaticMarkup(createElement(WorkbenchStatsBreakdowns, {
-  metric: "cost", model: null, provider: null, showProjects: true, stats,
-  modelHues: new Map([["gpt-6-sol", 111], ["claude-opus-5-5", 222]]),
-  onModelChange: () => undefined, onNavigateThread: () => undefined, onProviderChange: () => undefined,
-  projectName: (projectId: string) => projectId === "project/path" ? "Sparkle project" : projectId,
-}));
+const render = () => renderWithStats(createElement(WorkbenchStatsBreakdowns), { overview: usage, usage }, {
+  scope: { daemonId: TEST_STATS_DAEMON_ID, elsewhere: [], groups: [], labels: [], names: new Map([["project/path", "Sparkle project"]]), projectIds: [] },
+});
 
 test("top threads link through the canonical thread route and name their project", () => {
   const html = render();
@@ -47,7 +46,8 @@ test("top threads link through the canonical thread route and name their project
 
 test("a model keeps its colour in both the model bars and the thread segments", () => {
   const html = render();
-  // One bar in the Models panel plus one segment in the thread bar.
-  assert.equal(html.match(/--model-hue:111/gu)?.length, 2);
-  assert.equal(html.match(/--model-hue:222/gu)?.length, 2);
+  const hues = [...html.matchAll(/--model-hue:(\d+)/gu)].map(([, hue]) => hue);
+  // One bar in the Models panel plus one segment in the thread bar, per model.
+  assert.equal(new Set(hues).size, 2);
+  for (const hue of new Set(hues)) assert.equal(hues.filter((value) => value === hue).length, 2);
 });

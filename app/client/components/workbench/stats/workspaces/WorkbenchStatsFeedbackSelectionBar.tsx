@@ -5,11 +5,11 @@
  * - default WorkbenchStatsFeedbackSelectionBar: sticky summary of selected feedback with hold-to-delete and address actions.
  */
 import type { WorkbenchFeedbackCategory } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../PrimaryButton";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
-import WorkbenchStickyCard from "../WorkbenchStickyCard";
-import WorkbenchTooltip from "../WorkbenchTooltip";
-import { BinIcon, BotIcon } from "../workbench-icons";
+import WorkbenchStickyCard from "../../WorkbenchStickyCard";
+import WorkbenchTooltip from "../../WorkbenchTooltip";
+import { BinIcon, BotIcon } from "../../workbench-icons";
 
 const DELETE_HOLD_MS = 1_000;
 // Matches the action buttons on Git arc cards.

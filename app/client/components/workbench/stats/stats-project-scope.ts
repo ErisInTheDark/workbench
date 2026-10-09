@@ -1,9 +1,20 @@
 /*
  * Exports:
+ * - StatsProjectGroup: one selected project counted on the stats daemon, with all its local physical ids.
  * - StatsProjectScope: the sidebar selection expressed as projects on the daemon that serves statistics.
- * - resolveStatsProjectScope: map selected logical or physical projects onto one daemon's project ids and names.
+ * - resolveStatsProjectScope: map selected logical or physical projects onto one daemon's project ids, per-project groups, and names.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+
+export interface StatsProjectGroup {
+  /** The selected sidebar id: a logical project id, or a physical one when the sidebar shows physical projects. */
+  id: string;
+  label: string;
+  /** For icons; null when the sidebar knows no project for the id. */
+  project: WorkbenchLogicalProject | WorkbenchProjectOption | null;
+  /** Physical ids on the stats daemon, such as one project's worktrees. */
+  projectIds: string[];
+}
 
 export interface StatsProjectScope {
   /** The daemon whose statistics are observed; null until the app knows it. */
@@ -14,6 +25,8 @@ export interface StatsProjectScope {
   labels: string[];
   /** Selected projects with no location on the stats daemon; their usage lives elsewhere. */
   elsewhere: string[];
+  /** Each selected project counted here. */
+  groups: StatsProjectGroup[];
   names: ReadonlyMap<string, string>;
 }
 
@@ -21,12 +34,18 @@ export function resolveStatsProjectScope({ daemonId, logicalProjects, projects, 
   daemonId: string | null;
   /** Undefined when the sidebar shows physical projects directly. */
   logicalProjects: readonly WorkbenchLogicalProject[] | undefined;
-  projects: readonly Pick<WorkbenchProjectOption, "id" | "name">[];
+  projects: readonly WorkbenchProjectOption[];
   selectedProjectIds: readonly string[];
 }): StatsProjectScope {
   const names = new Map(projects.map((project) => [project.id as string, project.name]));
   if (!logicalProjects) {
-    return { daemonId, projectIds: [...selectedProjectIds], labels: selectedProjectIds.map((id) => names.get(id) ?? id), elsewhere: [], names };
+    const labels = selectedProjectIds.map((id) => names.get(id) ?? id);
+    return {
+      daemonId, projectIds: [...selectedProjectIds], labels, elsewhere: [], names,
+      groups: selectedProjectIds.map((id, index) => ({
+        id, label: labels[index]!, project: projects.find((project) => project.id === id) ?? null, projectIds: [id],
+      })),
+    };
   }
   const label = (project: WorkbenchLogicalProject) => project.displayName ?? project.label;
   for (const logical of logicalProjects) {
@@ -40,14 +59,21 @@ export function resolveStatsProjectScope({ daemonId, logicalProjects, projects, 
   const projectIds: string[] = [];
   const labels: string[] = [];
   const elsewhere: string[] = [];
+  const groups: StatsProjectGroup[] = [];
   for (const selectedId of selectedProjectIds) {
     const logical = logicalProjects.find((project) => project.id === selectedId);
     const local = logical?.locations.filter((location) => location.target.daemonId === daemonId) ?? [];
     const name = logical ? label(logical) : selectedId;
     (local.length ? labels : elsewhere).push(name);
+    if (local.length) {
+      groups.push({
+        id: selectedId, label: name, project: logical ?? null,
+        projectIds: [...new Set(local.map((location) => location.target.projectId as string))],
+      });
+    }
     for (const location of local) {
       if (!projectIds.includes(location.target.projectId)) projectIds.push(location.target.projectId);
     }
   }
-  return { daemonId, projectIds, labels, elsewhere, names };
+  return { daemonId, projectIds, labels, elsewhere, groups, names };
 }

@@ -2,13 +2,15 @@
  * Exports:
  * - default WorkbenchStatsLimits: a wrapping row of account-limit cards showing what is left per window with even-rationing notches, and folded history.
  */
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "../../../workbench/rate-limit-display";
-import WorkbenchStatsChart from "./WorkbenchStatsChart";
-import { formatPercent, formatResetIn } from "./stats-formatters";
+import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "../../../../workbench/rate-limit-display";
+import useStats from "../use-stats";
+import WorkbenchStatsChart from "../WorkbenchStatsChart";
+import WorkbenchStatsSkeleton, { statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import { formatPercent, formatResetIn } from "../stats-formatters";
 import { rationThresholds } from "./stats-ration";
 
-type Limit = WorkbenchStatsResponse["rateLimits"][number];
+type Limit = WorkbenchStatsSectionData<"limits">["rateLimits"][number];
 const WINDOW_KINDS = ["primary", "secondary", "tertiary"] as const;
 const WINDOW_FALLBACK = { primary: "Primary", secondary: "Secondary", tertiary: "Tertiary" } as const;
 
@@ -37,15 +39,31 @@ function observedAgo(observedAt: number, now: number) {
 
 const left = (usedPercent: number) => Math.max(0, 100 - usedPercent);
 
-export default function WorkbenchStatsLimits({ now, stats }: { now: number; stats: Pick<WorkbenchStatsResponse, "rateLimits"> | null }) {
-  const limits = (stats?.rateLimits ?? []).filter((limit) => currentWindows(limit).length);
+/** Account-wide plan limits, so they ignore the scope and period every other panel follows. */
+export default function WorkbenchStatsLimits() {
+  const { data } = useStats.limits();
+  const now = data?.generatedAt ?? 0;
+  const limits = (data?.rateLimits ?? []).filter((limit) => currentWindows(limit).length);
   return (
     <section aria-labelledby="stats-limits-heading" className="space-y-2">
       <h2 className="m-0 text-[0.74rem] font-semibold text-fg/muted" id="stats-limits-heading">Plan limits left</h2>
-      {!limits.length ? (
-        <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No limit readings yet. They appear after a provider reports its plan usage." : "-"}</p>
-      ) : (
+      {!data ? (
+        // Two cards of title, two windows and their meters: the usual shape of a reading.
         <div className="flex flex-wrap gap-x-8 gap-y-5">
+          {[0, 1].map((index) => (
+            <div className="min-w-0 flex-[1_1_15rem] space-y-2.5 sm:max-w-[24rem]" key={index}>
+              <WorkbenchStatsSkeleton className="h-4 w-32" />
+              <WorkbenchStatsSkeleton className="h-3 w-full" />
+              <WorkbenchStatsSkeleton className="h-1.5 w-full rounded-full" />
+              <WorkbenchStatsSkeleton className="h-3 w-full" />
+              <WorkbenchStatsSkeleton className="h-1.5 w-full rounded-full" />
+            </div>
+          ))}
+        </div>
+      ) : !limits.length ? (
+        <p className={`m-0 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No limit readings yet. They appear after a provider reports its plan usage.</p>
+      ) : (
+        <div className={`flex flex-wrap gap-x-8 gap-y-5 ${statsRevealClassName}`}>
           {limits.map((limit) => {
             const windows = currentWindows(limit);
             const latest = limit.samples.at(-1)!;

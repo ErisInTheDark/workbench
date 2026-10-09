@@ -2,25 +2,22 @@
  * Exports:
  * - default WorkbenchCacheEfficiency: input cache hit rate per period, and the large threads with the lowest hit rates.
  */
-import type { MouseEvent } from "react";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
-import WorkbenchStatsChart from "./WorkbenchStatsChart";
-import WorkbenchStatsShareList from "./WorkbenchStatsShareList";
-import { compactNumber, formatPercent } from "./stats-formatters";
-import { statsThreadIdentity } from "./stats-thread-identity";
+import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
+import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
+import useStats from "../use-stats";
+import WorkbenchStatsChart from "../WorkbenchStatsChart";
+import WorkbenchStatsShareList from "../WorkbenchStatsShareList";
+import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import { compactNumber, formatPercent } from "../stats-formatters";
+import { statsThreadIdentity } from "../stats-thread-identity";
 
 /** Mirrors the daemon cut so older daemons that still send small threads read the same. */
 const MINIMUM_UNCACHED_FOR_HIT_RATE = 500_000;
 
-export default function WorkbenchCacheEfficiency({ onNavigateThread, projectName, showProjects, stats }: {
-  onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
-  projectName: (projectId: string) => string;
-  showProjects: boolean;
-  stats: Pick<WorkbenchStatsResponse, "cacheEfficiency"> | null;
-}) {
+export default function WorkbenchCacheEfficiency() {
+  const { navigateThread, projectName, showProjects } = useStats();
+  const { data: stats, loading } = useStats.usage();
   const cache = stats?.cacheEfficiency;
   const projectHref = useWorkbenchProjectNavigation();
   const misses = (cache?.worstThreads ?? [])
@@ -31,15 +28,27 @@ export default function WorkbenchCacheEfficiency({ onNavigateThread, projectName
   // The worst period sits on the baseline; a whole-percent floor below 100 keeps a flat line visible.
   const floor = Math.min(99, Math.floor(Math.min(...rates.filter((rate) => rate !== null))));
   return (
-    <section aria-labelledby="cache-efficiency-heading" className="space-y-3 [--hue-chroma:50%]">
+    <section aria-busy={loading} aria-labelledby="cache-efficiency-heading" className={`space-y-3 [--hue-chroma:50%] ${statsReloadingClassName(loading && Boolean(stats))}`}>
       <h2 className="m-0 text-[1rem] font-semibold text-text" id="cache-efficiency-heading">
         Input caching
-        {hitRate !== null ? <span className="ml-2 text-[0.82rem] font-medium text-hue-300">{formatPercent(hitRate)} hit rate</span> : null}
+        {hitRate !== null ? <span className={`ml-2 text-[0.82rem] font-medium text-hue-300 ${statsRevealClassName}`}>{formatPercent(hitRate)} hit rate</span> : null}
       </h2>
-      {!cache || hitRate === null ? (
-        <p className="m-0 text-[0.8rem] text-fg/muted">{stats ? "No recorded input for these filters." : "-"}</p>
+      {!cache ? (
+        <div aria-hidden="true" className="grid gap-8 lg:grid-cols-2">
+          <div className="space-y-2">
+            <WorkbenchStatsSkeleton className="h-4 w-28" />
+            <WorkbenchStatsSkeleton className="h-40 w-full opacity-60" />
+            <WorkbenchStatsSkeleton className="h-3 w-24" />
+          </div>
+          <div className="space-y-2">
+            <WorkbenchStatsSkeleton className="mx-2 h-3 w-56" />
+            <WorkbenchStatsShareList empty="" loadingRows={3} rows={null} />
+          </div>
+        </div>
+      ) : hitRate === null ? (
+        <p className={`m-0 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No recorded input for these filters.</p>
       ) : (
-        <div className="grid gap-8 lg:grid-cols-2">
+        <div className={`grid gap-8 lg:grid-cols-2 ${statsRevealClassName}`}>
           <WorkbenchStatsChart
             appearance="area"
             buckets={cache.buckets.map((bucket) => bucket.startedAt)}
@@ -62,7 +71,7 @@ export default function WorkbenchCacheEfficiency({ onNavigateThread, projectName
                     <a
                       className="rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
-                      onClick={(event) => onNavigateThread(event, thread.projectId, thread.threadId)}
+                      onClick={(event) => navigateThread(event, thread.projectId, thread.threadId)}
                     >
                       {thread.title || thread.threadId}
                     </a>

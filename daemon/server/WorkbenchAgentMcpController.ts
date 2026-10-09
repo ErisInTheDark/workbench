@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, plus the served tool specs for prompt-cost accounting.
  */
 import type http from "node:http";
 
@@ -477,6 +477,11 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   private listCommands() {
     return listWorkbenchAgentCommands(this.getReloadScopeCatalog(), "agent", { virtualRepos: this.virtualReposAvailable() });
+  }
+
+  /** The exact tool list a root Workbench-project thread on this provider is served, for prompt-cost accounting. */
+  async listToolSpecs(provider: string, signal: AbortSignal = new AbortController().signal) {
+    return (await this.describe({ clientScope: LEGACY_MCP_CLIENT_SCOPE, projectLocal: true, provider, subagent: false }, signal)).tools;
   }
 
   listInstructionTools(): WorkbenchInstructionTool[] {

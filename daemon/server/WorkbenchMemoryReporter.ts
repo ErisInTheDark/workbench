@@ -6,12 +6,13 @@
 
 import os from "node:os";
 import { dim, yellow } from "workbench-shared/process/terminal-style";
+import { WORKBENCH_DATABASE_READ_LANES, type WorkbenchDatabaseReadLane } from "./database/workbench-database-protocol";
 
 type WorkerHeap = { used: number; total: number } | null;
 
 export interface WorkbenchMemoryReporterOptions {
   readProcess?: () => Pick<NodeJS.MemoryUsage, "rss" | "heapUsed" | "heapTotal" | "external" | "arrayBuffers">;
-  readWorkerHeaps(): Promise<{ writer: WorkerHeap; core: WorkerHeap; transcript: WorkerHeap; query: WorkerHeap }>;
+  readWorkerHeaps(): Promise<{ writer: WorkerHeap } & Record<WorkbenchDatabaseReadLane, WorkerHeap>>;
   /** Machine memory, so an incident shows whether RAM ran out rather than leaving it to inference from rss. */
   readSystem?: () => { free: number; total: number };
   log(message: string): void;
@@ -76,7 +77,7 @@ export default class WorkbenchMemoryReporter {
         ` MEM heap ${Math.round(memory.heapUsed / 1_048_576)}/${megabytes(memory.heapTotal)}, rss ${megabytes(memory.rss)}, `
         + `system free ${gigabytes(system.free)}/${Math.round(system.total / 1_073_741_824)}GB `
         + dim(`(external ${megabytes(memory.external)}, array buffers ${megabytes(memory.arrayBuffers)}, `
-          + `db workers: writer ${heap(workers.writer)}, core ${heap(workers.core)}, transcript ${heap(workers.transcript)}, query ${heap(workers.query)})`),
+          + `db workers: writer ${heap(workers.writer)}, ${WORKBENCH_DATABASE_READ_LANES.map(lane => `${lane} ${heap(workers[lane])}`).join(", ")})`),
       );
     } catch (error) {
       if (!this.disposed) this.options.warn(` MEM sample failed ${dim(`(${(error instanceof Error ? error.message : String(error)).slice(0, 300)})`)}`);

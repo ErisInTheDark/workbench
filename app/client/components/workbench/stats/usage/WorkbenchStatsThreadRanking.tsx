@@ -4,35 +4,48 @@
  * Exports:
  * - default WorkbenchStatsThreadRanking: top threads with bars split by model; hovering a segment highlights its model, hovering a title shows its thread tooltip.
  */
-import { useState, type MouseEvent } from "react";
+import { useState } from "react";
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
-import type { StatsActivityMetric } from "./WorkbenchStatsActivity";
-import { compactNumber, formatMoney, providerLabel, statsModelName } from "./stats-formatters";
-import { statsThreadIdentity } from "./stats-thread-identity";
+import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
+import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
+import useStats from "../use-stats";
+import WorkbenchStatsSkeleton, { statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import { compactNumber, formatMoney, providerLabel, statsModelName } from "../stats-formatters";
+import { statsThreadIdentity } from "../stats-thread-identity";
 import { statsModelHueStyle } from "./stats-model-colours";
 
-type Thread = WorkbenchStatsResponse["topThreads"][number];
+type Thread = WorkbenchStatsSectionData<"usage">["topThreads"][number];
 
-export default function WorkbenchStatsThreadRanking({ empty, metric, modelHues, onNavigateThread, projectName, showProjects, threads }: {
-  empty: string;
-  metric: StatsActivityMetric;
+export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
   modelHues: ReadonlyMap<string, number>;
-  onNavigateThread: (event: MouseEvent<HTMLAnchorElement>, projectId: string, threadId: string) => void;
-  projectName: (projectId: string) => string;
-  showProjects: boolean;
-  threads: readonly Thread[];
+  /** Null until usage arrives. */
+  threads: readonly Thread[] | null;
 }) {
+  const { metric, navigateThread, projectName, showProjects } = useStats();
   const projectHref = useWorkbenchProjectNavigation();
   const [hovered, setHovered] = useState<{ thread: string; model: string } | null>(null);
   const measure = (item: { costUsd: number; tokens: number }) => metric === "cost" ? item.costUsd : item.tokens;
+  if (!threads) {
+    return (
+      <ol aria-hidden="true" className="m-0 grid gap-y-1 p-0">
+        {[0, 1, 2, 3].map((index) => (
+          <li className="list-none space-y-2 px-2 pb-2 pt-1.5" key={index}>
+            <span className="flex h-[1.2rem] items-center justify-between gap-3">
+              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${50 - index * 8}%` }} />
+              <WorkbenchStatsSkeleton className="h-3 w-12" />
+            </span>
+            <WorkbenchStatsSkeleton className="h-1.5 rounded-full" style={{ width: `${90 - index * 18}%` }} />
+          </li>
+        ))}
+      </ol>
+    );
+  }
   const sorted = [...threads].sort((left, right) => measure(right) - measure(left)).slice(0, 12);
   const maximum = Math.max(0, ...sorted.map(measure)) || 1;
-  if (!sorted.length) return <p className="m-0 py-1 text-[0.8rem] text-fg/muted">{empty}</p>;
+  if (!sorted.length) return <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No thread usage in this period.</p>;
   return (
-    <ol className="m-0 grid gap-y-1 p-0">
+    <ol className={`m-0 grid gap-y-1 p-0 ${statsRevealClassName}`}>
       {sorted.map((thread) => {
         const key = `${thread.projectId}:${thread.threadId}`;
         // Daemons before the model split only know model names; one neutral segment stands in.
@@ -51,7 +64,7 @@ export default function WorkbenchStatsThreadRanking({ empty, metric, modelHues, 
                   <a
                     className="min-w-0 truncate rounded-sm font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                     href={projectHref(createThreadRoute(thread.projectId, thread.threadId))}
-                    onClick={(event) => onNavigateThread(event, thread.projectId, thread.threadId)}
+                    onClick={(event) => navigateThread(event, thread.projectId, thread.threadId)}
                   >
                     {thread.title || thread.threadId}
                   </a>

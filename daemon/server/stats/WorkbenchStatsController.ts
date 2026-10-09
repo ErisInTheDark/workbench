@@ -1,15 +1,19 @@
 /*
  * Exports:
- * - WorkbenchStatsControllerOptions: database, harness, rename, and warning ports.
- * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed rename-aware stats observations, account-limit history, refresh, failures, and disposal.
+ * - WorkbenchStatsControllerOptions: database, harness, rename, tool catalogue, and warning ports.
+ * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed per-section stats observations (rename-aware claims, tool prompt cost, import status), account-limit history, refresh, failures, and disposal.
  */
 import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchRateLimitObservation } from "../database/stats/WorkbenchStatsRepository.ts";
+import type {
+  WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse, WorkbenchStatsSectionData,
+} from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchRateLimitObservation, WorkbenchStoredStatsSection } from "../database/stats/WorkbenchStatsRepository.ts";
+import type WorkbenchToolCatalogueTokens from "./WorkbenchToolCatalogueTokens.ts";
+import type { WorkbenchToolPromptCost } from "./WorkbenchToolCatalogueTokens.ts";
 import type { WorkbenchClaimedRoot } from "../database/stats/WorkbenchClaimStatsRepository.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "./git-claim-observation.ts";
 import WorkbenchStatsImportController, { type WorkbenchStatsImportControllerOptions } from "./WorkbenchStatsImportController.ts";
@@ -30,7 +34,9 @@ export interface WorkbenchStatsControllerOptions {
     claimStatsClaimImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsClaimImport"];
     claimStatsUsageImport: WorkbenchStatsImportControllerOptions["database"]["claimStatsUsageImport"];
     readStatsImportProgress: import("./WorkbenchStatsImportController").WorkbenchStatsImportControllerOptions["database"]["readStatsImportProgress"];
-    readStats(request: WorkbenchStatsReadRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[], workbenchProjectId?: string | null): Promise<WorkbenchStatsResponse>;
+    readStats(
+      request: WorkbenchStatsReadRequest & { section: WorkbenchStoredStatsSection }, now?: number, renames?: readonly WorkbenchGitClaimRename[], workbenchProjectId?: string | null,
+    ): Promise<WorkbenchStatsResponse>;
     readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number): Promise<WorkbenchClaimedRoot[]>;
     readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames?: readonly WorkbenchGitClaimRename[]): Promise<WorkbenchClaimStatsResponse>;
     readFeedback(request: WorkbenchFeedbackReadRequest): Promise<WorkbenchFeedbackReadResponse>;
@@ -50,6 +56,8 @@ export interface WorkbenchStatsControllerOptions {
   log?(message: string): void;
   /** The project that owns wb feedback; null means the catalogue lost the Workbench checkout. */
   resolveWorkbenchProjectId?(): Promise<string | null>;
+  /** Always-on prompt cost per wb tool; absent leaves the tools section with calls only. */
+  toolCatalogue?: Pick<WorkbenchToolCatalogueTokens, "read">;
 }
 
 function rateWindow(candidate: WorkbenchRateLimitWindow | null) {
@@ -90,6 +98,7 @@ function responseRateSnapshots(candidate: WorkbenchAccountLimits) {
 export default class WorkbenchStatsController {
   private active = true;
   private failures: Array<{ harness: string | null; message: string; source: "capture" | "refresh" }> = [];
+  private toolCatalogueFailure: string | null = null;
   private queue: Promise<void> = Promise.resolve();
   private readonly importer: WorkbenchStatsImportController;
   private readonly observations = new Set<WorkbenchStatsObservation>();
@@ -165,7 +174,7 @@ export default class WorkbenchStatsController {
   observe(request: WorkbenchStatsReadRequest, publish: (state: WorkbenchStatsObservationState) => void) {
     if (!this.active) throw new Error("Stats controller is disposed.");
     const observation = new WorkbenchStatsObservation(request, {
-      read: (scope, history) => this.readSnapshot(scope, history),
+      read: (scope, history) => this.readSection(scope, history),
       readRenames: (scope) => this.readRenames(scope.projectIds, scope.range),
       warn: (message) => this.options.log?.(message),
     }, publish);
@@ -180,13 +189,85 @@ export default class WorkbenchStatsController {
     };
   }
 
-  private async readSnapshot(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead) {
-    const workbenchProjectId = this.options.resolveWorkbenchProjectId ? await this.options.resolveWorkbenchProjectId() : null;
-    if (this.options.resolveWorkbenchProjectId && !workbenchProjectId) {
-      this.options.log?.("The Workbench checkout is missing from the project catalogue, so wb agent feedback is hidden.");
+  private async readSection(request: WorkbenchStatsReadRequest, history: WorkbenchClaimRenameRead): Promise<WorkbenchStatsResponse> {
+    switch (request.section) {
+      case "status": return await this.readStatus();
+      case "usage":
+      case "limits": return await this.readStored({ ...request, section: request.section });
+      case "feedback": {
+        const workbenchProjectId = this.options.resolveWorkbenchProjectId ? await this.options.resolveWorkbenchProjectId() : null;
+        if (this.options.resolveWorkbenchProjectId && !workbenchProjectId) {
+          this.options.log?.("The Workbench checkout is missing from the project catalogue, so wb agent feedback is hidden.");
+        }
+        return await this.readStored({ ...request, section: "feedback" }, [], workbenchProjectId);
+      }
+      case "claims": return {
+        ...await this.readStored({ ...request, section: "claims" }, history.renames),
+        historyFailures: history.failures.map(({ message }) => message.replaceAll(/[\r\n]+/gu, " ").slice(0, 500)).slice(-20),
+      };
+      case "tools": return await this.withToolCosts(await this.readStored({ ...request, section: "tools" }));
     }
-    const result = await this.options.database.readStats(request, undefined, history.renames, workbenchProjectId);
-    return await this.withStatus(result, history);
+  }
+
+  private async readStored<Section extends WorkbenchStoredStatsSection>(
+    request: WorkbenchStatsReadRequest & { section: Section },
+    renames: readonly WorkbenchGitClaimRename[] = [],
+    workbenchProjectId: string | null = null,
+  ): Promise<WorkbenchStatsSectionData<Section>> {
+    const result = await this.options.database.readStats(request, undefined, renames, workbenchProjectId);
+    if (result.section !== request.section) throw new Error(`Statistics answered ${result.section} for a ${request.section} read.`);
+    return result as WorkbenchStatsSectionData<Section>;
+  }
+
+  private async readStatus(): Promise<WorkbenchStatsSectionData<"status">> {
+    const progress = this.importer.getProgress();
+    const historyImport = await this.options.database.readStatsImportProgress(progress.state, progress.revision, progress.unsupportedClaimCheckpoints);
+    return { failures: this.failures.slice(-20), generatedAt: Date.now(), historyImport, section: "status" };
+  }
+
+  /** Calls come from SQLite; prompt cost is daemon-owned. Without a catalogue the calls still show. */
+  private async withToolCosts(section: WorkbenchStatsSectionData<"tools">): Promise<WorkbenchStatsSectionData<"tools">> {
+    let cost: WorkbenchToolPromptCost | null = null;
+    if (this.options.toolCatalogue) {
+      try {
+        cost = await this.options.toolCatalogue.read();
+        this.toolCatalogueFailure = null;
+      } catch (error) {
+        const message = (error instanceof Error ? error.message : String(error)).replaceAll(/[\r\n]+/gu, " ").slice(0, 500);
+        // Every activity tick re-reads tools; one warning per distinct failure is enough.
+        if (message !== this.toolCatalogueFailure) this.options.log?.(`Tool prompt cost is unavailable: ${message}`);
+        this.toolCatalogueFailure = message;
+      }
+    }
+    const { bucketStarts, workbench } = section.tools;
+    const calls = new Map(workbench.map((row) => [row.tool, row]));
+    const tools = [...new Set([...calls.keys(), ...(cost?.tools.keys() ?? [])])].map((tool) => {
+      const row = calls.get(tool);
+      const tokens = cost?.tools.get(tool);
+      return {
+        buckets: row?.buckets ?? bucketStarts.map(() => 0),
+        bucketThreads: row?.bucketThreads ?? [],
+        calls: row?.calls ?? 0,
+        docsTokens: tokens?.docsTokens ?? 0,
+        failed: row?.failed ?? 0,
+        // Docs can still name a tool no provider serves any more; only a served spec has a spec cost.
+        specTokens: tokens?.specTokens ? tokens.specTokens : null,
+        threads: row?.threads ?? 0,
+        tool,
+      };
+    }).sort((left, right) => right.calls - left.calls || left.tool.localeCompare(right.tool)).slice(0, 300);
+    return {
+      ...section,
+      tools: {
+        ...section.tools,
+        catalogue: cost ? {
+          docsTokens: cost.docsTokens,
+          specTokens: cost.specTokens,
+          tools: [...cost.tools.values()].filter(({ specTokens }) => specTokens > 0).length,
+        } : null,
+        workbench: tools,
+      },
+    };
   }
 
   private invalidate(kind: WorkbenchStatsInvalidation) {
@@ -238,24 +319,6 @@ export default class WorkbenchStatsController {
       this.options.log?.(`Workbench claim rename failure: ${failure.message.replace(/[\r\n]/gu, " ").slice(0, 500)}`);
     }
     return history;
-  }
-
-  private async withStatus(result: WorkbenchStatsResponse, history: WorkbenchClaimRenameRead): Promise<WorkbenchStatsResponse> {
-    const currentProgress = this.importer.getProgress();
-    const historyImport = await this.options.database.readStatsImportProgress(
-      currentProgress.state,
-      currentProgress.revision,
-      currentProgress.unsupportedClaimCheckpoints,
-    );
-    return {
-      ...result,
-      failures: [
-        ...result.failures,
-        ...this.failures,
-        ...history.failures.map(({ message }) => ({ harness: null, message, source: "capture" as const })),
-      ].slice(-20),
-      historyImport,
-    };
   }
 
   async dispose() {

@@ -590,7 +590,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
-      case "stats": return { ...base, kind: "stats", claimsPhase: "pending", data: null };
+      case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
     }
   }
@@ -718,7 +718,7 @@ export default class WorkbenchWorkspaceRequestController {
         const fact = interest.thread?.observation.getSnapshot();
         const value = fact?.value?.kind === "stats" ? fact.value : null;
         this.update(interest, { kind: "stats", phase: fact?.phase ?? "pending", failure: fact?.failure ?? null,
-          claimsPhase: value?.claimsPhase ?? "pending", data: value?.data ?? null });
+          refinement: value?.refinement ?? "pending", data: value?.data ?? null });
         return;
       }
       case "threadOwner":

@@ -79,13 +79,21 @@ test("voice assembly omits the selected agent while preserving role-targeted pac
   }
 });
 
-test("configured creation, resume and fork retain installed mechanics in the final packet", async () => {
+test("configured creation, resume and fork retain tool docs and workspace mechanics in the final packet", async () => {
   const adapter = new WorkbenchCodexInstructionAdapter("ws://127.0.0.1:4500", process.cwd(), readNoLocalCapabilities);
   await adapter.augment({ method: "thread/start", params: {}, workbenchPromptContext: {} }, "thread/start");
   const override = path.join(testWorkbenchLibraryRoot, "AGENTS.override.md");
-  const mechanics = ["task-title", "task-status", "thread-git", "thread-recall", "thread-refresh", "long-waits"];
+  const selectors = {
+    "task-title": ["<docs tools=\"task_set\">", "</docs>"],
+    "task-status": ["<docs tools=\"task_completed\">", "</docs>"],
+    "thread-git": ["<workspace:project>", "</workspace:project>"],
+    "thread-recall": ["<docs tools=\"thread_recall\">", "</docs>"],
+    "thread-refresh": ["<docs tools=\"thread_refresh\">", "</docs>"],
+    "long-waits": ["<docs tools=\"message_wait\">", "</docs>"],
+  } as const;
+  const mechanics = Object.keys(selectors) as Array<keyof typeof selectors>;
   await fs.writeFile(override, [
-    ...mechanics.map(mechanic => `<available:${mechanic}>\nfixture ${mechanic}\n</available:${mechanic}>`),
+    ...mechanics.map(mechanic => `${selectors[mechanic][0]}\nfixture ${mechanic}\n${selectors[mechanic][1]}`),
     "<model:model>\nfixture matching model\n</model:model>",
     "<model:other>\nfixture other model\n</model:other>",
     "use <tool id=\"rg\" /> and <tool id=\"git_arc_release\" />.",

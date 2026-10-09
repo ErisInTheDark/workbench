@@ -61,6 +61,8 @@ import WorkbenchProjectStore from "./store/WorkbenchProjectStore";
 import { readDeviceIdentity } from "./store/device-identity";
 import WorkbenchSearchController from "./WorkbenchSearchController";
 import WorkbenchStatsController from "./stats/WorkbenchStatsController";
+import WorkbenchToolCatalogueTokens from "./stats/WorkbenchToolCatalogueTokens";
+import { readWorkbenchInstructionSources } from "./lib/workbench/instructions/instruction-source";
 import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
 import { reconcileCatalogClaims } from "./stats/reconcile-catalog-claims";
 import { resolveGitDirectory } from "./lib/git";
@@ -361,6 +363,12 @@ function createWorkbenchCoreFeature(
       const catalog = await projectCatalog.readCatalog();
       return catalog.data.find((candidate) => candidate.roots.some((root) => key(root.rootPath) === workbenchRoot))?.id ?? null;
     },
+    toolCatalogue: new WorkbenchToolCatalogueTokens({
+      harnesses: installedProviderKeys,
+      readToolSpecs: harness => run("mcp", mcp => mcp.listToolSpecs(harness), "Stats tool spec catalogue"),
+      readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Stats instruction tool catalogue"),
+      readInstructionSources: () => readWorkbenchInstructionSources(),
+    }),
   });
   const threadGit = new WorkbenchThreadGitFeature({
     selectionStore: database,

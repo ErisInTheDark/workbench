@@ -2,26 +2,29 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsStatus: an always-present inline slot for connection, loading, import progress, and issues, with a details popover.
+ * - default WorkbenchStatsStatus: an always-present inline slot for connection, import progress, and issues, with a details popover.
  */
 import { useEffect, useRef, useState } from "react";
-import type { WorkbenchStatsImportProgress, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { TriangleAlertIcon as AlertTriangleIcon } from "../workbench-icons";
+import useStats from "./use-stats";
 
 interface Issue { key: string; source: string; message: string }
 
-export default function WorkbenchStatsStatus({ ready, loading, retained, error, progress, failures }: {
-  ready: boolean;
-  loading: boolean;
-  retained: boolean;
+/** Panels show their own loading; this slot reports what concerns the whole view. */
+export default function WorkbenchStatsStatus({ error }: {
+  /** A failed import or refresh request from the view. */
   error: string;
-  progress: WorkbenchStatsImportProgress | null;
-  failures: WorkbenchStatsResponse["failures"];
 }) {
+  const { ready } = useStats();
+  const status = useStats.status().data;
+  const readFailures = useStats.failures();
+  const progress = status?.historyImport ?? null;
+  const failures = status?.failures ?? [];
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const issues: Issue[] = [
     ...(error ? [{ key: "error", source: "Statistics", message: error }] : []),
+    ...readFailures.map((message, index) => ({ key: `read:${index}`, source: "Statistics", message })),
     ...(progress?.recentFailures ?? []).map((failure, index) => ({
       key: `import:${index}`, source: `${failure.source === "claims" ? "Claim" : "Usage"} import`, message: `${failure.subject} · ${failure.message}`,
     })),
@@ -31,10 +34,8 @@ export default function WorkbenchStatsStatus({ ready, loading, retained, error, 
   ];
   // The importer reports running until its final settlement; a full bar has nothing left to announce.
   const importing = progress?.state === "running" && progress.percent < 100;
-  const status = !ready ? "Connecting…"
-    : loading ? retained ? "Updating…" : "Loading…"
-      : importing ? `Importing ${progress.percent.toFixed(0)}%` : "";
-  const busy = !ready || loading || importing;
+  const label = !ready ? "Connecting…" : importing ? `Importing ${progress.percent.toFixed(0)}%` : "";
+  const busy = !ready || importing;
   const hasDetails = issues.length > 0 || Boolean(progress && progress.state !== "idle");
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export default function WorkbenchStatsStatus({ ready, loading, retained, error, 
     // Always rendered at a fixed height so status changes never move the page below.
     <div className="relative ml-auto flex h-7 min-w-0 shrink-0 items-center gap-2 text-[0.74rem] text-fg/muted" ref={root}>
       {busy ? <span aria-hidden="true" className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent motion-reduce:animate-none" /> : null}
-      <span aria-live="polite" className="truncate empty:hidden">{status}</span>
+      <span aria-live="polite" className="truncate empty:hidden">{label}</span>
       {hasDetails ? (
         <button
           aria-expanded={open}

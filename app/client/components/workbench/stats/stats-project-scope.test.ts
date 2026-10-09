@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { resolveStatsProjectScope } from "./stats-project-scope.ts";
 
@@ -33,13 +34,15 @@ test("logical selections keep only projects on the stats daemon and report the r
   assert.deepEqual(scope.labels, ["One"]);
   assert.deepEqual(scope.elsewhere, ["two"]);
   assert.equal(scope.names.get("one-worktree"), "One · one-worktree");
+  assert.deepEqual(scope.groups.map(({ id, projectIds }) => [id, projectIds]), [[both, ["one-here", "one-worktree"]]]);
 });
 
 test("physical selections pass through unchanged", () => {
   const scope = resolveStatsProjectScope({
     daemonId: here, logicalProjects: undefined,
-    projects: [{ id: ProjectIdSchema.parse("a"), name: "Alpha" }], selectedProjectIds: ["a", "b"],
+    projects: [{ id: ProjectIdSchema.parse("a"), name: "Alpha" } as WorkbenchProjectOption], selectedProjectIds: ["a", "b"],
   });
   assert.deepEqual(scope.projectIds, ["a", "b"]);
+  assert.deepEqual(scope.groups.map(({ id, projectIds }) => [id, projectIds]), [["a", ["a"]], ["b", ["b"]]]);
   assert.equal(scope.names.get("a"), "Alpha");
 });

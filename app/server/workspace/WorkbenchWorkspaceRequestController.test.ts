@@ -305,7 +305,7 @@ test("a failed app-state refresh retains usable facts and only a new invalidatio
   await f.wait(value => value.kind === "appState" && value.data?.revision === 3);
 });
 
-test("stats observations relay each daemon revision, including claim freshness, and release with the interest", async context => {
+test("stats observations relay each daemon revision, including refinement, and release with the interest", async context => {
   let snapshot: { phase: "pending" | "current"; failure: null; value: object | null } = { phase: "pending", failure: null, value: null };
   let notify = () => {};
   const observed: object[] = [];
@@ -321,15 +321,15 @@ test("stats observations relay each daemon revision, including claim freshness, 
   };
   const f = await fixture(context, { get: (id) => id === daemonId ? source : undefined });
   const subscriptionId = randomUUID();
-  const request = { model: null, period: null, projectIds: null, provider: null, range: "7d" as const, tokenTypes: ["input" as const, "output" as const] };
+  const request = { model: null, period: null, projectIds: null, provider: null, range: "7d" as const, section: "claims" as const, tokenTypes: ["input" as const, "output" as const] };
   const initial = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "stats", daemonId, request } });
   assert.ok(initial.kind === "stats" && initial.phase === "pending");
   assert.deepEqual(observed, [{ kind: "stats", request }]);
   const data = { generatedAt: 7 };
-  for (const claimsPhase of ["pending", "current"] as const) {
-    snapshot = { phase: "current", failure: null, value: { kind: "stats", claimsPhase, data } };
+  for (const refinement of ["pending", "current"] as const) {
+    snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement, data } };
     notify();
-    const relayed = await f.wait(value => value.kind === "stats" && value.claimsPhase === claimsPhase);
+    const relayed = await f.wait(value => value.kind === "stats" && value.refinement === refinement);
     assert.ok(relayed.kind === "stats" && relayed.data === data && relayed.phase === "current");
   }
   f.owner.release({ subscriptionId, generation: 1 });

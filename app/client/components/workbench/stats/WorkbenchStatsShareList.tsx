@@ -1,9 +1,10 @@
 /*
  * Exports:
  * - StatsShareRow: one ranked row with its share of the largest row.
- * - default WorkbenchStatsShareList: ranked rows with slim share underlines; rows with onSelect act as filters.
+ * - default WorkbenchStatsShareList: ranked rows with slim share underlines; rows with onSelect act as filters; null rows hold the list's shape while loading.
  */
 import type { CSSProperties, ReactNode } from "react";
+import WorkbenchStatsSkeleton, { statsRevealClassName } from "./WorkbenchStatsSkeleton";
 
 export interface StatsShareRow {
   key: string;
@@ -20,16 +21,34 @@ export interface StatsShareRow {
   title?: string;
 }
 
-export default function WorkbenchStatsShareList({ barClassName = "bg-fg/40", empty, rows, trackClassName = "bg-fg/6" }: {
+const rowClassName = "relative flex min-h-9 w-full min-w-0 items-center justify-between gap-3 rounded-md px-2 pb-1.5 text-left";
+
+export default function WorkbenchStatsShareList({ barClassName = "bg-fg/40", empty, loadingRows = 4, rows, trackClassName = "bg-fg/6" }: {
   barClassName?: string;
   empty: string;
-  rows: readonly StatsShareRow[];
+  /** Placeholder rows while loading; the usual length of the list. */
+  loadingRows?: number;
+  /** Null until the list's data arrives. */
+  rows: readonly StatsShareRow[] | null;
   /** The unfilled rest of each bar, which can carry meaning of its own, such as uncached input. */
   trackClassName?: string;
 }) {
-  if (!rows.length) return <p className="m-0 py-1 text-[0.8rem] text-fg/muted">{empty}</p>;
+  if (!rows) {
+    return (
+      <ol aria-hidden="true" className="m-0 grid grid-cols-1 gap-y-0.5 p-0">
+        {Array.from({ length: loadingRows }, (_, index) => (
+          <li className={`list-none ${rowClassName}`} key={index}>
+            <WorkbenchStatsSkeleton className="h-3" style={{ width: `${Math.max(20, 55 - index * 9)}%` }} />
+            <WorkbenchStatsSkeleton className="h-3 w-10" />
+            <WorkbenchStatsSkeleton className="absolute inset-x-2 bottom-1 h-[3px] rounded-full" />
+          </li>
+        ))}
+      </ol>
+    );
+  }
+  if (!rows.length) return <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>{empty}</p>;
   return (
-    <ol className="m-0 grid grid-cols-1 gap-y-0.5 p-0">
+    <ol className={`m-0 grid grid-cols-1 gap-y-0.5 p-0 ${statsRevealClassName}`}>
       {rows.map((row) => {
         const content = (
           <>
@@ -46,10 +65,7 @@ export default function WorkbenchStatsShareList({ barClassName = "bg-fg/40", emp
             <span className="relative shrink-0 text-[0.76rem] font-semibold tabular-nums text-text">{row.value}</span>
           </>
         );
-        const className = `
-          relative flex min-h-9 w-full min-w-0 items-center justify-between gap-3 rounded-md px-2 pb-1.5 text-left
-          ${row.selected ? "ring-1 ring-inset ring-text/40" : ""}
-        `;
+        const className = `${rowClassName} ${row.selected ? "ring-1 ring-inset ring-text/40" : ""}`;
         return (
           <li className="list-none" key={row.key}>
             {row.onSelect ? (

@@ -6,13 +6,13 @@
  */
 import { useLayoutEffect, useRef, useState } from "react";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import ThreadMarkdown from "../thread-view/ThreadMarkdown";
-import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { FlameIcon, HarnessIcon } from "../workbench-icons";
+import ThreadMarkdown from "../../thread-view/ThreadMarkdown";
+import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
+import WorkbenchThreadButton from "../../WorkbenchThreadButton";
+import { FlameIcon, HarnessIcon } from "../../workbench-icons";
 import { feedbackImportanceTone } from "./stats-feedback-presentation";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
-import { statsThreadIdentity } from "./stats-thread-identity";
+import { statsThreadIdentity } from "../stats-thread-identity";
 
 /** Clamped text only offers expansion when it actually overflows at the current width. */
 function useClampOverflow(expanded: boolean) {

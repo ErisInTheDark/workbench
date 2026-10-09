@@ -1,4 +1,5 @@
-<docs tools="browse_run browse_sessions browse_stop browse_forget">
+<!-- Session tools (sessions/stop/forget) are documented by the /browse skill; this always-on text is about starting browser work. -->
+<docs tools="browse_run">
 ## Browser Use
 
 Browser use, ie diagnostics or validation, requires **Feature Activation**. 

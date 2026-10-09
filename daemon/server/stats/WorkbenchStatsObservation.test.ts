@@ -1,14 +1,13 @@
 /*
- * No exports. Protect staged publication, coalesced invalidation, history reuse, and release of one stats observation.
+ * No exports. Protect staged claim publication, single-stage sections, coalesced invalidation, history reuse, and release of one stats observation.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStatsResponse, WorkbenchStatsSection } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchClaimRenameRead } from "./WorkbenchClaimRenameController.ts";
 import WorkbenchStatsObservation, { type WorkbenchStatsObservationState } from "./WorkbenchStatsObservation.ts";
 
-const request = { projectIds: null, range: "7d" as const };
 const rename = { projectId: "project", rootId: "root", from: "old", to: "new" };
 
 /** Hands each pushed item to exactly one `next()` caller, in order, buffering items nobody awaits yet. */
@@ -38,11 +37,11 @@ function gate<T>() {
   return { promise, open };
 }
 
-function harness() {
+function harness(section: WorkbenchStatsSection = "claims") {
   const reads = channel<{ renames: number; release: () => void }>();
   const walks = channel<(history: WorkbenchClaimRenameRead) => void>();
   const states = channel<WorkbenchStatsObservationState>();
-  const observation = new WorkbenchStatsObservation(request, {
+  const observation = new WorkbenchStatsObservation({ projectIds: null, range: "7d", section }, {
     read: async (_request, history) => {
       const opened = gate<void>();
       reads.push({ renames: history.renames.length, release: () => opened.open() });
@@ -59,13 +58,13 @@ function harness() {
   return { observation, reads, walks, states };
 }
 
-test("usage publishes before rename history, then claims publish with the merged aliases", async () => {
+test("claim counts publish before rename history, then again with the merged aliases", async () => {
   const { observation, reads, walks, states } = harness();
-  const usageRead = reads.next();
+  const countsRead = reads.next();
   observation.start();
-  (await usageRead).release();
-  const usage = await states.next();
-  assert.deepEqual([usage.phase, usage.claimsPhase], ["current", "pending"]);
+  (await countsRead).release();
+  const counts = await states.next();
+  assert.deepEqual([counts.phase, counts.refinement], ["current", "pending"]);
   const walk = await walks.next();
   const claimsRead = reads.next();
   walk({ renames: [rename], failures: [] });
@@ -73,7 +72,23 @@ test("usage publishes before rename history, then claims publish with the merged
   assert.equal(merged.renames, 1, "claims re-read with the walked aliases");
   const claims = states.next();
   merged.release();
-  assert.equal((await claims).claimsPhase, "current");
+  assert.equal((await claims).refinement, "current");
+});
+
+test("other sections publish once per read as refined and never walk rename history", async () => {
+  const { observation, reads, walks, states } = harness("tools");
+  const first = reads.next();
+  observation.start();
+  (await first).release();
+  const published = await states.next();
+  assert.deepEqual([published.phase, published.refinement], ["current", "current"]);
+  await observation.settled;
+  const again = reads.next();
+  observation.invalidate("claims");
+  (await again).release();
+  await observation.settled;
+  assert.equal(walks.all.length, 0);
+  assert.equal(states.all.length, 2);
 });
 
 test("invalidations during a read collapse into one follow-up that reuses known history", async () => {

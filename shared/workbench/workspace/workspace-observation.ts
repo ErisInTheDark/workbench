@@ -115,9 +115,12 @@ export const WorkspaceReleaseSchema = z.object({
   generation: revision,
 }).strict();
 
-/** Usage arrives first; claim hotspots stay pending until rename history has been merged. */
+/**
+ * One stats section. `refinement` stays pending while published data is provisional: claim hotspots arrive
+ * before rename history is merged. Sections without a refinement step publish it as current.
+ */
 const statsObservation = {
-  claimsPhase: WorkspaceSourcePhaseSchema,
+  refinement: WorkspaceSourcePhaseSchema,
   data: WorkbenchStatsObservedResponseSchema.nullable(),
 };
 

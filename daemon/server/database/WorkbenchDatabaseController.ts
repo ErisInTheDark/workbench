@@ -24,7 +24,10 @@ import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/w
 import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
 import type { WorkbenchFeedbackReadRequest, WorkbenchFeedbackRecord } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type {
+  WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsSectionData,
+} from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsRepository.ts";
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
@@ -765,13 +768,18 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.#statsMutation({ type: "recordStatsRateLimits", observation });
   }
 
-  async readStats(request: WorkbenchStatsReadRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = [], workbenchProjectId: string | null = null) {
+  async readStats<Section extends WorkbenchStoredStatsSection>(
+    request: WorkbenchStatsReadRequest & { section: Section },
+    now?: number,
+    renames: readonly WorkbenchGitClaimRename[] = [],
+    workbenchProjectId: string | null = null,
+  ): Promise<WorkbenchStatsSectionData<Section>> {
     await this.start();
     const response = await this.#request({ type: "readStats", request, renames, workbenchProjectId, ...(now === undefined ? {} : { now }) });
-    if (response.type !== "statsResult") {
+    if (response.type !== "statsResult" || response.result.section !== request.section) {
       throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${response.type}`);
     }
-    return response.result;
+    return response.result as WorkbenchStatsSectionData<Section>;
   }
 
   async beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number) {
@@ -920,11 +928,15 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       const { used_heap_size: used, total_heap_size: total } = await worker.getHeapStatistics();
       return { used, total };
     };
-    const [writer, core, transcript, query] = await Promise.all([
+    const [writer, ...readers] = await Promise.all([
       read(this.#state === "closed" || this.#state === "failed" ? null : this.#worker),
       ...WORKBENCH_DATABASE_READ_LANES.map(lane => read(this.#readers.get(lane) ?? null)),
     ]);
-    return { writer, core, transcript, query };
+    return {
+      writer: writer ?? null,
+      ...Object.fromEntries(WORKBENCH_DATABASE_READ_LANES.map((lane, index) => [lane, readers[index] ?? null])) as
+        Record<WorkbenchDatabaseReadLane, Awaited<ReturnType<typeof read>>>,
+    };
   }
 
   async #openReaders() {

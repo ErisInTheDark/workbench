@@ -3,10 +3,10 @@
  * - STATS_TOKEN_SERIES: shared presentation, token-count, and cost access for the selectable billing categories.
  */
 import type { ComponentType } from "react";
-import type { StatsTokenType, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import { SquareArrowRightEnterIcon, SquareEqualIcon, SquareArrowRightExitIcon, SquarePenIcon, type IconProps } from "../workbench-icons";
+import type { StatsTokenType, WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import { SquareArrowRightEnterIcon, SquareEqualIcon, SquareArrowRightExitIcon, SquarePenIcon, type IconProps } from "../../workbench-icons";
 
-type Tokens = WorkbenchStatsResponse["tokens"]["totals"];
+type Tokens = WorkbenchStatsSectionData<"usage">["tokens"]["totals"];
 
 export const STATS_TOKEN_SERIES: readonly {
   key: StatsTokenType;
