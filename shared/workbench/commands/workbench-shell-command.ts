@@ -17,7 +17,7 @@ export const WorkbenchShellInputSchema = z.object({
   login: z.boolean().optional().describe("Use login-shell semantics. Defaults to true."),
   timeout_ms: z.number().int().nonnegative().optional().describe("Maximum command runtime in milliseconds. Codex's command default applies when omitted."),
   workdir: z.string().min(1).optional().describe("Working directory. Relative paths resolve from the current turn sandbox cwd."),
-  expensive: z.boolean().optional().describe("Set true for builds, test suites and other CPU/RAM-heavy commands: they queue machine-wide instead of all running at once, and queue time does not count against timeout_ms."),
+  expensive: z.boolean().optional().describe("Set true when running known-expensive tasks. DO NOT set for builds or tests already optimised to be good citizens. This queues tasks machine-wide. Mixing long, serial, low-cpu work with marking as expensive means a LOT of burnt time."),
 });
 
 export type WorkbenchShellInput = z.infer<typeof WorkbenchShellInputSchema>;
