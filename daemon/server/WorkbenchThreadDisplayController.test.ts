@@ -12,6 +12,7 @@ import WorkbenchThreadDisplayController, {
   setWorkbenchThreadEntryPriority,
 } from "./WorkbenchThreadDisplayController";
 import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
+import { parseWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
 const entry = projectWorkbenchThreadDraft(WorkbenchThreadDraftSchema.parse({
   attachments: [],
@@ -48,6 +49,30 @@ test("display owner applies priority semantics and rejects settled draft placeme
     snoozed: true,
   });
   assert.equal(setWorkbenchThreadEntryDisplaySection(entry, "settled"), null);
+});
+
+test("display priority cannot snooze provider-owned thread activity", () => {
+  const providerEntry = parseWorkbenchThreadStateEntry({
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: "thread" },
+    lifecycle: {
+      agent: { agentStatus: "working", turnId: "turn" },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread",
+  });
+  assert.ok(providerEntry.entryKind === "thread");
+  if (providerEntry.entryKind !== "thread") return;
+  assert.equal(setWorkbenchThreadEntryPriority(providerEntry, "snoozed"), null);
+  assert.ok(setWorkbenchThreadEntryPriority(providerEntry, "pinned"));
+  assert.ok(setWorkbenchThreadEntryPriority({
+    ...providerEntry,
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+  }, "snoozed"));
 });
 
 test("display owner clone can replace order without changing its source", () => {

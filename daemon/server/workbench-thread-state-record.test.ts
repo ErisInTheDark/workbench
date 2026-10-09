@@ -63,6 +63,74 @@ test("provider omission preserves saved top-level visibility and placement", () 
   assert.ok(projectWorkbenchThreadStateEntry(settled));
 });
 
+test("working top-level records repair to awake while inactive snooze remains durable", () => {
+  const lifecycle = {
+    agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") },
+    kind: "working" as const,
+    reason: "acceptedIntent" as const,
+    settled: false,
+  };
+  const snoozedUntil = {
+    targets: [{
+      identity: { harness: "codex" as const, threadId: "target" },
+      projectId: fixtureIdentityValues.ProjectId.project,
+      title: "Target",
+    }],
+  };
+  const working = parseWorkbenchThreadStateEntry({
+    ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
+  });
+  assert.ok(working.entryKind === "thread");
+  assert.equal(working.metadata.snoozed, false);
+  assert.equal(working.snoozedUntil, null);
+
+  const inactive = parseWorkbenchThreadStateEntry({
+    ...entry, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
+  });
+  assert.ok(inactive.entryKind === "thread");
+  assert.equal(inactive.metadata.snoozed, true);
+  assert.deepEqual(inactive.snoozedUntil, snoozedUntil);
+});
+
+test("stored working snooze repair reports every corrected path", () => {
+  const conformed = conformStoredWorkbenchThreadStateRecord({
+    ...entry,
+    lifecycle: {
+      agent: { agentStatus: "working", turnId: "turn" },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    },
+    metadata: { ...entry.metadata, snoozed: true },
+    snoozedUntil: {
+      targets: [{
+        identity: { harness: "codex", threadId: "target" },
+        projectId: fixtureIdentityValues.ProjectId.project,
+        title: "Target",
+      }],
+    },
+  }, fixtureIdentityValues.ProjectId.project);
+  assert.equal(conformed.success, true);
+  if (!conformed.success || conformed.data.entryKind !== "thread") return;
+  assert.equal(conformed.data.metadata.snoozed, false);
+  assert.equal(conformed.data.snoozedUntil, null);
+  assert.deepEqual(conformed.repairedPaths, [["metadata", "snoozed"], ["snoozedUntil"]]);
+
+  const withoutDeadline = conformStoredWorkbenchThreadStateRecord({
+    ...entry,
+    lifecycle: {
+      agent: { agentStatus: "working", turnId: "turn" },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    },
+    metadata: { ...entry.metadata, snoozed: true },
+  }, fixtureIdentityValues.ProjectId.project);
+  assert.equal(withoutDeadline.success, true);
+  if (!withoutDeadline.success) return;
+  assert.deepEqual(withoutDeadline.repairedPaths, [["metadata", "snoozed"]]);
+});
+
 test("subagent visibility still requires provider observation", () => {
   const { metadata: _metadata, ...common } = entry;
   const record = parseWorkbenchThreadStateEntry({

@@ -1,5 +1,5 @@
 /*
- * No production exports. Protects the observed feed's optimistic overlay lifecycle and older-turn window paging.
+ * No production exports. Protects observed activity, optimistic overlay lifecycle, and older-turn window paging.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -24,7 +24,11 @@ function projection(turns: Array<{ id: string; status?: string; clientIds?: stri
   } as unknown as WorkbenchTranscriptProjection;
 }
 
-function fixture(runtime: Record<string, object> = {}, lifecycle: object = { kind: "needsAttention", reason: "noActiveTurn", settled: false }) {
+function fixture(
+  runtime: Record<string, object> = {},
+  lifecycle: object = { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+  snoozed = false,
+) {
   const stops: object[] = [];
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const submits: Array<{ clientMessageId: string }> = [];
@@ -33,7 +37,7 @@ function fixture(runtime: Record<string, object> = {}, lifecycle: object = { kin
   let published: Partial<ThreadStoreState> = {};
   const entry = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId },
-    metadata: { archived: false, pinned: false, snoozed: false },
+    metadata: { archived: false, pinned: false, snoozed },
     lifecycle,
   };
   const ports = {
@@ -102,6 +106,16 @@ test("only a working thread has a live turn, whatever status the provider left o
   working.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "completed" }]));
   assert.equal(working.published.turns?.liveTurnId, "turn-2");
   working.release();
+});
+
+test("snoozed retained input is inactive after interruption while an unsnoozed question remains active", () => {
+  const lifecycle = { kind: "needsAttention", reason: "pendingInput", requestKey: "question", settled: false };
+  const active = fixture({}, lifecycle);
+  assert.equal(active.published.summary?.head?.status, "active:waitingOnUserInput");
+  active.release();
+  const snoozed = fixture({}, lifecycle, true);
+  assert.equal(snoozed.published.summary?.head?.status, "idle");
+  snoozed.release();
 });
 
 test("stop reaches the daemon whenever the thread is working, and not when it is idle", async () => {

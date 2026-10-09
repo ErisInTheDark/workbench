@@ -618,7 +618,7 @@ test("exact-turn transitions reject stale completion and stopped settlement pres
   assert.equal(isWorkbenchThreadStatusProviderOwned(pendingInput), true);
   assert.deepEqual(
     reduceWorkbenchThreadLifecycle(pendingInput, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] }),
-    pendingInput,
+    working,
   );
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "settle", entryKind: "thread" }), pendingInput);
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, { kind: "userNeedsAttention" }), pendingInput);
@@ -666,41 +666,38 @@ test("answered input can reopen terminal lifecycle without changing ordinary res
   }
 });
 
-test("late same-turn intent admission preserves an unresolved questionnaire", () => {
+test("accepted provider intent replaces pending input regardless of its prior turn correlation", () => {
   const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
   const pendingInput = reduceWorkbenchThreadLifecycle(
     reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId }),
     { kind: "pendingInput", requestKey: "request", turnId },
   );
 
-  assert.equal(
-    reduceWorkbenchThreadLifecycle(pendingInput, { kind: "acceptedIntent", turnId }),
-    pendingInput,
-  );
-  assert.deepEqual(
-    reduceWorkbenchThreadLifecycle(pendingInput, {
+  for (const acceptedTurnId of [turnId, fixtureIdentityValues.WorkbenchTurnId["new"]]) {
+    assert.deepEqual(reduceWorkbenchThreadLifecycle(pendingInput, {
       kind: "acceptedIntent",
-      turnId: fixtureIdentityValues.WorkbenchTurnId["new"],
-    }),
-    {
+      turnId: acceptedTurnId,
+    }), {
       agent: {
         agentStatus: "working",
-        turnId: fixtureIdentityValues.WorkbenchTurnId["new"],
+        turnId: acceptedTurnId,
       },
       kind: "working",
       reason: "acceptedIntent",
       settled: false,
-    },
-  );
+    });
+  }
 
   const uncorrelatedPendingInput = reduceWorkbenchThreadLifecycle(
     null,
     { kind: "pendingInput", requestKey: "request" },
   );
-  assert.equal(
-    reduceWorkbenchThreadLifecycle(uncorrelatedPendingInput, { kind: "acceptedIntent", turnId }),
-    uncorrelatedPendingInput,
-  );
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(uncorrelatedPendingInput, { kind: "acceptedIntent", turnId }), {
+    agent: { agentStatus: "working", turnId },
+    kind: "working",
+    reason: "acceptedIntent",
+    settled: false,
+  });
 });
 
 test("grouping keeps terminal status while settlement moves it to other", () => {

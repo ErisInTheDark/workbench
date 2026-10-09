@@ -845,6 +845,9 @@ export default class WorkbenchThreadStateController {
         && existing.pendingQuestionnaire?.requestKey === questionnaireMutation.requestKey;
       const shouldSetQuestionnaire = questionnaireMutation?.kind === "set"
         && !areDeeplyEqual(existing.pendingQuestionnaire, questionnaireMutation.questionnaire);
+      const shouldDropQuestionnaire = event.kind === "acceptedIntent"
+        && existing.entryKind === "thread"
+        && Boolean(existing.pendingQuestionnaire);
       if (
         event.kind !== "acceptedIntent"
         && areDeeplyEqual(existing.lifecycle, lifecycle)
@@ -871,7 +874,7 @@ export default class WorkbenchThreadStateController {
         };
       const next = questionnaireMutation?.kind === "set"
         ? { ...lifecycleEntry, pendingQuestionnaire: questionnaireMutation.questionnaire }
-        : shouldClearQuestionnaire
+        : shouldClearQuestionnaire || shouldDropQuestionnaire
           ? { ...lifecycleEntry, pendingQuestionnaire: null }
           : lifecycleEntry;
       const parsedNext = parseWorkbenchThreadStateEntry({
@@ -1896,6 +1899,7 @@ export default class WorkbenchThreadStateController {
         || source.entryKind !== "thread"
         || source.metadata.archived
         || source.lifecycle.settled
+        || isWorkbenchThreadStatusProviderOwned(source.lifecycle)
         || !target
         || target.entryKind !== "thread"
         || target.metadata.archived
@@ -2001,9 +2005,15 @@ export default class WorkbenchThreadStateController {
     const key = getThreadDisplayThreadKey(request.identity.harness, request.identity.threadId);
     const candidate = state.entries.get(key);
     const snoozingQuestionnaire = request.method === "workbench/thread-state/questionnaire/snooze";
-    const snoozeQuestionnaire = snoozingQuestionnaire && candidate?.entryKind === "thread"
+    const plainQuestionnaireSnooze = request.method === "workbench/thread-state/snooze/set" && request.snoozed;
+    const snoozeQuestionnaire = (snoozingQuestionnaire || plainQuestionnaireSnooze) && candidate?.entryKind === "thread"
       && !candidate.metadata.archived
-      && candidate.pendingQuestionnaire?.requestKey === request.requestKey
+      && candidate.pendingQuestionnaire
+      && (snoozingQuestionnaire
+        ? candidate.pendingQuestionnaire.requestKey === request.requestKey
+        : candidate.lifecycle.kind === "needsAttention"
+          && candidate.lifecycle.reason === "pendingInput"
+          && candidate.lifecycle.requestKey === candidate.pendingQuestionnaire.requestKey)
       ? candidate.pendingQuestionnaire : null;
     if (snoozingQuestionnaire && !snoozeQuestionnaire) return { accepted: false, revision: state.revision };
     const completionQuestionnaire = request.method === "workbench/thread-state/status/set"
@@ -2041,6 +2051,14 @@ export default class WorkbenchThreadStateController {
         || (isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
           && !(request.status === "completed" && completionQuestionnaire))
       )) {
+        return { accepted: false, revision: state.revision };
+      }
+      if (
+        request.method === "workbench/thread-state/snooze/set"
+        && request.snoozed
+        && isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
+        && !snoozeQuestionnaire
+      ) {
         return { accepted: false, revision: state.revision };
       }
       const canSettle = entry.lifecycle.kind === "completed"

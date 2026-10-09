@@ -1117,57 +1117,68 @@ test("failed retroactive archival preserves the visible thread and its settled f
   } finally { await controller.dispose(); }
 });
 
-test("questionnaire snooze retains input through interruption, then stop dismisses and wakes it", async () => {
+test("plain questionnaire snooze retains input through interruption for codex and claude", async context => {
   const question = {
     itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44", requestKey: "request", turnId: null,
     request: { id: "request", title: "Choose", summary: "", submitLabel: "Submit", questions: [
       { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
     ] },
   };
-  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1, entryKind: "thread", title: "Task", identity: { harness: "codex", threadId: fixtureThreadIds["snooze-question"] },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: fixtureTurnIds["turn"], settled: false },
-    pendingQuestionnaire: question,
-  };
-  let interrupts = 0;
-  const controller = new WorkbenchThreadStateController({
-    storageRoot: "questionnaire-snooze", threadStateStore: new MemoryThreadStatePersistence(),
-    getProjectCatalog: projectCatalog,
-    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [provider], { complete: true }); return []; },
-    interruptQuestionnaire: async () => {
-      interrupts++;
-      await controller.applyLifecycle(fixtureProjectIds["project"], "codex", provider.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
-      return true;
-    },
-  });
-  try {
-    await controller.readProject(fixtureProjectIds["project"]);
-    await controller.refresh(fixtureProjectIds["project"]);
-    const response = await controller.handleRequest("observer", {
-      method: "workbench/thread-state/questionnaire/snooze", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, requestKey: question.requestKey,
+  for (const harness of ["codex", "claude"] as const) {
+    await context.test(harness, async () => {
+      const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+        activityAt: 1, entryKind: "thread", title: "Task", identity: { harness, threadId: fixtureThreadIds["snooze-question"] },
+        metadata: { archived: false, pinned: false, snoozed: false },
+        lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "request", turnId: fixtureTurnIds["turn"], settled: false },
+        pendingQuestionnaire: question,
+      };
+      let interrupts = 0;
+      const controller = new WorkbenchThreadStateController({
+        storageRoot: `questionnaire-snooze-${harness}`, threadStateStore: new MemoryThreadStatePersistence(),
+        getProjectCatalog: projectCatalog,
+        reconcileProject: async (_project, _signal, accept) => { await accept(harness, [provider], { complete: true }); return []; },
+        interruptQuestionnaire: async () => {
+          interrupts++;
+          await controller.applyLifecycle(fixtureProjectIds["project"], harness, provider.identity.threadId, {
+            kind: "turnCompleted", status: "interrupted", turnId: fixtureTurnIds.turn,
+          });
+          return true;
+        },
+      });
+      try {
+        await controller.readProject(fixtureProjectIds["project"]);
+        await controller.refresh(fixtureProjectIds["project"]);
+        const response = await controller.handleRequest("observer", {
+          method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
+          identity: provider.identity, snoozed: true,
+        });
+        assert.equal(response.error, undefined);
+        assert.equal(interrupts, 1);
+        const read = async () => (await controller.getSnapshot(fixtureProjectIds.project)).entries
+          .find(entry => entry.entryKind === "thread" && entry.identity.threadId === provider.identity.threadId);
+        let entry = await read();
+        assert.ok(entry?.entryKind === "thread");
+        assert.equal(entry.metadata.snoozed, true);
+        assert.equal(entry.lifecycle.kind, "needsAttention");
+        assert.deepEqual(entry.pendingQuestionnaire, question);
+        await controller.applyLifecycle(fixtureProjectIds.project, harness, provider.identity.threadId, {
+          kind: "turnCompleted", status: "interrupted", turnId: fixtureTurnIds.turn,
+        });
+        entry = await read();
+        assert.ok(entry?.entryKind === "thread");
+        assert.equal(entry.lifecycle.kind, "needsAttention");
+        await controller.handleRequest("observer", {
+          method: "workbench/thread-state/stop", projectId: fixtureProjectIds.project,
+          identity: provider.identity, requestKey: question.requestKey,
+        });
+        entry = await read();
+        assert.ok(entry?.entryKind === "thread");
+        assert.equal(entry.lifecycle.kind, "stopped");
+        assert.equal(entry.metadata.snoozed, false);
+        assert.equal(entry.pendingQuestionnaire, null);
+      } finally { await controller.dispose(); }
     });
-    assert.equal(response.error, undefined);
-    assert.equal(interrupts, 1);
-    const read = async () => (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(entry => entry.entryKind === "thread" && entry.identity.threadId === provider.identity.threadId);
-    let entry = await read();
-    assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.metadata.snoozed, true);
-    assert.equal(entry.lifecycle.kind, "needsAttention");
-    assert.deepEqual(entry.pendingQuestionnaire, question);
-    await controller.applyLifecycle(fixtureProjectIds["project"], "codex", provider.identity.threadId, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") });
-    entry = await read();
-    assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.lifecycle.kind, "needsAttention");
-    await controller.handleRequest("observer", {
-      method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: provider.identity, requestKey: question.requestKey,
-    });
-    entry = await read();
-    assert.ok(entry?.entryKind === "thread");
-    assert.equal(entry.lifecycle.kind, "stopped");
-    assert.equal(entry.metadata.snoozed, false);
-    assert.equal(entry.pendingQuestionnaire, null);
-  } finally { await controller.dispose(); }
+  }
 });
 
 test("stop marks a working thread stopped without waiting for its interrupt event", async () => {
@@ -1176,14 +1187,29 @@ test("stop marks a working thread stopped without waiting for its interrupt even
     metadata: { archived: false, pinned: false, snoozed: false },
     lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
   };
+  const target: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", title: "Target", identity: { harness: "codex", threadId: fixtureThreadIds["target"] },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+  };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "thread-stop", threadStateStore: new MemoryThreadStatePersistence(),
     getProjectCatalog: projectCatalog,
-    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [working], { complete: true }); return []; },
+    reconcileProject: async (_project, _signal, accept) => { await accept("codex", [working, target], { complete: true }); return []; },
   });
   try {
     await controller.readProject(fixtureProjectIds["project"]);
     await controller.refresh(fixtureProjectIds["project"]);
+    const directSnooze = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
+      identity: working.identity, snoozed: true,
+    });
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(directSnooze.result).accepted, false);
+    const dependentSnooze = await controller.handleRequest("observer", {
+      method: "workbench/thread-state/snooze/until", projectId: fixtureProjectIds.project,
+      identity: working.identity, target: { identity: target.identity, projectId: fixtureProjectIds.project },
+    });
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(dependentSnooze.result).accepted, false);
     const response = await controller.handleRequest("observer", {
       method: "workbench/thread-state/stop", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), identity: working.identity,
     });

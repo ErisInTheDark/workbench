@@ -338,7 +338,8 @@ function WorkbenchThreadSidebarActionsProvider({
         onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned, source),
       }, {
         checked: snoozed,
-        disabled: group === "archived" || (entry.entryKind !== "draft" && entry.lifecycle.settled),
+        disabled: group === "archived" || (entry.entryKind !== "draft"
+          && (entry.lifecycle.settled || entry.lifecycle.kind === "working")),
         icon: <SnoozedThreadIcon size={16} />,
         id: "snooze",
         label: snoozed ? "Wake" : "Snooze thread",

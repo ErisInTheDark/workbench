@@ -10,7 +10,7 @@ import type {
   WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import { getWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import type { WorkbenchThreadPriority } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchThreadStatusProviderOwned, type WorkbenchThreadPriority } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 
 export function setWorkbenchThreadEntryPriority(
@@ -19,6 +19,7 @@ export function setWorkbenchThreadEntryPriority(
 ): WorkbenchThreadStateEntry | null {
   if (entry.entryKind !== "draft" && (entry.entryKind === "subagent" || entry.lifecycle.settled)) return null;
   if (entry.metadata.archived) return null;
+  if (priority === "snoozed" && entry.entryKind === "thread" && isWorkbenchThreadStatusProviderOwned(entry.lifecycle)) return null;
   const metadata = priority === "pinned"
     ? { archived: false as const, pinned: true, snoozed: false }
     : priority === "main"

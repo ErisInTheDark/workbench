@@ -68,7 +68,8 @@ interface PendingInput {
 
 function statusOf(entry: ThreadEntry) {
   return entry.lifecycle.kind === "working" ? "active"
-    : entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput" ? "active:waitingOnUserInput"
+    : entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
+      && (entry.entryKind === "subagent" || !entry.metadata.snoozed) ? "active:waitingOnUserInput"
       : "idle";
 }
 

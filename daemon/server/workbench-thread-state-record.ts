@@ -181,6 +181,15 @@ function internalFields(value: unknown) {
   };
 }
 
+function repairWorkingSnooze(record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
+  if (record.entryKind !== "thread" || record.lifecycle.kind !== "working" || !record.metadata.snoozed) return record;
+  return {
+    ...record,
+    metadata: { archived: false, pinned: record.metadata.pinned, snoozed: false },
+    snoozedUntil: null,
+  };
+}
+
 export function safeParseWorkbenchThreadStateEntry(value: unknown):
   | { data: WorkbenchThreadStateEntry; success: true }
   | { error: unknown; success: false } {
@@ -192,7 +201,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
   if (parsed.data.entryKind === "thread") {
     const { previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...persistent } = parsed.data;
-    return { data: { ...persistent, ...internalFields(value) }, success: true };
+    return { data: repairWorkingSnooze({ ...persistent, ...internalFields(value) }), success: true };
   }
   const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
@@ -229,9 +238,17 @@ export function conformStoredWorkbenchThreadStateRecord(
   const gitArc = persistent.gitArc?.acceptance
     ? (({ acceptance: _acceptance, ...arc }) => arc)(persistent.gitArc)
     : persistent.gitArc;
+  const record = { ...persistent, ...(gitArc !== undefined ? { gitArc } : {}), ...internalFields(value) };
+  const repaired = repairWorkingSnooze(record);
+  const repairedWorkingSnooze = repaired !== record;
   return {
-    data: { ...persistent, ...(gitArc !== undefined ? { gitArc } : {}), ...internalFields(value) },
-    repairedPaths: conformed.repairedPaths,
+    data: repaired,
+    repairedPaths: [
+      ...conformed.repairedPaths,
+      ...(repairedWorkingSnooze
+        ? [["metadata", "snoozed"], ...(record.snoozedUntil ? [["snoozedUntil"]] : [])]
+        : []),
+    ],
     success: true,
   };
 }
