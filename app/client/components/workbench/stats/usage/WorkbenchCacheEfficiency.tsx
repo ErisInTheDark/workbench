@@ -5,10 +5,10 @@
 import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
 import useStats from "../use-stats";
-import WorkbenchStatsChart from "../WorkbenchStatsChart";
 import WorkbenchStatsShareList from "../WorkbenchStatsShareList";
 import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import { compactNumber, formatPercent } from "../stats-formatters";
+import WorkbenchStatsStreamChart from "../WorkbenchStatsStreamChart";
+import { compactNumber, formatPercent, formatStatsBucket } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
 
 /** Mirrors the daemon cut so older daemons that still send small threads read the same. */
@@ -27,6 +27,8 @@ export default function WorkbenchCacheEfficiency() {
   const rates = cache?.buckets.map((bucket) => bucket.cacheHitPercent) ?? [];
   // The worst period sits on the baseline; a whole-percent floor below 100 keeps a flat line visible.
   const floor = Math.min(99, Math.floor(Math.min(...rates.filter((rate) => rate !== null))));
+  // The best period reaches the top, rounded up to a whole percent, so the band fills the chart instead of hugging the floor.
+  const ceiling = Math.min(100, Math.max(floor + 1, Math.ceil(Math.max(...rates.filter((rate) => rate !== null)))));
   return (
     <section aria-busy={loading} aria-labelledby="cache-efficiency-heading" className={`space-y-3 [--hue-chroma:50%] ${statsReloadingClassName(loading && Boolean(stats))}`}>
       <h2 className="m-0 text-[1rem] font-semibold text-text" id="cache-efficiency-heading">
@@ -49,15 +51,19 @@ export default function WorkbenchCacheEfficiency() {
         <p className={`m-0 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No recorded input for these filters.</p>
       ) : (
         <div className={`grid gap-8 lg:grid-cols-2 ${statsRevealClassName}`}>
-          <WorkbenchStatsChart
-            appearance="area"
-            buckets={cache.buckets.map((bucket) => bucket.startedAt)}
-            fixedMaximum={100}
-            formatValue={formatPercent}
-            minimum={Number.isFinite(floor) ? floor : 0}
-            series={[{ colourClassName: "text-hue-300", label: "Hit rate", values: rates }]}
-            title="Hit rate per period"
-          />
+          <div className="min-w-0 space-y-2">
+            <h3 className="m-0 text-[0.74rem] font-semibold text-fg/muted">Hit rate per period</h3>
+            <WorkbenchStatsStreamChart
+              buckets={cache.buckets.map((bucket) => bucket.startedAt)}
+              className="h-40"
+              formatBucket={(startedAt) => formatStatsBucket(startedAt, stats?.bucketUnit ?? "day")}
+              formatValue={formatPercent}
+              label="Input cache hit rate per period"
+              maximum={Number.isFinite(ceiling) ? ceiling : 100}
+              minimum={Number.isFinite(floor) ? floor : 0}
+              series={[{ key: "hitRate", label: "Hit rate", textClassName: "text-hue-300", values: rates }]}
+            />
+          </div>
           <div className="min-w-0 space-y-2">
             <h3 className="m-0 px-2 text-[0.74rem] font-semibold text-fg/muted">Lowest hit rates · threads with 500K+ uncached input</h3>
             <WorkbenchStatsShareList

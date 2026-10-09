@@ -80,6 +80,7 @@ export default function WorkbenchStatsActivity() {
         <div className={`[--hue-chroma:55%] ${statsRevealClassName} ${statsReloadingClassName(loading)}`}>
           <WorkbenchStatsStreamChart
             buckets={buckets}
+            emptyLabel="No usage in this period"
             formatBucket={(startedAt) => formatStatsBucket(startedAt, unit)}
             formatValue={metric === "cost" ? formatMoney : compactNumber}
             label={metric === "cost" ? "Estimated API cost per period" : "Tokens per period"}
