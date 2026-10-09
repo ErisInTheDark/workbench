@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - createSvgCodeBlockPreviewSrcDoc: build the sandboxed SVG preview document and its content policy.
  * - renderThreadMarkdown: render parsed markdown, inline content and interactive code headers; top-level section breaks host section-action slots.
  * - renderThreadInlineMarkdown: render inline markdown without a block container.
  */
@@ -92,14 +93,14 @@ function renderAppendReveal(children: ReactNode, key: string) {
   );
 }
 
-function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
+export function createSvgCodeBlockPreviewSrcDoc (svgSource: string) {
   return [
     "<!doctype html>",
     "<html>",
     "<head>",
     "<meta charset=\"utf-8\">",
     "<meta name=\"color-scheme\" content=\"light dark\">",
-    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline';\">",
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'\">",
     `<style>${SVG_PREVIEW_SRC_DOC_STYLE}</style>`,
     "</head>",
     "<body>",
@@ -732,7 +733,7 @@ function ThreadCodeBlock ({
             <iframe
               className="block size-full border-0 bg-transparent scheme-light-dark"
               key={svgPreviewSrcDoc}
-              sandbox=""
+              sandbox="allow-scripts"
               srcDoc={svgPreviewSrcDoc}
               title="SVG code block preview"
             />

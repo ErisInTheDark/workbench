@@ -1,12 +1,30 @@
 /*
- * No production exports. Regression wards protect ordered-list ordinals, SVG preview laziness, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback.
+ * No production exports. Regression wards protect SVG preview policy/laziness, ordered-list ordinals, agent-authored inline markers, notice blocks, Markdown bodies, and literal fallback.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement, Fragment } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { renderThreadInlineMarkdown, renderThreadMarkdown } from "./thread-markdown-render";
+import {
+  createSvgCodeBlockPreviewSrcDoc,
+  renderThreadInlineMarkdown,
+  renderThreadMarkdown,
+} from "./thread-markdown-render";
+
+test("SVG preview policy allows inline scripts and styles while denying other sources", () => {
+  const document = createSvgCodeBlockPreviewSrcDoc("<svg><script>globalThis.previewRan = true</script></svg>");
+  const policy = document.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u)?.[1];
+  assert.ok(policy);
+  const directives = Object.fromEntries(policy.split(";").map((directive) => {
+    const [name, ...values] = directive.trim().split(/\s+/u);
+    return [name, values.join(" ")];
+  }));
+
+  assert.equal(directives["default-src"], "'none'");
+  assert.equal(directives["script-src"], "'unsafe-inline'");
+  assert.equal(directives["style-src"], "'unsafe-inline'");
+});
 
 test("SVG source mode does not load a hidden preview document", () => {
   const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadMarkdown([
