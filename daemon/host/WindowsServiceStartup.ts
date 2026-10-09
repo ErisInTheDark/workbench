@@ -53,7 +53,7 @@ export default class WindowsServiceStartup implements ServiceStartupAdapter {
       "<RegistrationInfo><Description>Workbench daemon host</Description></RegistrationInfo>",
       enabled ? `<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xml(this.user)}</UserId></LogonTrigger></Triggers>` : "<Triggers/>",
       `<Principals><Principal id="User"><UserId>${xml(this.user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
-      "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>",
+      "<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>true</Hidden><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>",
       `<Actions Context="User"><Exec><Command>${xml(launcher)}</Command><Arguments>${xml(`${argument(root)} ${argument(this.options.nodePath)} ${argument(dataRoot)}`)}</Arguments><WorkingDirectory>${xml(root)}</WorkingDirectory></Exec></Actions>`,
       "</Task>",
     ].join("\r\n");
