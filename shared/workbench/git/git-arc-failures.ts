@@ -173,8 +173,21 @@ export class GitArcProposalAlreadyCommittedError extends Error {
 }
 
 function boundedMessage(value: string) {
-  return value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").replace(/\s+/gu, " ").trim().slice(0, 4_000)
-    || "The Git arc operation was rejected.";
+  const sanitise = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").replace(/\s+/gu, " ").trim();
+  const normalized = sanitise(value);
+  if (!normalized) return "The Git arc operation was rejected.";
+  if (normalized.length <= 4_000) return normalized;
+  const diagnostics = [...new Set(value.split(/\r?\n/gu)
+    .map(sanitise)
+    .filter(line => /(?:^|\s)(?:fatal|error):/iu.test(line)))].join(" | ").slice(0, 800);
+  const prefix = normalized.slice(0, 600);
+  const tail = normalized.slice(-2_500);
+  return [
+    prefix,
+    "[diagnostic middle omitted]",
+    ...(diagnostics ? [diagnostics, "[diagnostic tail]"] : []),
+    tail,
+  ].join(" ... ");
 }
 
 export function createGitArcOperationRejected(action: GitArcFailureAction, message: string): GitArcFailure {

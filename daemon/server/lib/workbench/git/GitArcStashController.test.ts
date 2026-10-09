@@ -22,7 +22,9 @@ test("discarding an adopted stash preserves the caller's live claims and changes
   await controller.stashArc({ cwd, threadId: "child" });
   await controller.createAndStartPlan({ cwd, threadId: "owner", intentName: "live", paths: ["two.txt"] });
   await fs.writeFile(path.join(cwd, "two.txt"), "live change\n");
-  await controller.adoptArc({ cwd, threadId: "owner", source: { harness: "codex", threadId: "child" } });
+  await controller.adoptArc({
+    cwd, threadId: "owner", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  });
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "owner" })).stashedClaims, ["one.txt"]);
   await assert.rejects(controller.stashArc({ cwd, threadId: "owner" }), /stash/i);
   await controller.discardStashedArc({ cwd, threadId: "owner" });

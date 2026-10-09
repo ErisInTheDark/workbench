@@ -25,6 +25,8 @@ export interface GitArcAdoptionInput {
   source: { harness: GitArcHarness; threadId: string };
   /** Move only these live source claims; the source keeps its stash and remaining claims. */
   selectedPaths?: string[];
+  /** Required when the source has saved stash: true moves it; false leaves it. */
+  transferStash?: boolean;
 }
 
 export interface GitArcSelectedTransferInput extends GitArcAdoptionInput {
@@ -87,8 +89,18 @@ export default class GitArcOwnershipTransferController {
     const [callerStash, sourceStash] = await Promise.all([
       stashes.readOwnedStash(caller, target), stashes.readOwnedStash(source, origin),
     ]);
+    if (sourceStash && input.transferStash === undefined) {
+      throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
+    }
+    if (!sourceStash && input.transferStash === true) {
+      throw new Error("transferStash is true, but the source has no saved stash.");
+    }
+    const moveStash = Boolean(sourceStash && input.transferStash);
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
+    if (moveStash && targetChain.length && await stack.chainHasPending(targetChain)) {
+      throw new GitArcRejectionError({ reason: "pendingStack" }, "Saved stash cannot move to a thread with pending stack layers.");
+    }
     const sourceOwn = stack.ownLayers(sourceChain, source);
     if (!selectedPaths && sourceOwn.length && await stack.chainHasPending(sourceOwn)) {
       throw new GitArcRejectionError({ reason: "stackedSource" }, "The source thread owns pending stack layers. They must be committed before adoption.");
@@ -110,15 +122,15 @@ export default class GitArcOwnershipTransferController {
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
-    if (selectedPaths && (!requested.length || new Set(requested).size !== selectedPaths.length
+    if (selectedPaths && (new Set(requested).size !== selectedPaths.length
       || requested.some(value => !sourceLive.includes(value)))) {
       throw new Error("Every selected path must be a distinct live claim owned by the releasing thread.");
     }
     const incoming = selectedPaths ? requested : sourceLive;
     const remaining = sourceLive.filter(value => !incoming.includes(value));
     const existing = targetOwned;
-    if (!incoming.length && (!sourceStash || selectedPaths)) throw new Error("The source thread owns no transferable live claims or saved stash.");
-    if (!selectedPaths && sourceStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
+    if (!incoming.length && !moveStash) throw new Error("The source thread owns no selected live claims or saved stash.");
+    if (moveStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
     const head = await repository.headOrNull();
     const sourceArc = liveArc(origin);
     const callerArc = liveArc(target);
@@ -145,7 +157,7 @@ export default class GitArcOwnershipTransferController {
     const updates: GitRefUpdate[] = [];
     const deletes: Array<{ oldValue?: string; ref: string }> = [];
     let stashCheckpoint: Awaited<ReturnType<GitCheckpointStore["prepareCheckpoint"]>> | null = null;
-    if (!selectedPaths && sourceStash) {
+    if (moveStash) {
       const baseline = await store.readCheckpoint(source.harness, source.threadId, sourceStash.checkpointCommit);
       if (!baseline.metadata || !["arc", "implement"].includes(baseline.metadata.kind)) {
         throw new Error("The source stash has no valid implementation checkpoint.");
@@ -187,7 +199,7 @@ export default class GitArcOwnershipTransferController {
       claimedPaths, intentName, intentDescription, phase: claimedPaths.length ? "active" as const : "resolved" as const,
       proposalIds: callerArc?.proposalIds ?? target?.proposalIds ?? [],
     };
-    const savedStash = !selectedPaths && sourceStash ? {
+    const savedStash = moveStash ? {
       checkpointCommit: stashCheckpoint!.checkpointCommit, paths: sourceStash.paths,
       intentName: sourceStash.intentName, intentDescription: sourceStash.intentDescription,
       proposalIds: [],
@@ -210,12 +222,12 @@ export default class GitArcOwnershipTransferController {
           ? { ...origin.retainedArc, checkpointCommit: sourcePrepared.checkpointCommit, claimedPaths: remaining } : null,
         proposalId: remaining.length ? origin.proposalId : null,
         proposalIds: remaining.length ? origin.proposalIds : [],
-        savedStash: selectedPaths ? origin.savedStash : null,
+        savedStash: moveStash ? null : origin.savedStash,
       }
       : {
         ...origin, checkpointCommit: sourcePrepared?.checkpointCommit ?? origin.checkpointCommit,
         phase: remaining.length ? "active" as const : "resolved" as const,
-        claimedPaths: remaining, savedStash: selectedPaths ? origin.savedStash : null,
+        claimedPaths: remaining, savedStash: moveStash ? null : origin.savedStash,
       } : null;
     const mutation = await registry.prepareOwners([
       { identity: caller, expectedCheckpointCommit: target?.checkpointCommit ?? null, next: nextTarget },
@@ -224,12 +236,15 @@ export default class GitArcOwnershipTransferController {
     updates.push(...mutation.updates);
     // Only the source loses files. Its pending proposals covering moved files can no longer be committed by their owner;
     // sealed proposals and every caller proposal are frozen snapshots that stay committable.
-    const sourceOpen = [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(!selectedPaths ? sourceStash?.proposalIds ?? [] : [])])]
+    const sourceOpen = [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(moveStash ? sourceStash?.proposalIds ?? [] : [])])]
       .filter(id => !sourceSealed.has(id));
     const { updates: invalidationUpdates, invalidatedProposals } = await proposals.prepareUnavailableUpdates({
       cwd: repository.root, ...source, repository,
       proposalIds: selectedPaths
-        ? await proposals.proposalsCoveringPaths(repository, source.harness, source.threadId, sourceOpen, incoming)
+        ? [...new Set([
+          ...await proposals.proposalsCoveringPaths(repository, source.harness, source.threadId, sourceOpen, incoming),
+          ...(moveStash ? sourceStash?.proposalIds ?? [] : []),
+        ])]
         : sourceOpen,
       reason: selectedPaths ? selectedReason : "Claim ownership was transferred to a coordinating thread.",
     });
@@ -241,7 +256,8 @@ export default class GitArcOwnershipTransferController {
       intentName, kind: plan ? "plan" : "arc",
       phase: claimedPaths.length ? plan ? "plan" : "active" : "stashed",
       repoRoot: repository.root, scopePaths: plan?.metadata?.scopePaths ?? claimedPaths,
-      claimedPaths, additionalClaims: incoming, stashedPaths: sourceStash?.paths ?? callerStash?.paths ?? [],
+      claimedPaths, additionalClaims: incoming,
+      stashedPaths: moveStash ? sourceStash?.paths ?? [] : callerStash?.paths ?? [],
       invalidatedProposals,
     };
     const sourcePlan = origin?.phase === "plan"
@@ -252,7 +268,7 @@ export default class GitArcOwnershipTransferController {
       checkpointCommit: origin?.phase === "plan" ? origin.checkpointCommit : sourceCheckpoint?.checkpointCommit ?? checkpointCommit,
       checkpointRef: sourceCheckpoint?.checkpointRef ?? checkpoint.checkpointRef,
       intentName: origin?.intentName ?? null, kind: "arc",
-      phase: origin?.phase === "plan" ? "plan" : remaining.length ? "active" : "resolved",
+      phase: origin?.phase === "plan" ? "plan" : remaining.length ? "active" : sourceStash && !moveStash ? "stashed" : "resolved",
       repoRoot: repository.root, scopePaths: remaining, claimedPaths: remaining, releasedClaims: incoming,
       ...(sourcePlan ? { plannedPaths: sourcePlan.metadata?.scopePaths ?? [] } : {}),
       invalidatedProposals,

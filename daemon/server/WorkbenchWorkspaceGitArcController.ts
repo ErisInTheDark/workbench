@@ -1037,17 +1037,37 @@ export default class WorkbenchWorkspaceGitArcController {
     if (paths) {
       const groups = this.groupRootPaths(project, members, paths, []);
       const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
+      let sourceHasStash = false;
+      let stashMembers = new Set<string>();
       const values = await this.runPreparedMembers(
         members,
         async () => {
           await beforeTransfer?.();
-          return members.filter(member => selected.has(member.repoRoot));
+          const source = await this.findLifecycleStateInMembers(project, members, input.source.harness, input.source.threadId);
+          stashMembers = new Set(source?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
+          sourceHasStash = stashMembers.size > 0;
+          if (sourceHasStash && input.transferStash === undefined) {
+            throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
+          }
+          if (!sourceHasStash && input.transferStash === true) {
+            throw new Error("transferStash is true, but the source has no saved stash.");
+          }
+          return members.filter(member => selected.has(member.repoRoot)
+            || input.transferStash === true && stashMembers.has(member.repoRoot));
         },
-        member => this.local.prepareAdoption({ ...input, harness, cwd: member.repoRoot, selectedPaths: selected.get(member.repoRoot)! }),
+        member => this.local.prepareAdoption({
+          ...input,
+          harness,
+          cwd: member.repoRoot,
+          selectedPaths: selected.get(member.repoRoot) ?? [],
+          transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
+        }),
         [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
       );
       return this.aggregateResults(project, values);
     }
+    let sourceHasStash = false;
+    let stashMembers = new Set<string>();
     const values = await this.runPreparedMembers(
       members,
       async () => {
@@ -1056,15 +1076,28 @@ export default class WorkbenchWorkspaceGitArcController {
           this.findLifecycleStateInMembers(project, members, input.source.harness, input.source.threadId),
           this.findLifecycleStateInMembers(project, members, harness, input.threadId),
         ]);
-        if (source?.stashedPaths?.length && caller?.stashedPaths?.length) {
+        stashMembers = new Set(source?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
+        sourceHasStash = stashMembers.size > 0;
+        if (sourceHasStash && input.transferStash === undefined) {
+          throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
+        }
+        if (!sourceHasStash && input.transferStash === true) {
+          throw new Error("transferStash is true, but the source has no saved stash.");
+        }
+        if (input.transferStash === true && caller?.stashedPaths?.length) {
           throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
         }
         const selected = new Set(source?.members
-          .filter(member => member.claimedPaths.length || member.stashedPaths?.length)
+          .filter(member => member.claimedPaths.length || input.transferStash === true && member.stashedPaths?.length)
           .map(member => member.repoRoot));
         return members.filter(member => selected.has(member.repoRoot));
       },
-      member => this.local.prepareAdoption({ ...input, harness, cwd: member.repoRoot }),
+      member => this.local.prepareAdoption({
+        ...input,
+        harness,
+        cwd: member.repoRoot,
+        transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
+      }),
       [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
     );
     return this.aggregateResults(project, values);
@@ -1072,32 +1105,52 @@ export default class WorkbenchWorkspaceGitArcController {
 
   async releaseToChild(
     project: AgentEndpointProjectResolution,
-    input: { cwd: string; harness: WorkbenchHarness; threadId: string; destination: { harness: WorkbenchHarness; threadId: string }; paths: string[] },
+    input: {
+      cwd: string;
+      harness: WorkbenchHarness;
+      threadId: string;
+      destination: { harness: WorkbenchHarness; threadId: string };
+      paths: string[];
+      transferStash?: boolean;
+    },
     beforeTransfer?: () => Promise<void>,
   ) {
     const members = await this.resolveRepoMembers(project);
     const selectedPaths = input.paths.map(value => this.parseRootPath(project, value, project.root.id).absolute);
-    if (!selectedPaths.length || new Set(selectedPaths.map(comparable)).size !== selectedPaths.length) {
-      throw new Error("Release to a subagent requires distinct live claim paths.");
+    if ((!selectedPaths.length && input.transferStash !== true)
+      || new Set(selectedPaths.map(comparable)).size !== selectedPaths.length) {
+      throw new Error("Release to a subagent requires distinct live claim paths or transferStash: true.");
     }
     const groups = this.groupRootPaths(project, members, input.paths, []);
     const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
+    let sourceHasStash = false;
+    let stashMembers = new Set<string>();
     const values = await this.runPreparedMembers<object>(
       members,
       async () => {
         await beforeTransfer?.();
         const parent = await this.findLifecycleStateInMembers(project, members, input.harness, input.threadId);
+        stashMembers = new Set(parent?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
+        sourceHasStash = stashMembers.size > 0;
+        if (sourceHasStash && input.transferStash === undefined) {
+          throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
+        }
+        if (!sourceHasStash && input.transferStash === true) {
+          throw new Error("transferStash is true, but the source has no saved stash.");
+        }
         const owned = new Set(parent?.members.filter(member => member.claimedPaths.length).map(member => member.repoRoot));
-        return members.filter(member => selected.has(member.repoRoot) || owned.has(member.repoRoot));
+        return members.filter(member => selected.has(member.repoRoot) || owned.has(member.repoRoot)
+          || input.transferStash === true && stashMembers.has(member.repoRoot));
       },
       async member => {
         const paths = selected.get(member.repoRoot);
-        if (paths) return await this.local.prepareReleaseToChild({
+        if (paths || input.transferStash === true && stashMembers.has(member.repoRoot)) return await this.local.prepareReleaseToChild({
           cwd: member.repoRoot,
           harness: input.destination.harness,
           threadId: input.destination.threadId,
           source: { harness: input.harness, threadId: input.threadId },
-          selectedPaths: paths,
+          selectedPaths: paths ?? [],
+          transferStash: sourceHasStash ? stashMembers.has(member.repoRoot) : input.transferStash,
         });
         const scope = await this.local.readScope({
           cwd: member.repoRoot, harness: input.harness, threadId: input.threadId,

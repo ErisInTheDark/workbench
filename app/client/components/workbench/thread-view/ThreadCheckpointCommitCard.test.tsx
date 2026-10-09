@@ -78,6 +78,26 @@ test("static previews do not claim to be loading and failures expose recovery in
   assert.doesNotMatch(failed, /aria-busy="true"|data-thread-checkpoint-commit-action/u);
 });
 
+test("bounded summaries display their exact changed-file count", () => {
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    ...pendingProps,
+    description: "",
+    presentation: "readonly",
+    state: {
+      status: "summary",
+      summary: {
+        changeCount: 1_300,
+        changes: null,
+        description: "",
+        title: "capture fixtures",
+      },
+    },
+    title: "capture fixtures",
+  }));
+
+  assert.match(html, />1300\b/u);
+});
+
 test("loaded proposed cards restore editing and commit actions only in interactive presentations", () => {
   const proposal = {
     amendTargetMessage: null, amendTargetSha: null, baseCommit: "a".repeat(40), changes: [],

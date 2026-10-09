@@ -18,12 +18,44 @@ import {
   defineWorkbenchAgentCommand,
   postWorkbenchAgentCommand,
 } from "./workbench-agent-command-definition";
+import { readGitClaimPathFile } from "./git-claim-path-file";
 
 const requiredText = z.string().trim().min(1);
 const paths = z.array(requiredText);
 const requiredPaths = paths.min(1);
 const rootPathsSchema = z.object({ paths: requiredPaths, rootId: requiredText }).strict();
 const memberRefSchema = z.object({ ref: requiredText, rootId: requiredText }).strict();
+const claimsCommandSchema = GitArcClaimsSchema.extend({
+  pathsFile: requiredText.optional().describe("Project-relative JSON file containing addPaths, removePaths, adoptPaths and roots."),
+}).strict().superRefine((input, context) => {
+  if (input.pathsFile && (input.addPaths.length || input.removePaths.length || input.adoptPaths.length || input.roots.length)) {
+    context.addIssue({ code: "custom", message: "pathsFile cannot be combined with inline claim arrays." });
+  }
+});
+
+function parseClaimsCommandArguments(args: readonly string[]) {
+  const remaining: string[] = [];
+  let pathsFile: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== "--paths-file") {
+      remaining.push(args[index]!);
+      continue;
+    }
+    if (pathsFile !== undefined) throw new Error("--paths-file was supplied twice.");
+    const value = args[++index];
+    if (!value?.trim()) throw new Error("--paths-file requires a project-relative JSON file.");
+    pathsFile = value;
+  }
+  const parsed = parseGitClaimArguments(remaining);
+  return {
+    addPaths: parsed.addPaths,
+    removePaths: parsed.removePaths,
+    adoptPaths: parsed.adoptPaths,
+    inherit: true as const,
+    roots: parsed.roots,
+    ...(pathsFile ? { pathsFile } : {}),
+  };
+}
 
 function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new GitArcRejectionError({ reason: "missingManagedIdentity" }, "A managed Workbench thread identity is required.");
@@ -129,30 +161,41 @@ const move = defineWorkbenchAgentCommand({
 });
 
 const release = defineWorkbenchAgentCommand({
-  description: "Release clean claims, or transfer selected live claims atomically to an owned subagent without changing workspace content.",
+  description: "Release clean claims, or transfer selected live claims and/or saved stash atomically to an owned subagent without changing workspace content.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "release"],
-  usage: "wb git arc release [--disown] | wb git arc release --to-subagent <name> -- <claim-path> [<claim-path>...]",
+  usage: "wb git arc release [--disown] | wb git arc release --to-subagent <name> [--transfer-stash|--leave-stash] [-- <claim-path>...]",
   inputSchema: z.object({
     disown: z.boolean().default(false).describe("Release ownership of dirty claims without changing their workspace or Git content."),
     toSubagent: requiredText.optional().describe("Owned unsettled subagent receiving selected live claims."),
     paths: paths.default([]),
+    transferStash: z.boolean().optional().describe("Required when saved stash exists: true transfers it; false leaves it."),
   }).strict().superRefine((input, context) => {
-    if (input.toSubagent && (!input.paths.length || input.disown) || !input.toSubagent && input.paths.length) {
-      context.addIssue({ code: "custom", message: "A subagent transfer requires paths and cannot use disown; ordinary release accepts no paths." });
+    if (input.toSubagent && ((!input.paths.length && input.transferStash !== true) || input.disown)
+      || !input.toSubagent && (input.paths.length || input.transferStash !== undefined)) {
+      context.addIssue({ code: "custom", message: "A subagent transfer requires paths or transferStash: true and cannot use disown; ordinary release accepts neither." });
     }
   }),
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, {
-      boolean: ["--disown"], values: ["--to-subagent"],
-    }), { boolean: ["--disown"], trailing: true, values: ["--to-subagent"] });
-    return { disown: flags.has("--disown"), toSubagent: flags.optional("--to-subagent") ?? undefined, paths: flags.trailing };
+      boolean: ["--disown", "--leave-stash", "--transfer-stash"], values: ["--to-subagent"],
+    }), { boolean: ["--disown", "--leave-stash", "--transfer-stash"], trailing: true, values: ["--to-subagent"] });
+    if (flags.has("--leave-stash") && flags.has("--transfer-stash")) throw new Error("Choose either --leave-stash or --transfer-stash.");
+    return {
+      disown: flags.has("--disown"), toSubagent: flags.optional("--to-subagent") ?? undefined, paths: flags.trailing,
+      ...(flags.has("--leave-stash") ? { transferStash: false } : flags.has("--transfer-stash") ? { transferStash: true } : {}),
+    };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       ...(input.toSubagent
-        ? { action: "arcTransferClaims" as const, destination: { kind: "subagent" as const, name: input.toSubagent }, paths: input.paths }
+        ? {
+          action: "arcTransferClaims" as const,
+          destination: { kind: "subagent" as const, name: input.toSubagent },
+          paths: input.paths,
+          ...(input.transferStash === undefined ? {} : { transferStash: input.transferStash }),
+        }
         : { action: "arcRelease" as const }),
       ...baseBody(callerHarness, callerThreadId, cwd),
       ...(!input.toSubagent ? { disown: input.disown } : {}),
@@ -264,36 +307,44 @@ const restore = defineWorkbenchAgentCommand({
 const claims = defineWorkbenchAgentCommand({
   description: "Edit active claims atomically, including continuation checks. Inheritance is required. Adopt only intentional dirty unclaimed work.",
   helpGroups: ["git-arc"], words: ["git", "arc", "claims"],
-  usage: "wb git arc claims --inherit [-- <add-path> -<remove-path> '*<adopt-path>'...]",
-  inputSchema: GitArcClaimsSchema,
-  parseCliArgs: (args) => ({ ...parseGitClaimArguments(args), inherit: true as const }),
-  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+  usage: "wb git arc claims --inherit [--paths-file <project-json> | -- <add-path> -<remove-path> '*<adopt-path>'...]",
+  inputSchema: claimsCommandSchema,
+  parseCliArgs: parseClaimsCommandArguments,
+  async buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    const { pathsFile, ...inline } = input;
+    const changes = pathsFile ? await readGitClaimPathFile(cwd, pathsFile) : inline;
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcClaims", ...input,
+      ...baseBody(callerHarness, callerThreadId, cwd), action: "arcClaims", ...changes, inherit: true,
     }, "git-arc-claims");
   },
 });
 
 const adopt = defineWorkbenchAgentCommand({
-  description: "Adopt a source's complete live claims and saved stash, or only selected live claims. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child. Preserve caller claims; source stash requires no caller stash.",
+  description: "Adopt complete or selected live claims. When the source has saved stash, transferStash must explicitly move or leave it. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "adopt"],
-  usage: "wb git arc adopt (--thread <id> | --name <name>) [--release-to-subagent <name>] [-- <claim-path> [<claim-path>...]]",
+  usage: "wb git arc adopt (--thread <id> | --name <name>) [--transfer-stash|--leave-stash] [--release-to-subagent <name>] [-- <claim-path>...]",
   inputSchema: z.object({
     threadId: requiredText.optional(),
     name: requiredText.optional(),
     paths: paths.default([]).describe("Move only these live source claims; the source keeps its stash and other claims."),
     releaseToSubagent: requiredText.optional().describe("Owned unsettled subagent receiving the selected claims instead of the caller."),
+    transferStash: z.boolean().optional().describe("Required when saved stash exists: true transfers it; false leaves it."),
   }).strict()
     .refine(input => Boolean(input.threadId) !== Boolean(input.name), "Supply exactly one threadId or name source.")
     .refine(input => !input.releaseToSubagent || input.paths.length > 0 && input.releaseToSubagent !== input.name,
       "releaseToSubagent requires paths and a different subagent than the source."),
   parseCliArgs(args) {
     const values = ["--thread", "--name", "--release-to-subagent"];
-    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values }), { trailing: true, values });
+    const booleans = ["--leave-stash", "--transfer-stash"];
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { boolean: booleans, values }), {
+      boolean: booleans, trailing: true, values,
+    });
+    if (flags.has("--leave-stash") && flags.has("--transfer-stash")) throw new Error("Choose either --leave-stash or --transfer-stash.");
     return {
       threadId: flags.optional("--thread") ?? undefined, name: flags.optional("--name") ?? undefined,
       paths: flags.trailing, releaseToSubagent: flags.optional("--release-to-subagent") ?? undefined,
+      ...(flags.has("--leave-stash") ? { transferStash: false } : flags.has("--transfer-stash") ? { transferStash: true } : {}),
     };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
@@ -302,6 +353,7 @@ const adopt = defineWorkbenchAgentCommand({
       source: input.name ? { kind: "subagent", name: input.name } : { kind: "thread", threadId: input.threadId! },
       ...(input.paths.length ? { paths: input.paths } : {}),
       ...(input.releaseToSubagent ? { releaseToSubagent: { kind: "subagent" as const, name: input.releaseToSubagent } } : {}),
+      ...(input.transferStash === undefined ? {} : { transferStash: input.transferStash }),
     }, "git-arc-adopt");
   },
 });

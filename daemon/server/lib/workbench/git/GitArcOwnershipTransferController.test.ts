@@ -14,7 +14,12 @@ import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
 
 const fixtures = new GitTestFixtureCache();
 type AdoptionOwner = WorkbenchGitCheckpointController & {
-  adoptArc(input: { cwd: string; threadId: string; source: { harness: "codex"; threadId: string } }): Promise<object>;
+  adoptArc(input: {
+    cwd: string;
+    threadId: string;
+    source: { harness: "codex"; threadId: string };
+    transferStash?: boolean;
+  }): Promise<object>;
 };
 
 async function start(controller: WorkbenchGitCheckpointController, cwd: string, threadId: string, paths: string[]) {
@@ -32,6 +37,9 @@ test("whole-source adoption keeps caller claims, pending proposals and source di
   await fs.writeFile(path.join(cwd, "two.txt"), "child change\n");
   const proposal = await controller.createProposal({ cwd, description: "", threadId: "parent", title: "parent work" });
   assert.equal(typeof controller.adoptArc, "function", "the Git owner must support whole-source adoption");
+  await assert.rejects(controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  }), /stash|saved work|nothing/i);
   await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } });
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).pending.map(({ proposalId }) => proposalId),
     [proposal.proposalId], "adoption leaves the caller's proposed snapshot committable");
@@ -62,7 +70,9 @@ test("adopted stash coexists with caller claims and restores without losing call
     "ordinary stash ownership must retain its existing registry phase");
   assert.ok(frozen?.frozen, "ordinary stash work must keep its frozen claim-loss snapshot");
   assert.equal(typeof controller.adoptArc, "function", "the Git owner must support stash adoption");
-  await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } });
+  await controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  });
   assert.equal((await parentLoss.read({ harness: "codex", threadId: "parent" }))?.commit, boundary.newValue,
     "the caller's earlier recovery boundary stays intact during adoption");
   assert.equal(await repository.readRef("refs/worktree/agents/codex/parent/arc-stash"), frozen!.commit,
@@ -86,6 +96,51 @@ test("adopted stash coexists with caller claims and restores without losing call
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "saved child change\n");
 });
 
+test("stash ownership can be declined, adopted alone, and returned alone", async context => {
+  const fixture = await fixtures.copyFresh(CONTROLLER_BASE_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController() as AdoptionOwner;
+
+  await start(controller, cwd, "child", ["one.txt"]);
+  await fs.writeFile(path.join(cwd, "one.txt"), "child saved\n");
+  await controller.stashArc({ cwd, threadId: "child" });
+  await start(controller, cwd, "donor", ["two.txt"]);
+  await controller.adoptArc({
+    cwd, threadId: "child", source: { harness: "codex", threadId: "donor" },
+  });
+
+  await assert.rejects(controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" },
+  }), /transferStash|saved stash|stash.*explicit/i);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).cleanClaims, ["two.txt"]);
+  await controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: false,
+  });
+
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).cleanClaims, ["two.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, []);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
+  await controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  });
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, ["one.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, []);
+
+  await (await controller.prepareReleaseToChild({
+    cwd,
+    threadId: "child",
+    source: { harness: "codex", threadId: "parent" },
+    selectedPaths: [],
+    transferStash: true,
+  })).apply();
+
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).cleanClaims, ["two.txt"]);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, []);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
+});
+
 test("an existing caller stash rejects adoption without transferring source claims or saved work", async context => {
   const fixture = await fixtures.copy(CONTROLLER_BASE_FIXTURE);
   context.after(() => fixture.dispose());
@@ -98,7 +153,7 @@ test("an existing caller stash rejects adoption without transferring source clai
   }
   assert.equal(typeof controller.adoptArc, "function", "the Git owner must reject unsafe stash adoption");
   await assert.rejects(controller.adoptArc({
-    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" },
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
   }), /stash/i);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, ["one.txt"]);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["two.txt"]);
@@ -118,7 +173,10 @@ test("a caller's ordinary stash survives adoption of live child claims", async c
   assert.ok(frozen?.frozen);
   await start(controller, cwd, "child", ["two.txt"]);
   await fs.writeFile(path.join(cwd, "two.txt"), "child live\n");
-  await controller.adoptArc({ cwd, threadId: "parent", source: { harness: "codex", threadId: "child" } });
+  const adopted = await controller.adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" },
+  }) as { stashedPaths: string[] };
+  assert.deepEqual(adopted.stashedPaths, ["one.txt"]);
   assert.equal(await repository.readRef("refs/worktree/agents/codex/parent/arc-stash"), frozen.commit);
   assert.equal(await losses.read({ harness: "codex", threadId: "parent" }), null);
   const saved = await controller.readStatus({ cwd, threadId: "parent" });
@@ -166,6 +224,14 @@ test("selected release returns dirty claims to a resolved child without exposing
   assert.deepEqual((await controller.compare({ cwd, threadId: "child" })).changes.map(change => change.path), ["one.txt"]);
   assert.equal(await repository.writeIndexTree(), index);
   assert.equal(await fs.readFile(path.join(cwd, "one.txt"), "utf8"), "child receives this dirty work\n");
+  await controller.stackArc({ cwd, threadId: "parent", title: "parent layer" });
+  await controller.stashArc({ cwd, threadId: "child" });
+  await assert.rejects((controller as AdoptionOwner).adoptArc({
+    cwd, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  }), /pending stack|stack/i);
+  assert.equal((await controller.listLifecycleStates({ cwd }))
+    .find(state => state.threadId === "parent")?.stackLayers.length, 1);
+  assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
 });
 
 test("selected release preserves the child's ordinary stash under its side address", async context => {
@@ -182,7 +248,8 @@ test("selected release preserves the child's ordinary stash under its side addre
   await start(controller, cwd, "parent", ["two.txt"]);
   await fs.writeFile(path.join(cwd, "two.txt"), "parent gives this\n");
   await (await controller.prepareReleaseToChild({
-    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" },
+    selectedPaths: ["two.txt"], transferStash: false,
   })).apply();
   assert.equal(await repository.readRef("refs/worktree/agents/codex/child/arc-stash"), frozen?.commit);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "child" })).stashedClaims, ["one.txt"]);
@@ -205,7 +272,8 @@ test("returning adopted live claims leaves the parent's saved stash with the par
   const savedCommit = await repository.readRef(savedRef);
   await fs.writeFile(path.join(cwd, "two.txt"), "returned dirty work\n");
   await (await controller.prepareReleaseToChild({
-    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" }, selectedPaths: ["two.txt"],
+    cwd, threadId: "child", source: { harness: "codex", threadId: "parent" },
+    selectedPaths: ["two.txt"], transferStash: false,
   })).apply();
   assert.equal(await repository.readRef(savedRef), savedCommit);
   assert.deepEqual((await controller.readStatus({ cwd, threadId: "parent" })).stashedClaims, ["one.txt"]);

@@ -246,12 +246,11 @@ export default class GitArcClaimViewController {
       outdated.push(relative);
     });
 
-    const contents = await GitObjectReadSession.read(repository.root, [...new Set(outdated.map(relative => wanted.get(relative)!.blob))]);
-    const byBlob = new Map(contents.flatMap(object => object?.contents ? [[object.objectId, object.contents] as const] : []));
+    const byPath = await repository.readCheckoutBytes(tree, outdated);
     try {
       for (const relative of outdated) {
         const { blob, mode } = wanted.get(relative)!;
-        const data = byBlob.get(blob);
+        const data = byPath.get(relative);
         if (!data) throw new Error(`Git object ${blob} for ${relative} is missing.`);
         const file = path.join(directory, relative);
         // A symlink or folder in the file's place is replaced, never written through.

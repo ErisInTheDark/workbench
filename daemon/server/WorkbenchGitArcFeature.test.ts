@@ -70,8 +70,8 @@ function waitFeature(extraOptions: object = {}) {
   });
 }
 
-test("adoption resolves admitted source ids and owned names without replacing the caller identity", async () => {
-  const captured: Array<{ threadId: string; source: { harness: string; threadId: string } }> = [];
+test("adoption resolves admitted source ids and preserves explicit stash intent", async () => {
+  const captured: Array<{ threadId: string; source: { harness: string; threadId: string }; transferStash?: boolean }> = [];
   const feature = waitFeature({
     publishAgentContext: async () => "admitted",
     resolveSubagentPeer: async () => ({
@@ -79,18 +79,21 @@ test("adoption resolves admitted source ids and owned names without replacing th
     }),
   });
   const internal = feature as unknown as {
-    workspaceController: { adopt: (project: object, input: { threadId: string; source: { harness: string; threadId: string } }) => Promise<object> };
+    workspaceController: { adopt: (project: object, input: { threadId: string; source: { harness: string; threadId: string }; transferStash?: boolean }) => Promise<object> };
   };
   internal.workspaceController.adopt = async (_project, input) => { captured.push(input); return {}; };
-  for (const source of [{ kind: "thread", threadId: wbThreadId("codex", "sibling") }, { kind: "subagent", name: "mira" }]) {
+  for (const [source, transferStash] of [
+    [{ kind: "thread", threadId: wbThreadId("codex", "sibling") }, false],
+    [{ kind: "subagent", name: "mira" }, true],
+  ] as const) {
     const response = await feature.executeRequest({
-      action: "arcAdoptSource", cwd: "C:/Git/Project", harness: "codex", threadId: "thread", source,
+      action: "arcAdoptSource", cwd: "C:/Git/Project", harness: "codex", threadId: "thread", source, transferStash,
     });
     assert.equal(response.ok, true, await response.text());
   }
   assert.deepEqual(captured, [
-    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "codex", threadId: wbThreadId("codex", "sibling") } },
-    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "opencode", threadId: wbThreadId("opencode", "sibling") } },
+    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "codex", threadId: wbThreadId("codex", "sibling") }, transferStash: false },
+    { cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"), source: { harness: "opencode", threadId: wbThreadId("opencode", "sibling") }, transferStash: true },
   ]);
 });
 
@@ -118,12 +121,12 @@ test("release to a named child keeps the parent as source and refreshes both own
   };
   const response = await feature.executeRequest({
     action: "arcTransferClaims", cwd: "C:/Git/Project", harness: "codex", threadId: "thread",
-    destination: { kind: "subagent", name: "mira" }, paths: ["one.txt"],
+    destination: { kind: "subagent", name: "mira" }, paths: ["one.txt"], transferStash: false,
   });
   assert.equal(response.ok, true, await response.text());
   assert.deepEqual(captured, {
     cwd: "C:/Git/Project", harness: "codex", threadId: wbThreadId("codex", "thread"),
-    destination: { harness: "opencode", threadId: childId }, paths: ["one.txt"],
+    destination: { harness: "opencode", threadId: childId }, paths: ["one.txt"], transferStash: false,
   });
   assert.deepEqual(refreshed, [wbThreadId("codex", "thread"), childId]);
   assert.deepEqual(notices, [childId]);

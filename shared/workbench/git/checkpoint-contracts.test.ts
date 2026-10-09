@@ -146,6 +146,30 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     threadId: "thread-one",
   }).success, true);
   assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcTransferClaims",
+    cwd: "C:/repo",
+    destination: { kind: "subagent", name: "mira" },
+    paths: [],
+    threadId: "thread-one",
+    transferStash: true,
+  }).success, true);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
+    action: "arcTransferClaims",
+    cwd: "C:/repo",
+    destination: { kind: "subagent", name: "mira" },
+    paths: [],
+    threadId: "thread-one",
+    transferStash: false,
+  }).success, false);
+  const adoptSource = GitCheckpointRequestSchema.parse({
+    action: "arcAdoptSource",
+    cwd: "C:/repo",
+    source: { kind: "subagent", name: "mira" },
+    threadId: "thread-one",
+    transferStash: false,
+  });
+  assert.equal(adoptSource.action === "arcAdoptSource" ? adoptSource.transferStash : undefined, false);
+  assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "arcMove",
     cwd: "C:/repo",
     move: { kind: "operands", operands: ["src/a.ts", "src/b.ts"] },

@@ -31,7 +31,9 @@ test("history replacement remaps the caller checkpoint but keeps adopted frozen 
   await controller.createAndStartPlan({ cwd: fixture.root, threadId: "child", intentName: "child", paths: ["two.txt"] });
   await fs.writeFile(path.join(fixture.root, "two.txt"), "saved work\n");
   await controller.stashArc({ cwd: fixture.root, threadId: "child" });
-  await controller.adoptArc({ cwd: fixture.root, threadId: "parent", source: { harness: "codex", threadId: "child" } });
+  await controller.adoptArc({
+    cwd: fixture.root, threadId: "parent", source: { harness: "codex", threadId: "child" }, transferStash: true,
+  });
   const owner = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "parent" });
   assert.ok(owner?.savedStash);
   const stashRef = "refs/worktree/agents/codex/parent/arc-stash";

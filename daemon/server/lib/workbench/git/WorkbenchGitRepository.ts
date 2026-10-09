@@ -6,6 +6,7 @@
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
+ * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk.
  */
@@ -609,6 +610,33 @@ export default class WorkbenchGitRepository {
     } finally {
       await temporaryDirectory.dispose();
     }
+  }
+
+  /** Materialise selected tree files exactly as Git would check them out, without touching the real index or worktree. */
+  async readCheckoutBytes(treeish: string, paths: readonly string[]) {
+    if (!paths.length) return new Map<string, Buffer>();
+    const selected = this.normalizePaths([...paths]);
+    return await this.withTemporaryIndex(async (indexPath, directory) => {
+      const checkoutDirectory = path.join(directory, "checkout");
+      const env = { ...process.env, GIT_INDEX_FILE: indexPath };
+      await fs.mkdir(checkoutDirectory, { recursive: true });
+      await this.run(["read-tree", await this.contentBase(treeish)], env);
+      await this.runWithInput([
+        "checkout-index",
+        "--force",
+        `--prefix=${checkoutDirectory.replace(/\\/gu, "/")}/`,
+        "-z",
+        "--stdin",
+      ], `${selected.join("\0")}\0`, env);
+      return new Map(await Promise.all(selected.map(async (relative) => {
+        const file = path.join(checkoutDirectory, relative);
+        const stat = await fs.lstat(file);
+        const contents = stat.isSymbolicLink()
+          ? Buffer.from(await fs.readlink(file, { encoding: "buffer" }))
+          : await fs.readFile(file);
+        return [relative, contents] as const;
+      })));
+    });
   }
 
   /**

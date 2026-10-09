@@ -312,14 +312,17 @@ class FakeLocalGitArcController {
     };
   }
 
-  async prepareAdoption(input: { cwd: string; threadId: string; source: { threadId: string } }) {
+  async prepareAdoption(input: {
+    cwd: string; threadId: string; source: { threadId: string }; transferStash?: boolean;
+  }) {
     const source = this.states.get(input.cwd);
     if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
     const result = {
       checkpointCommit: source.checkpointCommit, checkpointRef: `refs/${source.checkpointCommit}`,
-      intentName: source.intentName, kind: "arc" as const, phase: "active" as const,
+      intentName: source.intentName, kind: "arc" as const, phase: source.phase,
       repoRoot: input.cwd, scopePaths: source.claimedPaths, claimedPaths: source.claimedPaths,
-      additionalClaims: source.claimedPaths, stashedPaths: [],
+      additionalClaims: source.claimedPaths,
+      stashedPaths: input.transferStash ? source.stashedPaths ?? [] : [],
     };
     return {
       result,
@@ -336,7 +339,9 @@ class FakeLocalGitArcController {
     };
   }
 
-  async prepareReleaseToChild(input: { cwd: string; threadId: string; source: { threadId: string }; selectedPaths: string[] }) {
+  async prepareReleaseToChild(input: {
+    cwd: string; threadId: string; source: { threadId: string }; selectedPaths: string[]; transferStash?: boolean;
+  }) {
     const source = this.states.get(input.cwd);
     if (!source || source.threadId !== input.source.threadId) throw new Error("Source claims are unavailable.");
     const paths = input.selectedPaths.map(value => path.relative(input.cwd, value).replace(/\\/gu, "/"));
@@ -344,8 +349,10 @@ class FakeLocalGitArcController {
     const remaining = source.claimedPaths.filter(value => !paths.includes(value));
     const result = {
       checkpointCommit: source.checkpointCommit, checkpointRef: `refs/${source.checkpointCommit}`,
-      intentName: source.intentName, kind: "arc" as const, phase: remaining.length ? "active" as const : "resolved" as const,
+      intentName: source.intentName, kind: "arc" as const,
+      phase: input.transferStash ? "stashed" as const : remaining.length ? "active" as const : "resolved" as const,
       repoRoot: input.cwd, scopePaths: remaining, releasedClaims: paths,
+      stashedPaths: input.transferStash ? source.stashedPaths ?? [] : [],
     };
     return {
       result,
@@ -1203,6 +1210,38 @@ test("selected release leaves other roots claimed and compensates a later transf
   assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.claimedPaths, ["api:one.ts", "web:two.ts"]);
 });
 
+test("workspace release transfers saved stash without requiring live claim paths", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(
+    local as unknown as WorkbenchGitCheckpointController,
+    new WorkbenchThreadTransitionCoordinator(),
+    async root => root,
+  );
+  await local.createPlan({
+    cwd: "C:/repo/web", harness: "codex", threadId: "parent",
+    paths: ["C:/repo/web/two.ts"], intentName: "saved parent work", intentDescription: "",
+  });
+  await local.startArc({ cwd: "C:/repo/web" });
+  await controller.execute(project, {
+    cwd: project.cwd, harness: "codex", threadId: "parent", action: "arcStash",
+  });
+
+  const result = await controller.releaseToChild(project, {
+    cwd: project.cwd,
+    destination: { harness: "codex", threadId: "child" },
+    harness: "codex",
+    paths: [],
+    threadId: "parent",
+    transferStash: true,
+  });
+
+  assert.deepEqual(result.releasedClaims, []);
+  assert.deepEqual(result.stashedPaths, ["web:two.ts"]);
+  assert.equal(await controller.findLifecycleState(project, "codex", "parent"), null);
+  assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.stashedPaths, ["web:two.ts"]);
+});
+
 test("a caller stash in another root blocks the whole source stash transfer", async () => {
   const local = new FakeLocalGitArcController();
   const project = createWorkspace("C:/repo/api", "C:/repo/web");
@@ -1224,7 +1263,7 @@ test("a caller stash in another root blocks the whole source stash transfer", as
   assert.deepEqual((await controller.findLifecycleState(project, "codex", "child"))?.stashedPaths, ["web:two.ts"]);
   await assert.rejects(controller.adopt(project, {
     cwd: project.cwd, harness: "codex", threadId: "parent",
-    source: { harness: "codex", threadId: "child" },
+    source: { harness: "codex", threadId: "child" }, transferStash: true,
   }), /already has a stash/u);
   assert.deepEqual(local.adoptionCalls, []);
   assert.deepEqual((await controller.findLifecycleState(project, "codex", "parent"))?.stashedPaths, ["api:one.ts"]);

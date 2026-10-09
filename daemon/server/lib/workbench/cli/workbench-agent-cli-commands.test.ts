@@ -210,12 +210,47 @@ test("combined claim CLI preserves addition, removal and adoption as separate ar
   assert.equal(missing.kind, "error");
 });
 
-test("adoption requires exactly one thread or child-name selector, and only selected claims go to another child", async () => {
-  for (const [flag, source] of [["--thread", { kind: "thread", threadId: "source" }], ["--name", { kind: "subagent", name: "source" }]] as const) {
-    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", flag, "source"], gitArcOptions);
+test("bulk claim files and explicit stash choices preserve typed request semantics", async () => {
+  const claimsPath = "claims.json";
+  const context = {
+    ...gitArcOptions, callerHarness: "codex" as const, cwd: temporaryDirectoryPath, workbenchOrigin: null,
+  };
+  await writeFile(path.join(temporaryDirectoryPath, claimsPath), JSON.stringify({
+    addPaths: ["new.ts"], adoptPaths: ["dirty.ts"], removePaths: ["old.ts"], roots: [],
+  }));
+  const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc claims");
+  assert.ok(definition);
+  const request = await definition.buildRequestFromJson({
+    inherit: true, pathsFile: claimsPath,
+  }, context);
+  assert.deepEqual(request.body, {
+    action: "arcClaims", addPaths: ["new.ts"], adoptPaths: ["dirty.ts"], cwd: temporaryDirectoryPath,
+    harness: "codex", inherit: true, removePaths: ["old.ts"], roots: [], threadId: gitArcOptions.callerThreadId,
+  });
+  await assert.rejects(definition.buildRequestFromJson({
+    addPaths: ["inline.ts"], inherit: true, pathsFile: claimsPath,
+  }, context));
+
+  const released = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "release", "--to-subagent", "mira", "--transfer-stash",
+  ], gitArcOptions);
+  assert.equal(released.kind, "request");
+  assert.deepEqual(released.kind === "request" ? {
+    paths: released.request.body?.paths,
+    transferStash: released.request.body?.transferStash,
+  } : null, { paths: [], transferStash: true });
+});
+
+test("adoption requires exactly one source and preserves explicit stash choices", async () => {
+  for (const [flag, source, stashFlag, transferStash] of [
+    ["--thread", { kind: "thread", threadId: "source" }, "--leave-stash", false],
+    ["--name", { kind: "subagent", name: "source" }, "--transfer-stash", true],
+  ] as const) {
+    const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", flag, "source", stashFlag], gitArcOptions);
     assert.equal(parsed.kind, "request");
     assert.deepEqual(parsed.request.body?.source, source);
     assert.equal(parsed.request.body?.threadId, gitArcOptions.callerThreadId);
+    assert.equal(parsed.request.body?.transferStash, transferStash);
   }
   const moved = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", "--name", "source", "--release-to-subagent", "fern", "--", "one.ts"], gitArcOptions);
   assert.equal(moved.kind, "request");
@@ -1869,6 +1904,23 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
     mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
     matchedPathCount: 1, mode: "applied", remainingMatchCount: 0, scopePaths: ["src/old.ts", "tests/old.ts"],
   }, { action: "arcMove" }).stdout)?.mode, "applied");
+  const largeStack = adapt("git-arc-stack", {
+    checkpointCommit: successorRef,
+    intentName: "Large fixture stack",
+    layerProposals: [{
+      changes: Array.from({ length: 1_300 }, (_, index) => ({
+        additions: 1, deletions: 0, kind: "add", path: `fixtures/${index}.ts`,
+      })),
+      description: "",
+      proposalId: "large-proposal",
+      title: "large fixtures",
+    }],
+    layerTitle: "fixture migration",
+    scopePaths: ["fixtures"],
+  }, { action: "arcStack" });
+  assert.equal(parseGitArcReceipt(largeStack.stdout)?.stackedProposals?.[0]?.changeCount, 1_300);
+  assert.equal(parseGitArcReceipt(largeStack.stdout)?.stackedProposals?.[0]?.changes, null);
+  assert.ok(largeStack.stdout.length < 4_000);
   assert.equal(parseGitArcReceipt(adapt("git-arc-propose", {
     proposalId: "proposal-one",
     sourceCheckpoint: successorRef,

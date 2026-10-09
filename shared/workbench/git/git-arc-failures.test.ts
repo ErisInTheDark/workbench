@@ -33,6 +33,19 @@ test("unclassified diagnostics remain agent evidence, not human presentation", (
   assert.deepEqual(parseGitArcFailureReceipt(formatGitArcFailureReceipt(failure)), failure);
 });
 
+test("oversized operation failures retain the command prefix, explicit failure and tail", () => {
+  const warnings = Array.from({ length: 200 }, (_, index) => `warning: line ${index} will be replaced`).join("\n");
+  const failure = createGitArcOperationRejected(
+    "arcClaims",
+    `Command failed: git add -A -- .\n${warnings}\nfatal: unable to write new index file\n${warnings}`,
+  );
+
+  assert.equal(failure.code, "operationRejected");
+  assert.match(failure.message, /^Command failed: git add -A -- \./u);
+  assert.match(failure.message, /fatal: unable to write new index file/u);
+  assert.ok(failure.message.length <= 4_000);
+});
+
 test("plain failures preserve collision facts without a duplicate JSON envelope", () => {
   const failure: GitArcFailure = { action: "arcStart", code: "siblingClaimCollision", conflicts: [conflict], version: 1 };
   const output = formatGitArcFailureReceipt(failure);

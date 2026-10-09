@@ -134,6 +134,8 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
     source: GitArcAdoptionSourceSchema,
     /** Move only these live source claims. */
     paths: checkpointPaths.optional(),
+    /** Required when the source has saved stash: true moves it; false leaves it. */
+    transferStash: z.boolean().optional(),
     /** Hand the selected claims to this owned subagent instead of the caller. */
     releaseToSubagent: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict().optional(),
     ...checkpointBaseRequest,
@@ -141,9 +143,12 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("arcTransferClaims"),
     destination: z.object({ kind: z.literal("subagent"), name: nonEmptyString }).strict(),
-    paths: checkpointPaths,
+    paths: optionalCheckpointPaths.default([]),
+    /** Required when the source has saved stash: true moves it; false leaves it. */
+    transferStash: z.boolean().optional(),
     ...checkpointBaseRequest,
-  }).strict(),
+  }).strict().refine(input => input.paths.length > 0 || input.transferStash === true,
+    "A subagent transfer requires live claim paths or transferStash: true."),
   GitArcPlanClaimsSchema.safeExtend({ action: z.literal("planClaims"), start: z.boolean().default(false), ...checkpointBaseRequest }),
   GitArcClaimsSchema.extend({ action: z.literal("arcClaims"), ...checkpointBaseRequest }),
   z.object({ action: z.literal("arcScope"), ...checkpointBaseRequest }).strict(),

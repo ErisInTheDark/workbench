@@ -3,6 +3,7 @@
  * - GitArcAction/GitArcReceipt: describe persisted arc action presentation data.
  * - GitArcChangeTotalSchema/GitArcChangeTotal: one file's diff-free change totals.
  * - GitArcStackedProposalSchema/GitArcStackedProposal: sealed proposal message and per-file totals captured at stacking.
+ * - GitArcStackedProposalReceiptSchema/GitArcStackedProposalReceipt/projectGitArcStackedProposalReceipt: bounded stack receipt summary.
  * - GitArcInvalidatedProposalSchema/GitArcInvalidatedProposal: proposal an operation made unavailable, with its reason.
  * - GitArcReceiptSchema/projectGitArcReceipt/parseGitArcReceipt: validate compact presentation facts and decode current or historical text.
  * - formatGitArcTextReceipt: emit one labelled plain-text result without duplicated JSON.
@@ -30,6 +31,25 @@ export const GitArcStackedProposalSchema = z.object({
   title: z.string(),
 }).strict();
 export type GitArcStackedProposal = z.infer<typeof GitArcStackedProposalSchema>;
+
+export const GitArcStackedProposalReceiptSchema = z.object({
+  changeCount: z.number().int().nonnegative().optional(),
+  changes: z.array(GitArcChangeTotalSchema).nullable(),
+  description: z.string(),
+  proposalId: z.string().min(1),
+  title: z.string(),
+}).strict();
+export type GitArcStackedProposalReceipt = z.infer<typeof GitArcStackedProposalReceiptSchema>;
+
+const STACK_RECEIPT_CHANGE_LIMIT = 20;
+
+export function projectGitArcStackedProposalReceipt(input: GitArcStackedProposal): GitArcStackedProposalReceipt {
+  return {
+    ...input,
+    changeCount: input.changes.length,
+    changes: input.changes.length > STACK_RECEIPT_CHANGE_LIMIT ? null : input.changes,
+  };
+}
 
 /** One proposal an operation made unavailable, with the reason its owner can no longer commit it. */
 export const GitArcInvalidatedProposalSchema = z.object({ proposalId: z.string().min(1), reason: z.string().min(1) }).strict();
@@ -60,7 +80,7 @@ export const GitArcReceiptSchema = z.object({
   proposalId: z.string().min(1).optional(),
   proposals: z.array(z.object({ proposalId: z.string().min(1), status: z.enum(["proposed", "committed"]) })).optional(),
   /** Sealed proposals of the stacked or unstacked layer, when the layer recorded them. */
-  stackedProposals: z.array(GitArcStackedProposalSchema).optional(),
+  stackedProposals: z.array(GitArcStackedProposalReceiptSchema).optional(),
   rootId: z.string().min(1).optional(),
   reloadScopes: z.array(z.string().regex(DAEMON_RELOAD_SCOPE_PATTERN)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
@@ -266,7 +286,7 @@ function parseTextReceipt(output: string) {
     } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode" || key === "layer") {
       result[key === "intent" ? "intentName" : key === "root" ? "rootId" : key === "proposal" ? "proposalId" : key] = readGitArcValue(value);
     } else if (key === "sealed") {
-      result.stackedProposals = take(count(value)).map(row => GitArcStackedProposalSchema.parse(JSON.parse(row)));
+      result.stackedProposals = take(count(value)).map(row => GitArcStackedProposalReceiptSchema.parse(JSON.parse(row)));
     } else if (key === "unchanged") result.unchanged = true;
     else if (key === "previous-plan") {
       if (previousRef) throw new Error("Missing planning drift paths.");

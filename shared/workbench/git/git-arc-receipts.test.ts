@@ -78,6 +78,27 @@ test("stack receipts round trip sealed messages without section injection", () =
   assert.deepEqual(receipt?.stackedProposals?.[0]?.changes, [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }]);
 });
 
+test("large stack receipts retain exact counts without serialising every changed path", () => {
+  const changes = Array.from({ length: 1_300 }, (_, index) => ({
+    additions: 1, deletions: 0, kind: "add" as const, path: `fixtures/${index}.ts`,
+  }));
+  const output = formatGitArcTextReceipt({
+    action: "stack", claimedPaths: [], intentName: "work", layer: "large", ref, version: 1,
+    stackedProposals: [{
+      changeCount: changes.length,
+      changes: null,
+      description: "",
+      proposalId: "large-proposal",
+      title: "capture fixtures",
+    }],
+  });
+  const receipt = parseGitArcReceipt(output);
+
+  assert.ok(output.length < 2_000);
+  assert.equal(receipt?.stackedProposals?.[0]?.changeCount, 1_300);
+  assert.equal(receipt?.stackedProposals?.[0]?.changes, null);
+});
+
 test("unstash receipts retain the complete stashed set and textual conflicts", () => {
   const receipt = {
     action: "unstash" as const,

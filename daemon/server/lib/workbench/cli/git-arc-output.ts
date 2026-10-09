@@ -3,7 +3,7 @@
  * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc response.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
-import { escapeGitArcValue, formatGitArcTextReceipt, GitArcStackedProposalSchema, projectGitArcReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import { escapeGitArcValue, formatGitArcTextReceipt, GitArcStackedProposalSchema, projectGitArcReceipt, projectGitArcStackedProposalReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { normalizeDaemonReloadScopes } from "workbench-shared/workbench/daemon-reload";
 import { formatGitArcStatus, GitArcStatusFullSchema, GitArcStatusSchema, projectGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
@@ -94,7 +94,10 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
         layer: string(payload, "layerTitle"),
         // Layers sealed before summaries were recorded only know their proposal ids.
         ...(Array.isArray(payload.layerProposals)
-          ? { stackedProposals: GitArcStackedProposalSchema.array().parse(payload.layerProposals) }
+          ? {
+            stackedProposals: GitArcStackedProposalSchema.array().parse(payload.layerProposals)
+              .map(projectGitArcStackedProposalReceipt),
+          }
           : { proposals: paths(payload, "proposalIds").map(proposalId => ({ proposalId, status: "proposed" as const })) }),
       } : {}),
       ...(string(payload, "rootId") ? { rootId: string(payload, "rootId") } : {}),

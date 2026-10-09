@@ -374,6 +374,7 @@ export default class WorkbenchGitArcFeature {
               ? Response.json(await this.workspaceController.releaseToChild(project, {
                 cwd: project.cwd, harness: owner.harness, threadId: owner.threadId,
                 destination: transferDestination, paths: effectiveRequest.paths,
+                transferStash: effectiveRequest.transferStash,
               }, async () => {
                 const [parent, child] = await Promise.all([
                   this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId),
@@ -387,6 +388,7 @@ export default class WorkbenchGitArcFeature {
               ? Response.json(await this.workspaceController.adopt(project, {
                 cwd: project.cwd, harness: adoptionRecipient?.harness ?? owner.harness,
                 threadId: adoptionRecipient?.threadId ?? owner.threadId, source: adoptionSource,
+                transferStash: effectiveRequest.transferStash,
               }, async () => {
                 const owners = await Promise.all([owner, ...adoptionRecipient ? [adoptionRecipient] : []].map(async identity => (
                   await this.options.getThreadClaimContext(project.project.id, identity.harness, identity.threadId)

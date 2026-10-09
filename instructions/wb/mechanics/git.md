@@ -72,8 +72,8 @@ follow-up scope:
 
 <docs tools="git_arc_adopt">
 ### adopt claims from another thread
-- <tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
-- Exact `paths` move only those live claims, without stash; add `releaseToSubagent` to hand them from one owned child to another atomically.
+- <tool id="git_arc_adopt" /> transfers complete live claims. If the source has saved stash, set `transferStash` explicitly to move or leave it. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
+- Exact `paths` select live claims; `transferStash` independently selects saved stash. `releaseToSubagent` hands the selection from one owned child to another atomically.
 - Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
 </docs>
 
@@ -86,8 +86,8 @@ follow-up scope:
 
 <docs tools="git_arc_release git_arc_status">
 ### release or hand off claims
-- <tool id="git_arc_release" /> releases clean claims without changing workspace or Git content; `disown: true` releases dirty ownership only on explicit user direction.
-- `toSubagent` plus exact `paths` atomically gives selected live claims to an owned child, including dirty claims, without moving stash or files. Releasing retained claims keeps the current inactive plan.
+- Ordinary release keeps dirty claims; `disown: true` releases dirty ownership only on explicit user direction. Neither changes workspace or Git content.
+- <tool id="git_arc_release" /> releases clean claims, or transfers selected live claims and/or saved stash to an owned subagent. Stash transfer rejects recipients with saved work or pending stack layers.
 - Active claim edits mutate ownership; inactive planning publishes scope. Recover a lost proposal response with <tool id="git_arc_status" /> before retrying, never as a preflight.
 </docs>
 

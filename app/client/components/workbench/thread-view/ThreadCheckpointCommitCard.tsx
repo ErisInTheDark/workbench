@@ -27,6 +27,8 @@ import { ThreadFileChangeList, type ThreadFileChangeListChange } from "./ThreadF
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 
 export interface ThreadCommitSummary {
+  /** Exact total when a bounded receipt omits per-file summaries. */
+  changeCount?: number;
   /** Null when the proposal predates recorded totals. */
   changes: readonly GitArcChangeTotal[] | null;
   committedSha?: string | null;
@@ -235,7 +237,8 @@ export default function ThreadCheckpointCommitCard({
   const editable = !readOnly && (!proposal || proposal.status === "proposed" || committedAmendable);
   const displayedChanges = getCheckpointProposalDisplayedChanges(proposal, commitMode);
   const summaryChanges = summary?.changes ?? null;
-  const fileCount = proposal ? displayedChanges.length : summaryChanges ? summaryChanges.length : paths.length;
+  const summaryChangeCount = summary?.changeCount ?? summaryChanges?.length ?? null;
+  const fileCount = proposal ? displayedChanges.length : summaryChangeCount ?? paths.length;
   const committedSha = proposal?.status === "committed" ? proposal.committedSha : summary?.committedSha ?? null;
   const amendTargetMessage = proposal?.amendTargetMessage ?? null;
   const titleWillChange = commitMode === "amend"
@@ -244,7 +247,7 @@ export default function ThreadCheckpointCommitCard({
   const descriptionWillChange = commitMode === "amend"
     && amendTargetMessage !== null
     && description.trim() !== amendTargetMessage.description.trim();
-  const changeSummary = proposal || summaryChanges || paths.length
+  const changeSummary = proposal || summaryChangeCount !== null || paths.length
     ? `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`
     : "Arc changes";
   const canCommit = canCommitCheckpointProposal({
