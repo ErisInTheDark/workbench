@@ -9,7 +9,7 @@ import { statsRangeShape, WorkbenchStatsReadRequestSchema } from "./workbench-st
 test("stats requests keep explicit project scope and install filter defaults", () => {
   const section = "usage" as const;
   assert.deepEqual(WorkbenchStatsReadRequestSchema.parse({ projectIds: ["a", "b"], range: "7d", section }), {
-    model: null, period: null, projectIds: ["a", "b"], provider: null, range: "7d", section, tokenTypes: ["input", "cacheRead", "cacheWrite", "output"],
+    feedbackId: null, model: null, period: null, projectIds: ["a", "b"], provider: null, range: "7d", section, tokenTypes: ["input", "cacheRead", "cacheWrite", "output"],
   });
   assert.deepEqual(
     WorkbenchStatsReadRequestSchema.parse({ projectIds: null, range: "7d", section, tokenTypes: ["cache", "cacheRead"] }).tokenTypes,

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchFeedbackRepository: record and delete agent feedback, and read importance-weighted stats summaries and paged agent reports.
+ * - default WorkbenchFeedbackRepository: record and delete agent feedback, and read importance-weighted stats summaries, paged agent reports, and one report by id as a stats section.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -38,6 +38,21 @@ interface ScoredRow {
   id: number;
   importance: number;
   scored: boolean;
+}
+
+interface StoredScoreRow {
+  category: WorkbenchFeedbackCategory; channel: WorkbenchFeedbackChannel; created_at: number;
+  id: number; model: string | null; reasoning_effort: string | null;
+}
+
+function scoreRow(row: StoredScoreRow): ScoredRow {
+  return {
+    category: row.category,
+    channel: row.channel,
+    createdAt: row.created_at,
+    id: row.id,
+    ...scoreFeedbackImportance({ category: row.category, model: row.model, reasoningEffort: row.reasoning_effort }),
+  };
 }
 
 function ordered(rows: readonly ScoredRow[], sort: WorkbenchFeedbackSort) {
@@ -98,6 +113,17 @@ export default class WorkbenchFeedbackRepository {
     return { page: request.page, pages, rows: page.map((row) => details.get(row.id)!) };
   }
 
+  /** The stats section narrowed to one report by id, whatever its scope or age; empty once deleted. */
+  report(id: number): WorkbenchStatsFeedback {
+    const row = this.database.prepare(`
+      SELECT id, channel, category, model, reasoning_effort, created_at FROM workbench_agent_feedback WHERE id = ?
+    `).get(id) as StoredScoreRow | undefined;
+    const item = row ? this.#details([scoreRow(row)]).get(id) : undefined;
+    return item
+      ? { counts: [{ category: item.category, count: 1 }], items: [item], total: 1, workbenchProjectId: null }
+      : { counts: [], items: [], total: 0, workbenchProjectId: null };
+  }
+
   /** Importance depends on the maintained trust registry, so it is computed on read rather than stored. */
   #scored(filter: FeedbackFilter): ScoredRow[] {
     const projects = new WorkbenchProjectRepository(this.database);
@@ -124,17 +150,8 @@ export default class WorkbenchFeedbackRepository {
       projects: scope === null ? null : JSON.stringify(scope),
       startedAt: filter.startedAt,
       workbenchInScope: workbench !== null && (scope === null || scope.includes(workbench)) ? 1 : 0,
-    }) as Array<{
-      category: WorkbenchFeedbackCategory; channel: WorkbenchFeedbackChannel; created_at: number;
-      id: number; model: string | null; reasoning_effort: string | null;
-    }>;
-    return rows.map((row) => ({
-      category: row.category,
-      channel: row.channel,
-      createdAt: row.created_at,
-      id: row.id,
-      ...scoreFeedbackImportance({ category: row.category, model: row.model, reasoningEffort: row.reasoning_effort }),
-    }));
+    }) as StoredScoreRow[];
+    return rows.map(scoreRow);
   }
 
   #details(rows: readonly ScoredRow[]) {

@@ -5,14 +5,17 @@
  * - StatsSectionSnapshot: one panel's latest data, retained across request changes, with its loading and refinement state.
  * - StatsState: the view's filters, derived scope, and actions.
  * - StatsThreadLocation/StatsProjectLocation: where a stats row's thread or project lives once merged across machines.
- * - StatsInputs: app-owned facts the view feeds the store (workspace, project scope, routes).
- * - default WorkbenchStatsStore: own stats filters and lease one cross-machine workspace observation per demanded section request.
+ * - StatsFeedbackReport/StatsFeedbackReportSnapshot: one feedback report addressed through the thread that filed it, and its read state.
+ * - StatsInputs: app-owned facts the stats view feeds the store (project scope, routes).
+ * - default WorkbenchStatsStore: app-wide stats owner; own stats filters, lease one cross-machine workspace observation per demanded
+ *   section request, and lease single feedback report reads.
  */
 import type { MouseEvent } from "react";
 import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
-import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { z } from "zod";
 import {
   STATS_TOKEN_TYPES,
@@ -23,7 +26,7 @@ import {
   type WorkbenchStatsSectionData,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type WorkbenchWorkspaceClient from "../../../workbench/app/WorkbenchWorkspaceClient";
-import type { WorkspaceQueryHandle } from "../../../workbench/app/WorkbenchWorkspaceClient";
+import type { WorkspaceQueryHandle, WorkspaceQuerySnapshot } from "../../../workbench/app/WorkbenchWorkspaceClient";
 import { nextStatsPeriod, type StatsPeriodSelection } from "./stats-period";
 import { statsLocationKey, type StatsProjectGroup, type StatsProjectScope } from "./stats-project-scope";
 
@@ -60,8 +63,19 @@ export interface StatsSectionSnapshot<Name extends StatsSectionName = StatsSecti
 
 type Project = WorkbenchProjectOption;
 
+/** Report ids are only unique per daemon, so a report is addressed through the thread that filed it. */
+export interface StatsFeedbackReport {
+  readonly feedbackId: number;
+  readonly threadId: string;
+}
+
+export type StatsFeedbackReportSnapshot =
+  | { readonly status: "loading" }
+  | { readonly status: "ready"; readonly item: WorkbenchFeedbackItem }
+  | { readonly status: "deleted" }
+  | { readonly status: "failed"; readonly failure: string };
+
 export interface StatsInputs {
-  readonly workspace: WorkbenchWorkspaceClient | null;
   readonly scope: StatsProjectScope;
   readonly projects: readonly Project[];
   readonly addressFeedback: (projectId: string, prompt: string) => void;
@@ -137,7 +151,40 @@ interface Entry {
   readonly stop: () => void;
 }
 
+interface ReportEntry {
+  readonly listeners: Set<() => void>;
+  snapshot: StatsFeedbackReportSnapshot;
+  stop: () => void;
+}
+
 const PENDING: StatsSectionSnapshot = { data: null, failure: null, loading: true, refining: false };
+const REPORT_LOADING: StatsFeedbackReportSnapshot = { status: "loading" };
+const reportKey = ({ feedbackId, threadId }: StatsFeedbackReport) => `${threadId}\0${feedbackId}`;
+
+/** Owner first, then the narrowed feedback section: its report, an answer without it (deleted), or a failure. */
+function reportSnapshot(
+  feedbackId: number,
+  owner: WorkspaceQuerySnapshot<"threadOwner">,
+  section: WorkspaceQuerySnapshot<"stats"> | null,
+): StatsFeedbackReportSnapshot {
+  const ownerData = owner.value?.data;
+  const ownerFailure = owner.failure ?? (ownerData && ownerData.phase !== "current" && ownerData.phase !== "pending" ? ownerData.failure : null);
+  if (ownerFailure) return { status: "failed", failure: ownerFailure };
+  const data = section?.value?.data;
+  if (data?.section === "feedback") {
+    const item = data.feedback.items.find(({ id }) => id === feedbackId);
+    return item ? { status: "ready", item } : { status: "deleted" };
+  }
+  const failure = section?.failure ?? section?.value?.failure;
+  return failure ? { status: "failed", failure } : REPORT_LOADING;
+}
+
+function sameReportSnapshot(left: StatsFeedbackReportSnapshot, right: StatsFeedbackReportSnapshot) {
+  if (left.status !== right.status) return false;
+  if (left.status === "ready" && right.status === "ready") return left.item === right.item;
+  if (left.status === "failed" && right.status === "failed") return left.failure === right.failure;
+  return true;
+}
 const EMPTY_SCOPE: StatsProjectScope = { attachedDaemonId: null, groups: [], labels: [], logical: new Map(), names: new Map(), references: [] };
 
 function sameSnapshot(left: StatsSectionSnapshot, right: StatsSectionSnapshot) {
@@ -154,10 +201,13 @@ export default class WorkbenchStatsStore {
     provider: null, range: "7d", tokenTypes: [...STATS_TOKEN_TYPES], workspaceProject: null,
   };
   #inputs: StatsInputs = {
-    workspace: null, scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {}, openRoute: () => {},
+    scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {}, openRoute: () => {},
     threadRoute: () => { throw new Error("Stats threads cannot open before the view supplies routes."); },
   };
+  readonly #workspace: WorkbenchWorkspaceClient | null;
   #state: StatsState;
+  /** Leased feedback reports, each observed through its thread's owner. */
+  readonly #reports = new Map<string, ReportEntry>();
   readonly #listeners = new Set<() => void>();
   readonly #leases = new Map<StatsSectionName, number>();
   readonly #sectionListeners = new Map<StatsSectionName, Set<() => void>>();
@@ -169,7 +219,8 @@ export default class WorkbenchStatsStore {
   #failures: readonly string[] = [];
   #syncQueued = false;
 
-  constructor() {
+  constructor(workspace: WorkbenchWorkspaceClient | null) {
+    this.#workspace = workspace;
     this.#state = this.#buildState();
   }
 
@@ -186,19 +237,96 @@ export default class WorkbenchStatsStore {
     this.#inputs = inputs;
     // References are plain JSON in a fixed order, so their serialisation identifies the selection.
     const selection = (scope: StatsProjectScope) => `${scope.attachedDaemonId}\0${JSON.stringify(scope.references)}`;
-    const changed = previous.workspace !== inputs.workspace || previous.projects !== inputs.projects
+    const changed = previous.projects !== inputs.projects
       || previous.scope.names !== inputs.scope.names || previous.scope.labels.join("\0") !== inputs.scope.labels.join("\0")
       || previous.threadRoute !== inputs.threadRoute || selection(previous.scope) !== selection(inputs.scope);
     if (!changed) return;
     // A changed sidebar selection replaces any project drilled into from the old one.
     if (selection(previous.scope) !== selection(inputs.scope)) this.#filters = { ...this.#filters, focusedProject: null };
-    if (previous.workspace !== inputs.workspace) this.#closeEntries();
     this.#update();
   }
 
   /** Release every observation; leased sections reopen on their next subscription. */
   dispose() {
     this.#closeEntries();
+    for (const entry of this.#reports.values()) entry.stop();
+    this.#reports.clear();
+  }
+
+  /**
+   * The first lease observes the thread's owner, then the feedback section narrowed to the report on that thread's
+   * folder, since report ids are only unique per daemon. The last release closes both observations.
+   */
+  subscribeFeedbackReport(report: StatsFeedbackReport, listener: () => void) {
+    const key = reportKey(report);
+    let entry = this.#reports.get(key);
+    if (!entry) {
+      const created: ReportEntry = { listeners: new Set(), snapshot: REPORT_LOADING, stop: () => {} };
+      this.#reports.set(key, created);
+      this.#observeReport(report, created);
+      entry = created;
+    }
+    const leased = entry;
+    leased.listeners.add(listener);
+    return () => {
+      leased.listeners.delete(listener);
+      // Remounts (strict effects, windowed rows) re-lease before the microtask, so their observation survives.
+      queueMicrotask(() => {
+        if (leased.listeners.size || this.#reports.get(key) !== leased) return;
+        this.#reports.delete(key);
+        leased.stop();
+      });
+    };
+  }
+
+  getFeedbackReportSnapshot(report: StatsFeedbackReport): StatsFeedbackReportSnapshot {
+    return this.#reports.get(reportKey(report))?.snapshot ?? REPORT_LOADING;
+  }
+
+  #observeReport(report: StatsFeedbackReport, entry: ReportEntry) {
+    const workspace = this.#workspace;
+    const threadId = ThreadReferenceSchema.safeParse(report.threadId).data;
+    if (!workspace || !threadId) {
+      entry.snapshot = { status: "failed", failure: workspace ? "The report's thread is unknown." : "The Workbench workspace is unavailable." };
+      return;
+    }
+    const owner = workspace.observe({ kind: "threadOwner", threadId });
+    let section: { readonly key: string; readonly handle: WorkspaceQueryHandle<"stats">; readonly stop: () => void } | null = null;
+    const publish = () => {
+      const next = reportSnapshot(report.feedbackId, owner.getSnapshot(), section?.handle.getSnapshot() ?? null);
+      if (sameReportSnapshot(entry.snapshot, next)) return;
+      entry.snapshot = next;
+      for (const listener of [...entry.listeners]) listener();
+    };
+    const ownerChanged = () => {
+      const data = owner.getSnapshot().value?.data;
+      const location = data?.phase === "current" ? data.location : null;
+      const key = location ? `${location.daemonId}/${location.projectId}` : null;
+      if (section?.key !== key) {
+        section?.stop();
+        section = null;
+        if (location && key) {
+          const handle = workspace.observe({
+            kind: "stats",
+            projects: [{ kind: "location", location }],
+            request: {
+              feedbackId: report.feedbackId, model: null, period: null, provider: null,
+              range: "7d", section: "feedback", tokenTypes: [...STATS_TOKEN_TYPES],
+            },
+          });
+          const unsubscribe = handle.subscribe(publish);
+          section = { key, handle, stop: () => { unsubscribe(); handle.release(); } };
+        }
+      }
+      publish();
+    };
+    const unsubscribeOwner = owner.subscribe(ownerChanged);
+    ownerChanged();
+    entry.stop = () => {
+      unsubscribeOwner();
+      owner.release();
+      section?.stop();
+    };
   }
 
   subscribeSection(name: StatsSectionName, listener: () => void) {
@@ -304,7 +432,7 @@ export default class WorkbenchStatsStore {
       projects: inputs.projects,
       provider: filters.provider,
       range: filters.range,
-      ready: Boolean(inputs.workspace),
+      ready: Boolean(this.#workspace),
       scope: inputs.scope,
       showProjects: references === null || references.length > 1 || references.some(({ kind }) => kind === "logical"),
       isLocal,
@@ -351,6 +479,7 @@ export default class WorkbenchStatsStore {
     return {
       projects: projects === null ? null : [...projects],
       request: {
+        feedbackId: null,
         model: usage ? filters.model : null,
         period: wholeRange || !filters.period ? null : { from: filters.period.from, to: filters.period.to },
         provider: usage ? filters.provider : null,
@@ -371,7 +500,7 @@ export default class WorkbenchStatsStore {
   }
 
   #sync() {
-    const workspace = this.#inputs.workspace;
+    const workspace = this.#workspace;
     const desired = new Map<string, StatsQuery>();
     this.#keys.clear();
     for (const [name, leases] of this.#leases) {

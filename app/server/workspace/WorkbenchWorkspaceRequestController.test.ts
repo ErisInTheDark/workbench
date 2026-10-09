@@ -327,7 +327,7 @@ test("stats fan out to every daemon, merge once all answer, combine refinement, 
     get: (id) => [here, there].find((candidate) => candidate.id === id), all: () => [here, there], attached: here,
   });
   const subscriptionId = randomUUID();
-  const request = { model: null, period: null, provider: null, range: "7d" as const, section: "feedback" as const, tokenTypes: ["input" as const, "output" as const] };
+  const request = { feedbackId: null, model: null, period: null, provider: null, range: "7d" as const, section: "feedback" as const, tokenTypes: ["input" as const, "output" as const] };
   const initial = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "stats", projects: null, request } });
   assert.ok(initial.kind === "stats" && initial.phase === "pending");
   // Every project on every daemon, including ones no catalogue registers.

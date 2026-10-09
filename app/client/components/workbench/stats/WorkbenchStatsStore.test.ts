@@ -1,17 +1,22 @@
-/* No production exports. Protect section leasing: one observation per distinct request, filter relevance per section, retention while reloading, and release. */
+/*
+ * No production exports. Protect section leasing: one observation per distinct request, filter relevance per section, retention while reloading, and release.
+ * Protect feedback report leasing: the narrowed feedback section on the thread's own folder, ready/deleted/failed states, and release.
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { EMPTY_WORKBENCH_STATS_SECTIONS } from "workbench-shared/workbench/stats/workbench-stats-conformance";
 import type WorkbenchWorkspaceClient from "../../../workbench/app/WorkbenchWorkspaceClient";
 import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
-import { createFakeStatsWorkspace as fakeWorkspace, testStatsRoutes, testStatsScope } from "./stats-test-store";
+import {
+  createFakeStatsWorkspace as fakeWorkspace, TEST_STATS_THREAD_LOCATION, testFeedbackItem, testFeedbackReportSection, testStatsRoutes, testStatsScope,
+} from "./stats-test-store";
 import type { StatsProjectScope } from "./stats-project-scope";
 import WorkbenchStatsStore from "./WorkbenchStatsStore";
 
 function storeWith(workspace: WorkbenchWorkspaceClient, scope: StatsProjectScope = testStatsScope()) {
-  const store = new WorkbenchStatsStore();
-  store.setInputs({ addressFeedback: () => {}, ...testStatsRoutes, projects: [], scope, workspace });
+  const store = new WorkbenchStatsStore(workspace);
+  store.setInputs({ addressFeedback: () => {}, ...testStatsRoutes, projects: [], scope });
   return store;
 }
 
@@ -83,4 +88,48 @@ test("a section keeps showing its last data while a new request loads, then rele
   stop();
   await settle();
   assert.equal(open.size, 0);
+});
+
+test("a feedback report observes the narrowed feedback section on its thread's folder while leased", async () => {
+  const { open, ownerReads, workspace } = fakeWorkspace(new Map([["thread-one", TEST_STATS_THREAD_LOCATION]]));
+  const store = storeWith(workspace);
+  const report = { feedbackId: 53, threadId: "thread-one" };
+  const notified: string[] = [];
+  const stopFirst = store.subscribeFeedbackReport(report, () => notified.push("first"));
+  const stopSecond = store.subscribeFeedbackReport(report, () => notified.push("second"));
+  assert.deepEqual(store.getFeedbackReportSnapshot(report), { status: "loading" });
+  const [query] = [...open.values()];
+  assert.equal(open.size, 1);
+  assert.deepEqual(query!.projects, [{ kind: "location", location: TEST_STATS_THREAD_LOCATION }]);
+  assert.equal(query!.request.section, "feedback");
+  assert.equal(query!.request.feedbackId, 53);
+  const item = testFeedbackItem();
+  query!.publish(testFeedbackReportSection(item));
+  assert.deepEqual(store.getFeedbackReportSnapshot(report), { status: "ready", item });
+  assert.deepEqual(notified, ["first", "second"]);
+  // Stats re-read after deletion; the narrowed answer then lacks the report.
+  query!.publish(testFeedbackReportSection(null));
+  assert.deepEqual(store.getFeedbackReportSnapshot(report), { status: "deleted" });
+  // A remount re-leases before release settles, so it keeps its observations; the last release closes both.
+  stopFirst();
+  stopSecond();
+  const stopRemount = store.subscribeFeedbackReport(report, () => {});
+  await settle();
+  assert.equal(open.size, 1);
+  stopRemount();
+  await settle();
+  assert.equal(open.size, 0);
+  assert.equal(ownerReads.size, 0);
+});
+
+test("a feedback report fails visibly when its thread or its section cannot be read", () => {
+  const { open, workspace } = fakeWorkspace(new Map([["thread-one", TEST_STATS_THREAD_LOCATION]]));
+  const store = storeWith(workspace);
+  const unknown = { feedbackId: 53, threadId: "thread-gone" };
+  const unreadable = { feedbackId: 53, threadId: "thread-one" };
+  store.subscribeFeedbackReport(unknown, () => {});
+  store.subscribeFeedbackReport(unreadable, () => {});
+  [...open.values()][0]!.fail("Statistics are unavailable.");
+  assert.deepEqual(store.getFeedbackReportSnapshot(unknown), { status: "failed", failure: "Unknown thread." });
+  assert.deepEqual(store.getFeedbackReportSnapshot(unreadable), { status: "failed", failure: "Statistics are unavailable." });
 });

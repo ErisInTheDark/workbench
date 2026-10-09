@@ -2,8 +2,10 @@
 
 /*
  * Exports:
- * - WorkbenchFeedbackReportDisplay: shared titled feedback report display used by stats and command disclosures.
- * - default WorkbenchStatsFeedbackReport: one selectable agent feedback report with its importance flame, and its author's profile, time, and thread in one footer row.
+ * - WorkbenchFeedbackReportDisplay: category tag, title, and clampable report text, for stored reports and reports known only from their filing call.
+ * - WorkbenchFeedbackReportBody: one stored report with its importance flame, and its author's profile, time, and optional thread in one footer row.
+ * - WorkbenchFeedbackReportSkeleton: loading placeholder shaped like one report.
+ * - default WorkbenchStatsFeedbackReport: one selectable report in the stats view's feedback list.
  */
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type {
@@ -17,6 +19,7 @@ import { FlameIcon, HarnessIcon } from "../../workbench-icons";
 import { feedbackImportanceTone } from "./stats-feedback-presentation";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
 import { statsThreadIdentity } from "../stats-thread-identity";
+import WorkbenchStatsSkeleton from "../WorkbenchStatsSkeleton";
 
 /** Clamped text only offers expansion when it actually overflows at the current width. */
 function useClampOverflow(enabled: boolean, expanded: boolean) {
@@ -85,39 +88,33 @@ export function WorkbenchFeedbackReportDisplay({
   );
 }
 
-export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle, selected }: {
+/** Placeholder lines shaped like one report: tag and title, then the report's opening lines. */
+export function WorkbenchFeedbackReportSkeleton({ index = 0 }: { index?: number }) {
+  return (
+    <div aria-hidden="true" className="space-y-2 py-2">
+      <WorkbenchStatsSkeleton className="h-3 w-40" />
+      <WorkbenchStatsSkeleton className="h-3" style={{ width: `${88 - index * 14}%` }} />
+      <WorkbenchStatsSkeleton className="h-3" style={{ width: `${62 - index * 10}%` }} />
+    </div>
+  );
+}
+
+/** One stored report as the stats view shows it: importance, report, and its author's model, time, and thread. */
+export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread = true }: {
+  clamp?: boolean;
   item: WorkbenchFeedbackItem;
   /** Catalogue display name, or the stored id when the catalogue does not know it. */
   modelName: string | null;
-  onToggle: () => void;
-  selected: boolean;
+  /** Off where the authoring thread is the one already on screen. */
+  showThread?: boolean;
 }) {
   const thread = statsThreadIdentity(item);
   const importance = Math.round(item.importance * 100);
-  // Links and buttons inside the card act on their own; anywhere else toggles the card's selection.
-  const toggleFrom = (target: EventTarget) => {
-    if (target instanceof Element && target.closest("a,button")) return;
-    onToggle();
-  };
   return (
-    <li
-      aria-selected={selected}
-      className={`
-        group/report cursor-pointer list-none rounded-[0.95rem] px-3 py-2.5 outline-none
-        focus-visible:ring-2 focus-visible:ring-accent-soft
-        ${selected ? "bg-accent-soft/60 ring-1 ring-inset ring-accent" : "hover:bg-fg/4"}
-      `}
-      onClick={(event) => toggleFrom(event.target)}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || (event.key !== " " && event.key !== "Enter")) return;
-        event.preventDefault();
-        onToggle();
-      }}
-      role="option"
-      tabIndex={0}
-    >
+    <>
       <WorkbenchFeedbackReportDisplay
         category={item.category}
+        clamp={clamp}
         meta={<span
           className={`
             ml-auto inline-flex shrink-0 items-center gap-1 font-semibold tabular-nums
@@ -143,15 +140,50 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle
         </span>
         <span aria-hidden="true">·</span>
         <WorkbenchRelativeTime className="shrink-0" timestampMs={item.createdAt} />
-        <span className="ml-auto min-w-0 max-w-[60%] text-[0.8rem]">
-          {thread ? (
-            <WorkbenchThreadButton
-              fallback={<span className="truncate text-fg/muted">{thread.threadId}</span>}
-              threadId={thread.threadId}
-            />
-          ) : <span className="text-fg/muted">Thread removed</span>}
-        </span>
+        {showThread ? (
+          <span className="ml-auto min-w-0 max-w-[60%] text-[0.8rem]">
+            {thread ? (
+              <WorkbenchThreadButton
+                fallback={<span className="truncate text-fg/muted">{thread.threadId}</span>}
+                threadId={thread.threadId}
+              />
+            ) : <span className="text-fg/muted">Thread removed</span>}
+          </span>
+        ) : null}
       </div>
+    </>
+  );
+}
+
+export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle, selected }: {
+  item: WorkbenchFeedbackItem;
+  modelName: string | null;
+  onToggle: () => void;
+  selected: boolean;
+}) {
+  // Links and buttons inside the card act on their own; anywhere else toggles the card's selection.
+  const toggleFrom = (target: EventTarget) => {
+    if (target instanceof Element && target.closest("a,button")) return;
+    onToggle();
+  };
+  return (
+    <li
+      aria-selected={selected}
+      className={`
+        group/report cursor-pointer list-none rounded-[0.95rem] px-3 py-2.5 outline-none
+        focus-visible:ring-2 focus-visible:ring-accent-soft
+        ${selected ? "bg-accent-soft/60 ring-1 ring-inset ring-accent" : "hover:bg-fg/4"}
+      `}
+      onClick={(event) => toggleFrom(event.target)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== " " && event.key !== "Enter")) return;
+        event.preventDefault();
+        onToggle();
+      }}
+      role="option"
+      tabIndex={0}
+    >
+      <WorkbenchFeedbackReportBody item={item} modelName={modelName} />
     </li>
   );
 }

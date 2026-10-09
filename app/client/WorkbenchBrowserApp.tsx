@@ -1,8 +1,8 @@
 /*
  * Default export:
- * - WorkbenchBrowserApp: select the ordinary Workbench SPA or chrome-free thread rendering surface from browser location.
+ * - WorkbenchBrowserApp: own the app-wide stats store and select the ordinary Workbench SPA or chrome-free thread rendering surface from browser location.
  */
-import { useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 import AgentThreadViewer from "./components/workbench/thread-view/AgentThreadViewer.tsx";
 import ThreadRenderLab from "./components/workbench/thread-view/ThreadRenderLab.tsx";
@@ -14,6 +14,8 @@ import WorkbenchAppRpcContext from "./workbench/app/WorkbenchAppRpcContext";
 import type WorkbenchAppRpcClient from "./workbench/app/WorkbenchAppRpcClient";
 import type WorkbenchWorkspaceClient from "./workbench/app/WorkbenchWorkspaceClient";
 import WorkbenchWorkspaceContext from "./components/workbench/WorkbenchWorkspaceContext";
+import { WorkbenchStatsProvider } from "./components/workbench/stats/use-stats";
+import WorkbenchStatsStore from "./components/workbench/stats/WorkbenchStatsStore";
 import { usePathname } from "./workbench/navigation/browser-navigation.ts";
 
 const SAFE_AREA_BOTTOM_PROPERTY = "--workbench-safe-area-bottom";
@@ -97,6 +99,9 @@ export default function WorkbenchBrowserApp({
 }) {
   useWorkbenchSafeAreaBottom();
   const pathname = usePathname();
+  // One stats owner for every surface: the stats view and thread feedback rows read through it.
+  const [stats] = useState(() => new WorkbenchStatsStore(workspace));
+  useEffect(() => () => stats.dispose(), [stats]);
   let content;
   if (pathname === "/agent/thread-lab") {
     content = <ThreadRenderLab />;
@@ -109,7 +114,9 @@ export default function WorkbenchBrowserApp({
     <WorkbenchWorkspaceContext.Provider value={workspace}>
     <WorkbenchAppRpcContext.Provider value={rpc ?? null}>
       <WorkbenchClientStateProvider controller={controller}>
+      <WorkbenchStatsProvider value={stats}>
         {content}
+      </WorkbenchStatsProvider>
       </WorkbenchClientStateProvider>
     </WorkbenchAppRpcContext.Provider>
     </WorkbenchWorkspaceContext.Provider>

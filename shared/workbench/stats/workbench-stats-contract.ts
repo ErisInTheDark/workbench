@@ -7,7 +7,7 @@
  * - WorkbenchStatsRangeSchema/WorkbenchStatsRange: bounded selectable stats windows.
  * - STATS_TOKEN_TYPES/StatsTokenType: independently selectable billing categories.
  * - WORKBENCH_STATS_SECTIONS/WorkbenchStatsSectionSchema/WorkbenchStatsSection: independently observed parts of the stats view.
- * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: one section of a project-scoped, filtered stats request.
+ * - WorkbenchStatsReadRequestSchema/WorkbenchStatsReadRequest: one section of a project-scoped, filtered stats request, or the feedback section narrowed to one report.
  * - WorkbenchStatsSectionSchemas/WorkbenchStatsResponseSchema/WorkbenchStatsResponse/WorkbenchStatsSectionData: one section's data: usage, limits, claims, feedback, tools, or status.
  * - statsRangeShape: shared UTC day/week window boundaries.
  * - statsPeriodShape: a range's buckets narrowed to a selected period.
@@ -87,6 +87,8 @@ export type WorkbenchStatsSection = z.infer<typeof WorkbenchStatsSectionSchema>;
 
 /** Provider, model and token-type filters narrow usage only; every other section follows scope, range and period. */
 export const WorkbenchStatsReadRequestSchema = z.object({
+  /** Narrows the feedback section to this one report, whatever its scope, range or period; ignored by other sections. */
+  feedbackId: z.number().int().positive().nullable().default(null),
   model: z.string().trim().min(1).max(200).nullable().default(null),
   /**
    * Narrows every figure to the buckets starting between these two bucket starts, inclusive.

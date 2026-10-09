@@ -5,21 +5,18 @@
  * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, filterable by category tags, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
  */
 import { useContext, useEffect, useMemo, useState } from "react";
-import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
-import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import {
   WORKBENCH_FEEDBACK_CATEGORIES,
   type WorkbenchFeedbackCategory,
   type WorkbenchFeedbackSort,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
-import { useWorkbenchThreads } from "../../use-workbench-client";
 import WorkbenchModeRow from "../../WorkbenchModeRow";
 import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchWorkspaceContext from "../../WorkbenchWorkspaceContext";
 import useStats from "../use-stats";
 import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsFeedbackReport from "./WorkbenchStatsFeedbackReport";
+import WorkbenchStatsFeedbackReport, { WorkbenchFeedbackReportSkeleton } from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
 import {
   FEEDBACK_CATEGORY_PRESENTATION,
@@ -28,27 +25,6 @@ import {
   countFeedbackCategories,
   selectFeedbackItems,
 } from "./stats-feedback-presentation";
-
-/** Model catalogues for the harnesses that authored reports, read once each from the shared account cache. */
-function useModelCatalogues(harnesses: readonly WorkbenchHarness[]) {
-  const { listModels } = useWorkbenchThreads();
-  const [catalogues, setCatalogues] = useState<ReadonlyMap<string, readonly WorkbenchModelOption[]>>(new Map());
-  const key = [...new Set(harnesses)].sort().join("\0");
-  useEffect(() => {
-    let active = true;
-    for (const harness of key ? key.split("\0") as WorkbenchHarness[] : []) {
-      listModels(harness).then((models) => {
-        if (active) setCatalogues((current) => new Map(current).set(harness, models));
-      }).catch((error: unknown) => {
-        console.warn("Feedback model names are unavailable.", {
-          harness, reason: (error instanceof Error ? error.message : "Model read failed").slice(0, 300),
-        });
-      });
-    }
-    return () => { active = false; };
-  }, [key, listModels]);
-  return catalogues;
-}
 
 export default function WorkbenchStatsFeedback() {
   const { addressFeedback: onAddress, localProject, projectName, scope } = useStats();
@@ -103,18 +79,13 @@ export default function WorkbenchStatsFeedback() {
     }
   };
   const visible = useMemo(() => selectFeedbackItems(items, categories, sort), [categories, items, sort]);
-  const catalogues = useModelCatalogues(items.flatMap(({ harness }) => harness ? [harness] : []));
+  const modelName = useStats.modelNames(items.flatMap(({ harness }) => harness ? [harness] : []));
   const newest = items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
   const toggle = (category: WorkbenchFeedbackCategory) => setCategories((current) => {
     const next = new Set(current);
     if (!next.delete(category)) next.add(category);
     return next;
   });
-  const modelName = (harness: string | null, model: string | null) => {
-    if (!model) return null;
-    const known = harness ? catalogues.get(harness)?.find((option) => matchesWorkbenchModelOption(option, model)) : undefined;
-    return known?.displayName ?? model.slice(model.indexOf("/") + 1);
-  };
   const origin = (channel: string, projectId: string, daemonId: string | null | undefined) => channel === "project"
     ? projectName(projectId, daemonId)
     : projectId === feedback?.workbenchProjectId ? "Workbench" : `Workbench, from ${projectName(projectId, daemonId)}`;
@@ -141,13 +112,7 @@ export default function WorkbenchStatsFeedback() {
         // Category tags, then a few report cards.
         <div aria-hidden="true" className="space-y-3">
           <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <WorkbenchStatsSkeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
-          {[0, 1, 2].map((index) => (
-            <div className="space-y-2 py-2" key={index}>
-              <WorkbenchStatsSkeleton className="h-3 w-40" />
-              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${88 - index * 14}%` }} />
-              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${62 - index * 10}%` }} />
-            </div>
-          ))}
+          {[0, 1, 2].map((index) => <WorkbenchFeedbackReportSkeleton index={index} key={index} />)}
         </div>
       ) : !feedback.total ? (
         <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No agent feedback in this period.</p>

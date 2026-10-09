@@ -2,6 +2,7 @@
  * Exports:
  * - WORKBENCH_FEEDBACK_CHANNELS/WorkbenchFeedbackChannelSchema/WorkbenchFeedbackChannel: who the friction is about, Workbench or the project.
  * - WORKBENCH_FEEDBACK_CATEGORIES/WorkbenchFeedbackCategorySchema/WorkbenchFeedbackCategory: kind of friction.
+ * - WORKBENCH_FEEDBACK_TITLE_FALLBACK: presentation title for historical reports recorded before titles existed.
  * - WorkbenchFeedbackTitleSchema: bounded single-line report title.
  * - WorkbenchFeedbackReportSchema: bounded agent report text.
  * - WORKBENCH_FEEDBACK_SORTS/WorkbenchFeedbackSort: importance-first or newest-first ordering.
@@ -23,6 +24,7 @@ export const WORKBENCH_FEEDBACK_CATEGORIES = ["bug", "waste", "confusion", "oppo
 export const WorkbenchFeedbackCategorySchema = z.enum(WORKBENCH_FEEDBACK_CATEGORIES);
 export type WorkbenchFeedbackCategory = z.infer<typeof WorkbenchFeedbackCategorySchema>;
 
+export const WORKBENCH_FEEDBACK_TITLE_FALLBACK = "Feedback report";
 export const WorkbenchFeedbackTitleSchema = z.string().trim().min(1).max(120)
   .refine((value) => !/[\r\n]/u.test(value), "Title must be one line");
 export const WorkbenchFeedbackReportSchema = z.string().trim().min(1).max(4_000);
@@ -52,7 +54,7 @@ export const WorkbenchFeedbackItemSchema = z.object({
   /** Null once the authoring thread is gone. */
   threadId: z.string().min(1).nullable(),
   // Old servers send the source thread title (up to 500 chars) here; keep either reload order readable.
-  title: z.string().max(500).nullable().transform((value) => value?.trim().slice(0, 120) || "Feedback report"),
+  title: z.string().max(500).nullable().transform((value) => value?.trim().slice(0, 120) || WORKBENCH_FEEDBACK_TITLE_FALLBACK),
 }).strict();
 export type WorkbenchFeedbackItem = z.infer<typeof WorkbenchFeedbackItemSchema>;
 

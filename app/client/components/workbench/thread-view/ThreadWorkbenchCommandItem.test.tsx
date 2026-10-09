@@ -23,6 +23,10 @@ import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadDisclosure from "./ThreadDisclosure";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
+import { createFakeStatsWorkspace, TEST_STATS_THREAD_LOCATION, testFeedbackItem, testFeedbackReportSection } from "../stats/stats-test-store";
+import { WorkbenchStatsProvider } from "../stats/use-stats";
+import WorkbenchStatsStore from "../stats/WorkbenchStatsStore";
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -41,18 +45,39 @@ function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandIt
   )));
 }
 
-test("feedback uses its titled category summary and shared report display", () => {
-  const html = renderSpecialized(makeItem("feedback", {
+test("an opened feedback call shows the report stored under its acknowledged id", () => {
+  const stats = statsWithReport(testFeedbackItem());
+  const html = renderFeedback({
     category: "bug",
     channel: "wb",
     report: "Queue declarations vanished after reload.",
     title: "Queues vanish after reload",
-  }, "Recorded wb/bug feedback #53. Thanks."));
+  }, stats);
   assert.match(html, /Reported/u);
-  assert.match(html, /Bug/u);
   assert.match(html, /Queues vanish after reload/u);
-  assert.match(html, /Queue declarations vanished after reload\./u);
+  assert.match(html, /Stored report title/u);
+  assert.match(html, /Stored report text\./u);
+  assert.match(html, /gpt-5\.6/u);
   assert.doesNotMatch(html, /Recorded wb\/bug feedback|&quot;channel&quot;/u);
+});
+
+test("historical feedback without a title summarises with a placeholder and still opens its stored report", () => {
+  const stats = statsWithReport(testFeedbackItem());
+  const html = renderFeedback({ category: "bug", channel: "wb", report: "Queue declarations vanished after reload." }, stats);
+  assert.match(html, /Feedback report/u);
+  assert.match(html, /Stored report title/u);
+});
+
+test("a feedback call whose stored report is gone shows what it filed", () => {
+  const stats = statsWithReport(null);
+  const html = renderFeedback({
+    category: "bug",
+    channel: "wb",
+    report: "Queue declarations vanished after reload.",
+    title: "Queues vanish after reload",
+  }, stats);
+  assert.match(html, /Queue declarations vanished after reload\./u);
+  assert.match(html, /since been deleted/u);
 });
 
 test("status uses the dedicated card without inventing paths for count-only groups", () => {
@@ -285,6 +310,7 @@ function renderSpecialized(
   store: WorkbenchThreadSidebarStore | null = null,
   openDetails = true,
   ownerLocation: Parameters<typeof createClient>[1] = defaultOwnerLocation,
+  stats = new WorkbenchStatsStore(null),
 ) {
   const route = getWorkbenchMcpCommandRoute({ argumentsValue: item.arguments, server: item.server, tool: item.tool });
   assert.equal(route?.kind, "specialized");
@@ -293,25 +319,45 @@ function renderSpecialized(
     WorkbenchClientProvider,
     {
       children: createElement(
-        WorkbenchContextMenuProvider,
-        null,
+        WorkbenchStatsProvider,
+        { value: stats },
         createElement(
-          ThreadGitArcPresentationContext.Provider,
-          { value: presentation },
-          createElement(openDetails ? OpenedSpecialized : ThreadWorkbenchCommandItem, {
-            item,
-            relatedThreadsById: {},
-            renderRecallRecord: () => null,
-            route,
-            subagents: [],
-            threadCwdPath: "C:/workspace",
-            threadId: "thread-one",
-          }),
+          WorkbenchContextMenuProvider,
+          null,
+          createElement(
+            ThreadGitArcPresentationContext.Provider,
+            { value: presentation },
+            createElement(openDetails ? OpenedSpecialized : ThreadWorkbenchCommandItem, {
+              item,
+              relatedThreadsById: {},
+              renderRecallRecord: () => null,
+              route,
+              subagents: [],
+              threadCwdPath: "C:/workspace",
+              threadId: "thread-one",
+            }),
+          ),
         ),
       ),
       client: createClient(store, ownerLocation),
     },
   ));
+}
+
+/** Server rendering never subscribes, so report #53 is leased and its narrowed section published before rendering. */
+function statsWithReport(report: WorkbenchFeedbackItem | null) {
+  const { open, workspace } = createFakeStatsWorkspace(new Map([["thread-one", TEST_STATS_THREAD_LOCATION]]));
+  const stats = new WorkbenchStatsStore(workspace);
+  stats.subscribeFeedbackReport({ feedbackId: 53, threadId: "thread-one" }, () => {});
+  for (const query of open.values()) query.publish(testFeedbackReportSection(report));
+  return stats;
+}
+
+function renderFeedback(argumentsValue: McpItem["arguments"], stats: WorkbenchStatsStore) {
+  return renderSpecialized(
+    makeItem("feedback", argumentsValue, "Recorded wb/bug feedback #53. Thanks."),
+    null, null, true, defaultOwnerLocation, stats,
+  );
 }
 
 function threadEntry(

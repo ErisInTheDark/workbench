@@ -19,6 +19,7 @@ import {
   parseGitCheckpointDiffArtifactId,
   parseGitCheckpointDiffOutput,
   parseGitCheckpointProposalId,
+  parseWorkbenchFeedbackId,
   getThreadMcpToolCallOutcome,
   getThreadSubagentWaitMcpOutcome,
   type WorkbenchCommandRoute,
@@ -119,9 +120,11 @@ export default function ThreadWorkbenchCommandItem({
     return (
       <ThreadFeedbackCommandItem
         durationMs={visibleDurationMs ?? null}
+        feedbackId={parseWorkbenchFeedbackId(output)}
         operation={operation.operation}
         outcome={outcome}
         projectId={projectId}
+        threadId={threadId}
       />
     );
   }

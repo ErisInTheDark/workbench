@@ -148,11 +148,17 @@ export default class WorkbenchStatsRepository {
             .hotspots(request.projectIds, period.startedAt, Math.min(now, period.endedAt - 1), renames),
           generatedAt: now, historyFailures: [], section: "claims",
         };
-        // Provider and model filters describe usage, not feedback authors, so feedback follows only scope and period.
-        case "feedback": return {
-          feedback: new WorkbenchFeedbackRepository(this.database).summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId),
-          generatedAt: now, section: "feedback",
-        };
+        // Provider and model filters describe usage, not feedback authors, so feedback follows only scope and period,
+        // unless the read names one report.
+        case "feedback": {
+          const feedback = new WorkbenchFeedbackRepository(this.database);
+          return {
+            feedback: request.feedbackId
+              ? feedback.report(request.feedbackId)
+              : feedback.summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId),
+            generatedAt: now, section: "feedback",
+          };
+        }
         case "tools": return {
           generatedAt: now, section: "tools",
           tools: new WorkbenchToolStatsRepository(this.database).read(request.projectIds, period, now),

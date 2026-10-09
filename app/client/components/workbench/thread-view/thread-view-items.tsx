@@ -80,6 +80,7 @@ import {
   parseGitArcCommand,
   parseGitArcReceipt,
   parseWorkbenchFeedbackCommand,
+  parseWorkbenchFeedbackId,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -1718,9 +1719,11 @@ function ThreadCommandExecutionDetails ({
     return (
       <ThreadFeedbackCommandItem
         durationMs={visibleDurationMs ?? null}
+        feedbackId={parseWorkbenchFeedbackId(item.aggregatedOutput ?? "")}
         operation={feedbackCommand}
         outcome={commandOutcome}
         projectId={projectId}
+        threadId={threadId}
       />
     );
   }

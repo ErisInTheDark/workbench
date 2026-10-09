@@ -316,8 +316,18 @@ test("feedback CLI and MCP routes preserve one titled report intent", () => {
     title: "Lockfile diff noise",
   };
   assert.deepEqual(parseWorkbenchFeedbackCommand(command), expected);
-  assert.equal(parseWorkbenchFeedbackCommand("wb feedback --channel wb --category waste -- report"), null);
-  assert.equal(parseWorkbenchFeedbackCommand('wb feedback --channel wb --category waste -- "report mentions --title fake"'), null);
+  assert.deepEqual(parseWorkbenchFeedbackCommand("wb feedback --channel wb --category waste -- report"), {
+    category: "waste",
+    channel: "wb",
+    report: "report",
+    title: "Feedback report",
+  });
+  assert.deepEqual(parseWorkbenchFeedbackCommand('wb feedback --channel wb --category waste -- "report mentions --title fake"'), {
+    category: "waste",
+    channel: "wb",
+    report: "report mentions --title fake",
+    title: "Feedback report",
+  });
 
   const route = getWorkbenchMcpCommandRoute({
     argumentsValue: expected,

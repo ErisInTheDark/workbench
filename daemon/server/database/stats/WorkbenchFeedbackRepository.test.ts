@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect feedback scope, windows, filters, ordering, paging, and thread-independent retention.
+ * No exports. Tests protect feedback scope, windows, filters, ordering, paging, single-report reads, and thread-independent retention.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -53,6 +53,20 @@ test("schema migration gives retained feedback a reload-compatible placeholder t
 
     const migrated = database.prepare("SELECT title FROM workbench_agent_feedback").get() as { title: string };
     assert.equal(migrated.title, "Feedback report");
+  } finally {
+    database.close();
+  }
+});
+
+test("one report reads by id exactly as the stats summary lists it, whatever its age, and not once deleted", () => {
+  const { database, repository } = setup();
+  try {
+    const { id } = repository.record(report({ channel: "project" }), now - 400 * day);
+    repository.record(report({ channel: "project", category: "bug" }), now - day);
+    const listed = repository.summary(null, 0, now + day).items.find((item) => item.id === id);
+    assert.deepEqual(repository.report(id), { counts: [{ category: "waste", count: 1 }], items: [listed], total: 1, workbenchProjectId: null });
+    repository.delete([id]);
+    assert.deepEqual(repository.report(id), { counts: [], items: [], total: 0, workbenchProjectId: null });
   } finally {
     database.close();
   }

@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsView: own the stats store for the view's lifetime, nudge history import and limit refresh, and render the shared controls and the routed tab.
+ * - default WorkbenchStatsView: feed the app's stats store its view facts, nudge history import and limit refresh, and render the shared controls and the routed tab.
  */
 import { useContext, useEffect, useLayoutEffect, useState, type ComponentType } from "react";
 
@@ -10,9 +10,9 @@ import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
 import WorkbenchWorkspaceContext, { WorkbenchOperationsContext as WorkbenchDaemonClientContext } from "../WorkbenchWorkspaceContext";
 import type { StatsProjectScope } from "./stats-project-scope";
-import { WorkbenchStatsProvider } from "./use-stats";
+import useStats from "./use-stats";
 import WorkbenchStatsControls from "./WorkbenchStatsControls";
-import WorkbenchStatsStore, { type StatsInputs } from "./WorkbenchStatsStore";
+import type { StatsInputs } from "./WorkbenchStatsStore";
 import WorkbenchStatsToolsTab from "./tools/WorkbenchStatsToolsTab";
 import WorkbenchStatsUsageTab from "./usage/WorkbenchStatsUsageTab";
 import WorkbenchStatsWorkspacesTab from "./workspaces/WorkbenchStatsWorkspacesTab";
@@ -35,14 +35,13 @@ export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, pro
 }) {
   const daemon = useContext(WorkbenchDaemonClientContext);
   const workspace = useContext(WorkbenchWorkspaceContext);
-  const [store] = useState(() => new WorkbenchStatsStore());
+  const store = useStats.store();
   const [actionError, setActionError] = useState("");
 
   // Panels lease sections during render-time subscription, so app facts must land before they paint.
   useLayoutEffect(() => {
-    store.setInputs({ addressFeedback: onAddressFeedback, openRoute: onOpenRoute, projects, scope, threadRoute, workspace });
+    store.setInputs({ addressFeedback: onAddressFeedback, openRoute: onOpenRoute, projects, scope, threadRoute });
   });
-  useEffect(() => () => store.dispose(), [store]);
 
   // Commands only nudge the daemon; their effects stream back through the observations. They run on every
   // connection, so a cold load waits for the socket instead of failing before it opens.
@@ -68,11 +67,9 @@ export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, pro
 
   const Tab = TABS[tab];
   return (
-    <WorkbenchStatsProvider value={store}>
-      <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 pb-10 pt-1">
-        <WorkbenchStatsControls error={actionError} tab={tab} />
-        <Tab key={tab} />
-      </div>
-    </WorkbenchStatsProvider>
+    <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 pb-10 pt-1">
+      <WorkbenchStatsControls error={actionError} tab={tab} />
+      <Tab key={tab} />
+    </div>
   );
 }

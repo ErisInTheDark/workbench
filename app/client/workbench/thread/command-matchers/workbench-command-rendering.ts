@@ -4,6 +4,7 @@
  * - GitCheckpointCommitCommandIntent: proposal-card message and explicit or target-resolved commit mode.
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
+ * - parseWorkbenchFeedbackId: read the stored report id from a feedback call's acknowledgement.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -14,9 +15,10 @@
  */
 import type { JsonValue } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
-import type {
-  WorkbenchFeedbackCategory,
-  WorkbenchFeedbackChannel,
+import {
+  WORKBENCH_FEEDBACK_TITLE_FALLBACK,
+  type WorkbenchFeedbackCategory,
+  type WorkbenchFeedbackChannel,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
 
@@ -317,15 +319,21 @@ function actionTarget(action: string, target: string): ThreadCommandDisplayPart[
   return [CommandMatcher.Text(action), primary(target)];
 }
 
+/** CLI and MCP calls both acknowledge with `Recorded wb/bug feedback #53. Thanks.` */
+export function parseWorkbenchFeedbackId(output: string): number | null {
+  const id = /\bfeedback #(\d+)\b/u.exec(output)?.[1];
+  return id ? Number(id) : null;
+}
+
 function readFeedbackOperation(args: Record<string, JsonValue | undefined>): WorkbenchFeedbackOperation | null {
   const category = readString(args.category);
   const channel = readString(args.channel);
   const report = readString(args.report)?.trim();
-  const title = readString(args.title)?.trim();
+  const title = readString(args.title)?.trim() || WORKBENCH_FEEDBACK_TITLE_FALLBACK;
   if (
     !category || !["bug", "waste", "confusion", "opportunity"].includes(category)
     || !channel || !["wb", "project"].includes(channel)
-    || !report || !title
+    || !report
   ) return null;
   return {
     category: category as WorkbenchFeedbackCategory,

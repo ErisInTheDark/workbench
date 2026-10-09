@@ -10,9 +10,10 @@
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
-import type {
-  WorkbenchFeedbackCategory,
-  WorkbenchFeedbackChannel,
+import {
+  WORKBENCH_FEEDBACK_TITLE_FALLBACK,
+  type WorkbenchFeedbackCategory,
+  type WorkbenchFeedbackChannel,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 
 import { CommandMatcher } from "./core";
@@ -57,12 +58,12 @@ export function parseWorkbenchFeedbackCommand(command: string): WorkbenchFeedbac
   };
   const category = flag("--category");
   const channel = flag("--channel");
-  const title = flag("--title")?.trim();
+  const title = flag("--title")?.trim() || WORKBENCH_FEEDBACK_TITLE_FALLBACK;
   const report = separator >= 0 ? tokens.slice(separator + 1).join(" ").trim() : "";
   if (
     !category || !["bug", "waste", "confusion", "opportunity"].includes(category)
     || !channel || !["wb", "project"].includes(channel)
-    || !title || !report
+    || !report
   ) return null;
   return {
     category: category as WorkbenchFeedbackCategory,
