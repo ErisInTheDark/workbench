@@ -651,6 +651,29 @@ test("delivered user input reactivates provider-owned terminal state without ove
   assert.equal(reduceWorkbenchThreadLifecycle(pendingInput, delivered), pendingInput);
 });
 
+test("a live provider turn revives only lifecycles a turn end or provider snapshot left behind", () => {
+  const liveTurnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("live-turn");
+  const live = { kind: "providerTurnActive" as const, turnId: liveTurnId };
+  const revived = { agent: { agentStatus: "working" as const, turnId: liveTurnId }, kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const };
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const ended = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const interrupted = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "interrupted", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(ended, live), revived);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(interrupted, live), revived);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle({ kind: "completed", reason: "providerInactive", settled: false }, live), revived);
+  assert.deepEqual(reduceWorkbenchThreadLifecycle(working, live), revived, "working follows the turn that is actually moving");
+  assert.equal(reduceWorkbenchThreadLifecycle(interrupted, { ...live, turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] }), interrupted);
+
+  // Agents keep streaming after reporting status, and questions or user decisions outrank activity.
+  const completed = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const blocked = reduceWorkbenchThreadLifecycle(working, { kind: "agentStatus", status: "blocked", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  const pendingInput = reduceWorkbenchThreadLifecycle(working, { kind: "pendingInput", requestKey: "request", turnId: fixtureIdentityValues.WorkbenchTurnId["old-turn"] });
+  for (const kept of [completed, blocked, pendingInput, reduceWorkbenchThreadLifecycle(ended, { kind: "userCompleted" }), reduceWorkbenchThreadLifecycle(working, { kind: "userStopped" })]) {
+    assert.equal(reduceWorkbenchThreadLifecycle(kept, live), kept);
+  }
+});
+
 test("answered input can reopen terminal lifecycle without changing ordinary resolution", () => {
   const turnId = fixtureIdentityValues.WorkbenchTurnId["turn"];
   for (const status of ["blocked", "completed"] as const) {

@@ -2702,10 +2702,6 @@ test("a reconciliation snapshot cannot replace a lifecycle transition made while
   assert.deepEqual(await lifecycle(), {
     agent: { agentStatus: "working", turnId: "next-turn" }, kind: "working", reason: "acceptedIntent", settled: false,
   }, "the turn accepted mid-reconciliation must stay working");
-
-  await reconcileHeld(async () => undefined);
-  assert.deepEqual(await lifecycle(), { kind: "needsAttention", reason: "noActiveTurn", settled: false },
-    "an unchanged working entry is still repaired from the inactive provider");
   await controller.dispose();
 });
 
@@ -2892,7 +2888,7 @@ test("replayed questionnaire lifecycle does not invent fresh thread activity", a
   await temporary.dispose();
 });
 
-test("inactive providers release stale questionnaire ownership without changing terminal semantics", async () => {
+test("provider reconciliation cannot release a questionnaire its turn still owns", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-inactive-questionnaire-");
   const root = temporary.path;
   const working = (threadId: string): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
@@ -2940,69 +2936,135 @@ test("inactive providers release stale questionnaire ownership without changing 
   await controller.observeLifecycle("codex", fixtureThreadIds["top"], { kind: "pendingInput", questionnaire: null, requestKey: "top-request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("top-turn") });
   await controller.observeLifecycle("codex", fixtureThreadIds["child"], { kind: "pendingInput", questionnaire: null, requestKey: "child-request", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn") });
 
-  const beforeRefresh = freshRevision;
-  await controller.refresh(fixtureProjectIds["project"]);
-  await waitFor(() => freshRevision > beforeRefresh
-    && publishedEntries.every((entry) => entry.entryKind === "draft" || entry.lifecycle.reason === "pendingInput"), "Active questionnaires lost provider ownership.");
-
+  // A provider list can call the waiting turn idle; only that turn's events (or the cold-start sweep) end the wait.
   providerEntries = [
     { ...working("top"), lifecycle: { kind: "completed", reason: "providerInactive", settled: true } },
     { ...child, lifecycle: { kind: "completed", reason: "providerInactive", settled: false } },
   ];
+  const beforeRefresh = freshRevision;
   await controller.refresh(fixtureProjectIds["project"]);
-  await waitFor(() => {
-    const top = publishedEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "top");
-    const settledChild = publishedEntries.find((entry) => entry.entryKind === "subagent" && entry.identity.threadId === "child");
-    return top?.entryKind === "thread"
-      && top.lifecycle.kind === "needsAttention"
-      && top.lifecycle.reason === "noActiveTurn"
-      && settledChild?.entryKind === "subagent"
-      && settledChild.lifecycle.kind === "completed"
-      && !settledChild.lifecycle.settled;
-  }, "Inactive providers did not release stale questionnaire ownership.");
-
-  const completed = await controller.handleRequest("observer", {
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("top") }, method: "workbench/thread-state/status/set", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), status: "completed",
-  });
-  assert.equal("result" in completed ? (completed.result as { accepted?: boolean }).accepted : false, true);
-  const settled = await controller.handleRequest("observer", {
-    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("top") }, method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-  });
-  assert.equal("result" in settled ? (settled.result as { accepted?: boolean }).accepted : false, true);
-  const top = publishedEntries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "top");
-  assert.equal(top?.entryKind === "thread" ? top.lifecycle.kind : null, "completed");
-  assert.equal(top?.entryKind === "thread" ? top.lifecycle.settled : null, true);
+  await waitFor(() => freshRevision > beforeRefresh, "Inactive provider reconciliation did not finish.");
+  assert.deepEqual(publishedEntries.map((entry) => entry.entryKind === "draft" ? null : entry.lifecycle.reason), ["pendingInput", "pendingInput"]);
 
   await controller.dispose();
   await temporary.dispose();
 });
 
-test("active provider observation repairs stale top-level attention", async () => {
+function lifecycleFixture(storageRoot: string) {
+  const project = fixtureProjectIds["project"];
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     reconcileProject: async () => [],
-    storageRoot: "active-attention-repair",
+    storageRoot,
     threadStateStore: new MemoryThreadStatePersistence(),
   });
-  const threadId = fixtureThreadIds["attention"];
-  const providerEntry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
-    activityAt: 1,
-    entryKind: "thread",
-    identity: { harness: "codex", threadId },
-    lifecycle: { agent: { agentStatus: "working", turnId: fixtureTurnIds["turn"] }, kind: "working", reason: "acceptedIntent", settled: false },
-    metadata: { archived: false, pinned: false, snoozed: false },
-    title: "Active thread",
+  const working = (turnId?: string) => ({
+    agent: { agentStatus: "working" as const, ...(turnId ? { turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId) } : {}) },
+    kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const,
+  });
+  const top = (lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>["lifecycle"]): Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> => ({
+    activityAt: 1, entryKind: "thread", identity: { harness: "codex", threadId: fixtureThreadIds["top"] },
+    lifecycle, metadata: { archived: false, pinned: false, snoozed: false }, title: "Top",
+  });
+  const child = (lifecycle: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }>["lifecycle"]): Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> => ({
+    activityAt: 1, createdAt: 1, cwd: "C:/repo", directSubagentIndex: 0, entryKind: "subagent",
+    identity: { harness: "codex", threadId: fixtureThreadIds["child"] }, lifecycle, name: "Child",
+    parentThreadId: fixtureThreadIds["parent"], pinned: false, profileId: "default", profileName: "Default",
+    projectId: project, title: "Child", updatedAt: 1,
+  });
+  const read = async (threadId: string) => {
+    const entry = await controller.getCanonicalThreadEntry(project, fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId));
+    return entry && entry.entryKind !== "draft" ? entry : null;
+  };
+  return { child, controller, project, read, top, working };
+}
+
+test("provider rows cannot end or revive a lifecycle whose turn Workbench knows", async () => {
+  const { child, controller, project, read, top, working } = lifecycleFixture("known-turn-lifecycle");
+  try {
+    await controller.ensureProviderEntry(project, top(working("top-turn")));
+    await controller.ensureProviderEntry(project, child(working("child-turn")));
+    // A provider list can report a live turn as idle, or omit it; only that turn's own events end it.
+    await controller.ensureProviderEntry(project, top({ kind: "completed", reason: "providerInactive", settled: true }));
+    await controller.ensureProviderEntry(project, child({ kind: "completed", reason: "providerInactive", settled: false }));
+    assert.deepEqual((await read("top"))?.lifecycle, working("top-turn"));
+    assert.deepEqual((await read("child"))?.lifecycle, working("child-turn"));
+
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["top"], {
+      kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("top-turn"),
+    });
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["child"], {
+      kind: "agentStatus", status: "blocked", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("child-turn"),
+    });
+    const ended = [(await read("top"))?.lifecycle, (await read("child"))?.lifecycle];
+    await controller.ensureProviderEntry(project, top(working("other-turn")));
+    await controller.ensureProviderEntry(project, child(working("other-turn")));
+    assert.deepEqual([(await read("top"))?.lifecycle, (await read("child"))?.lifecycle], ended);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("provider rows still end a working lifecycle whose turn Workbench cannot identify", async () => {
+  const { child, controller, project, read, top, working } = lifecycleFixture("unknown-turn-lifecycle");
+  try {
+    await controller.ensureProviderEntry(project, top(working()));
+    await controller.ensureProviderEntry(project, child(working()));
+    await controller.ensureProviderEntry(project, top({ kind: "completed", reason: "providerInactive", settled: true }));
+    await controller.ensureProviderEntry(project, child({ kind: "completed", reason: "providerInactive", settled: false }));
+    assert.deepEqual((await read("top"))?.lifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false });
+    assert.deepEqual((await read("child"))?.lifecycle, { kind: "completed", reason: "providerInactive", settled: false });
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("a steered admission keeps the live turn's questionnaire while a started turn replaces it", async () => {
+  const { controller, project, read, top, working } = lifecycleFixture("steered-admission");
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("question-turn");
+  const questionnaire = {
+    itemId: "question-item", requestKey: "workbench-mcp:question", turnId,
+    request: {
+      id: "workbench-mcp:question", title: "Continue?", summary: "", submitLabel: "Send",
+      questions: [{ id: "choice", header: "", question: "Continue?", options: [], allowOther: true, isSecret: false }],
+    },
   };
   try {
-    await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
-    for (const event of [{ kind: "providerSystemError" } as const, { kind: "agentStatus", status: "blocked" } as const]) {
-      await controller.applyLifecycle(fixtureProjectIds["project"], "codex", threadId, event);
-      const stale = await controller.getCanonicalThreadEntry(fixtureProjectIds["project"], threadId);
-      assert.equal(stale?.entryKind === "thread" ? stale.lifecycle.kind : null, "needsAttention");
-      await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry);
-      const healed = await controller.getCanonicalThreadEntry(fixtureProjectIds["project"], threadId);
-      assert.deepEqual(healed?.entryKind === "thread" ? healed.lifecycle : null, providerEntry.lifecycle);
-    }
+    await controller.ensureProviderEntry(project, top(working("question-turn")));
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["top"], {
+      kind: "pendingInput", requestKey: questionnaire.requestKey, turnId,
+    }, undefined, { kind: "set", questionnaire });
+    const waiting = await read("top");
+    assert.equal(waiting?.lifecycle.kind === "needsAttention" ? waiting.lifecycle.reason : null, "pendingInput");
+
+    await controller.acceptAdmission(project, "codex", fixtureThreadIds["top"], { kind: "steered", turnId });
+    const steered = await read("top");
+    assert.deepEqual(steered?.lifecycle, waiting?.lifecycle);
+    assert.deepEqual(steered?.pendingQuestionnaire, questionnaire);
+
+    await controller.acceptAdmission(project, "codex", fixtureThreadIds["top"], {
+      kind: "started", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("next-turn"),
+    });
+    const started = await read("top");
+    assert.deepEqual(started?.lifecycle, working("next-turn"));
+    assert.equal(started?.pendingQuestionnaire ?? null, null);
+  } finally {
+    await controller.dispose();
+  }
+});
+
+test("items streaming into a live turn revive a lifecycle only a turn end left behind", async () => {
+  const { controller, project, read, top, working } = lifecycleFixture("live-item-heal");
+  try {
+    await controller.ensureProviderEntry(project, top(working("top-turn")));
+    await controller.applyLifecycle(project, "codex", fixtureThreadIds["top"], {
+      kind: "turnCompleted", status: "completed", turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("top-turn"),
+    });
+    await controller.observeItemActivity(project, fixtureThreadIds["top"], 5, []);
+    assert.deepEqual((await read("top"))?.lifecycle, { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      "activity outside a live turn is not evidence of work");
+    await controller.observeItemActivity(project, fixtureThreadIds["top"], 6, [fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("live-turn")]);
+    assert.deepEqual((await read("top"))?.lifecycle, working("live-turn"));
   } finally {
     await controller.dispose();
   }

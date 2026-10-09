@@ -14,6 +14,7 @@ import {
   type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
+import type { WorkbenchAgentMessageAdmission } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -50,8 +51,8 @@ export interface WorkbenchThreadMessageControllerOptions {
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
-    /** Mark the target working on the turn that admitted the message, as user messages do. */
-    acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
+    /** Move the target by how its provider admitted the message, as user messages do. */
+    acceptAdmission(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, admitted: WorkbenchAgentMessageAdmission): Promise<void>;
     resolvePendingQuestionnaire: WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"];
   };
 }
@@ -137,7 +138,7 @@ export default class WorkbenchThreadMessageController {
           userVisibleSimpleVersion: input.userVisibleSimpleVersion,
         },
       });
-      await this.options.threadState.acceptIntent(target.projectId, target.harness, target.threadId, admitted.turnId);
+      await this.options.threadState.acceptAdmission(target.projectId, target.harness, target.threadId, admitted);
     })();
     this.requests.add(operation);
     return operation.finally(() => this.requests.delete(operation));
@@ -247,8 +248,8 @@ export default class WorkbenchThreadMessageController {
       },
     };
     // Waiters read lifecycle; without this a re-messaged child still looks finished until provider events land.
-    const accept = (admitted: { turnId: string }) => this.options.threadState.acceptIntent(
-      target.projectId, target.harness, target.threadId, admitted.turnId,
+    const accept = (admitted: WorkbenchAgentMessageAdmission) => this.options.threadState.acceptAdmission(
+      target.projectId, target.harness, target.threadId, admitted,
     );
     const active = isThreadStatusActive(target.thread.status);
     const entry = directChild

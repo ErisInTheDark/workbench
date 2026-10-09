@@ -4,6 +4,7 @@
  * - WorkbenchProviderThreadCreate: resolved creation context supplied by the daemon.
  * - WorkbenchProviderCompactionScope: canonical item and turn owned by one compaction execution.
  * - WorkbenchProviderThreadList: bounded provider discovery request.
+ * - WorkbenchAgentMessageAdmission: whether an agent message started a turn or steered the live one.
  * - WorkbenchProviderThreads: WB-valued thread operations implemented at the provider edge.
  * - WorkbenchProviderThreadContextRollover: optional fresh-native-context operations.
  * - WorkbenchProviderTranscriptReconcile: demanded window and pre-fetch capture-gap identities.
@@ -54,6 +55,11 @@ export interface WorkbenchProviderTranscriptReconcile {
   target: WorkbenchThreadReconciliationTarget;
   gapIds: string[];
 }
+/** How a provider admitted an agent message: as a new turn, or steered into the live one. */
+export interface WorkbenchAgentMessageAdmission {
+  kind: "started" | "steered";
+  turnId: string;
+}
 export interface WorkbenchProviderThreads {
   readonly contextRollover?: WorkbenchProviderThreadContextRollover;
   reconcile(input: WorkbenchProviderTranscriptReconcile, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
@@ -68,7 +74,7 @@ export interface WorkbenchProviderThreads {
   admitTurn(threadId: string, turnReference: string): Promise<void>;
   submit(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageResult>;
   /** Deliver an attributed agent message; report whether its Workbench turn started or was steered. */
-  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<{ kind: "started" | "steered"; turnId: string }>;
+  messageAgent(input: { threadId: string; cwd: string; message: WorkbenchAgentMessage; context?: WorkbenchMessageContext }): Promise<WorkbenchAgentMessageAdmission>;
   rename(threadId: string, title: string): Promise<void>;
   compact(threadId: string, options: { scope: WorkbenchProviderCompactionScope; signal?: AbortSignal }): Promise<void>;
   /** Delete the backing provider session, retaining WB identity, state and history. */

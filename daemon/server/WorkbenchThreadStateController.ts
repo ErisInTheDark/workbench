@@ -130,18 +130,15 @@ function reconcileProviderLifecycle(
   providerEntry: Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>,
   record: WorkbenchThreadStateRecord | undefined,
 ): WorkbenchThreadLifecycle {
+  if (!record) return providerEntry.lifecycle;
+  // Provider rows can misreport a live turn, so a lifecycle with a known turn or an ended state moves only through events.
+  // Only a provider-owned lifecycle without a turn identity is unknown enough to take the provider's inactive view.
   if (
-    providerEntry.entryKind === "thread"
-    && providerEntry.lifecycle.kind === "working"
-    && record?.entryKind === "thread"
-    && record.lifecycle.kind === "needsAttention"
-    && record.lifecycle.reason !== "pendingInput"
-    && !record.pendingQuestionnaire
+    !isWorkbenchThreadStatusProviderOwned(record.lifecycle)
+    || getWorkbenchLifecycleTurnId(record.lifecycle) !== null
+    || isWorkbenchThreadStatusProviderOwned(providerEntry.lifecycle)
   ) {
-    return providerEntry.lifecycle;
-  }
-  if (!record || !isWorkbenchThreadStatusProviderOwned(record.lifecycle) || isWorkbenchThreadStatusProviderOwned(providerEntry.lifecycle)) {
-    return record?.lifecycle ?? providerEntry.lifecycle;
+    return record.lifecycle;
   }
   if (
     providerEntry.entryKind === "thread"
@@ -585,6 +582,17 @@ export default class WorkbenchThreadStateController {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "acceptedIntent", turnId }, providerEntry);
   }
 
+  /** Move a message target by what its provider did: a started turn is new intent; a steer is input on the live turn. */
+  async acceptAdmission(
+    projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId,
+    admitted: { kind: "started" | "steered"; turnId: WorkbenchTurnId },
+  ) {
+    // A steer must never read as new intent: that would drop the live turn's questionnaire while it still waits.
+    return admitted.kind === "started"
+      ? await this.acceptProviderIntent(projectId, harness, threadId, admitted.turnId)
+      : await this.applyLifecycle(projectId, harness, threadId, { kind: "userInputDelivered", turnId: admitted.turnId });
+  }
+
   async reportRecoveryFailed(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
     return await this.applyLifecycle(projectId, harness, threadId, { kind: "recoveryFailed" });
   }
@@ -822,7 +830,10 @@ export default class WorkbenchThreadStateController {
       const ownedEvent = existing.entryKind === "subagent" && event.kind === "turnCompleted" && event.status === "completed"
         ? { kind: "agentStatus" as const, status: "completed" as const, turnId: event.turnId }
         : validatedEvent;
-      const reducedLifecycle = reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+      // A held questionnaire still waits on the user, however the turn around it moves.
+      const reducedLifecycle = ownedEvent.kind === "providerTurnActive" && existing.pendingQuestionnaire
+        ? existing.lifecycle
+        : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
       const heldQuestionnaire = this.heldQuestionnaire(existing, questionnaireMutation);
       const retainedQuestionnaire = existing.entryKind === "thread"
         && existing.lifecycle.kind === "needsAttention"
@@ -1202,13 +1213,14 @@ export default class WorkbenchThreadStateController {
     }
   }
 
-  /** The canonical transcript admitted new thread items; activity only moves forward to their observed time. */
-  async observeItemActivity(projectId: ProjectId, threadId: WorkbenchThreadId, activityAt: number) {
+  /** The canonical transcript admitted new thread items; activity only moves forward, and items in a live provider turn prove it runs. */
+  async observeItemActivity(projectId: ProjectId, threadId: WorkbenchThreadId, activityAt: number, liveTurnIds: readonly WorkbenchTurnId[] = []) {
     projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
     const located = [...state.entries.values()].find(entry => entry.entryKind !== "draft" && entry.identity.threadId === threadId);
     if (!located || located.entryKind === "draft") return;
-    const key = `${located.identity.harness}:${threadId}`;
+    const harness = located.identity.harness;
+    const key = `${harness}:${threadId}`;
     await this.enqueue(`${projectId}:thread:${key}`, async () => {
       const entry = state.entries.get(key);
       if (!entry || entry.entryKind === "draft" || entry.activityAt >= activityAt) return;
@@ -1217,6 +1229,8 @@ export default class WorkbenchThreadStateController {
       await this.persist(projectId, state, [key]);
       this.publish(projectId, state, next);
     });
+    const liveTurnId = liveTurnIds.at(-1);
+    if (liveTurnId) await this.applyLifecycle(projectId, harness, threadId, { kind: "providerTurnActive", turnId: liveTurnId });
   }
 
   async observeDisplayLabel(harness: WorkbenchHarness, threadId: WorkbenchThreadId, label: string, selectedProjectId?: ProjectId) {

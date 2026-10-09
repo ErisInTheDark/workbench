@@ -11,6 +11,7 @@ import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type W
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import type { WorkbenchAgentMessageAdmission } from "workbench-shared/workbench/provider/provider-thread";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
@@ -381,9 +382,11 @@ function createWorkbenchCoreFeature(
     if (!key) throw new Error(`Provider ${harness} is unavailable.`);
     return providers.get(key);
   };
-  // Agent messages flip their target to working on the admitted turn, exactly like user messages.
-  const acceptIntent = async (projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string) => {
-    await requireThreadState().controller.acceptProviderIntent(projectId, harness, threadId, WorkbenchTurnIdSchema.parse(turnId));
+  // Agent messages move their target by what the provider did with them, exactly like user messages.
+  const acceptAdmission = async (projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, admitted: WorkbenchAgentMessageAdmission) => {
+    await requireThreadState().controller.acceptAdmission(projectId, harness, threadId, {
+      kind: admitted.kind, turnId: WorkbenchTurnIdSchema.parse(admitted.turnId),
+    });
   };
   // Built after thread state below; its lifecycle listener must register before any subagent wait subscribes.
   let subagentQueues: WorkbenchSubagentQueueController | undefined;
@@ -399,7 +402,7 @@ function createWorkbenchCoreFeature(
     persistence: database,
     // Read lazily: thread actions own stop and are built later in this node.
     stopThread: threadId => threadActions.stopThread(threadId),
-    acceptIntent,
+    acceptAdmission,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
         return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);
@@ -440,7 +443,7 @@ function createWorkbenchCoreFeature(
       getEntry: async (projectId, harness, threadId) => (
         await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
       ),
-      acceptIntent,
+      acceptAdmission,
       resolvePendingQuestionnaire: (input, deliver) => (
         requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
       ),

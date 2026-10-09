@@ -24,7 +24,7 @@ import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
 import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import {
-  ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema,
+  ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
   type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
@@ -238,6 +238,8 @@ export default class WorkbenchThreadStateFeature {
     this.unsubscribeItemActivity = context.itemActivity?.subscribeItemActivity(async (activity) => {
       await this.controller.observeItemActivity(
         ProjectIdSchema.parse(activity.projectId), WorkbenchThreadIdSchema.parse(activity.threadId), activity.activityAt,
+        // An older transcript generation may still publish activity without live turns.
+        (activity.liveTurnIds ?? []).map(turnId => WorkbenchTurnIdSchema.parse(turnId)),
       );
     }) ?? (() => undefined);
   }

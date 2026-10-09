@@ -22,6 +22,7 @@ import {
 } from "./lib/workbench/subagent/subagent-output";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
+import type { WorkbenchAgentMessageAdmission } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { gitArcPreventsThreadSettlement, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
@@ -59,7 +60,7 @@ export interface WorkbenchSubagentControllerOptions {
   /** Stop: interrupt the live turn, dismiss its pending questionnaire and mark the thread stopped. */
   stopThread(threadId: WorkbenchThreadId): Promise<void>;
   /** Mark a child working on the turn that admitted its first message. */
-  acceptIntent(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, turnId: string): Promise<void>;
+  acceptAdmission(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, admitted: WorkbenchAgentMessageAdmission): Promise<void>;
   /** Consume queue lines (paused holds, dropped places) owed to the parent about a child whose turn ended. */
   queueReleaseNote?(threadId: WorkbenchThreadId): string | null;
   threadState?: {
@@ -113,7 +114,7 @@ export default class WorkbenchSubagentController {
   private readonly resolveProjectFromCwd: AgentEndpointProjectResolver;
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
-  private readonly acceptIntent: WorkbenchSubagentControllerOptions["acceptIntent"];
+  private readonly acceptAdmission: WorkbenchSubagentControllerOptions["acceptAdmission"];
   private readonly queueReleaseNote: WorkbenchSubagentControllerOptions["queueReleaseNote"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly waiters = new Map<string, AbortController>();
@@ -131,7 +132,7 @@ export default class WorkbenchSubagentController {
     resolveProjectFromCwd,
     subagentStore,
     stopThread,
-    acceptIntent,
+    acceptAdmission,
     queueReleaseNote,
     threadState,
   }: WorkbenchSubagentControllerOptions) {
@@ -144,7 +145,7 @@ export default class WorkbenchSubagentController {
     this.resolveProjectFromCwd = resolveProjectFromCwd;
     this.subagentStore = subagentStore;
     this.stopThread = stopThread;
-    this.acceptIntent = acceptIntent;
+    this.acceptAdmission = acceptAdmission;
     this.queueReleaseNote = queueReleaseNote;
     this.threadState = threadState;
   }
@@ -341,7 +342,7 @@ export default class WorkbenchSubagentController {
             userVisibleSimpleVersion,
           },
         });
-        await this.acceptIntent(caller.project.id, profile.harness, childId, admitted.turnId);
+        await this.acceptAdmission(caller.project.id, profile.harness, childId, admitted);
         result = { threadId: childId };
       } catch (error) {
         try {

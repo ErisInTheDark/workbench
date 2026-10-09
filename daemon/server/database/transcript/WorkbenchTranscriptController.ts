@@ -71,6 +71,8 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
 export interface WorkbenchTranscriptItemActivity {
   /** Latest observed time among the newly admitted items. */
   activityAt: number;
+  /** Running turns whose items a live provider settlement changed; empty for replays and Workbench records. Absent from older generations. */
+  liveTurnIds?: string[];
   projectId: string;
   threadId: string;
 }
@@ -299,7 +301,7 @@ export default class WorkbenchTranscriptController {
       this.#subscriptions.settle(settlement.changedThreadIds, {
         snapshots: requestsSubscriptionRefresh(recoveryObservations, context.source),
       });
-      this.#publishSettlement(settlement, recoveryObservations, context.source);
+      this.#publishSettlement(settlement, recoveryObservations, context.source, false);
       this.#publishSettled(settlement.changedThreadIds);
       return settlement;
     }
@@ -321,7 +323,7 @@ export default class WorkbenchTranscriptController {
     this.#subscriptions.settle(settlement.changedThreadIds, {
       snapshots: requestsSubscriptionRefresh(observations, context.source),
     });
-    this.#publishSettlement(settlement, observations, context.source);
+    this.#publishSettlement(settlement, observations, context.source, context.source === "provider");
     this.#publishSettled(settlement.changedThreadIds);
     this.#publishContextCompactions(settlement);
     // Compatibility imports replay history; their turns, steers and deliveries are not live news.
@@ -394,9 +396,10 @@ export default class WorkbenchTranscriptController {
     settlement: WorkbenchTranscriptSettlement,
     observations: readonly WorkbenchTranscriptObservation[],
     source: WorkbenchTranscriptRecordingContext["source"],
+    live: boolean,
   ) {
     if (!settlement.changes) return;
-    this.#publishItemActivity(settlement.changes);
+    this.#publishItemActivity(settlement.changes, live);
     try {
       this.#live.settle(settlement.changes, {
         replaceLiveText: source === "provider" && observations.some(observation => observation.kind === "providerTurnScope"),
@@ -435,12 +438,17 @@ export default class WorkbenchTranscriptController {
     }
   }
 
-  #publishItemActivity(changes: NonNullable<WorkbenchTranscriptSettlement["changes"]>) {
+  #publishItemActivity(changes: NonNullable<WorkbenchTranscriptSettlement["changes"]>, live: boolean) {
     if (this.#disposed) return;
     for (const change of changes) {
       if (change.itemActivityAt === null) continue;
-      const activity = {
-        activityAt: change.itemActivityAt, projectId: change.snapshot.thread.project_id, threadId: change.snapshot.thread.id,
+      // Live provider items prove their turn is moving only while the transcript still has that turn running.
+      const itemTurnIds = new Set(change.snapshot.rows.threadItems.map(item => item.turn_id));
+      const liveTurnIds = live
+        ? change.snapshot.turns.filter(turn => turn.state === "inProgress" && itemTurnIds.has(turn.id)).map(turn => turn.id)
+        : [];
+      const activity: WorkbenchTranscriptItemActivity = {
+        activityAt: change.itemActivityAt, liveTurnIds, projectId: change.snapshot.thread.project_id, threadId: change.snapshot.thread.id,
       };
       for (const listener of this.#itemActivityListeners) {
         // Listener failure must never relabel a successful durable commit as a capture gap.

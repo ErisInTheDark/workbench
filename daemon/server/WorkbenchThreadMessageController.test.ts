@@ -207,9 +207,11 @@ function fixture({
         name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
         profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
       } : null,
-      acceptIntent: async (selected, selectedHarness, threadId, turnId) => {
-        calls.push({ method: "acceptIntent", params: { projectId: selected, harness: selectedHarness, threadId, turnId } });
-        await questionnaireState?.acceptProviderIntent(selected, selectedHarness, threadId, identitySchemas.WorkbenchTurnIdSchema.parse(turnId));
+      acceptAdmission: async (selected, selectedHarness, threadId, admitted) => {
+        calls.push({ method: "acceptAdmission", params: { projectId: selected, harness: selectedHarness, threadId, admitted } });
+        await questionnaireState?.acceptAdmission(selected, selectedHarness, threadId, {
+          kind: admitted.kind, turnId: identitySchemas.WorkbenchTurnIdSchema.parse(admitted.turnId),
+        });
       },
       resolvePendingQuestionnaire: questionnaireState
         ? questionnaireState.resolvePendingQuestionnaire.bind(questionnaireState)
@@ -467,12 +469,13 @@ test("subagents reach unsettled siblings by name without reaching other parents'
   await outsider.controller.dispose();
 });
 
-test("an admitted agent message marks its target working on the admitted turn", async () => {
+test("an admitted agent message moves its target by how the provider admitted it", async () => {
   for (const activeChild of [false, true]) {
     const { calls, controller } = fixture({ activeChild });
     await controller.send({ callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Another pass.", threadId: "child" });
-    assert.deepEqual(calls.find(({ method }) => method === "acceptIntent")?.params, {
-      projectId, harness, threadId: "child", turnId: "delivered-child",
+    // A steer into a live turn must not read as a started turn, or it would drop that turn's questionnaire.
+    assert.deepEqual(calls.find(({ method }) => method === "acceptAdmission")?.params, {
+      projectId, harness, threadId: "child", admitted: { kind: activeChild ? "steered" : "started", turnId: "delivered-child" },
     });
     await controller.dispose();
   }
@@ -504,7 +507,7 @@ test("direct-child messages retain questionnaire ordering and lock fencing", asy
   await active.controller.send({
     callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue with the review.", threadId: "child",
   });
-  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "acceptIntent", "respond"]);
+  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "acceptAdmission", "respond"]);
   const delivery = active.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.message.senderName, "parent agent");
   await active.controller.dispose();

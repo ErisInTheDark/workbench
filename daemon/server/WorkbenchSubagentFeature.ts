@@ -24,7 +24,7 @@ export interface WorkbenchSubagentFeatureContext {
   resolveProjectFromCwd(cwd: string | null | undefined, options?: { endpointName?: string }): Promise<AgentEndpointProjectResolution>;
   persistence: WorkbenchSubagentPersistence;
   stopThread: WorkbenchSubagentControllerOptions["stopThread"];
-  acceptIntent: WorkbenchSubagentControllerOptions["acceptIntent"];
+  acceptAdmission: WorkbenchSubagentControllerOptions["acceptAdmission"];
   queueReleaseNote: NonNullable<WorkbenchSubagentControllerOptions["queueReleaseNote"]>;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -53,7 +53,7 @@ export default class WorkbenchSubagentFeature {
       resolveProjectFromCwd: context.resolveProjectFromCwd,
       subagentStore: this.store,
       stopThread: context.stopThread,
-      acceptIntent: context.acceptIntent,
+      acceptAdmission: context.acceptAdmission,
       queueReleaseNote: context.queueReleaseNote,
       threadState: context.threadState,
     });

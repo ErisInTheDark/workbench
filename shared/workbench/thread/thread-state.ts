@@ -839,6 +839,8 @@ export type WorkbenchLifecycleEvent =
   | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId; answered?: true }
   | { kind: "agentStatus"; status: "completed" | "blocked"; turnId?: WorkbenchTurnId }
   | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId }
+  /** Live provider items arrived in this running turn. */
+  | { kind: "providerTurnActive"; turnId: WorkbenchTurnId }
   | { kind: "recoveryFailed" }
   | { kind: "providerSystemError" }
   | { kind: "userNeedsAttention" }
@@ -909,6 +911,17 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (currentTurnId !== event.turnId) return current!;
       if (event.status === "interrupted") return { kind: "needsAttention", reason: "interrupted", settled: false, turnId: event.turnId };
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
+    }
+    case "providerTurnActive": {
+      // Moving items outrank only a turn end or provider snapshot; agent status, questions and user decisions stand.
+      const revivable = current?.kind === "working"
+        || (current?.kind === "completed" && current.reason === "providerInactive")
+        || (current?.kind === "needsAttention" && (
+          current.reason === "noActiveTurn" || (current.reason === "interrupted" && current.turnId !== event.turnId)
+        ));
+      return revivable
+        ? { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false }
+        : current!;
     }
     case "recoveryFailed": return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     case "providerSystemError": return { kind: "needsAttention", reason: "noActiveTurn", settled: false };

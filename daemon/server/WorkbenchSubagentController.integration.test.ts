@@ -200,7 +200,7 @@ test("creates with the selected profile and delivers attributed initial input", 
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptIntent: async (_projectId, _harness, threadId, turnId) => { accepted.push({ threadId, turnId }); },
+    acceptAdmission: async (_projectId, _harness, threadId, { turnId }) => { accepted.push({ threadId, turnId }); },
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -289,7 +289,7 @@ test("keeps relationship storage independent from lifecycle through create and s
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptIntent: async () => undefined,
+    acceptAdmission: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -340,7 +340,7 @@ test("keeps a created child durable when its first turn fails to start", async (
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptIntent: async () => undefined,
+    acceptAdmission: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });

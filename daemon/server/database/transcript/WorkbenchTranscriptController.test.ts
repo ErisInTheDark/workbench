@@ -767,10 +767,17 @@ test("committed admissions of new thread items notify item-activity listeners un
   try {
     await owner.record([message("first", 40)], { source: "provider" });
     await owner.record([message("first", 50)], { source: "provider" });
-    assert.deepEqual(received, [{ activityAt: 40, projectId: testProjectIds.project, threadId }]);
+    // Only live provider items prove their running turn is moving; Workbench records and recovery replays do not.
+    await owner.record([message("recorded", 52)], { source: "workbench" });
+    await owner.record([message("replayed", 54)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    assert.deepEqual(received, [
+      { activityAt: 40, liveTurnIds: [turnId], projectId: testProjectIds.project, threadId },
+      { activityAt: 52, liveTurnIds: [], projectId: testProjectIds.project, threadId },
+      { activityAt: 54, liveTurnIds: [], projectId: testProjectIds.project, threadId },
+    ]);
     unsubscribe();
     await owner.record([message("second", 60)], { source: "provider" });
-    assert.equal(received.length, 1);
+    assert.equal(received.length, 3);
   } finally {
     owner.dispose();
   }
