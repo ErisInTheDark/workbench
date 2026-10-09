@@ -4,6 +4,7 @@
  * - chartMaximum: find a nonzero scale without spreading large sample arrays.
  * - chartSegments: split lines and their filled areas at unavailable values.
  * - chartPointerIndex: invert the SVG screen transform and select the nearest sample.
+ * - chartSmoothPath: a curve through every point that never overshoots, so stacked bands cannot cross.
  */
 export function chartX(index: number, length: number) {
   return length === 1 ? 50 : index / Math.max(1, length - 1) * 100;
@@ -34,6 +35,19 @@ export function chartSegments(values: readonly (number | null)[], maximum: numbe
   });
   flush();
   return result;
+}
+
+/**
+ * Each span is a cubic with flat tangents at both ends, so it stays between its two values: a band's top and bottom
+ * edges keep their stacked order everywhere, not only at the samples. `start` is "L" when continuing a path.
+ */
+export function chartSmoothPath(points: readonly { x: number; y: number }[], start: "M" | "L" = "M") {
+  return points.map(({ x, y }, index) => {
+    if (!index) return `${start}${x},${y}`;
+    const previous = points[index - 1]!;
+    const middle = (previous.x + x) / 2;
+    return `C${middle},${previous.y} ${middle},${y} ${x},${y}`;
+  }).join(" ");
 }
 
 export function chartPointerIndex(clientX: number, clientY: number, matrix: {

@@ -7,15 +7,17 @@
 import type { StatsTokenType } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import WorkbenchModeRow from "../../WorkbenchModeRow";
 import useStats from "../use-stats";
-import WorkbenchStatsBarChart from "../WorkbenchStatsBarChart";
+import WorkbenchStatsStreamChart from "../WorkbenchStatsStreamChart";
 import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
 import { compactNumber, formatMoney, formatStatsBucket, providerLabel } from "../stats-formatters";
 import { STATS_TOKEN_SERIES } from "./stats-token-series";
 
-// Deterministic bar heights for the loading chart, so it reads as a chart without pretending to be data.
-const SKELETON_BARS = [38, 52, 30, 64, 46, 72, 58, 41, 66, 49, 35, 57, 70, 44];
+// A deterministic stream silhouette for the loading chart, so it reads as a chart without pretending to be data.
+const SKELETON_HEIGHTS = [38, 52, 30, 64, 46, 72, 58, 41, 66, 49, 35, 57, 70, 44];
+const SKELETON_STREAM = `polygon(0% 100%, ${SKELETON_HEIGHTS.map((height, index) =>
+  `${(index / (SKELETON_HEIGHTS.length - 1) * 100).toFixed(2)}% ${100 - height}%`).join(", ")}, 100% 100%)`;
 
-/** Always the whole range: picking bars narrows every other usage panel. */
+/** Always the whole range: picking periods narrows every other usage panel. */
 export default function WorkbenchStatsActivity() {
   const filters = useStats();
   const { data: stats, loading } = useStats.overview();
@@ -27,7 +29,7 @@ export default function WorkbenchStatsActivity() {
   const picked = first >= 0 && last >= first ? { first, last } : null;
   const unit = stats?.bucketUnit ?? "day";
   const series = shown.map((entry) => ({
-    key: entry.key, label: entry.label, fillClassName: entry.fillClassName, textClassName: entry.textClassName,
+    key: entry.key, label: entry.label, textClassName: entry.textClassName,
     values: metric === "cost"
       ? stats?.cost.buckets.map((bucket) => bucket.byTokenType[entry.key]) ?? []
       : stats?.tokens.buckets.map(entry.count) ?? [],
@@ -76,7 +78,7 @@ export default function WorkbenchStatsActivity() {
       </div>
       {stats ? (
         <div className={`[--hue-chroma:55%] ${statsRevealClassName} ${statsReloadingClassName(loading)}`}>
-          <WorkbenchStatsBarChart
+          <WorkbenchStatsStreamChart
             buckets={buckets}
             formatBucket={(startedAt) => formatStatsBucket(startedAt, unit)}
             formatValue={metric === "cost" ? formatMoney : compactNumber}
@@ -87,13 +89,9 @@ export default function WorkbenchStatsActivity() {
           />
         </div>
       ) : (
-        // The chart's own geometry: bars, the date row, and the readout.
+        // The chart's own geometry: the stream, the date row, and the readout.
         <div aria-hidden="true" className="space-y-3">
-          <div className="flex h-48 items-end gap-[3px] sm:gap-1">
-            {SKELETON_BARS.map((height, index) => (
-              <WorkbenchStatsSkeleton className="min-w-0 flex-1 rounded-b-none rounded-t-[3px]" key={index} style={{ height: `${height}%` }} />
-            ))}
-          </div>
+          <WorkbenchStatsSkeleton className="h-48 rounded-none" style={{ clipPath: SKELETON_STREAM }} />
           <div className="flex h-[1.02rem] items-center justify-between"><WorkbenchStatsSkeleton className="h-2.5 w-12" /><WorkbenchStatsSkeleton className="h-2.5 w-12" /></div>
           <div className="flex min-h-10 items-start"><WorkbenchStatsSkeleton className="mt-1 h-3 w-40" /></div>
         </div>
