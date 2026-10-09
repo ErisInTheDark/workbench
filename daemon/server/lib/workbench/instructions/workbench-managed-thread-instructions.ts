@@ -2,7 +2,7 @@
  * Exports:
  * - ManagedThreadInstructionContext: managed prompt context plus the model used for selector filtering.
  * - WorkbenchManagedThreadInstructions: filtered base and developer instructions for one managed thread.
- * - createManagedThreadFilter: bind one managed caller's selectors, tools, and capability context.
+ * - createManagedThreadFilter: bind one managed caller's selectors, audience-visible tools (which gate `<docs>`), and workspace/setting facts.
  * - buildWorkbenchManagedThreadInstructions: assemble and filter managed base and developer instructions.
  * - buildWorkbenchManagedThreadActivatedSkills: assemble and filter activated skill bodies for one managed thread.
  */
@@ -33,10 +33,10 @@ export async function createManagedThreadFilter(
   const catalogue = (await context.readInstructionTools()).filter(tool => (
     isWorkbenchToolVisibleTo(tool.id, Boolean(context.subagentName?.trim()))
   ));
-  const available = await listWorkbenchInstructionMechanics(context, readLocalCapabilities, catalogue);
+  const facts = await listWorkbenchInstructionMechanics(context, readLocalCapabilities);
   return (value: string | null, field: string, sources: readonly InstructionSourceSpan[] = []) => (
     filterWorkbenchInstructionContent(value, {
-      available,
+      facts,
       field,
       harness: context.harness,
       model: context.model,

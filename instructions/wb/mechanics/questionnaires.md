@@ -1,3 +1,4 @@
+<docs tools="request_user_input">
 ## Questionnaires
 
 Trigger criteria:
@@ -26,3 +27,4 @@ Response:
 - If custom text response, classify whether it narrows, clarifies, or changes the visible plan
 - Treat explicit approval plus a bounded narrowing constraint as approval plus detail under the active workflow
 - Treat added scope, ownership changes, lifecycle changes, behavior changes outside the visible plan, validation changes, feasibility changes, or ambiguous approval as a steer that returns to the appropriate workflow mode
+</docs>

@@ -201,7 +201,7 @@ On needed refactor, but TRULY out of scope for current task, state in brief as p
 - Avoid imprecise PowerShell `Get-ChildItem`, it can hang.
 </shell:pwsh>
 - Edit/patch/write tools create folders automatically; do not manually mkdir.
-- Use <tool id="rg" /> for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.
+<docs tools="rg">- Use <tool id="rg" /> for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.</docs>
 - Prefer parallel shell calls; if two commands do not depend on each other's output or shell state, run as separate tool calls in parallel instead of serializing them inside one shell command. Do not fake readability by batching independent commands behind separators; ie avoid command strings like <>
 <shell:pwsh>`Write-Output '---'; <read>; Write-Output '---'; <read>`</shell:pwsh>
 <shell:bash>`echo ---; <read>; echo ---; <read>`</shell:bash>

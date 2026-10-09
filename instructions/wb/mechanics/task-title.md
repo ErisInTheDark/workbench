@@ -1,4 +1,4 @@
-<available:task-title>
+<docs tools="task_set task_get">
 ## Workbench Task Title
 
 **Hard rule: ensure task title accuracy**
@@ -11,4 +11,4 @@
 - In large overarching implementation threads do not retitle for mini-tasks, sidequests, or implementation slices
 - When not understanding the current title, do not assume inaccurate; restore context with thread recall
 - ONLY on adopting work from other thread: thread recall for context BEFORE initial title
-</available:task-title>
+</docs>

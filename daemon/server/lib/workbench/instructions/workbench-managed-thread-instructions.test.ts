@@ -1,4 +1,4 @@
-/* Exports: none. Protect managed-thread skill manifests, activation-only bodies, and capability-driven mechanics. */
+/* Exports: none. Protect managed-thread skill manifests, activation-only bodies, tool-gated docs, and setting selectors. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -45,7 +45,7 @@ function createContext(activatedSkillPaths: readonly string[] = []) {
 const readNoLocalCapabilities = async () => ({ browseRawCommandsEnabled: false });
 
 test("remote repository guidance follows one current audience tool catalogue", async () => {
-  const input = '<available:remote-repos>read with <tool id="git_repo" /></available:remote-repos>';
+  const input = '<docs tools="git_repo">read with <tool id="git_repo" /></docs>';
   for (const harness of ["codex", "opencode", "claude"] as const) {
     for (const subagentName of [null, "mira"]) {
       let available = false;
@@ -88,7 +88,7 @@ test("proposal instructions resolve for parents but become handoff instructions 
   const tools = async () => [{ id: "git_arc_propose", codeModeEligible: false }];
   const input = [
     "<>",
-    "<available:git-proposals>propose with <tool id=\"git_arc_propose\" /></available:git-proposals>",
+    "<docs tools=\"git_arc_propose\">propose with <tool id=\"git_arc_propose\" /></docs>",
     "<else>handoff</else>",
     "</>",
   ].join("\n");
@@ -137,15 +137,15 @@ ${bodyMarker}
   }
 });
 
-test("managed mechanics availability follows injected local capabilities", async () => {
+test("managed setting selectors follow injected local capabilities", async () => {
   const override = path.join(libraryRoot, "AGENTS.override.md");
   const rawMarker = "RAW BROWSE MECHANIC MARKER";
   await fs.mkdir(libraryRoot, { recursive: true });
   await fs.writeFile(override, [
     "base policy",
-    "<available:browse-raw>",
+    "<setting:browse-raw>",
     rawMarker,
-    "</available:browse-raw>",
+    "</setting:browse-raw>",
   ].join("\n"), "utf8");
 
   try {
@@ -158,7 +158,7 @@ test("managed mechanics availability follows injected local capabilities", async
       readNoLocalCapabilities,
     );
     assert.match(enabled.baseInstructions ?? "", new RegExp(rawMarker, "u"));
-    assert.doesNotMatch(enabled.baseInstructions ?? "", /<available:browse-raw>/u);
+    assert.doesNotMatch(enabled.baseInstructions ?? "", /<setting:browse-raw>/u);
     assert.doesNotMatch(disabled.baseInstructions ?? "", new RegExp(rawMarker, "u"));
   } finally {
     await fs.rm(override, { force: true });

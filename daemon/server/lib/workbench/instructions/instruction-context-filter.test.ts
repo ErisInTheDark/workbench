@@ -8,6 +8,8 @@ import {
   formatWorkbenchInstructionFilterWarning,
   stripWorkbenchInstructionHtmlComments,
   type WorkbenchInstructionFilterWarning,
+  type WorkbenchInstructionSetting,
+  type WorkbenchInstructionWorkspaceFact,
 } from "./instruction-context-filter";
 import type { RenderedInstructionContent } from "./instruction-file-generation";
 import { resolveWorkbenchInstructionToolReference } from "./instruction-tool-reference";
@@ -16,18 +18,23 @@ function filter(
   value: string,
   harness: "claude" | "codex" | "copilot" | "opencode" = "codex",
   shell: "pwsh" | "bash" = "pwsh",
-  available = new Set(["thread-recall"]),
+  workspace: ReadonlySet<WorkbenchInstructionWorkspaceFact> = new Set(["project"]),
   model: string | null = "gpt-6-astra",
   sourceSections?: readonly RenderedInstructionContent[],
+  settings: ReadonlySet<WorkbenchInstructionSetting> = new Set(),
 ) {
   const warnings: WorkbenchInstructionFilterWarning[] = [];
+  const docs: Array<[string, string]> = [];
   return {
+    docs,
     output: filterWorkbenchInstructionContent(value, {
-      available,
+      facts: { settings, workspace },
       field: "test",
       harness,
       model,
+      onDocsLine: (tools, line) => docs.push([tools.join(" "), line]),
       onWarning: (warning) => warnings.push(warning),
+      // "missing" stands for a tool the caller cannot see, such as a parent-only tool for a subagent.
       resolveTool: id => id === "missing" ? null : `tools.${harness}.${id}`,
       shell,
       sourceSections,
@@ -96,20 +103,20 @@ test("inline selectors work for every axis and compose with standalone blocks", 
     "<model:gpt-6-astra>exact</model:gpt-6-astra>",
     '<model matches="^gpt-">family</model>',
     "<shell:pwsh>powershell</shell:pwsh>",
-    "<available:thread-recall>recall</available:thread-recall>",
+    "<workspace:project>project</workspace:project>",
     "</harness:codex>",
   ].join("\n");
-  assert.equal(filter(value).output, "start agent\nexact\nfamily\npowershell\nrecall");
+  assert.equal(filter(value).output, "start agent\nexact\nfamily\npowershell\nproject");
   assert.equal(filter(value, "codex", "bash", new Set(), "gpt-6-preview").output, "start agent\nfamily");
   assert.equal(filter(value, "opencode").output, "");
 
   const warnings: WorkbenchInstructionFilterWarning[] = [];
   const voice = filterWorkbenchInstructionContent(value, {
-    available: new Set(["thread-recall"]), field: "test", harness: "codex",
+    facts: { settings: new Set(), workspace: new Set(["project"]) }, field: "test", harness: "codex",
     model: "gpt-6-astra", onWarning: warning => warnings.push(warning),
     role: "voice-to-text", shell: "pwsh",
   });
-  assert.equal(voice, "start voice\nexact\nfamily\npowershell\nrecall");
+  assert.equal(voice, "start voice\nexact\nfamily\npowershell\nproject");
   assert.deepEqual(warnings, []);
 });
 
@@ -133,10 +140,10 @@ test("inline selectors stay literal in Markdown code and comments cannot activat
 });
 
 test("inline malformed and crossing selectors preserve body and report the affected column", () => {
-  const malformed = filter("prefix <available:not-real>body</available:not-real> suffix");
+  const malformed = filter("prefix <workspace:not-real>body</workspace:not-real> suffix");
   assert.equal(malformed.output, "prefix body suffix");
   assert.deepEqual(malformed.warnings.map(warning => warning.recovery), ["malformed", "malformed"]);
-  assert.equal(malformed.warnings[0]?.column, "prefix <available:".length + 1);
+  assert.equal(malformed.warnings[0]?.column, "prefix <workspace:".length + 1);
 
   const crossed = filter("<harness:codex><model:gpt-6-astra>body</harness:codex></model:gpt-6-astra>");
   assert.equal(crossed.output, "body");
@@ -152,7 +159,7 @@ test("trusted voice role excludes agent guidance and composes with other selecto
   const source = "<role:agent>\nordinary\n</role:agent>\n<role:voice-to-text>\n<harness:codex>\nvoice\n</harness:codex>\n</role:voice-to-text>";
   const warnings: WorkbenchInstructionFilterWarning[] = [];
   const context = {
-    available: new Set<string>(), field: "pack", harness: "codex" as const,
+    facts: { settings: new Set<never>(), workspace: new Set<never>() }, field: "pack", harness: "codex" as const,
     model: null, shell: "pwsh" as const,
     onWarning: (warning: WorkbenchInstructionFilterWarning) => warnings.push(warning),
     role: "voice-to-text" as const,
@@ -250,19 +257,25 @@ test("an unclosed html comment opener remains literal", () => {
 });
 
 test("unknown and malformed controls preserve body and warn", () => {
-  const result = filter("<available:not-real>\nbody\n</available:not-real>");
+  const result = filter("<setting:not-real>\nbody\n</setting:not-real>");
   assert.equal(result.output, "body");
   assert.equal(result.warnings.length, 2);
+
+  // A user pack written before `available` retired keeps its content and says why instead of leaking tags.
+  const retired = filter("<available:thread-recall>\nbody\n</available:thread-recall>");
+  assert.equal(retired.output, "body");
+  assert.deepEqual(retired.warnings.map(warning => warning.recovery), ["malformed", "malformed"]);
+  assert.match(retired.warnings[0]?.message ?? "", /^Retired selector/u);
 
   const malformedModel = filter("<model:gpt 6>\nmodel body\n</model:gpt 6>");
   assert.equal(malformedModel.output, "model body");
   assert.equal(malformedModel.warnings.length, 2);
 });
 
-test("unknown availability reports the active source file and exact value span", () => {
-  const sourceContent = "heading\n<available:thread-status>\nbody";
+test("an unknown workspace fact reports the active source file and exact value span", () => {
+  const sourceContent = "heading\n<workspace:thread-status>\nbody";
   const content = `wrapper\n${sourceContent}\nafter`;
-  const result = filter(content, "codex", "pwsh", new Set(["thread-recall"]), "gpt-6-astra", [{
+  const result = filter(content, "codex", "pwsh", new Set(["project"]), "gpt-6-astra", [{
     content: sourceContent,
     sources: [{
       absolutePath: "C:\\library\\wb\\mechanics\\thread-status.md",
@@ -274,14 +287,14 @@ test("unknown availability reports the active source file and exact value span",
   }]);
 
   assert.deepEqual(result.warnings[0], {
-    column: "<available:".length + 1,
+    column: "<workspace:".length + 1,
     field: "test",
     length: "thread-status".length,
     line: 2,
-    message: "Unable to check availability of thread-status",
+    message: "Unknown workspace selector thread-status",
     path: "C:\\library\\wb\\mechanics\\thread-status.md",
     recovery: "malformed",
-    source: "<available:thread-status>",
+    source: "<workspace:thread-status>",
   });
 });
 
@@ -303,27 +316,64 @@ test("warning rendering uses a home-relative path and distinct prefix colours", 
   assert.match(pointer ?? "", /^\u001b\[31mINSTR /u);
 });
 
-test("multi-root availability keeps workspace-only instructions out of single-root prompts", () => {
-  const value = "before\n<available:multi-root>\nworkspace arc\n</available:multi-root>\nafter";
-  assert.equal(filter(value).output, "before\nafter");
-  assert.equal(filter(value, "codex", "pwsh", new Set(["thread-recall", "multi-root"])).output, "before\nworkspace arc\nafter");
+test("workspace facts keep multi-root and project-only instructions out of other workspaces", () => {
+  const value = "before\n<workspace:multi-root>\nworkspace arc\n</workspace:multi-root>\n<workspace:project>\ngit\n</workspace:project>\nafter";
+  assert.equal(filter(value).output, "before\ngit\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(["project", "multi-root"])).output, "before\nworkspace arc\ngit\nafter");
+  assert.equal(filter(value, "codex", "pwsh", new Set(["daemon"])).output, "before\nafter");
 });
 
-test("capability selectors use their exact availability", () => {
+test("setting selectors follow the caller's enabled local settings", () => {
+  const value = "<setting:browse-raw>\nraw Browse\n</setting:browse-raw>";
+  assert.equal(filter(value).output, "");
+  assert.equal(filter(value, "codex", "pwsh", new Set(["project"]), "gpt-6-astra", undefined, new Set(["browse-raw"])).output, "raw Browse");
+});
+
+test("docs regions render when any listed tool is visible and drop out when none are", () => {
   const value = [
-    "<available:browse-raw>",
-    "raw Browse",
-    "</available:browse-raw>",
-    "<available:long-waits>",
-    "wait",
-    "</available:long-waits>",
-    "<available:thread-refresh>",
-    "refresh",
-    "</available:thread-refresh>",
+    "before",
+    "<docs tools=\"missing git_arc_wait\">",
+    "wait with <tool id=\"git_arc_wait\" />",
+    "</docs>",
+    "<docs tools=\"missing\">",
+    "hidden <tool id=\"missing\" />",
+    "</docs>",
+    "after",
   ].join("\n");
-  assert.equal(filter(value, "codex", "pwsh", new Set(["browse-raw"])).output, "raw Browse");
-  assert.equal(filter(value, "codex", "pwsh", new Set(["long-waits"])).output, "wait");
-  assert.equal(filter(value, "codex", "pwsh", new Set(["thread-refresh"])).output, "refresh");
+  const result = filter(value);
+  assert.equal(result.output, "before\nwait with `tools.codex.git_arc_wait`\nafter");
+  assert.deepEqual(result.warnings, [], "a hidden tool's own reference inside its hidden docs is not a defect");
+});
+
+test("docs regions act as selectors inside wrappers, so else covers callers without the tool", () => {
+  const value = "<><docs tools=\"missing\">propose</docs><else>handoff</else></>";
+  assert.equal(filter(value).output, "handoff");
+  assert.equal(filter("<><docs tools=\"git_arc_propose\">propose</docs><else>handoff</else></>").output, "propose");
+});
+
+test("rendered docs lines are attributed to their innermost region, fences included", () => {
+  const value = [
+    "plain",
+    "<docs tools=\"message message_wait\">",
+    "shared line",
+    "<docs tools=\"message_wait\">",
+    "wait line",
+    "```js",
+    "example",
+    "```",
+    "</docs>",
+    "<harness:opencode>",
+    "opencode only",
+    "</harness:opencode>",
+    "</docs>",
+  ].join("\n");
+  assert.deepEqual(filter(value).docs, [
+    ["message message_wait", "shared line"],
+    ["message_wait", "wait line"],
+    ["message_wait", "```js"],
+    ["message_wait", "example"],
+    ["message_wait", "```"],
+  ]);
 });
 
 test("inline wrapper tags lay out variants across lines with inline parity", () => {

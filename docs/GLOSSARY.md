@@ -42,3 +42,4 @@
 | interrupt | Ends the live turn but keeps its pending questionnaire; the thread needs attention. |
 | stop | Interrupts the live turn, dismisses its pending questionnaire and sets status to stopped. |
 | held questionnaire | A questionnaire form that is no longer attached to a request_user_input tool call due to an interruption; the thread is stopped, but the form remains answerable by the user. (Response admitted via normal user message) |
+| tool docs | `<docs tools="a b">` instruction regions for specific wb tools; render only when a listed tool is visible to the caller; Stats → Tools charges their tokens evenly to those tools |

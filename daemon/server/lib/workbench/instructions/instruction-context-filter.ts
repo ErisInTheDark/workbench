@@ -1,8 +1,11 @@
 /*
  * Exports:
+ * - WORKBENCH_INSTRUCTION_WORKSPACE_FACTS/WorkbenchInstructionWorkspaceFact: `<workspace:…>` selector values (project, daemon, multi-root).
+ * - WORKBENCH_INSTRUCTION_SETTINGS/WorkbenchInstructionSetting: `<setting:…>` selector values from local capability settings.
+ * - WorkbenchInstructionFacts: one caller's workspace facts and enabled settings.
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
- * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<else>` fallbacks and provider tool references, and collapse inline wrapper regions.
+ * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, and collapse inline wrapper regions.
  * - formatWorkbenchInstructionFilterWarning: render one bounded source diagnostic with ANSI emphasis.
  */
 
@@ -12,16 +15,30 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-type SelectorAxis = "available" | "else" | "harness" | "model" | "shell" | "role" | "tool" | "wrapper";
+/** `available` is retired: its tags still parse so they strip with a warning instead of leaking into payloads. */
+type SelectorAxis = "available" | "docs" | "else" | "harness" | "model" | "setting" | "shell" | "role" | "tool" | "workspace" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
+export const WORKBENCH_INSTRUCTION_WORKSPACE_FACTS = ["project", "daemon", "multi-root"] as const;
+export type WorkbenchInstructionWorkspaceFact = typeof WORKBENCH_INSTRUCTION_WORKSPACE_FACTS[number];
+export const WORKBENCH_INSTRUCTION_SETTINGS = ["browse-raw"] as const;
+export type WorkbenchInstructionSetting = typeof WORKBENCH_INSTRUCTION_SETTINGS[number];
+
+export interface WorkbenchInstructionFacts {
+  readonly settings: ReadonlySet<WorkbenchInstructionSetting>;
+  readonly workspace: ReadonlySet<WorkbenchInstructionWorkspaceFact>;
+}
+
 export interface WorkbenchInstructionFilterContext {
-  available: ReadonlySet<string>;
+  facts: WorkbenchInstructionFacts;
   field: string;
   harness: WorkbenchHarness;
   model: string | null;
   role?: "agent" | "voice-to-text";
   onWarning: (warning: WorkbenchInstructionFilterWarning) => void;
+  /** Receives each rendered line inside a `<docs>` region with its innermost region's tools; prompt-cost accounting only. */
+  onDocsLine?: (tools: readonly string[], line: string) => void;
+  /** The caller's visible tool catalogue; `<docs>` regions render only when one of their tools resolves. */
   resolveTool?: (id: string) => string | null;
   shell: WorkbenchShell;
   sourceSections?: readonly RenderedInstructionContent[];
@@ -58,33 +75,20 @@ interface SelectorTag {
 }
 interface Fence { include?: boolean; marker: "`" | "~"; size: number }
 
-const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role):([^<>]+)>/uy;
+const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role|workspace|setting):([^<>]+)>/uy;
 const MODEL_MATCHES_TAG = /<model matches="([^"\n]+)">/uy;
 const MODEL_NAME_CLOSE_TAG = /<\/model>/uy;
 const MODEL_ATTR_CLOSE_TAG = /<\/model(\s[^>]*)>/uy;
 const WRAPPER_TAG = /<(\/)?>/uy;
 const ELSE_TAG = /<(\/)?else>/uy;
 const TOOL_TAG = /<tool id="([a-z][a-z0-9_]*)"\s*\/>/uy;
-const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|else|harness|model|shell|role|tool)(?::|\s|>)/u;
-const AVAILABLE_VALUE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u;
+const DOCS_OPEN_TAG = /<docs tools="([a-z][a-z0-9_]*(?: [a-z][a-z0-9_]*)*)">/uy;
+const DOCS_CLOSE_TAG = /<\/docs>/uy;
+const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|setting|shell|role|tool|workspace)(?::|\s|>)/u;
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
-const KNOWN_AVAILABLE_VALUES = new Set([
-  "browse",
-  "browse-raw",
-  "daemon-workspace",
-  "long-waits",
-  "messages",
-  "multi-root",
-  "remote-repos",
-  "subagents",
-  "thread-git",
-  "git-proposals",
-  "thread-recall",
-  "thread-refresh",
-  "task-status",
-  "task-title",
-]);
+const WORKSPACE_FACTS = new Set<string>(WORKBENCH_INSTRUCTION_WORKSPACE_FACTS);
+const SETTINGS = new Set<string>(WORKBENCH_INSTRUCTION_SETTINGS);
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_RESET = "\u001b[0m";
@@ -147,6 +151,26 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
         start: index,
       });
       index += toolMatch[0].length;
+      continue;
+    }
+    DOCS_OPEN_TAG.lastIndex = index;
+    DOCS_CLOSE_TAG.lastIndex = index;
+    const docsMatch = DOCS_OPEN_TAG.exec(line) ?? DOCS_CLOSE_TAG.exec(line);
+    if (docsMatch) {
+      tags.push({
+        control: {
+          axis: "docs",
+          closing: docsMatch[1] === undefined,
+          matchMode: "exact",
+          neutral: false,
+          pattern: null,
+          value: docsMatch[1] ?? "",
+        },
+        end: index + docsMatch[0].length,
+        line: lineIndex,
+        start: index,
+      });
+      index += docsMatch[0].length;
       continue;
     }
     WRAPPER_TAG.lastIndex = index;
@@ -333,13 +357,19 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 }
 
 function isKnownValue(axis: SelectorAxis, value: string) {
-  if (axis === "wrapper" || axis === "else") return true;
-  if (axis === "tool") return false;
+  // Docs tool ids are syntax-checked by their tag; whether one resolves is visibility, not validity.
+  if (axis === "wrapper" || axis === "else" || axis === "docs") return true;
+  if (axis === "tool" || axis === "available") return false;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
   if (axis === "model") return MODEL_VALUE.test(value);
   if (axis === "shell") return value === "pwsh" || value === "bash";
-  return AVAILABLE_VALUE.test(value) && KNOWN_AVAILABLE_VALUES.has(value);
+  if (axis === "workspace") return WORKSPACE_FACTS.has(value);
+  return SETTINGS.has(value);
+}
+
+function docsTools(control: SelectorControl) {
+  return control.value.split(" ");
 }
 
 function matches(control: SelectorControl, context: WorkbenchInstructionFilterContext) {
@@ -355,7 +385,9 @@ function matches(control: SelectorControl, context: WorkbenchInstructionFilterCo
       : control.value === context.model;
   }
   if (control.axis === "shell") return control.value === context.shell;
-  return context.available.has(control.value);
+  if (control.axis === "docs") return docsTools(control).some(id => Boolean(context.resolveTool?.(id)));
+  if (control.axis === "workspace") return context.facts.workspace.has(control.value as WorkbenchInstructionWorkspaceFact);
+  return context.facts.settings.has(control.value as WorkbenchInstructionSetting);
 }
 
 function sanitizeWarningSource(source: string) {
@@ -441,10 +473,11 @@ function warningMessage(
   value?: string,
 ) {
   if (recovery === "fenced") return "Instruction wrapper cannot contain a fenced code block";
-  if (recovery === "malformed" && axis === "available" && value) {
-    return `Unable to check availability of ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
+  if (recovery === "malformed" && (axis === "workspace" || axis === "setting") && value) {
+    return `Unknown ${axis} selector ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
   }
   if (recovery === "malformed" && axis === "tool") return "Unknown Workbench tool id";
+  if (recovery === "malformed" && axis === "available") return "Retired selector: use <docs tools=\"…\">, <workspace:…> or <setting:…>";
   if (recovery === "malformed" && axis === "else") return "Instruction else must sit directly inside <>";
   if (recovery === "malformed") return "Malformed instruction selector";
   if (recovery === "unclosed") return "Instruction selector is not closed";
@@ -649,13 +682,20 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     rendered += middle;
     flushed = true;
   };
+  // A rendered line belongs to the innermost docs region open at its start, or the last one it opens.
+  let lineDocs: SelectorControl | null = null;
+  const push = (text: string) => {
+    output.push(text);
+    if (lineDocs && context.onDocsLine) context.onDocsLine(docsTools(lineDocs), text);
+  };
   fence = null;
   lines.forEach((line, lineIndex) => {
     flushed = false;
+    lineDocs = active[findLastMatchingIndex(active, (control) => control.axis === "docs" && !control.neutral)] ?? null;
     if (fence) {
       if (fence.include !== false) {
         if (inline) { emit(line); emit("\n"); }
-        else output.push(line);
+        else push(line);
       }
       if (closesFence(line, fence)) fence = null;
       return;
@@ -665,7 +705,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
       const include = included();
       if (include) {
         if (inline) { emit(line); emit("\n"); }
-        else output.push(line);
+        else push(line);
       }
       fence = { ...openedFence, include };
       return;
@@ -673,7 +713,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     const tags = tagsByLine.get(lineIndex);
     if (!tags?.length) {
       if (inline) { if (included()) { emit(line); emit("\n"); } return; }
-      if (included()) output.push(line);
+      if (included()) push(line);
       return;
     }
     const lineTagOnly = tags.length === 1
@@ -709,8 +749,10 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         cursor = tag.end;
         continue;
       }
-      if (!control.closing && control.value) active.push(control);
-      else if (control.closing) {
+      if (!control.closing && control.value) {
+        active.push(control);
+        if (control.axis === "docs" && !control.neutral) lineDocs = control;
+      } else if (control.closing) {
         const index = findLastMatchingIndex(active, (opened) => pairsWithCloser(opened, control));
         if (index >= 0) active.splice(index, 1);
       }
@@ -718,7 +760,7 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
     }
     if (included()) emit(line.slice(cursor));
     if (inline) { if (included()) emit("\n"); return; }
-    if (rendered && !(lineTagOnly && !flushed)) output.push(rendered);
+    if (rendered && !(lineTagOnly && !flushed)) push(rendered);
     rendered = "";
   });
   return output.join("\n");

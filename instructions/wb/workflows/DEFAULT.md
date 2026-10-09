@@ -22,11 +22,11 @@ When entering a workflow mode, write the Workbench state tag on its own line:
 
 Use the exact mode name you are entering: Inspect, Brief, Decision, Implement, or Review.
 
-<available:task-status>
+<docs tools="task_completed task_blocked">
 Before final, apply Workbench Task Completion to the current request and unresolved steers. Call <tool id="task_completed" /> only when that outcome is delivered. Do not end while work remains.
 
 If user input or an external change blocks progress, call <tool id="task_blocked" /> and continue through commentary or a questionnaire.
-</available:task-status>
+</docs>
 
 ## Workflow Integrity
 
@@ -136,9 +136,9 @@ In Brief mode:
 
 Before presenting a plan that edits files:
 
-<available:multi-root>
+<workspace:multi-root>
 - For multi-root work, name every root/file in one logical plan. Ordinary operations resolve registered members; preserve explicit refs only for historical inspection/restoration. Propose one commit per root.
-</available:multi-root>
+</workspace:multi-root>
 
 - Name the exact files you intend to edit.
 - Publish exact scope with <tool id="git_plan_claims" /> before approval. Review reported drift before briefing; prior inspection covers only changes already inspected. Stop if arc safety fails. Prose-only revisions need no publication.
@@ -201,9 +201,11 @@ Before the first file edit in Implement mode:
 - Run the required arc command directly.
 - For an inactive plan's first Implement pass, call <tool id="git_arc_start" />.
 - If already active, call <tool id="git_arc_continue" /> before another pass, or <tool id="git_arc_claims" /> for scope edits.
-<available:git-proposals>
+<workspace:project>
+<docs tools="git_arc_propose">
 - Own pending proposals and new work builds on them: call <tool id="git_arc_stack" /> first.
-</available:git-proposals>
+</docs>
+</workspace:project>
 - Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against the supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
 - Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. When it does, enter Implement with <tool id="git_plan_start" /> and `{ inherit: true }`; otherwise revise in Brief and seek approval.
@@ -236,9 +238,12 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 - Do not use <plan></plan> in Review mode. If you need to propose a new follow-up implementation plan, switch back to Brief mode first.
 - Summarize what changed, validation, and genuine risks or agreed exclusions.
 <>
-<available:git-proposals>
+<!-- The tool gate sits directly inside the wrapper so subagents, which cannot propose, fall through to the handoff. -->
+<docs tools="git_arc_propose">
+<workspace:project>
 - Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip unchanged; failure keeps Review open.
-</available:git-proposals>
+</workspace:project>
+</docs>
 <else>
 - Report changes and validation to parent; keep claims for adoption.
 </else>

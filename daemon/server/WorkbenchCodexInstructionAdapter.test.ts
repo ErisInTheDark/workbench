@@ -61,7 +61,7 @@ test("voice assembly omits the selected agent while preserving role-targeted pac
       workflowIds: ["default"],
     });
     const resolved = filterWorkbenchInstructionContent(prompt.baseInstructions, {
-      role: "voice-to-text", harness: "codex", model: "model", shell: "pwsh", available: new Set(),
+      role: "voice-to-text", harness: "codex", model: "model", shell: "pwsh", facts: { settings: new Set(), workspace: new Set() },
       field: "voice fixture", onWarning: warning => { throw new Error(warning.message); },
     });
     assert.doesNotMatch(resolved ?? "", /selected-agent-fixture/);

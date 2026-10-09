@@ -43,7 +43,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const prompt = await buildWorkbenchPromptInstructions({ role: "voice-to-text", harness: selection.harness });
         const filtered = filterWorkbenchInstructionContent(prompt.baseInstructions, {
           role: "voice-to-text", harness: selection.harness, model: selection.model,
-          shell: process.platform === "win32" ? "pwsh" : "bash", available: new Set(),
+          shell: process.platform === "win32" ? "pwsh" : "bash", facts: { settings: new Set(), workspace: new Set() },
           field: "voice AGENTS.md", onWarning: warning => console.warn(formatWorkbenchInstructionFilterWarning(warning)),
         });
         if (!filtered) throw new Error("Voice instructions are empty.");

@@ -1,10 +1,11 @@
-<available:remote-repos>
+<docs tools="git_repo">
 ## Remote Git Repo Inspection
 - <tool id="git_repo" /> warms a readonly copy of a public remote repository. Not a real clone.
 - Favour it and normal shell calls over web searches and reads.
 - Assume user does not want to contribute to remote repositories by default.
-</available:remote-repos>
-<available:thread-git>
+</docs>
+<workspace:project>
+<docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_mv git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack">
 ## Workbench Git Plans and Arcs
 
 ### lifecycle and claims
@@ -27,6 +28,7 @@ claims and safety:
 - Before using raw Git, state why no arc tool can do that job.
 - Call required arc tools directly, without raw `git status`/`git diff` or equivalent preflights; rejection is the stop signal.
 
+<docs tools="git_plan_claims">
 ### create or revise an inactive plan
 publishing scope:
 - <tool id="git_plan_claims" /> publishes inactive scope. Provide a short `intentName` and `addPaths`.
@@ -38,18 +40,24 @@ publishing scope:
 - Dirty active-claimed paths may remain ordinary plan paths. Dirty unclaimed paths require explicit adoption.
 <!-- Failure: agents release active work before revising scope. -->
 - Inherited planning can publish an inactive successor from an active arc: it retains covered dirty claims, releases clean claims, and leaves additions unclaimed. Removing dirty coverage rejects.
+</docs>
 
+<docs tools="git_arc_start git_plan_start">
 ### start an inactive plan
 activating:
 - <tool id="git_arc_start" /> activates an inactive plan; omit `ref` for registered lifecycle, or pass an explicit `ref` to select a historical plan.
 - Empty plans cannot start.
 - Drift rejects activation and reports plan-intersecting counts. <tool id="git_arc_diff" /> reads against a supplied ref.
 - <tool id="git_plan_start" /> with `{ inherit: true }` refreshes baselines and activates inherited scope.
+</docs>
 
+<docs tools="git_arc_wait">
 waiting:
 - <tool id="git_arc_wait" /> waits for sibling claims, then activates the inactive plan. Do not republish that plan for collisions; if requested scope has no inactive plan, publish it first.
 - Waiting never refreshes baselines. Treat it as a Workbench Long Wait.
+</docs>
 
+<docs tools="git_arc_continue git_arc_claims">
 ### continue or extend an active arc
 continuing or editing claims:
 - Before another implementation pass without scope changes, call <tool id="git_arc_continue" /> with no ref. Unchanged continuation need not publish a successor.
@@ -60,33 +68,45 @@ follow-up scope:
 - After resolution, explicit approved additions/adoptions begin follow-up scope with stored intent, never old claims. Exact removals cannot expose dirty owned work.
 - Folder paths are shorthand: activation claims their current files, so claim new files under them separately; removing a folder drops its file claims. Removing final clean scope resolves lifecycle.
 - Never use claim expansion to excuse vague planning. Never restore, release, unclaim, or discard only to change scope.
+</docs>
 
+<docs tools="git_arc_adopt">
 ### adopt claims from another thread
 - <tool id="git_arc_adopt" /> transfers a source's complete live claims and stash. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
 - Exact `paths` move only those live claims, without stash; add `releaseToSubagent` to hand them from one owned child to another atomically.
 - Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
+</docs>
 
+<docs tools="git_arc_stash git_arc_unstash">
 ### stash or restore claimed work
 - <tool id="git_arc_stash" /> saves all claimed work and releases live claims. <tool id="git_arc_unstash" /> restores it alongside current claims. Neither accepts paths.
 - Stash and unstash preserve pending plans and the frozen merge base; reject stash replacement.
 - Text conflicts are editable worktree markers, not a Git operation, so no Git continue/abort is required. Unsupported conflicts reject and preserve the stash.
+</docs>
 
+<docs tools="git_arc_release git_arc_status">
 ### release or hand off claims
 - <tool id="git_arc_release" /> releases clean claims without changing workspace or Git content; `disown: true` releases dirty ownership only on explicit user direction.
 - `toSubagent` plus exact `paths` atomically gives selected live claims to an owned child, including dirty claims, without moving stash or files. Releasing retained claims keeps the current inactive plan.
 - Active claim edits mutate ownership; inactive planning publishes scope. Recover a lost proposal response with <tool id="git_arc_status" /> before retrying, never as a preflight.
+</docs>
 
+<docs tools="git_arc_mv">
 ### move paths
 - <tool id="git_arc_mv" /> performs approved path moves; source and destination stay claimed and the ordinary Git index stays unchanged.
 - Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Confirm a regex preview, then preview again when more matches remain.
+</docs>
 
+<docs tools="git_arc_compare git_arc_diff">
 ### compare or diff an arc
 - Use <tool id="git_arc_compare" /> for counts or <tool id="git_arc_diff" /> for unified details. Omit paths and refs for the caller's registered scope.
 - Explicit refs select historical snapshots/proposals, never a guessed "latest" ref.
 - Explicit paths return complete unpaged data; do not page them.
 - Unscoped results report the next page or end. Follow returned cursors with the same target.
+</docs>
 
-<available:git-proposals>
+<!-- git_arc_propose is parent-only, so this outer region keeps proposal mechanics out of subagent prompts. -->
+<docs tools="git_arc_propose">
 ### proposals
 proposing:
 - Proposal creation requires prior arc comparison or diff inspection.
@@ -96,9 +116,12 @@ proposing:
 - Title names a simple symptom/outcome for the whole changeset.
 - Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
 
+<docs tools="git_arc_rescind">
 rescinding:
 - Use <tool id="git_arc_rescind" /> to rescind one pending unsealed proposal; to revise its content, rescind, edit, then `amend: proposalId` revives it.
+</docs>
 
+<docs tools="git_arc_propose git_arc_reword">
 amending:
 <!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
 <!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
@@ -108,10 +131,12 @@ amending:
 - Update title/description for changed scope, or omit both to inherit.
 - Content amendments to committed proposals require `freshTitle` and optional `freshDescription`.
 - Use <tool id="git_arc_reword" /> for message-only changes to pending or committed proposals.
+</docs>
 
 acceptance:
 - Preserve excluded newer work when a proposal is accepted.
 
+<docs tools="git_arc_stack git_arc_unstack">
 ### stack proposals
 sealing a layer:
 - <tool id="git_arc_stack" /> with `title` seals ALL pending unsealed proposals as one layer; their result becomes the arc baseline, claims stay
@@ -124,16 +149,20 @@ constraints:
 - Sealed proposals may be amended or reworded. They cannot be rescinded; <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
 - Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending
 - Subagent claim transfers keep sealed proposals; children inherit the stack baseline
-</available:git-proposals>
+</docs>
+</docs>
 
+<docs tools="git_arc_restore">
 ### restore an arc
 - Use <tool id="git_arc_restore" /> with exact ref and path list to restore selected paths to pre-patch state.
 - Do not restore more than required.
 - After restore, remove unneeded clean claims with <tool id="git_arc_claims" /> and `{ inherit: true, removePaths }`.
 - Full arc: preview all affected paths first, get explicit user approval if missing, then reuse with `confirmRestore: true`.
 - Tool cannot restore pre-commit state.
+</docs>
 
-<available:multi-root>
+<workspace:multi-root>
+<docs tools="git_plan_claims">
 ### multi-root workspace arcs
 planning:
 - A multi-root workspace still gives one managed thread one logical Git arc, containing one repo-local member per participating Git repository.
@@ -142,17 +171,21 @@ planning:
 - Ordinary operations resolve registered members. Preserve root/ref pairs only for historical inspection, restoration or deliberate baseline selection.
 - Partial failures report successful members: inspect the partial outcome and retry only unfinished edits. Do not repeat successful removals or roll back successful repositories.
 
-<available:git-proposals>
+<docs tools="git_arc_propose">
 - Call <tool id="git_arc_propose" /> once per root with `rootId`; omit `paths` for that root's changed claims or select a narrower subset. Never combine roots in one commit.
-</available:git-proposals>
+</docs>
 
 - Use the terminal lifecycle card for restore or unclaim so all remaining repo members stay visible and recoverable.
-</available:multi-root>
+</docs>
+</workspace:multi-root>
+</docs>
 
+<docs tools="git_add git_unstage git_commit">
 ## Workbench Git Commits
 When workflow or user explicitly authorizes unsupervised agent commits:
 - <tool id="git_add" /> selects the exact currently changed files beneath `paths`; selections are thread- and worktree-isolated but do not snapshot contents.
 - <tool id="git_unstage" /> removes exact files or descendants from this thread's selection. Pass `paths: ["."]` to clear it.
 - <tool id="git_commit" /> commits CURRENT versions of selected files using `title` and optional `description`, then clears selection.
 - NO raw shell git usage for commits.
-</available:thread-git>
+</docs>
+</workspace:project>

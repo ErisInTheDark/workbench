@@ -1,4 +1,4 @@
-<available:messages>
+<docs tools="message">
 ## thread messages
 
 - <tool id="message" /> sends a message to one Workbench thread. Select exactly one of `threadId`, `name`, or `parent`.
@@ -7,4 +7,4 @@
 - Every message needs `message` (full technical detail for agents) and `userVisibleSimpleVersion` (same message but simplified down to 1-2 plain sentences; no paths, ids or jargon; NOT EXPLANATION ADDRESSED TO USER). Example:
   - `message`: "`getSubagentTabLayout` now drops settled ids before ordering; arc `abc12` touches `ThreadView.tsx`. Rerun `wb test -- thread-subagents.test.ts` after rebasing."
   - `userVisibleSimpleVersion`: "Finished the tab ordering fix. Tests need a rerun after the rebase."
-</available:messages>
+</docs>

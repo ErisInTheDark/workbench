@@ -65,11 +65,13 @@ Keep workflow-specific process in workflow files instead of AGENTS.md.
 
 ## Control-Flow Selectors
 
-Workbench sources and packs support standalone blocks or inline spans using `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>` / `<model matches="regex">`, `<shell:pwsh>` / `<shell:bash>` and `<available:mechanic-id>`. Close with the identical tag name, so `</harness:codex>`; an attribute-bearing opener closes with the bare name, so `<model matches="^gpt-">` closes with `</model>`. Roles default to agent; model IDs match exactly, while regex patterns test the model slug without implicit anchors or flags. For all GPT models, use `<model matches="^gpt-">` and `</model>`. `<>`…`</>` joins its variant lines into one inline span; inside it, `<else>`…`</else>` renders only when no earlier sibling selector rendered. Final-payload filtering removes controls before delivery.
+Workbench sources and packs support standalone blocks or inline spans using `<role:agent>` / `<role:voice-to-text>`, `<harness:provider-id>`, `<model:model-id>` / `<model matches="regex">`, `<shell:pwsh>` / `<shell:bash>`, `<workspace:project>` / `<workspace:daemon>` / `<workspace:multi-root>` and `<setting:browse-raw>`. Close with the identical tag name, so `</harness:codex>`; an attribute-bearing opener closes with the bare name, so `<model matches="^gpt-">` closes with `</model>`. Roles default to agent; model IDs match exactly, while regex patterns test the model slug without implicit anchors or flags. For all GPT models, use `<model matches="^gpt-">` and `</model>`. `<>`…`</>` joins its variant lines into one inline span; inside it, `<else>`…`</else>` renders only when no earlier sibling selector rendered. Final-payload filtering removes controls before delivery.
 
 Use `<tool id="git_arc_release" />` for registered Workbench tools in prose. Final-payload filtering renders the provider's callable name. Fenced and inline code examples remain literal.
 
-Use selectors only for role, harness, model, shell or available-mechanic differences. Nested selectors must all match. Keep ordinary policy/mechanics inside role:agent; retain selected agent and workflow for both roles.
+Wrap text that exists because of specific Workbench tools in `<docs tools="git_arc_stash git_arc_unstash">`…`</docs>`. It renders only when the caller can see at least one listed tool, and Stats → Tools charges its tokens evenly to them; nested regions charge the innermost. Docs regions also count as selectors inside `<>`.
+
+Use selectors only for role, harness, model, shell, workspace, setting or tool-docs differences. Nested selectors must all match. Keep ordinary policy/mechanics inside role:agent; retain selected agent and workflow for both roles.
 
 Lines inside Markdown code fences are examples, not active selectors.
 

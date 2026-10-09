@@ -1,10 +1,11 @@
-<available:subagents>
+<docs tools="subagent_create subagent_list subagent_profiles subagent_stop subagent_settle subagent_wait subagent_queue subagent_dequeue">
 ## Subagents
 
 Subagents require **Feature Activation**. 
 
 Every subagent call must run in the intended project cwd; this is the directory subagents will have access to.
 
+<docs tools="subagent_list subagent_profiles subagent_create subagent_stop subagent_settle">
 ### managing subagents
 
 - <tool id="subagent_list" /> lists unsettled direct children. Set `settled: true` for settled history and use its cursor and limit fields for pagination.
@@ -14,7 +15,9 @@ Every subagent call must run in the intended project cwd; this is the directory 
 - <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names.
 
 Let the active agent identity influence child names. Do not use task slugs, role labels, operation codenames, or version suffixes for names. The title owns the task description.
+</docs>
 
+<docs tools="subagent_wait">
 ### waiting
 
 <tool id="subagent_wait" /> accepts any number of `names` and `threadIds` and returns when the first selected child needs attention, completes, or stops.
@@ -22,7 +25,9 @@ Let the active agent identity influence child names. Do not use task slugs, role
 Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do not use separate concurrent waits.
 
 DO NOT USE <tool id="message_wait" /> TO WAIT FOR SUBAGENTS; IT MISSES SUBAGENT EVENTS.
+</docs>
 
+<docs tools="subagent_queue subagent_dequeue">
 ### queues
 
 Use queues instead of messages to order contended work (builds, test suites, shared files).
@@ -31,6 +36,7 @@ Use queues instead of messages to order contended work (builds, test suites, sha
 - Holds last until <tool id="subagent_dequeue" />. A holder's turn end, task completion or block pauses the queue; resolve by messaging the child or kicking with <tool id="subagent_dequeue" /> `{ queue, name }`. Your own inactivity freezes all your queues.
 - Reorder with <tool id="subagent_queue" /> `{ queue, name, after | before }`.
 - Queues order agents, not processes: never queue work a process lock already serializes.
+</docs>
 
 ### notes
 
@@ -40,4 +46,4 @@ Use queues instead of messages to order contended work (builds, test suites, sha
 - A thread may operate only on direct children it owns. Sideways (except sibling messages) and grandchild access fails closed.
 - Do not blindly trust subagent output. The parent owns verification and scope control.
 - When orchestrating reviews, prevent infinite review loops and scope creep. The parent owns the acceptance threshold.
-</available:subagents>
+</docs>

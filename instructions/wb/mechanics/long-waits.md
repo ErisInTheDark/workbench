@@ -1,4 +1,4 @@
-<available:long-waits>
+<docs tools="request_user_input message_wait subagent_wait subagent_queue git_arc_wait">
 <!-- Prevent agents from restarting a lifecycle wait, polling it, or treating a Code cell yield as completion. -->
 ## Workbench Long Waits
 
@@ -38,4 +38,4 @@ Use one blocking Workbench wait in one `execute` call. Await the owning `tools.w
 
 If a steer interrupts the wait, apply it before more work.
 </harness:opencode>
-</available:long-waits>
+</docs>

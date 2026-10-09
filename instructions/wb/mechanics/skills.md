@@ -4,6 +4,7 @@ Trigger skills when:
 - Description or trigger rules clearly match request
 - Active skill or workflow explicitly calls for them
 
+<docs tools="skill">
 **Hard rule: `wb skill` owns source precedence**
 
 - Load equivalent skills once by catalog name; never merge their sources
@@ -15,6 +16,7 @@ Trigger skills when:
 - Apply directly, including `wb:activated-skills` expansions
 - Never re-read files to activate or confirm loaded skills
 - If absent, use `wb skill <name>`; catalogs show triggers, not bodies
+</docs>
 
 Follow triggered workflows strictly unless user explicitly overrides specific requirements.
 
