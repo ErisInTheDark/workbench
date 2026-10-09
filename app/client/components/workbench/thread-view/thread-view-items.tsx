@@ -111,6 +111,7 @@ import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
+import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "./ThreadProgressiveWindow";
 import ThreadGenericItem from "./ThreadGenericItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
@@ -2967,48 +2968,68 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       chunks.push(windowEntries.slice(index, index + THREAD_WINDOW_CHUNK_SIZE));
     }
     let chunkOffset = 0;
-    return chunks.map((chunk) => {
+    const progressiveChunks: ThreadProgressiveWindowChunk[] = chunks.map((chunk) => {
       const chunkStart = start + chunkOffset;
       chunkOffset += chunk.length;
       const firstEntry = chunk[0]!;
-      return (
-        <ThreadMeasuredContent
-          key={`window:${getRenderEntryKey(firstEntry, chunkStart)}`}
-          visibilityRange="approaching"
-          windowed
-        >
-          <div className="space-y-2">
-            {chunk.map((entry, index) => renderEntry(entry, chunkStart + index))}
-          </div>
-        </ThreadMeasuredContent>
-      );
+      const key = `window:${getRenderEntryKey(firstEntry, chunkStart)}`;
+      return {
+        key,
+        content: (
+          <ThreadMeasuredContent
+            key={key}
+            visibilityRange="approaching"
+            windowed
+          >
+            <div className="space-y-2">
+              {chunk.map((entry, index) => renderEntry(entry, chunkStart + index))}
+            </div>
+          </ThreadMeasuredContent>
+        ),
+      };
     });
+    return (
+      <ThreadProgressiveWindow
+        key={`progressive:${turnId}:${start}`}
+        chunks={progressiveChunks}
+        identity={`${turnId}:${start}`}
+      />
+    );
   };
-  if (!initialInactiveItemIds) return <div className="space-y-2">{renderWindowedEntries(stableEntries, 0)}</div>;
   let offset = 0;
-  return <div className="space-y-2">{partitionWorkedRows(stableEntries).map(group => {
+  const groups = initialInactiveItemIds ? partitionWorkedRows(stableEntries) : [stableEntries];
+  const progressiveGroups: ThreadProgressiveWindowChunk[] = groups.map(group => {
     const start = offset;
     offset += group.length;
     const children = renderWindowedEntries(group, start);
-    if (!group[0]?.eligible) return children;
+    const firstEntry = group[0];
+    const key = firstEntry ? `group:${getRenderEntryKey(firstEntry, start)}` : `group:${turnId}:${start}`;
+    if (!firstEntry?.eligible) return { key, content: children };
     const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
     const activity = ids.map(id => {
       const timeline = findWorkbenchThreadItemTimelineEntry(id, renderItemTimeline);
       const times = timeline ? [timeline.startedAt, timeline.firstSeenAt, timeline.completedAt, timeline.lastSeenAt].filter((time): time is number => time !== null) : [];
       return times.length ? Math.max(...times) : null;
     });
-    return <ThreadWorkedRun
-      key={ids[0]}
-      identity={ids[0]}
-      count={group.length}
-      durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
-      fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"
-        ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }> => item.type === "fileChange" || item.type === "dynamicToolCall")
-        : []))}
-      initialInactive={ids.every(id => initialInactiveItemIds.has(id))}
-      newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
-    >{children}</ThreadWorkedRun>;
-  })}</div>;
+    return {
+      key,
+      content: (
+        <ThreadWorkedRun
+          identity={ids[0]!}
+          count={group.length}
+          durationMs={getThreadItemTimelineDurationMs(ids, renderItemTimeline)}
+          fileTotals={getThreadFileChangeTotals(group.flatMap(entry => entry.kind === "block"
+            ? getRenderableBlockItems(entry.block).filter((item): item is Extract<ThreadItem, { type: "fileChange" | "dynamicToolCall" }> => item.type === "fileChange" || item.type === "dynamicToolCall")
+            : []))}
+          initialInactive={ids.every(id => initialInactiveItemIds?.has(id) ?? false)}
+          newestActivityAt={activity.some(time => time === null) ? null : Math.max(...activity as number[])}
+        >
+          {children}
+        </ThreadWorkedRun>
+      ),
+    };
+  });
+  return <ThreadProgressiveWindow chunks={progressiveGroups} identity={`${turnId}:groups`} />;
 });
 
 export function ThreadTranscriptItemDetails ({

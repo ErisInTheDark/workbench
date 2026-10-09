@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, entry motion, worked-run remount state, end target, bottom-return notifications, and layout preservation.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, progressive-window capability, entry motion, worked-run state, and layout preservation.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
@@ -16,6 +16,7 @@ import type {
 export interface ThreadScrollViewportContextValue {
   readonly entryMotion: ThreadEntryMotionController | null;
   readonly workedRunState: ThreadWorkedRunController | null;
+  readonly progressiveWindowing: boolean;
   readonly getViewport: () => HTMLDivElement | null;
   readonly observeContent: (
     element: HTMLElement,
@@ -31,6 +32,7 @@ export interface ThreadScrollViewportContextValue {
 const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue = {
   entryMotion: null,
   workedRunState: null,
+  progressiveWindowing: false,
   getViewport: () => null,
   observeContent: () => () => {},
   preserveOffscreenLayout: () => () => {},
