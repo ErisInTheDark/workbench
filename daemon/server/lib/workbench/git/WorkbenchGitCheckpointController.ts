@@ -972,7 +972,7 @@ export default class WorkbenchGitCheckpointController {
   }
 
   private async compareActiveArc(
-    { cwd, harness: rawHarness, paths: rawPaths, threadId }: ControllerInput & { paths?: string[] },
+    { cwd, harness: rawHarness, patches, paths: rawPaths, threadId }: ControllerInput & { patches?: boolean; paths?: string[] },
     inspection: GitArcInspectionSnapshot,
   ): Promise<GitCheckpointCompareResult> {
     const { checkpoint, harness, metadata, repository } = await this.requireActiveArc(
@@ -989,7 +989,9 @@ export default class WorkbenchGitCheckpointController {
       threadId,
     });
     return {
-      changes: await repository.buildFileChanges(baseline, inspection.tree, paths),
+      changes: patches
+        ? await repository.buildFileChanges(baseline, inspection.tree, paths)
+        : await repository.buildFileChangeSummaries(baseline, inspection.tree, paths),
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointRef: checkpoint.checkpointRef,
       hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
@@ -999,13 +1001,17 @@ export default class WorkbenchGitCheckpointController {
     };
   }
 
+  /** Changed files with counts; patch text only when `patches` is set, since compare callers read counts alone. */
   async compare(
-    input: ControllerInput & { paths?: string[]; ref?: string },
+    input: ControllerInput & { patches?: boolean; paths?: string[]; ref?: string },
     existingInspection?: GitArcInspectionSnapshot,
   ): Promise<GitCheckpointCompareResult> {
     return await GitObjectReadSession.run<GitCheckpointCompareResult>(async () => {
       const inspection = existingInspection ?? await this.createInspectionSnapshot(input.cwd);
       const repository = inspection.repository;
+      const changesOf = (from: string | null, paths: string[]) => input.patches
+        ? repository.buildFileChanges(from, inspection.tree, paths)
+        : repository.buildFileChangeSummaries(from, inspection.tree, paths);
       if (!input.ref) {
         const current = inspection.entries.find((entry) => entry.harness === normalizeHarness(input.harness)
           && entry.threadId === normalizeThreadId(input.threadId));
@@ -1016,7 +1022,7 @@ export default class WorkbenchGitCheckpointController {
             const paths = input.paths?.length ? repository.normalizePaths(input.paths) : lost.paths;
             return {
               checkpointCommit: lost.commit, checkpointRef: lost.ref, phase: "resolved",
-              changes: await repository.buildFileChanges(lost.commit, inspection.tree, paths),
+              changes: await changesOf(lost.commit, paths),
               scopePaths: paths, hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
               intentName: current?.intentName ?? null, repoRoot: repository.root,
             };
@@ -1028,7 +1034,7 @@ export default class WorkbenchGitCheckpointController {
             const paths = repository.normalizePaths(input.paths);
             return {
               checkpointCommit: inspection.head, checkpointRef: inspection.head, phase: "workspace",
-              changes: await repository.buildFileChanges(inspection.head, inspection.tree, paths),
+              changes: await changesOf(inspection.head, paths),
               scopePaths: paths,
               hasUncommittedChanges: (await repository.listChangedPaths(inspection.head, inspection.tree, paths)).length > 0,
               intentName: null, repoRoot: repository.root,
@@ -1054,7 +1060,7 @@ export default class WorkbenchGitCheckpointController {
         const proposal = await this.store(repository).readProposal(harness, input.threadId, input.ref);
         const paths = input.paths?.length ? repository.normalizePaths(input.paths) : repository.normalizePaths(proposal.metadata.paths);
         return {
-          changes: await repository.buildFileChanges(proposal.proposalCommit, inspection.tree, paths),
+          changes: await changesOf(proposal.proposalCommit, paths),
           checkpointCommit: proposal.proposalCommit,
           checkpointRef: proposal.proposalRef,
           intentName: null,
@@ -1078,7 +1084,7 @@ export default class WorkbenchGitCheckpointController {
           throw new Error("Explicit inspection refs must identify this thread's plan, arc or proposal.");
         }
         const paths = input.paths?.length ? repository.normalizePaths(input.paths) : metadata.scopePaths;
-        const changes = await repository.buildFileChanges(checkpoint.checkpointCommit, inspection.tree, paths);
+        const changes = await changesOf(checkpoint.checkpointCommit, paths);
         return {
           changes,
           phase: metadata.kind === "plan" ? "plan" : "active",
@@ -1112,7 +1118,7 @@ export default class WorkbenchGitCheckpointController {
     ref?: string;
   }, existingInspection?: GitArcInspectionSnapshot): Promise<GitCheckpointDiffResult> {
     return await GitObjectReadSession.run(async () => {
-      const result = await this.compare(input, existingInspection);
+      const result = await this.compare({ ...input, patches: true }, existingInspection);
       return {
         ...result,
         ...createGitArcDiffPage(

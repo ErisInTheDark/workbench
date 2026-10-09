@@ -824,8 +824,8 @@ test("one workspace arc aggregates two repositories and keeps proposals root-spe
     ...identity,
   }, { modifiedSince: 1 });
   assert.deepEqual(local.compareCalls.slice(compareCallCount), [
-    { cwd: apiRoot, harness: "codex", ref: apiProposal.proposalId, threadId: identity.threadId },
-    { cwd: webRoot, harness: "codex", ref: webProposal.proposalId, threadId: identity.threadId },
+    { cwd: apiRoot, harness: "codex", patches: false, ref: apiProposal.proposalId, threadId: identity.threadId },
+    { cwd: webRoot, harness: "codex", patches: false, ref: webProposal.proposalId, threadId: identity.threadId },
   ]);
   const messageAmendment = await controller.execute(project, {
     action: "proposalCreate", amend: false, amendProposalId: webProposal.proposalId,

@@ -167,8 +167,7 @@ export default class GitArcStackController {
         tree = await this.repository.writeTreeWithPathsFromSource(tree, proposal.tree, proposal.metadata.paths);
       }
       const summaries = await Promise.all(proposals.map(async ({ metadata, tree: proposalTree }): Promise<GitArcStackedProposal> => ({
-        changes: (await this.repository.buildFileChanges(metadata.baseCommit, proposalTree, metadata.paths))
-          .map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind: kind.type, path })),
+        changes: await this.repository.buildChangeTotals(metadata.baseCommit, proposalTree, metadata.paths),
         description: metadata.description,
         proposalId: metadata.proposalId,
         title: metadata.title,
@@ -387,8 +386,7 @@ export default class GitArcStackController {
     }
     // Summaries live on the tip so stack cards never rehydrate each sealed proposal.
     const proposals = await Promise.all(pending.map(async ({ metadata, tree }): Promise<GitArcStackedProposal> => ({
-      changes: (await this.repository.buildFileChanges(metadata.baseCommit, tree, metadata.paths))
-        .map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind: kind.type, path })),
+      changes: await this.repository.buildChangeTotals(metadata.baseCommit, tree, metadata.paths),
       description: metadata.description,
       proposalId: metadata.proposalId,
       title: metadata.title,

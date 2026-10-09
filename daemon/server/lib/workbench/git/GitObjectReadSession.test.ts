@@ -1,4 +1,4 @@
-/* No production exports. Regression wards cover stream framing, concurrent readers and deterministic failure cleanup. */
+/* No production exports. Regression wards cover stream framing, concurrent readers, deterministic failure cleanup and detached queue work. */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
@@ -29,6 +29,23 @@ function processFixture(closeOnEnd = true) {
 function frame(id: string, type: string, body: Buffer) {
   return Buffer.concat([Buffer.from(`${id} ${type} ${body.length}\n`), body, Buffer.from("\n")]);
 }
+
+test("work resumed after its starting operation closed reads only through a detached scope", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let inherited!: Promise<unknown>;
+  let detached!: Promise<unknown>;
+  await GitObjectReadSession.run(async () => {
+    inherited = gate.then(async () => await GitObjectReadSession.read(process.cwd(), ["HEAD"], "info"));
+    detached = gate.then(async () => await GitObjectReadSession.detached(async () => (
+      await GitObjectReadSession.read(process.cwd(), ["HEAD"], "info")
+    )));
+  });
+  release();
+  await assert.rejects(inherited, /read scope is closed/u);
+  const [head] = await detached as Awaited<ReturnType<typeof GitObjectReadSession.read>>;
+  assert.equal(head?.type, "commit");
+});
 
 test("interleaved reads preserve split byte framing, missing objects and identity-only replies", async () => {
   const fixture = processFixture();

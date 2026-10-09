@@ -847,6 +847,7 @@ async function checkInspectionSnapshot(source: string) {
     controller.compare({
       cwd: source,
       harness: "codex",
+      patches: true,
       threadId: "adopt-thread",
     }, snapshot),
     controller.listUnclaimedWorkspaceDirt({ cwd: source, modifiedSince: 0 }, snapshot),

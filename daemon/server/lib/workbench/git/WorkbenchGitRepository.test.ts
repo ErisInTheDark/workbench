@@ -217,6 +217,7 @@ test("combined diffs preserve per-file colour output and isolate nested submodul
 
 test("scoped diff batching excludes unrelated patches before collecting output", async (context) => {
   const repository = new WorkbenchGitRepository(process.cwd());
+  context.mock.method(repository, "listChangedPaths", async () => ["selected[1]"]);
   const patch = "diff --git a/selected[1] b/selected[1]\n+selected\n";
   context.mock.method(repository, "run", async (args: string[]) => {
     if (!args.includes(":(top,literal)selected[1]")) throw new Error("Unrelated patches exceeded output capacity.");
@@ -227,73 +228,57 @@ test("scoped diff batching excludes unrelated patches before collecting output",
   assert.deepEqual(changes.map(({ path: filePath, diff }) => [filePath, diff]), [["selected[1]", patch]]);
 });
 
-test("diff batching falls back only for capacity limits and preserves per-file failures", async (context) => {
-  const patch = "diff --git a/selected b/selected\n+selected\n";
-  const failures = [
-    Object.assign(new RangeError("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
-    Object.assign(new Error("spawn git E2BIG"), { code: "E2BIG" }),
-    Object.assign(new Error("spawn git ENAMETOOLONG"), { code: "ENAMETOOLONG" }),
-  ];
-  for (const failure of failures) {
-    const repository = new WorkbenchGitRepository(process.cwd());
-    let combinedReads = 0;
-    let singleReads = 0;
-    let singleFailure: Error | undefined;
-    context.mock.method(repository, "run", async (args: string[]) => {
-      if (args.includes("--name-only")) return "selected\0unrelated\0";
-      if (args.includes("-z")) {
-        combinedReads += 1;
-        throw failure;
-      }
-      singleReads += 1;
+const patchOf = (filePath: string) => `diff --git a/${filePath} b/${filePath}\n+${filePath}\n`;
+const stdoutOverflow = () => Object.assign(new RangeError("stdout maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+
+test("diff batches split only when output overflows and preserve per-file failures", async (context) => {
+  const repository = new WorkbenchGitRepository(process.cwd());
+  context.mock.method(repository, "listChangedPaths", async () => ["first", "second"]);
+  const batches: string[][] = [];
+  let singleFailure: Error | undefined;
+  context.mock.method(repository, "run", async (args: string[]) => {
+    const selected = args.slice(args.indexOf("--") + 1).map(value => value.replace(":(top,literal)", ""));
+    if (!args.includes("-z")) {
       if (singleFailure) throw singleFailure;
-      assert.equal(args.at(-1), ":(top,literal)selected");
-      return `:100644 100644 aaaaaaa bbbbbbb M\tselected\n1\t0\tselected\n${patch}`;
-    });
-    const changes = await repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"]);
-    assert.deepEqual(changes.map(({ diff }) => diff), [patch]);
-    assert.equal(combinedReads, 1);
-    assert.equal(singleReads, 1);
-    singleFailure = new Error("single-file failure");
-    await assert.rejects(repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"]), (error) => error === singleFailure);
-    assert.equal(singleReads, 2);
-  }
+      return `:100644 100644 aaaaaaa bbbbbbb M\tsecond\n1\t0\tsecond\n${patchOf("second")}`;
+    }
+    batches.push(selected);
+    if (selected.length > 1 || selected[0] === "second") throw stdoutOverflow();
+    return `:100644 100644 aaaaaaa bbbbbbb M\0first\0` + `1\t0\tfirst\0\0${patchOf("first")}`;
+  });
+  const changes = await repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["first", "second"]);
+  assert.deepEqual(changes.map(({ diff, path: filePath }) => [filePath, diff]), [["first", patchOf("first")], ["second", patchOf("second")]]);
+  assert.deepEqual(batches, [["first", "second"], ["first"], ["second"]]);
+  singleFailure = new Error("single-file failure");
+  await assert.rejects(repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["first", "second"]), (error) => error === singleFailure);
+
   for (const failure of [
     new Error("repository inaccessible"),
     Object.assign(new RangeError("stderr maxBuffer length exceeded"), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }),
   ]) {
-    const repository = new WorkbenchGitRepository(process.cwd());
-    const calls = context.mock.method(repository, "run", async () => { throw failure; });
-    await assert.rejects(repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"]), (error) => error === failure);
+    const failing = new WorkbenchGitRepository(process.cwd());
+    context.mock.method(failing, "listChangedPaths", async () => ["selected"]);
+    const calls = context.mock.method(failing, "run", async () => { throw failure; });
+    await assert.rejects(failing.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"]), (error) => error === failure);
     assert.equal(calls.mock.callCount(), 1);
   }
 });
 
-test("file-change construction passes cancellation through combined and fallback Git reads", async (context) => {
+test("file-change construction passes cancellation through listing, batch and single-file Git reads", async (context) => {
   const signal = new AbortController().signal;
-  const patch = "diff --git a/selected b/selected\n+selected\n";
-  const combined = new WorkbenchGitRepository(process.cwd());
-  const combinedSignals: Array<AbortSignal | undefined> = [];
-  context.mock.method(combined, "run", async (_args, _env, receivedSignal) => {
-    combinedSignals.push(receivedSignal);
-    return `:100644 100644 aaaaaaa bbbbbbb M\0selected\0`
-      + `1\t0\tselected\0\0${patch}`;
+  const repository = new WorkbenchGitRepository(process.cwd());
+  const signals: Array<AbortSignal | undefined> = [];
+  context.mock.method(repository, "listChangedPaths", async (_from, _to, _paths, receivedSignal) => {
+    signals.push(receivedSignal);
+    return ["selected"];
   });
-  await combined.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"], signal);
-  assert.deepEqual(combinedSignals, [signal]);
-
-  const fallback = new WorkbenchGitRepository(process.cwd());
-  const fallbackSignals: Array<AbortSignal | undefined> = [];
-  context.mock.method(fallback, "run", async (args, _env, receivedSignal) => {
-    fallbackSignals.push(receivedSignal);
-    if (args.includes("--name-only")) return "selected\0";
-    if (args.includes("-z")) {
-      throw Object.assign(new Error("spawn git E2BIG"), { code: "E2BIG" });
-    }
-    return `:100644 100644 aaaaaaa bbbbbbb M\tselected\n1\t0\tselected\n${patch}`;
+  context.mock.method(repository, "run", async (args, _env, receivedSignal) => {
+    signals.push(receivedSignal);
+    if (args.includes("-z")) throw stdoutOverflow();
+    return `:100644 100644 aaaaaaa bbbbbbb M\tselected\n1\t0\tselected\n${patchOf("selected")}`;
   });
-  await fallback.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"], signal);
-  assert.deepEqual(fallbackSignals, [signal, signal, signal]);
+  await repository.buildFileChanges("a".repeat(40), "b".repeat(40), ["selected"], signal);
+  assert.deepEqual(signals, [signal, signal, signal]);
 });
 
 test("normalizes the index before atomic ref publication and keeps retries idempotent", async () => {
@@ -549,4 +534,41 @@ test("reads objects and preserves exact changes across literal, binary, and larg
   const missingCommit = "f".repeat(40);
   await fs.writeFile(path.join(fixture.root, ".git", "refs", "worktree", "workbench", "dangling"), `${missingCommit}\n`);
   assert.equal(await repository.readCommitRef(missingCommit, "refs/worktree/workbench/dangling"), null);
+});
+
+test("huge changed pathsets diff within the command-line budget through a few Git processes at a time", async (context) => {
+  const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const head = await repository.currentHead();
+  await fs.mkdir(path.join(fixture.root, "huge"));
+  const paths = Array.from({ length: 300 }, (_value, index) => `huge/${String(index).padStart(4, "0")}-${"y".repeat(140)}.txt`);
+  await Promise.all(paths.map(async (filePath, index) => {
+    await fs.writeFile(path.join(fixture.root, filePath), `line ${index}\n`, "utf8");
+  }));
+  const tree = await repository.writeScopedWorktreeTree(paths);
+  const run = repository.run.bind(repository);
+  let inFlight = 0;
+  let peak = 0;
+  let longestArguments = 0;
+  context.mock.method(repository, "run", async (...args: Parameters<typeof repository.run>) => {
+    longestArguments = Math.max(longestArguments, args[0].reduce((total, value) => total + value.length + 1, 0));
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    try { return await run(...args); } finally { inFlight -= 1; }
+  });
+
+  const changes = await repository.buildFileChanges(head, tree, paths);
+  assert.deepEqual(changes.map(({ additions, deletions, kind, path: filePath }) => [filePath, kind.type, additions, deletions]),
+    paths.map(filePath => [filePath, "add", 1, 0]));
+  assert.ok(changes.every(({ diff, path: filePath }) => diff.startsWith(`diff --git a/${filePath}`)));
+  // Windows rejects command lines near 32k characters; one process per file stalls the daemon while spawning.
+  assert.ok(longestArguments < 32 * 1024, `a Git invocation carried ${longestArguments} argument characters`);
+  assert.ok(peak <= 4, `${peak} Git processes ran at once`);
+  const totals = await repository.buildChangeTotals(head, tree, paths);
+  assert.deepEqual(totals, paths.map(filePath => ({ additions: 1, deletions: 0, kind: "add", path: filePath })));
+  const summaries = await repository.buildFileChangeSummaries(head, tree, ["huge"]);
+  assert.deepEqual(summaries.map(({ diff, path: filePath }) => [filePath, diff]), paths.map(filePath => [filePath, ""]));
+  assert.ok(longestArguments < 32 * 1024, `a Git invocation carried ${longestArguments} argument characters`);
+  assert.ok(peak <= 4, `${peak} Git processes ran at once`);
 });

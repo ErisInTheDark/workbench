@@ -12,6 +12,7 @@ import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rej
 import type { GitArcProposalCommitEntry, GitCheckpointProposal, GitCheckpointRequest } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcMissingClaimSetError, GitArcProposalAlreadyCommittedError } from "workbench-shared/workbench/git/git-arc-failures";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import GitObjectReadSession from "./GitObjectReadSession";
 import type { GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
 import GitArcProposalDiffController from "./GitArcProposalDiffController";
@@ -382,7 +383,8 @@ async function buildProposalFileChanges(
   const baseTree = await repository.resolveTree(baseCommit);
   return await proposalDiffs.readOrBuild({
     baseTree,
-    build: async signal => await repository.buildFileChanges(baseCommit, targetTree, paths, signal),
+    // The diff queue owns this build and may start it after the requesting operation's read scope closed.
+    build: async signal => await GitObjectReadSession.detached(async () => await repository.buildFileChanges(baseCommit, targetTree, paths, signal)),
     paths,
     repositoryRoot: repository.root,
     targetTree,

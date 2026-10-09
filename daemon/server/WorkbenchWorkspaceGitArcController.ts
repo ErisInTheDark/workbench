@@ -1267,6 +1267,8 @@ export default class WorkbenchWorkspaceGitArcController {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const input = {
         cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
+        // Only diff pages show patch text; compare reads counts.
+        patches: request.action === "diff",
         ...(group?.paths.length ? { paths: group.paths } : {}),
         ...(refs.get(member.repoRoot) ? { ref: refs.get(member.repoRoot) } : {}),
       };

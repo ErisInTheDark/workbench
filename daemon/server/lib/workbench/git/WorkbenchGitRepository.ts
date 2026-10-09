@@ -8,7 +8,9 @@
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
  * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
- * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk.
+ * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
+ * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
+ * that fit the command line, with at most four Git processes in flight.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -33,8 +35,39 @@ export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generatio
 const realIndexPaths = new Map<string, Promise<string>>();
 /** A directory's repository root only changes if the repository is removed, which `open` re-checks on every hit. */
 const repositoryRoots = new Map<string, string>();
-// Windows command lines cap near 32k characters; larger pathspec sets fall back to listing everything and filtering.
+// Windows command lines cap near 32k characters; larger pathspec sets are batched or listed unscoped and filtered.
 const PATHSPEC_ARGUMENT_BUDGET = 16_000;
+/** Git processes one diff read keeps in flight; each spawn blocks the event loop briefly, so fan-out stays small. */
+const GIT_DIFF_CONCURRENCY = 4;
+
+type GitProcessLimit = <T>(work: () => Promise<T>) => Promise<T>;
+
+/** Admits at most GIT_DIFF_CONCURRENCY Git processes from one read at a time, in request order. */
+function gitProcessLimit(): GitProcessLimit {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async (work) => {
+    if (active >= GIT_DIFF_CONCURRENCY) await new Promise<void>(resolve => waiting.push(resolve));
+    else active += 1;
+    try {
+      return await work();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active -= 1;
+    }
+  };
+}
+
+function isStdoutCapacityError(error: unknown) {
+  return error instanceof Error && "code" in error
+    && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.message.startsWith("stdout ");
+}
+
+function halves<T>(values: readonly T[]) {
+  const middle = Math.ceil(values.length / 2);
+  return [values.slice(0, middle), values.slice(middle)] as const;
+}
 
 function realIndexPath(repository: WorkbenchGitRepository) {
   let resolved = realIndexPaths.get(repository.root);
@@ -686,7 +719,7 @@ export default class WorkbenchGitRepository {
   }
 
   /** Literal pathspecs that let Git walk only the selected scopes; none (walk everything, then filter) when too many. */
-  private scopePathspecs(scopes: readonly string[]) {
+  scopePathspecs(scopes: readonly string[]) {
     if (!scopes.length || scopes.includes(".")) return [];
     const pathspecs = scopes.map(scope => this.literalPathspec(scope));
     return pathspecs.reduce((total, pathspec) => total + pathspec.length + 1, 0) > PATHSPEC_ARGUMENT_BUDGET ? [] : ["--", ...pathspecs];
@@ -971,82 +1004,115 @@ export default class WorkbenchGitRepository {
     };
   }
 
+  /** Per-file changes with patches; plain --patch gives binary files Git's header-only stub, never a base85 payload. */
   async buildFileChanges(from: string | null, to: string, paths: string[], signal?: AbortSignal) {
-    from = await this.contentBase(from);
-    const scopes = paths.includes(".") ? [] : paths;
-    let output: string;
-    try {
-      output = await this.run([
-        // Plain --patch: binary files get Git's header-only stub, never a base85 payload.
-        "diff", "--raw", "--numstat", "--patch", "-z", "--no-renames", from, to,
-        "--", ...scopes.map((scope) => this.literalPathspec(scope)),
-      ], process.env, signal);
-    } catch (error) {
-      const capacityExceeded = error instanceof Error && "code" in error && (
-        error.code === "E2BIG" || error.code === "ENAMETOOLONG"
-        || (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.message.startsWith("stdout "))
-      );
-      if (!capacityExceeded) throw error;
-      // Combined output/arguments can overflow even when each selected file fits; Git lists the paths to inspect singly.
-      const changedPaths = filterPathsByScopes(parseNullPaths(await this.run([
-        "diff", "--name-only", "-z", "--no-renames", from, to,
-      ], process.env, signal)), paths).sort((left, right) => left.localeCompare(right));
-      return await this.inspectFileChanges(from, to, changedPaths, signal);
-    }
-    const parsed = parseGitFileChangeOutput(output);
-    if (parsed.kind === "changes") {
-      const selected = new Set(filterPathsByScopes(parsed.changes.map(({ path: filePath }) => filePath), paths));
-      return parsed.changes.filter(({ path: filePath }) => selected.has(filePath))
-        .sort((left, right) => left.path.localeCompare(right.path));
-    }
-    const changedPaths = filterPathsByScopes(parsed.paths, paths).sort((left, right) => left.localeCompare(right));
-    return await this.inspectFileChanges(from, to, changedPaths, signal);
+    const base = await this.contentBase(from);
+    const changedPaths = await this.listChangedPaths(base, to, paths, signal);
+    const limit = gitProcessLimit();
+    const changes = (await Promise.all(this.pathspecBatches(changedPaths).map(async batch => (
+      await this.diffPatchBatch(base, to, batch, limit, signal)
+    )))).flat();
+    return changes.sort((left, right) => left.path.localeCompare(right.path));
   }
 
   /** Per-file totals without patches, for durable summaries; scoped like `buildFileChanges`. */
-  async buildChangeTotals(from: string | null, to: string, paths: string[]) {
+  async buildChangeTotals(from: string | null, to: string, paths: string[], signal?: AbortSignal) {
     if (!paths.length) return [];
-    from = await this.contentBase(from);
-    const scopes = paths.includes(".") ? [] : paths;
-    const diff = async (pathspecs: string[]) => parseGitChangeTotalsOutput(await this.run([
-      "diff", "--raw", "--numstat", "-z", "--no-renames", from, to, "--", ...pathspecs,
-    ]));
-    let totals: Awaited<ReturnType<typeof diff>>;
-    try {
-      totals = await diff(scopes.map((scope) => this.literalPathspec(scope)));
-    } catch (error) {
-      // Long path lists can overflow the argument limit; the unscoped diff is filtered below instead.
-      if (!(error instanceof Error && "code" in error && (error.code === "E2BIG" || error.code === "ENAMETOOLONG"))) throw error;
-      totals = await diff([]);
-    }
-    const selected = new Set(filterPathsByScopes(totals.map(({ path: filePath }) => filePath), paths));
-    return totals.filter(({ path: filePath }) => selected.has(filePath))
-      .sort((left, right) => left.path.localeCompare(right.path));
+    const base = await this.contentBase(from);
+    const changedPaths = await this.listChangedPaths(base, to, paths, signal);
+    const limit = gitProcessLimit();
+    const totals = (await Promise.all(this.pathspecBatches(changedPaths).map(async batch => (
+      await this.diffTotalsBatch(base, to, batch, limit, signal)
+    )))).flat();
+    return totals.sort((left, right) => left.path.localeCompare(right.path));
   }
 
-  private async inspectFileChanges(from: string, to: string, changedPaths: string[], signal?: AbortSignal) {
-    return await Promise.all(changedPaths.map(async (filePath): Promise<GitCheckpointFileChange> => {
-      const pathspec = this.literalPathspec(filePath);
-      const inspected = await this.run([
-        "diff", "--raw", "--numstat", "--patch", "--no-renames", from, to, "--", pathspec,
-      ], process.env, signal);
-      const patchOffset = inspected.indexOf("diff --git ");
-      if (patchOffset < 0) throw new Error(`Git did not return a patch for changed path ${filePath}.`);
-      const metadata = inspected.slice(0, patchOffset);
-      const status = /^:[0-7]{6} [0-7]{6} [a-f0-9]+ [a-f0-9]+ ([A-Z])/mu.exec(metadata)?.[1] ?? "";
-      const numstat = /^(\d+|-)\t(\d+|-)\t/mu.exec(metadata);
-      if (!status || !numstat) throw new Error(`Git returned invalid change metadata for ${filePath}.`);
-      const [, added = "0", deleted = "0"] = numstat;
-      return {
-        additions: /^\d+$/u.test(added) ? Number(added) : 0,
-        deletions: /^\d+$/u.test(deleted) ? Number(deleted) : 0,
-        diff: inspected.slice(patchOffset),
-        kind: status === "A" ? { type: "add" } : status === "D"
-          ? { type: "delete" }
-          : { move_path: null, type: "update" },
-        path: filePath,
-      };
+  /** `buildFileChanges` without patch text (`diff` is empty), for callers that only show which files changed and by how much. */
+  async buildFileChangeSummaries(from: string | null, to: string, paths: string[], signal?: AbortSignal): Promise<GitCheckpointFileChange[]> {
+    return (await this.buildChangeTotals(from, to, paths, signal)).map(({ additions, deletions, kind, path: filePath }) => ({
+      additions, deletions, diff: "",
+      kind: kind === "add" ? { type: "add" } : kind === "delete" ? { type: "delete" } : { move_path: null, type: "update" },
+      path: filePath,
     }));
+  }
+
+  /** Exact changed files grouped so each Git invocation's literal pathspecs stay inside the command-line budget. */
+  private pathspecBatches(changedPaths: readonly string[]) {
+    const batches: string[][] = [];
+    let current: string[] = [];
+    let size = 0;
+    for (const filePath of changedPaths) {
+      const length = this.literalPathspec(filePath).length + 1;
+      if (current.length && size + length > PATHSPEC_ARGUMENT_BUDGET) {
+        batches.push(current);
+        current = [];
+        size = 0;
+      }
+      current.push(filePath);
+      size += length;
+    }
+    if (current.length) batches.push(current);
+    return batches;
+  }
+
+  private async diffTotalsBatch(
+    from: string, to: string, batch: string[], limit: GitProcessLimit, signal?: AbortSignal,
+  ): Promise<ReturnType<typeof parseGitChangeTotalsOutput>> {
+    try {
+      return parseGitChangeTotalsOutput(await limit(() => this.run([
+        "diff", "--raw", "--numstat", "-z", "--no-renames", from, to, "--", ...batch.map(filePath => this.literalPathspec(filePath)),
+      ], process.env, signal)));
+    } catch (error) {
+      if (!isStdoutCapacityError(error) || batch.length < 2) throw error;
+      const [left, right] = halves(batch);
+      return [...await this.diffTotalsBatch(from, to, left, limit, signal), ...await this.diffTotalsBatch(from, to, right, limit, signal)];
+    }
+  }
+
+  /** One batch's patches; overflowing output splits the batch, and gitlinks inspect their files singly. */
+  private async diffPatchBatch(
+    from: string, to: string, batch: string[], limit: GitProcessLimit, signal?: AbortSignal,
+  ): Promise<GitCheckpointFileChange[]> {
+    let output: string;
+    try {
+      output = await limit(() => this.run([
+        "diff", "--raw", "--numstat", "--patch", "-z", "--no-renames", from, to,
+        "--", ...batch.map(filePath => this.literalPathspec(filePath)),
+      ], process.env, signal));
+    } catch (error) {
+      if (!isStdoutCapacityError(error)) throw error;
+      if (batch.length < 2) return [await this.inspectFileChange(from, to, batch[0]!, limit, signal)];
+      const [left, right] = halves(batch);
+      return [...await this.diffPatchBatch(from, to, left, limit, signal), ...await this.diffPatchBatch(from, to, right, limit, signal)];
+    }
+    const parsed = parseGitFileChangeOutput(output);
+    if (parsed.kind === "changes") return parsed.changes;
+    // Expanded submodule patches can nest headers, so each file in the batch reads on its own.
+    return await Promise.all(parsed.paths.map(async filePath => await this.inspectFileChange(from, to, filePath, limit, signal)));
+  }
+
+  private async inspectFileChange(
+    from: string, to: string, filePath: string, limit: GitProcessLimit, signal?: AbortSignal,
+  ): Promise<GitCheckpointFileChange> {
+    const inspected = await limit(() => this.run([
+      "diff", "--raw", "--numstat", "--patch", "--no-renames", from, to, "--", this.literalPathspec(filePath),
+    ], process.env, signal));
+    const patchOffset = inspected.indexOf("diff --git ");
+    if (patchOffset < 0) throw new Error(`Git did not return a patch for changed path ${filePath}.`);
+    const metadata = inspected.slice(0, patchOffset);
+    const status = /^:[0-7]{6} [0-7]{6} [a-f0-9]+ [a-f0-9]+ ([A-Z])/mu.exec(metadata)?.[1] ?? "";
+    const numstat = /^(\d+|-)\t(\d+|-)\t/mu.exec(metadata);
+    if (!status || !numstat) throw new Error(`Git returned invalid change metadata for ${filePath}.`);
+    const [, added = "0", deleted = "0"] = numstat;
+    return {
+      additions: /^\d+$/u.test(added) ? Number(added) : 0,
+      deletions: /^\d+$/u.test(deleted) ? Number(deleted) : 0,
+      diff: inspected.slice(patchOffset),
+      kind: status === "A" ? { type: "add" } : status === "D"
+        ? { type: "delete" }
+        : { move_path: null, type: "update" },
+      path: filePath,
+    };
   }
 
   async listTreePaths(treeish: string | null, paths?: string[]) {

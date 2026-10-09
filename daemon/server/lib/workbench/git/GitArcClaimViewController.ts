@@ -198,23 +198,23 @@ export default class GitArcClaimViewController {
    */
   private async mirror(repository: WorkbenchGitRepository, tree: string, directory: string, scopes: string[]) {
     const wanted = new Map<string, WantedFile>();
-    const listing = await repository.run([
-      "ls-tree", "-r", "-z", "--full-tree", tree, "--", ...scopes.map(scope => repository.literalPathspec(scope)),
-    ]);
+    const scope = new GitArcPathSet(scopes);
+    const inScope = (relative: string) => !scopes.length || scope.covers(relative);
+    // Scope sets past the command-line budget list the whole tree and filter here instead.
+    const listing = await repository.run(["ls-tree", "-r", "-z", "--full-tree", tree, ...repository.scopePathspecs(scopes)]);
     for (const record of listing.split("\0")) {
       const tab = record.indexOf("\t");
       if (tab < 0) continue;
       const [mode, type, blob] = record.slice(0, tab).split(" ");
+      const relative = record.slice(tab + 1);
       // Submodule commits have no file content to mirror.
-      if (type === "blob" && mode && blob) wanted.set(record.slice(tab + 1), { blob, mode });
+      if (type === "blob" && mode && blob && inScope(relative)) wanted.set(relative, { blob, mode });
     }
     if (wanted.has(MANIFEST_NAME)) throw new Error(`The view contains ${MANIFEST_NAME}, which mirrors reserve for their own record.`);
     const algorithm = tree.length === 64 ? "sha256" : "sha1";
     await fs.mkdir(directory, { recursive: true });
     const manifestPath = path.join(directory, MANIFEST_NAME);
     const recorded = await readManifest(manifestPath);
-    const scope = new GitArcPathSet(scopes);
-    const inScope = (relative: string) => !scopes.length || scope.covers(relative);
     const inBatches = async <T>(items: readonly T[], work: (item: T) => Promise<void>) => {
       for (let offset = 0; offset < items.length; offset += 64) await Promise.all(items.slice(offset, offset + 64).map(work));
     };

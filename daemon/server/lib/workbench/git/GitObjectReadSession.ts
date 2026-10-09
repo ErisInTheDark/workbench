@@ -4,7 +4,8 @@
  * - GitObjectReadScope: a shared scope that separate steps of one long operation re-enter until its owner closes it.
  * - GitObjectReadResult: object identity and optional raw contents; null means missing.
  * - GitObjectReadProcess: injectable process boundary for protocol/lifecycle tests.
- * Notable members: yieldSlice lets loops whose size grows with ref count hand the event loop back between bounded slices.
+ * Notable members: yieldSlice lets loops whose size grows with ref count hand the event loop back between bounded slices;
+ * detached runs queue-owned work in a fresh scope independent of the request that started it.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -120,6 +121,14 @@ export default class GitObjectReadSession {
       if (failures.length) throw new AggregateError(failures, "Git object-reader cleanup failed.");
       return result;
     });
+  }
+
+  /**
+   * Runs `callback` in a fresh scope of its own, ignoring any scope the caller's async context inherited. Work owned by a
+   * longer-lived queue (not the request that happened to start it) uses this, since that request's scope may close first.
+   */
+  static async detached<T>(callback: () => Promise<T>): Promise<T> {
+    return await scopes.exit(async () => await GitObjectReadSession.run(callback));
   }
 
   /** Shares one computation of a fact that cannot change within the current operation; outside one, computes fresh. */

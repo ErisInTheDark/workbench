@@ -317,7 +317,6 @@ checkpointTest("plans snapshot claimed work and their checked proposals feed con
   ]);
   assert.equal(proposalComparison.proposalId, proposal.proposalId);
   assert.deepEqual(proposalComparison.changes.map((change) => change.path), ["selected.txt"]);
-  assert.match(proposalComparison.changes[0]?.diff ?? "", /after proposal/u);
   assert.equal(proposalDiff.proposalId, proposal.proposalId);
   assert.match(proposalDiff.diff, /after proposal/u);
   await write(repoRoot, "unrelated.txt", "unrelated checkpoint\n");
@@ -425,8 +424,6 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   await assert.rejects(git(repoRoot, ["rev-parse", "--verify", "MERGE_HEAD"]));
   const comparison = await controller.compare({ cwd: repoRoot, threadId: state.threadId });
   assert.deepEqual(comparison.changes.map(change => change.path), ["selected.txt", "unrelated.txt"]);
-  assert.match(comparison.changes[0]!.diff, /^ current line$/mu);
-  assert.doesNotMatch(comparison.changes[0]!.diff, /^-selected checkpoint$/mu);
   const diff = await controller.diff({ cwd: repoRoot, threadId: state.threadId });
   assert.match(diff.diff, /^ current line$/mu);
   assert.doesNotMatch(diff.diff, /^-selected checkpoint$/mu);
