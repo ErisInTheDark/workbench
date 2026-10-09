@@ -3,9 +3,12 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 
 import {
   findThreadSubagentCoordinationSpans,
+  groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
   type ThreadSubagentCoordinationRole,
 } from "./thread-subagent-coordination";
@@ -13,6 +16,40 @@ import {
 const incoming: ThreadSubagentCoordinationRole = { incoming: true, itemCount: 1, outgoing: false };
 const outgoing: ThreadSubagentCoordinationRole = { incoming: false, itemCount: 1, outgoing: true };
 const wait: ThreadSubagentCoordinationRole = { incoming: false, itemCount: 1, outgoing: false };
+
+function mcp(
+  id: string,
+  tool: string,
+  argumentsValue: Extract<ThreadItem, { type: "mcpToolCall" }>["arguments"],
+): Extract<ThreadItem, { type: "mcpToolCall" }> {
+  return {
+    appContext: null,
+    arguments: argumentsValue,
+    durationMs: 1,
+    error: null,
+    id,
+    pluginId: null,
+    readOnlyHint: null,
+    result: null,
+    server: "wbex",
+    status: "completed",
+    tool,
+    type: "mcpToolCall",
+  };
+}
+
+function incomingItem(id: string, senderThreadId: string): Extract<ThreadItem, { type: "userMessage" }> {
+  return {
+    clientId: null,
+    content: [{
+      text: createWorkbenchAgentMessageText({ message: id, senderName: senderThreadId, senderThreadId }),
+      text_elements: [],
+      type: "text",
+    }],
+    id,
+    type: "userMessage",
+  };
+}
 
 test("coordination spans require three items or both message directions and absorb the whole eligible run", () => {
   assert.deepEqual(findThreadSubagentCoordinationSpans([
@@ -84,4 +121,43 @@ test("subagent claim transfers expose their participant and paths for coordinati
     paths: ["src/three.ts"],
     target: { kind: "id", value: "child-thread" },
   });
+});
+
+test("conversation channels regroup within direction runs and flush on the inverse direction", () => {
+  const runs = groupThreadSubagentCoordinationConversation([
+    incomingItem("from-1a", "subagent-1"),
+    incomingItem("from-2", "subagent-2"),
+    incomingItem("from-1b", "subagent-1"),
+    incomingItem("from-1c", "subagent-1"),
+    mcp("release-1", "git_arc_release", { paths: ["src/one.ts"], toSubagent: "subagent-1" }),
+    mcp("to-1", "message", { message: "to one", name: "subagent-1" }),
+    mcp("to-2", "message", { message: "to two", name: "subagent-2" }),
+    incomingItem("from-1d", "subagent-1"),
+  ], (target) => `${target.kind}:${target.value ?? ""}`);
+
+  assert.deepEqual(runs.map((run) => ({
+    ids: run.items.map((item) => item.id),
+    kind: run.kind,
+    target: run.kind === "outgoing" ? run.target : undefined,
+  })), [
+    { ids: ["from-1a", "from-1b", "from-1c"], kind: "incoming", target: undefined },
+    { ids: ["from-2"], kind: "incoming", target: undefined },
+    { ids: ["release-1", "to-1"], kind: "outgoing", target: { kind: "name", value: "subagent-1" } },
+    { ids: ["to-2"], kind: "outgoing", target: { kind: "name", value: "subagent-2" } },
+    { ids: ["from-1d"], kind: "incoming", target: undefined },
+  ]);
+});
+
+test("standalone adoption is an outgoing channel paragraph", () => {
+  const runs = groupThreadSubagentCoordinationConversation([
+    mcp("adopt", "git_arc_adopt", { name: "mira" }),
+  ], (target) => `${target.kind}:${target.value ?? ""}`);
+
+  assert.deepEqual(runs.map((run) => ({
+    ids: run.items.map((item) => item.id),
+    kind: run.kind,
+    target: run.kind === "outgoing" ? run.target : undefined,
+  })), [
+    { ids: ["adopt"], kind: "outgoing", target: { kind: "name", value: "mira" } },
+  ]);
 });

@@ -12,7 +12,7 @@
 
 import {
   memo, useCallback, useContext, useEffect, useMemo, useRef, useState,
-  type ComponentProps, type ReactElement, type ReactNode,
+  type ComponentProps, type ReactNode,
 } from "react";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -123,7 +123,7 @@ import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSentAgentMessageItem, {
   ThreadAgentMessageBubble,
-  ThreadAgentMessageClaimRelease,
+  ThreadAgentMessageClaimAction,
   ThreadAgentMessageTarget,
 } from "./ThreadAgentMessageItem";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
@@ -154,9 +154,11 @@ import {
   type ThreadSubagentWaitTiming,
 } from "./thread-subagent-wait-groups";
 import {
+  groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationOutgoingMessage,
   readThreadSubagentCoordinationWait,
+  type ThreadSubagentCoordinationTarget,
 } from "./thread-subagent-coordination";
 import { createThreadTurnCompactionRenderPlan } from "./thread-turn-compaction-sections";
 import { partitionCompletedThreadWork } from "./thread-completed-work";
@@ -783,52 +785,80 @@ function getCoordinationParticipants(
   return [...participants.values()];
 }
 
-function ThreadCoordinationOutgoingMessage({
-  claimRelease,
-  item,
+function resolveCoordinationTarget(
+  target: ThreadSubagentCoordinationTarget,
+  subagents: readonly WorkbenchSubagentSummary[],
+) {
+  if (target.kind === "parent" || !target.value) return null;
+  return resolveWorkbenchSubagentCommandTargets(subagents, [{
+    kind: target.kind,
+    value: target.value,
+  }])[0] ?? null;
+}
+
+function getCoordinationTargetKey(
+  target: ThreadSubagentCoordinationTarget,
+  subagents: readonly WorkbenchSubagentSummary[],
+) {
+  return resolveCoordinationTarget(target, subagents)?.threadId
+    ?? `${target.kind}:${target.value ?? ""}`;
+}
+
+function ThreadCoordinationOutgoingChannel({
+  items,
   relatedThreadsById,
   subagents,
+  target,
   threadId,
   ...markdownProps
 }: ThreadMessageMarkdownProps & {
-  claimRelease?: ReactNode;
-  item: ThreadItem;
+  items: readonly ThreadItem[];
   relatedThreadsById: RelatedThreadsById;
   subagents: readonly WorkbenchSubagentSummary[];
+  target: ThreadSubagentCoordinationTarget;
   threadId: string;
 }) {
-  const outgoing = readThreadSubagentCoordinationOutgoingMessage(item);
-  if (!outgoing) return null;
-  const descriptor = outgoing.target.kind === "parent" || !outgoing.target.value
-    ? null
-    : {
-      kind: outgoing.target.kind === "name" ? "name" as const : "id" as const,
-      value: outgoing.target.value,
-    };
-  const target = descriptor ? resolveWorkbenchSubagentCommandTargets(subagents, [descriptor])[0] ?? null : null;
+  const resolved = resolveCoordinationTarget(target, subagents);
   const recipient = (
     <ThreadAgentMessageTarget
-      fallbackName={outgoing.target.kind === "parent" ? "parent" : target?.fallbackName ?? outgoing.target.value}
-      subagent={target?.subagent}
-      target={outgoing.target.kind === "parent"
+      fallbackName={target.kind === "parent" ? "parent" : resolved?.fallbackName ?? target.value}
+      subagent={resolved?.subagent}
+      target={target.kind === "parent"
         ? { relation: "parent", threadId }
-        : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
-      thread={target?.threadId ? relatedThreadsById[target.threadId] : undefined}
+        : resolved?.threadId ? { relation: "self", threadId: resolved.threadId } : null}
+      thread={resolved?.threadId ? relatedThreadsById[resolved.threadId] : undefined}
     />
   );
   return (
     <ThreadAgentMessageBubble recipient={recipient}>
-      <>
-        <ThreadAgentMessageBody
-          {...markdownProps}
-          parts={[{
-            markdown: outgoing.message,
-            userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion,
-          }]}
-          threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
-        />
-        {claimRelease}
-      </>
+      {items.map((item) => {
+        const outgoing = readThreadSubagentCoordinationOutgoingMessage(item);
+        if (outgoing) {
+          return (
+            <ThreadAgentMessageBody
+              {...markdownProps}
+              key={item.id}
+              parts={[{
+                markdown: outgoing.message,
+                userVisibleSimpleVersion: outgoing.userVisibleSimpleVersion,
+              }]}
+              threadCwdPath={item.type === "commandExecution" ? item.cwd : markdownProps.threadCwdPath}
+            />
+          );
+        }
+        const claimAction = readThreadSubagentCoordinationClaimAction(item);
+        return claimAction ? (
+          <ThreadAgentMessageClaimAction
+            action={claimAction.action}
+            key={item.id}
+            paths={claimAction.paths}
+            projectFilePaths={markdownProps.projectFilePaths}
+            projectId={markdownProps.projectId}
+            projectRootPath={markdownProps.projectRootPath}
+            workspaceRoots={markdownProps.workspaceRoots}
+          />
+        ) : null;
+      })}
     </ThreadAgentMessageBubble>
   );
 }
@@ -837,7 +867,6 @@ function ThreadSubagentCoordination({
   block,
   itemTimeline,
   relatedThreadsById,
-  renderClaimActionBlock,
   subagents,
   threadId,
   ...markdownProps
@@ -845,7 +874,6 @@ function ThreadSubagentCoordination({
   block: Extract<ThreadRenderableBlock, { kind: "subagentCoordination" }>;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   relatedThreadsById: RelatedThreadsById;
-  renderClaimActionBlock: (block: ThreadRenderableBlock) => ReactElement | null;
   subagents: readonly WorkbenchSubagentSummary[];
   threadId: string;
 }) {
@@ -859,6 +887,10 @@ function ThreadSubagentCoordination({
   });
   const waitGroup = waits.length ? { anchor: waits.at(-1)!, entries: waits } : null;
   const timing = waitGroup ? getThreadSubagentWaitTiming(waitGroup, itemTimeline ?? []) : null;
+  const conversation = groupThreadSubagentCoordinationConversation(
+    block.items,
+    (target) => getCoordinationTargetKey(target, subagents),
+  );
   return (
     <ThreadSubagentCoordinationItem
       active={waitGroup?.anchor.outcome === "inProgress"}
@@ -866,56 +898,29 @@ function ThreadSubagentCoordination({
       durationMs={timing?.durationMs}
       participants={getCoordinationParticipants(block.items, relatedThreadsById, subagents)}
     >
-      {block.blocks.flatMap((conversationBlock, blockIndex) => {
-        const incomingItems = conversationBlock.kind === "agentMessageSequence"
-          ? conversationBlock.items
-          : conversationBlock.kind === "subagentWaitExchange" ? conversationBlock.messages : null;
-        if (incomingItems?.length) {
-          return [(
+      {conversation.map((run) => {
+        if (run.kind === "incoming") {
+          return (
             <ThreadIncomingAgentMessageRuns
               {...markdownProps}
               itemTimeline={itemTimeline}
-              items={incomingItems}
-              key={getRenderableBlockKey(conversationBlock)}
+              items={run.items}
+              key={run.items[0]!.id}
               subagents={subagents}
             />
-          )];
+          );
         }
-        const items = getRenderableBlockItems(conversationBlock);
-        const claimAction = items.length === 1
-          ? readThreadSubagentCoordinationClaimAction(items[0]!)
-          : null;
-        if (claimAction) {
-          const previousBlock = block.blocks[blockIndex - 1];
-          const followsOutgoingMessage = claimAction.action === "release"
-            && previousBlock
-            && getRenderableBlockItems(previousBlock).some(readThreadSubagentCoordinationOutgoingMessage);
-          return followsOutgoingMessage ? [] : [renderClaimActionBlock(conversationBlock)];
-        }
-        const nextBlock = block.blocks[blockIndex + 1];
-        const nextItems = nextBlock ? getRenderableBlockItems(nextBlock) : [];
-        const nextClaimAction = nextItems.length === 1
-          ? readThreadSubagentCoordinationClaimAction(nextItems[0]!)
-          : null;
-        return items.map(item => (
-          <ThreadCoordinationOutgoingMessage
+        return (
+          <ThreadCoordinationOutgoingChannel
             {...markdownProps}
-            claimRelease={nextClaimAction?.action === "release" ? (
-              <ThreadAgentMessageClaimRelease
-                paths={nextClaimAction.paths}
-                projectFilePaths={markdownProps.projectFilePaths}
-                projectId={markdownProps.projectId}
-                projectRootPath={markdownProps.projectRootPath}
-                workspaceRoots={markdownProps.workspaceRoots}
-              />
-            ) : undefined}
-            item={item}
-            key={item.id}
+            items={run.items}
+            key={run.items[0]!.id}
             relatedThreadsById={relatedThreadsById}
             subagents={subagents}
+            target={run.target}
             threadId={threadId}
           />
-        ));
+        );
       })}
     </ThreadSubagentCoordinationItem>
   );
@@ -2231,6 +2236,21 @@ function ThreadCommandSequence ({
             outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode) as "completed" | "inProgress"}
             status={segment.status}
           />
+        ) : segment.kind === "gitArc" && readThreadSubagentCoordinationClaimAction(segment.item) ? (
+          <ThreadCoordinationOutgoingChannel
+            inlineMentionSources={inlineMentionSources}
+            items={[segment.item]}
+            key={`claim-action:${segment.item.id}`}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            target={readThreadSubagentCoordinationClaimAction(segment.item)!.target}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
         ) : segment.kind === "gitArc" || segment.kind === "message" || segment.kind === "subagent" ? (
           <ThreadCommandExecutionDetails
             activeStartedAtMs={getActiveItemStartedAtMs(segment.item, itemTimeline)}
@@ -2346,38 +2366,32 @@ function ThreadRenderableBlockViewComponent ({
         projectId={projectId}
         projectRootPath={projectRootPath}
         relatedThreadsById={relatedThreadsById}
-        renderClaimActionBlock={(claimActionBlock) => (
-          <ThreadRenderableBlockViewComponent
-            animateEntries={animateEntries}
-            block={claimActionBlock}
-            browseResultEntries={browseResultEntries}
-            finalAgentMessageId={finalAgentMessageId}
-            inlineMentionSources={inlineMentionSources}
-            isMostRecentBlock={false}
-            itemTimeline={itemTimeline}
-            knownSkills={knownSkills}
-            presentationSource={presentationSource}
-            primaryUserBlock={primaryUserBlock}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            relatedThreadsById={relatedThreadsById}
-            subagents={subagents}
-            threadCwdPath={threadCwdPath}
-            threadId={threadId}
-            turnCompletedAt={turnCompletedAt}
-            turnId={turnId}
-            turnStartedAt={turnStartedAt}
-            turnStatus={turnStatus}
-            workspaceRoots={workspaceRoots}
-          />
-        )}
         subagents={subagents}
         threadId={threadId}
         threadCwdPath={threadCwdPath}
         workspaceRoots={workspaceRoots}
       />
     );
+  }
+  if (block.kind === "item") {
+    const claimAction = readThreadSubagentCoordinationClaimAction(block.item);
+    if (claimAction) {
+      return (
+        <ThreadCoordinationOutgoingChannel
+          inlineMentionSources={inlineMentionSources}
+          items={[block.item]}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          relatedThreadsById={relatedThreadsById}
+          subagents={subagents}
+          target={claimAction.target}
+          threadCwdPath={threadCwdPath}
+          threadId={threadId}
+          workspaceRoots={workspaceRoots}
+        />
+      );
+    }
   }
   if (block.kind === "agentMessageSequence") {
     return (

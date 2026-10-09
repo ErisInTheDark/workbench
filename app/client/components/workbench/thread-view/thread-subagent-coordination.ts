@@ -4,9 +4,11 @@
  * - readThreadSubagentCoordinationOutgoingMessage: read one visible CLI or MCP outgoing message.
  * - readThreadSubagentCoordinationWait: read one CLI or MCP wait with its targets and outcome.
  * - readThreadSubagentCoordinationClaimAction: read a successful subagent-targeted claim transfer.
+ * - groupThreadSubagentCoordinationConversation: regroup uninterrupted incoming or outgoing items by subagent channel.
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread/thread-agent-message";
 import {
   getThreadCommandDisplay,
   getThreadCommandExecutionOutcome,
@@ -47,6 +49,17 @@ export interface ThreadSubagentCoordinationClaimAction {
   paths: string[];
   target: { kind: "id" | "name"; value: string };
 }
+
+export type ThreadSubagentCoordinationTarget = {
+  kind: "id" | "name" | "parent";
+  value: string | null;
+};
+
+type IncomingCoordinationItem = Extract<ThreadItem, { type: "functionCallOutput" | "userMessage" }>;
+
+export type ThreadSubagentCoordinationConversationRun =
+  | { items: IncomingCoordinationItem[]; kind: "incoming" }
+  | { items: ThreadItem[]; kind: "outgoing"; target: ThreadSubagentCoordinationTarget };
 
 function getCommandDisplay(item: Extract<ThreadItem, { type: "commandExecution" }>) {
   return getThreadCommandDisplay({
@@ -152,6 +165,60 @@ export function readThreadSubagentCoordinationClaimAction(
     paths: operation.paths,
     target: { kind: "name", value: operation.source.name },
   } : null;
+}
+
+function readOutgoingTarget(item: ThreadItem): ThreadSubagentCoordinationTarget | null {
+  const message = readThreadSubagentCoordinationOutgoingMessage(item);
+  if (message) {
+    return {
+      kind: message.target.kind === "thread" ? "id" : message.target.kind,
+      value: message.target.value,
+    };
+  }
+  return readThreadSubagentCoordinationClaimAction(item)?.target ?? null;
+}
+
+export function groupThreadSubagentCoordinationConversation(
+  items: readonly ThreadItem[],
+  getOutgoingTargetKey: (target: ThreadSubagentCoordinationTarget) => string,
+): ThreadSubagentCoordinationConversationRun[] {
+  const runs: ThreadSubagentCoordinationConversationRun[] = [];
+  let direction: "incoming" | "outgoing" | null = null;
+  let channels = new Map<string, ThreadSubagentCoordinationConversationRun>();
+  const flush = () => {
+    runs.push(...channels.values());
+    channels = new Map();
+    direction = null;
+  };
+
+  for (const item of items) {
+    const incoming = (item.type === "functionCallOutput" || item.type === "userMessage")
+      ? readWorkbenchAgentMessageItem(item)
+      : null;
+    const outgoingTarget = incoming ? null : readOutgoingTarget(item);
+    const nextDirection = incoming ? "incoming" : outgoingTarget ? "outgoing" : null;
+    if (!nextDirection) {
+      flush();
+      continue;
+    }
+    if (direction && direction !== nextDirection) flush();
+    direction = nextDirection;
+    const key = nextDirection === "incoming"
+      ? incoming!.senderThreadId
+      : getOutgoingTargetKey(outgoingTarget!);
+    const existing = channels.get(key);
+    if (existing?.kind === "incoming" && nextDirection === "incoming") {
+      existing.items.push(item as IncomingCoordinationItem);
+    } else if (existing?.kind === "outgoing" && nextDirection === "outgoing") {
+      existing.items.push(item);
+    } else if (nextDirection === "incoming") {
+      channels.set(key, { items: [item as IncomingCoordinationItem], kind: "incoming" });
+    } else {
+      channels.set(key, { items: [item], kind: "outgoing", target: outgoingTarget! });
+    }
+  }
+  flush();
+  return runs;
 }
 
 export function findThreadSubagentCoordinationSpans(

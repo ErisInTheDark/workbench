@@ -3,7 +3,7 @@
  * - default ThreadAgentMessageItem: render a sent cross-thread message as a disclosure naming the target thread button, with a left-aligned user-style bubble.
  * - ThreadAgentMessageTarget: render a sent message's resolved destination name or thread link.
  * - ThreadAgentMessageBubble: render only the sent-message bubble, optionally with destination attribution.
- * - ThreadAgentMessageClaimRelease: append a compact expandable released-file list to a sent-message bubble.
+ * - ThreadAgentMessageClaimAction: render a compact expandable release/adopt paragraph in a sent-message bubble.
  */
 "use client";
 
@@ -16,7 +16,7 @@ import { isProjectDirectoryPath } from "../../../workbench/project/project-file-
 
 import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
-import { EllipsisIcon, SquareArrowRightEnterIcon } from "../workbench-icons";
+import { EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import ThreadAgentName from "./ThreadAgentName";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
@@ -68,13 +68,15 @@ export function ThreadAgentMessageBubble({
   );
 }
 
-export function ThreadAgentMessageClaimRelease({
+export function ThreadAgentMessageClaimAction({
+  action,
   paths,
   projectFilePaths,
   projectId,
   projectRootPath,
   workspaceRoots,
 }: {
+  action: "adopt" | "release";
   paths: readonly string[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -83,11 +85,17 @@ export function ThreadAgentMessageClaimRelease({
 }) {
   const [showAll, setShowAll] = useState(false);
   const visiblePaths = showAll ? paths : paths.slice(0, 3);
-  if (!paths.length) return null;
+  const actionLabel = action === "adopt" ? "Adopted claims from subagent" : "Released claims to subagent";
+  const filesLabel = action === "adopt" ? "adopted files" : "released files";
   return (
-    <p className="m-0 mt-2 flex flex-wrap items-center gap-1.5 text-[0.78em] leading-[1.5] text-fg/muted">
+    <p
+      aria-label={actionLabel}
+      className="m-0 flex flex-wrap items-center gap-1.5 text-[0.78em] leading-[1.5] text-fg/muted"
+    >
       <span className="inline-flex shrink-0" aria-hidden="true">
-        <SquareArrowRightEnterIcon size={16} />
+        {action === "adopt"
+          ? <SquareArrowRightExitIcon className="-scale-x-100" size={16} />
+          : <SquareArrowRightEnterIcon size={16} />}
       </span>
       {visiblePaths.map((filePath) => {
         const displayPath = toWorkspaceDisplayPath(filePath, {
@@ -109,10 +117,10 @@ export function ThreadAgentMessageClaimRelease({
         <button
           type="button"
           aria-expanded={showAll}
-          aria-label={showAll ? "Show fewer released files" : "Show all released files"}
+          aria-label={showAll ? `Show fewer ${filesLabel}` : `Show all ${filesLabel}`}
           className="inline-flex size-6 items-center justify-center rounded-full text-fg/muted transition-colors hover:bg-fg/7 hover:text-text focus-visible:bg-fg/7 focus-visible:text-text focus-visible:outline-none motion-reduce:transition-none"
           onClick={() => setShowAll((current) => !current)}
-          title={showAll ? "Show fewer released files" : "Show all released files"}
+          title={showAll ? `Show fewer ${filesLabel}` : `Show all ${filesLabel}`}
         >
           <EllipsisIcon size={16} />
         </button>
