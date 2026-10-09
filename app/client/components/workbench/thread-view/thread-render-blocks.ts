@@ -57,6 +57,7 @@ import {
   readThreadSubagentCoordinationClaimAction,
   readThreadSubagentCoordinationCreate,
   readThreadSubagentCoordinationOutgoingMessage,
+  readThreadSubagentCoordinationQueueCheck,
   readThreadSubagentCoordinationWait,
   type ThreadSubagentCoordinationRole,
 } from "./thread-subagent-coordination";
@@ -333,6 +334,7 @@ function splitCoordinationCommandSequence(
   const segments = buildCommandSequenceRenderSegments({ items: block.items });
   if (!segments.some(segment => segment.kind === "message"
     || segment.kind === "subagentWait"
+    || segment.kind === "subagentQueueCheck"
     || segment.kind === "subagent" && readThreadSubagentCoordinationCreate(segment.item)
     || segment.kind === "gitArc" && readThreadSubagentCoordinationClaimAction(segment.item))) return [block];
   return segments.map(segment => {
@@ -365,6 +367,9 @@ function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentC
       itemCount: segment.group.entries.length,
       outgoing: false,
     };
+    if (segment?.kind === "subagentQueueCheck") {
+      return { incoming: false, itemCount: 1, outgoing: false };
+    }
     if (segment?.kind === "gitArc") return readThreadSubagentCoordinationClaimAction(segment.item)
       ? { incoming: false, itemCount: 1, outgoing: false }
       : null;
@@ -377,6 +382,7 @@ function getCoordinationBlockRole(block: ThreadRenderableBlock): ThreadSubagentC
   if (readThreadSubagentCoordinationOutgoingMessage(block.item)) return { incoming: false, itemCount: 1, outgoing: true };
   if (readThreadSubagentCoordinationClaimAction(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   if (readThreadSubagentCoordinationCreate(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
+  if (readThreadSubagentCoordinationQueueCheck(block.item)) return { incoming: false, itemCount: 1, outgoing: false };
   return readThreadSubagentCoordinationWait(block.item)
     ? { incoming: false, itemCount: 1, outgoing: false }
     : null;
@@ -567,6 +573,7 @@ export type CommandSequenceRenderSegment =
   | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "message" }
   | { item: CommandItem; kind: "subagent" }
+  | { item: CommandSequenceItem; kind: "subagentQueueCheck" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
   | { group: ThreadSubagentWaitRenderGroup<CommandItem>; kind: "subagentWait" }
   | { item: CommandItem; kind: "threadStatus"; status: "blocked" | "completed" }
@@ -587,6 +594,9 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     }
     if (item.type === "mcpToolCall") {
       flushWaits();
+      if (readThreadSubagentCoordinationQueueCheck(item)) {
+        flushCommands(); segments.push({ item, kind: "subagentQueueCheck" }); continue;
+      }
       if (item.status !== "completed" || item.error) { flushCommands(); segments.push({ kind: "commands", items: [item] }); }
       else commands.push(item);
       continue;
@@ -617,6 +627,9 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     if (gitArcAction) { flushCommands(); flushWaits(); segments.push({ action: gitArcAction, kind: "gitArc", item }); continue; }
     const message = parseWorkbenchMessageCommand(display.unwrappedCommand, item.commandActions);
     if (message) { flushCommands(); flushWaits(); segments.push({ kind: "message", item }); continue; }
+    if (readThreadSubagentCoordinationQueueCheck(item)) {
+      flushCommands(); flushWaits(); segments.push({ item, kind: "subagentQueueCheck" }); continue;
+    }
     const subagent = parseWorkbenchSubagentCommand(display.unwrappedCommand, item.commandActions);
     if (subagent?.action === "wait" && subagent.targets.length) {
       flushCommands();

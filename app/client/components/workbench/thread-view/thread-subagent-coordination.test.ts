@@ -10,6 +10,7 @@ import {
   findThreadSubagentCoordinationSpans,
   groupThreadSubagentCoordinationConversation,
   readThreadSubagentCoordinationClaimAction,
+  readThreadSubagentCoordinationQueueCheck,
   type ThreadSubagentCoordinationRole,
 } from "./thread-subagent-coordination";
 
@@ -181,6 +182,50 @@ test("subagent creation stays visible as a boundary inside the coordination conv
   })), [
     { ids: ["to-luna"], kind: "outgoing" },
     { ids: ["create"], kind: "create" },
+    { ids: ["to-luna-again"], kind: "outgoing" },
+  ]);
+});
+
+test("read-only queue checks are coordination boundaries without admitting queue mutations", () => {
+  const check = mcp("check", "subagent_queue", { queue: "machine" });
+  const cliCheck = {
+    aggregatedOutput: "",
+    command: "wb subagent queue machine",
+    commandActions: [],
+    cwd: "C:/repo",
+    durationMs: 1,
+    exitCode: 0,
+    id: "cli-check",
+    pluginId: null,
+    processId: null,
+    scriptPath: null,
+    source: "agent",
+    status: "completed",
+    type: "commandExecution",
+  } as const satisfies Extract<ThreadItem, { type: "commandExecution" }>;
+  assert.deepEqual(readThreadSubagentCoordinationQueueCheck(check), {
+    item: check,
+    queue: "machine",
+  });
+  assert.deepEqual(readThreadSubagentCoordinationQueueCheck(cliCheck), {
+    item: cliCheck,
+    queue: "machine",
+  });
+  assert.equal(readThreadSubagentCoordinationQueueCheck(
+    mcp("join", "subagent_queue", { description: "tests", queue: "machine" }),
+  ), null);
+
+  const runs = groupThreadSubagentCoordinationConversation([
+    mcp("to-luna", "message", { message: "prepare", name: "luna" }),
+    check,
+    mcp("to-luna-again", "message", { message: "continue", name: "luna" }),
+  ], (target) => `${target.kind}:${target.value ?? ""}`);
+  assert.deepEqual(runs.map((run) => ({
+    ids: run.items.map((item) => item.id),
+    kind: run.kind,
+  })), [
+    { ids: ["to-luna"], kind: "outgoing" },
+    { ids: ["check"], kind: "queueCheck" },
     { ids: ["to-luna-again"], kind: "outgoing" },
   ]);
 });

@@ -275,6 +275,18 @@ test("three one-way coordination items fold while shorter and held-message runs 
   ]);
 });
 
+test("read-only queue checks count toward subagent coordination", () => {
+  const blocks = buildRenderableBlocks([
+    mcp("queue-one", "subagent_queue", { queue: "machine" }),
+    mcp("queue-two", "subagent_queue", { queue: "machine" }),
+    mcp("queue-three", "subagent_queue", { queue: "machine" }),
+  ]);
+
+  assert.deepEqual(blocks.map(blockShape), [[
+    "subagentCoordination", ["queue-one", "queue-two", "queue-three"],
+  ]]);
+});
+
 test("subagent claim transfers join adjacent coordination runs without absorbing ordinary arc actions", () => {
   const release = { ...mcp("release", "git_arc_release", { paths: ["src/one.ts"], toSubagent: "Iris" }), server: "wbex" };
   const adopt = { ...mcp("adopt", "git_arc_adopt", { name: "Iris", paths: ["src/two.ts"] }), server: "wbex" };

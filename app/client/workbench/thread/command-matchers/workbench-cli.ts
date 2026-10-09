@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchMessageCommand/parseWorkbenchMessageCommand: parse canonical and legacy global thread messages.
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, and ordered id/name targets.
+ * - WorkbenchSubagentQueueCheckCommand/parseWorkbenchSubagentQueueCheckCommand: parse an exact read-only queue check.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
@@ -29,6 +30,10 @@ export interface WorkbenchSubagentCommand {
   targets: WorkbenchSubagentCommandTarget[];
   title: string | null;
   userVisibleSimpleVersion?: string;
+}
+
+export interface WorkbenchSubagentQueueCheckCommand {
+  queue: string;
 }
 
 export interface WorkbenchMessageCommand {
@@ -168,6 +173,28 @@ export function parseWorkbenchSubagentCommand(
     }
   }
   return parseSingleWorkbenchSubagentCommand(command);
+}
+
+function parseSingleWorkbenchSubagentQueueCheckCommand(command: string): WorkbenchSubagentQueueCheckCommand | null {
+  const tokens = tokenizeCommand(command.trim());
+  if (tokens?.length !== 4
+    || !/^wb(?:\.cmd)?$/iu.test(tokens[0]!)
+    || tokens[1]?.toLocaleLowerCase() !== "subagent"
+    || tokens[2]?.toLocaleLowerCase() !== "queue"
+    || !tokens[3]
+    || tokens[3].startsWith("-")) return null;
+  return { queue: tokens[3] };
+}
+
+export function parseWorkbenchSubagentQueueCheckCommand(
+  command: string,
+  commandActions: readonly CommandAction[] = [],
+): WorkbenchSubagentQueueCheckCommand | null {
+  for (const action of commandActions) {
+    const parsedAction = parseSingleWorkbenchSubagentQueueCheckCommand(action.command);
+    if (parsedAction) return parsedAction;
+  }
+  return parseSingleWorkbenchSubagentQueueCheckCommand(command);
 }
 
 function parseSingleWorkbenchMessageCommand(command: string): WorkbenchMessageCommand | null {
@@ -425,6 +452,15 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         : command.target.kind === "name" ? "subagent"
           : "thread";
       return semanticMatcherResult(`Messaging ${target}`, `Messaged ${target}`);
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.subagent-queue-check",
+    match: ({ stage }) => {
+      const command = parseSingleWorkbenchSubagentQueueCheckCommand(stage.text);
+      return command
+        ? getWorkbenchCommandRendering("subagent_queue", { queue: command.queue })?.result ?? null
+        : null;
     },
   }),
   CommandMatcher({

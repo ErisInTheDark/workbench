@@ -537,7 +537,8 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
 }
 
 function renderSubagentQueue(action: "queue" | "dequeue", args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
-  const queue = `queue ${readString(args.queue) ?? ""}`.trim();
+  const queueName = readString(args.queue) ?? "";
+  const queue = `queue ${queueName}`.trim();
   const member = readString(args.name);
   if (action === "dequeue") {
     return member
@@ -547,7 +548,11 @@ function renderSubagentQueue(action: "queue" | "dequeue", args: { [key: string]:
   if (member) return simple("workbench-cli.subagent", actionTarget(`Moving ${member} in `, queue), actionTarget(`Moved ${member} in `, queue));
   return readString(args.description) || readString(args.after) || readString(args.before)
     ? simple("workbench-cli.subagent", actionTarget("Waiting for ", queue), actionTarget("Joined ", queue))
-    : simple("workbench-cli.subagent", actionTarget("Reading ", queue), actionTarget("Read ", queue));
+    : simple(
+      "workbench-cli.subagent",
+      [CommandMatcher.Text("Checking "), CommandMatcher.Code(queueName), CommandMatcher.Text(" queue")],
+      [CommandMatcher.Text("Checked "), CommandMatcher.Code(queueName), CommandMatcher.Text(" queue")],
+    );
 }
 
 function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {

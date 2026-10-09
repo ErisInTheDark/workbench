@@ -5,7 +5,8 @@
  * - readThreadSubagentCoordinationWait: read one CLI or MCP wait with its targets and outcome.
  * - readThreadSubagentCoordinationClaimAction: read a successful subagent-targeted claim transfer.
  * - readThreadSubagentCoordinationCreate: read one visible successful or active subagent creation.
- * - groupThreadSubagentCoordinationConversation: regroup uninterrupted incoming or outgoing items by subagent channel.
+ * - readThreadSubagentCoordinationQueueCheck: read one visible read-only CLI or MCP queue check.
+ * - groupThreadSubagentCoordinationConversation: regroup message channels around create and queue-check boundaries.
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -21,7 +22,10 @@ import {
   type CommandShell,
   type ThreadCommandExecutionOutcome,
 } from "../../../workbench/thread/thread-command-matchers";
-import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
+import {
+  parseWorkbenchSubagentQueueCheckCommand,
+  type WorkbenchSubagentCommandTarget,
+} from "../../../workbench/thread/command-matchers/workbench-cli";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
 
 export interface ThreadSubagentCoordinationRole {
@@ -38,6 +42,7 @@ export interface ThreadSubagentCoordinationOutgoingMessage {
 
 type CoordinationWaitItem = Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
 type CoordinationCreateItem = Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
+type CoordinationQueueCheckItem = Extract<ThreadItem, { type: "commandExecution" | "mcpToolCall" }>;
 
 export interface ThreadSubagentCoordinationWait {
   item: CoordinationWaitItem;
@@ -57,6 +62,11 @@ export interface ThreadSubagentCoordinationCreate {
   name: string;
 }
 
+export interface ThreadSubagentCoordinationQueueCheck {
+  item: CoordinationQueueCheckItem;
+  queue: string;
+}
+
 export type ThreadSubagentCoordinationTarget = {
   kind: "id" | "name" | "parent";
   value: string | null;
@@ -67,6 +77,7 @@ type IncomingCoordinationItem = Extract<ThreadItem, { type: "functionCallOutput"
 export type ThreadSubagentCoordinationConversationRun =
   | { items: IncomingCoordinationItem[]; kind: "incoming" }
   | { items: [CoordinationCreateItem]; kind: "create" }
+  | { items: [CoordinationQueueCheckItem]; kind: "queueCheck" }
   | { items: ThreadItem[]; kind: "outgoing"; target: ThreadSubagentCoordinationTarget };
 
 function getCommandDisplay(item: Extract<ThreadItem, { type: "commandExecution" }>) {
@@ -164,6 +175,35 @@ export function readThreadSubagentCoordinationCreate(
     : null;
 }
 
+export function readThreadSubagentCoordinationQueueCheck(
+  item: ThreadItem,
+): ThreadSubagentCoordinationQueueCheck | null {
+  if (item.type === "commandExecution") {
+    const outcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
+    if (outcome !== "completed" && outcome !== "inProgress") return null;
+    const operation = parseWorkbenchSubagentQueueCheckCommand(
+      getCommandDisplay(item).unwrappedCommand,
+      item.commandActions,
+    );
+    return operation ? { item, queue: operation.queue } : null;
+  }
+  if (item.type !== "mcpToolCall" || item.status === "failed" || item.error || item.tool !== "subagent_queue") {
+    return null;
+  }
+  const route = getWorkbenchMcpCommandRoute({
+    argumentsValue: item.arguments,
+    server: item.server,
+    tool: item.tool,
+  });
+  const args = item.arguments;
+  if (!route || !args || typeof args !== "object" || Array.isArray(args)) return null;
+  const queue = typeof args.queue === "string" ? args.queue.trim() : "";
+  const mutation = ["description", "after", "before", "name"].some((key) => (
+    typeof args[key] === "string" && args[key].trim()
+  ));
+  return queue && !mutation ? { item, queue } : null;
+}
+
 export function readThreadSubagentCoordinationClaimAction(
   item: ThreadItem,
 ): ThreadSubagentCoordinationClaimAction | null {
@@ -237,6 +277,12 @@ export function groupThreadSubagentCoordinationConversation(
     if (create) {
       flush();
       runs.push({ items: [create.item], kind: "create" });
+      continue;
+    }
+    const queueCheck = readThreadSubagentCoordinationQueueCheck(item);
+    if (queueCheck) {
+      flush();
+      runs.push({ items: [queueCheck.item], kind: "queueCheck" });
       continue;
     }
     const incoming = (item.type === "functionCallOutput" || item.type === "userMessage")

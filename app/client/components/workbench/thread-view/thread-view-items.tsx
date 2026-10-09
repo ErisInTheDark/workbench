@@ -931,6 +931,7 @@ function ThreadCoordinationCreate({
 
 function ThreadSubagentCoordination({
   block,
+  isMostRecent,
   itemTimeline,
   knownSkills,
   relatedThreadsById,
@@ -939,6 +940,7 @@ function ThreadSubagentCoordination({
   ...markdownProps
 }: ThreadMessageMarkdownProps & {
   block: Extract<ThreadRenderableBlock, { kind: "subagentCoordination" }>;
+  isMostRecent: boolean;
   itemTimeline?: readonly WorkbenchThreadItemTimelineEntry[];
   knownSkills?: WorkbenchSkillSummary[];
   relatedThreadsById: RelatedThreadsById;
@@ -989,6 +991,26 @@ function ThreadSubagentCoordination({
               relatedThreadsById={relatedThreadsById}
               subagents={subagents}
               threadId={threadId}
+            />
+          );
+        }
+        if (run.kind === "queueCheck") {
+          return (
+            <ThreadRegularCommandItem
+              inlineMentionSources={markdownProps.inlineMentionSources}
+              isMostRecent={isMostRecent && block.items.at(-1)?.id === run.items[0].id}
+              item={run.items[0]}
+              itemTimeline={itemTimeline}
+              key={run.items[0].id}
+              knownSkills={knownSkills}
+              projectFilePaths={markdownProps.projectFilePaths}
+              projectId={markdownProps.projectId}
+              projectRootPath={markdownProps.projectRootPath}
+              relatedThreadsById={relatedThreadsById}
+              subagents={subagents}
+              threadCwdPath={markdownProps.threadCwdPath}
+              threadId={threadId}
+              workspaceRoots={markdownProps.workspaceRoots}
             />
           );
         }
@@ -2356,6 +2378,24 @@ function ThreadCommandSequence ({
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
+        ) : segment.kind === "subagentQueueCheck" ? (
+          <ThreadRegularCommandItem
+            browseResultEntries={browseResultEntries}
+            inlineMentionSources={inlineMentionSources}
+            isMostRecent={isMostRecent && index === renderSegments.length - 1}
+            item={segment.item}
+            itemTimeline={itemTimeline}
+            key={`subagent-queue-check:${segment.item.id}`}
+            knownSkills={knownSkills}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            relatedThreadsById={relatedThreadsById}
+            subagents={subagents}
+            threadCwdPath={threadCwdPath}
+            threadId={threadId}
+            workspaceRoots={workspaceRoots}
+          />
         ) : segment.kind === "subagentWait" ? (
           <ThreadCommandExecutionDetails
             browseResultEntries={browseResultEntries}
@@ -2450,6 +2490,7 @@ function ThreadRenderableBlockViewComponent ({
         block={block}
         inlineMentionSources={inlineMentionSources}
         itemTimeline={itemTimeline}
+        isMostRecent={isMostRecentBlock}
         knownSkills={knownSkills}
         projectFilePaths={projectFilePaths}
         projectId={projectId}

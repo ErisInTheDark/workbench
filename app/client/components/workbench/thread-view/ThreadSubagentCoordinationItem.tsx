@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadSubagentCoordinationItem: render one two-way subagent coordination disclosure.
+ * - default ThreadSubagentCoordinationItem: render one qualifying subagent coordination disclosure.
  */
 "use client";
 
@@ -32,7 +32,7 @@ export default function ThreadSubagentCoordinationItem({
       summary={(
         <span>
           {active ? "Coordinating with " : "Coordinated with "}
-          {participants.map((participant, index) => (
+          {participants.length ? participants.map((participant, index) => (
             <Fragment key={participant.key}>
               {index === 0
                 ? null
@@ -41,7 +41,7 @@ export default function ThreadSubagentCoordinationItem({
                   : ", "}
               {participant.label}
             </Fragment>
-          ))}
+          )) : "subagents"}
           {visibleDurationMs !== null && visibleDurationMs !== undefined ? (
             <span className="ml-2 text-[0.84em] text-fg/muted">
               <ThreadDurationText durationMs={visibleDurationMs} />
