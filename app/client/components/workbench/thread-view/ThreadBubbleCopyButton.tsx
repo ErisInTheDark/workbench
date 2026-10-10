@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - threadBubbleControlClassName: shared look for icon buttons in a bubble's hover row.
- * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback, followed by optional extra bubble actions; the row shows on hover/focus, or always when persistent.
+ * - default ThreadBubbleCopyButton: copy the explicit source Markdown of one aligned user bubble with shared feedback, followed by optional extra bubble actions; the row shows on hover/focus, or always on coarse touch when touchVisible.
  */
 "use client";
 
@@ -22,15 +22,15 @@ export const threadBubbleControlClassName = [
 export default function ThreadBubbleCopyButton({
   actions,
   markdown,
-  persistent = false,
   side,
+  touchVisible = false,
 }: {
   /** Extra icon buttons shown in the same hover row, after copy; a `role="alert"` child keeps the row visible. */
   actions?: ReactNode;
   markdown: string;
-  /** Keeps the row visible without hover or focus, for actions that must stay findable on touch, like stopping a command. */
-  persistent?: boolean;
   side: "left" | "right";
+  /** Keeps the row visible on coarse touch, where hover cannot reveal it, for actions that must stay findable like stopping a command. */
+  touchVisible?: boolean;
 }) {
   const unregisterRef = useRef<(() => void) | null>(null);
   const setButtonRef = useCallback((button: HTMLButtonElement | null) => {
@@ -64,7 +64,7 @@ export default function ThreadBubbleCopyButton({
         "group-focus-within/thread-bubble:translate-y-[calc(-50%-0.125rem)] group-focus-within/thread-bubble:opacity-100 group-focus-within/thread-bubble:pointer-events-auto",
         // An action failure stays readable after the pointer leaves.
         "has-[[role=alert]]:(opacity-100 pointer-events-auto)",
-        persistent ? "opacity-100 pointer-events-auto" : "",
+        touchVisible ? "coarse-touch:(opacity-100 pointer-events-auto)" : "",
         "motion-reduce:!translate-x-0 motion-reduce:!translate-y-[-50%] motion-reduce:transition-opacity",
       ].join(" ")}
       data-thread-bubble-controls={side}

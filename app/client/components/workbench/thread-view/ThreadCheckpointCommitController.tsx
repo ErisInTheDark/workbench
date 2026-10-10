@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its presentation inputs.
- * - default ThreadCheckpointCommitController: demand near-visible proposal state (showing the observed summary until it loads), own edit and commit actions, and register commit-all readiness.
+ * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed summary until it loads; unobserved surfaces read for themselves), own edit and commit actions, and register commit-all readiness.
  */
 "use client";
 
@@ -27,7 +27,7 @@ import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
-import type { ThreadGitArcProposalObservation } from "../../../workbench/thread/ThreadGitArcProposalObserver";
+import type { ThreadGitArcProposalObservation, ThreadGitArcProposalVariant } from "../../../workbench/thread/ThreadGitArcProposalObserver";
 
 export interface ThreadCheckpointCommitControllerProps {
   cwd: string | null;
@@ -65,7 +65,7 @@ function ThreadCheckpointCommitController({
   cwd: string;
   harness: WorkbenchHarness;
   isProposalObserved: boolean;
-  observeProposal: ((proposalId: string) => () => void) | null;
+  observeProposal: ((proposalId: string, variant?: ThreadGitArcProposalVariant) => () => void) | null;
   proposalObservation: ThreadGitArcProposalObservation | null;
   /** The observed lifecycle's summary: shown while the full proposal hydrates, instead of skeletons. */
   proposalSummary: WorkbenchGitArcProposalSummary | null;
@@ -268,30 +268,41 @@ function ThreadCheckpointCommitController({
     }
   }, [acceptProposal, cwd, daemon, harness, hydratingState, includeNewer, includeUnclaimed, proposalId, threadId]);
 
+  // Including newer work or unclaimed dirt is its own observed read, demanded while chosen.
+  const variantActive = includeNewer || includeUnclaimed;
+  const variantObservation = useThreadGitArcProposalObservation(variantActive ? proposalId : null, { includeNewer, includeUnclaimed }).state;
   useEffect(() => {
-    if (!isProposalObserved || includeNewer || includeUnclaimed) return;
+    if (!isProposalObserved || !variantActive || !proposalId || !observeProposal) return;
+    return observeProposal(proposalId, { includeNewer, includeUnclaimed });
+  }, [includeNewer, includeUnclaimed, isProposalObserved, observeProposal, proposalId, variantActive]);
+
+  useEffect(() => {
+    if (!isProposalObserved) return;
     if (!proposalId) {
       setState({ status: "idle" });
       return;
     }
-    if (!proposalObservation || proposalObservation.status === "loading") {
-      setState(hydratingState());
+    const observation = variantActive ? variantObservation : proposalObservation;
+    if (!observation || observation.status === "loading") {
+      // A changed inclusion keeps showing the loaded card until its own read lands.
+      setState(current => variantActive && current.status === "loaded" ? current : hydratingState());
       return;
     }
-    if (proposalObservation.status === "failed") {
+    if (observation.status === "failed") {
       setState({
-        error: proposalObservation.error,
-        failure: proposalObservation.failure,
+        error: observation.error,
+        failure: observation.failure,
         retryable: true,
         status: "error",
       });
       return;
     }
-    acceptProposal(proposalObservation.proposal);
-  }, [acceptProposal, hydratingState, includeNewer, includeUnclaimed, isProposalObserved, proposalId, proposalObservation]);
+    acceptProposal(observation.proposal);
+  }, [acceptProposal, hydratingState, isProposalObserved, proposalId, proposalObservation, variantActive, variantObservation]);
 
+  // Surfaces outside an observing thread read for themselves.
   useEffect(() => {
-    if (isProposalObserved && !includeNewer && !includeUnclaimed) return;
+    if (isProposalObserved) return;
     if (!proposalId) {
       setState({ status: "idle" });
       return;

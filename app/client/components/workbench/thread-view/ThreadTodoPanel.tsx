@@ -1,17 +1,16 @@
 /*
  * Exports:
- * - default ThreadTodoPanel: a thread's goal and todos; text edits in place, todos can be picked for the next message, marked required or removed, and a trailing blank row becomes a new todo once it holds text.
+ * - default ThreadTodoPanel: a thread's goal and todos as always-live plain-text fields; todos can be picked for the next message, marked required or removed, and a trailing blank row becomes a new todo once it holds text.
  */
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { WORKBENCH_THREAD_GOAL_MAX_LENGTH, type WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
 import { WORKBENCH_THREAD_TODO_MAX_LENGTH, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import IconButton from "../../ui/IconButton";
 import { AsteriskIcon, AsteriskOffIcon, FlagFilledIcon, FlagIcon, XIcon } from "../workbench-icons";
 import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
-import MarkdownRender from "../../ui/MarkdownRender";
 import type { ThreadTodoSelection } from "./use-thread-todo-selection";
 
 const rowClassName = "group/row flex min-w-0 items-start gap-1 rounded-[0.6rem] px-1 transition-colors";
@@ -23,7 +22,7 @@ const serialClassName = "text-[0.72em] font-semibold tabular-nums";
 const revealClassName = "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 coarse-touch:opacity-100";
 
 /** Plain text field: Enter or leaving commits, Escape reverts. */
-function InlineField ({ ariaLabel, autoFocus, draft, onCommit, onDraft, onEnter, onRevert, placeholder }: {
+function InlineField ({ ariaLabel, autoFocus, draft, onCommit, onDraft, onEnter, onFocus, onRevert, placeholder }: {
   ariaLabel: string;
   autoFocus?: boolean;
   draft: string;
@@ -32,12 +31,13 @@ function InlineField ({ ariaLabel, autoFocus, draft, onCommit, onDraft, onEnter,
   onDraft: (text: string) => void;
   /** Replaces leaving the field on Enter. */
   onEnter?: () => void;
+  onFocus?: () => void;
   onRevert: () => void;
   placeholder: string;
 }) {
   const reverting = useRef(false);
   return (
-    <div className="min-w-0 flex-1">
+    <div className="min-w-0 flex-1" onFocus={onFocus}>
       <PlaintextEditable
         ariaLabel={ariaLabel}
         autoFocus={autoFocus}
@@ -67,77 +67,64 @@ function InlineField ({ ariaLabel, autoFocus, draft, onCommit, onDraft, onEnter,
   );
 }
 
-/** Rendered text that turns into its editor when clicked. */
-function EditableText ({ ariaLabel, children, onSave, placeholder, value }: {
+/** A stored value that is always its own editor, so focusing never swaps layout; leaving saves a changed, trimmed value. */
+function LiveTextField ({ ariaLabel, onSave, placeholder, value }: {
   ariaLabel: string;
-  children: ReactNode;
   onSave: (text: string) => void;
   placeholder: string;
   value: string;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  if (draft === null) {
-    return (
-      <button
-        aria-label={`Edit ${ariaLabel.toLowerCase()}`}
-        className={`${textClassName} cursor-text text-left [overflow-wrap:anywhere] focus-visible:outline-none`}
-        onClick={(event) => {
-          // Links inside the text keep working.
-          if (event.target instanceof Element && event.target.closest("a")) return;
-          setDraft(value);
-        }}
-        type="button"
-      >
-        {value ? children : <span className="text-fg/muted">{placeholder}</span>}
-      </button>
-    );
-  }
+  const [draft, setDraft] = useState(value);
+  const [focused, setFocused] = useState(false);
+  // Observed changes replace the draft only while it is not being edited.
+  useEffect(() => { if (!focused) setDraft(value); }, [focused, value]);
   return (
     <InlineField
       ariaLabel={ariaLabel}
-      autoFocus
       draft={draft}
       onCommit={() => {
-        setDraft(null);
-        if (draft.trim() !== value.trim()) onSave(draft.trim());
+        setFocused(false);
+        const text = draft.trim();
+        if (text !== value.trim()) onSave(text);
       }}
       onDraft={setDraft}
-      onRevert={() => setDraft(null)}
+      onFocus={() => setFocused(true)}
+      onRevert={() => {
+        setFocused(false);
+        setDraft(value);
+      }}
       placeholder={placeholder}
     />
   );
 }
 
-function RowButtons ({ disabled = false, onRemove, onToggleRequired, removeLabel, required }: {
-  disabled?: boolean;
+function RowButtons ({ onRemove, onToggleRequired, removeLabel, required }: {
   onRemove: () => void;
   onToggleRequired: () => void;
   removeLabel: string;
   required: boolean;
 }) {
   return (
-    <span className="flex shrink-0 items-center py-0.5">
+    <span className="flex shrink-0 items-center">
       <IconButton
         aria-pressed={required}
-        className={required || disabled ? "" : revealClassName}
-        disabled={disabled}
+        className={required ? "" : revealClassName}
         display="hover-border"
         label={required ? "Required" : "Optional"}
         onClick={onToggleRequired}
-        size="compact"
+        size="small"
       >
-        {required ? <AsteriskIcon size={14} /> : <AsteriskOffIcon size={14} />}
+        {required ? <AsteriskIcon size={16} /> : <AsteriskOffIcon size={16} />}
       </IconButton>
       <IconButton
-        className={disabled ? "" : revealClassName}
-        disabled={disabled}
+        className={revealClassName}
         display="hover-border"
         label={removeLabel}
         onClick={onRemove}
-        size="compact"
+        size="small"
         tone="danger"
       >
-        <XIcon size={14} />
+        <XIcon size={16} />
       </IconButton>
     </span>
   );
@@ -167,11 +154,8 @@ export default function ThreadTodoPanel ({
   onSetTodoText: (id: number, text: string) => Promise<void>;
 }) {
   const [error, setError] = useState("");
-  const [goalDraft, setGoalDraft] = useState(goal?.objective ?? "");
-  const [goalFocused, setGoalFocused] = useState(false);
-  const [blank, setBlank] = useState({ key: 0, text: "", required: false, refocus: false });
+  const [blank, setBlank] = useState({ key: 0, text: "", refocus: false });
   const nextNumber = todos.reduce((highest, todo) => Math.max(highest, todo.id), 0) + 1;
-  useEffect(() => { if (!goalFocused) setGoalDraft(goal?.objective ?? ""); }, [goal?.objective, goalFocused]);
 
   const run = (operation: () => Promise<void>, fallback: string) => {
     setError("");
@@ -186,35 +170,26 @@ export default function ThreadTodoPanel ({
   const commitBlank = (refocus: boolean) => {
     const text = blank.text.trim();
     if (!text || tooLong(text, WORKBENCH_THREAD_TODO_MAX_LENGTH)) return;
-    const { required } = blank;
-    setBlank(current => ({ key: current.key + 1, text: "", required: false, refocus }));
-    run(() => onAddTodo(text, required), "Unable to add the todo.");
+    setBlank(current => ({ key: current.key + 1, text: "", refocus }));
+    run(() => onAddTodo(text, false), "Unable to add the todo.");
   };
-  const clearBlank = () => setBlank(current => ({ ...current, text: "", required: false }));
+  const clearBlank = () => setBlank(current => ({ ...current, text: "" }));
 
   return (
     <div className="space-y-1 px-2 py-2">
-      {/* The goal is always a live field: focus edits it, leaving saves it, emptying clears it. */}
-      <div className={`${rowClassName} focus-within:bg-fg/5`} onFocus={() => setGoalFocused(true)}>
+      {/* Emptying the goal clears it. */}
+      <div className={`${rowClassName} focus-within:bg-fg/5`}>
         <span aria-hidden="true" className={`${markerClassName} ${goal ? "text-text" : ""}`}>
           {goal ? <FlagFilledIcon size={14} /> : <FlagIcon size={14} />}
         </span>
-        <InlineField
+        <LiveTextField
           ariaLabel="Goal"
-          draft={goalDraft}
-          onCommit={() => {
-            setGoalFocused(false);
-            const text = goalDraft.trim();
-            if (text === (goal?.objective ?? "")) return;
+          onSave={(text) => {
             if (!text) run(onClearGoal, "Unable to clear the goal.");
             else if (!tooLong(text, WORKBENCH_THREAD_GOAL_MAX_LENGTH)) run(() => onSetGoal(text), "Unable to save the goal.");
           }}
-          onDraft={setGoalDraft}
-          onRevert={() => {
-            setGoalFocused(false);
-            setGoalDraft(goal?.objective ?? "");
-          }}
           placeholder="Add a persistent goal across context compactions and turns"
+          value={goal?.objective ?? ""}
         />
       </div>
       <ul aria-label="Todos" className="m-0 list-none space-y-0.5 p-0">
@@ -241,7 +216,7 @@ export default function ThreadTodoPanel ({
               >
                 <span className={serialClassName}>#{todo.id}</span>
               </button>
-              <EditableText
+              <LiveTextField
                 ariaLabel={`Todo ${todo.id}`}
                 onSave={(text) => {
                   if (!text) run(() => onRemoveTodo(todo.id), "Unable to remove the todo.");
@@ -249,9 +224,7 @@ export default function ThreadTodoPanel ({
                 }}
                 placeholder="Todo"
                 value={todo.text}
-              >
-                <MarkdownRender markdown={todo.text} />
-              </EditableText>
+              />
               <RowButtons
                 onRemove={() => run(() => onRemoveTodo(todo.id), "Unable to remove the todo.")}
                 onToggleRequired={() => run(() => onSetTodoRequired(todo.id, !todo.required), "Unable to update the todo.")}
@@ -264,7 +237,7 @@ export default function ThreadTodoPanel ({
         <li
           className={`${rowClassName} focus-within:bg-fg/5`}
           key={`new-${blank.key}`}
-          // Its own buttons keep the row in progress; leaving the whole row commits it.
+          // Leaving the row commits it.
           onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) commitBlank(false); }}
         >
           <span aria-hidden="true" className={`${markerClassName} opacity-60`}><span className={serialClassName}>#{nextNumber}</span></span>
@@ -277,13 +250,6 @@ export default function ThreadTodoPanel ({
             onEnter={() => commitBlank(true)}
             onRevert={clearBlank}
             placeholder="Add a new todo"
-          />
-          <RowButtons
-            disabled={!blank.text.trim()}
-            onRemove={clearBlank}
-            onToggleRequired={() => setBlank(current => ({ ...current, required: !current.required }))}
-            removeLabel="Discard new todo"
-            required={blank.required}
           />
         </li>
       </ul>

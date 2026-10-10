@@ -30,7 +30,8 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
-import type { ThreadGitArcProposalObservation } from "./ThreadGitArcProposalObserver";
+import type { ThreadGitArcClaimObservation } from "./ThreadGitArcClaimObserver";
+import type { ThreadGitArcProposalObservation, ThreadGitArcProposalVariant } from "./ThreadGitArcProposalObserver";
 
 export type ThreadHead = ThreadHeadFields & ({ id: DraftId; isDraft: true } | { id: WorkbenchThreadId; isDraft: false });
 
@@ -70,7 +71,10 @@ export interface ThreadSummarySlice {
   entry: ThreadEntry | null;
   subagents: WorkbenchSubagentSummary[];
   rateLimits: WorkbenchRateLimitSnapshot | null;
+  /** Demanded proposal reads, by `getThreadGitArcProposalObservationKey`. */
   gitArcProposals: Record<string, ThreadGitArcProposalObservation>;
+  /** The demanded active claim's change state; null while nothing demands it or no stopped active claim exists. */
+  gitArcClaimChanges: ThreadGitArcClaimObservation | null;
   /** Child heads by thread id, for subagent tab labels and linked items. */
   relatedHeads: Record<string, ThreadHead>;
   /** Drafts only: the local draft document the app launches a thread from on first send. */
@@ -135,8 +139,12 @@ export interface ThreadStoreActions {
   changeSettings(value: Parameters<WorkbenchControls["setCurrentThreadComposerSettings"]>[1]): void;
   /** Loads one older turn window; resolves with the newly loaded turn ids, or null when nothing loaded. */
   loadOlder(): Promise<readonly string[] | null>;
-  /** Demands one Git arc proposal card until released. */
-  observeGitArcProposal(proposalId: string): () => void;
+  /** Demands one Git arc proposal card, or one read variant of it, until released. */
+  observeGitArcProposal(proposalId: string, variant?: ThreadGitArcProposalVariant): () => void;
+  /** Demands the active claim's change state until released. */
+  observeGitArcClaimChanges(): () => void;
+  /** Re-reads the active claim's change state, such as after reverting its files. */
+  refreshGitArcClaimChanges(): void;
   setGoal(objective: string): Promise<void>;
   clearGoal(): Promise<void>;
   deactivateSkill(path: string): Promise<void>;
@@ -163,7 +171,7 @@ export interface ThreadStoreSource {
 export const EMPTY_THREAD_STORE_STATE: ThreadStoreState = {
   summary: {
     status: "loading", error: null, head: null, entry: null, subagents: [], rateLimits: null,
-    gitArcProposals: {}, relatedHeads: {}, draftDocument: null,
+    gitArcProposals: {}, gitArcClaimChanges: null, relatedHeads: {}, draftDocument: null,
   },
   turns: { transcript: { status: "idle" }, turns: NO_TURNS, canLoadOlder: false, liveTurnId: null },
   questionnaire: { pending: null },

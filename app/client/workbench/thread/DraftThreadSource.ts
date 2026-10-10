@@ -69,6 +69,8 @@ export default function createDraftThreadSource(
       changeSettings: value => ports.controls.setCurrentThreadComposerSettings(ports.draftId, value),
       loadOlder: async () => null,
       observeGitArcProposal: () => () => {},
+      observeGitArcClaimChanges: () => () => {},
+      refreshGitArcClaimChanges: () => {},
       setGoal: unsupported("set a goal"),
       clearGoal: unsupported("clear a goal"),
       deactivateSkill: unsupported("deactivate a skill"),

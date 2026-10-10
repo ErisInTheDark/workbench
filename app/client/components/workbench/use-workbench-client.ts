@@ -289,8 +289,10 @@ export function useWorkbenchThreadTextPresentationField(
   return useSyncExternalStore(subscribe, getSnapshot, () => canonicalText);
 }
 
+/** Chrome-free surfaces have no Workbench client; they read no sidebar rather than failing to render. */
 function useWorkbenchThreadSidebarStore(explicitClient?: WorkbenchClientController) {
-  return useWorkbenchClientController(explicitClient).mounted?.threadSidebar ?? null;
+  const providedClient = useContext(WorkbenchClientContext);
+  return (explicitClient ?? providedClient)?.mounted?.threadSidebar ?? null;
 }
 
 export function useWorkbenchProjectThreadSidebar(projectId: ProjectId | "" | null | undefined, explicitClient?: WorkbenchClientController) {

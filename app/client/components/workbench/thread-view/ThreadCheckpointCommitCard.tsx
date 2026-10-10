@@ -60,7 +60,7 @@ function summaryChangeRows(changes: readonly GitArcChangeTotal[], sourceItemId: 
 const noop = () => undefined;
 
 /**
- * The full card without controls, for commits shown away from the lifecycle card: stack receipts (summaries) and
+ * The full card without controls, for commits shown away from the Git arc panel: stack receipts (summaries) and
  * opened transcript proposals (on-demand loads). `fallbackTitle` names a commit that has not loaded yet.
  */
 export function ThreadReadonlyCommitCard({

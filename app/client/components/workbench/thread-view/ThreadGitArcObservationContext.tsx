@@ -1,47 +1,65 @@
 /*
  * Exports:
- * - ThreadGitArcObservationProvider: provide one active thread controller's proposal observations and summaries, demand action and running acceptance.
- * - useThreadGitArcProposalObservation: read and demand one proposal's source-local observation state, its observed summary and its acceptance role.
+ * - ThreadGitArcObservationProvider: provide one active thread controller's proposal and claim-change observations, summaries, demand actions and running acceptance.
+ * - useThreadGitArcProposalObservation: read and demand one proposal's (or read variant's) source-local observation state, its observed summary and its acceptance role.
+ * - useThreadGitArcClaimChanges: demand the active claim's change state while enabled, with a re-read action.
  */
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
-import type { ThreadGitArcProposalObservation } from "../../../workbench/thread/ThreadGitArcProposalObserver";
+import type { ThreadGitArcClaimObservation } from "../../../workbench/thread/ThreadGitArcClaimObserver";
+import {
+  getThreadGitArcProposalObservationKey,
+  type ThreadGitArcProposalObservation,
+  type ThreadGitArcProposalVariant,
+} from "../../../workbench/thread/ThreadGitArcProposalObserver";
 
 type ThreadGitArcAcceptance = NonNullable<WorkbenchGitArcLifecycleState["acceptance"]>;
 
 interface ThreadGitArcObservationSource {
   acceptance: ThreadGitArcAcceptance | null;
-  observeProposal(proposalId: string): () => void;
+  claimChanges: ThreadGitArcClaimObservation | null;
+  observeClaimChanges(): () => void;
+  observeProposal(proposalId: string, variant?: ThreadGitArcProposalVariant): () => void;
   proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
+  refreshClaimChanges(): void;
   summaries: ReadonlyMap<string, WorkbenchGitArcProposalSummary>;
 }
 
 const ThreadGitArcObservationContext = createContext<ThreadGitArcObservationSource | null>(null);
+const NO_DEMAND = () => () => {};
+const NO_REFRESH = () => {};
 
 export function ThreadGitArcObservationProvider({
   acceptance = null,
   children,
+  claimChanges = null,
   lifecycleProposals,
+  observeClaimChanges = NO_DEMAND,
   observeProposal,
   proposals,
+  refreshClaimChanges = NO_REFRESH,
 }: {
   /** The observed lifecycle's running batched acceptance, if any. */
   acceptance?: ThreadGitArcAcceptance | null;
   children: ReactNode;
+  /** Absent for hosts that observe no claim, whose claim state stays unknown. */
+  claimChanges?: ThreadGitArcClaimObservation | null;
   /** The observed lifecycle's proposals; their Git-derived summaries need no proposal read. */
   lifecycleProposals: WorkbenchGitArcLifecycleState["proposals"] | null;
-  observeProposal(proposalId: string): () => void;
+  observeClaimChanges?: () => () => void;
+  observeProposal(proposalId: string, variant?: ThreadGitArcProposalVariant): () => void;
   proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
+  refreshClaimChanges?: () => void;
 }) {
   const summaries = useMemo(() => new Map((lifecycleProposals ?? []).flatMap(({ proposalId, summary }) => (
     summary ? [[proposalId, summary] as const] : []
   ))), [lifecycleProposals]);
   const source = useMemo(
-    () => ({ acceptance, observeProposal, proposals, summaries }),
-    [acceptance, observeProposal, proposals, summaries],
+    () => ({ acceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries }),
+    [acceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries],
   );
   return (
     <ThreadGitArcObservationContext.Provider value={source}>
@@ -50,7 +68,7 @@ export function ThreadGitArcObservationProvider({
   );
 }
 
-export function useThreadGitArcProposalObservation(proposalId: string | null) {
+export function useThreadGitArcProposalObservation(proposalId: string | null, variant: ThreadGitArcProposalVariant = {}) {
   const proposals = useContext(ThreadGitArcObservationContext);
   const acceptance = proposals?.acceptance ?? null;
   return {
@@ -60,8 +78,19 @@ export function useThreadGitArcProposalObservation(proposalId: string | null) {
         : acceptance.queuedIds.includes(proposalId) ? "queued" as const : null,
     isObserved: proposals !== null,
     observe: proposals?.observeProposal ?? null,
-    state: proposalId ? proposals?.proposals[proposalId] ?? null : null,
+    state: proposalId ? proposals?.proposals[getThreadGitArcProposalObservationKey(proposalId, variant)] ?? null : null,
     /** Present while the observed lifecycle owns this proposal and Git has been read. */
     summary: proposalId ? proposals?.summaries.get(proposalId) ?? null : null,
   };
+}
+
+/** Null without an observing thread, where no claim state can be known. */
+export function useThreadGitArcClaimChanges(enabled: boolean) {
+  const source = useContext(ThreadGitArcObservationContext);
+  const observe = source?.observeClaimChanges ?? null;
+  useEffect(() => {
+    if (!enabled || !observe) return;
+    return observe();
+  }, [enabled, observe]);
+  return source ? { refresh: source.refreshClaimChanges, state: enabled ? source.claimChanges : null } : null;
 }

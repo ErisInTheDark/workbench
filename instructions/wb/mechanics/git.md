@@ -213,7 +213,7 @@ planning:
 </docs>
 
 <docs tools="git_arc_restore">
-- Use the terminal lifecycle card for restore or unclaim so all remaining repo members stay visible and recoverable.
+- Use the thread status row's Git arc panel for restore or unclaim so all remaining repo members stay visible and recoverable.
 </docs>
 </workspace:multi-root>
 </docs>

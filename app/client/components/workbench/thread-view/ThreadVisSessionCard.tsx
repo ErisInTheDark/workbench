@@ -1,30 +1,19 @@
 /*
  * Exports:
- * - default ThreadVisSessionCard: show each live vis session's latest render above the work lifecycle card, keeping it while
+ * - default ThreadVisSessionCard: show each live vis session's latest render under a summary row, keeping it while
  *   a new render is in flight, with frame-reload and end buttons and the outcome of the latest answer the page sent through
- *   `wb.send`; whether the card is open persists per browser. Presentational:
- *   the thread view observes the sessions, so mockups can render this with any sessions.
+ *   `wb.send`. Frameless and presentational: its host frames it, and the thread view observes the sessions.
+ * - getVisSessionsUpdatedAt: latest render time across sessions.
  */
 "use client";
 
 import { useState } from "react";
-import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
-import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import LoaderIcon from "../LoaderIcon";
 import IconButton from "../../ui/IconButton";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { CheckIcon, RefreshCwIcon, XIcon } from "../workbench-icons";
-import Disclosure from "../../ui/Disclosure";
 import ThreadVisFrame from "./ThreadVisFrame";
-
-function readOpen(records: readonly WorkbenchClientStateRecord[]) {
-  for (const record of records) {
-    if (record.kind === "globalPreference" && record.preference.key === "threadVisOpen") return record.preference.value;
-  }
-  return true;
-}
 
 function Spinner({ label }: { label: string }) {
   return <span aria-label={label} className="inline-flex shrink-0" role="status"><LoaderIcon size={14} /></span>;
@@ -112,41 +101,20 @@ export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
     );
   };
   const onReload = (sessionId: string) => setReloads((current) => ({ ...current, [sessionId]: (current[sessionId] ?? 0) + 1 }));
-  const clientStateController = useWorkbenchClientStateController();
-  const clientState = useWorkbenchClientStateSnapshot();
-  const canPersist = clientState.schemaVersion >= appStateReleases.threadVisOpen.version;
-  const [unpersistedOpen, setUnpersistedOpen] = useState(true);
-  const open = canPersist ? readOpen(clientState.records) : unpersistedOpen;
   if (!sessions.length) return null;
-  const setOpen = (next: boolean) => {
-    if (next === open) return;
-    if (!canPersist) {
-      setUnpersistedOpen(next);
-      return;
-    }
-    void clientStateController.put({ kind: "globalPreference", preference: { key: "threadVisOpen", value: next } }).catch((error) => {
-      console.error("Workbench vis disclosure persistence failed.", error);
-    });
-  };
   const lone = sessions.length === 1 ? sessions[0]! : null;
   const rendering = sessions.some((session) => session.rendering);
-  const updatedAt = Math.max(0, ...sessions.map(({ render }) => render?.renderedAt ?? 0));
+  const updatedAt = getVisSessionsUpdatedAt(sessions);
   return (
-    <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2" data-thread-vis-card="true">
-      <Disclosure
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-        open={open}
-        summary={(
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="shrink-0">Live vis</span>
-            <span className="truncate font-semibold text-text">{lone ? lone.path : `${sessions.length} files`}</span>
-            {updatedAt ? <WorkbenchRelativeTime className="shrink-0" timestampMs={updatedAt} /> : null}
-            {rendering && (lone || !open) ? <Spinner label="Rendering" /> : null}
-            {lone ? <SessionActions onEnd={onEnd} onReload={onReload} session={lone} /> : null}
-          </span>
-        )}
-        summaryClassName="px-3 py-1.5 text-[0.8rem]"
-      >
+    <section className="w-full" data-thread-vis-card="true">
+      <div className="flex min-w-0 items-center gap-1.5 px-3 py-1.5 text-[0.8rem] text-fg/muted">
+        <span className="shrink-0">Live vis</span>
+        <span className="truncate font-semibold text-text">{lone ? lone.path : `${sessions.length} files`}</span>
+        {updatedAt ? <WorkbenchRelativeTime className="shrink-0" timestampMs={updatedAt} /> : null}
+        {rendering && lone ? <Spinner label="Rendering" /> : null}
+        {lone ? <SessionActions onEnd={onEnd} onReload={onReload} session={lone} /> : null}
+      </div>
+      <div>
         {sessions.map((session) => (
           <VisSession
             actions={lone ? null : { onEnd, onReload, session }}
@@ -157,7 +125,12 @@ export default function ThreadVisSessionCard({ onAnswer, onEnd, sessions }: {
             session={session}
           />
         ))}
-      </Disclosure>
+      </div>
     </section>
   );
+}
+
+/** Latest render across the sessions, or 0 before any rendered. */
+export function getVisSessionsUpdatedAt(sessions: readonly VisLiveSession[]) {
+  return Math.max(0, ...sessions.map(({ render }) => render?.renderedAt ?? 0));
 }

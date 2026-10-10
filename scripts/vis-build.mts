@@ -76,7 +76,20 @@ const script = bundled.outputFiles[0]!.text;
 const inputs = Object.keys(bundled.metafile.inputs).filter((input) => !input.startsWith("<stdin>") && !input.endsWith("vis-entry.tsx"));
 
 // Nothing can be written, so the bundle's class-like tokens reach Tailwind inline; the app's own sources come from tailwind.css.
-const candidates = [...new Set(script.match(/[^\s"'`<>{}\\]{2,}/gu) ?? [])].filter((token) => /[a-z]/u.test(token));
+// `<` and `>` stay in tokens: child and sibling selectors like `[&>*]:flex` are class names.
+// Class names balance their brackets; an unbalanced code token like `for(var` makes Tailwind read the following
+// candidates as its argument and drop them.
+function balanced(token: string) {
+  const closers: string[] = [];
+  for (const character of token) {
+    if (character === "(") closers.push(")");
+    else if (character === "[") closers.push("]");
+    else if ((character === ")" || character === "]") && closers.pop() !== character) return false;
+  }
+  return closers.length === 0;
+}
+const candidates = [...new Set(script.match(/[^\s"'`{}\\]{2,}/gu) ?? [])]
+  .filter((token) => /[a-z]/u.test(token) && balanced(token));
 const tailwindInput = [
   `@import ${JSON.stringify(path.join(app, "client", "components", "vis-kit", "vis-page.css").replaceAll("\\", "/"))};`,
   `@source inline(${JSON.stringify(candidates.join(" "))});`,

@@ -2058,7 +2058,7 @@ function ThreadCommandExecutionDetails ({
   return (
     <div className="group/thread-bubble relative">
       {commandDisplayView}
-      <ThreadBubbleCopyButton actions={<ThreadShellStopAction itemId={item.id} />} markdown="" persistent side="right" />
+      <ThreadBubbleCopyButton actions={<ThreadShellStopAction itemId={item.id} />} markdown="" side="right" touchVisible />
     </div>
   );
 }

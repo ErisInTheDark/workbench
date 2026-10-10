@@ -54,7 +54,6 @@ function renderList(open: boolean, proposalIds: readonly string[]) {
       cwd: "/repo",
       harness: "opencode",
       proposals: proposalIds.map(proposalId => ({ proposalId, status: "proposed" as const })),
-      running: true,
       stackLayers: [],
       threadId: "thread",
     })));

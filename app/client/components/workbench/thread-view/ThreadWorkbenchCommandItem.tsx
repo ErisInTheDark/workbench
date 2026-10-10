@@ -34,7 +34,7 @@ import {
   createThreadGitArcCompareSummaryRows,
   createThreadGitArcDiffSummaryRows,
 } from "./ThreadGitArcCollapsedSummary";
-import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
+import { ObservedThreadGitArcIntersectionCard } from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
@@ -191,11 +191,10 @@ export default function ThreadWorkbenchCommandItem({
       && gitArcPresentation.projectId
     ) {
       return (
-        <ThreadGitArcIntersectionCard
+        <ObservedThreadGitArcIntersectionCard
           harness={gitArcPresentation.harness}
           mode="wait"
           onOpenThread={gitArcPresentation.onOpenThread}
-          projectId={gitArcPresentation.projectId}
           threadId={threadId}
         />
       );

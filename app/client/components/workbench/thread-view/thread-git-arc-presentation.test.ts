@@ -1,4 +1,4 @@
-/* No production exports. Regression wards cover proposal intent, source-turn indexing, editable message ownership, and running/terminal hoisting. */
+/* No production exports. Regression wards cover proposal intent, source-turn indexing, editable message ownership, and Git arc work selection. */
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,7 +8,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
 import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import getThreadGitArcProposalPresentation, {
-  getHoistedThreadGitArc,
+  getThreadGitArcWork,
   proposalIntentOwnsMessage,
   readThreadGitArcMcpProposalTranscriptItem,
 } from "./thread-git-arc-presentation";
@@ -133,49 +133,49 @@ function observed(value: GitCheckpointProposal) {
   return { proposal: { proposal: value, status: "loaded" as const } };
 }
 
-test("terminal Git arc hoisting keeps only useful current work", () => {
+test("Git arc work keeps only useful current work", () => {
   const currentTurn = turn("current", []);
   const oldProposalTurns = new Map([["proposal", "old"]]);
   const currentProposalTurns = new Map([["proposal", currentTurn.id]]);
 
-  assert.equal(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.equal(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc(),
     proposalObservations: {},
     proposalTurnIds: oldProposalTurns,
   }), null, "invalid or filtered proposals leave no card");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: { proposal: { status: "loading" } },
     proposalTurnIds: oldProposalTurns,
-  }), "loading proposals hoist from durable lifecycle state");
-  assert.equal(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  }), "loading proposals count as work from durable state");
+  assert.equal(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: observed(proposal("proposal", "unavailable")),
     proposalTurnIds: oldProposalTurns,
-  }), null, "loaded invalid proposals do not hoist");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  }), null, "loaded invalid proposals are not work");
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "proposed" }] }),
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: oldProposalTurns,
   }), "old pending proposals remain actionable");
-  assert.equal(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.equal(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: oldProposalTurns,
-  }), null, "old accepted-only proposals stop hoisting");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  }), null, "old accepted-only proposals stop being work");
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: currentProposalTurns,
   }), "current accepted-only proposals remain visible");
-  assert.deepEqual(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.deepEqual(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({
       claimedPaths: ["src/one.ts"],
       proposals: [{ proposalId: "proposal", status: "committed" }],
@@ -183,8 +183,8 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     proposalObservations: { proposal: { status: "loading" } },
     proposalTurnIds: oldProposalTurns,
   })?.proposals, [{ proposalId: "proposal", status: "committed" }], "live claims show durable proposal rows while hydration loads");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({
       proposals: [
         { proposalId: "accepted", status: "committed" },
@@ -197,23 +197,23 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
     },
     proposalTurnIds: new Map([["accepted", "old"], ["pending", "old"]]),
   }), "any pending proposal keeps a mixed lifecycle visible");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: true,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({
       claimedPaths: ["src/one.ts"],
       proposals: [{ proposalId: "proposal", status: "proposed" }],
     }),
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: currentProposalTurns,
-  }), "pending proposals hoist while the turn is still running");
-  assert.deepEqual(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: true,
+  }), "pending proposals beside claims are work");
+  assert.deepEqual(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: currentProposalTurns,
-  })?.proposals, [{ proposalId: "proposal", status: "committed" }], "landed proposals stay in the lifecycle card while the turn runs");
-  assert.deepEqual(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: true,
+  })?.proposals, [{ proposalId: "proposal", status: "committed" }], "proposals landed this turn stay work");
+  assert.deepEqual(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({
       proposals: [
         { proposalId: "accepted", status: "committed" },
@@ -225,39 +225,33 @@ test("terminal Git arc hoisting keeps only useful current work", () => {
   })?.proposals, [
     { proposalId: "accepted", status: "committed" },
     { proposalId: "pending", status: "proposed" },
-  ], "a running turn keeps landed proposals beside pending ones, so acceptance never relocates cards");
-  assert.equal(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: true,
+  ], "landed proposals stay beside pending ones, so acceptance never relocates cards");
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: gitArc({ claimedPaths: ["src/one.ts"] }),
     proposalObservations: {},
     proposalTurnIds: currentProposalTurns,
-  }), null, "a running turn keeps claim resolution out of the hoisted card");
+  }), "claimed files alone are work, so they stay reachable mid-turn");
 });
 
-test("a stashed arc stays hoisted while its proposals are no longer actionable", () => {
+test("a stashed arc stays work while its proposals are no longer actionable", () => {
   const currentTurn = turn("current", []);
   const oldProposalTurns = new Map([["proposal", "old"]]);
 
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
     proposalObservations: observed(proposal("proposal", "unavailable")),
     proposalTurnIds: oldProposalTurns,
   }), "stashed files stay recoverable while their proposal is invalid");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: stashedGitArc([{ proposalId: "proposal", status: "committed" }]),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: oldProposalTurns,
   }), "stashed files stay recoverable after their proposal is accepted");
-  assert.equal(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: true,
-    gitArc: stashedGitArc([{ proposalId: "proposal", status: "proposed" }]),
-    proposalObservations: observed(proposal("proposal", "unavailable")),
-    proposalTurnIds: oldProposalTurns,
-  }), null, "a running turn hoists no stash-only resolution");
-  assert.ok(getHoistedThreadGitArc({
-    currentTurnId: currentTurn.id, running: false,
+  assert.ok(getThreadGitArcWork({
+    currentTurnId: currentTurn.id,
     gitArc: { ...stashedGitArc(), phase: "resolved" },
     proposalObservations: {},
     proposalTurnIds: new Map(),
@@ -271,7 +265,7 @@ test("visible proposal intents associate title and description with the proposal
       commandItem("ordinary", "pnpm typecheck", null),
       commandItem(
         "proposal",
-        "wb git arc propose --amend --title \"Preview hoisted proposal\" --description \"Show both fields immediately.\" --fresh-title \"Commit correction separately\" --fresh-description \"Keep prior history unchanged.\" -- src/one.ts",
+        "wb git arc propose --amend --title \"Preview proposal\" --description \"Show both fields immediately.\" --fresh-title \"Commit correction separately\" --fresh-description \"Keep prior history unchanged.\" -- src/one.ts",
         "Workbench arc proposal: proposal-one\n",
       ),
     ])],
@@ -283,7 +277,7 @@ test("visible proposal intents associate title and description with the proposal
     freshTitle: "Commit correction separately",
     mode: "amend",
     paths: ["src/one.ts"],
-    title: "Preview hoisted proposal",
+    title: "Preview proposal",
   });
   assert.equal(intents.size, 1);
 });

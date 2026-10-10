@@ -8,7 +8,7 @@
 - Discarding a stash deletes its frozen work snapshot, leaves worktree content unchanged, and retains any pending plan. Settled plan-only history may expire; stashed history waits for explicit resolution.
 - Git arc storage writes canonical Workbench thread IDs. Reads resolve legacy provider IDs through admitted identity; unresolved owners are orphaned, inactive, and omitted from normal projections.
 - Proposal summaries do not require diff hydration. Full proposal diffs hydrate on demand through bounded Git work; completed immutable projections may be reused only by exact tree-and-path identity.
-- Proposal state commits record per-file change totals. SQLite retains compact proposal messages, mode, commit SHA, and totals independently of full diff refs. Interactive proposal cards live only in the lifecycle card; transcript proposal items stay in place and read proposals only when opened.
+- Proposal state commits record per-file change totals. SQLite retains compact proposal messages, mode, commit SHA, and totals independently of full diff refs. Interactive proposal cards live only in the thread status row's Git arc panel; transcript proposal items stay in place and read proposals only when opened.
 - Resolved Git snapshots expire 24 hours after their resolution epoch, independently of thread settlement. Live/stashed claims, non-empty plans, saved stash, pending/unavailable proposals, and stack tips block deletion at the final ref mutation.
 - Proposal diff cache entries expire one day after last access and remain subject to the byte cap.
 - Every new Workbench Git ref must be handled explicitly by the history rewriter and covered across replacement history.

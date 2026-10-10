@@ -22,6 +22,7 @@ import { getThreadObservationKey } from "./ThreadObservationController";
 import type ThreadTranscriptProjectionController from "../transcript/ThreadTranscriptProjectionController";
 import type { ThreadTranscriptLocalThread, ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
 import { createOptimisticItem } from "./thread-optimistic-items";
+import ThreadGitArcClaimObserver from "./ThreadGitArcClaimObserver";
 import ThreadGitArcProposalObserver from "./ThreadGitArcProposalObserver";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
@@ -45,7 +46,12 @@ export interface ObservedThreadSourcePorts {
   /** Demand the provider's account limits while a view shows them (idempotent). */
   watchRateLimits: (harness: WorkbenchHarness) => void;
   subscribeRateLimits: (listener: () => void) => () => void;
-  readGitArcProposal?: (input: { cwd: string; harness: WorkbenchHarness; proposalId: string; rootId?: string; threadId: string }) => Promise<GitCheckpointProposal>;
+  readGitArcProposal?: (input: {
+    cwd: string; harness: WorkbenchHarness; includeNewer: boolean; includeUnclaimed: boolean; proposalId: string; rootId?: string; threadId: string;
+  }) => Promise<GitCheckpointProposal>;
+  /** Compares the thread's active claim with its checkpoint, for the claimed files' dirty state. */
+  compareGitArcClaims?: (input: { cwd: string; harness: WorkbenchHarness; threadId: string }) => Promise<{ changeCount: number; hasUncommittedChanges: boolean }>;
+  /** Fires when observed Git arc reads may be stale, such as when the window regains focus. */
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
   updateThreadStateWithAcceptance: (request: {
     method: "workbench/thread-state/questionnaire/snooze"; projectId: ReturnType<typeof ProjectIdSchema.parse>;
@@ -156,6 +162,12 @@ export default function createObservedThreadSource(
     changed: () => sync(),
     isLive: () => !disposed && leases > 0,
   });
+  const gitArcClaims = new ThreadGitArcClaimObserver({
+    ...(ports.compareGitArcClaims ? { compare: ports.compareGitArcClaims } : {}),
+    ...(ports.subscribeGitArcProposalRefresh ? { subscribeRefresh: ports.subscribeGitArcProposalRefresh } : {}),
+    changed: () => sync(),
+    isLive: () => !disposed && leases > 0,
+  });
 
   const readEntry = () => {
     const state = ports.observations.getSnapshot(observationKey);
@@ -228,6 +240,7 @@ export default function createObservedThreadSource(
     const current = projection();
     const head = entry ? headOf(entry, runtime[threadId], current?.thread.cwd ?? "") : null;
     gitArc.sync(entry, views && head?.cwd ? head.cwd : null);
+    gitArcClaims.sync(entry, views && head?.cwd ? head.cwd : null);
     const subagents: WorkbenchSubagentSummary[] = ports.observations.getSubagents(observationKey);
     const relatedHeads = Object.fromEntries((state.observation?.entries ?? []).flatMap(candidate =>
       candidate.entryKind === "subagent" ? [[candidate.identity.threadId, headOf(candidate, runtime[candidate.identity.threadId], candidate.cwd)]] : []));
@@ -236,7 +249,7 @@ export default function createObservedThreadSource(
       summary: {
         status: failure ? "failed" : entry ? "ready" : "loading", error: failure, head, entry,
         subagents, rateLimits: entry ? ports.readRateLimits(entry.identity.harness) : null,
-        gitArcProposals: gitArc.proposals, relatedHeads, draftDocument: null,
+        gitArcProposals: gitArc.proposals, gitArcClaimChanges: gitArcClaims.claimChanges, relatedHeads, draftDocument: null,
       },
       turns: createThreadTurnsSlice(transcriptState, Boolean(current?.hasPreviousTurns), entry?.lifecycle.kind === "working"),
       questionnaire: { pending: pendingQuestionnaire },
@@ -371,11 +384,24 @@ export default function createObservedThreadSource(
           select(entry);
         });
       },
-      observeGitArcProposal(proposalId) {
+      observeGitArcProposal(proposalId, variant) {
         if (disposed) return () => {};
-        const release = gitArc.demand(proposalId);
+        const release = gitArc.demand(proposalId, variant);
         sync();
         return release;
+      },
+      observeGitArcClaimChanges() {
+        if (disposed) return () => {};
+        const release = gitArcClaims.demand();
+        sync();
+        return () => {
+          release();
+          sync();
+        };
+      },
+      refreshGitArcClaimChanges() {
+        gitArcClaims.refresh();
+        sync();
       },
       // The observation's runtime carries the resulting goal and skills.
       async setGoal(objective) { await ports.daemon.threads.goal.set({ threadId, objective }); },
@@ -408,12 +434,13 @@ export default function createObservedThreadSource(
         }
         if (!--leases) {
           gitArc.clear();
+          gitArcClaims.clear();
           stopRateLimits?.();
           stopRateLimits = null;
           observation?.release();
           observation = null;
           publish({ summary: { status: "loading", error: null, head: null, entry: null, subagents: [], rateLimits: null,
-            gitArcProposals: {}, relatedHeads: {}, draftDocument: null } });
+            gitArcProposals: {}, gitArcClaimChanges: null, relatedHeads: {}, draftDocument: null } });
         } else sync();
       };
     },
@@ -428,6 +455,7 @@ export default function createObservedThreadSource(
       disposed = true;
       releaseTranscript();
       gitArc.dispose();
+      gitArcClaims.dispose();
       stopRateLimits?.();
       observation?.release();
       observation = null;

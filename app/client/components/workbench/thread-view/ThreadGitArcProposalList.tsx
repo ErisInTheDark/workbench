@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: the thread's only interactive proposal cards, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header that collapses to just its counts unless a stopped thread has pending proposals, and offers stack-ordered commit all (whether or not the header is collapsed) backed by observed summaries.
+ * - default ThreadGitArcProposalList: the thread's only interactive proposal cards, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header disclosure whose open state persists per browser, and offers stack-ordered commit all (whether or not the header is collapsed) backed by observed summaries.
  */
 "use client";
 
@@ -12,7 +12,8 @@ import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalState, Workb
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { CheckCheckIcon, GitArcStackIcon } from "../workbench-icons";
+import { CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
+import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
@@ -87,7 +88,6 @@ export default function ThreadGitArcProposalList({
   projectId,
   projectRootPath,
   proposals,
-  running,
   stackLayers,
   threadId,
   workspaceRoots,
@@ -103,8 +103,6 @@ export default function ThreadGitArcProposalList({
   threadId: string;
   proposals: readonly WorkbenchGitArcProposalState[];
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
-  /** Running turns collapse by saved preference; stopped threads always show pending proposals. */
-  running: boolean;
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
   stackLayers: ReadonlyArray<{ layerId: string; proposalIds: readonly string[]; title: string }>;
 }) {
@@ -132,9 +130,7 @@ export default function ThreadGitArcProposalList({
     : unsealedProposals;
   // Only the lowest layer with pending work can commit; higher layers wait on it.
   const lowestPendingGroup = layerGroups.find(({ pendingIds }) => pendingIds.length);
-  // Only pending work on a stopped thread demands attention; anything else follows the saved preference.
-  const collapsible = running || !proposedIds.length;
-  const open = !collapsible || (canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen);
+  const open = canPersist ? readProposalsOpen(clientState.records) : unpersistedOpen;
   const storedFailure = useObservedProposalCommits(commitActions, proposals.filter(({ status }) => status === "proposed"));
   const readSnapshot = () => commitActions.isReady(proposedIds);
   const commitAllReady = useSyncExternalStore(commitActions.subscribe, readSnapshot, readSnapshot);
@@ -172,11 +168,20 @@ export default function ThreadGitArcProposalList({
     }
   };
 
+  // A lone pending proposal names itself, so the header reads as that commit.
+  const lone = proposals.length === 1 && proposedIds.length === 1 ? proposals[0]!.summary ?? null : null;
   const summary = (
-    <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-      <span>{formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}</span>
+    // Narrow rows wrap into two lines: the title alone, then totals with the action pushed right.
+    <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
+        <GitArcProposalIcon className="shrink-0" size={14} />
+        {lone
+          ? <span className="min-w-0 truncate font-medium text-text">{lone.title}</span>
+          : formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}
+      </span>
+      {lone?.changes ? <span className="inline-flex shrink-0"><ThreadGitArcChangeTotals changes={lone.changes} /></span> : null}
       {showCommitAll || committing ? (
-        <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
+        <span className="ml-auto inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
           <PrimaryButton
             className="!px-3 !py-1.5 !text-[0.76rem]"
             data-thread-git-arc-commit-all="true"
@@ -184,7 +189,7 @@ export default function ThreadGitArcProposalList({
             onClick={() => void commitInOrder(proposedIds)}
             pendingHalo={committing}
           >
-            {remaining ? `Committing… ${remaining} left` : committing ? "Committing…" : "Commit all"}
+            {remaining ? `Committing… ${remaining} left` : committing ? "Committing…" : lone ? "Commit" : "Commit all"}
           </PrimaryButton>
         </span>
       ) : null}
@@ -283,28 +288,18 @@ export default function ThreadGitArcProposalList({
 
   return (
     <ThreadCheckpointCommitActionsContext.Provider value={commitActions}>
-      {collapsible ? (
-        <>
-          <Disclosure
-            // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
-            keepMounted
-            onToggle={(event) => setOpen(event.currentTarget.open)}
-            open={open}
-            summary={summary}
-            summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
-          >
-            {open ? failureRow : null}
-            {anchors}
-          </Disclosure>
-          {open ? null : failureRow}
-        </>
-      ) : (
-        <div>
-          <div className="flex min-w-0 items-center px-3 py-2 text-[0.76em] leading-[1.45] text-fg/muted">{summary}</div>
-          {failureRow}
-          {anchors}
-        </div>
-      )}
+      <Disclosure
+        // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
+        keepMounted
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+        open={open}
+        summary={summary}
+        summaryClassName="px-3 py-2 text-[0.76em] leading-[1.45]"
+      >
+        {open ? failureRow : null}
+        {anchors}
+      </Disclosure>
+      {open ? null : failureRow}
     </ThreadCheckpointCommitActionsContext.Provider>
   );
 }

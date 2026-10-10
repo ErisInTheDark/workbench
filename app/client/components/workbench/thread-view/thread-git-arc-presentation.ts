@@ -4,7 +4,7 @@
  * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent.
  * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message.
  * - ThreadGitArcProposalPresentation: index proposal message intents and latest source turns from loaded transcript turns.
- * - getHoistedThreadGitArc: select useful current Git arc work without duplicating Git validity; hoisted proposals keep their observed summaries.
+ * - getThreadGitArcWork: select a thread's useful Git arc work (claims, stash, actionable proposals, accepted commits from the current turn) using observed proposal validity.
  * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
@@ -102,40 +102,36 @@ export function readThreadGitArcMcpProposalTranscriptItem(
   };
 }
 
-export function getHoistedThreadGitArc({
+export function getThreadGitArcWork({
   currentTurnId,
-  running,
   gitArc,
   proposalObservations,
   proposalTurnIds,
 }: {
   currentTurnId: string | null;
-  /** Whether the thread is working (its lifecycle), not any turn's status. */
-  running: boolean;
   gitArc: WorkbenchGitArcLifecycleState | null;
   proposalObservations: Readonly<Record<string, ThreadGitArcProposalObservation>>;
   proposalTurnIds: ReadonlyMap<string, string>;
 }) {
   if (!gitArc) return null;
-  // The lifecycle card owns every interactive proposal card, so landed proposals stay hoisted even mid-turn.
+  // Observed Git validity wins over the lifecycle's status; only actionable or landed proposals are work.
   const proposals = gitArc.proposals.flatMap((proposal) => {
     const observation = proposalObservations[proposal.proposalId];
     const status = observation?.status === "loaded" ? observation.proposal.status : proposal.status;
     return status === "proposed" || status === "committed" ? [{ ...proposal, status }] : [];
   });
-  const visibleGitArc = proposals.length === gitArc.proposals.length
+  const work = proposals.length === gitArc.proposals.length
     && proposals.every((proposal, index) => proposal.status === gitArc.proposals[index]?.status)
     ? gitArc
     : { ...gitArc, proposals };
-  // A stashed arc's files are recoverable terminal work, so the card must stay available
-  // to unstash even when none of its proposals is currently actionable. Claim resolution
-  // stays terminal-only: a running turn still owns its claims.
-  if (!running && (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed")) return visibleGitArc;
+  // Claimed and stashed files are work whatever their proposals say, so they stay reachable.
+  if (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed") return work;
   if (!proposals.length) return null;
-  if (proposals.some(({ status }) => status === "proposed")) return visibleGitArc;
+  if (proposals.some(({ status }) => status === "proposed")) return work;
+  // Accepted-only work is news for the turn that landed it, not for every later turn.
   return currentTurnId && proposals.some(({ proposalId }) => (
     proposalTurnIds.get(proposalId) === currentTurnId
-  )) ? visibleGitArc : null;
+  )) ? work : null;
 }
 
 export default function getThreadGitArcProposalPresentation({

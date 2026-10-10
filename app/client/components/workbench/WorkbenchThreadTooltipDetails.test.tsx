@@ -18,7 +18,7 @@ import type { WorkbenchClientController } from "./workbench-client-context";
 import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
-import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
+import { ObservedThreadGitArcIntersectionCard } from "./thread-view/ThreadGitArcIntersectionCard";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { getWorkbenchThreadClaimIntersections } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -372,10 +372,9 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   assert.doesNotMatch(compactHtml, /href="\/project\/@\/thread\/planned%20intersection"|<details/u);
 
   const fullHtml = renderWithClient(
-    createElement(ThreadGitArcIntersectionCard, {
+    createElement(ObservedThreadGitArcIntersectionCard, {
       harness: "codex",
       onOpenThread: () => undefined,
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "thread",
     }),
     planStore,
@@ -409,11 +408,10 @@ test("a tooltip reads planned intersections from its owner's source during a pen
   assert.match(html, /data-thread-tooltip-questionnaire=/u);
 });
 
-test("a home-view intersection uses the known owner without parsing an empty view project", () => {
-  const html = renderWithClient(createElement(ThreadGitArcIntersectionCard, {
+test("a home-view intersection uses the known owner", () => {
+  const html = renderWithClient(createElement(ObservedThreadGitArcIntersectionCard, {
     harness: "codex",
     onOpenThread: () => undefined,
-    projectId: "",
     threadId: "thread",
   }), planStore);
   assert.match(html, /data-workbench-sidebar-thread-link="true"/u);
@@ -439,11 +437,10 @@ test("waiting references reuse compact rows and keep unloaded targets navigable"
 
 test("Git arc waits show active claim owners without planned-only intersections", () => {
   const html = renderWithClient(
-    createElement(ThreadGitArcIntersectionCard, {
+    createElement(ObservedThreadGitArcIntersectionCard, {
       harness: "codex",
       mode: "wait",
       onOpenThread: () => undefined,
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       threadId: "thread",
     }),
     planStore,

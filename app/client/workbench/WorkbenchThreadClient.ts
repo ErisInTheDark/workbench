@@ -422,7 +422,11 @@ function WorkbenchThreadClient(
           readRateLimits: harness => account.getRateLimits(harness),
           watchRateLimits: harness => account.watchRateLimits(harness),
           subscribeRateLimits: listener => subscribe(listener),
-          readGitArcProposal: async input => await daemon.git.arc.proposal.read({ ...input, includeNewer: false }),
+          readGitArcProposal: async input => await daemon.git.arc.proposal.read(input),
+          compareGitArcClaims: async ({ cwd, harness, threadId }) => {
+            const comparison = await daemon.git.arc.compare({ cwd, harness, refs: [], roots: [], threadId });
+            return { changeCount: comparison.changes.length, hasUncommittedChanges: Boolean(comparison.hasUncommittedChanges) };
+          },
           subscribeGitArcProposalRefresh: listener => {
             window.addEventListener("focus", listener);
             return () => window.removeEventListener("focus", listener);

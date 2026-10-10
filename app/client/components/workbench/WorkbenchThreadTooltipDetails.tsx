@@ -10,7 +10,7 @@ import type { UserInput } from "workbench-shared/workbench/thread/workbench-thre
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import ThreadCheckpointCommitController from "./thread-view/ThreadCheckpointCommitController";
-import ThreadGitArcIntersectionCard from "./thread-view/ThreadGitArcIntersectionCard";
+import { ObservedThreadGitArcIntersectionCard } from "./thread-view/ThreadGitArcIntersectionCard";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
 import { useThreadArcEntry, useWorkbenchProjectThreadSummaries, useWorkbenchThreadSidebarEntry } from "./use-workbench-client";
@@ -64,12 +64,11 @@ export default function WorkbenchThreadTooltipDetails({
   const questionnaireIsLive = Boolean(pendingRequest && !materialized && questionnaire.thread.store);
   if (questionnaire.thread.status === "failed") return null;
   const intersectionCard = (mode: "plan" | "stashed") => (
-    <ThreadGitArcIntersectionCard
+    <ObservedThreadGitArcIntersectionCard
       harness={harness}
       mode={mode}
       onOpenThread={onOpenThread}
       presentation="compact"
-      projectId={projectId}
       threadId={threadId}
     />
   );

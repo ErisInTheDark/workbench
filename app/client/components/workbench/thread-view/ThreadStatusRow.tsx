@@ -1,19 +1,32 @@
 /*
  * Exports:
- * - default ThreadStatusRow: a thread's persistent status row; its live title opens the live-turn panel and its goal/todo pill (led by active skill pills) opens the todo panel, sliding between the two.
+ * - ThreadStatusPanel: one status-row control: its segmented pill and the panel it opens.
+ * - threadStatusSegmentClassName: the default pill segment look, for segments that extend it.
+ * - default ThreadStatusRow: a thread's persistent status row; its live title (or a leading notice) and each segmented pill open one shared, sliding panel area. Narrow rows hide inline content in favour of narrow-only pills.
  */
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 
 import IconButton from "../../ui/IconButton";
-import { ClipboardListIcon, FlagFilledIcon, FlagIcon } from "../workbench-icons";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 
-type Panel = "live" | "todos";
+export interface ThreadStatusPanel {
+  id: string;
+  label: string;
+  /** Pill cells, side by side at the button's height; an empty list hides the control. */
+  segments: readonly { key: string; className?: string; content: ReactNode }[];
+  /** Replaces the default pressed chrome while this panel is open. */
+  pressedClassName?: string;
+  /** Shown only on narrow rows, for controls whose wide form is the row's inline content. */
+  narrowOnly?: boolean;
+  render(): ReactNode;
+}
 
-/** One grid cell holds both panels; the inactive one leaves flow and slides out toward its own side. */
+const LIVE = "live";
+
+/** One grid cell holds every panel; inactive ones leave flow and slide out toward their own side. */
 const panelClassName = `
   hidden absolute inset-0 col-start-1 row-start-1 min-h-0 min-w-0 overflow-clip opacity-0
   [transition-behavior:allow-discrete]
@@ -27,99 +40,129 @@ const panelClassName = `
   motion-reduce:(transition-none)
 `;
 const liveSlideClassName = "transform-[translateX(-1.5rem)] starting:data-[active=true]:transform-[translateX(-1.5rem)]";
-const todoSlideClassName = "transform-[translateX(1.5rem)] starting:data-[active=true]:transform-[translateX(1.5rem)]";
+const controlSlideClassName = "transform-[translateX(1.5rem)] starting:data-[active=true]:transform-[translateX(1.5rem)]";
+// Segments sit close together; only the pill's outer edges keep the full inset.
+export const threadStatusSegmentClassName = `
+  gap-1 px-1 first:pl-2 last:pr-2 text-[0.74rem] font-semibold tabular-nums
+  @max-[32rem]/status:(px-0.5 first:pl-1.5 last:pr-1.5)
+`;
+/** An open panel's control keeps its hover chrome, so it reads as the thing that closes it. */
+const pressedControlClassName = "!border-[color-mix(in_srgb,var(--text)_18%,transparent)] !bg-[color-mix(in_srgb,var(--text)_5%,transparent)]";
 
-export default function ThreadStatusRow({ live, skills, todos }: {
+export default function ThreadStatusRow({ attention = null, inline, leading = null, live, panels = [] }: {
+  /** Opens its panel whenever its key changes, such as when a stopped turn leaves proposals to review. */
+  attention?: { key: string; panel: string } | null;
+  /** Wide rows only, just left of the pills, such as the thread's active skill pills. */
+  inline?: ReactNode;
+  /** Fills the title slot while nothing is live, opening its panel. */
+  leading?: { content: ReactNode; panel: string } | null;
   live: ThreadLiveActivityView | null;
-  /** Sits just left of the goal/todo pill, such as the thread's active skill pills. */
-  skills?: ReactNode;
-  /** Absent where a thread has no goal or todos to manage, such as standalone renders. */
-  todos?: { goalSet: boolean; count: number; renderPanel(): ReactNode } | null;
+  panels?: readonly ThreadStatusPanel[];
 }) {
   const panelsId = useId();
-  const [panel, setPanel] = useState<Panel | null>(null);
+  const [panel, setPanel] = useState<string | null>(null);
+  // Panels mount on first opening and stay while the row is open, so switching keeps edits in progress.
+  const [mounted, setMounted] = useState<readonly string[]>([]);
   // The live panel belongs to one turn; mounting waits for its first opening.
   const [mountedLiveKey, setMountedLiveKey] = useState<string | null>(null);
   const liveKey = live?.key ?? null;
+  const attentionKey = attention?.key ?? null;
+  const attentionPanel = attention?.panel ?? null;
   useEffect(() => {
-    setPanel(current => current === "live" ? null : current);
+    setPanel(current => current === LIVE ? null : current);
   }, [liveKey]);
   useEffect(() => {
-    if (panel === "live" && liveKey) setMountedLiveKey(liveKey);
+    if (attentionKey && attentionPanel) setPanel(attentionPanel);
+  }, [attentionKey, attentionPanel]);
+  useEffect(() => {
+    if (panel === LIVE && liveKey) setMountedLiveKey(liveKey);
+    if (panel === null) setMounted([]);
+    else if (panel !== LIVE) setMounted(current => current.includes(panel) ? current : [...current, panel]);
   }, [liveKey, panel]);
 
-  if (!live && !todos) return null;
-  const open = panel !== null;
-  const toggle = (next: Panel) => setPanel(current => current === next ? null : next);
-  // During a live turn both panels share one height, so swapping never makes the row hop.
-  const panelHeight = live ? "h-[min(100vh,24rem)]" : "max-h-[min(100vh,24rem)]";
+  const visiblePanels = panels.filter(({ segments }) => segments.length);
+  if (!live && !leading && !visiblePanels.length && !inline) return null;
+  // A panel whose control disappeared closes with it.
+  const activePanel = panel === LIVE ? (live ? LIVE : null) : visiblePanels.some(({ id }) => id === panel) ? panel : null;
+  const open = activePanel !== null;
+  const toggle = (next: string) => setPanel(current => current === next ? null : next);
 
   return (
-    <div className="py-4">
-      {/* The live panel deliberately closes once scrolled out of view; the todo panel keeps any edit in progress. */}
-      <ThreadMeasuredContent onHidden={() => setPanel(current => current === "live" ? null : current)}>
+    <div className="@container/status py-4">
+      {/* The live panel deliberately closes once scrolled out of view; other panels keep any edit in progress. */}
+      <ThreadMeasuredContent onHidden={() => setPanel(current => current === LIVE ? null : current)}>
         <div className={`
           overflow-hidden rounded-[0.8rem] border transition-colors
           ${open ? "border-fg-alpha/16 bg-fg/3" : "border-transparent"}
         `}>
-          <div className={`flex min-w-0 items-center gap-2 px-3 py-1.5 ${open ? "border-b border-fg-alpha/16" : ""}`}>
-            {live ? (
+          <div className={`flex min-w-0 items-center gap-2 px-3 py-1.5 @max-[32rem]/status:(gap-0.5 px-2) ${open ? "border-b border-fg-alpha/16" : ""}`}>
+            {live || leading ? (
               <button
                 aria-controls={panelsId}
-                aria-expanded={panel === "live"}
+                aria-expanded={activePanel === (live ? LIVE : leading?.panel)}
                 className="
                   flex min-w-0 flex-1 cursor-pointer items-center py-0.5 text-left text-[0.92em] font-medium leading-[1.6] text-fg/muted
                   transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none
                 "
-                onClick={() => toggle("live")}
+                onClick={() => toggle(live ? LIVE : leading!.panel)}
                 type="button"
               >
-                <span aria-live="polite" className="flex min-w-0 overflow-hidden">{live.title}</span>
+                <span aria-live="polite" className="flex min-w-0 overflow-hidden">{live ? live.title : leading!.content}</span>
               </button>
             ) : <span className="flex-1" />}
-            {skills ? <span className="flex max-w-[60%] shrink-0 items-center">{skills}</span> : null}
-            {todos ? (
-              <IconButton
-                aria-controls={panelsId}
-                aria-expanded={panel === "todos"}
-                aria-pressed={panel === "todos"}
-                display="hover-border"
-                label={panel === "todos" ? "Hide goal and todos" : "Show goal and todos"}
-                onClick={() => toggle("todos")}
-                shape="pill"
-                size="small"
-              >
-                <span>{todos.goalSet ? <FlagFilledIcon size={14} /> : <FlagIcon size={14} />}</span>
-                <span className={todos.count ? "gap-1 pr-2.5 pl-[9px]" : ""}>
-                  <ClipboardListIcon size={14} />
-                  {todos.count ? <span className="text-[0.74rem] font-semibold tabular-nums">{todos.count}</span> : null}
-                </span>
-              </IconButton>
+            {inline ? <span className="flex max-w-[60%] shrink-0 items-center @max-[32rem]/status:hidden">{inline}</span> : null}
+            {visiblePanels.length ? (
+              <span className="flex shrink-0 items-center">
+                {visiblePanels.map(({ id, label, narrowOnly, pressedClassName, segments }) => {
+                  const pressed = activePanel === id;
+                  const control = (
+                    <IconButton
+                      aria-controls={panelsId}
+                      aria-expanded={pressed}
+                      aria-pressed={pressed}
+                      className={pressed ? pressedClassName ?? pressedControlClassName : ""}
+                      display="hover-border"
+                      key={id}
+                      label={label}
+                      onClick={() => toggle(id)}
+                      shape="pill"
+                      size="small"
+                    >
+                      {segments.map(({ className = threadStatusSegmentClassName, content, key }) => (
+                        <span className={className} key={key}>{content}</span>
+                      ))}
+                    </IconButton>
+                  );
+                  return narrowOnly ? <span className="hidden @max-[32rem]/status:contents" key={id}>{control}</span> : control;
+                })}
+              </span>
             ) : null}
           </div>
           {open ? (
-            // A zero-minimum row keeps content from growing the cell, so panel scrollers stay bounded.
-            <div className={`relative grid min-w-0 grid-rows-[minmax(0,1fr)] ${panelHeight}`} id={panelsId}>
+            // Panels grow to their content; only the streaming live terminal keeps a fixed height to scroll within.
+            <div className="relative grid min-w-0" id={panelsId}>
               {live ? (
                 <div
-                  aria-hidden={panel !== "live"}
-                  className={`${panelClassName} ${liveSlideClassName}`}
-                  data-active={panel === "live" ? "true" : "false"}
-                  inert={panel !== "live"}
+                  aria-hidden={activePanel !== LIVE}
+                  className={`${panelClassName} ${liveSlideClassName} h-[min(100vh,24rem)]`}
+                  data-active={activePanel === LIVE ? "true" : "false"}
+                  inert={activePanel !== LIVE}
                 >
-                  {mountedLiveKey === live.key || panel === "live" ? live.renderBody(panel === "live") : null}
+                  {mountedLiveKey === live.key || activePanel === LIVE ? live.renderBody(activePanel === LIVE) : null}
                 </div>
               ) : null}
-              {todos ? (
+              {visiblePanels.map(({ id, render }) => mounted.includes(id) || activePanel === id ? (
                 <div
-                  aria-hidden={panel !== "todos"}
-                  className={`${panelClassName} ${todoSlideClassName} max-h-[min(100vh,24rem)] overflow-y-auto overscroll-contain`}
-                  data-active={panel === "todos" ? "true" : "false"}
-                  inert={panel !== "todos"}
+                  aria-hidden={activePanel !== id}
+                  className={`${panelClassName} ${controlSlideClassName}`}
+                  data-active={activePanel === id ? "true" : "false"}
+                  data-thread-status-panel={id}
+                  inert={activePanel !== id}
+                  key={id}
                 >
-                  {todos.renderPanel()}
+                  {render()}
                 </div>
-              ) : null}
+              ) : null)}
             </div>
           ) : null}
         </div>

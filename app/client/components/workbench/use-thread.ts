@@ -18,6 +18,7 @@ const unavailableActions: ThreadStoreActions = {
   stopShell: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable, changeAgent: unavailable,
   changeModel: unavailable, changeReasoningEffort: unavailable, changeServiceTier: unavailable, changeSettings: unavailable,
   loadOlder: unavailable, observeGitArcProposal: () => () => {},
+  observeGitArcClaimChanges: () => () => {}, refreshGitArcClaimChanges: () => {},
   setGoal: unavailable, clearGoal: unavailable, deactivateSkill: unavailable,
   addTodo: unavailable, removeTodo: unavailable, setTodoRequired: unavailable, setTodoText: unavailable, clearAddressedFeedback: unavailable,
 };

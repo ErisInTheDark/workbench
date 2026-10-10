@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - formatLongTimestamp: full local date and time for timestamp tooltips and accessible labels.
- * - formatThreadRelativeTimestamp: format thread timestamps as compact relative activity labels. Keywords: workbench, thread, relative time, bumped.
+ * - formatThreadRelativeTimestamp: format thread timestamps as relative ("5m ago") or single-unit short ("5m") activity labels.
  * - humanizeThreadLabel: turn thread status and type labels into readable text. Keywords: workbench, thread, label.
  * - getThreadTitle: derive the best available thread title. Keywords: workbench, thread, title.
  * - truncateThreadText: shorten thread text for summaries without breaking words awkwardly. Keywords: workbench, thread, summary.
@@ -16,28 +16,23 @@ export function formatLongTimestamp (timestampMs: number) {
   return Number.isFinite(date.getTime()) ? LONG_TIMESTAMP_FORMAT.format(date) : "";
 }
 
-export function formatThreadRelativeTimestamp (timestampSeconds: number, nowMs: number) {
+/** `relative` reads "5m ago"; `short` is the single unit alone ("now", "5m") for tight controls. */
+export function formatThreadRelativeTimestamp (timestampSeconds: number, nowMs: number, style: "relative" | "short" = "relative") {
   if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0 || !Number.isFinite(nowMs)) {
     return "";
   }
 
   const elapsedSeconds = Math.max(0, Math.floor((nowMs - timestampSeconds * 1000) / 1000));
   if (elapsedSeconds < 45) {
-    return "just now";
+    return style === "short" ? "now" : "just now";
   }
 
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `${elapsedMinutes}m ago`;
-  }
-
   const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) {
-    return `${elapsedHours}h ago`;
-  }
-
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  return `${elapsedDays}d ago`;
+  const unit = elapsedMinutes < 60 ? `${elapsedMinutes}m`
+    : elapsedHours < 24 ? `${elapsedHours}h`
+      : `${Math.floor(elapsedHours / 24)}d`;
+  return style === "short" ? unit : `${unit} ago`;
 }
 
 export function humanizeThreadLabel (value: string) {

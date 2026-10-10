@@ -48,10 +48,12 @@
  * - FilePlusIcon/ExternalLinkIcon: file creation and external navigation glyphs.
  * - ArrowRightIcon/ArrowUpIcon/ChevronDownIcon/ChevronUpIcon: directional glyphs.
  * - FolderGit2Icon/AppWindowIcon/RefreshCwIcon: project, browser and refresh glyphs.
+ * - WallpaperIcon: live vis glyph.
  * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
  * - SquarePenIcon/CheckCheckIcon/AlarmClockIcon/ZzzIcon: editing and status glyphs.
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
  * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
+ * - SlashIcon: compact skill overflow glyph.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
@@ -441,6 +443,15 @@ export function FolderGit2Icon(props: IconProps) {
   );
 }
 
+export function WallpaperIcon(props: IconProps) {
+  return (
+    <OutlinedIcon {...props}>
+      <path d="M12 17v4" /><path d="M8 21h8" /><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15" />
+      <circle cx="8" cy="9" r="2" /><rect x="2" y="3" width="20" height="14" rx="2" />
+    </OutlinedIcon>
+  );
+}
+
 export function AppWindowIcon(props: IconProps) {
   return (
     <OutlinedIcon {...props}>
@@ -760,6 +771,10 @@ export function ListIcon(props: IconProps) {
 
 export function EllipsisIcon(props: IconProps) {
   return <OutlinedIcon {...props}><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /><circle cx="5" cy="12" r="1" /></OutlinedIcon>;
+}
+
+export function SlashIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m16 3-8 18" /></OutlinedIcon>;
 }
 
 export function FeatherIcon(props: IconProps) {

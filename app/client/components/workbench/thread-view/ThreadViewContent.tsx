@@ -57,7 +57,7 @@ import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalRevi
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
-import getThreadGitArcProposalPresentation, { getHoistedThreadGitArc } from "./thread-git-arc-presentation";
+import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
 import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
@@ -65,14 +65,11 @@ import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
-import ThreadSkillPills from "./ThreadSkillPills";
-import ThreadStatusRow from "./ThreadStatusRow";
+import ThreadStatusArea from "./ThreadStatusArea";
 import ThreadTodoPanel from "./ThreadTodoPanel";
 import useThreadLiveActivity from "./use-thread-live-activity";
 import useThreadTodoSelection from "./use-thread-todo-selection";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import ThreadWorkLifecycleCard from "./ThreadWorkLifecycleCard";
-import ThreadVisSessionCard from "./ThreadVisSessionCard";
 import ThreadVisUserEndedItem from "./ThreadVisUserEndedItem";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
@@ -80,7 +77,6 @@ import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
-import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadRateLimits from "./ThreadRateLimits";
 import ThreadEntryMotionController, { getThreadEntryMotionIdentities } from "./ThreadEntryMotionController";
 import ThreadWorkedRunController from "./ThreadWorkedRunController";
@@ -1059,14 +1055,12 @@ export default memo(function ThreadViewContent ({
       })}
     />
   ) : null;
-  const hoistedGitArc = getHoistedThreadGitArc({
+  const gitArcWork = getThreadGitArcWork({
     currentTurnId: currentTurn?.id ?? null,
-    running: liveTurn !== null,
     gitArc: activeGitArcSelection?.gitArc ?? null,
     proposalObservations: active.gitArcProposals,
     proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
-  const showPlanConflicts = !liveTurn || Boolean(activePendingUserInputRequest);
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message
     : activeTranscriptSource?.status === "absent"
@@ -1087,9 +1081,12 @@ export default memo(function ThreadViewContent ({
     >
       <ThreadGitArcObservationProvider
         acceptance={active.entry?.gitArc?.acceptance ?? null}
+        claimChanges={active.gitArcClaimChanges}
         lifecycleProposals={active.entry?.gitArc?.proposals ?? null}
+        observeClaimChanges={active.actions.observeGitArcClaimChanges}
         observeProposal={observeGitArcProposal}
         proposals={active.gitArcProposals}
+        refreshClaimChanges={active.actions.refreshGitArcClaimChanges}
       >
       <ThreadGitArcPresentationContext.Provider value={{
         gitArcPlan: activeGitArcSelection?.gitArcPlan ?? null,
@@ -1214,13 +1211,30 @@ export default memo(function ThreadViewContent ({
           )}
           </>}
         </div>
-        {activeThread && !isMessageBoardOpen && (liveActivityView || (active.entry && !isDraftThreadView)) ? (
-          <ThreadStatusRow
+        {activeThread && !isMessageBoardOpen && (liveActivityView || !isDraftThreadView) ? (
+          <ThreadStatusArea
+            addressedFeedback={active.head?.addressedFeedback ?? []}
+            // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
+            gitArc={!isDraftThreadView && activeThread.cwd && gitArcWork ? {
+              claim: gitArcWork,
+              commitActions: checkpointCommitActions,
+              cwd: activeThread.cwd,
+              harness: activeThread.harness,
+              running: liveTurn !== null,
+            } : null}
+            harness={activeThread.harness}
             key={activeThread.id}
             live={liveActivityView}
-            skills={active.entry && !isDraftThreadView ? (
-              <ThreadSkillPills onDeactivate={active.actions.deactivateSkill} skills={active.head?.skills ?? []} />
-            ) : null}
+            onFeedbackDeleted={active.actions.clearAddressedFeedback}
+            onOpenThread={onOpenThread}
+            projectFilePaths={projectFilePaths}
+            projectId={projectId}
+            projectRootPath={projectRootPath}
+            skills={active.entry && !isDraftThreadView ? { onDeactivate: active.actions.deactivateSkill, skills: active.head?.skills ?? [] } : null}
+            threadId={activeThread.id}
+            threadLifecycle={activeGitArcSelection?.lifecycle ?? active.entry?.lifecycle ?? null}
+            vis={!isDraftThreadView && vis?.sessions.length ? { sessions: vis.sessions, ...visActions } : null}
+            workspaceRoots={workspaceFileLinkRoots}
             todos={active.entry && !isDraftThreadView ? {
               goalSet: Boolean(active.head?.goal),
               count: active.head?.todos?.length ?? 0,
@@ -1239,35 +1253,6 @@ export default memo(function ThreadViewContent ({
                 />
               ),
             } : null}
-          />
-        ) : null}
-        {activeThread && !isDraftThreadView && showPlanConflicts ? (
-          <ThreadGitArcIntersectionCard
-            harness={activeThread.harness}
-            onOpenThread={onOpenThread}
-            projectId={projectId}
-            threadId={activeThread.id}
-          />
-        ) : null}
-        {activeThread && !isDraftThreadView && vis?.sessions.length ? <ThreadVisSessionCard sessions={vis.sessions} {...visActions} /> : null}
-        {/* Observed heads learn the working directory with the transcript; the card's Git requests need it. */}
-        {activeThread && !isDraftThreadView ? (
-          <ThreadWorkLifecycleCard
-            addressedFeedback={active.head?.addressedFeedback ?? []}
-            gitArc={hoistedGitArc && activeThread.cwd && activeGitArcSelection ? {
-              claim: hoistedGitArc,
-              commitActions: checkpointCommitActions,
-              cwd: activeThread.cwd,
-              harness: activeThread.harness,
-              running: liveTurn !== null,
-            } : null}
-            onFeedbackDeleted={active.actions.clearAddressedFeedback}
-            projectFilePaths={projectFilePaths}
-            projectId={projectId}
-            projectRootPath={projectRootPath}
-            threadId={activeThread.id}
-            threadLifecycle={activeGitArcSelection?.lifecycle ?? active.entry?.lifecycle ?? null}
-            workspaceRoots={workspaceFileLinkRoots}
           />
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
