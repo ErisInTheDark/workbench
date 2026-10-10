@@ -9,9 +9,8 @@ import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import type { WorkbenchAgentMessageAdmission } from "workbench-shared/workbench/provider/provider-thread";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
@@ -189,8 +188,26 @@ function createWorkbenchCoreFeature(
     now: Date.now,
     warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
   });
-  const providers = new WorkbenchProviderDispatcher(run, undefined, autoCompact.run.bind(autoCompact),
-    (threadId, message) => run("messages", owner => { owner.receive(threadId, message); }, "agent message admission"));
+  const providers = new WorkbenchProviderDispatcher(run, {
+    messageAdmission: autoCompact.run.bind(autoCompact),
+    onAgentMessageAdmitted: (threadId, message) => run(
+      "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
+    ),
+    onMessageAdmitted: async admission => {
+      const identity = await threadIdentity.resolve({
+        harness: admission.harness,
+        threadId: WorkbenchThreadIdSchema.parse(admission.threadId),
+      });
+      if (!identity) throw new Error("Accepted message has no canonical Workbench thread identity.");
+      await requireThreadState().controller.acceptAdmission(
+        identity.projectId,
+        admission.harness,
+        identity.threadId,
+        { kind: admission.kind, turnId: WorkbenchTurnIdSchema.parse(admission.turnId) },
+        admission.firstMessagePreview,
+      );
+    },
+  });
   const threadContextRollover = new WorkbenchThreadContextRolloverController(admission, {
     readSelectedCap: async threadId => {
       const identity = await threadIdentity.resolve({ threadId });
@@ -425,12 +442,6 @@ function createWorkbenchCoreFeature(
     if (!key) throw new Error(`Provider ${harness} is unavailable.`);
     return providers.get(key);
   };
-  // Agent messages move their target by what the provider did with them, exactly like user messages.
-  const acceptAdmission = async (projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, admitted: WorkbenchAgentMessageAdmission) => {
-    await requireThreadState().controller.acceptAdmission(projectId, harness, threadId, {
-      kind: admitted.kind, turnId: WorkbenchTurnIdSchema.parse(admitted.turnId),
-    });
-  };
   // Built after thread state below; its lifecycle listener must register before any subagent wait subscribes.
   let subagentQueues: WorkbenchSubagentQueueController | undefined;
   const subagents = new WorkbenchSubagentFeature({
@@ -445,7 +456,6 @@ function createWorkbenchCoreFeature(
     persistence: database,
     // Read lazily: thread actions own stop and are built later in this node.
     stopThread: threadId => threadActions.stopThread(threadId),
-    acceptAdmission,
     threadState: {
       getEntry: async (projectId, harness, threadId) => {
         return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);
@@ -486,7 +496,6 @@ function createWorkbenchCoreFeature(
       getEntry: async (projectId, harness, threadId) => (
         await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
       ),
-      acceptAdmission,
       resolvePendingQuestionnaire: (input, deliver) => (
         requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
       ),

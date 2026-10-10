@@ -54,7 +54,7 @@ export interface WorkbenchThreadActionOwners {
   profiles: Pick<WorkbenchThreadStateFeature, "captureCreationProfile" | "captureCreationProfileForProject">;
   state: Pick<
     WorkbenchThreadStateController,
-    "acceptProviderIntent" | "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
+    "getCanonicalThreadEntry" | "handleRequest" | "listPendingQuestionnaires"
   >;
   skills: Pick<WorkbenchThreadSkillsController, "read" | "deactivate">;
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
@@ -284,20 +284,6 @@ export default class WorkbenchThreadActionController {
     } catch (error) {
       const warning = "Your message was accepted, but Workbench could not record its activated skills.";
       this.owners.warn(`${warning} ${error instanceof Error ? error.message.slice(0, 300) : ""}`);
-      warnings.push(warning);
-    }
-    try {
-      const turnId = WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId);
-      const firstText = input.intent === "newTurn"
-        ? input.input.find(item => item.type === "text" && item.text.trim())
-        : undefined;
-      await this.owners.state.acceptProviderIntent(
-        identity.projectId, harness, identity.threadId, turnId,
-        firstText?.type === "text" ? firstText.text : undefined,
-      );
-    } catch {
-      const warning = "Your message was accepted, but Workbench could not update its thread state. Do not resend it.";
-      this.owners.warn(warning);
       warnings.push(warning);
     }
     return warnings.length

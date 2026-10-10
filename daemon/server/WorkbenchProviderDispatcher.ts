@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - WorkbenchProviderDispatcherOptions: shared message admission and post-admission hooks.
  * - default WorkbenchProviderDispatcher: obtain reload-safe provider handles with one process-wide steer-wait interruption path.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
@@ -8,9 +9,8 @@ import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/p
 import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
+import type { WorkbenchProviderHandleOptions } from "./WorkbenchProviderHandle";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
-import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
-import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 
 function interruptSteerWaits(threadId: string, senderThreadId?: string) {
   getProcessWorkbenchAgentMcpRequestRegistry().interruptThreadWaits(
@@ -20,23 +20,32 @@ function interruptSteerWaits(threadId: string, senderThreadId?: string) {
   );
 }
 
+export type WorkbenchProviderDispatcherOptions = Partial<WorkbenchProviderHandleOptions>;
+
 export default class WorkbenchProviderDispatcher {
   constructor(
     private readonly run: WorkbenchProviderOperation,
-    private readonly onSteerAdmitted: (threadId: string, senderThreadId?: string) => void = interruptSteerWaits,
-    private readonly messageAdmission?: WorkbenchThreadAutoCompactController["run"],
-    private readonly onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void,
+    private readonly options: WorkbenchProviderDispatcherOptions = {},
   ) {}
 
   get(key: WorkbenchProviderKey): WorkbenchProvider {
-    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted, this.messageAdmission, this.onAgentMessageAdmitted);
+    return new WorkbenchProviderHandle(key, this.run, {
+      interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
+      messageAdmission: this.options.messageAdmission,
+      onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
+      onMessageAdmitted: this.options.onMessageAdmitted,
+    });
   }
 
   hydratesUsage(key: WorkbenchProviderKey) {
-    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted).hydratesUsage();
+    return new WorkbenchProviderHandle(key, this.run, {
+      interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
+    }).hydratesUsage();
   }
 
   continueUnfinished(key: WorkbenchProviderKey, target: WorkbenchUnfinishedTurnTarget) {
-    return new WorkbenchProviderHandle(key, this.run, this.onSteerAdmitted).continueUnfinishedTurn(target);
+    return new WorkbenchProviderHandle(key, this.run, {
+      interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
+    }).continueUnfinishedTurn(target);
   }
 }

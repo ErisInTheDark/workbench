@@ -207,12 +207,6 @@ function fixture({
         name: relationship.name, parentThreadId: relationship.parentThreadId, pinned: childPinned,
         profileId: relationship.profileId, profileName: relationship.profileName, projectId: relationship.projectId, title: relationship.title, updatedAt: 2,
       } : null,
-      acceptAdmission: async (selected, selectedHarness, threadId, admitted) => {
-        calls.push({ method: "acceptAdmission", params: { projectId: selected, harness: selectedHarness, threadId, admitted } });
-        await questionnaireState?.acceptAdmission(selected, selectedHarness, threadId, {
-          kind: admitted.kind, turnId: identitySchemas.WorkbenchTurnIdSchema.parse(admitted.turnId),
-        });
-      },
       resolvePendingQuestionnaire: questionnaireState
         ? questionnaireState.resolvePendingQuestionnaire.bind(questionnaireState)
         : (async () => null) satisfies WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"],
@@ -469,18 +463,6 @@ test("subagents reach unsettled siblings by name without reaching other parents'
   await outsider.controller.dispose();
 });
 
-test("an admitted agent message moves its target by how the provider admitted it", async () => {
-  for (const activeChild of [false, true]) {
-    const { calls, controller } = fixture({ activeChild });
-    await controller.send({ callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Another pass.", threadId: "child" });
-    // A steer into a live turn must not read as a started turn, or it would drop that turn's questionnaire.
-    assert.deepEqual(calls.find(({ method }) => method === "acceptAdmission")?.params, {
-      projectId, harness, threadId: "child", admitted: { kind: activeChild ? "steered" : "started", turnId: "delivered-child" },
-    });
-    await controller.dispose();
-  }
-});
-
 test("subagent messages to arbitrary peers use the caller thread title", async () => {
   const { calls, controller } = fixture();
   await controller.send({
@@ -507,7 +489,7 @@ test("direct-child messages retain questionnaire ordering and lock fencing", asy
   await active.controller.send({
     callerThreadId: "reviewer", cwd: "C:/repo", userVisibleSimpleVersion: "Summary.", message:"Continue with the review.", threadId: "child",
   });
-  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "acceptAdmission", "respond"]);
+  assert.deepEqual(active.calls.map(({ method }) => method), ["messageAgent", "respond"]);
   const delivery = active.calls[0]?.params as Parameters<WorkbenchProviderThreads["messageAgent"]>[0];
   assert.equal(delivery.message.senderName, "parent agent");
   await active.controller.dispose();

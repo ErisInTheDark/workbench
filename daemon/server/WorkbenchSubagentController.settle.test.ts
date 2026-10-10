@@ -63,7 +63,6 @@ async function createHarness() {
     publicThreadId: async () => { throw new Error("Settle does not publish thread identities."); },
     provider: () => { throw new Error("Settle does not call providers."); },
     stopThread: async () => { throw new Error("Settle does not stop threads."); },
-    acceptAdmission: async () => { throw new Error("Settle does not message threads."); },
     onRelationshipCommitted: async () => undefined,
     resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
     profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },

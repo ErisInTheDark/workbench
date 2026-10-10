@@ -1,5 +1,7 @@
 /*
  * Exports:
+ * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
+ * - WorkbenchProviderHandleOptions: post-admission hooks and shared message admission policy.
  * - default WorkbenchProviderHandle: forward operations through the current definition lease and wake waits after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
@@ -9,17 +11,30 @@ import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/p
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 
+export interface WorkbenchProviderMessageAdmission {
+  firstMessagePreview?: string;
+  harness: WorkbenchProviderKey;
+  kind: "started" | "steered";
+  threadId: string;
+  turnId: string;
+}
+
+export interface WorkbenchProviderHandleOptions {
+  interruptSteerWaits: (threadId: string, senderThreadId?: string) => void;
+  messageAdmission?: WorkbenchThreadAutoCompactController["run"];
+  onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
+  onMessageAdmitted?: (admission: WorkbenchProviderMessageAdmission) => Promise<void> | void;
+}
+
 export default class WorkbenchProviderHandle implements WorkbenchProvider {
   constructor(
     private readonly key: WorkbenchProviderKey,
     private readonly run: WorkbenchProviderOperation,
-    private readonly interruptSteerWaits: (threadId: string, senderThreadId?: string) => void,
-    private readonly messageAdmission?: WorkbenchThreadAutoCompactController["run"],
-    private readonly onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void,
+    private readonly options: WorkbenchProviderHandleOptions,
   ) {}
 
   private admitted<T extends { kind: "started" | "steered" }>(threadId: string, result: T, senderThreadId?: string): T {
-    if (result.kind === "steered") this.interruptSteerWaits(threadId, senderThreadId);
+    if (result.kind === "steered") this.options.interruptSteerWaits(threadId, senderThreadId);
     return result;
   }
 
@@ -29,7 +44,43 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     admit: () => Promise<T>,
     options?: { skipAutoCompact?: boolean },
   ) {
-    return this.messageAdmission ? this.messageAdmission(threadId, provider, admit, options) : admit();
+    return this.options.messageAdmission ? this.options.messageAdmission(threadId, provider, admit, options) : admit();
+  }
+
+  private publishMessageAdmission(
+    threadId: string,
+    admission: { kind: "started" | "steered"; turnId: string },
+    firstMessagePreview?: string,
+  ) {
+    return this.options.onMessageAdmitted?.({
+      harness: this.key,
+      kind: admission.kind,
+      threadId,
+      turnId: admission.turnId,
+      ...(firstMessagePreview ? { firstMessagePreview } : {}),
+    });
+  }
+
+  private async publishAcceptedUserMessage<
+    Result extends ({ kind: "started"; turn: { id: string }; warning?: string } | { kind: "steered"; turnId: string; warning?: string }),
+  >(input: Parameters<WorkbenchProvider["threads"]["submit"]>[0], result: Result): Promise<Result> {
+    const firstMessagePreview = input.intent === "newTurn"
+      ? input.input.flatMap(part => part.type === "text" && part.text.trim() ? [part.text] : []).at(0)
+      : undefined;
+    try {
+      await this.publishMessageAdmission(input.threadId, {
+        kind: result.kind,
+        turnId: result.kind === "started" ? result.turn.id : result.turnId,
+      }, firstMessagePreview);
+      return result;
+    } catch {
+      const warning = "Your message was accepted, but Workbench could not update its thread state. Do not resend it.";
+      console.warn(`[thread-state] ${warning}`);
+      return {
+        ...result,
+        warning: [result.warning?.slice(0, 500), warning].filter(Boolean).join(" "),
+      };
+    }
   }
 
   readonly context: NonNullable<WorkbenchProvider["context"]> = {
@@ -91,14 +142,17 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
     submit: async input => {
       const { skipAutoCompact, ...providerInput } = input;
-      return this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
+      const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
         this.admitMessage(input.threadId, provider, () => provider.threads.submit(providerInput), { skipAutoCompact })
       ), `${this.key}: threads.submit`));
+      return await this.publishAcceptedUserMessage(input, result);
     },
     messageAgent: async input => {
       const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.messageAgent(input)), `${this.key}: threads.messageAgent`);
-      await this.onAgentMessageAdmitted?.(input.threadId, input.message);
-      return this.admitted(input.threadId, result, input.message.senderThreadId);
+      await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
+      const admitted = this.admitted(input.threadId, result, input.message.senderThreadId);
+      await this.publishMessageAdmission(input.threadId, admitted);
+      return admitted;
     },
     rename: (threadId, title) => this.run(providerRegistrations[this.key], provider => provider.threads.rename(threadId, title), `${this.key}: threads.rename`),
     compact: (threadId, options) => this.run(providerRegistrations[this.key], provider => provider.threads.compact(threadId, options), `${this.key}: threads.compact`),

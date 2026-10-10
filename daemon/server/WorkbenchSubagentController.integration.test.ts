@@ -187,7 +187,6 @@ test("creates with the selected profile and delivers attributed initial input", 
   const cwd = process.cwd();
   const provider = new FakeProvider(cwd);
   const committed: WorkbenchSubagentRelationship[] = [];
-  const accepted: Array<{ threadId: string; turnId: string }> = [];
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities,
     publicThreadId: fixture.publicThreadId,
@@ -200,7 +199,6 @@ test("creates with the selected profile and delivers attributed initial input", 
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptAdmission: async (_projectId, _harness, threadId, { turnId }) => { accepted.push({ threadId, turnId }); },
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -222,7 +220,6 @@ test("creates with the selected profile and delivers attributed initial input", 
   assert.deepEqual(created, { id: 3, result: { threadId: childThreadId } });
   assert.deepEqual(committed.map(({ threadId }) => threadId), [childThreadId]);
   // A wait right after creation must see the first message's turn as running, not the empty thread as finished.
-  assert.deepEqual(accepted, [{ threadId: childThreadId, turnId: `${childThreadId}-admitted` }]);
   assert.deepEqual(provider.calls.filter(({ method }) => method === "create" || method === "messageAgent").map(({ method }) => method), [
     "create",
     "messageAgent",
@@ -289,7 +286,6 @@ test("keeps relationship storage independent from lifecycle through create and s
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptAdmission: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });
@@ -340,7 +336,6 @@ test("keeps a created child durable when its first turn fails to start", async (
     profileStore,
     subagentStore: new WorkbenchSubagentStore(fixture.database),
     stopThread: async () => undefined,
-    acceptAdmission: async () => undefined,
   });
 
   await controller.mutateProfile({ kind: "upsert", profile: profile() });

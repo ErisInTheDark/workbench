@@ -19,7 +19,6 @@ function fixture(providerWarning?: string) {
   const mutations: object[] = [];
   const stopOrder: string[] = [];
   let interruptFailure = false;
-  let settlementFailure = false;
   let titleFailure = false;
   const provider: WorkbenchProvider = {
     threads: {
@@ -66,12 +65,6 @@ function fixture(providerWarning?: string) {
     vis: { endById: unused },
     recordSkillActivations: async () => undefined,
     state: {
-      acceptProviderIntent: async (_project, _harness, acceptedThread, acceptedTurn) => {
-        assert.equal(acceptedThread, threadId);
-        assert.equal(acceptedTurn, "wb-turn");
-        if (settlementFailure) throw new Error("state persistence unavailable");
-        return unused();
-      },
       getCanonicalThreadEntry: async () => null,
       listPendingQuestionnaires: () => [],
       handleRequest: async (connectionId, request) => {
@@ -89,7 +82,6 @@ function fixture(providerWarning?: string) {
     provider, owners,
     controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded,
     failInterrupt: () => { interruptFailure = true; },
-    failSettlement: () => { settlementFailure = true; },
     failTitle: () => { titleFailure = true; },
   };
 }
@@ -203,45 +195,6 @@ test("provider deletion rejects unsupported and ambiguous targets before any des
   assert.deepEqual(f.mutations, []);
 });
 
-test("accepted messages retain WB identity and are not resent when state settlement fails", async () => {
-  const f = fixture();
-  f.failSettlement();
-  const result = await f.controller.handle("thread/message/submit", {
-    threadId: "wb-thread", clientMessageId: "message", input: [{
-      type: "text", text: "hello",
-      text_elements: [{ byteRange: { start: 0, end: 5 }, placeholder: null }],
-    }],
-    intent: "continue",
-  });
-  assert.equal(result.kind, "steered");
-  assert.ok(result.warning);
-  assert.equal(f.messages.length, 1);
-  assert.equal(f.warnings.length, 1);
-  assert.ok("threadId" in f.messages[0]);
-  assert.equal(f.messages[0].threadId, "wb-thread");
-});
-
-test("new-turn admission passes the first non-empty user text as display fallback", async () => {
-  const f = fixture();
-  const fallbacks: Array<string | undefined> = [];
-  f.provider.threads.submit = async () => ({ kind: "started", turn: { id: "wb-turn" } as never });
-  f.owners.state.acceptProviderIntent = async (_project, _harness, _threadId, _turnId, fallback?: string) => {
-    fallbacks.push(fallback);
-    return null;
-  };
-  const input = [
-    { type: "text", text: "  ", text_elements: [] },
-    { type: "text", text: "First user message", text_elements: [] },
-  ];
-  await f.controller.handle("thread/message/submit", {
-    threadId: "wb-thread", clientMessageId: "launch:one", input, intent: "newTurn",
-  });
-  await f.controller.handle("thread/message/submit", {
-    threadId: "wb-thread", clientMessageId: "steer", input, intent: "steer", expectedTurnId: "wb-turn",
-  });
-  assert.deepEqual(fallbacks, ["First user message", undefined]);
-});
-
 test("message admission ignores browser steer classification", async () => {
   const f = fixture();
   await f.controller.handle("thread/message/submit", {
@@ -252,14 +205,15 @@ test("message admission ignores browser steer classification", async () => {
   }]);
 });
 
-test("accepted provider warnings survive an additional state settlement failure", async () => {
+test("accepted provider warnings survive an additional skill-recording failure", async () => {
   const f = fixture("Recorder needs repair.");
-  f.failSettlement();
+  f.owners.recordSkillActivations = async () => { throw new Error("skills unavailable"); };
   const result = await f.controller.handle("thread/message/submit", {
     threadId: "wb-thread", clientMessageId: "message", input: [], intent: "continue",
   });
   assert.ok(result.warning?.includes("Recorder needs repair."));
-  assert.ok(result.warning?.includes(f.warnings[0]));
+  assert.match(result.warning ?? "", /could not record its activated skills/u);
+  assert.match(f.warnings[0] ?? "", /skills unavailable/u);
   assert.equal(f.messages.length, 1);
 });
 
@@ -394,7 +348,6 @@ test("dismissing an undelivered steer records the user's final word, and held st
 
 test("resending submits the held input as a fresh message before retiring the undelivered copy", async () => {
   const f = fixture();
-  f.owners.state.acceptProviderIntent = async () => null;
   withSteer(f, "failed");
   const result = await f.controller.handle("thread/steer/resend", { threadId: "wb-thread", itemId: "steer-item" });
   assert.equal(result.kind, "steered");

@@ -949,8 +949,10 @@ test("status notices follow committed input transitions, not repeats or notifica
     await controller.ensureProviderEntry(fixtureProjectIds.project, entry);
     for (const status of ["blocked", "completed"] as const) {
       await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, { kind: "agentStatus", status });
-      await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn);
-      await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn);
+      await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+        { kind: "started", turnId: fixtureTurnIds.turn });
+      await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+        { kind: "started", turnId: fixtureTurnIds.turn });
     }
     const { metadata: _metadata, ...common } = entry;
     await controller.ensureProviderEntry(fixtureProjectIds.project, {
@@ -960,7 +962,8 @@ test("status notices follow committed input transitions, not repeats or notifica
       profileId: "profile", profileName: "profile", projectId: fixtureProjectIds.project,
     });
     await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.child, { kind: "agentStatus", status: "blocked" });
-    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.child, fixtureTurnIds.turn);
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.child,
+      { kind: "started", turnId: fixtureTurnIds.turn });
     assert.equal(notices.length, 2);
     assert.deepEqual(statesAtPublication, ["working", "working"]);
     assert.equal(warnings.length, 2);
@@ -2151,7 +2154,8 @@ test("legacy profiles migrate and accepted provider work retains its configured 
   assert.equal(await controller.setComposerProfileTarget(threadSlot, {
     kind: "custom", settings: { ...selected.settings, model: "" },
   }), false);
-  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["turn"]);
+  await controller.acceptAdmission(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"],
+    { kind: "started", turnId: fixtureTurnIds["turn"] });
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
 
   const stored = await readProjectState<{
@@ -2165,7 +2169,8 @@ test("legacy profiles migrate and accepted provider work retains its configured 
   assert.deepEqual(stored.newThreadProfile, selected);
   assert.deepEqual(stored.records.find((record) => record.identity.threadId === "materialized")?.profile, selected);
   await controller.setComposerProfileTarget({ kind: "new-thread", projectId: fixtureProjectIds["project"] }, migrated);
-  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"], fixtureTurnIds["next-turn"]);
+  await controller.acceptAdmission(fixtureProjectIds["project"], "codex", fixtureThreadIds["materialized"],
+    { kind: "started", turnId: fixtureTurnIds["next-turn"] });
   assert.deepEqual(await controller.readComposerProfileTarget(threadSlot), selected);
   await controller.dispose();
   await temporary.dispose();
@@ -2584,8 +2589,8 @@ test("accepted intent survives provider discovery lag and remains visible after 
   await controller.readProject(fixtureProjectIds["project"]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   publishedSnapshots.length = 0;
-  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.provider,
-    fixtureTurnIds.turn, "First user message");
+  await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.provider,
+    { kind: "started", turnId: fixtureTurnIds.turn }, "First user message");
   const entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind !== "draft" && candidate.identity.threadId === "provider");
   assert.ok(entry && entry.entryKind !== "draft");
   assert.equal(entry?.title, "First user message");
@@ -2694,11 +2699,13 @@ test("a reconciliation snapshot cannot replace a lifecycle transition made while
   };
   await controller.readProject(fixtureProjectIds["project"]);
   await new Promise(resolve => setTimeout(resolve, 0));
-  await controller.acceptProviderIntent(fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"], fixtureTurnIds["old-turn"]);
+  await controller.acceptAdmission(fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"],
+    { kind: "started", turnId: fixtureTurnIds["old-turn"] });
   await controller.observeLifecycle("codex", fixtureThreadIds["provider"], { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds["old-turn"] });
 
-  await reconcileHeld(() => controller.acceptProviderIntent(
-    fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"], fixtureTurnIds["next-turn"]));
+  await reconcileHeld(() => controller.acceptAdmission(
+    fixtureProjectIds["project"], "codex", fixtureThreadIds["provider"],
+    { kind: "started", turnId: fixtureTurnIds["next-turn"] }));
   assert.deepEqual(await lifecycle(), {
     agent: { agentStatus: "working", turnId: "next-turn" }, kind: "working", reason: "acceptedIntent", settled: false,
   }, "the turn accepted mid-reconciliation must stay working");
@@ -2729,11 +2736,11 @@ test("accepted intent replaces only a neutral headless provider title with the f
 
   await controller.readProject(fixtureProjectIds["project"]);
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("neutral", "New thread"));
-  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.neutral,
-    fixtureTurnIds["neutral-turn"], "First user message");
+  await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.neutral,
+    { kind: "started", turnId: fixtureTurnIds["neutral-turn"] }, "First user message");
   await controller.ensureProviderEntry(fixtureProjectIds["project"], providerEntry("named", "Meaningful provider title"));
-  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.named,
-    fixtureTurnIds["named-turn"], "Different user message");
+  await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.named,
+    { kind: "started", turnId: fixtureTurnIds["named-turn"] }, "Different user message");
 
   const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
   assert.equal(snapshot.entries.find((entry) => entry.entryKind === "thread" && entry.identity.threadId === "neutral")?.title, "First user message");
@@ -2757,17 +2764,20 @@ test("provider admission keeps a first-message display fallback separate from ex
     threadStateStore: new MemoryThreadStatePersistence(),
   });
   try {
-    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "First user message");
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+      { kind: "started", turnId: fixtureTurnIds.turn }, "First user message");
     let entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
     assert.equal(entry?.title, "First user message");
     assert.deepEqual(entry?.entryKind === "thread" ? entry.titleHistory : null, []);
 
-    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "Later message");
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+      { kind: "started", turnId: fixtureTurnIds.turn }, "Later message");
     entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
     assert.equal(entry?.title, "First user message");
 
     await controller.setTitle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, "Explicit title");
-    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, fixtureTurnIds.turn, "Even later message");
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+      { kind: "started", turnId: fixtureTurnIds.turn }, "Even later message");
     entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.thread);
     assert.equal(entry?.title, "Explicit title");
     assert.equal(entry?.entryKind === "thread" ? entry.titleHistory?.[0]?.title : null, "Explicit title");
@@ -2780,7 +2790,8 @@ test("provider admission keeps a first-message display fallback separate from ex
       metadata: { archived: false, pinned: false, snoozed: false },
       title: "Provider name",
     });
-    await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.child, fixtureTurnIds.turn, "First child message");
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.child,
+      { kind: "started", turnId: fixtureTurnIds.turn }, "First child message");
     entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, fixtureThreadIds.child);
     assert.equal(entry?.title, "Provider name");
     assert.deepEqual(entry?.entryKind === "thread" ? entry.titleHistory : null, []);
@@ -2827,8 +2838,8 @@ test("successful user input wakes snoozed threads without changing questionnaire
   await controller.readProject(fixtureProjectIds["project"]);
   await waitFor(() => discovered, "Snoozed threads were not discovered.");
 
-  await controller.acceptProviderIntent(fixtureProjectIds.project, "codex", fixtureThreadIds.accepted,
-    fixtureTurnIds["new-turn"], "Accepted");
+  await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.accepted,
+    { kind: "started", turnId: fixtureTurnIds["new-turn"] }, "Accepted");
   let entry = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread" && candidate.identity.threadId === "accepted");
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.snoozed : null, false);
   assert.equal(entry?.entryKind === "thread" ? entry.metadata.pinned : null, true);

@@ -574,7 +574,7 @@ export default class WorkbenchThreadStateController {
     return request;
   }
 
-  async acceptProviderIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, firstMessagePreview?: string) {
+  private async acceptStartedIntent(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, firstMessagePreview?: string) {
     const providerEntry = this.acceptedIntentEntry({
       harness, threadId, turnId,
       title: resolveWorkbenchThreadTitle({ id: threadId, name: null, preview: firstMessagePreview }),
@@ -586,10 +586,11 @@ export default class WorkbenchThreadStateController {
   async acceptAdmission(
     projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId,
     admitted: { kind: "started" | "steered"; turnId: WorkbenchTurnId },
+    firstMessagePreview?: string,
   ) {
     // A steer must never read as new intent: that would drop the live turn's questionnaire while it still waits.
     return admitted.kind === "started"
-      ? await this.acceptProviderIntent(projectId, harness, threadId, admitted.turnId)
+      ? await this.acceptStartedIntent(projectId, harness, threadId, admitted.turnId, firstMessagePreview)
       : await this.applyLifecycle(projectId, harness, threadId, { kind: "userInputDelivered", turnId: admitted.turnId });
   }
 

@@ -14,7 +14,6 @@ import {
   type WorkbenchThreadId,
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
-import type { WorkbenchAgentMessageAdmission } from "workbench-shared/workbench/provider/provider-thread";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import { isWorkbenchMcpQuestionnaireRequestKey } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
@@ -51,8 +50,6 @@ export interface WorkbenchThreadMessageControllerOptions {
   resolveProjectFromCwd: AgentEndpointProjectResolver;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
-    /** Move the target by how its provider admitted the message, as user messages do. */
-    acceptAdmission(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId, admitted: WorkbenchAgentMessageAdmission): Promise<void>;
     resolvePendingQuestionnaire: WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"];
   };
 }
@@ -128,7 +125,7 @@ export default class WorkbenchThreadMessageController {
     if (!this.active) return Promise.reject(new Error("Thread message controller is draining for runtime reload."));
     const operation = (async () => {
       const target = await this.resolveThread(input.threadId, "Workbench notice target");
-      const admitted = await this.options.provider(target.harness).threads.messageAgent({
+      await this.options.provider(target.harness).threads.messageAgent({
         cwd: target.thread.cwd,
         threadId: target.threadId,
         message: {
@@ -138,7 +135,6 @@ export default class WorkbenchThreadMessageController {
           userVisibleSimpleVersion: input.userVisibleSimpleVersion,
         },
       });
-      await this.options.threadState.acceptAdmission(target.projectId, target.harness, target.threadId, admitted);
     })();
     this.requests.add(operation);
     return operation.finally(() => this.requests.delete(operation));
@@ -247,10 +243,6 @@ export default class WorkbenchThreadMessageController {
         userVisibleSimpleVersion: request.userVisibleSimpleVersion,
       },
     };
-    // Waiters read lifecycle; without this a re-messaged child still looks finished until provider events land.
-    const accept = (admitted: WorkbenchAgentMessageAdmission) => this.options.threadState.acceptAdmission(
-      target.projectId, target.harness, target.threadId, admitted,
-    );
     const active = isThreadStatusActive(target.thread.status);
     const entry = directChild
       ? await this.options.threadState.getEntry(target.projectId, target.harness, target.threadId)
@@ -265,7 +257,6 @@ export default class WorkbenchThreadMessageController {
       ...input,
       ...(directChild && !active ? { context: buildSubagentPromptContext(directChild.name, request.workbenchOrigin) } : {}),
     });
-    await accept(admitted);
     if (question) {
       const response = createEmptySubagentQuestionnaireResponse(question.request);
       const replaced = new Error("The captured questionnaire was replaced.");

@@ -48,8 +48,10 @@ test("accepted agent messages wake matching message waits and end others without
       },
       submit: async () => ({ kind: "steered", turnId: "turn" }),
     } } as unknown as WorkbenchProvider;
-    const dispatcher = new WorkbenchProviderDispatcher(async (_definition, operation) => operation(provider),
-      undefined, undefined, (target, message) => { owner.receive(target, message); });
+    const dispatcher = new WorkbenchProviderDispatcher(
+      async (_definition, operation) => operation(provider),
+      { onAgentMessageAdmitted: (target, message) => { owner.receive(target, message); } },
+    );
     const handle = dispatcher.get(harness);
     const waiter = owner.wait({
       waitId: "filtered", callerThreadId: threadId, senderThreadIds: [WorkbenchThreadIdSchema.parse("selected")],
@@ -122,8 +124,13 @@ test("user and agent messages on every provider share compact-before-start admis
         now: () => 30 * 60_000,
         warn: () => {},
       });
-      const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider),
-        threadId => { waits.push(threadId); }, owner.run.bind(owner));
+      const dispatcher = new WorkbenchProviderDispatcher(
+        async (_registration, operation) => operation(provider),
+        {
+          interruptSteerWaits: threadId => { waits.push(threadId); },
+          messageAdmission: owner.run.bind(owner),
+        },
+      );
       const send = (route: "user" | "agent") => route === "user"
         ? dispatcher.get(harness).threads.submit({ threadId: "thread", clientMessageId: "message", input: [], intent: "continue" })
         : dispatcher.get(harness).threads.messageAgent({ threadId: "thread", cwd: "C:/repo",
@@ -165,8 +172,7 @@ test("user bypass skips Workbench compaction and is stripped before provider sub
   });
   const dispatcher = new WorkbenchProviderDispatcher(
     async (_registration, operation) => operation(provider),
-    undefined,
-    owner.run.bind(owner),
+    { messageAdmission: owner.run.bind(owner) },
   );
   await dispatcher.get("codex").threads.submit({
     threadId: "thread",
@@ -203,8 +209,11 @@ test("the shared provider admission gate wakes waits only for accepted steers", 
       },
     },
   } as unknown as WorkbenchProvider;
-  const handle = new WorkbenchProviderHandle("codex", async (_registration, operation) => operation(provider),
-    threadId => { interrupted.push(threadId); });
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: threadId => { interrupted.push(threadId); } },
+  );
   const userMessage = {
     threadId: "parent", clientMessageId: "user-1", input: [], intent: "continue" as const,
   };
@@ -230,6 +239,92 @@ test("the shared provider admission gate wakes waits only for accepted steers", 
   agentAdmission = "failed";
   await assert.rejects(handle.threads.messageAgent(message), /admission failed/u);
   assert.deepEqual(interrupted, ["parent", "parent"]);
+});
+
+test("the shared provider handle publishes each provider-chosen message admission once", async () => {
+  const admissions: Array<{ firstMessagePreview?: string; harness: string; kind: string; threadId: string; turnId: string }> = [];
+  let userAdmission: "failed" | "started" | "steered" = "started";
+  let agentAdmission: "started" | "steered" = "steered";
+  const provider = {
+    threads: {
+      submit: async () => {
+        if (userAdmission === "failed") throw new Error("provider rejected message");
+        return userAdmission === "started"
+          ? { kind: "started" as const, turn: { id: "user-started" } as never }
+          : { kind: "steered" as const, turnId: "user-steered" };
+      },
+      messageAgent: async () => ({
+        kind: agentAdmission,
+        turnId: agentAdmission === "started" ? "agent-started" : "agent-steered",
+      }),
+    },
+  } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    {
+      interruptSteerWaits: () => undefined,
+      onMessageAdmitted: admission => { admissions.push(admission); },
+    },
+  );
+
+  await handle.threads.submit({
+    threadId: "thread", clientMessageId: "user-start",
+    input: [{ type: "text", text: "First user message", text_elements: [] }],
+    intent: "newTurn",
+  });
+  userAdmission = "steered";
+  await handle.threads.submit({
+    threadId: "thread", clientMessageId: "user-steer", input: [], intent: "continue",
+  });
+  await handle.threads.messageAgent({
+    threadId: "thread", cwd: "C:/repo",
+    message: { message: "continue", senderName: "luna", senderThreadId: "sender" },
+  });
+  agentAdmission = "started";
+  await handle.threads.messageAgent({
+    threadId: "thread", cwd: "C:/repo",
+    message: { message: "restart", senderName: "luna", senderThreadId: "sender" },
+  });
+
+  assert.deepEqual(admissions, [
+    {
+      firstMessagePreview: "First user message",
+      harness: "codex", kind: "started", threadId: "thread", turnId: "user-started",
+    },
+    { harness: "codex", kind: "steered", threadId: "thread", turnId: "user-steered" },
+    { harness: "codex", kind: "steered", threadId: "thread", turnId: "agent-steered" },
+    { harness: "codex", kind: "started", threadId: "thread", turnId: "agent-started" },
+  ]);
+  userAdmission = "failed";
+  await assert.rejects(handle.threads.submit({
+    threadId: "thread", clientMessageId: "rejected", input: [], intent: "continue",
+  }), /provider rejected message/u);
+  assert.equal(admissions.length, 4);
+});
+
+test("an accepted user message returns a warning when lifecycle publication fails", async context => {
+  const warned = context.mock.method(console, "warn", () => undefined);
+  const provider = { threads: {
+    submit: async () => ({ kind: "steered" as const, turnId: "turn", warning: "Provider warning." }),
+  } } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderHandle(
+    "codex",
+    async (_registration, operation) => operation(provider),
+    {
+      interruptSteerWaits: () => undefined,
+      onMessageAdmitted: () => { throw new Error("state unavailable"); },
+    },
+  );
+
+  const result = await handle.threads.submit({
+    threadId: "thread", clientMessageId: "accepted", input: [], intent: "continue",
+  });
+
+  assert.equal(result.kind, "steered");
+  assert.match(result.warning ?? "", /Provider warning/u);
+  assert.match(result.warning ?? "", /could not update its thread state/u);
+  assert.equal(warned.mock.callCount(), 1);
 });
 
 test("tool capture finishes through the replacement owner with the original pinned identity", async () => {
@@ -328,7 +423,9 @@ function fixture() {
       provides: ["providers"], requires: [], safeAll: true,
       scope: "server:consumer",
       create: (_context, { run }) => ({
-        registrations: { providers: new WorkbenchProviderDispatcher(run, () => undefined) },
+        registrations: {
+          providers: new WorkbenchProviderDispatcher(run, { interruptSteerWaits: () => undefined }),
+        },
         start() {}, dispose() {},
       }),
     }),
