@@ -171,15 +171,15 @@ export default function ThreadGitArcProposalList({
   // A lone pending proposal names itself, so the header reads as that commit.
   const lone = proposals.length === 1 && proposedIds.length === 1 ? proposals[0]!.summary ?? null : null;
   const summary = (
-    // Narrow rows wrap into two lines: the title alone, then totals with the action pushed right.
+    // Totals stay beside the title they describe; narrow rows wrap the action onto its own line.
     <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
       <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
         <GitArcProposalIcon className="shrink-0" size={14} />
         {lone
           ? <span className="min-w-0 truncate font-medium text-text">{lone.title}</span>
           : formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}
+        {lone?.changes ? <span className="ml-1.5 inline-flex shrink-0"><ThreadGitArcChangeTotals changes={lone.changes} /></span> : null}
       </span>
-      {lone?.changes ? <span className="inline-flex shrink-0"><ThreadGitArcChangeTotals changes={lone.changes} /></span> : null}
       {showCommitAll || committing ? (
         <span className="ml-auto inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
           <PrimaryButton
