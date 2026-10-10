@@ -82,15 +82,14 @@ function VisSession({ actions, answerStatus, onAnswer, reloads, session }: {
       <AnswerStatusLine status={answerStatus} />
       {session.render ? (
         <ThreadVisFrame
-          className="h-[min(65vh,32rem)] rounded-lg"
+          className="rounded-[0.65rem] bg-fg/4"
           document={session.render.document}
           key={reloads}
           onAnswer={onAnswer}
-          resizable
           title={`Live vis of ${session.path}`}
         />
       ) : (
-        <div aria-hidden="true" className="h-[min(65vh,32rem)] animate-pulse rounded-lg bg-fg/5 motion-reduce:animate-none" />
+        <div aria-hidden="true" className="h-48 animate-pulse rounded-[0.65rem] bg-fg/4 motion-reduce:animate-none" />
       )}
     </div>
   );

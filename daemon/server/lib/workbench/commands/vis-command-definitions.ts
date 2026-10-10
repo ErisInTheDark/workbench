@@ -1,7 +1,8 @@
 /*
  * Exports:
- * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end or answer read.
- * - WORKBENCH_VIS_COMMANDS: `wb vis start`, `wb vis end` and `wb vis read`, shared by CLI and MCP.
+ * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end, answer read or browser check.
+ * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot`, CLI-only: most threads never use vis, so its
+ *   tools stay out of every thread's MCP list and the /vis skill teaches them when needed.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -11,18 +12,13 @@ import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWork
 const visPath = z.string().trim().min(1).max(1_000);
 const caller = { cwd: z.string().trim().min(1), harness: ProviderKeySchema, threadId: z.string().trim().min(1) };
 const visProject = z.string().trim().min(1).max(1_000);
+type VisAction = "start" | "end" | "read" | "snapshot" | "screenshot";
 export const WorkbenchVisRequestSchema = z.object({
-  action: z.enum(["start", "end", "read"]), path: visPath, project: visProject.optional(), ...caller,
+  action: z.enum(["start", "end", "read", "snapshot", "screenshot"]), path: visPath, project: visProject.optional(), ...caller,
 }).strict();
 
-const pathField = visPath.describe("An .html, .htm, .svg, .tsx or .jsx file in this project, relative to the thread cwd.");
-const inputSchema = z.object({ path: pathField }).strict();
-const startInputSchema = z.object({
-  path: pathField,
-  project: visProject.optional().describe(
-    "Build context: \".\" (default) this project's .wb.json, a folder relative to the cwd with its own .wb.json, or \"default\" for Workbench's kit (import from \"workbench/vis\").",
-  ),
-}).strict();
+const inputSchema = z.object({ path: visPath }).strict();
+const startInputSchema = z.object({ path: visPath, project: visProject.optional() }).strict();
 
 function parsePath(args: readonly string[]) {
   const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths([...args], { values: [] }), { trailing: true });
@@ -37,40 +33,36 @@ function parseStart(args: readonly string[]) {
   return { path: flags.trailing[0]!, ...(project ? { project } : {}) };
 }
 
+function visCommand(action: Exclude<VisAction, "start">, description: string, readOnly: boolean) {
+  return defineWorkbenchAgentCommand({
+    words: ["vis", action],
+    usage: `wb vis ${action} <path>`,
+    description,
+    effects: { readOnly },
+    helpGroups: ["vis"],
+    hideFromMcp: true,
+    inputSchema,
+    parseCliArgs: parsePath,
+    buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action, ...input, ...managedWorkbenchAgentCommandBody(context) }),
+  });
+}
+
 const start = defineWorkbenchAgentCommand({
   words: ["vis", "start"],
-  usage: "wb vis start [--project <.|folder|default>] <path>",
+  usage: "wb vis start [--project <.|folder|kit>] <path>",
   description: "Show an .html, .svg, .tsx or .jsx file live to the user until you end it; snapshots it now. Load the /vis skill first.",
   effects: { readOnly: false },
   helpGroups: ["vis"],
-  mcpCodeModeEligible: true,
+  hideFromMcp: true,
   inputSchema: startInputSchema,
   parseCliArgs: parseStart,
   buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "start", ...input, ...managedWorkbenchAgentCommandBody(context) }),
 });
 
-const read = defineWorkbenchAgentCommand({
-  words: ["vis", "read"],
-  usage: "wb vis read <path>",
-  description: "Read what the user sent from a vis (wb.send), newest last.",
-  effects: { readOnly: true },
-  helpGroups: ["vis"],
-  mcpCodeModeEligible: true,
-  inputSchema,
-  parseCliArgs: parsePath,
-  buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "read", ...input, ...managedWorkbenchAgentCommandBody(context) }),
-});
-
-const end = defineWorkbenchAgentCommand({
-  words: ["vis", "end"],
-  usage: "wb vis end <path>",
-  description: "End a live vis session and snapshot its final content.",
-  effects: { readOnly: false },
-  helpGroups: ["vis"],
-  mcpCodeModeEligible: true,
-  inputSchema,
-  parseCliArgs: parsePath,
-  buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "end", ...input, ...managedWorkbenchAgentCommandBody(context) }),
-});
-
-export const WORKBENCH_VIS_COMMANDS = [start, end, read] as const;
+export const WORKBENCH_VIS_COMMANDS = [
+  start,
+  visCommand("end", "End a live vis session and snapshot its final content.", false),
+  visCommand("read", "Read what the user sent from a vis (wb.send), newest last.", true),
+  visCommand("snapshot", "Accessibility snapshot of a live vis's current render, from its headless browser.", true),
+  visCommand("screenshot", "Full-page screenshot of a live vis's current render, from its headless browser; the image is sent to you.", true),
+] as const;

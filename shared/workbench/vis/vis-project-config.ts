@@ -21,7 +21,7 @@ export const VisProjectConfigSectionSchema = z.object({
     .describe("Compiles CSS for .html and .svg vis files containing <link rel=\"workbench-css\">."),
   build: VisProjectCommandSchema.optional()
     .describe("Builds .tsx and .jsx vis files; prints JSON { document, inputs }."),
-}).strict().describe("Live visual drafts agents show with vis_start.");
+}).strict().describe("Live visual drafts agents show with wb vis start.");
 
 export const VisBuildOutputSchema = z.object({
   document: z.string().max(VIS_MAX_DOCUMENT_LENGTH),

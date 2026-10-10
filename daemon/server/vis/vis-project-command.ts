@@ -3,7 +3,7 @@
  * - VisCommandRunner: runs one shell command as a thread, inside that thread's sandbox.
  * - VisRenderRuns: hands out run ids and collects what `wb vis render` delivers for them.
  * - visShellCommand: pipe a quoted argument vector into `wb vis render` through the user's login shell.
- * - VisBuildContext/WORKBENCH_DEFAULT_VIS_CONFIG: where a session's commands run, and Workbench's own default-kit commands.
+ * - VisBuildContext/WORKBENCH_KIT_VIS_CONFIG: where a session's commands run, and Workbench's own kit commands.
  * - compileVisCss/buildVisDocument: run a context's `vis.css` or `vis.build` command for one file.
  */
 import { randomUUID } from "node:crypto";
@@ -61,7 +61,7 @@ function bounded(text: string) {
 }
 
 /**
- * Where a session's commands run. `config` is fixed for Workbench's default context; projects read theirs from
+ * Where a session's commands run. `config` is fixed for Workbench's kit context; projects read theirs from
  * `.wb.json` at `rootPath` on every render, so edits apply without restarting the session.
  */
 export interface VisBuildContext {
@@ -69,11 +69,11 @@ export interface VisBuildContext {
   config: { css?: VisProjectCommand; build?: VisProjectCommand } | null;
 }
 
-/** Workbench's own build, run from its checkout: Workbench Tailwind, and `.tsx` files may import `workbench/vis`. */
-export const WORKBENCH_DEFAULT_VIS_CONFIG: NonNullable<VisBuildContext["config"]> = {
+/** Workbench's own build, run from its checkout: Workbench Tailwind, and `.tsx` files may import `workbench/kit`. */
+export const WORKBENCH_KIT_VIS_CONFIG: NonNullable<VisBuildContext["config"]> = {
   css: {
     command: ["node", "app/node_modules/@tailwindcss/cli/dist/index.mjs", "--input", "{input}"],
-    input: "@import \"{root}/app/client/tailwind.css\";\n@source \"{file}\";\n",
+    input: "@import \"{root}/app/client/components/vis-kit/vis-page.css\";\n@source \"{file}\";\n",
   },
   build: { command: ["node", "--disable-warning=ExperimentalWarning", "--import", "tsx", "scripts/vis-build.mts", "--kit", "{file}"] },
 };
@@ -81,7 +81,7 @@ export const WORKBENCH_DEFAULT_VIS_CONFIG: NonNullable<VisBuildContext["config"]
 async function readCommand(context: VisBuildContext, kind: "css" | "build") {
   if (context.config) {
     const command = context.config[kind];
-    if (!command) throw new Error(`Workbench's default vis context has no ${kind} command.`);
+    if (!command) throw new Error(`Workbench's kit vis context has no ${kind} command.`);
     return command;
   }
   const { config, ignored } = await readWorkbenchProjectConfig(context.rootPath);
@@ -91,7 +91,7 @@ async function readCommand(context: VisBuildContext, kind: "css" | "build") {
     const invalid = ignored.filter((entry) => entry === "(top level)" || entry.startsWith("(the whole") || entry === "vis" || entry.startsWith(`vis.${kind}`));
     throw new Error(invalid.length
       ? `${need}, but ${WORKBENCH_PROJECT_CONFIG_FILE} has an invalid vis.${kind} (${invalid.join(", ")}), so it was ignored.`
-      : `${need}, but ${path.join(context.rootPath, WORKBENCH_PROJECT_CONFIG_FILE)} has no vis.${kind} command. Configure it, or start the session with project "default" to use Workbench's kit.`);
+      : `${need}, but ${path.join(context.rootPath, WORKBENCH_PROJECT_CONFIG_FILE)} has no vis.${kind} command. Configure it, or start the session with project "kit" to use Workbench's kit.`);
   }
   return command;
 }

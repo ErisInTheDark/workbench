@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, and hidden turn-end replies.
+ * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and CLI calls with dedicated rows staying visible.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,7 +8,7 @@ import { withWorkbenchInputState } from "workbench-shared/workbench/thread/threa
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import {
   buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
-  reuseRenderableBlocks, hasSameBlockTimeline, type CommandItem,
+  reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
 } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
 
@@ -462,6 +462,12 @@ test("consecutive non-final agent messages share one commentary block until anot
     ["agentCommentarySequence", ["c"]],
     ["item", ["final"]],
   ]);
+});
+
+test("CLI vis calls reach their dedicated row instead of being hidden as specialized output", () => {
+  for (const action of ["start", "end", "read", "snapshot", "screenshot"]) {
+    assert.equal(isHiddenCommandExecution(`wb vis ${action} mockups/chart.tsx`), false, action);
+  }
 });
 
 test("native plan items are excluded from render blocks", () => {

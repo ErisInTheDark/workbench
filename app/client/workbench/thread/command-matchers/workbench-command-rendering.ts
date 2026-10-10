@@ -5,7 +5,7 @@
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
  * - parseWorkbenchFeedbackId: read the stored report id from a feedback call's acknowledgement.
- * - WorkbenchVisOperation: one vis session start, end or answer read shared by CLI and MCP presentation.
+ * - WORKBENCH_VIS_ACTIONS/WorkbenchVisOperation: one vis session start, end, answer read or browser snapshot/screenshot shared by CLI and MCP presentation.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -50,9 +50,12 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "feedback",
   "todo",
   "todo_remove",
+  // Vis is CLI-only; its CLI matcher renders through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
   "vis_read",
+  "vis_snapshot",
+  "vis_screenshot",
   "request_user_input",
   "message",
   "message_wait",
@@ -167,9 +170,10 @@ export interface WorkbenchFeedbackOperation {
   title: string;
 }
 
-/** A vis session moment or answer read; CLI and MCP calls name the file the same way. */
+/** A vis session moment, answer read or browser check; CLI and MCP calls name the file the same way. */
+export const WORKBENCH_VIS_ACTIONS = ["start", "end", "read", "snapshot", "screenshot"] as const;
 export interface WorkbenchVisOperation {
-  action: "start" | "end" | "read";
+  action: typeof WORKBENCH_VIS_ACTIONS[number];
   path: string;
 }
 
@@ -751,9 +755,11 @@ export function getWorkbenchCommandRoute(
     }
     case "vis_start":
     case "vis_end":
-    case "vis_read": {
+    case "vis_read":
+    case "vis_snapshot":
+    case "vis_screenshot": {
       const path = readString(args.path)?.trim();
-      const action = name === "vis_start" ? "start" : name === "vis_end" ? "end" : "read";
+      const action = WORKBENCH_VIS_ACTIONS.find(action => name === `vis_${action}`)!;
       return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }) : null;
     }
     case "task_get":

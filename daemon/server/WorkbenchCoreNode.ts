@@ -51,6 +51,7 @@ import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
 import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
 import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import WorkbenchVisController from "./vis/WorkbenchVisController";
+import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -293,6 +294,8 @@ function createWorkbenchCoreFeature(
       for (const listener of runtimeListeners) listener(threadId, { todos });
     },
   });
+  /** Cancels this generation's vis browser calls when the core node is disposed. */
+  const visBrowseLifetime = new AbortController();
   const vis = new WorkbenchVisController({
     store: command => database.executeThreadVis(command),
     resolveRoot: async session => {
@@ -315,8 +318,22 @@ function createWorkbenchCoreFeature(
       return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
     },
     scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
-    // This file lives at daemon/server in the Workbench checkout the default vis context builds from.
+    // This file lives at daemon/server in the Workbench checkout the kit vis context builds from.
     workbenchRoot: path.resolve(import.meta.dirname, "..", ".."),
+    browse: new WorkbenchVisBrowse({
+      directory: path.join(context.dataRootPath, "daemon", "vis", "browse"),
+      // Browse is its own reload node; these run as the session's thread through its agent entry points.
+      port: {
+        execute: request => run("browseExecution", execution => execution.executeBrowseRequest(Buffer.from(JSON.stringify(request)), visBrowseLifetime.signal), "Vis browser"),
+        stop: async request => {
+          const response = await run("browseExecution", execution => execution.executeSessionRequest({
+            body: Buffer.from(JSON.stringify({ action: "stop", ...request })), method: "POST", url: "/",
+          }, visBrowseLifetime.signal), "Vis browser stop");
+          if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? `Browse stop failed with status ${response.status}.`);
+        },
+      },
+      log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
+    }),
     log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
   });
   const threadAddressedFeedback = new WorkbenchThreadAddressedFeedbackController({
@@ -921,6 +938,7 @@ function createWorkbenchCoreFeature(
       unsubscribeAgentMessageDelivery();
       unsubscribeVisSettlement();
       vis.dispose();
+      visBrowseLifetime.abort(new Error("Vis browser calls are reloading."));
       unfinishedTurns.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();

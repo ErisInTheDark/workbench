@@ -344,7 +344,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         threadId: WorkbenchThreadIdSchema.parse(input.threadId),
         clientMessageId: randomUUID(),
         input: [
-          createWorkbenchTextInput(createAgentScreenshotSteerText()),
+          createWorkbenchTextInput(createAgentScreenshotSteerText({ hidden: input.hidden })),
           { type: "image", url: input.imageUrl },
         ],
         intent: "steer",

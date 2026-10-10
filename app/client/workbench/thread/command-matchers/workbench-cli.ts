@@ -6,7 +6,7 @@
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
- * - parseWorkbenchVisCommand: parse `wb vis start|end|read <path>` for its snapshot or answers card.
+ * - parseWorkbenchVisCommand: parse `wb vis start|end|read|snapshot|screenshot <path>` for its vis item.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
@@ -20,7 +20,7 @@ import {
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
-import { getWorkbenchCommandRendering, type WorkbenchFeedbackOperation, type WorkbenchVisOperation } from "./workbench-command-rendering";
+import { getWorkbenchCommandRendering, WORKBENCH_VIS_ACTIONS, type WorkbenchFeedbackOperation, type WorkbenchVisOperation } from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "profiles" | "settle" | "stop" | "wait";
 
@@ -81,7 +81,8 @@ export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation
   const rest = tokens.slice(3);
   const projectAt = action === "start" ? rest.indexOf("--project") : -1;
   const paths = rest.filter((token, index) => token !== "--" && (projectAt < 0 || (index !== projectAt && index !== projectAt + 1)));
-  return (action === "start" || action === "end" || action === "read") && paths.length === 1 ? { action, path: paths[0]! } : null;
+  const known = WORKBENCH_VIS_ACTIONS.find(candidate => candidate === action);
+  return known && paths.length === 1 ? { action: known, path: paths[0]! } : null;
 }
 
 export type WorkbenchTaskTitleCommand =

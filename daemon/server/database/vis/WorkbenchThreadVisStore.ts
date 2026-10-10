@@ -12,7 +12,7 @@ import type { VisAnswer, VisSnapshot, VisSnapshotKind, VisUserEnded } from "work
 /** Answers kept per session; older ones are dropped as new ones arrive. */
 const ANSWERS_PER_SESSION = 100;
 
-export type ThreadVisStoredBuild = { kind: "caller" } | { kind: "folder"; root: string } | { kind: "default" };
+export type ThreadVisStoredBuild = { kind: "caller" } | { kind: "folder"; root: string } | { kind: "kit" };
 
 export interface ThreadVisStoredSession {
   sessionId: string;
@@ -56,8 +56,9 @@ interface SessionRow {
   started_at: number; ended_at: number | null;
 }
 
+/** Release 75 stores the kit context as `default`, its name before it became `kit`. */
 function build(row: SessionRow): ThreadVisStoredBuild {
-  if (row.build_kind === "default") return { kind: "default" };
+  if (row.build_kind === "default") return { kind: "kit" };
   return row.build_kind === "folder" && row.build_root ? { kind: "folder", root: row.build_root } : { kind: "caller" };
 }
 
@@ -82,7 +83,7 @@ export default class WorkbenchThreadVisStore {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
             .run(
               value.sessionId, value.threadId, value.harness, value.cwd, value.projectId, value.path,
-              value.build.kind, value.build.kind === "folder" ? value.build.root : null, value.startedAt,
+              value.build.kind === "kit" ? "default" : value.build.kind, value.build.kind === "folder" ? value.build.root : null, value.startedAt,
             );
           this.#snapshot(value.sessionId, "start", snapshot);
           return { sessions: [{ ...value, endedAt: null }], snapshot: null };

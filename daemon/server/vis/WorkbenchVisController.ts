@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - WorkbenchVisControllerOptions: storage, project, sandboxed project-command and file-watching ports.
+ * - WorkbenchVisControllerOptions: storage, project, sandboxed project-command, browser and file-watching ports.
  * - default WorkbenchVisController: own live vis sessions for one daemon generation. Starting and ending snapshot the
  *   rendered file; between them a change to the file (or, for built components, any file the build read) keeps the
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
  *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
- *   or Workbench's default kit, and stores the answers its vis sends back.
+ *   or Workbench's kit, stores the answers its vis sends back, and has a headless browser agents check it in.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
@@ -19,9 +19,10 @@ import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/v
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import { WORKBENCH_PROJECT_CONFIG_FILE } from "workbench-shared/workbench/project-config/workbench-project-config";
 import {
-  buildVisDocument, compileVisCss, VisRenderRuns, WORKBENCH_DEFAULT_VIS_CONFIG,
+  buildVisDocument, compileVisCss, VisRenderRuns, WORKBENCH_KIT_VIS_CONFIG,
   type VisBuildContext, type VisCommandRunner,
 } from "./vis-project-command";
+import type WorkbenchVisBrowse from "./WorkbenchVisBrowse";
 
 export interface WorkbenchVisControllerOptions {
   store(command: ThreadVisCommand): Promise<ThreadVisResult>;
@@ -31,8 +32,10 @@ export interface WorkbenchVisControllerOptions {
   runCommand(session: ThreadVisStoredSession): VisCommandRunner;
   /** Workbench-owned directory for project command input files. */
   scratchDirectory: string;
-  /** Workbench's checkout, where the default context's commands run. */
+  /** Workbench's checkout, where the kit context's commands run. */
   workbenchRoot: string;
+  /** Each session's headless browser, opened with it and stopped when it ends. */
+  browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open">;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
   watch?(file: string, onChange: () => void): () => void;
   now?(): number;
@@ -126,7 +129,20 @@ export default class WorkbenchVisController {
     await this.#options.store({ kind: "start", session, snapshot: { capturedAt: stored.startedAt, document: rendered.document, failure: rendered.failure } });
     const live = this.#begin(stored, file, input.rootPath, context, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure);
     this.#watch(live, rendered.inputs);
+    // Warms the session's browser without holding up the start; it never rejects.
+    void this.#options.browse?.open({ ...stored, document: rendered.document });
     return { sessionId: stored.sessionId, path: display, failure: rendered.failure };
+  }
+
+  /** Checks the session's current render in its headless browser: an accessibility snapshot, or a screenshot sent to the agent. */
+  async inspect(input: { threadId: string; cwd: string; rootPath: string; path: string }, kind: "snapshot" | "screenshot") {
+    await this.start();
+    const { display } = await this.#resolve(input.rootPath, input.cwd, input.path, false);
+    const live = this.#findLive(input.threadId, display);
+    if (!live) throw new Error(`No vis session is live on ${display}.`);
+    if (!live.state.render) throw new Error(`${display} has not rendered yet; try again once it has.`);
+    if (!this.#options.browse) throw new Error("Vis browser checks are unavailable.");
+    return await this.#options.browse.inspect({ ...live.stored, document: live.state.render.document }, kind);
   }
 
   async endSession(input: { threadId: string; cwd: string; rootPath: string; path: string }) {
@@ -255,7 +271,7 @@ export default class WorkbenchVisController {
   }
 
   #context(build: ThreadVisStoredBuild, projectRoot: string): VisBuildContext {
-    if (build.kind === "default") return { rootPath: this.#options.workbenchRoot, config: WORKBENCH_DEFAULT_VIS_CONFIG };
+    if (build.kind === "kit") return { rootPath: this.#options.workbenchRoot, config: WORKBENCH_KIT_VIS_CONFIG };
     return { rootPath: build.kind === "folder" ? build.root : projectRoot, config: null };
   }
 
@@ -348,6 +364,8 @@ export default class WorkbenchVisController {
     this.#unwatch(live);
     live.cancel.abort(new Error("The vis session ended."));
     this.#publish(live.stored.threadId);
+    // Never rejects; stopping a browser should not hold up ending.
+    void this.#options.browse?.end(live.stored);
   }
 
   async #render(stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext, signal: AbortSignal): Promise<Rendered> {

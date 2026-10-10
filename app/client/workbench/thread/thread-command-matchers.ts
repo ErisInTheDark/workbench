@@ -13,7 +13,7 @@
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
  * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
  * - parseWorkbenchFeedbackId: read the stored report id from a wb feedback acknowledgement.
- * - parseWorkbenchVisCommand/WorkbenchVisOperation: parse a `wb vis start|end` call for its snapshot card.
+ * - parseWorkbenchVisCommand/WorkbenchVisOperation: parse a `wb vis` call for its vis item.
  * - parseWorkbenchFeedbackCommand/parseWorkbenchMessageCommand/parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb feedback/message/subagent/task-title actions and identify standalone title sets.
  * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.

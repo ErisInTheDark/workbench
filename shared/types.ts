@@ -600,6 +600,8 @@ export type WorkbenchBrowseAgentScriptRequest =
 
 export interface WorkbenchBrowseAgentScriptBaseRequest {
   cwd: string;
+  /** Internal: screenshots reach the model without a transcript image card (vis self-checks). */
+  hiddenScreenshots?: boolean;
   mode?: WorkbenchBrowseSessionMode | null;
   session?: string | null;
   streamProgress?: boolean | null;

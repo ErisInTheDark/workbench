@@ -1,5 +1,5 @@
 /*
- * Exports: the `workbench/vis` module that default-context vis files import.
+ * Exports: the `workbench/kit` module that kit-context vis files import.
  * - Workbench UI: Disclosure/DisclosureStaticRow, MarkdownRender, IconButton, PrimaryButton, RadioRow, Tooltip,
  *   PressDragMenu, PressDragSlider, StepSlider, OptionCards/OptionCard, FormSection, Tabs/Tab, ShareList, Sparkline,
  *   StreamChart, LineChart, Skeleton, and every Workbench icon.

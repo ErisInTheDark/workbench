@@ -260,7 +260,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             }))
             : request.action === "end"
               ? text("end", await vis.endSession({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
-              : formatVisAnswers(await vis.readAnswers({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }));
+              : request.action === "read"
+                ? formatVisAnswers(await vis.readAnswers({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
+                : await vis.inspect({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }, request.action);
           return new Response(body, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
         } catch (error) {
           if (signal.aborted) throw error;

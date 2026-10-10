@@ -1,4 +1,4 @@
-/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, build contexts, answers, ending and resuming. */
+/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, build contexts, answers, browser checks, ending and resuming. */
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -49,6 +49,15 @@ async function fixture(context: TestContext) {
     next: { exitCode: 0, stdout: ".a{}", stderr: "" },
   };
   const workbenchRoot = path.join(root, "workbench-checkout");
+  const browse = {
+    calls: [] as string[],
+    open: async (target: { sessionId: string; document: string }) => { browse.calls.push(`open ${target.document}`); },
+    inspect: async (target: { document: string }, kind: "snapshot" | "screenshot") => {
+      browse.calls.push(`${kind} ${target.document}`);
+      return `${kind} of ${target.document}`;
+    },
+    end: async (target: { sessionId: string }) => { browse.calls.push(`end ${target.sessionId}`); },
+  };
   const create = (): WorkbenchVisController => {
     const controller: WorkbenchVisController = new WorkbenchVisController({
       store,
@@ -64,6 +73,7 @@ async function fixture(context: TestContext) {
       },
       scratchDirectory: path.join(root, ".scratch"),
       workbenchRoot,
+      browse,
       watch: (file, onChange) => { watchers.set(file, onChange); return () => watchers.delete(file); },
       now: () => 100,
       log: () => undefined,
@@ -74,7 +84,7 @@ async function fixture(context: TestContext) {
   const start = (controller: WorkbenchVisController) => controller.startSession({
     threadId: "thread", harness: "codex", cwd: root, projectId: "project", rootPath: root, path: "mock.html", project: { kind: "caller" },
   });
-  return { root, file, create, start, snapshots, sessions, watchers, css, workbenchRoot };
+  return { root, file, create, start, snapshots, sessions, watchers, css, workbenchRoot, browse };
 }
 
 /** Resolves on the first publication whose thread state passes `accept`; file reads are real I/O, so no tick count works. */
@@ -192,17 +202,34 @@ test("ending snapshots the current file and stops watching; a new generation res
   second.dispose();
 });
 
+test("a session's browser opens with it, checks its latest render, and stops when it ends", async context => {
+  const f = await fixture(context);
+  await writeFile(f.file, "<p>one</p>");
+  const controller = f.create();
+  const { sessionId } = await f.start(controller);
+  const target = { threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" };
+  await writeFile(f.file, "<p>two</p>");
+  const rendered = until(controller, session => !session.rendering && session.render?.document === "<p>two</p>");
+  f.watchers.get(f.file)!();
+  await rendered;
+  assert.equal(await controller.inspect(target, "screenshot"), "screenshot of <p>two</p>");
+  await controller.endSession(target);
+  assert.deepEqual(f.browse.calls, ["open <p>one</p>", "screenshot <p>two</p>", `end ${sessionId}`]);
+  await assert.rejects(controller.inspect(target, "snapshot"), /No vis session is live/u);
+  controller.dispose();
+});
+
 test("a session builds in its chosen context, and a resumed session keeps it", async context => {
   const f = await fixture(context);
   const entry = path.join(f.root, "mock.tsx");
   await writeFile(entry, "export default () => null;");
-  // No `.wb.json` in the caller's project: the default context needs none.
+  // No `.wb.json` in the caller's project: the kit context needs none.
   f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>kit</p>", inputs: ["../mock.tsx", "../../kit-outside-the-project/index.ts"] }), stderr: "" };
   const first = f.create();
   await first.startSession({
-    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "default" },
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "kit" },
   });
-  assert.equal(f.css.cwds[0], f.workbenchRoot, "the default context runs in Workbench's checkout");
+  assert.equal(f.css.cwds[0], f.workbenchRoot, "the kit context runs in Workbench's checkout");
   assert.ok(f.css.commands[0]?.at(-1)?.includes("'--kit'"), "and builds with the kit");
   assert.deepEqual([...f.watchers.keys()], [entry], "the caller's file is watched; Workbench's kit is not");
   first.dispose();
@@ -210,7 +237,7 @@ test("a session builds in its chosen context, and a resumed session keeps it", a
   const resumed = f.create();
   await resumed.start();
   await until(resumed, session => session.render !== null);
-  assert.equal(f.css.cwds.at(-1), f.workbenchRoot, "a resumed session still builds in the default context");
+  assert.equal(f.css.cwds.at(-1), f.workbenchRoot, "a resumed session still builds in the kit context");
   resumed.dispose();
 
   const folder = path.join(f.root, "other");

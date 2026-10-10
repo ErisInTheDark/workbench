@@ -18,7 +18,7 @@ export interface WorkbenchBrowseResultCallbacks {
   listHarnesses: () => readonly WorkbenchHarness[];
   readThread: (harness: WorkbenchHarness, threadId: string) => Promise<ThreadReadResponse>;
   recordResult: (entry: WorkbenchBrowseResultEntry, harness: WorkbenchHarness) => Promise<void>;
-  screenshot: (harness: WorkbenchHarness, input: { threadId: string; turnId: string; imageUrl: string }) => Promise<WorkbenchBrowseScreenshotDelivery>;
+  screenshot: (harness: WorkbenchHarness, input: { threadId: string; turnId: string; imageUrl: string; hidden?: boolean }) => Promise<WorkbenchBrowseScreenshotDelivery>;
 }
 
 function isActiveBrowseCommandItem(item: ThreadReadResponse["thread"]["turns"][number]["items"][number]) {
@@ -75,13 +75,13 @@ export default class WorkbenchBrowseResultController implements WorkbenchBrowseR
     this.tails.set(event.threadId, current);
   }
 
-  async deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null): Promise<WorkbenchBrowseScreenshotDelivery> {
+  async deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null, options: { hidden?: boolean } = {}): Promise<WorkbenchBrowseScreenshotDelivery> {
     const signal = this.generation.signal;
     signal.throwIfAborted();
     const activeThread = origin === undefined ? await this.readActiveThread(threadId, signal) : origin;
     signal.throwIfAborted();
     if (!activeThread) throw new Error("Unable to deliver screenshot because the target thread has no active turn.");
-    return this.callbacks.screenshot(activeThread.harness, { threadId, turnId: activeThread.turnId, imageUrl });
+    return this.callbacks.screenshot(activeThread.harness, { threadId, turnId: activeThread.turnId, imageUrl, ...(options.hidden ? { hidden: true } : {}) });
   }
 
   async waitForIdle() {

@@ -9,9 +9,10 @@
  * - VisThreadSchema/VisThread: every active vis session of one thread, plus the ones the user ended.
  * - VisSnapshotSchema/VisSnapshot: the stored document of one session moment.
  * - formatVisSessionResult/parseVisSessionResult: the tool acknowledgement that carries a session id to transcript cards.
- * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's default kit.
+ * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's kit.
  * - VIS_MAX_ANSWER_LENGTH/VisAnswerSchema/VisAnswer: one JSON value a vis sent back through `wb.send`.
  * - formatVisAnswers: the `wb vis read` text for one session's answers.
+ * - formatVisScreenshotResult/parseVisScreenshotImage: the `wb vis screenshot` text and the stored image it names.
  */
 import { z } from "zod";
 
@@ -81,13 +82,13 @@ export type VisProject =
   | { kind: "caller" }
   /** A folder relative to the caller's cwd, built with that folder's `.wb.json`. */
   | { kind: "folder"; path: string }
-  /** Workbench's own build, where `workbench/vis` is importable. */
-  | { kind: "default" };
+  /** Workbench's own build, where `workbench/kit` is importable. */
+  | { kind: "kit" };
 
 export function parseVisProject(value: string | undefined): VisProject {
   const trimmed = value?.trim() ?? "";
   if (!trimmed || trimmed === ".") return { kind: "caller" };
-  if (trimmed === "default" || trimmed === "none") return { kind: "default" };
+  if (trimmed === "kit") return { kind: "kit" };
   return { kind: "folder", path: trimmed };
 }
 
@@ -113,6 +114,16 @@ export function formatVisAnswers({ answers, live, path }: { answers: readonly Vi
     ...(shown.length < answers.length ? [`(${answers.length - shown.length} older omitted)`] : []),
     ...shown.map(({ sentAt, value }) => `- ${new Date(sentAt).toISOString()} ${value}`),
   ].join("\n") + "\n";
+}
+
+/** `wb vis screenshot` output; the image line lets its transcript entry show what the agent saw. */
+export function formatVisScreenshotResult(path: string, imageUrl: string | null) {
+  return `Screenshot of ${path} attached.\n${imageUrl ? `Image: ${imageUrl}\n` : ""}`;
+}
+
+/** Only Workbench transcript asset paths render; anything else in the output is ignored. */
+export function parseVisScreenshotImage(output: string) {
+  return /^Image: (\/api\/transcript-assets\/\S+)$/mu.exec(output)?.[1] ?? null;
 }
 
 export function parseVisSessionResult(output: string) {

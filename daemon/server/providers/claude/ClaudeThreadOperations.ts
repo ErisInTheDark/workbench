@@ -253,10 +253,10 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       const runtime = this.live.get(identity.threadId);
       if (!runtime) throw new Error("Claude screenshot delivery needs an active turn on this thread.");
       runtime.injectContent([
-        { type: "text", text: createAgentScreenshotSteerText() },
+        { type: "text", text: createAgentScreenshotSteerText({ hidden: input.hidden }) },
         claudeImageBlock(input.imageUrl),
       ]);
-      await this.options.transcript.recordScreenshotSteer(identity.threadId, runtime.turnId, input.imageUrl);
+      await this.options.transcript.recordScreenshotSteer(identity.threadId, runtime.turnId, input.imageUrl, input.hidden === true);
       return { kind: "injected", acceptedAt: Date.now(), turnId: runtime.turnId };
     },
   };

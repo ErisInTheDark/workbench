@@ -193,7 +193,9 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "task_set": return { title: "Render typed wb tools" };
     case "vis_start":
     case "vis_end":
-    case "vis_read": return { path: "mockups/chart.html" };
+    case "vis_read":
+    case "vis_snapshot":
+    case "vis_screenshot": return { path: "mockups/chart.html" };
     case "task_completed":
     case "task_blocked": return {};
     case "message_wait":

@@ -2,7 +2,7 @@
  * No exports. Builds one .tsx/.jsx vis file for this repository: bundles its default export with React in memory,
  * expands Tailwind variant groups like the app build, compiles the app's Tailwind for it, and prints
  * `{ document, inputs }` to stdout. Writes no files, so it runs in a read-only sandbox.
- * With `--kit` (Workbench's default vis context) the file may live in any project: it imports `workbench/vis`,
+ * With `--kit` (Workbench's kit vis context) the file may live in any project: it imports `workbench/kit`,
  * React and its own relative files, always against Workbench's copies, never repository paths.
  * Usage: node --import tsx scripts/vis-build.mts [--kit] <file>
  */
@@ -26,11 +26,11 @@ if (!file) throw new Error("Usage: vis-build.mts [--kit] <file>");
 const entry = path.resolve(file);
 const visKit = path.join(app, "client", "components", "vis-kit", "index.ts");
 
-/** Kit mockups resolve `workbench/vis` to the kit, and React to the app's single copy even beside a project's own. */
+/** Kit mockups resolve `workbench/kit` to the kit, and React to the app's single copy even beside a project's own. */
 const kitPlugin: import("esbuild").Plugin = {
   name: "workbench-vis-kit",
   setup(build) {
-    build.onResolve({ filter: /^workbench\/vis$/ }, () => ({ path: visKit }));
+    build.onResolve({ filter: /^workbench\/kit$/ }, () => ({ path: visKit }));
     build.onResolve({ filter: /^react(?:-dom)?(?:\/.*)?$/ }, (args) => ({ path: requireFromApp.resolve(args.path) }));
   },
 };
@@ -78,7 +78,7 @@ const inputs = Object.keys(bundled.metafile.inputs).filter((input) => !input.sta
 // Nothing can be written, so the bundle's class-like tokens reach Tailwind inline; the app's own sources come from tailwind.css.
 const candidates = [...new Set(script.match(/[^\s"'`<>{}\\]{2,}/gu) ?? [])].filter((token) => /[a-z]/u.test(token));
 const tailwindInput = [
-  `@import ${JSON.stringify(path.join(app, "client", "tailwind.css").replaceAll("\\", "/"))};`,
+  `@import ${JSON.stringify(path.join(app, "client", "components", "vis-kit", "vis-page.css").replaceAll("\\", "/"))};`,
   `@source inline(${JSON.stringify(candidates.join(" "))});`,
 ].join("\n");
 const css = await new Promise<string>((resolve, reject) => {
@@ -95,7 +95,8 @@ const css = await new Promise<string>((resolve, reject) => {
 const document = [
   "<!doctype html><html><head><meta charset=\"utf-8\">",
   `<style>${css.replace(/<\/style/giu, "<\\/style")}</style>`,
-  "</head><body class=\"bg-bg text-text\"><div id=\"root\"></div>",
+  // No page background: the card's tinted frame shows through.
+  "</head><body class=\"text-text\"><div id=\"root\"></div>",
   // `</script`, `<!--` and `<script` inside the bundle (Markdown handling has all three) would end or re-nest the
   // element; `\x3C` reads as `<` in every string, template and regular expression the minifier can emit.
   `<script>${script.replace(/<(?=\/script|!--|script)/giu, "\\x3C")}</script>`,

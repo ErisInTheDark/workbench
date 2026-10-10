@@ -63,7 +63,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Live visual drafts agents show with vis_start."
+      "description": "Live visual drafts agents show with wb vis start."
     }
   },
   "additionalProperties": false,

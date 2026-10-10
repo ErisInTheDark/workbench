@@ -73,6 +73,8 @@ const BROWSE_MARKDOWN_VARIABLE_REFERENCE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*
 export type WorkbenchBrowseSerializedRunner = <TValue>(task: () => Promise<TValue>) => Promise<TValue>;
 
 interface WorkbenchBrowseExecutionContext {
+  /** Screenshots of this request reach the model without a transcript image card. */
+  hiddenScreenshots: boolean;
   persistScreenshot: (threadId: string, image: ScreenshotImagePayload) => Promise<string>;
   publicThreadId: (nativeThreadId: string) => Promise<string>;
   rawCli: WorkbenchBrowseRawCli;
@@ -205,6 +207,7 @@ function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): Workben
 
   const base = {
     cwd,
+    ...(value.hiddenScreenshots === true ? { hiddenScreenshots: true } : {}),
     mode: normalizeMode(value.mode),
     session: normalizeString(value.session) || null,
     streamProgress: value.streamProgress === true,
@@ -942,7 +945,7 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
   const image = parseScreenshotBase64(result.stdout);
   const assetUrl = await execution.persistScreenshot(payload.threadId, image);
   execution.signal.throwIfAborted();
-  const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image), screenshotOrigin);
+  const delivery = await execution.results.deliverScreenshot(payload.threadId, createScreenshotDataUrl(image), screenshotOrigin, { hidden: execution.hiddenScreenshots });
   const deliveryFields = delivery.kind === "injected"
     ? { injected: true, injectionAcceptedAt: delivery.acceptedAt, injectionTurnId: delivery.turnId }
     : { steered: true, steerTurnId: delivery.turnId };
@@ -951,6 +954,8 @@ async function runBrowseCommandAndMaybeDeliverScreenshot(
     assetUrl,
     stdout: JSON.stringify({
       screenshot: "captured",
+      // The stored transcript image, so callers such as vis can show it with their own entry.
+      assetUrl,
       ...deliveryFields,
     }, null, 2),
     ...deliveryFields,
@@ -1260,6 +1265,7 @@ export default class WorkbenchBrowseRequestHandler {
   async handle(body: Buffer, signal: AbortSignal, runSerialized: WorkbenchBrowseSerializedRunner) {
     const startedAt = Date.now();
     const execution: WorkbenchBrowseExecutionContext = {
+      hiddenScreenshots: false,
       persistScreenshot: async (threadId, image) => {
         signal.throwIfAborted();
         if (!this.assets) throw new Error("Browse screenshot storage is not configured.");
@@ -1298,7 +1304,8 @@ export default class WorkbenchBrowseRequestHandler {
       }
 
       try {
-        return browseCommandResponse(await runSerialized(async () => await runBrowseMarkdownRequest(execution, scriptRequest)));
+        const scriptExecution = { ...execution, hiddenScreenshots: scriptRequest.hiddenScreenshots === true };
+        return browseCommandResponse(await runSerialized(async () => await runBrowseMarkdownRequest(scriptExecution, scriptRequest)));
       } catch (error) {
         return browseCommandResponse({
           durationMs: Date.now() - startedAt,

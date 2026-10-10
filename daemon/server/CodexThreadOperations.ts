@@ -155,7 +155,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
         params: {
           threadId: input.threadId, expectedTurnId: input.turnId,
           toolOutput: { name: "screenshot", namespace: "workbench", output: [
-            { type: "input_text", text: createAgentScreenshotSteerText() },
+            { type: "input_text", text: createAgentScreenshotSteerText({ hidden: input.hidden }) },
             { type: "input_image", image_url: input.imageUrl },
           ] },
         },

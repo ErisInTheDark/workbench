@@ -1,18 +1,20 @@
 /*
  * Exports:
  * - default ThreadVisCommandItem: render a vis start or end call as a closed disclosure that shows the document snapshotted at that
- *   moment, and an answer read as one that shows what the agent read.
+ *   moment, an answer read or browser snapshot as one that shows what the agent read, and a screenshot as one that shows the
+ *   image the agent saw (its delivery is transcript-hidden, so this is its only place).
  */
 "use client";
 
 import { useContext, useMemo } from "react";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { parseVisSessionResult } from "workbench-shared/workbench/vis/vis-contract";
+import { parseVisScreenshotImage, parseVisSessionResult } from "workbench-shared/workbench/vis/vis-contract";
 import type { WorkbenchVisOperation } from "../../../workbench/thread/thread-command-matchers";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
+import ThreadUserImage from "./ThreadUserImage";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 /** Mounts only once the disclosure opens, so the stored document is read on demand. */
@@ -26,17 +28,25 @@ function VisSnapshotContent({ sessionId, snapshotKind, threadId }: { sessionId: 
   if (!data) {
     return snapshot.failure
       ? <p className="m-0 text-[0.78em] text-fg/muted">The snapshot is unavailable: {snapshot.failure}</p>
-      : <div aria-hidden="true" className="h-[min(60vh,28rem)] animate-pulse rounded-lg bg-fg/5 motion-reduce:animate-none" />;
+      : <div aria-hidden="true" className="h-48 animate-pulse rounded-[0.65rem] bg-fg/4 motion-reduce:animate-none" />;
   }
   return (
     <div className="space-y-1">
       {data.document !== null
-        ? <ThreadVisFrame className="h-[min(60vh,28rem)] rounded-lg" document={data.document} resizable title={`Vis snapshot of ${data.path}`} />
+        ? <ThreadVisFrame className="rounded-[0.65rem] bg-fg/4" document={data.document} title={`Vis snapshot of ${data.path}`} />
         : null}
       {data.failure ? <p className="m-0 text-[0.78em] text-fg/muted">{data.failure}</p> : null}
     </div>
   );
 }
+
+const VERBS: Record<WorkbenchVisOperation["action"], Record<"completed" | "failed" | "inProgress", string>> = {
+  start: { inProgress: "Starting vis on", failed: "Could not start vis on", completed: "Started vis on" },
+  end: { inProgress: "Ending vis on", failed: "Could not end vis on", completed: "Ended vis on" },
+  read: { inProgress: "Reading answers from", failed: "Could not read answers from", completed: "Read answers from" },
+  snapshot: { inProgress: "Checking vis structure", failed: "Could not check vis structure", completed: "Checked vis structure" },
+  screenshot: { inProgress: "Checking vis appearance", failed: "Could not check vis appearance", completed: "Checked vis appearance" },
+};
 
 export default function ThreadVisCommandItem({ durationMs, operation, outcome, output, threadId }: {
   durationMs: number | null;
@@ -47,11 +57,7 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   threadId: string;
 }) {
   const result = parseVisSessionResult(output);
-  const verb = operation.action === "start"
-    ? outcome === "inProgress" ? "Starting vis on" : outcome === "failed" ? "Could not start vis on" : "Started vis on"
-    : operation.action === "end"
-      ? outcome === "inProgress" ? "Ending vis on" : outcome === "failed" ? "Could not end vis on" : "Ended vis on"
-      : outcome === "inProgress" ? "Reading answers from" : outcome === "failed" ? "Could not read answers from" : "Read answers from";
+  const verb = VERBS[operation.action][outcome];
   const summary = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className="shrink-0">{verb}</span>
@@ -59,7 +65,19 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
       {durationMs === null ? null : <ThreadDurationText className="shrink-0 text-[0.78em] text-fg/muted" durationMs={durationMs} />}
     </span>
   );
-  if (operation.action === "read" && outcome === "completed") {
+  const screenshot = operation.action === "screenshot" && outcome === "completed" ? parseVisScreenshotImage(output) : null;
+  if (screenshot) {
+    return (
+      <Disclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        renderContent={() => <ThreadUserImage alt={`Screenshot of ${operation.path}`} src={screenshot} />}
+        summary={summary}
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      />
+    );
+  }
+  if ((operation.action === "read" || operation.action === "snapshot") && outcome === "completed") {
     return (
       <Disclosure
         className="py-2"

@@ -8,5 +8,6 @@ export type WorkbenchScreenshotDelivery =
   | { kind: "steered"; turnId: string };
 
 export interface WorkbenchProviderBrowse {
-  screenshot(input: { threadId: string; turnId: string; imageUrl: string }): Promise<WorkbenchScreenshotDelivery>;
+  /** `hidden` screenshots reach the model without a transcript image card. */
+  screenshot(input: { threadId: string; turnId: string; imageUrl: string; hidden?: boolean }): Promise<WorkbenchScreenshotDelivery>;
 }

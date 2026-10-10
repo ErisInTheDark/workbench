@@ -45,6 +45,7 @@ import {
 import {
   getAgentScreenshotSteerImages,
   isAgentScreenshotSteerUserMessage,
+  isHiddenAgentScreenshotContent,
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
@@ -1084,6 +1085,7 @@ function ThreadUserMessageItem ({
   }
 
   if (isAgentScreenshotSteerUserMessage(item)) {
+    if (isHiddenAgentScreenshotContent(item.content)) return null;
     return (
       <ThreadAgentScreenshotItem
         images={getAgentScreenshotSteerImages(item).map((image) => image.url)}

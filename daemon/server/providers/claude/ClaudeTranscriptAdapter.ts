@@ -219,12 +219,12 @@ export default class ClaudeTranscriptAdapter {
   }
 
   /** A delivered screenshot shows in the transcript as the marked image steer every provider renders. */
-  async recordScreenshotSteer(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, imageUrl: string) {
+  async recordScreenshotSteer(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, imageUrl: string, hidden = false) {
     const reference = `screenshot:${randomUUID()}`;
     const item = (await externalizeCodexTranscriptInlineImages<ThreadItem>({
       type: "userMessage", id: reference, clientId: null,
       content: [
-        { type: "text", text: createAgentScreenshotSteerText(), text_elements: [] },
+        { type: "text", text: createAgentScreenshotSteerText({ hidden }), text_elements: [] },
         { type: "image", url: imageUrl },
       ],
     }, { assets: this.owners.assets, threadId })).value;

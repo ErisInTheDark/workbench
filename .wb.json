@@ -3,7 +3,7 @@
   "vis": {
     "css": {
       "command": ["node", "app/node_modules/@tailwindcss/cli/dist/index.mjs", "--input", "{input}"],
-      "input": "@import \"{root}/app/client/tailwind.css\";\n@source \"{file}\";\n"
+      "input": "@import \"{root}/app/client/components/vis-kit/vis-page.css\";\n@source \"{file}\";\n"
     },
     "build": {
       "command": ["node", "--disable-warning=ExperimentalWarning", "--import", "tsx", "scripts/vis-build.mts", "{file}"]

@@ -163,7 +163,7 @@ export function isHiddenCommandExecution(command: string) {
     || isThreadContextMatcherClaim(display.claimedBy)
     || isWorkbenchTaskStatusMatcherClaim(display.claimedBy)
     || isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy)
-    || display.claimedBy?.split(",").includes("workbench-cli.subagent");
+    || display.claimedBy?.split(",").some(claim => claim === "workbench-cli.subagent" || claim === "workbench-cli.vis");
   return display.omitFromDisplay && !dedicated;
 }
 

@@ -35,7 +35,7 @@ export interface WorkbenchBrowseResultEvent {
 export interface WorkbenchBrowseResultSink {
   captureOrigin(threadId: string): Promise<WorkbenchBrowseResultOrigin | null>;
   record(event: WorkbenchBrowseResultEvent, origin: WorkbenchBrowseResultOrigin | null): void;
-  deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null): Promise<WorkbenchBrowseScreenshotDelivery>;
+  deliverScreenshot(threadId: string, imageUrl: string, origin?: WorkbenchBrowseResultOrigin | null, options?: { hidden?: boolean }): Promise<WorkbenchBrowseScreenshotDelivery>;
   waitForIdle(): Promise<void>;
 }
 

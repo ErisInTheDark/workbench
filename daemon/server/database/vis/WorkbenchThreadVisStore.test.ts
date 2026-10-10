@@ -67,11 +67,11 @@ test("retention deletes a thread's sessions with their snapshots and answers, an
 
 test("build contexts survive storage, so resumed sessions build where they started", async context => {
   const { store, start, threadId } = await fixture(context);
-  start(threadId, "a.tsx", 1, { kind: "default" });
+  start(threadId, "a.tsx", 1, { kind: "kit" });
   start(threadId, "b.tsx", 2, { kind: "folder", root: "/elsewhere" });
   start(threadId, "c.tsx", 3);
   assert.deepEqual(store.execute({ kind: "readActive" }).sessions.map(({ build }) => build),
-    [{ kind: "default" }, { kind: "folder", root: "/elsewhere" }, { kind: "caller" }]);
+    [{ kind: "kit" }, { kind: "folder", root: "/elsewhere" }, { kind: "caller" }]);
 });
 
 test("answers belong to a live session of their own thread, read from the newest session on a path, keeping the latest 100", async context => {
