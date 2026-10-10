@@ -215,6 +215,25 @@ test("v15 draft rows survive binary image table upgrade with a retained rollback
   } finally { await repository.close(); }
 });
 
+test("v21 composer drafts survive the reference table upgrade", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const old = new Database(databasePath);
+  applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 21 });
+  old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
+  old.prepare(
+    "INSERT INTO composer_drafts(daemon_registration_id,project_id,thread_id,text,updated_at,deleted,revision) "
+    + "VALUES ('retained','project','thread','saved',1,0,2)",
+  ).run();
+  old.close();
+
+  const repository = new WorkbenchAppStateRepository({ databasePath });
+  try {
+    await repository.start();
+    assert.equal(repository.query(selectRows(appStateTables.composerDrafts))[0]?.text, "saved");
+    assert.deepEqual(repository.query(selectRows(appStateTables.composerDraftReferences)), []);
+  } finally { await repository.close(); }
+});
+
 test("app startup preserves its pre-upgrade database even when closed during opening", async (context) => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);

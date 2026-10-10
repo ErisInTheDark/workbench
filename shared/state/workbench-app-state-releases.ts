@@ -29,6 +29,7 @@ const appStateReleases = Object.freeze({
   removePinPlacement: release(19, "0ce2379f89a9229a19409689417783cf8537313bb6f3159324fb6d2d0d0968ac"),
   threadGitArcProposalsOpen: release(20, "b5405e56eb9635cb6aa8cece6459f7e7454efe9bd28e1cbf7a0f3ee8c7932029"),
   threadVisOpen: release(21, "39024869c7066015e21ed070dde900315d729521375b037966bea896658b3d55"),
+  composerDraftReferences: release(22, "5695acd99487d62b9d743d13e9a645ba6062c9fcc1203080d6c945366c880118"),
 });
 
 export default appStateReleases;

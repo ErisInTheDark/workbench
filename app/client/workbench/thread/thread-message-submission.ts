@@ -3,8 +3,28 @@
  * Exports:
  * - ThreadMessageNotSentError: expected pre-dispatch cancellation that silently restores composer input. Keywords: message, draft, cancellation.
  * - isThreadMessageNotSentError: classify expected not-sent cancellation without matching text. Keywords: message, error, classification.
+ * - createThreadComposerMessageInput: build existing-thread text and image input from one composer draft.
  * - runThreadComposerSubmission: await preservation and admission, then report cleanup without inviting a duplicate send.
  */
+
+import type { WorkbenchThreadComposerAttachmentDraft } from "workbench-shared/types";
+import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import {
+  createComposerReferenceMessage,
+  type ComposerReference,
+} from "workbench-shared/workbench/thread/composer-reference";
+
+export function createThreadComposerMessageInput(
+  message: string,
+  attachments: readonly WorkbenchThreadComposerAttachmentDraft[],
+  references: readonly ComposerReference[],
+): UserInput[] {
+  const input: UserInput[] = [];
+  const text = createComposerReferenceMessage(references, message);
+  if (text) input.push({ type: "text", text, text_elements: [] });
+  for (const attachment of attachments) input.push({ type: "image", url: attachment.url });
+  return input;
+}
 
 export class ThreadMessageNotSentError extends Error {
   constructor() {

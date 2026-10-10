@@ -36,6 +36,10 @@ import { z } from "zod";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
 import { DaemonIdSchema, LogicalProjectIdSchema, type LogicalProjectId } from "../workbench/identity.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
+import {
+  PresentationDraftReferenceSchema,
+  type PresentationDraftReference,
+} from "./workbench-presentation-state.ts";
 
 export const WorkbenchDaemonRegistrationRequestSchema = z.object({
   daemonId: DaemonIdSchema,
@@ -132,6 +136,8 @@ export interface WorkbenchFileDraftValue {
 
 export interface WorkbenchComposerDraftValue {
   attachments: Array<{ id: string; url: string }>;
+  /** `null` is the old-client preserve sentinel; projected records always return an array. */
+  references?: PresentationDraftReference[] | null;
   text: string;
   updatedAt: number;
 }
@@ -253,6 +259,7 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
     }) }),
   z.object({ kind: z.literal("composerDraft"), ...projectAddress, threadId: address,
     value: z.object({ attachments: z.array(attachment),
+      references: z.array(PresentationDraftReferenceSchema).max(200).nullable().default(null),
       text: z.string(), updatedAt: z.number() }) }),
   z.object({ kind: z.literal("questionnaireDraft"), ...projectAddress, threadId: address,
     requestKey: address, value: z.object({

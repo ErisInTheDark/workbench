@@ -5,11 +5,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchComposerInputDraft } from "workbench-shared/types";
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import DraftSessionController from "../../components/workbench/thread-view/DraftSessionController";
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import {
-  clearComposerDraft, clearQuestionnaireDraft, projectComposerDrafts, saveComposerDraft, saveQuestionnaireDraft,
+  attachComposerDraftReference, clearComposerDraft, clearQuestionnaireDraft, projectComposerDrafts,
+  saveComposerDraft, saveQuestionnaireDraft,
   type ComposerDraftTarget,
 } from "./draft-persistence";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
@@ -276,6 +278,44 @@ test("composer changes use latest client-state content and clearing leaves other
   await saveComposerDraft(state, { ...target, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("two") }, (draft) => ({ ...draft, text: "keep this" }), autosave);
   await clearComposerDraft(state, target);
   assert.deepEqual(state.records("composerDraft").map((record) => record.value.text), ["keep this"]);
+});
+
+test("reference-only composer drafts persist for an existing thread", async () => {
+  const state = new WorkbenchClientStateController();
+  const target: ComposerDraftTarget = { kind: "thread", daemonRegistrationId: "memory",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("one"),
+    threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };
+  const feedback: WorkbenchThreadAddressedFeedback = {
+    kind: "feedback", id: 7, daemonId: "daemon-a", category: "bug", title: "Stats action fails",
+    author: "GPT-5.5 high", thread: "Fix stats", createdAt: 1_760_050_000_000, report: "The stats action fails.",
+  };
+
+  await saveComposerDraft(state, target, draft => ({ ...draft, references: [feedback] }), autosave);
+
+  assert.deepEqual(state.records("composerDraft").map(record => record.value.references), [[feedback]]);
+});
+
+test("attaching feedback preserves composer content and deduplicates its reference identity", () => {
+  const feedback: WorkbenchThreadAddressedFeedback = {
+    kind: "feedback", id: 7, daemonId: "daemon-a", category: "bug", title: "Stats action fails",
+    author: "GPT-5.5 high", thread: "Fix stats", createdAt: 1_760_050_000_000, report: "The stats action fails.",
+  };
+  const existing = { kind: "updateIssue" as const, text: "Keep this issue." };
+  const draft: WorkbenchComposerInputDraft = {
+    attachments: [{ id: "shot", url: "image:shot" }],
+    references: [existing],
+    text: "keep this text",
+    updatedAt: 1,
+  };
+
+  const once = attachComposerDraftReference(draft, feedback);
+  const twice = attachComposerDraftReference(once, feedback);
+
+  assert.deepEqual(twice, {
+    ...draft,
+    references: [existing, feedback],
+  });
+  assert.equal(twice, once);
 });
 
 test("composer draft projection follows the UUID owner across daemon registrations", async () => {

@@ -14,6 +14,7 @@ import type {
 } from "workbench-shared/state/workbench-client-state";
 import {
   WORKBENCH_BROWSER_STATE_HEADER,
+  WorkbenchClientStateMutationSchema,
   workbenchClientStateAttachmentUrl,
 } from "workbench-shared/state/workbench-client-state";
 import {
@@ -336,8 +337,9 @@ export default class WorkbenchClientStateController {
   async #request(mutation: WorkbenchClientStateMutation) {
     if (this.#workspace) {
       const browserStateId = this.#browserStateId ?? null;
+      const conformedMutation = WorkbenchClientStateMutationSchema.parse(mutation);
       return this.#parseResponse(await this.#workspace.rpc.requestRaw({
-        method: "app/state/mutate", params: { browserStateId, mutation },
+        method: "app/state/mutate", params: { browserStateId, mutation: conformedMutation },
       }));
     }
     throw new Error("App state requires the workspace connection.");

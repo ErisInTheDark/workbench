@@ -14,6 +14,7 @@ import type {
 } from "./workbench-client-state.ts";
 import { LogicalProjectIdSchema } from "../workbench/identity.ts";
 import reportClientSchemaError from "../workbench/report-client-schema-error.ts";
+import type { PresentationDraftReference } from "./workbench-presentation-state.ts";
 
 export type WorkbenchClientStateProjectionChange =
   | { change: "delete"; identity: WorkbenchClientStateIdentity; revision: number }
@@ -192,9 +193,34 @@ export function projectWorkbenchClientStateRows(
     });
   }
 
+  const composerKey = (row: {
+    daemon_registration_id: string;
+    project_id: string;
+    thread_id: string;
+  }) => `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}`;
+  const composerReferences = new Map<string, PresentationDraftReference[]>();
+  for (const row of [...rows.composerDraftReferences].sort((left, right) => left.position - right.position)) {
+    const key = composerKey(row);
+    const values = composerReferences.get(key) ?? [];
+    values.push(row.kind === "feedback" ? {
+      kind: "feedback",
+      id: row.feedback_id!,
+      daemonId: row.feedback_daemon_id!,
+      category: row.feedback_category!,
+      title: row.feedback_title!,
+      author: row.feedback_author!,
+      thread: row.feedback_thread!,
+      createdAt: row.feedback_created_at!,
+      report: row.body,
+    } : {
+      kind: "updateIssue",
+      text: row.body,
+    });
+    composerReferences.set(key, values);
+  }
   const composerAttachments = new Map<string, Array<{ id: string; url: string }>>();
   for (const row of rows.composerDraftAttachments) {
-    const key = `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}`;
+    const key = composerKey(row);
     const values = composerAttachments.get(key) ?? [];
     values.push({ id: row.id, url: row.url });
     composerAttachments.set(key, values);
@@ -210,7 +236,8 @@ export function projectWorkbenchClientStateRows(
     else add(row.revision, 0, {
       ...identity,
       value: {
-        attachments: composerAttachments.get(`${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}`) ?? [],
+        attachments: composerAttachments.get(composerKey(row)) ?? [],
+        references: composerReferences.get(composerKey(row)) ?? [],
         text: row.text!,
         updatedAt: row.updated_at!,
       },

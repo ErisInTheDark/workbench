@@ -8,11 +8,12 @@ import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react"
 
 import WorkbenchDragController from "../../../workbench/layout/WorkbenchDragController";
 import type { WorkbenchThreadDragAction } from "../../../workbench/layout/workbench-drag";
-import { FolderInputIcon, OpenThreadIcon, PinIcon, SnoozedThreadIcon } from "../workbench-icons";
+import { FolderInputIcon, MegaphoneIcon, OpenThreadIcon, PinIcon, SnoozedThreadIcon } from "../workbench-icons";
 import { GitArcWaitIcon } from "../thread-view/GitArcIcon";
 import { WorkbenchDragContext } from "./workbench-drag-context";
 
 const ACTION_ICONS = {
+  attach: MegaphoneIcon,
   folder: FolderInputIcon,
   main: OpenThreadIcon,
   pinned: PinIcon,

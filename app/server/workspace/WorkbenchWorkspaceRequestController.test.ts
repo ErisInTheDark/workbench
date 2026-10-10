@@ -117,7 +117,7 @@ test("daemon compaction settings route to the selected installation without a pr
 function state(revision: number): WorkbenchClientStateResponse {
   return { daemonRegistrationId: "registration", revision, kind: "snapshot", oldestAvailableRevision: 0,
     rows: {
-      composerDraftAttachments: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
+      composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
       modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
       projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],

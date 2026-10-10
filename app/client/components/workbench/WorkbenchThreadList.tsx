@@ -30,6 +30,7 @@ import {
   type WorkbenchThreadDisplaySection,
 } from "workbench-shared/workbench/thread/thread-display-order";
 import type { WorkbenchThreadPriority, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import {
   canMoveWorkbenchThreadRowToSection,
@@ -56,6 +57,7 @@ import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOp
 import { CheckIcon, SnoozedThreadIcon, SparkleIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
+import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
@@ -143,6 +145,7 @@ export default function WorkbenchThreadList ({
   getThreadHref,
   logicalProjects,
   logicalThreads,
+  onAttachFeedback,
   onCreateThread,
   onCreateThreadPointerDragStart,
   onOpenQualifiedThread,
@@ -170,6 +173,11 @@ export default function WorkbenchThreadList ({
   getThreadHref?: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string | undefined;
   logicalProjects?: readonly WorkbenchLogicalProject[];
   logicalThreads?: readonly WorkbenchLogicalThreadRow[];
+  onAttachFeedback?: (
+    ownerProjectId: string,
+    target: WorkbenchThreadTarget,
+    reference: WorkbenchThreadAddressedFeedback,
+  ) => Promise<void>;
   onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
@@ -374,7 +382,7 @@ export default function WorkbenchThreadList ({
       && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
     );
     const readOnly = Boolean(qualified?.observedOnly);
-    const dragTargets = archived || readOnly ? null : (
+    const rowActionDragTargets = archived || readOnly ? null : (
       <WorkbenchThreadDragTargets
         activePayload={activeDragPayload}
         folderLabel={placementFolder ? `add to ${placementFolder.title}` : "create folder"}
@@ -423,6 +431,22 @@ export default function WorkbenchThreadList ({
         targetTitle={entry.title}
       />
     );
+    const feedbackDropTarget = readOnly || !onAttachFeedback ? null : (
+      <WorkbenchThreadComposerDropTarget
+        activePayload={activeDragPayload}
+        onDrop={({ reference }) => {
+          void onAttachFeedback(ProjectIdSchema.parse(entryProjectId), target, reference).catch(error => {
+            const message = error instanceof Error ? error.message.slice(0, 500) : "Unable to attach feedback.";
+            setLayoutError(message);
+            console.error("Unable to attach feedback", message);
+          });
+        }}
+        title={entry.title}
+      />
+    );
+    const dragTargets = rowActionDragTargets || feedbackDropTarget
+      ? <>{rowActionDragTargets}{feedbackDropTarget}</>
+      : null;
     const renderRow = ({ draggable, onDragStart, onPointerDown }: {
       draggable: false;
       onDragStart: import("react").DragEventHandler<HTMLElement>;

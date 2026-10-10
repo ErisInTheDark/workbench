@@ -164,6 +164,11 @@ function renderThreads(
   entries: ThreadEntry[],
   activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
   displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
+  options: {
+    attachedDaemonId?: string;
+    logicalThreads?: readonly WorkbenchLogicalThreadRow[];
+    onAttachFeedback?: ComponentProps<typeof WorkbenchThreadList>["onAttachFeedback"];
+  } = {},
 ) {
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
   return renderToStaticMarkup(createElement(
@@ -179,13 +184,16 @@ function renderThreads(
             createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
               actions: createActions({ projects: [{ projectId, entries, displayOrder, error: null, freshness: "fresh", revision: 1 }] }),
               activeDragPayload,
+              attachedDaemonId: options.attachedDaemonId,
               canCreateThread: true,
               currentTarget: null,
               displayOrder,
               entries,
               getThreadHref: () => "/agent/thread/thread-one",
               onCreateThread: () => undefined,
+              onAttachFeedback: options.onAttachFeedback,
               onOpenThread: () => undefined,
+              logicalThreads: options.logicalThreads,
               projectId,
               projects: [],
               selectedOwnerProjectId: projectId,
@@ -198,6 +206,36 @@ function renderThreads(
     },
   ));
 }
+
+test("feedback drags target writable thread composers but not observed rows", () => {
+  const entry = createThreadEntry({ threadId: "feedback-target", title: "Feedback target" });
+  const daemonId = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000111");
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  const logicalProjectId = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000112");
+  const payload = {
+    reference: {
+      kind: "feedback" as const, id: 7, daemonId, category: "bug" as const, title: "Stats action fails",
+      author: "GPT-5.5 high", thread: "Fix stats", createdAt: 1_760_050_000_000, report: "The stats action fails.",
+    },
+    type: "feedback" as const,
+  };
+  const row = (observedOnly: boolean): WorkbenchLogicalThreadRow => ({
+    entry,
+    hostname: "test",
+    location: { daemonId, projectId },
+    logicalProjectId,
+    observedOnly,
+    rootPath: "C:/repo",
+  });
+  const render = (observedOnly: boolean) => renderThreads([entry], payload, {}, {
+    attachedDaemonId: daemonId,
+    logicalThreads: [row(observedOnly)],
+    onAttachFeedback: async () => undefined,
+  });
+
+  assert.match(render(false), /data-thread-feedback-drop-target="true"/u);
+  assert.doesNotMatch(render(true), /data-thread-feedback-drop-target="true"/u);
+});
 
 function renderHomeThreads({
   activeDragPayload = null,

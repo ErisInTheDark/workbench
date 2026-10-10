@@ -7,7 +7,10 @@ import { test, type TestContext } from "node:test";
 import Database from "better-sqlite3";
 
 import { projectWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state-projection";
-import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
+import type {
+  WorkbenchClientStateResponse,
+  WorkbenchComposerDraftValue,
+} from "workbench-shared/state/workbench-client-state";
 import { LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { appStateSchema } from "workbench-shared/state/workbench-app-state-schema";
@@ -73,7 +76,10 @@ test("UUID conversion flattens saved aliases without resurrecting deleted drafts
   const old = ProjectIdSchema.parse("remote://example.test/owner/repo");
   const projectId = testProjectIds.project;
   const identity = { kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old/path", threadId: "live" };
-  const value = { text: "retained", attachments: [{ id: "image", url: "attachment" }], updatedAt: 1 };
+  const value = {
+    text: "retained", attachments: [{ id: "image", url: "attachment" }],
+    references: [], updatedAt: 1,
+  };
   try {
     for (const threadId of ["live", "deleted"]) {
       await fixture.controller.mutate({ action: "put", record: { ...identity, threadId, value } });
@@ -95,13 +101,24 @@ test("UUID conversion flattens saved aliases without resurrecting deleted drafts
   } finally { await restarted.close(); }
 });
 
-test("project remapping preserves draft attachments and launch selection across restart and late old-address saves", async context => {
+test("project remapping preserves draft attachments, references and launch selection across restart and old-client saves", async context => {
   const fixture = await controllerFixture(context);
   const projectId = ProjectIdSchema.parse("remote://example.test/owner/repo");
   const request = { daemonRegistrationId: fixture.daemonRegistrationId, aliases: [{ alias: "old", projectId }] };
+  const references: NonNullable<WorkbenchComposerDraftValue["references"]> = [
+    {
+      kind: "feedback", id: 7, daemonId: "daemon", category: "bug", title: "Stats drop",
+      author: "lily", thread: "thread", createdAt: 10, report: "The drop missed its target.",
+    },
+    { kind: "updateIssue", text: "Keep the issue current." },
+  ];
   const draft = {
     kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread",
-    value: { text: "keep this draft", updatedAt: 1, attachments: [{ id: "attachment", url: "data:image/png;base64,YQ==" }] },
+    value: {
+      text: "keep this draft", updatedAt: 1,
+      attachments: [{ id: "attachment", url: "data:image/png;base64,YQ==" }],
+      references,
+    },
   };
   try {
     await fixture.controller.mutate({ action: "put", record: draft });
@@ -119,9 +136,21 @@ test("project remapping preserves draft attachments and launch selection across 
   const restarted = fixture.create();
   try {
     await restarted.start();
-    await restarted.mutate({ action: "put", record: { ...draft, value: { ...draft.value, text: "late edit" } } });
+    const oldClientValue = {
+      attachments: draft.value.attachments,
+      text: "late edit",
+      updatedAt: 2,
+    };
+    await restarted.mutate({ action: "put", record: { ...draft, value: oldClientValue } });
     assert.deepEqual(projectedRecords(restarted.read()).filter(record => record.kind === "composerDraft"), [
-      { ...draft, projectId, value: { ...draft.value, text: "late edit" } },
+      { ...draft, projectId, value: { ...oldClientValue, references } },
+    ]);
+    await restarted.mutate({ action: "put", record: {
+      ...draft,
+      value: { ...oldClientValue, references: [], updatedAt: 3 },
+    } });
+    assert.deepEqual(projectedRecords(restarted.read()).filter(record => record.kind === "composerDraft"), [
+      { ...draft, projectId, value: { ...oldClientValue, references: [], updatedAt: 3 } },
     ]);
     await restarted.mutate({ action: "delete", identity: {
       kind: "composerDraft", daemonRegistrationId: fixture.daemonRegistrationId, projectId: "old", threadId: "thread",

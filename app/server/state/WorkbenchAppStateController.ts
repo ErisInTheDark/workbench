@@ -367,6 +367,14 @@ export default class WorkbenchAppStateController {
             projectId: row.project_id, threadId: row.thread_id,
           }, row.id, row.url),
         })),
+      composerDraftReferences: composerDrafts.flatMap(draft => this.#repository.query(selectRows(
+        appStateClientTables.composerDraftReferences, {
+          where: {
+            daemon_registration_id: draft.daemon_registration_id,
+            project_id: draft.project_id,
+            thread_id: draft.thread_id,
+          },
+        }))),
       composerDrafts,
       fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
@@ -493,6 +501,7 @@ export default class WorkbenchAppStateController {
             thread_id: record.threadId,
             updated_at: record.value.updatedAt,
           }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id"], updateColumns: ["text", "updated_at", "deleted", "revision"] }),
+          ...this.#replaceComposerReferences(record),
           ...this.#replaceComposerAttachments(record),
         ];
       }
@@ -568,6 +577,9 @@ export default class WorkbenchAppStateController {
           deleteRows(appStateTables.composerDraftAttachments, {
             daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId, thread_id: identity.threadId,
           }),
+          deleteRows(appStateTables.composerDraftReferences, {
+            daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId, thread_id: identity.threadId,
+          }),
           updateRows(appStateTables.composerDrafts, { deleted: 1, revision, text: null, updated_at: null }, {
             daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId, thread_id: identity.threadId,
           }),
@@ -629,6 +641,32 @@ export default class WorkbenchAppStateController {
         updateColumns: ["url"] }));
     }
     return mutations;
+  }
+
+  #replaceComposerReferences(record: Extract<WorkbenchClientStateRecord, { kind: "composerDraft" }>) {
+    if (record.value.references == null) return [];
+    const owner = {
+      daemon_registration_id: record.daemonRegistrationId,
+      project_id: record.projectId,
+      thread_id: record.threadId,
+    };
+    return [
+      deleteRows(appStateTables.composerDraftReferences, owner),
+      ...record.value.references.map((reference, position) => insertRow(appStateTables.composerDraftReferences, {
+        ...owner,
+        owner_deleted: 0,
+        position,
+        kind: reference.kind,
+        body: reference.kind === "feedback" ? reference.report : reference.text,
+        feedback_id: reference.kind === "feedback" ? reference.id : null,
+        feedback_daemon_id: reference.kind === "feedback" ? reference.daemonId : null,
+        feedback_category: reference.kind === "feedback" ? reference.category : null,
+        feedback_title: reference.kind === "feedback" ? reference.title : null,
+        feedback_author: reference.kind === "feedback" ? reference.author : null,
+        feedback_thread: reference.kind === "feedback" ? reference.thread : null,
+        feedback_created_at: reference.kind === "feedback" ? reference.createdAt : null,
+      })),
+    ];
   }
 
   #replaceQuestionnaireAttachments(record: Extract<WorkbenchClientStateRecord, { kind: "questionnaireDraft" }>) {

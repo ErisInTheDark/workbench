@@ -14,6 +14,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared/workbench/identity";
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
@@ -44,6 +45,11 @@ interface WorkbenchThreadSidebarProps {
   emptySelectionMessage?: string;
   harness: WorkbenchHarness;
   logicalProjects?: readonly WorkbenchLogicalProject[];
+  onAttachFeedback?: (
+    ownerProjectId: string,
+    target: WorkbenchThreadTarget,
+    reference: WorkbenchThreadAddressedFeedback,
+  ) => Promise<void>;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
@@ -70,6 +76,7 @@ export default memo(function WorkbenchThreadSidebar({
   emptySelectionMessage,
   harness,
   logicalProjects,
+  onAttachFeedback,
   onBeginPointerDrag,
   onCreateThread,
   onOpenThread,
@@ -140,6 +147,7 @@ export default memo(function WorkbenchThreadSidebar({
           } : logicalProjects ? undefined : (target) => projectHref(createThreadRoute(projectId, target))}
           logicalProjects={logicalProjects ?? (logicalProject ? [logicalProject] : undefined)}
           logicalThreads={logicalThreads}
+          onAttachFeedback={onAttachFeedback}
           onCreateThread={onCreateThread}
           onCreateThreadPointerDragStart={showMosaicView ? (event) => {
             onBeginPointerDrag(event, { harness, type: "new-thread" });

@@ -12,7 +12,7 @@ function response(revision: number, rows: Partial<WorkbenchClientStateRows> = {}
   return {
     daemonRegistrationId: "registration", kind, oldestAvailableRevision: 0, revision, schemaVersion: 0,
     rows: {
-      composerDraftAttachments: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
+      composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
       modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
       projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],

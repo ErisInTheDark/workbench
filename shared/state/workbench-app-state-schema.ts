@@ -795,6 +795,22 @@ const composerDraftsHistory = initialHistory(defineTable("composer_drafts", {
   ],
 })));
 
+function composerOwnerConstraints(table: {
+  daemon_registration_id: Parameters<typeof foreignKey>[0][number];
+  owner_deleted: Parameters<typeof foreignKey>[0][number];
+  project_id: Parameters<typeof foreignKey>[0][number];
+  thread_id: Parameters<typeof foreignKey>[0][number];
+}) {
+  return [
+    foreignKey([table.daemon_registration_id, table.project_id, table.thread_id, table.owner_deleted], {
+      columns: ["daemon_registration_id", "project_id", "thread_id", "deleted"],
+      onDelete: "CASCADE",
+      table: "composer_drafts",
+    }),
+    check(sql`${table.owner_deleted} = ${literal(0)}`),
+  ];
+}
+
 const composerDraftAttachmentsHistory = initialHistory(defineTable("composer_draft_attachments", {
   daemon_registration_id: text().notNull(),
   project_id: text().notNull(),
@@ -805,14 +821,57 @@ const composerDraftAttachmentsHistory = initialHistory(defineTable("composer_dra
 }, (table) => ({
   constraints: [
     primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.id]),
-    foreignKey([table.daemon_registration_id, table.project_id, table.thread_id, table.owner_deleted], {
-      columns: ["daemon_registration_id", "project_id", "thread_id", "deleted"],
-      onDelete: "CASCADE",
-      table: "composer_drafts",
-    }),
-    check(sql`${table.owner_deleted} = ${literal(0)}`),
+    ...composerOwnerConstraints(table),
   ],
 })));
+
+const composerDraftReferences = defineTable("composer_draft_references", {
+  daemon_registration_id: text().notNull(),
+  project_id: text().notNull(),
+  thread_id: text().notNull(),
+  owner_deleted: booleanInteger().notNull().default(0),
+  position: integer().notNull().nonNegative(),
+  kind: enumText("feedback", "updateIssue").notNull(),
+  body: text().notNull(),
+  feedback_id: integer().nonNegative(),
+  feedback_daemon_id: text(),
+  feedback_category: enumText("bug", "confusion", "opportunity", "waste"),
+  feedback_title: text(),
+  feedback_author: text(),
+  feedback_thread: text(),
+  feedback_created_at: integer().nonNegative(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.position]),
+    ...composerOwnerConstraints(table),
+    check(sql`
+      (${table.kind} = ${literal("updateIssue")}
+        AND ${table.feedback_id} IS NULL
+        AND ${table.feedback_daemon_id} IS NULL
+        AND ${table.feedback_category} IS NULL
+        AND ${table.feedback_title} IS NULL
+        AND ${table.feedback_author} IS NULL
+        AND ${table.feedback_thread} IS NULL
+        AND ${table.feedback_created_at} IS NULL)
+      OR (${table.kind} = ${literal("feedback")}
+        AND ${table.feedback_id} IS NOT NULL
+        AND ${table.feedback_daemon_id} IS NOT NULL
+        AND ${table.feedback_category} IS NOT NULL
+        AND ${table.feedback_title} IS NOT NULL
+        AND ${table.feedback_author} IS NOT NULL
+        AND ${table.feedback_thread} IS NOT NULL
+        AND ${table.feedback_created_at} IS NOT NULL)
+    `),
+  ],
+}));
+const composerDraftReferencesHistory = defineTableHistory({
+  current: composerDraftReferences,
+  versions: [tableVersion({
+    migration: createTable(composerDraftReferences),
+    schemaVersion: appStateReleases.composerDraftReferences.version,
+    table: composerDraftReferences,
+  })],
+});
 
 const composerDraftImageContent = defineTable("composer_draft_image_content", {
   daemon_registration_id: text().notNull(),
@@ -1034,6 +1093,7 @@ const histories = [
   fileDraftsHistory,
   composerDraftsHistory,
   composerDraftAttachmentsHistory,
+  composerDraftReferencesHistory,
   composerDraftImageContentHistory,
   questionnaireDraftsHistory,
   questionnaireDraftAnswersHistory,
@@ -1046,6 +1106,7 @@ export const appStateClientTables = Object.freeze({
   modelPreferences: modelPreferencesHistory.current,
   modelGroupDisclosures: modelGroupDisclosuresHistory.current,
   composerDraftAttachments: composerDraftAttachmentsHistory.current,
+  composerDraftReferences: composerDraftReferencesHistory.current,
   composerDrafts: composerDraftsHistory.current,
   fileDrafts: fileDraftsHistory.current,
   globalPreferences: globalPreferencesHistory.current,

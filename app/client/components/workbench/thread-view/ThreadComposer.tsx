@@ -37,7 +37,10 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
 import { toInlineMentionOverlayHighlights } from "../../../workbench/thread/inline-mention-styles";
-import { runThreadComposerSubmission } from "../../../workbench/thread/thread-message-submission";
+import {
+  createThreadComposerMessageInput,
+  runThreadComposerSubmission,
+} from "../../../workbench/thread/thread-message-submission";
 import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
@@ -58,7 +61,7 @@ import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
 import {
-  composerReferenceKey, createComposerReferenceMessage, type ComposerReference,
+  composerReferenceKey, type ComposerReference,
 } from "workbench-shared/workbench/thread/composer-reference";
 import { workbenchThreadTodoReference, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import ComposerReferencePills from "./ComposerReferencePills";
@@ -430,23 +433,13 @@ export default function ThreadComposer ({
       return;
     }
 
-    // Drafts launch from their saved references and prompt; thread messages carry selected todos ahead of the text.
-    const text = thread.isDraft ? trimmedValue : createComposerReferenceMessage(todoReferences, trimmedValue);
+    // Drafts launch from saved references; existing threads carry every attached reference in their next message.
     const sentTodoIds = todoReferences.map(({ id }) => id);
-    const input: UserInput[] = [];
-    if (text) {
-      input.push({
-        type: "text",
-        text,
-        text_elements: [],
-      });
-    }
-    for (const attachment of attachments) {
-      input.push({
-        type: "image",
-        url: attachment.url,
-      });
-    }
+    const input = createThreadComposerMessageInput(
+      trimmedValue,
+      attachments,
+      thread.isDraft ? [] : references,
+    );
 
     const activatedSkillPaths = getActivatedWorkbenchSkillPaths(composerHighlights);
     setError("");

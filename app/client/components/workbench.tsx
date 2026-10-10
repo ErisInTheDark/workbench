@@ -91,7 +91,7 @@ import type { WorkbenchSearchHit } from "../workbench/search/WorkbenchSearchCont
 import WorkbenchSearchController from "../workbench/search/WorkbenchSearchController";
 import { createComposerProfilePersistence, createComposerProfileTargetPersistence } from "../workbench/state/composer-profile-api";
 import {
-    clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
+    attachComposerDraftReference, clearComposerDraft, presentationDraftToInput, projectComposerDrafts, saveComposerDraft,
     type ComposerDraftTarget,
 } from "../workbench/state/draft-persistence";
 import {
@@ -144,7 +144,9 @@ import resolveThreadActivityTimestampMs from "./workbench/thread-view/thread-act
 import { getThreadTitle } from "./workbench/thread-view/thread-view-formatters";
 import WorkbenchRelativeTime from "./workbench/WorkbenchRelativeTime";
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
+import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
+import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import WorkbenchDraftTitleIcons from "./workbench/WorkbenchDraftTitleIcons";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
@@ -1484,6 +1486,26 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
   }, [clientStateController, getComposerDraftTarget]);
 
+  const handleAttachFeedbackToThread = useCallback(async (
+    ownerProjectId: string,
+    target: WorkbenchThreadTarget,
+    reference: WorkbenchThreadAddressedFeedback,
+  ) => {
+    if (clientState.schemaVersion < appStateReleases.composerDraftReferences.version) {
+      throw new Error("Restart Workbench to attach feedback to an existing thread.");
+    }
+    if (target.kind === "new") throw new Error("Feedback needs a concrete thread composer.");
+    const threadId = target.kind === "draft" ? target.draftId : target.threadId;
+    await handleThreadComposerDraftChange(
+      ownerProjectId,
+      threadId,
+      draft => attachComposerDraftReference(draft, reference),
+      "autosave",
+      target,
+      true,
+    );
+  }, [clientState.schemaVersion, handleThreadComposerDraftChange]);
+
   const setThreadComposerSettings = useCallback((threadId: string, settings: WorkbenchComposerSettings) => {
     if (currentThread?.id === threadId && currentThread.isDraft && currentThread.harness !== settings.harness) {
       void clientStateController.put({
@@ -2107,6 +2129,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     if (isMobile || event.button !== 0 || payload.type === "thread-folder" || payload.type === "home-thread-folder") return;
     const label = payload.type === "new-thread"
       ? "New thread"
+      : payload.type === "feedback"
+        ? payload.reference.title
       : payload.target.kind === "file"
         ? payload.target.filePath
         : payload.target.kind === "thread" && (payload.target.target.kind === "provider" || payload.target.target.kind === "subagent")
@@ -2511,6 +2535,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         logicalProject={selectedLogicalProject}
                         logicalProjects={displayedLogicalProjects}
                         logicalThreads={explorer.logicalThreads}
+                        onAttachFeedback={clientState.schemaVersion >= appStateReleases.composerDraftReferences.version
+                          ? handleAttachFeedbackToThread
+                          : undefined}
                         presentation={workbenchClient.mounted?.presentationClient?.snapshot().data}
                         controls={controls}
                         selectedLocation={browseLocation}

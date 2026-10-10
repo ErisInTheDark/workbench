@@ -4,6 +4,7 @@
  * - ComposerDraftTarget: existing-thread or app-owned unsent destination.
  * - presentationDraftToInput: project saved prompt, image attachments and references into composer input.
  * - projectComposerDrafts: select only composer records matching each UUID's registered owner.
+ * - attachComposerDraftReference: append one reference to a composer draft without duplicating its identity.
  * - saveComposerDraft: merge edits and materialise eligible app drafts.
  * - clearComposerDraft: remove only the captured composer destination.
  * - saveQuestionnaireDraft: merge edits into the latest questionnaire record.
@@ -17,6 +18,8 @@ import type WorkbenchClientStateController from "./WorkbenchClientStateControlle
 import type { WorkbenchClientStateSnapshot } from "./WorkbenchClientStateController";
 import type WorkbenchPresentationClient from "./WorkbenchPresentationClient";
 import type { DraftId, ProjectId, ThreadReference, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
+import { composerReferenceKey } from "workbench-shared/workbench/thread/composer-reference";
 
 export interface ClientDraftIdentity {
   daemonRegistrationId: string;
@@ -59,8 +62,19 @@ export function projectComposerDrafts(
     const owner = identityFor(record.threadId);
     return owner && owner.daemonRegistrationId === record.daemonRegistrationId
       && owner.projectId === record.projectId && owner.threadId === record.threadId
-      ? [[record.threadId, record.value] as const] : [];
+      ? [[record.threadId, { ...record.value, references: record.value.references ?? [] }] as const] : [];
   }));
+}
+
+export function attachComposerDraftReference(
+  draft: WorkbenchComposerInputDraft,
+  reference: PresentationDraftReference,
+): WorkbenchComposerInputDraft {
+  const references = draft.references ?? [];
+  const key = composerReferenceKey(reference);
+  return references.some(item => composerReferenceKey(item) === key)
+    ? draft
+    : { ...draft, references: [...references, reference] };
 }
 
 export async function saveComposerDraft(
@@ -72,11 +86,16 @@ export async function saveComposerDraft(
   if (target.kind === "thread") {
     const { daemonRegistrationId, projectId, threadId } = target;
     const identity = { kind: "composerDraft" as const, daemonRegistrationId, projectId, threadId };
-    const current = state.records("composerDraft").find((record) => (
+    const stored = state.records("composerDraft").find((record) => (
       record.daemonRegistrationId === daemonRegistrationId && record.projectId === projectId && record.threadId === threadId
     ))?.value ?? { text: "", attachments: [], updatedAt: 0 };
+    const current = { ...stored, references: stored.references ?? [] };
     const draft = { ...update(current), updatedAt: Date.now() };
-    if (!draft.text.trim() && !draft.attachments.length) {
+    if (!hasWorkbenchThreadDraftContent({
+      attachments: draft.attachments,
+      prompt: draft.text,
+      references: draft.references,
+    })) {
       await state.delete(identity);
       return draft;
     }

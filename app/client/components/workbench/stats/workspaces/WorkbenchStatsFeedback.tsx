@@ -18,6 +18,8 @@ import useStats from "../use-stats";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import WorkbenchStatsFeedbackReport, { WorkbenchFeedbackReportSkeleton } from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
+import Draggable from "../../drag/Draggable";
+import { WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID } from "../../../../workbench/layout/workbench-drag";
 import {
   FEEDBACK_CATEGORY_PRESENTATION,
   feedbackAddressProjectId,
@@ -38,6 +40,7 @@ export default function WorkbenchStatsFeedback() {
   const [actionError, setActionError] = useState("");
   const feedback = stats?.feedback ?? null;
   const items = feedback?.items ?? [];
+  const attached = scope.attachedDaemonId;
   const keyOf = (item: { daemonId?: string | null; id: number }) => `${item.daemonId ?? ""}:${item.id}`;
   // Selection follows the published reports, so deleted or out-of-period reports simply stop counting.
   const selected = items.filter((item) => selectedKeys.has(keyOf(item)));
@@ -87,7 +90,6 @@ export default function WorkbenchStatsFeedback() {
     return next;
   });
   const address = () => {
-    const attached = scope.attachedDaemonId;
     if (!addressProjectId || (!attached && selected.some((item) => !item.daemonId))) return;
     onAddress(addressProjectId, selected.map((item) => feedbackReference(item, {
       daemonId: item.daemonId ?? attached!,
@@ -158,15 +160,36 @@ export default function WorkbenchStatsFeedback() {
             </div>
           </div>
           <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
-            {visible.map((item) => (
-              <WorkbenchStatsFeedbackReport
-                item={item}
-                key={keyOf(item)}
-                modelName={modelName(item.harness, item.model)}
-                onToggle={() => toggleSelected(keyOf(item))}
-                selected={selectedKeys.has(keyOf(item))}
-              />
-            ))}
+            {visible.map((item) => {
+              const key = keyOf(item);
+              const daemonId = item.daemonId ?? attached;
+              const report = (
+                <WorkbenchStatsFeedbackReport
+                  item={item}
+                  modelName={modelName(item.harness, item.model)}
+                  onToggle={() => toggleSelected(key)}
+                  selected={selectedKeys.has(key)}
+                />
+              );
+              if (!daemonId) return <div className="contents" key={key}>{report}</div>;
+              return (
+                <Draggable
+                  dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
+                  key={key}
+                  label={item.title}
+                  payload={{
+                    reference: feedbackReference(item, {
+                      daemonId,
+                      modelName: modelName(item.harness, item.model),
+                      projectName: projectName(item.projectId, item.daemonId),
+                    }),
+                    type: "feedback",
+                  }}
+                >
+                  {report}
+                </Draggable>
+              );
+            })}
           </ol>
           {feedback.total > items.length ? (
             <p className="m-0 text-[0.72rem] text-fg/muted">

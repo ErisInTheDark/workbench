@@ -1,18 +1,42 @@
 /*
  * Exports:
- * - No production exports; Node tests cover composer admission commit, silent cancellation, and visible failure. Keywords: composer, draft, admission, test.
+ * - No production exports; Node tests cover composer input, admission commit, silent cancellation, and visible failure. Keywords: composer, draft, admission, test.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { runThreadComposerSubmission, ThreadMessageNotSentError } from "./thread-message-submission.ts";
+import { readComposerReferenceMessage, type ComposerReference } from "workbench-shared/workbench/thread/composer-reference";
+import {
+  createThreadComposerMessageInput,
+  runThreadComposerSubmission,
+  ThreadMessageNotSentError,
+} from "./thread-message-submission.ts";
 
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((accept) => { resolve = accept; });
   return { promise, resolve };
 }
+
+test("existing-thread input sends attached feedback before text and keeps images separate", () => {
+  const feedback: ComposerReference = {
+    kind: "feedback", id: 7, daemonId: "daemon-a", category: "bug", title: "Stats action fails",
+    author: "GPT-5.5 high", thread: "Fix stats", createdAt: 1_760_050_000_000, report: "The stats action fails.",
+  };
+  const input = createThreadComposerMessageInput(
+    "please investigate",
+    [{ id: "screenshot", url: "image:screenshot" }],
+    [feedback],
+  );
+
+  assert.equal(input[0]?.type, "text");
+  assert.deepEqual(input[0]?.type === "text" ? readComposerReferenceMessage(input[0].text) : null, {
+    message: "please investigate",
+    references: [{ ...feedback, daemonId: null }],
+  });
+  assert.deepEqual(input[1], { type: "image", url: "image:screenshot" });
+});
 
 test("unresolved admission does not commit or restore the durable draft", async () => {
   const events: string[] = [];
