@@ -10,6 +10,7 @@
 - Do not give augmentation tables a second history order.
 - Store Workbench-owned domain state in typed tables.
 - Store other provider items as generic payloads; presentation matching needs no dedicated table.
+- Record Workbench-originated thread events as Workbench items. Never merge client-side overlays into history.
 - Keep provider-native evidence separate from Workbench items.
 - Provider-native evidence does not render or order history.
 - Expire completed result bodies one day after item creation. Keep invocation, outcome, timing, error, exit, and item identity facts plus an expiry tombstone.

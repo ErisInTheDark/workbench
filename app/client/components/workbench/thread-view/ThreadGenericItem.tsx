@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGenericItem: match provider presentation or retain an expandable raw payload.
+ * - default ThreadGenericItem: match provider or Workbench item presentation or retain an expandable raw payload.
  */
 "use client";
 
@@ -12,13 +12,16 @@ import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic
 import Disclosure from "../../ui/Disclosure";
 import ThreadSleepItem from "./ThreadSleepItem";
 import ThreadSummaryText from "./ThreadSummaryText";
+import { ThreadVisSnapshotRow } from "./ThreadVisCommandItem";
 
 export default function ThreadGenericItem({
   item,
+  threadId,
   timeline,
   turnStatus = "completed",
 }: {
   item: ThreadItem | WorkbenchProjectedGenericItem;
+  threadId: string;
   timeline?: WorkbenchThreadItemTimelineEntry | null;
   turnStatus?: Turn["status"];
 }) {
@@ -26,8 +29,11 @@ export default function ThreadGenericItem({
     ? item
     : { nativeType: item.type, safeValue: item };
   const match = matchThreadGenericItem(source);
-  if (match) {
-    return <ThreadSleepItem key={item.id} durationMs={match.durationMs} timeline={timeline} turnStatus={turnStatus} />;
+  switch (match?.kind) {
+    case "sleep":
+      return <ThreadSleepItem key={item.id} durationMs={match.durationMs} timeline={timeline} turnStatus={turnStatus} />;
+    case "visEnd":
+      return <ThreadVisSnapshotRow durationMs={null} path={match.path} sessionId={match.sessionId} snapshotKind="end" threadId={threadId} />;
   }
   return (
     <Disclosure

@@ -104,6 +104,31 @@ test("shell stops reach Codex call ids through item source aliases and reject co
   await assert.rejects(f.controller.handle("thread/shell/stop", { threadId: "wb-thread", itemId: "shell-item" }), /no longer running/);
 });
 
+test("a user ending a vis from its card records a Workbench vis end item in the thread's latest turn", async () => {
+  const f = fixture();
+  const sessionId = "4b6d8f0e-6a52-4d2f-9c1e-2f5a7b3c9d10";
+  f.owners.vis.endById = async (threadId, id) => {
+    assert.deepEqual([threadId, id], ["native-thread", sessionId]);
+    return { sessionId, path: "mock.tsx", failure: null };
+  };
+  f.owners.transcript.read = async request => {
+    assert.deepEqual(request, { threadId: "wb-thread", turnLimit: 1 });
+    return { turns: [{ id: "wb-turn-latest" }] } as never;
+  };
+  assert.deepEqual(await f.controller.handle("thread/vis/end", { threadId: "native-thread", sessionId }), { ok: true });
+  assert.equal(f.recorded.length, 1);
+  const [observation] = f.recorded as Array<{ kind: string; threadId: string; turnId: string; lifecycle: string; item: Record<string, unknown> }>;
+  assert.equal(observation!.kind, "item");
+  assert.equal(observation!.threadId, "wb-thread");
+  assert.equal(observation!.turnId, "wb-turn-latest");
+  assert.equal(observation!.lifecycle, "completed");
+  assert.deepEqual({ ...observation!.item, id: "" }, { type: "visEnd", id: "", sessionId, path: "mock.tsx" });
+
+  f.owners.vis.endById = async () => { throw new Error("That vis session is no longer live."); };
+  await assert.rejects(f.controller.handle("thread/vis/end", { threadId: "wb-thread", sessionId }), /no longer live/);
+  assert.equal(f.recorded.length, 1, "a session that did not end records nothing");
+});
+
 test("provider deletion resolves aliases without mutating WB state and preserves failures", async () => {
   const f = fixture();
   const deleted: string[] = [];

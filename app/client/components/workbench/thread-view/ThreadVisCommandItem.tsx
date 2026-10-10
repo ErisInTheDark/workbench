@@ -3,6 +3,7 @@
  * - default ThreadVisCommandItem: render a vis start or end call as a closed disclosure that shows the document snapshotted at that
  *   moment, an answer read or browser snapshot as one that shows what the agent read, and a screenshot as one that shows the
  *   image the agent saw (its delivery is transcript-hidden, so this is its only place).
+ * - ThreadVisSnapshotRow: the completed start or end row over its snapshot, shared with the user's card-end item.
  */
 "use client";
 
@@ -48,6 +49,35 @@ const VERBS: Record<WorkbenchVisOperation["action"], Record<"completed" | "faile
   screenshot: { inProgress: "Checking vis appearance", failed: "Could not check vis appearance", completed: "Checked vis appearance" },
 };
 
+function VisSummary({ durationMs, path, verb }: { durationMs: number | null; path: string; verb: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0">{verb}</span>
+      <span className="min-w-0 truncate font-mono text-[0.92em] text-text">{path}</span>
+      {durationMs === null ? null : <ThreadDurationText className="shrink-0 text-[0.78em] text-fg/muted" durationMs={durationMs} />}
+    </span>
+  );
+}
+
+/** A completed vis start or end: a closed disclosure over the document snapshotted at that moment. */
+export function ThreadVisSnapshotRow({ durationMs, path, sessionId, snapshotKind, threadId }: {
+  durationMs: number | null;
+  path: string;
+  sessionId: string;
+  snapshotKind: "start" | "end";
+  threadId: string;
+}) {
+  return (
+    <Disclosure
+      className="py-2"
+      contentClassName="mt-2 pl-6"
+      renderContent={() => <VisSnapshotContent sessionId={sessionId} snapshotKind={snapshotKind} threadId={threadId} />}
+      summary={<VisSummary durationMs={durationMs} path={path} verb={VERBS[snapshotKind].completed} />}
+      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+    />
+  );
+}
+
 export default function ThreadVisCommandItem({ durationMs, operation, outcome, output, threadId }: {
   durationMs: number | null;
   operation: WorkbenchVisOperation;
@@ -57,14 +87,7 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   threadId: string;
 }) {
   const result = parseVisSessionResult(output);
-  const verb = VERBS[operation.action][outcome];
-  const summary = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0">{verb}</span>
-      <span className="min-w-0 truncate font-mono text-[0.92em] text-text">{operation.path}</span>
-      {durationMs === null ? null : <ThreadDurationText className="shrink-0 text-[0.78em] text-fg/muted" durationMs={durationMs} />}
-    </span>
-  );
+  const summary = <VisSummary durationMs={durationMs} path={operation.path} verb={VERBS[operation.action][outcome]} />;
   const screenshot = operation.action === "screenshot" && outcome === "completed" ? parseVisScreenshotImage(output) : null;
   if (screenshot) {
     return (
@@ -96,13 +119,5 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
       </div>
     );
   }
-  return (
-    <Disclosure
-      className="py-2"
-      contentClassName="mt-2 pl-6"
-      renderContent={() => <VisSnapshotContent sessionId={result.sessionId} snapshotKind={result.kind} threadId={threadId} />}
-      summary={summary}
-      summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-    />
-  );
+  return <ThreadVisSnapshotRow durationMs={durationMs} path={operation.path} sessionId={result.sessionId} snapshotKind={result.kind} threadId={threadId} />;
 }

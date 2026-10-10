@@ -30,7 +30,6 @@ async function fixture(context: TestContext) {
         snapshots.set(`${value.sessionId}:end`, command.snapshot);
       } break;
       case "readActive": return { sessions: [...sessions.values()].filter(({ endedAt }) => endedAt === null), snapshot: null };
-      case "readUserEnded": return { sessions: [], snapshot: null, userEnded: [] };
       case "answer": {
         const live = sessions.get(command.sessionId);
         if (!live || live.endedAt !== null || live.threadId !== command.threadId) break;
@@ -167,13 +166,13 @@ test("a component re-renders when a file its build read changes, and watching fo
   controller.dispose();
 });
 
-test("a user end is listed for the user only, and the session can't be ended twice", async context => {
+test("a user end names the ended session for its transcript item, and the session can't be ended twice", async context => {
   const f = await fixture(context);
   await writeFile(f.file, "<p>x</p>");
   const controller = f.create();
   const { sessionId } = await f.start(controller);
-  await controller.endById("thread", sessionId);
-  assert.deepEqual(controller.read("thread"), { sessions: [], userEnded: [{ sessionId, path: "mock.html", endedAt: 100 }] });
+  assert.deepEqual(await controller.endById("thread", sessionId), { sessionId, path: "mock.html", failure: null });
+  assert.deepEqual(controller.read("thread"), { sessions: [] });
   await assert.rejects(controller.endById("thread", sessionId), /no longer live/u);
   controller.dispose();
 });

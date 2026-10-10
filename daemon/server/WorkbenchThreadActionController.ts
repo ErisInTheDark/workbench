@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
@@ -42,7 +42,7 @@ export interface WorkbenchThreadActionOwners {
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   transcripts: Pick<WorkbenchTranscriptReader, "readPage" | "history">;
-  /** Canonical transcript writes for Workbench-owned steer decisions, and item source reads for shell stops. */
+  /** Canonical transcript writes for Workbench-owned steer decisions and vis ends; latest-turn reads for shell stops and vis ends. */
   transcript: Pick<DaemonTranscriptRegistration, "record" | "read">;
   /** Running wb shell calls the user can stop. */
   shells: Pick<WorkbenchAgentMcpRequestRegistry, "stopShell">;
@@ -214,10 +214,7 @@ export default class WorkbenchThreadActionController {
       await this.owners.addressedFeedback.clear(input.threadId);
       return { ok: true };
     },
-    "thread/vis/end": async input => {
-      await this.owners.vis.endById(input.threadId, input.sessionId);
-      return { ok: true };
-    },
+    "thread/vis/end": input => this.endVis(input.threadId, input.sessionId),
     "thread/vis/answer": async input => {
       await this.owners.vis.answer(input.threadId, input.sessionId, input.value);
       return { ok: true };
@@ -378,6 +375,23 @@ export default class WorkbenchThreadActionController {
 
   private async dismissSteer(input: WorkbenchThreadSteerTarget) {
     await this.recordDismissed(await this.undeliveredSteer(input));
+    return { ok: true as const };
+  }
+
+  /** The user's force-end from a vis card becomes a Workbench item at that moment of the latest turn; the agent is not told. */
+  private async endVis(threadId: string, sessionId: string) {
+    const ended = await this.owners.vis.endById(threadId, sessionId);
+    const { identity } = await this.target(threadId);
+    const turn = (await this.owners.transcript.read({ threadId: identity.threadId, turnLimit: 1 }))?.turns.at(-1);
+    if (!turn) throw new Error("The vis session ended, but its thread has no turn to show that in.");
+    await this.owners.transcript.record([{
+      kind: "item",
+      threadId: identity.threadId,
+      turnId: WorkbenchTurnIdSchema.parse(turn.id),
+      item: { type: "visEnd", id: randomUUID(), sessionId: ended.sessionId, path: ended.path },
+      lifecycle: "completed",
+      observedAt: Date.now(),
+    }], { source: "workbench" });
     return { ok: true as const };
   }
 

@@ -22,6 +22,7 @@
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | held steer | An admitted steer awaiting delivery (pending) or never delivered (undelivered). Stored outside the transcript and shown as an overlay at the thread bottom until delivered, dismissed, or resent |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
+| workbench item | A transcript item Workbench records itself (compaction, steers, user vis ends) via a `kind: "item"` observation with `source: "workbench"`. Non-core types store as generic payloads and render through `thread-generic-item-matchers.ts` |
 | logs | Persisted daemon and app server logs under `.workbench/logs/`. |
 | socket spy | `wb debug socket`: search recent daemon and app WebSocket frames held in memory, or print one frame's exact payload. |
 | layered sort | A sort where each layer orders only ties from earlier layers. A user override replaces later layers within its slot. |

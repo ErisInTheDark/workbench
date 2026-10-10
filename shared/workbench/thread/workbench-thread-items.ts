@@ -154,6 +154,8 @@ export type ThreadItem =
   | { type: "imageView"; id: string; path: string }
   | ({ type: "sleep" } & SleepItem)
   | ({ type: "imageGeneration" } & ImageGenerationItem)
+  /** Workbench-owned: the user ended a vis session from its card. Stored as a generic payload; the agent is not told. */
+  | { type: "visEnd"; id: string; sessionId: string; path: string }
   | { type: "enteredReviewMode"; id: string; review: string }
   | { type: "exitedReviewMode"; id: string; review: string }
   | {

@@ -142,6 +142,8 @@ export function getThreadItemRenderSignature(item: ThreadItem) {
         return `${item.id}:${item.type}:${item.path}`;
       case "sleep":
         return `${identity}:${item.durationMs}`;
+      case "visEnd":
+        return `${item.id}:${item.type}:${item.sessionId}:${item.path}`;
       case "imageGeneration":
         return `${item.id}:${item.type}:${item.status}:${item.revisedPrompt ?? ""}:${item.result}:${item.savedPath ?? ""}`;
       case "enteredReviewMode":

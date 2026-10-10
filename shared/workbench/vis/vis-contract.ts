@@ -5,8 +5,7 @@
  * - VisSnapshotKindSchema/VisSnapshotKind: the moment a snapshot captured, session start or end.
  * - VisRenderSchema/VisRender: one rendered document, ready for a sandboxed frame.
  * - VisLiveSessionSchema/VisLiveSession: one active session's latest render, in-flight render and failure.
- * - VisUserEndedSchema/VisUserEnded: a session the user ended, for their own transcript note.
- * - VisThreadSchema/VisThread: every active vis session of one thread, plus the ones the user ended.
+ * - VisThreadSchema/VisThread: every active vis session of one thread.
  * - VisSnapshotSchema/VisSnapshot: the stored document of one session moment.
  * - formatVisSessionResult/parseVisSessionResult: the tool acknowledgement that carries a session id to transcript cards.
  * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's kit.
@@ -50,15 +49,10 @@ export const VisLiveSessionSchema = z.object({
 }).strict();
 export type VisLiveSession = z.infer<typeof VisLiveSessionSchema>;
 
-/** A session the user ended from the card; shown to them in the transcript, never to the agent. */
-export const VisUserEndedSchema = z.object({ sessionId: z.uuid(), path, endedAt: timestamp }).strict();
-export type VisUserEnded = z.infer<typeof VisUserEndedSchema>;
-
+/** Not strict: fields a daemon from another reload generation adds or still sends are stripped, not fatal. */
 export const VisThreadSchema = z.object({
   sessions: z.array(VisLiveSessionSchema).max(50),
-  /** Older daemons send none. */
-  userEnded: z.array(VisUserEndedSchema).max(500).default([]),
-}).strict();
+});
 export type VisThread = z.infer<typeof VisThreadSchema>;
 
 export const VisSnapshotSchema = z.object({

@@ -223,6 +223,7 @@ export function transformCoreTranscriptItem(
     "subAgentActivity",
     "imageView",
     "sleep",
+    "visEnd",
     "imageGeneration",
     "enteredReviewMode",
     "exitedReviewMode",

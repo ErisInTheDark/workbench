@@ -70,7 +70,6 @@ import ThreadTodoPanel from "./ThreadTodoPanel";
 import useThreadLiveActivity from "./use-thread-live-activity";
 import useThreadTodoSelection from "./use-thread-todo-selection";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
-import ThreadVisUserEndedItem from "./ThreadVisUserEndedItem";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
@@ -335,12 +334,8 @@ export default memo(function ThreadViewContent ({
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const active = useThread(projectId, activeTarget, "view");
   const activeTurns = useThread.turns(active.store);
-  // Live vis cards and the user's own "ended vis" transcript notes share one observation.
   const visQuery = useMemo(() => ({ kind: "threadVis" as const, threadId: ThreadReferenceSchema.parse(activeThreadId) }), [activeThreadId]);
   const vis = useWorkspaceObservation(useContext(WorkbenchWorkspaceContext), visQuery).value?.data ?? null;
-  const visNotes = useMemo(() => (vis?.userEnded ?? []).map((ended) => ({
-    key: `vis-ended:${ended.sessionId}`, atMs: ended.endedAt, node: <ThreadVisUserEndedItem ended={ended} />,
-  })), [vis?.userEnded]);
   const visActions = useMemo(() => ({
     onEnd: (sessionId: string) => { void daemon?.threads.vis.end({ threadId: activeThreadId, sessionId }).catch((error: unknown) => console.error("Ending the vis session failed.", error)); },
     // The card shows whether the answer was recorded, so a failure reaches the user there.
@@ -1186,7 +1181,6 @@ export default memo(function ThreadViewContent ({
                     }}
                     projection={activeTranscriptProjection}
                     liveTurnId={activeTurns.liveTurnId}
-                    localNotes={visNotes}
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}

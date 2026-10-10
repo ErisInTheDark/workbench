@@ -7,7 +7,7 @@
  * - default WorkbenchThreadVisStore: own vis sessions, their start and end snapshots, and their answers in SQLite.
  */
 import type Database from "better-sqlite3";
-import type { VisAnswer, VisSnapshot, VisSnapshotKind, VisUserEnded } from "workbench-shared/workbench/vis/vis-contract";
+import type { VisAnswer, VisSnapshot, VisSnapshotKind } from "workbench-shared/workbench/vis/vis-contract";
 
 /** Answers kept per session; older ones are dropped as new ones arrive. */
 const ANSWERS_PER_SESSION = 100;
@@ -33,7 +33,6 @@ export type ThreadVisCommand =
   /** Ends the thread's live session on `path`; nothing happens when none is live. */
   | { kind: "end"; threadId: string; path: string; endedBy: "agent" | "user"; snapshot: CapturedDocument }
   | { kind: "readActive" }
-  | { kind: "readUserEnded"; threadId: string }
   | { kind: "readSnapshot"; sessionId: string; snapshotKind: VisSnapshotKind }
   /** Records one answer for a live session of the thread; returns no sessions when it is not live. */
   | { kind: "answer"; threadId: string; sessionId: string; sentAt: number; value: string }
@@ -44,8 +43,6 @@ export type ThreadVisCommand =
 export interface ThreadVisResult {
   sessions: ThreadVisStoredSession[];
   snapshot: VisSnapshot | null;
-  /** Sessions the user ended, oldest first; filled only by `readUserEnded`. */
-  userEnded?: VisUserEnded[];
   /** Filled only by `readAnswers`. */
   answers?: VisAnswer[];
 }
@@ -101,14 +98,6 @@ export default class WorkbenchThreadVisStore {
             sessions: (this.database.prepare("SELECT * FROM workbench_thread_vis_sessions WHERE ended_at IS NULL ORDER BY started_at")
               .all() as SessionRow[]).map(session),
             snapshot: null,
-          };
-        case "readUserEnded":
-          return {
-            sessions: [], snapshot: null,
-            userEnded: (this.database.prepare(`SELECT id, path, ended_at FROM workbench_thread_vis_sessions
-              WHERE thread_id = ? AND ended_by = 'user' ORDER BY ended_at`).all(command.threadId) as
-              Array<{ id: string; path: string; ended_at: number }>)
-              .map(({ id, path, ended_at }) => ({ sessionId: id, path, endedAt: ended_at })),
           };
         case "readSnapshot": {
           const row = this.database.prepare(`SELECT s.path, v.captured_at, v.document, v.failure

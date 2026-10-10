@@ -2677,7 +2677,7 @@ function ThreadRenderableBlockViewComponent ({
         return <p className="py-2 text-[0.92em] text-fg/muted">Result expired after 1 day.</p>;
       }
       const item = readWorkbenchToolOutput(block.item);
-      if (!item) return <ThreadGenericItem item={block.item} />;
+      if (!item) return <ThreadGenericItem item={block.item} threadId={threadId} />;
       const timeline = findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline);
       const timestamp = timeline?.firstSeenAt ?? item.workbenchInjectionAcceptedAt;
       return (
@@ -2830,7 +2830,7 @@ function ThreadRenderableBlockViewComponent ({
     case "collabAgentToolCall":
       return null;
     default:
-      return <ThreadGenericItem item={block.item} timeline={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)} turnStatus={turnStatus} />;
+      return <ThreadGenericItem item={block.item} threadId={threadId} timeline={findWorkbenchThreadItemTimelineEntry(block.item.id, itemTimeline)} turnStatus={turnStatus} />;
   }
 }
 
@@ -2981,7 +2981,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     >
       {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
         {entry.kind === "generic" ? (
-          <ThreadGenericItem item={entry.item} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
+          <ThreadGenericItem item={entry.item} threadId={threadId} timeline={findWorkbenchThreadItemTimelineEntry(entry.item.id, renderItemTimeline)} turnStatus={turnStatus} />
         ) : (
           <ThreadRenderableBlockView
             animateEntries={animateEntries}

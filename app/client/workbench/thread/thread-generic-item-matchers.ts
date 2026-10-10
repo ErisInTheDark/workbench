@@ -5,8 +5,9 @@
  */
 import type { WorkbenchProjectedGenericItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { matchSleepItem } from "./generic-item-matchers/sleep";
+import { matchVisEndItem } from "./generic-item-matchers/vis-end";
 
-const matchers = [matchSleepItem];
+const matchers = [matchSleepItem, matchVisEndItem];
 
 export function matchThreadGenericItem(item: Pick<WorkbenchProjectedGenericItem, "nativeType" | "safeValue">) {
   for (const match of matchers) {

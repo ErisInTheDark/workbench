@@ -13,7 +13,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   isVisPath, VIS_MAX_ANSWER_LENGTH, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES,
-  type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread, type VisUserEnded,
+  type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread,
 } from "workbench-shared/workbench/vis/vis-contract";
 import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/vis-document";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
@@ -92,8 +92,6 @@ export default class WorkbenchVisController {
   readonly #listeners = new Map<string, Set<() => void>>();
   readonly #lifetime = new AbortController();
   readonly #runs = new VisRenderRuns();
-  /** Per observed thread, the sessions its user ended; loaded on first observation. */
-  readonly #userEnded = new Map<string, VisUserEnded[]>();
   #restoring: Promise<void> | null = null;
 
   constructor(options: WorkbenchVisControllerOptions) {
@@ -166,7 +164,6 @@ export default class WorkbenchVisController {
   /** Retention: expired threads lose their sessions and snapshots. */
   async prune(threadIds: readonly string[]) {
     for (const live of [...this.#live.values()]) if (threadIds.includes(live.stored.threadId)) this.#drop(live);
-    for (const threadId of threadIds) this.#userEnded.delete(threadId);
     await this.#options.store({ kind: "delete", threadIds });
   }
 
@@ -174,7 +171,7 @@ export default class WorkbenchVisController {
     return (await this.#options.store({ kind: "readSnapshot", sessionId, snapshotKind: kind })).snapshot;
   }
 
-  /** The user's force-end from the card; their transcript shows it, the agent is never told. */
+  /** The user's force-end from the card; its caller records the transcript item, the agent is never told. */
   async endById(threadId: string, sessionId: string) {
     await this.start();
     const live = this.#live.get(sessionId);
@@ -202,14 +199,12 @@ export default class WorkbenchVisController {
     return {
       sessions: [...this.#live.values()].filter(({ stored }) => stored.threadId === threadId)
         .map(({ state }) => state).sort((left, right) => left.startedAt - right.startedAt),
-      userEnded: this.#userEnded.get(threadId) ?? [],
     };
   }
 
   observe(threadId: string, onChange: () => void) {
     let listeners = this.#listeners.get(threadId);
     if (!listeners) this.#listeners.set(threadId, listeners = new Set());
-    if (!this.#userEnded.has(threadId)) void this.#loadUserEnded(threadId);
     const listener = () => onChange();
     listeners.add(listener);
     return {
@@ -227,17 +222,6 @@ export default class WorkbenchVisController {
     for (const live of this.#live.values()) this.#unwatch(live);
     this.#live.clear();
     this.#listeners.clear();
-  }
-
-  async #loadUserEnded(threadId: string) {
-    try {
-      const { userEnded = [] } = await this.#options.store({ kind: "readUserEnded", threadId });
-      if (this.#lifetime.signal.aborted || this.#userEnded.has(threadId)) return;
-      this.#userEnded.set(threadId, userEnded);
-      this.#publish(threadId);
-    } catch (error) {
-      this.#options.log(`Vis user-ended sessions could not be read: ${message(error)}`);
-    }
   }
 
   async #restore() {
@@ -350,11 +334,6 @@ export default class WorkbenchVisController {
       kind: "end", threadId: live.stored.threadId, path: live.stored.path, endedBy,
       snapshot: { capturedAt, document: rendered.document, failure: rendered.failure },
     });
-    if (endedBy === "user") {
-      const threadId = live.stored.threadId;
-      this.#userEnded.set(threadId, [...this.#userEnded.get(threadId) ?? [], { sessionId: live.stored.sessionId, path: live.stored.path, endedAt: capturedAt }]);
-      this.#publish(threadId);
-    }
     return { sessionId: live.stored.sessionId, path: live.stored.path, failure: rendered.failure };
   }
 

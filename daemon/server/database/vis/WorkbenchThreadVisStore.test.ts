@@ -43,8 +43,6 @@ test("a file holds one live session per thread until it ends, and both moments k
   const ended = store.execute({ kind: "end", threadId, path: "a.html", endedBy: "user", snapshot: { capturedAt: 5, document: null, failure: "gone" } });
   assert.equal(ended.sessions[0]?.endedAt, 5);
   assert.deepEqual(store.execute({ kind: "end", threadId, path: "a.html", endedBy: "agent", snapshot: { capturedAt: 6, document: "", failure: null } }).sessions, []);
-  assert.deepEqual(store.execute({ kind: "readUserEnded", threadId }).userEnded, [{ sessionId: first.sessionId, path: "a.html", endedAt: 5 }]);
-  assert.deepEqual(store.execute({ kind: "readUserEnded", threadId: otherThreadId }).userEnded, [], "agent ends and other threads never show as user ends");
   const restarted = start(threadId, "a.html", 7);
   assert.notEqual(restarted.sessionId, first.sessionId);
   assert.equal(store.execute({ kind: "readSnapshot", sessionId: first.sessionId, snapshotKind: "start" }).snapshot?.document, "<p>a.html start</p>");
