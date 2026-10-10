@@ -31,6 +31,7 @@ import {
 } from "./workbench-icons";
 import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
+import { useThread } from "./use-thread";
 import WorkbenchDraftTitleIcons from "./WorkbenchDraftTitleIcons";
 import { useWorkbenchSubagentClaims, type WorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
@@ -226,10 +227,12 @@ export default function WorkbenchThreadListItem({
     entry.entryKind === "draft" ? null : entry.identity.threadId,
   );
   const target = targetForEntry(entry);
+  const facts = useThread.summary(entry.entryKind === "draft" ? null : entry.identity.threadId)?.summary.facts;
+  const todoCount = facts?.todoCount ?? 0;
   const {
     activityAt, claimedPaths, group, Icon, lifecycle, showProposedCommit,
     stashed, stashedPaths, status, statusClassName, statusTone, tooltipStatus, waiting,
-  } = describeThreadEntry(entry, { attentionLabel, hasTooltipDetails: Boolean(tooltipDetails) });
+  } = describeThreadEntry(entry, { attentionLabel, facts, hasTooltipDetails: Boolean(tooltipDetails) });
   // Row text is pointer-transparent under the link overlay; the row tooltip's own time carries the full form.
   const rowTime = <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />;
   const subagentClaims = useWorkbenchSubagentClaims(projectId, entry.entryKind === "thread" ? entry.identity.threadId : null);
@@ -257,7 +260,8 @@ export default function WorkbenchThreadListItem({
     : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
   const gitWorkLabels = [
     hasComposerDraft ? "unsent draft" : "",
-    proposalCount ? `${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
+    todoCount ? `${todoCount} ${todoCount === 1 ? "todo" : "todos"}` : "",
+    proposalCount ?`${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
     activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
     stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
   ].filter(Boolean);
@@ -370,7 +374,7 @@ export default function WorkbenchThreadListItem({
           <Icon className={`mr-1.5 ${statusClassName}`} size={16} />
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} />
+            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} todoCount={todoCount} />
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={16} /></span> : null}
             {trailing ?? rowTime}
           </span>
@@ -401,7 +405,7 @@ export default function WorkbenchThreadListItem({
           ) : undefined}
           metadata={(
             <span className="grid items-center">
-              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} />
+              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} todoCount={todoCount} />
             </span>
           )}
           statusIcon={<Icon className={statusClassName} size={16} />}

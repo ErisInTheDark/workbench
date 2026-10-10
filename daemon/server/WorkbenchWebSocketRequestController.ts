@@ -61,8 +61,8 @@ import {
 import { transcriptSnapshotForProtocol } from "./database/transcript/transcript-wire-compatibility";
 import WorkbenchWorkspaceObservationController, { type DaemonObservationChange } from "./WorkbenchWorkspaceObservationController";
 import {
-  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema,
-  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, WorkspaceReleaseSchema,
+  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_RETARGET_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceObservation,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { describeObservationDelta, observationDeltaSubjects } from "workbench-shared/workbench/workspace/observation-patch";
@@ -423,7 +423,7 @@ export default class WorkbenchWebSocketRequestController {
     const isRequest = requestId === null || typeof requestId === "number" || typeof requestId === "string";
     const transcriptRequest = decodeWorkbenchTranscriptRequest(method, message.params);
     const daemonRequest = this.daemonRequests.accepts(method);
-    const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD;
+    const workspaceRequest = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD || method === WORKSPACE_RETARGET_METHOD;
     const workbenchRequest = daemonRequest || method.startsWith("voice/") || method === REPO_RUNTIME_READ_METHOD
       || method.startsWith("workbench/thread-state/")
       || workspaceRequest
@@ -453,7 +453,9 @@ export default class WorkbenchWebSocketRequestController {
           if (!this.workspace) throw new Error("Workspace observation support is unavailable.");
           const result = method === WORKSPACE_OBSERVE_METHOD
             ? this.workspace.observe(client, connectionId, DaemonWorkspaceObserveSchema.parse(message.params))
-            : this.workspace.release(connectionId, WorkspaceReleaseSchema.parse(message.params));
+            : method === WORKSPACE_RETARGET_METHOD
+              ? this.workspace.retarget(connectionId, DaemonWorkspaceRetargetSchema.parse(message.params))
+              : this.workspace.release(connectionId, WorkspaceReleaseSchema.parse(message.params));
           await this.sendJsonToClient(client, { id: requestId, result });
         } catch (error) {
           const invalid = error instanceof z.ZodError;

@@ -11,6 +11,7 @@ import { applyObservationDelta, describeObservationDelta } from "workbench-share
 import { daemonObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
+import { createThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 
 type Client = { id: string };
 type Owners = ConstructorParameters<typeof WorkbenchWorkspaceObservationController<Client>>[0];
@@ -37,7 +38,6 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
       peekProject: () => null, readProject: async projectId => sidebar(projectId),
       peekProjectSummary: () => null, getProjectThreadSummary: async () => { throw new Error("Unexpected summary read."); },
       readWorkspaceThread: async () => { throw new Error("Unexpected thread read."); },
-      isThreadCompacting: () => false,
       subscribeProjects: listener => { projectChanged = listener; return () => {}; },
     },
     projects: { getCurrentUpdate: () => null, observe: () => () => {} },
@@ -144,20 +144,48 @@ test("lean rows leave out archived threads and their subagents but count them", 
   assert.equal("previousTitles" in rows.entries[0]!, false);
 });
 
-test("project row v2 exposes current compaction while legacy projection omits it", context => {
-  const compactingThread = thread(0);
-  if (compactingThread.entryKind !== "thread") throw new Error("Expected a thread fixture.");
-  const project = { ...sidebar(a), entries: [compactingThread] };
-  const f = fixture(context);
-  f.owners.threads.peekProject = () => project;
-  f.owners.threads.isThreadCompacting = id => id === compactingThread.identity.threadId;
-  const legacy = f.observe({ kind: "projectThreads", projectIds: [a] });
-  const current = f.observe({ kind: "projectThreads", projectIds: [a], sidebarRowVersion: 2 });
-  assert.ok(legacy.kind === "projectThreads" && current.kind === "projectThreads");
-  const legacyEntry = legacy.projects[0]?.sidebar?.entries[0];
-  const currentEntry = current.projects[0]?.sidebar?.entries[0];
-  assert.equal(legacyEntry && "compacting" in legacyEntry, false);
-  assert.equal(currentEntry?.entryKind === "thread" ? currentEntry.compacting : null, true);
+test("a thread summary batch reads unknown threads, retargets as deltas, and follows summary changes", async context => {
+  const [first, second] = [thread(0), thread(1)];
+  if (first.entryKind !== "thread" || second.entryKind !== "thread") throw new Error("Expected thread fixtures.");
+  const summaries = new Map([first, second].map(entry => [entry.identity.threadId as string, createThreadSummary(entry, {})]));
+  const known = new Set<string>();
+  let announce: (threadId: string) => void = () => {};
+  const f = fixture(context, { summaries: {
+    peek: threadId => known.has(threadId) ? summaries.get(threadId) ?? null : null,
+    read: async threadId => { known.add(threadId); return summaries.get(threadId) ?? null; },
+    subscribe: listener => { announce = listener; return () => {}; },
+  } });
+  const [firstId, secondId] = [first.identity.threadId, second.identity.threadId];
+  const opened = f.observe({ kind: "threadSummaries", threadIds: [ThreadReferenceSchema.parse(firstId)] });
+  assert.equal(opened.phase, "pending");
+  const loaded = await f.wait(value => value.kind === "threadSummaries" && value.phase === "current");
+  assert.ok(loaded.kind === "threadSummaries");
+  assert.deepEqual(Object.keys(loaded.summaries), [firstId]);
+
+  const retarget = (threadIds: string[]) => f.owner.retarget("connection", {
+    subscriptionId: opened.subscriptionId, generation: opened.generation,
+    query: { kind: "threadSummaries", threadIds: threadIds.map(id => ThreadReferenceSchema.parse(id)) },
+  });
+  retarget([firstId, secondId]);
+  const grown = await f.wait(value => value.kind === "threadSummaries" && secondId in value.summaries);
+  assert.ok(grown.kind === "threadSummaries" && f.updates.at(-1)?.change, "a retarget publishes a delta, never a fresh value");
+  assert.equal(grown.summaries[firstId], loaded.summaries[firstId], "kept threads keep their value");
+
+  retarget([secondId]);
+  const shrunk = f.updates.at(-1)!.value;
+  assert.ok(shrunk.kind === "threadSummaries");
+  assert.deepEqual(Object.keys(shrunk.summaries), [secondId]);
+
+  summaries.set(secondId, createThreadSummary(second, { todoCount: 4 }));
+  announce(secondId);
+  const counted = f.updates.at(-1)!.value;
+  assert.ok(counted.kind === "threadSummaries");
+  assert.deepEqual(counted.summaries[secondId]?.facts, { todoCount: 4 });
+
+  const rows = f.observe({ kind: "projectThreads", projectIds: [a] });
+  assert.throws(() => f.owner.retarget("connection", {
+    subscriptionId: rows.subscriptionId, generation: rows.generation, query: { kind: "projectThreads", projectIds: [b] },
+  }), /Only thread summary batches/u);
 });
 
 test("one held project read does not block a different caller's selected project", async context => {

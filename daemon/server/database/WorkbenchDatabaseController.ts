@@ -344,6 +344,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.result;
   }
 
+  async readThreadTodoCounts() {
+    await this.start();
+    const response = await this.#request({ type: "threadTodoCounts" });
+    if (response.type !== "threadTodoCounts") throw new WorkbenchDatabaseFailure(`Unexpected thread todo count response: ${response.type}`);
+    return new Map(Object.entries(response.counts));
+  }
+
   async executeThreadAddressedFeedback(command: ThreadAddressedFeedbackCommand) {
     await this.start();
     const response = await this.#request({ type: "threadAddressedFeedback", command });

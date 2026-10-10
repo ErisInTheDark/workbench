@@ -8,7 +8,7 @@ import { useContext, type ReactNode } from "react";
 
 import { createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import { useWorkbenchThreadRow } from "./use-workbench-client";
+import { useThread } from "./use-thread";
 import WorkbenchClientContext from "./workbench-client-context";
 import WorkbenchThreadHoverTooltip from "./WorkbenchThreadHoverTooltip";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
@@ -28,17 +28,17 @@ export default function WorkbenchThreadButton(props: WorkbenchThreadButtonProps)
   return useContext(WorkbenchClientContext) ? <LoadedWorkbenchThreadButton {...props} /> : <>{props.fallback}</>;
 }
 
-/** Resolves its own thread row by id, so references work for threads in any project, listed or not. */
+/** Leases its thread's summary by id, so references work for threads in any project, listed or not. */
 function LoadedWorkbenchThreadButton({ fallback, label, relation = "self", threadId }: WorkbenchThreadButtonProps) {
   const projectHref = useWorkbenchProjectNavigation();
-  const child = useWorkbenchThreadRow(relation === "parent" ? threadId : null);
+  const child = useThread.summary(relation === "parent" ? threadId : null);
   const targetId = relation === "parent"
-    ? child?.entry.entryKind === "subagent" ? child.entry.parentThreadId : null
+    ? child?.summary.row.entryKind === "subagent" ? child.summary.row.parentThreadId : null
     : threadId;
-  const row = useWorkbenchThreadRow(targetId);
-  if (!row || row.entry.entryKind === "draft") return <>{fallback}</>;
-  const { entry } = row;
-  const projectId = row.location.projectId;
+  const thread = useThread.summary(targetId);
+  if (!thread) return <>{fallback}</>;
+  const entry = thread.summary.row;
+  const projectId = thread.location.projectId;
   const route = createThreadRoute(projectId, entry.entryKind === "subagent"
     ? { harness: entry.identity.harness, kind: "subagent", parentThreadId: entry.parentThreadId, threadId: entry.identity.threadId }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId });

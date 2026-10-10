@@ -20,7 +20,7 @@ import {
 import {
   DaemonWorkspaceQuerySchema, DaemonWorkspaceObservationSchema, WorkspaceObservationDeltaSchema,
   daemonObservationShape, type WorkspaceObservationDelta,
-  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_UPDATED_METHOD,
+  WORKSPACE_DELTA_METHOD, WORKSPACE_OBSERVE_METHOD, WORKSPACE_RELEASE_METHOD, WORKSPACE_RETARGET_METHOD, WORKSPACE_UPDATED_METHOD,
   type DaemonWorkspaceQuery, type DaemonWorkspaceObservation,
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -241,6 +241,30 @@ export default class WorkbenchDaemonSource {
     if (created && this.available) this.openInterest(retained);
     return {
       getSnapshot: () => this.readInterest(retained),
+      /**
+       * Swaps a sole owner's batch arguments in place; the daemon answers with a delta against the current value.
+       * A daemon without retargeting gets a fresh subscription for the new arguments instead.
+       */
+      retarget: (next: DaemonWorkspaceQuery) => {
+        if (retained.listeners.size !== 1 || !retained.listeners.has(owner)) throw new Error("Only a sole observer can retarget a daemon observation.");
+        const target = DaemonWorkspaceQuerySchema.parse(next);
+        if (areDeeplyEqual(target, retained.query)) return;
+        retained.query = target;
+        if (!this.available) return;
+        const generation = this.socket.getSnapshot().generation;
+        void this.request(WORKSPACE_RETARGET_METHOD, { subscriptionId: retained.subscriptionId, generation, query: target },
+          {}, { signal: retained.cancellation.signal }).catch(error => {
+          if (error instanceof WorkbenchRpcRequestInterruptedError || this.interests.get(retained.subscriptionId) !== retained
+            || generation !== this.socket.getSnapshot().generation) return;
+          if (!(error instanceof WorkbenchDaemonRequestError)) {
+            retained.failure = bounded(error);
+            this.options.warn(`Daemon observation retarget failed: ${retained.failure}`);
+            this.publishInterest(retained);
+            return;
+          }
+          this.resubscribe(retained);
+        });
+      },
       release: () => {
         if (!retained.listeners.delete(owner) || retained.listeners.size) return;
         this.interests.delete(retained.subscriptionId);
@@ -310,7 +334,7 @@ export default class WorkbenchDaemonSource {
   ): Promise<Result> {
     if (!this.available) throw new WorkbenchRpcRequestInterruptedError("The daemon is not connected; request was not sent.", false);
     // Observation plumbing never creates demand of its own; only observers and leases do.
-    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD
+    const release = method === WORKSPACE_OBSERVE_METHOD || method === WORKSPACE_RELEASE_METHOD || method === WORKSPACE_RETARGET_METHOD
       ? () => {} : this.retain();
     try {
       const response = await this.socket.sendRequest<Result>({ ...fields, method, params }, {
@@ -461,23 +485,27 @@ export default class WorkbenchDaemonSource {
     }
   }
 
+  /** Replaces an interest's daemon subscription with a fresh one for its current arguments. */
+  private resubscribe(interest: Interest) {
+    const previous = interest.subscriptionId;
+    void this.request(WORKSPACE_RELEASE_METHOD, { subscriptionId: previous, generation: this.socket.getSnapshot().generation })
+      .catch(error => {
+        if (!(error instanceof WorkbenchRpcRequestInterruptedError)) this.options.warn(`Daemon observation release failed: ${bounded(error)}`);
+      });
+    this.interests.delete(previous);
+    interest.subscriptionId = randomUUID();
+    interest.raw = null;
+    interest.early = [];
+    this.interests.set(interest.subscriptionId, interest);
+    this.openInterest(interest);
+  }
+
   private openInterest(interest: Interest) {
     const generation = this.socket.getSnapshot().generation;
     interest.failure = null;
-    const request = (query: DaemonWorkspaceQuery) => this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
-      subscriptionId: interest.subscriptionId, generation, query,
-    }, {}, { signal: interest.cancellation.signal });
-    const compatibleRequest = async () => {
-      try {
-        return await request(interest.query);
-      } catch (error) {
-        if (interest.query.kind !== "projectThreads" || !interest.query.sidebarRowVersion
-          || !(error instanceof WorkbenchDaemonRequestError) || error.code !== -32602) throw error;
-        const { sidebarRowVersion: _version, ...legacy } = interest.query;
-        return await request(legacy);
-      }
-    };
-    void compatibleRequest().then(value => {
+    void this.request<DaemonWorkspaceObservation>(WORKSPACE_OBSERVE_METHOD, {
+      subscriptionId: interest.subscriptionId, generation, query: interest.query,
+    }, {}, { signal: interest.cancellation.signal }).then(value => {
       const parsed = DaemonWorkspaceObservationSchema.safeParse(value);
       if (!parsed.success) {
         reportClientSchemaError("Rejected daemon observation response", parsed.error);

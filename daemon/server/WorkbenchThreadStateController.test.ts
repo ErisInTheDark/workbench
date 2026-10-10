@@ -1575,15 +1575,6 @@ test("project subscribers receive activity and transient wait state without sock
   assert.equal(cleared?.entryKind === "thread" ? cleared.waitingFor : null, undefined);
   assert.equal(received.length, releasedCount);
   assert.ok(otherUpdates > liveCount);
-
-  controller.setThreadCompactionState("waiting-thread", true);
-  const compacting = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
-  assert.equal(compacting?.entryKind === "thread" ? compacting.waitingFor : null, undefined);
-  assert.equal(controller.isThreadCompacting("waiting-thread"), true);
-  controller.setThreadCompactionState("waiting-thread", false);
-  const compacted = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find((candidate) => candidate.entryKind === "thread");
-  assert.equal(compacted?.entryKind === "thread" ? compacted.waitingFor : null, undefined);
-  assert.equal(controller.isThreadCompacting("waiting-thread"), false);
 });
 
 test("an observed project represents a missing thread as an empty observation", async () => {

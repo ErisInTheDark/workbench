@@ -4,7 +4,7 @@ import test from "node:test";
 import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import { createWorkspaceClientFixture } from "./workspace-client-fixture";
-import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
 
 test("working-tree reads cross the workspace socket with their folder scope and validate replies", async context => {
@@ -105,23 +105,27 @@ test("matching interests share work and releasing one does not retire the other"
   assert.equal(socket.sent.filter(item => item.method === "workspace/release").length, 1);
 });
 
-test("project rows negotiate v2 and retry legacy once when an older app rejects it", async context => {
+test("a summary batch retargets in place, and an app without retargeting gets a fresh subscription", async context => {
   const fixture = createWorkspaceClientFixture();
   context.after(() => fixture.dispose());
   const socket = await fixture.open();
-  const handle = fixture.workspace.observe({ kind: "projectThreads", projects: null });
-  const first = await socket.request("workspace/observe");
-  assert.equal(first.params.query.kind, "projectThreads");
-  assert.equal("sidebarRowVersion" in first.params.query ? first.params.query.sidebarRowVersion : null, 2);
+  const [first, second] = ["00000001", "00000002"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
+  const handle = fixture.workspace.observe({ kind: "threadSummaries", threadIds: [first] });
+  const opened = await socket.request("workspace/observe");
+  await socket.observation(opened, { kind: "threadSummaries", phase: "current", failure: null, data: {} }, 1, true);
   const offset = socket.sent.length;
-  socket.fail(first, "Invalid workspace query.", -32600);
-  const fallback = await socket.request("workspace/observe", offset);
-  assert.equal(fallback.params.subscriptionId, first.params.subscriptionId);
-  assert.equal("sidebarRowVersion" in fallback.params.query, false);
-  await socket.observation(fallback, {
-    kind: "projectThreads", phase: "current", failure: null, data: { rows: [], projects: [] },
-  }, 1, true);
-  assert.equal(handle.getSnapshot().phase, "current");
+  handle.retarget({ kind: "threadSummaries", threadIds: [first, second] });
+  const retarget = await socket.request("workspace/retarget", offset);
+  assert.equal(retarget.params.subscriptionId, opened.params.subscriptionId);
+  assert.deepEqual(retarget.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+
+  const fallbackOffset = socket.sent.length;
+  socket.fail(retarget, "Invalid request.", -32600);
+  const reopened = await socket.request("workspace/observe", fallbackOffset);
+  assert.notEqual(reopened.params.subscriptionId, opened.params.subscriptionId);
+  assert.deepEqual(reopened.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+  assert.ok(socket.sent.slice(fallbackOffset).some(message => message.method === "workspace/release"
+    && message.params.subscriptionId === opened.params.subscriptionId), "the old subscription is released");
 });
 
 test("app deltas update the exact retained value and a gap re-observes instead of guessing", async context => {

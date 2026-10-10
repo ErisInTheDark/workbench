@@ -49,6 +49,7 @@ import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
 import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
+import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import WorkbenchVisController from "./vis/WorkbenchVisController";
 import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
@@ -149,6 +150,8 @@ function createWorkbenchCoreFeature(
   });
   const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
+  /** Compaction and todos are wired before thread state exists; their facts reach the index once it does. */
+  let threadSummaries: WorkbenchThreadSummaryIndex | null = null;
   let stats: WorkbenchStatsController | null = null;
   const admission = new WorkbenchThreadAdmissionController();
   /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
@@ -160,7 +163,7 @@ function createWorkbenchCoreFeature(
   };
   const compaction = new WorkbenchThreadCompactionController(admission, {
     record: transcript.record.bind(transcript),
-    setCompacting: (threadId, compacting) => threadState?.controller.setThreadCompactionState(threadId, compacting),
+    setCompacting: (threadId, compacting) => threadSummaries?.setCompacting(threadId, compacting),
     now: Date.now,
   });
   const autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
@@ -291,6 +294,7 @@ function createWorkbenchCoreFeature(
     store: command => database.executeThreadTodos(command),
     resolve: resolveCanonicalThread,
     changed: (threadId, todos) => {
+      threadSummaries?.setTodoCount(threadId, todos.length);
       for (const listener of runtimeListeners) listener(threadId, { todos });
     },
   });
@@ -539,6 +543,16 @@ function createWorkbenchCoreFeature(
     transitions: worktreeGitTransitions,
     pruneThreadVis: threadIds => vis.prune(threadIds),
   });
+  const threadStateController = threadState.controller;
+  threadSummaries = new WorkbenchThreadSummaryIndex({
+    resolveProject: async threadId => (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.projectId ?? null,
+    peekProject: projectId => threadStateController.peekProject(projectId),
+    readProject: projectId => threadStateController.readProject(projectId),
+    subscribeProjects: listener => threadStateController.subscribeProjects(listener),
+    readTodoCounts: () => database.readThreadTodoCounts(),
+    warn: logThreadStateWarning,
+  });
+  const summaries = threadSummaries;
   // A settled thread's live vis sessions end with a final snapshot, so no live card outlives its thread.
   const unsubscribeVisSettlement = threadState.controller.subscribe((_projectId, entry) => {
     if (lease.isCurrent() && entry.entryKind !== "draft" && entry.lifecycle.settled) void vis.endThread(entry.identity.threadId);
@@ -876,6 +890,7 @@ function createWorkbenchCoreFeature(
     workingTree,
     accountLimits,
     threadRuntime,
+    threadSummaries: summaries,
     turnRecoveryFailures: {
       report: async (cwd, harness, threadId) => {
         const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });
@@ -937,6 +952,7 @@ function createWorkbenchCoreFeature(
       unsubscribeHeldSteers();
       unsubscribeAgentMessageDelivery();
       unsubscribeVisSettlement();
+      summaries.dispose();
       vis.dispose();
       visBrowseLifetime.abort(new Error("Vis browser calls are reloading."));
       unfinishedTurns.dispose();

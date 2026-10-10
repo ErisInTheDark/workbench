@@ -330,6 +330,10 @@ export default class WorkbenchAppEventSocketController {
           if (!workspace) throw new Error("Workspace queries are unavailable.");
           return workspace.release(input.params);
         }
+        if (input.method === "workspace/retarget") {
+          if (!workspace) throw new Error("Workspace queries are unavailable.");
+          return workspace.retarget(input.params);
+        }
         if (input.method === "workspace/draft/launch") {
           if (!this.options.workspaceDrafts) throw new Error("Draft launch service is unavailable.");
           return await this.options.workspaceDrafts.launch(input.params.draftId, input.params.expectedRevision, {

@@ -13,16 +13,16 @@ const base = {
   waitingOnThreads: [],
 } as const;
 
-test("explicit compaction uses the waiting appearance without borrowing tool-wait state", () => {
+test("a compacting summary fact uses the waiting appearance without borrowing tool-wait state", () => {
   const entry = WorkbenchThreadSidebarRowSchema.parse({
     ...base,
-    compacting: true,
     lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
   });
-  const presentation = describeThreadEntry(entry);
+  const presentation = describeThreadEntry(entry, { facts: { compacting: true } });
   assert.equal(presentation.status, "Compacting");
   assert.equal(presentation.statusTone, "waiting");
   assert.equal(presentation.waiting, true);
+  assert.equal(describeThreadEntry(entry).waiting, false, "without the summary the row reads as not compacting");
 });
 
 test("ordinary waits retain their existing label regardless of lifecycle shape", () => {

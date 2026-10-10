@@ -339,6 +339,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "threadTodos", result: new WorkbenchThreadTodoStore(database).execute(request.command) });
     return;
   }
+  if (request.type === "threadTodoCounts") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "threadTodoCounts", counts: new WorkbenchThreadTodoStore(database).counts() });
+    return;
+  }
   if (request.type === "threadAddressedFeedback") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadAddressedFeedback", result: new WorkbenchThreadAddressedFeedbackStore(database).execute(request.command) });

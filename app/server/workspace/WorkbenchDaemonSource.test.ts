@@ -227,31 +227,30 @@ test("daemon deltas apply onto the exact first value, may arrive before it, and 
   assert.match(f.warnings.join("\n"), /projectThreads observation resync/u);
 });
 
-test("v2 project rows retry legacy once when an older daemon rejects the query", async context => {
+test("a summary batch retargets in place, and a daemon without retargeting gets a fresh subscription", async context => {
   const f = fixture();
   context.after(() => f.source.dispose());
-  const projectId = ProjectIdSchema.parse("project");
-  const current = Promise.withResolvers<void>();
-  const handle = f.source.observe({
-    kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2,
-  }, () => {
-    if (handle.getSnapshot().phase === "current") current.resolve();
-  });
+  const [first, second] = ["00000001", "00000002"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
+  const handle = f.source.observe({ kind: "threadSummaries", threadIds: [first] }, () => {});
   const socket = await f.created;
   const opening = f.source.socket.connect(); socket.open(); await opening;
-  const first = await socket.request("workspace/observe");
-  assert.deepEqual(first.params.query, { kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2 });
-  const offset = socket.sent.length;
-  socket.notify({ id: first.id, error: { code: -32602, message: "Invalid params" } });
-  const fallback = await socket.request("workspace/observe", offset);
-  assert.equal(fallback.params.subscriptionId, first.params.subscriptionId);
-  assert.deepEqual(fallback.params.query, { kind: "projectThreads", projectIds: [projectId] });
-  socket.notify({ id: fallback.id, result: {
-    kind: "projectThreads", subscriptionId: fallback.params.subscriptionId,
-    generation: fallback.params.generation, revision: 1, phase: "current", failure: null, projects: [],
+  const opened = await socket.request("workspace/observe");
+  socket.notify({ id: opened.id, result: {
+    kind: "threadSummaries", subscriptionId: opened.params.subscriptionId,
+    generation: opened.params.generation, revision: 1, phase: "current", failure: null, summaries: {},
   } });
-  await current.promise;
-  assert.equal(handle.getSnapshot().phase, "current");
+  const offset = socket.sent.length;
+  handle.retarget({ kind: "threadSummaries", threadIds: [first, second] });
+  const retarget = await socket.request("workspace/retarget", offset);
+  assert.equal(retarget.params.subscriptionId, opened.params.subscriptionId);
+
+  const fallbackOffset = socket.sent.length;
+  socket.notify({ id: retarget.id, error: { code: -32601, message: "Method not found" } });
+  const reopened = await socket.request("workspace/observe", fallbackOffset);
+  assert.notEqual(reopened.params.subscriptionId, opened.params.subscriptionId);
+  assert.deepEqual(reopened.params.query, { kind: "threadSummaries", threadIds: [first, second] });
+  assert.ok(socket.sent.slice(fallbackOffset).some(message => message.method === "workspace/release"
+    && message.params.subscriptionId === opened.params.subscriptionId), "the old subscription is released");
 });
 
 test("matching transcript views share an upstream subscription and late joiners receive a fresh baseline", async context => {

@@ -357,97 +357,55 @@ test("stats fan out to every daemon, merge once all answer, combine refinement, 
   assert.deepEqual([here.released, there.released], [1, 1]);
 });
 
-test("a thread row observation publishes only that thread's row from its owner project, then patches it", async context => {
+test("a thread summary batch locates each thread, shares one daemon batch, and retargets it as threads move", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
   const projectId = ProjectIdSchema.parse("project");
-  const threadId = WorkbenchThreadIdSchema.parse("00000001-0000-4000-8000-000000000000");
-  const otherId = WorkbenchThreadIdSchema.parse("00000002-0000-4000-8000-000000000000");
-  const entry = (id: typeof threadId, title: string) => ({
-    entryKind: "thread" as const, title, activityAt: 10_000, waitingOnThreads: [],
-    compacting: true,
-    identity: { harness: "codex" as const, threadId: id },
+  const [firstId, secondId, unknownId] = ["00000001", "00000002", "00000003"].map(prefix =>
+    WorkbenchThreadIdSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
+  const summary = (threadId: string, title: string) => ({ facts: {}, row: {
+    entryKind: "thread" as const, title, activityAt: 10_000,
+    identity: { harness: "codex" as const, threadId },
     metadata: { archived: false as const, pinned: false, snoozed: false },
     lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
-  });
-  let title = "first";
+  } });
+  const calls: string[] = [];
+  let batch: string[] = [];
   let notify = () => {};
-  const observed: object[] = [];
   const source = {
     id: daemonId,
-    observe: (query: object, listener: () => void) => {
-      observed.push(query);
+    observe: (query: { kind: string; threadIds: string[] }, listener: () => void) => {
+      calls.push(`observe ${query.threadIds.length}`);
+      batch = query.threadIds;
       notify = listener;
-      return { getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "projectThreads", projects: [{
-        projectId, phase: "current", failure: null,
-        sidebar: { projectId, revision: 1, freshness: "fresh", error: null, displayOrder: {}, entries: [entry(otherId, "other"), entry(threadId, title)] },
-      }] } }), release: () => {} };
+      return {
+        getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "threadSummaries",
+          summaries: Object.fromEntries(batch.map(id => [id, summary(id, id === firstId ? "first" : "second")])) } }),
+        retarget: (next: { threadIds: string[] }) => { calls.push(`retarget ${next.threadIds.length}`); batch = next.threadIds; },
+        release: () => { calls.push("release"); },
+      };
     },
     socket: { onNotification: () => () => {} },
   };
-  const owner = { phase: "current" as const, identity: { threadId, projectId, harness: "codex" as const }, location: { daemonId, projectId }, logicalProjectId: null };
+  const owner = (threadId: string) => ({ phase: "current" as const, identity: { threadId: WorkbenchThreadIdSchema.parse(threadId), projectId, harness: "codex" as const },
+    location: { daemonId, projectId }, logicalProjectId: null });
   const f = await fixture(context, { get: id => id === daemonId ? source : undefined }, {
-    observe: (id: string) => ({ getSnapshot: () => id === threadId ? owner : { phase: "unavailable" as const, failure: "unknown" }, release: () => {} }),
+    observe: (id: string) => ({ getSnapshot: () => id === unknownId ? { phase: "unavailable" as const, failure: "unknown" } : owner(id), release: () => {} }),
   });
-  const initial = f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "threadRow", threadId: ThreadReferenceSchema.parse(threadId) } });
-  assert.deepEqual(observed, [{ kind: "projectThreads", projectIds: [projectId] }]);
-  assert.ok(initial.kind === "threadRow" && initial.phase === "current");
-  assert.equal(initial.data?.entry.entryKind === "thread" && initial.data.entry.title, "first");
-  assert.equal(initial.data?.entry && "compacting" in initial.data.entry, false);
-  title = "renamed";
-  notify();
-  const patched = await f.wait(value => value.kind === "threadRow" && value.data?.entry.entryKind === "thread" && value.data.entry.title === "renamed");
-  assert.ok(patched);
-  assert.deepEqual(f.deltas.at(-1)?.delta, { objects: { data: { objects: { entry: { set: { title: "renamed" } } } } } });
-  const unknown = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
-    query: { kind: "threadRow", threadId: ThreadReferenceSchema.parse("00000003-0000-4000-8000-000000000000") } });
-  assert.ok(unknown.kind === "threadRow" && unknown.data === null && unknown.phase === "unavailable");
-});
+  const threadIds = (...ids: string[]) => ids.map(id => ThreadReferenceSchema.parse(id));
+  const opened = f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, unknownId) } });
+  assert.ok(opened.kind === "threadSummaries" && opened.phase === "current");
+  assert.equal(opened.data[firstId]?.summary.row.title, "first");
+  assert.deepEqual(opened.data[firstId]?.location, { daemonId, projectId });
+  assert.equal(opened.data[unknownId], null, "an unowned thread reads as gone, not pending");
 
-test("project rows forward v2 compaction and strip it for legacy browsers", async context => {
-  const daemonId = DaemonIdSchema.parse(randomUUID());
-  const projectId = ProjectIdSchema.parse("project");
-  const threadId = WorkbenchThreadIdSchema.parse("00000001-0000-4000-8000-000000000000");
-  const observed: object[] = [];
-  const source = {
-    id: daemonId,
-    observe: (query: object) => {
-      observed.push(query);
-      return { getSnapshot: () => ({ phase: "current", failure: null, value: {
-        kind: "projectThreads", projects: [{ projectId, phase: "current", failure: null, sidebar: {
-          projectId, revision: 1, freshness: "fresh", error: null, displayOrder: {}, entries: [{
-            entryKind: "thread" as const, title: "Compacting", activityAt: 10_000, waitingOnThreads: [],
-            compacting: true, identity: { harness: "codex" as const, threadId },
-            metadata: { archived: false as const, pinned: false, snoozed: false },
-            lifecycle: { kind: "completed" as const, reason: "providerInactive" as const, settled: false as const },
-          }],
-        } }],
-      } }), release: () => {} };
-    },
-    socket: { onNotification: () => () => {} },
-  };
-  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
-  const workspace = f.workspace.getSnapshot();
-  context.mock.method(f.workspace, "getSnapshot", () => ({
-    ...workspace,
-    observedProjects: [{
-      identityKey: ProjectIdentityKeySchema.parse("local:///repo/project"), registrationFailure: null,
-      locations: [{ location: { daemonId, projectId }, hostname: "remote", project: {
-        id: projectId, kind: "git" as const, name: "project", relativePath: "project",
-        rootPath: "/repo/project", roots: [], lastCommitTimeMs: null,
-      } }],
-    }],
-  }));
-  const projects = [{ kind: "location" as const, location: { daemonId, projectId } }];
-  const current = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
-    query: { kind: "projectThreads", projects, sidebarRowVersion: 2 } });
-  assert.deepEqual(observed[0], { kind: "projectThreads", projectIds: [projectId], sidebarRowVersion: 2 });
-  assert.equal(current.kind === "projectThreads" && current.data.rows[0]?.entry.entryKind === "thread"
-    ? current.data.rows[0].entry.compacting : null, true);
-  const legacy = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
-    query: { kind: "projectThreads", projects } });
-  assert.deepEqual(observed[1], { kind: "projectThreads", projectIds: [projectId] });
-  assert.equal(legacy.kind === "projectThreads" && legacy.data.rows[0]
-    ? "compacting" in legacy.data.rows[0].entry : null, false);
+  f.owner.retarget({ subscriptionId: opened.subscriptionId, generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, secondId) } });
+  assert.deepEqual(calls, ["observe 1", "retarget 2"], "one daemon batch follows the browser's set");
+  notify();
+  const grown = await f.wait(value => value.kind === "threadSummaries" && Boolean(value.data[secondId]));
+  assert.ok(grown.kind === "threadSummaries" && !(unknownId in grown.data));
+  assert.equal(f.deltas.at(-1)?.delta.objects?.data !== undefined, true, "the browser receives the change as a delta");
+  assert.throws(() => f.owner.retarget({ subscriptionId: opened.subscriptionId, generation: 1,
+    query: { kind: "threadOwner", threadId: ThreadReferenceSchema.parse(firstId) } }), /Only thread summary batches/u);
 });
 
 test("closing a caller stops invalidations and fences its pending state read", async context => {

@@ -146,6 +146,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
   executeThreadGoals: import("./database/WorkbenchDatabaseController").default["executeThreadGoals"];
   executeThreadTodos: import("./database/WorkbenchDatabaseController").default["executeThreadTodos"];
+  readThreadTodoCounts: import("./database/WorkbenchDatabaseController").default["readThreadTodoCounts"];
   executeThreadVis: import("./database/WorkbenchDatabaseController").default["executeThreadVis"];
   executeThreadAddressedFeedback: import("./database/WorkbenchDatabaseController").default["executeThreadAddressedFeedback"];
   executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
@@ -295,6 +296,8 @@ export interface DaemonRuntimeObjects {
     /** `change` carries pushed values; null means token usage may have changed and must be reread. */
     subscribe(listener: (threadId: string, change: Partial<import("workbench-shared/workbench/thread/thread-state").ThreadRuntime> | null) => void): () => void;
   };
+  /** Every observed thread's canonical summary: lean row plus live facts. */
+  threadSummaries: import("./WorkbenchThreadSummaryIndex").default;
   projectStore: import("./store/WorkbenchProjectStore").default;
   questionnaires: WorkbenchQuestionnaireController;
   approvals: import("./WorkbenchApprovalController").default;

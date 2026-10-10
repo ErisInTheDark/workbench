@@ -1,16 +1,16 @@
 /*
  * Exports:
- * - useThread: lease one thread store (summary or view interest) and read its summary slice and actions; `useThread.turns/questionnaire/approvals` read further slices of a leased store.
+ * - useThread: lease one thread store (summary or view interest) and read its summary slice and actions; `useThread.turns/questionnaire/approvals` read further slices of a leased store; `useThread.summary` leases one thread's batched summary for any thread display.
  */
 "use client";
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import type { WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import type ThreadStore from "../../workbench/thread/ThreadStore";
 import {
   EMPTY_THREAD_STORE_STATE, type ThreadInterest, type ThreadSliceName, type ThreadStoreActions, type ThreadStoreState,
 } from "../../workbench/thread/ThreadStore";
-import { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
+import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 
 function unavailable(): never { throw new Error("The thread is not ready."); }
 const unavailableActions: ThreadStoreActions = {
@@ -55,6 +55,20 @@ export function useThread(projectId: string, target: WorkbenchThreadRouteTarget 
     actions: store?.actions ?? unavailableActions,
   }), [store, summary]);
 }
+
+const NO_SUMMARY_LEASE = () => () => {};
+
+/**
+ * One thread's located summary (lean row plus live facts) for any thread display; null while unknown. Every mounted
+ * display shares one batched observation, so showing a thread costs a lease, not a subscription of its own.
+ */
+useThread.summary = function useThreadSummary(threadId: string | null) {
+  const store = useContext(WorkbenchClientContext)?.mounted?.threadSummaries ?? null;
+  const subscribe = useCallback((listener: () => void) => store && threadId ? store.subscribe(threadId, listener) : NO_SUMMARY_LEASE(),
+    [store, threadId]);
+  const read = useCallback(() => store && threadId ? store.get(threadId) : null, [store, threadId]);
+  return useSyncExternalStore(subscribe, read, read);
+};
 
 useThread.turns = function useThreadTurns(store: ThreadStore | null) { return useSlice(store, "turns"); };
 useThread.questionnaire = function useThreadQuestionnaire(store: ThreadStore | null) { return useSlice(store, "questionnaire"); };

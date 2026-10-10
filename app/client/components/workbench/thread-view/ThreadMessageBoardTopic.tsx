@@ -8,11 +8,9 @@
 import { useMemo, useState, type ComponentProps } from "react";
 
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
-import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { deriveThreadMessageBoardHistory, type ThreadMessageBoardMessage } from "../../../workbench/thread/thread-message-board";
 import { getSubagentSummary, resolveWorkbenchSubagentCommandTargets } from "../../../workbench/thread/thread-subagents";
 import { describeThreadEntry } from "../thread-entry-presentation";
-import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useThread } from "../use-thread";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
@@ -182,13 +180,12 @@ export default function ThreadMessageBoardTopic({
   subagent: WorkbenchSubagentSummary;
   subagents: readonly WorkbenchSubagentSummary[];
 }) {
-  const parsedProjectId = ProjectIdSchema.safeParse(projectId).data ?? null;
-  const entry = useWorkbenchThreadSidebarEntry(parsedProjectId, subagent.harness, subagent.threadId);
+  const thread = useThread.summary(subagent.threadId);
   const agentName = <ThreadAgentName subagent={subagent} thread={null} />;
   // History holds the child's live "view" interest, so it mounts only while the topic is open.
   const [isOpen, setIsOpen] = useState(false);
   // The row's own status outline becomes the topic border; drawn as overlays so the colour never tints the text.
-  const status = entry ? describeThreadEntry(entry) : null;
+  const status = thread ? describeThreadEntry(thread.summary.row, { facts: thread.summary.facts }) : null;
   const borderClassName = status
     ? `${status.statusClassName} border-current ${!status.waiting && (status.lifecycle?.kind === "needsAttention" || status.lifecycle?.kind === "stopped") ? "border-dashed" : ""}`
     : neutralBorderClassName;
@@ -206,13 +203,13 @@ export default function ThreadMessageBoardTopic({
         summary={(
           // The disclosure summary mutes its text; topic titles keep full contrast.
           <div className="relative text-text">
-            {entry && parsedProjectId ? (
+            {thread ? (
               <WorkbenchThreadListItem
                 compact={false}
-                entry={entry}
+                entry={thread.summary.row}
                 href={undefined}
                 presentation="disclosure-summary"
-                projectId={parsedProjectId}
+                projectId={thread.location.projectId}
                 showFrame={false}
                 showTooltip={false}
                 statusLeading={agentName}

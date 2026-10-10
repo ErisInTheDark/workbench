@@ -1,12 +1,14 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, and live vis sessions); publish typed keyed deltas after each first value.
+ * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, live vis sessions, and retargetable thread summary batches); publish typed keyed deltas after each first value.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  DaemonWorkspaceObserveSchema, WorkspaceReleaseSchema, daemonObservationShape,
-  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation,
+  DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, WorkspaceReleaseSchema, daemonObservationShape,
+  type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type DaemonWorkspaceRetarget,
 } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { ThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
+import type WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -85,7 +87,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     identities: Pick<WorkbenchThreadIdentityController, "findThread" | "resolve" | "subscribe">;
     threads: Pick<WorkbenchThreadStateController,
       "peekProject" | "readProject" | "peekProjectSummary" | "getProjectThreadSummary" | "subscribeProjects"
-      | "readWorkspaceThread" | "isThreadCompacting">;
+      | "readWorkspaceThread">;
+    /** Canonical per-thread summaries for `threadSummaries` batches. */
+    summaries?: Pick<WorkbenchThreadSummaryIndex, "peek" | "read" | "subscribe">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
@@ -120,6 +124,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       owners.identities.subscribe(threadId => this.identityChanged(threadId)),
       owners.threads.subscribeProjects(projectId => this.projectChanged(projectId)),
       ...(owners.runtime ? [owners.runtime.subscribe((threadId, change) => this.runtimeChanged(threadId, change))] : []),
+      ...(owners.summaries ? [owners.summaries.subscribe(threadId => this.summaryChanged(threadId))] : []),
     ];
   }
 
@@ -231,6 +236,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "archivedThreads":
         this.selectProjects(observation);
         break;
+      case "threadSummaries":
+        this.readSummaries(observation);
+        break;
       case "stats":
         if (!this.owners.stats) {
           this.update(observation, { kind: "stats", phase: "unavailable", failure: "Statistics are unavailable.", refinement: "unavailable", data: null });
@@ -239,6 +247,25 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         observation.stats = this.owners.stats.observe(request.query.request, state => this.update(observation, { kind: "stats", ...state }));
         break;
     }
+  }
+
+  /**
+   * Swaps a live `threadSummaries` batch's ids in place: kept threads keep their values and the change
+   * publishes as an ordinary delta, so growing or shrinking a batch ships only the threads that moved.
+   */
+  retarget(connectionId: string, input: DaemonWorkspaceRetarget) {
+    if (this.closed) throw new Error("Workspace observations are reloading.");
+    const request = DaemonWorkspaceRetargetSchema.parse(input);
+    const observation = this.observations.get(this.key(connectionId, request.subscriptionId));
+    if (!observation || observation.request.generation !== request.generation) {
+      throw new Error("Workspace observation to retarget is not open.");
+    }
+    if (observation.request.query.kind !== "threadSummaries" || request.query.kind !== "threadSummaries") {
+      throw new Error("Only thread summary batches can be retargeted.");
+    }
+    observation.request = request;
+    this.readSummaries(observation);
+    return { revision: observation.value.revision };
   }
 
   release(connectionId: string, input: { subscriptionId: string; generation: number }) {
@@ -266,10 +293,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     for (const observation of this.observations.values()) this.retire(observation);
   }
 
-  /** Observers get lean rows without archived threads. */
-  private sidebar(sidebar: WorkbenchThreadSidebarSnapshot, version?: 2) {
-    return projectSidebarRowSnapshot(sidebar,
-      version === 2 ? threadId => this.owners.threads.isThreadCompacting(threadId) : undefined);
+  /** Observers get lean rows without archived threads; live per-thread facts ride thread summaries. */
+  private sidebar(sidebar: WorkbenchThreadSidebarSnapshot) {
+    return projectSidebarRowSnapshot(sidebar);
   }
 
   /** Activity to ten seconds, so a running agent's stream of items is one summary tick per window. */
@@ -333,6 +359,58 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
       case "threadVis": return { ...envelope, kind: "threadVis", phase: "pending", failure: null, data: null };
       case "visSnapshot": return { ...envelope, kind: "visSnapshot", phase: "pending", failure: null, data: null };
+      case "threadSummaries": return { ...envelope, kind: "threadSummaries", phase: "pending", failure: null, summaries: {} };
+    }
+  }
+
+  /**
+   * Publishes every requested thread already summarised, then reads the rest. Threads dropped by a retarget leave the
+   * value; a read that lands after its thread left the batch is discarded.
+   */
+  private readSummaries(observation: Observation<Client>) {
+    const query = observation.request.query;
+    if (query.kind !== "threadSummaries" || observation.value.kind !== "threadSummaries") return;
+    const index = this.owners.summaries;
+    if (!index) {
+      this.update(observation, { kind: "threadSummaries", phase: "unavailable", failure: "Thread summaries are unavailable.", summaries: {} });
+      return;
+    }
+    const previous = observation.value.summaries;
+    const summaries: Record<string, ThreadSummary | null> = {};
+    const missing: string[] = [];
+    for (const threadId of new Set(query.threadIds)) {
+      const peeked = index.peek(threadId);
+      if (peeked) summaries[threadId] = peeked;
+      else if (threadId in previous) summaries[threadId] = previous[threadId]!;
+      else missing.push(threadId);
+    }
+    this.update(observation, { kind: "threadSummaries", phase: missing.length ? "pending" : "current", failure: null, summaries });
+    for (const threadId of missing) {
+      void index.read(threadId).then(summary => this.acceptSummary(observation, threadId, summary), error => {
+        const message = failure(error);
+        this.owners.warn(`Thread summary read failed: ${message}`);
+        if (!this.active(observation) || observation.value.kind !== "threadSummaries") return;
+        this.update(observation, { ...observation.value, phase: "stale", failure: message });
+      });
+    }
+  }
+
+  /** A read or change lands only while its thread is still in the batch. */
+  private acceptSummary(observation: Observation<Client>, threadId: string, summary: ThreadSummary | null) {
+    const query = observation.request.query;
+    if (!this.active(observation) || query.kind !== "threadSummaries" || observation.value.kind !== "threadSummaries"
+      || !query.threadIds.includes(ThreadReferenceSchema.parse(threadId))) return;
+    const summaries = { ...observation.value.summaries, [threadId]: summary };
+    const pending = query.threadIds.some(id => !(id in summaries));
+    this.update(observation, { ...observation.value, phase: pending ? "pending" : "current", summaries });
+  }
+
+  private summaryChanged(threadId: string) {
+    const summary = this.owners.summaries?.peek(threadId) ?? null;
+    for (const observation of this.observations.values()) {
+      if (observation.value.kind === "threadSummaries" && threadId in observation.value.summaries) {
+        this.acceptSummary(observation, threadId, summary);
+      }
     }
   }
 
@@ -397,13 +475,11 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         failures: value.failures.filter(item => selectedSet.has(item.projectId)),
       });
     } else if (value.kind === "projectThreads") {
-      const version = observation.request.query.kind === "projectThreads"
-        ? observation.request.query.sidebarRowVersion : undefined;
       const projects = selected.map(projectId => {
         const sidebar = this.owners.threads.peekProject(projectId);
         const retained = value.projects.find(project => project.projectId === projectId);
         if (sidebar) return { projectId, phase: "current" as const, failure: null,
-          sidebar: this.sidebar(sidebar, version) };
+          sidebar: this.sidebar(sidebar) };
         observation.dirty.add(projectId);
         return retained ?? { projectId, phase: "pending" as const, failure: null, sidebar: null };
       });
@@ -528,11 +604,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         pendingProjectIds: [...observation.dirty], failures,
       });
     } else if (value.kind === "projectThreads") {
-      const version = observation.request.query.kind === "projectThreads"
-        ? observation.request.query.sidebarRowVersion : undefined;
       const projects = value.projects.map(project => project.projectId === projectId
         ? { projectId, phase: "current" as const, failure: null,
-          sidebar: this.sidebar(sidebar, version) } : project);
+          sidebar: this.sidebar(sidebar) } : project);
       const failed = projects.find(project => project.failure);
       this.update(observation, {
         kind: "projectThreads", phase: observation.dirty.size ? "pending" : failed ? "stale" : "current",

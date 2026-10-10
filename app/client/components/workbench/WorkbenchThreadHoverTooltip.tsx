@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadHoverTooltip: give any thread link the sidebar's thread tooltip, optionally led by an agent name, loading the thread only while it shows.
+ * - default WorkbenchThreadHoverTooltip: give any thread link the sidebar's thread tooltip, optionally led by an agent name, leasing the thread's summary only while it shows.
  */
 "use client";
 
@@ -14,12 +14,12 @@ import Tooltip from "../ui/Tooltip";
 
 interface ThreadIdentity { harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId }
 
-/** Mounted only while the tooltip is open, so hovering is what acquires the thread's summary interest. */
+/** Mounted only while the tooltip is open, so hovering is what leases the thread's summary. */
 function LoadedThreadTooltip({ agentName, harness, projectId, threadId, title }: ThreadIdentity & { agentName?: ReactNode; title: string }) {
-  const thread = useThread(projectId, { harness, kind: "provider", threadId });
-  const entry = thread.entry;
-  if (!entry) return <p className="m-0 text-[0.8rem] text-fg/muted">{thread.status === "loading" ? `Loading ${title}…` : title}</p>;
-  const shown = describeThreadEntry(entry);
+  const thread = useThread.summary(threadId);
+  if (!thread) return <p className="m-0 text-[0.8rem] text-fg/muted">{`Loading ${title}…`}</p>;
+  const entry = thread.summary.row;
+  const shown = describeThreadEntry(entry, { facts: thread.summary.facts });
   return (
     <ThreadTooltipContent
       activityAt={shown.activityAt}

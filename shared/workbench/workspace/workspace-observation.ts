@@ -15,9 +15,11 @@
  * - WorkspaceObservationSchema/WorkspaceObservation: independently revisioned app query results.
  * - WorkspaceObserveSchema/WorkspaceObserve: replace one named observation's arguments.
  * - WorkspaceReleaseSchema: release only the matching observation generation.
+ * - WORKSPACE_RETARGET_METHOD/DaemonWorkspaceRetargetSchema/WorkspaceRetargetSchema/WorkspaceRetargetResultSchema: swap a live observation's arguments, answered with a delta.
+ * - WorkspaceThreadSummarySchema/WorkspaceThreadSummariesSchema: located thread summaries a `threadSummaries` batch returns, keyed by thread id.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
- * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity; a `threadRow` query observes one by thread id.
+ * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity.
  * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
  * Queries include a thread's live `threadVis` sessions and one stored `visSnapshot`.
@@ -41,6 +43,7 @@ import {
   WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema,
 } from "../thread/thread-state";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity";
+import { ThreadSummariesSchema, ThreadSummarySchema } from "../thread/thread-summary";
 import { PresentationSnapshotSchema } from "../../state/workbench-presentation-state";
 import type { WorkbenchClientStateResponse } from "../../state/workbench-client-state";
 import { conformWorkbenchClientStateResponse } from "../../state/workbench-client-state-conformance";
@@ -68,6 +71,7 @@ export const WORKSPACE_OBSERVE_METHOD = "workspace/observe";
 export const WORKSPACE_RELEASE_METHOD = "workspace/release";
 export const WORKSPACE_UPDATED_METHOD = "workspace/updated";
 export const WORKSPACE_DELTA_METHOD = "workspace/delta";
+export const WORKSPACE_RETARGET_METHOD = "workspace/retarget";
 
 export const WorkspaceSourcePhaseSchema = z.enum(["pending", "current", "stale", "failed", "unavailable"]);
 export type WorkspaceSourcePhase = z.infer<typeof WorkspaceSourcePhaseSchema>;
@@ -106,6 +110,8 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("archivedThreads"), projectIds: z.array(ProjectIdSchema), limit: archivedLimit }).strict(),
   z.object({ kind: z.literal("threadVis"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("visSnapshot"), sessionId: z.uuid(), snapshotKind: VisSnapshotKindSchema }).strict(),
+  /** One batch of thread summaries; callers retarget the id set instead of observing each thread. */
+  z.object({ kind: z.literal("threadSummaries"), threadIds: z.array(ThreadReferenceSchema) }).strict(),
 ]);
 export type DaemonWorkspaceQuery = z.infer<typeof DaemonWorkspaceQuerySchema>;
 export const DaemonWorkspaceObserveSchema = z.object({
@@ -118,6 +124,10 @@ export const WorkspaceReleaseSchema = z.object({
   subscriptionId: z.uuid(),
   generation: revision,
 }).strict();
+/** Swap a live observation's arguments for the same kind; the change arrives as an ordinary delta against its last value. */
+export const DaemonWorkspaceRetargetSchema = DaemonWorkspaceObserveSchema;
+export type DaemonWorkspaceRetarget = DaemonWorkspaceObserve;
+export const WorkspaceRetargetResultSchema = z.object({ revision }).strict();
 
 /**
  * One stats section. `refinement` stays pending while published data is provisional: claim hotspots arrive
@@ -185,6 +195,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("archivedThreads"), projects: z.array(archivedProject) }).strict(),
   z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("visSnapshot"), data: VisSnapshotSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("threadSummaries"), summaries: ThreadSummariesSchema }).strict(),
 ]);
 export type DaemonWorkspaceObservation = z.infer<typeof DaemonWorkspaceObservationSchema>;
 
@@ -212,7 +223,6 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema, daemonId: DaemonIdSchema.nullable() }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), threadId: ThreadReferenceSchema }).strict(),
-  z.object({ kind: z.literal("threadRow"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("presentation") }).strict(),
   z.object({
     kind: z.literal("appState"), browserStateId: z.uuid().nullable(),
@@ -235,8 +245,17 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("threadVis"), threadId: ThreadReferenceSchema }).strict(),
   /** One stored vis moment; the thread routes it to its daemon. */
   z.object({ kind: z.literal("visSnapshot"), threadId: ThreadReferenceSchema, sessionId: z.uuid(), snapshotKind: VisSnapshotKindSchema }).strict(),
+  /** Summaries for every thread a page shows, wherever each lives; the browser retargets one batch as displays mount. */
+  z.object({ kind: z.literal("threadSummaries"), threadIds: z.array(ThreadReferenceSchema) }).strict(),
 ]);
 export type WorkspaceQuery = z.infer<typeof WorkspaceQuerySchema>;
+/** Swap a live observation's arguments for the same kind; the change arrives as an ordinary delta against its last value. */
+export const WorkspaceRetargetSchema = z.object({
+  subscriptionId: z.uuid(),
+  generation: revision,
+  query: WorkspaceQuerySchema,
+}).strict();
+export type WorkspaceRetarget = z.infer<typeof WorkspaceRetargetSchema>;
 
 export const WorkspaceDaemonFactSchema = z.object({
   daemonId: DaemonIdSchema,
@@ -339,6 +358,16 @@ export type WorkspaceArchivedThreads = z.infer<typeof WorkspaceArchivedThreadsSc
 export const workspaceThreadRowKey = (row: Pick<WorkspaceThreadRow, "logicalProjectId" | "location" | "entry">) =>
   `${row.logicalProjectId ?? "observed"}/${row.location.daemonId}/${row.location.projectId}/${sidebarRowKey(row.entry)}`;
 
+/** One thread's summary with where it lives; null while its owner or summary is unknown. */
+export const WorkspaceThreadSummarySchema = z.object({
+  location: ProjectLocationReferenceSchema,
+  logicalProjectId: LogicalProjectIdSchema.nullable(),
+  summary: ThreadSummarySchema,
+}).strict();
+export type WorkspaceThreadSummary = z.infer<typeof WorkspaceThreadSummarySchema>;
+export const WorkspaceThreadSummariesSchema = z.record(z.string().min(1), WorkspaceThreadSummarySchema.nullable());
+export type WorkspaceThreadSummaries = z.infer<typeof WorkspaceThreadSummariesSchema>;
+
 export const WorkspaceThreadOwnerSchema = z.discriminatedUnion("phase", [
   z.object({
     phase: z.literal("current"), identity: WorkbenchThreadIdentityResolutionSchema,
@@ -391,7 +420,6 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
     data: WorkbenchThreadObservationSnapshotSchema.nullable(),
     runtime: ThreadRuntimeRecordSchema.default({}),
   }).strict(),
-  z.object({ ...envelope, kind: z.literal("threadRow"), data: WorkspaceThreadRowSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("presentation"), data: PresentationSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("appState"), data: appState.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: runtime.nullable() }).strict(),
@@ -400,6 +428,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("archivedThreads"), data: WorkspaceArchivedThreadsSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("visSnapshot"), data: VisSnapshotSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("threadSummaries"), data: WorkspaceThreadSummariesSchema }).strict(),
 ]);
 export type WorkspaceObservation = z.infer<typeof WorkspaceObservationSchema>;
 
@@ -546,9 +575,15 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
+    // A retarget adds and removes whole threads; one thread's change ships only its changed fields.
+    case "threadSummaries": return { schema, fields: { summaries: observationShape.record(ThreadSummarySchema.nullable(), threadSummaryShape) } };
     default: return { schema };
   }
 }
+
+const threadSummaryShape: ObservationShape = {
+  fields: { row: observationShape.object({ validate: WorkbenchThreadSidebarRowSchema, fields: entryFields }) },
+};
 
 function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): ObservationShape {
   const schema = memberSchema(WorkspaceObservationSchema, kind);
@@ -572,8 +607,10 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "appState": return { schema, fields: { data: appStateShape() } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
-    case "threadRow": return { schema, fields: { data: observationShape.object(threadRowShape) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
+    case "threadSummaries": return { schema, fields: { data: observationShape.record(WorkspaceThreadSummarySchema.nullable(), {
+      fields: { summary: observationShape.object(threadSummaryShape) },
+    }) } };
     default: return { schema };
   }
 }

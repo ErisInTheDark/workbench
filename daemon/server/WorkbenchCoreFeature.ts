@@ -37,6 +37,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "workingTree",
   "accountLimits",
   "threadRuntime",
+  "threadSummaries",
 ] as const satisfies readonly (keyof DaemonRuntimeObjects)[];
 
 interface WorkbenchCoreFeatureOptions {

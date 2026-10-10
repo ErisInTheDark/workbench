@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkspaceQuerySnapshot: stable received facts and app-connection-aware freshness.
- * - WorkspaceQueryHandle: caller-owned typed observation and release boundary.
+ * - WorkspaceQueryHandle: caller-owned typed observation, retarget and release boundary.
  * - default WorkbenchWorkspaceClient: share typed query interests over the tab's single app connection.
  */
 import {
@@ -9,7 +9,6 @@ import {
   type WorkspaceQuery, type WorkspaceObservation, type WorkspaceObservationDelta,
   type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
-import { WORKBENCH_THREAD_SIDEBAR_ROW_VERSION } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
@@ -42,6 +41,8 @@ export interface WorkspaceQuerySnapshot<Kind extends WorkspaceQuery["kind"] = Wo
 
 export interface WorkspaceQueryHandle<Kind extends WorkspaceQuery["kind"]> {
   getSnapshot(): WorkspaceQuerySnapshot<Kind>;
+  /** Sole observers of a batch query swap its arguments in place; the change arrives as a delta. */
+  retarget(query: Extract<WorkspaceQuery, { kind: Kind }>): void;
   readonly signal: AbortSignal;
   subscribe(listener: () => void): () => void;
   release(): void;
@@ -260,10 +261,7 @@ export default class WorkbenchWorkspaceClient {
     listener: () => void = () => {},
   ): WorkspaceQueryHandle<Query["kind"]> {
     if (this.disposed) throw new Error("Workspace client is closed.");
-    const requested = WorkspaceQuerySchema.parse(query);
-    const parsed: WorkspaceQuery = requested.kind === "projectThreads" && !requested.sidebarRowVersion
-      ? { ...requested, sidebarRowVersion: WORKBENCH_THREAD_SIDEBAR_ROW_VERSION }
-      : requested;
+    const parsed: WorkspaceQuery = WorkspaceQuerySchema.parse(query);
     let interest = [...this.interests.values()].find(item => areDeeplyEqual(item.query, parsed));
     const created = !interest;
     if (!interest) {
@@ -279,6 +277,7 @@ export default class WorkbenchWorkspaceClient {
     if (created && this.rpc.connected) this.open(retained);
     return {
       getSnapshot: () => retained.snapshot as WorkspaceQuerySnapshot<Query["kind"]>,
+      retarget: (next: Extract<WorkspaceQuery, { kind: Query["kind"] }>) => this.retarget(retained, token, next),
       signal: cancellation.signal,
       subscribe: (notify: () => void) => {
         listeners.add(notify);
@@ -332,22 +331,41 @@ export default class WorkbenchWorkspaceClient {
     this.notificationListeners.clear();
   }
 
+  /**
+   * Swaps a sole owner's batch arguments in place; the app answers with a delta against the current value.
+   * An app server without retargeting gets a fresh subscription for the new arguments instead.
+   */
+  private retarget(interest: Interest, token: object, query: WorkspaceQuery) {
+    if (interest.listeners.size !== 1 || !interest.listeners.has(token)) throw new Error("Only a sole observer can retarget a workspace query.");
+    const next = WorkspaceQuerySchema.parse(query);
+    if (areDeeplyEqual(next, interest.query)) return;
+    interest.query = next;
+    if (!this.rpc.connected || !this.active(interest)) return;
+    const generation = this.rpc.getSnapshot().generation;
+    void this.rpc.requestRaw({ method: "workspace/retarget", params: { subscriptionId: interest.id, generation, query: next } },
+      { signal: interest.cancellation.signal }).catch(error => {
+      if (!this.active(interest) || generation !== this.rpc.getSnapshot().generation
+        || error instanceof WorkbenchRpcRequestInterruptedError) return;
+      if (!(error instanceof WorkbenchDaemonRequestError)) {
+        this.warn("Workspace query retarget failed", error);
+        return;
+      }
+      void this.rpc.requestRaw({ method: "workspace/release", params: { subscriptionId: interest.id, generation } })
+        .catch(release => { if (!(release instanceof WorkbenchRpcRequestInterruptedError)) this.warn("Workspace release failed", release); });
+      this.interests.delete(interest.id);
+      interest.id = crypto.randomUUID();
+      interest.raw = null;
+      interest.early = [];
+      this.interests.set(interest.id, interest);
+      this.open(interest);
+    });
+  }
+
   private open(interest: Interest) {
     const generation = this.rpc.getSnapshot().generation;
-    const request = (query: WorkspaceQuery) => this.rpc.requestRaw({
-      method: "workspace/observe", params: { subscriptionId: interest.id, generation, query },
-    }, { signal: interest.cancellation.signal });
-    const compatibleRequest = async () => {
-      try {
-        return await request(interest.query);
-      } catch (error) {
-        if (interest.query.kind !== "projectThreads" || !interest.query.sidebarRowVersion
-          || !(error instanceof WorkbenchDaemonRequestError) || error.code !== -32600) throw error;
-        const { sidebarRowVersion: _version, ...legacy } = interest.query;
-        return await request(legacy);
-      }
-    };
-    void compatibleRequest().then(result => {
+    void this.rpc.requestRaw({
+      method: "workspace/observe", params: { subscriptionId: interest.id, generation, query: interest.query },
+    }, { signal: interest.cancellation.signal }).then(result => {
       if (!this.active(interest) || !this.rpc.connected || generation !== this.rpc.getSnapshot().generation) return;
       const parsed = WorkspaceObservationSchema.safeParse(result);
       if (!parsed.success) {

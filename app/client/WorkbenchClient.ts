@@ -55,6 +55,7 @@ import WorkbenchDaemonRuntimeClient from "./workbench/WorkbenchDaemonRuntimeClie
 import WorkbenchProjectFileIndexStore from "./workbench/project/WorkbenchProjectFileIndexStore";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
+import ThreadSummaryStore from "./workbench/thread/ThreadSummaryStore";
 import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import WorkbenchVoiceClient from "./workbench/voice/WorkbenchVoiceClient";
 import type { WorkbenchDomSurfaces, WorkbenchEditorDomSurfaces } from "./workbench/workbench-dom";
@@ -105,6 +106,8 @@ export interface MountedWorkbenchClient {
   dispose(): void;
   threadRuntime: WorkbenchThreadRuntimeStore;
   threadSidebar: WorkbenchThreadSidebarStore;
+  /** Per-thread summaries every thread display leases, batched into one workspace observation; absent where nothing observes them. */
+  threadSummaries?: ThreadSummaryStore;
   threadTextPresentation: ThreadTextPresentationController;
   threadTextPresentationFor(threadId: string): ThreadTextPresentationController | null;
 }
@@ -893,6 +896,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   }));
   lifetime.addUnsubscribe(presentation.subscribe(factsChanged));
   if (state) lifetime.addUnsubscribe(state.subscribe(factsChanged));
+  const threadSummaries = new ThreadSummaryStore(workspace);
   presentation.start();
   void network.start().catch(error => warn("Network settings could not start.", error));
   void runtime.open().catch(error => warn("Runtime observation could not start.", error));
@@ -907,7 +911,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         rows?.getSnapshot().failure, tree?.getSnapshot().failure].filter(Boolean).join(" "),
       subscribe: listener => { factListeners.add(listener); return () => { factListeners.delete(listener); }; },
     },
-    threadRuntime, threadSidebar: sidebar,
+    threadRuntime, threadSidebar: sidebar, threadSummaries,
     get threadTextPresentation() { return threadClient.textPresentation; },
     threadTextPresentationFor: id => rendererForThread(id).textPresentation,
     getThreadStore: (projectId, target) => {
@@ -949,6 +953,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       archived?.handle.release();
       tree?.release();
       for (const owner of owners.values()) owner.release();
+      threadSummaries.dispose();
       for (const panel of panels) panel.dispose();
       navigation.dispose();
       routeIntents.dispose();

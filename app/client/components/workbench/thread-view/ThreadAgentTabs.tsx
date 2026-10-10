@@ -9,7 +9,6 @@ import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
-import { useWorkbenchThreadSidebarEntry } from "../use-workbench-client";
 import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
@@ -84,10 +83,10 @@ function SubagentTabLink({
   const terminal = tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped";
   const parsedProjectId = ProjectIdSchema.safeParse(projectId).data ?? null;
   const threadId = WorkbenchThreadIdSchema.parse(tab.id);
-  const entry = useWorkbenchThreadSidebarEntry(parsedProjectId, harness, threadId);
+  const summary = useThread.summary(threadId)?.summary ?? null;
   const hasComposerDraft = useWorkbenchComposerDraftPresence(projectId, tab.id);
-  const claimedCount = entry?.gitArc?.claimedPaths.length ?? 0;
-  const stashedCount = entry?.gitArc?.stashedPaths?.length ?? 0;
+  const claimedCount = summary?.row.gitArc?.claimedPaths.length ?? 0;
+  const stashedCount = summary?.row.gitArc?.stashedPaths?.length ?? 0;
   const accentChromaPercent = selected ? 90 : 55;
   return (
     <ContextMenuCapability
@@ -139,7 +138,8 @@ function SubagentTabLink({
           <ThreadAgentName accentChromaPercent={accentChromaPercent} subagent={tab.subagent} thread={tab.thread} />
           {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
           <span className="text-[0.72rem] font-normal text-fg/muted empty:hidden">
-            <WorkbenchThreadEntryBadge claimedCount={claimedCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedCount} />
+            <WorkbenchThreadEntryBadge claimedCount={claimedCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedCount}
+              todoCount={summary?.facts.todoCount ?? 0} />
           </span>
         </Tab>
       </WorkbenchThreadHoverTooltip>
