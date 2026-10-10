@@ -100,7 +100,27 @@ const threadBrowseEntriesV1 = defineTable("thread_browse_entries", {
 }, (table) => ({
   constraints: [unique([table.item_id, table.action_index])],
 }));
-const threadBrowseEntriesHistory = initialHistory(threadBrowseEntriesV1);
+const threadBrowseEntriesV2 = evolveTable(threadBrowseEntriesV1, {
+  extras: table => ({
+    constraints: [unique([table.item_id, table.action_index])],
+    indexes: [index("thread_browse_entries_asset_idx", [table.asset_digest], {
+      where: sql`${table.asset_digest} IS NOT NULL`,
+    })],
+  }),
+});
+const threadBrowseEntriesHistory = defineTableHistory({
+  current: threadBrowseEntriesV2,
+  versions: [
+    ...initialHistory(threadBrowseEntriesV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.boundedPayloadRetention.version,
+      table: threadBrowseEntriesV2,
+      migration: createIndexes({
+        from: threadBrowseEntriesV1, to: threadBrowseEntriesV2, names: ["thread_browse_entries_asset_idx"],
+      }),
+    }),
+  ],
+});
 export const threadBrowseEntries = threadBrowseEntriesHistory.current;
 
 const transcriptAssetRefsV1 = defineTable("transcript_asset_refs", {
@@ -128,7 +148,38 @@ const transcriptAssetRefsV1 = defineTable("transcript_asset_refs", {
     }),
   ],
 }));
-const transcriptAssetRefsHistory = initialHistory(transcriptAssetRefsV1);
+const transcriptAssetRefsV2 = evolveTable(transcriptAssetRefsV1, {
+  extras: table => ({
+    constraints: [check(sql`
+    (${table.owner_kind} = ${literal("thread")} AND ${table.thread_id} IS NOT NULL AND ${table.item_id} IS NULL)
+    OR (${table.owner_kind} = ${literal("item")} AND ${table.thread_id} IS NULL AND ${table.item_id} IS NOT NULL)
+  `)],
+    indexes: [
+      index("transcript_asset_refs_thread_idx", [table.thread_id, table.role, table.ref_index], {
+        unique: true,
+        where: sql`${table.owner_kind} = ${literal("thread")}`,
+      }),
+      index("transcript_asset_refs_item_idx", [table.item_id, table.role, table.ref_index], {
+        unique: true,
+        where: sql`${table.owner_kind} = ${literal("item")}`,
+      }),
+      index("transcript_asset_refs_asset_idx", [table.asset_digest]),
+    ],
+  }),
+});
+const transcriptAssetRefsHistory = defineTableHistory({
+  current: transcriptAssetRefsV2,
+  versions: [
+    ...initialHistory(transcriptAssetRefsV1).versions,
+    tableVersion({
+      schemaVersion: databaseReleases.boundedPayloadRetention.version,
+      table: transcriptAssetRefsV2,
+      migration: createIndexes({
+        from: transcriptAssetRefsV1, to: transcriptAssetRefsV2, names: ["transcript_asset_refs_asset_idx"],
+      }),
+    }),
+  ],
+});
 export const transcriptAssetRefs = transcriptAssetRefsHistory.current;
 
 const transcriptCaptureGapsV1 = defineTable("transcript_capture_gaps", {

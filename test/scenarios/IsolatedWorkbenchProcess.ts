@@ -7,7 +7,7 @@ import type { ChildProcess } from "node:child_process";
 import { killProcessTreeAsync } from "../../daemon/server/process-helpers";
 
 export interface IsolatedWorkbenchProcessOptions {
-  onOutput?: (chunk: Buffer) => void;
+  onOutput?: (event: { chunk: Buffer; stream: "stderr" | "stdout" }) => void;
   onChange?: () => void;
   gracefulSignal?: () => AbortSignal;
   retire?: (pid: number | undefined) => Promise<void>;
@@ -23,13 +23,13 @@ export default class IsolatedWorkbenchProcess {
     readonly child: ChildProcess,
     private readonly options: IsolatedWorkbenchProcessOptions = {},
   ) {
-    const collect = (chunk: Buffer) => {
+    const collect = (stream: "stderr" | "stdout") => (chunk: Buffer) => {
       this.tail = (this.tail + chunk.toString()).slice(-12_000);
-      options.onOutput?.(chunk);
+      options.onOutput?.({ chunk, stream });
       options.onChange?.();
     };
-    child.stdout?.on("data", collect);
-    child.stderr?.on("data", collect);
+    child.stdout?.on("data", collect("stdout"));
+    child.stderr?.on("data", collect("stderr"));
     child.on("error", error => {
       this.processError = error;
       options.onChange?.();

@@ -1,7 +1,9 @@
 - Choose stable owners, identities, and extension seams before implementation.
 - Prefer compatible schema additions.
 - Before upgrading a persisted database, preserve a verified complete backup. Never migrate if that backup fails.
-- Before opening a newer-schema database with older code, archive it separately as a failed upgrade, then restore a verified matching-schema backup. Retain the latest backup per schema version; never prune failed-upgrade archives automatically.
+- After publishing a verified ordinary backup, retain it plus at most one predecessor no older than seven days. Never prune the newest verified backup.
+- Before opening a newer-schema database with older code, archive it separately as a failed upgrade, then restore a verified matching-schema backup. Retain at most two failed-upgrade archives no older than 30 days.
+- Lifecycle migration validation models destructive retention independently against the pristine checkpoint, compares every common relational fact, checks SQLite integrity, and enforces the compacted-size budget.
 - Convert old data at the owning boundary when old and new shapes can coexist.
 - Use one focused transactional conversion when the shapes cannot coexist.
 - Do not add a general migration framework for one conversion.

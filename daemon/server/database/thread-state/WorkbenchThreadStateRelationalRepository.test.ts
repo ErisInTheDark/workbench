@@ -316,7 +316,7 @@ test("relational batches roll back invalid references and preserve valid draft p
   } finally { database.close(); }
 });
 
-test("the git startup cache stores only its persisted subset, so live Git-derived facts never rewrite or drift into it", () => {
+test("the git startup cache retains compact summaries while live stack facts never rewrite or drift into it", () => {
   const database = openDatabase();
   try {
     const [threadId] = seedIdentities(database, "project", "arc");
@@ -344,11 +344,21 @@ test("the git startup cache stores only its persisted subset, so live Git-derive
       CREATE TEMP TRIGGER reject_cache_rewrite BEFORE UPDATE ON workbench_thread_git_observations
       BEGIN SELECT RAISE(ABORT, 'unchanged cache rewritten'); END
     `);
-    // A changed summary is a live Git fact, not cached state: the unchanged persisted subset is not rewritten.
-    repository.commit({ projectId: testProjectIds.project, records: [record("updated", "reworded title")] });
+    // Acceptance and stack layers remain live Git facts: the unchanged persisted subset is not rewritten.
+    repository.commit({ projectId: testProjectIds.project, records: [record("updated", "observed title")] });
     const loaded = repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]!;
     assert.equal(loaded.title, "updated");
-    assert.deepEqual(loaded.gitArc?.proposals, [{ proposalId: "proposal", status: "proposed" }]);
+    assert.deepEqual(loaded.gitArc?.proposals, [{
+      proposalId: "proposal",
+      status: "proposed",
+      summary: {
+        changes: [{ additions: 2, deletions: 1, kind: "update", path: "one.ts" }],
+        committedSha: null,
+        description: "",
+        mode: "commit",
+        title: "observed title",
+      },
+    }]);
     assert.equal(loaded.gitArc?.stackLayers, undefined);
   } finally { database.close(); }
 });

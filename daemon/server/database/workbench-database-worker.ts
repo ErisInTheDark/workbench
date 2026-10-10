@@ -6,7 +6,13 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 
-import { isWorkbenchDatabaseReadRequest, type WorkbenchDatabaseInventory, type WorkbenchDatabaseRequest, type WorkbenchDatabaseResponse } from "./workbench-database-protocol.ts";
+import {
+  isWorkbenchDatabaseReadRequest,
+  type WorkbenchDatabaseInventory,
+  type WorkbenchDatabaseRequest,
+  type WorkbenchDatabaseResponse,
+  type WorkbenchDatabaseWorkerMessage,
+} from "./workbench-database-protocol.ts";
 import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
 import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
@@ -45,7 +51,12 @@ import WorkbenchThreadVisStore from "./vis/WorkbenchThreadVisStore.ts";
 import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
+import WorkbenchTranscriptRetentionRepository from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
+import {
+  WorkbenchDatabaseDiagnosticEventSchema,
+  type WorkbenchDatabaseDiagnosticEvent,
+} from "workbench-shared/database/workbench-database-diagnostic";
 
 if (!parentPort) throw new Error("Workbench database worker requires a parent port");
 
@@ -62,6 +73,7 @@ let statsRepository: WorkbenchStatsRepository | null = null;
 let statsImportRepository: WorkbenchStatsImportRepository | null = null;
 let statsAttributionRepository: WorkbenchStatsAttributionRepository | null = null;
 let gitArcProposalDiffRepository: GitArcProposalDiffRepository | null = null;
+let transcriptRetentionRepository: WorkbenchTranscriptRetentionRepository | null = null;
 let migrationAcknowledgement: { id: number; acknowledge(): void } | null = null;
 let suspendedDatabase: { path: string; version: number } | null = null;
 
@@ -80,6 +92,7 @@ function initializeRepositories(reader = false) {
   statsImportRepository = new WorkbenchStatsImportRepository(database);
   statsAttributionRepository = new WorkbenchStatsAttributionRepository(database);
   gitArcProposalDiffRepository = new GitArcProposalDiffRepository(database);
+  transcriptRetentionRepository = reader ? null : new WorkbenchTranscriptRetentionRepository(database);
 }
 
 function boundedError(error: unknown) {
@@ -109,8 +122,41 @@ function proveReadWrite() {
   })();
 }
 
+function reclaimDatabasePages(database: Database.Database) {
+  const pageCount = database.pragma("page_count", { simple: true }) as number;
+  const mode = database.pragma("auto_vacuum", { simple: true }) as number;
+  let fullCompaction = false;
+  if (mode === 0) {
+    const startedAt = performance.now();
+    postDiagnostic({
+      source: "database", operation: "compaction", phase: "pending", level: "info",
+      detail: `${pageCount} pages`, elapsedMs: null, progress: null,
+    });
+    database.pragma("auto_vacuum = INCREMENTAL");
+    database.exec("VACUUM");
+    fullCompaction = true;
+    const compactedPages = database.pragma("page_count", { simple: true }) as number;
+    postDiagnostic({
+      source: "database", operation: "compaction", phase: "completed", level: "info",
+      detail: `${compactedPages} pages`, elapsedMs: performance.now() - startedAt, progress: null,
+    });
+  } else {
+    if (mode === 1) database.pragma("auto_vacuum = INCREMENTAL");
+    database.pragma("incremental_vacuum(32768)");
+  }
+  const retainedPages = database.pragma("page_count", { simple: true }) as number;
+  return { fullCompaction, reclaimedPages: Math.max(0, pageCount - retainedPages) };
+}
+
 function post(response: WorkbenchDatabaseResponse) {
   parentPort!.postMessage(response);
+}
+
+function postDiagnostic(diagnostic: WorkbenchDatabaseDiagnosticEvent) {
+  parentPort!.postMessage({
+    type: "diagnostic",
+    diagnostic: WorkbenchDatabaseDiagnosticEventSchema.parse(diagnostic),
+  } satisfies WorkbenchDatabaseWorkerMessage);
 }
 
 function closeDatabase() {
@@ -124,6 +170,7 @@ function closeDatabase() {
   statsRepository = null;
   statsImportRepository = null;
   statsAttributionRepository = null;
+  transcriptRetentionRepository = null;
   const activeDatabase = database;
   if (!activeDatabase) return null;
   try {
@@ -354,6 +401,37 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
       gitArcProposalDiffRepository.write(request.value, request.maxBytes);
       post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
     }
+    return;
+  }
+  if (request.type === "runRetention") {
+    if (!database || !transcriptRetentionRepository || !gitArcProposalDiffRepository) {
+      throw new Error("Database retention repositories are not initialized");
+    }
+    const startedAt = performance.now();
+    postDiagnostic({
+      source: "database", operation: "retention", phase: "pending", level: "info",
+      detail: `results before ${request.cutoffs.resultCutoff}, transcripts before ${request.cutoffs.transcriptCutoff}`,
+      elapsedMs: null, progress: null,
+    });
+    const result = {
+      ...transcriptRetentionRepository.expire(request.cutoffs),
+      expiredAssets: new WorkbenchTranscriptAssetStore(database).collectOrphans(request.cutoffs.expiredAt - 3_600_000),
+      expiredProposalCaches: gitArcProposalDiffRepository.evictOlderThan(request.proposalCacheCutoff),
+    };
+    const compaction = reclaimDatabasePages(database);
+    postDiagnostic({
+      source: "database", operation: "retention", phase: "completed", level: "info",
+      detail: `${result.expiredResults} results, ${result.expiredTurns} turns, ${result.expiredAssets} assets, ${result.expiredProposalCaches} proposal caches, ${compaction.reclaimedPages} pages`,
+      elapsedMs: performance.now() - startedAt, progress: null,
+    });
+    post({
+      id: request.id,
+      type: "retentionResult",
+      result: {
+        ...result,
+        ...compaction,
+      },
+    });
     return;
   }
   if (request.type === "readTranscriptProviderCursor") {
@@ -674,15 +752,19 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       }
       let projects: WorkbenchProjectStartup | undefined;
       if (installedVersion === 0) {
-        await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, { beforeMigration: acknowledgeCheckpoint });
+        await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
+          beforeMigration: acknowledgeCheckpoint, diagnosticEvent: postDiagnostic,
+        });
       } else if (installedVersion < databaseReleases.stableProjectPreparation.version) {
         await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
-          beforeMigration: acknowledgeCheckpoint, targetVersion: databaseReleases.stableProjectPreparation.version,
+          beforeMigration: acknowledgeCheckpoint,
+          diagnosticEvent: postDiagnostic,
+          targetVersion: databaseReleases.stableProjectPreparation.version,
         });
       }
       await new WorkbenchProjectIdentityMigration(connection).run(request.projects?.discovery, acknowledgeCheckpoint);
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
-        beforeMigration: acknowledgeCheckpoint,
+        beforeMigration: acknowledgeCheckpoint, diagnosticEvent: postDiagnostic,
       });
       await new WorkbenchTranscriptTimestampRepair(connection).run(acknowledgeCheckpoint);
       // Serving writes always enforce foreign keys; only checkpointed restore,

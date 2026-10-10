@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default GitArcRetentionController: expire one settled thread's canonical and compatible refs without touching live work.
+ * - default GitArcRetentionController: expire one resolved thread's refs only after rechecking all actionable work.
  * - GitArcRetentionResult: exact thread-namespace cleanup result.
  */
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "./GitArcRegistry";
+import GitCheckpointStore from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
   checkpointNamespace,
@@ -35,9 +36,7 @@ export default class GitArcRetentionController {
     if (!repository) return true;
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
-    if (entry?.savedStash) return false;
-    return !entry || entry.phase === "resolved"
-      || (entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length);
+    return !await this.hasActionableState(repository, harness, threadId, entry);
   }
 
   async pruneThread({
@@ -55,12 +54,8 @@ export default class GitArcRetentionController {
     if (!identity) throw new Error("The Git arc owner identity is unavailable.");
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
-    if (entry?.savedStash) {
-      throw new Error("Git arc history cannot expire while the thread owns saved work.");
-    }
-    if (entry && entry.phase !== "resolved"
-      && !(entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length)) {
-      throw new Error("Git arc history cannot expire while the thread owns live or stashed work.");
+    if (await this.hasActionableState(repository, harness, threadId, entry)) {
+      throw new Error("Git arc history cannot expire while the thread owns actionable work.");
     }
     const prefixes = [...new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
       threadNamespace(checkpointNamespace(harness, storageId)),
@@ -80,5 +75,20 @@ export default class GitArcRetentionController {
       prunedRefCount: refs.length,
       registryEntryRemoved: Boolean(registryMutation?.updates.length),
     };
+  }
+
+  private async hasActionableState(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    entry: Awaited<ReturnType<GitArcRegistry["find"]>>,
+  ) {
+    if (!entry) return false;
+    if (entry.savedStash || entry.stackTip) return true;
+    if (entry.phase !== "resolved"
+      && !(entry.phase === "plan" && !getGitArcLiveClaimPaths(entry).length)) return true;
+    const proposals = await new GitCheckpointStore(repository, this.resolveThreadIdentity)
+      .readProposalSummaries(harness, threadId, entry.proposalIds ?? []);
+    return proposals.some(({ status }) => status === "proposed" || status === "unavailable");
   }
 }

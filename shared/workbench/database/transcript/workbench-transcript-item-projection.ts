@@ -608,6 +608,7 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
 
 export function projectWorkbenchTranscriptItems(
   rows: WorkbenchTranscriptSnapshot["rows"],
+  expiredPayloads: readonly { expiredAt: number; itemId: number }[] = [],
 ): WorkbenchTranscriptItemProjectionResult {
   try {
     const itemRootsById = new Map(rows.threadItems.map((item) => [item.id, item]));
@@ -626,12 +627,19 @@ export function projectWorkbenchTranscriptItems(
       }
     }
     const indexes = createIndexes(rows, sourceIdsByItemId);
+    const expiredAtByItemId = new Map(expiredPayloads.map(({ expiredAt, itemId }) => [itemId, expiredAt]));
     return {
       data: rows.threadItems.map((root) => {
         if (root.public_id !== null && identities.get(root.public_id)?.thread_id !== root.thread_id) {
           fail("invalidReference", "itemIdentities", root.public_id);
         }
-        const item = projectItem(root, indexes);
+        const projected = projectItem(root, indexes);
+        const expiredAt = expiredAtByItemId.get(root.id);
+        const item = expiredAt === undefined || ![
+          "commandExecution", "dynamicToolCall", "functionCallOutput", "mcpToolCall",
+        ].includes(projected.type)
+          ? projected
+          : { ...projected, resultExpiredAt: expiredAt };
         const identityKind = root.public_id === null ? readRetainedTranscriptIdentityKind(item) : sourceKinds.get(root.public_id) ?? "stable";
         return {
           item: identityKind === "provisional"

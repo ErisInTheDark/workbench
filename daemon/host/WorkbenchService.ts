@@ -20,6 +20,7 @@ import {
 } from "../../shared/http/workbench-service.ts";
 import type { WorkbenchDaemonIdentity } from "../../shared/http/workbench-daemon-discovery.ts";
 import WorkbenchDaemonHost, { type WorkbenchDaemonHostOptions } from "./WorkbenchDaemonHost.ts";
+import type { DaemonDiagnosticMessage } from "../../shared/http/workbench-daemon-lifecycle.ts";
 import WorkbenchServiceSessions from "./WorkbenchServiceSessions.ts";
 import WorkbenchServiceRuntime from "./runtime/WorkbenchServiceRuntime.ts";
 
@@ -33,6 +34,7 @@ export interface WorkbenchServiceOptions {
   restart(fatal?: boolean): void;
   stop?(): void;
   emergencyStop?(): void;
+  onDiagnostic?(message: DaemonDiagnosticMessage): void;
   writeLog?: ConstructorParameters<typeof WorkbenchDaemonHost>[0]["writeLog"];
 }
 
@@ -71,6 +73,7 @@ export default class WorkbenchService {
         await this.standalone.refresh();
       },
       projectRootPath: options.root,
+      onDiagnostic: options.onDiagnostic,
       writeLog: options.writeLog,
       lifetime: this.abort.signal,
       environment: { ...process.env, WORKBENCH_DATA_ROOT: this.dataRoot, WORKBENCH_SERVICE_MANAGED: "1" },

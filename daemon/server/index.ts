@@ -28,7 +28,12 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
-import { DaemonHostMessageSchema, DaemonOwnedMessageSchema, type DaemonSleepMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
+import {
+  DaemonHostMessageSchema,
+  DaemonOwnedMessageSchema,
+  type DaemonDiagnosticMessage,
+  type DaemonSleepMessage,
+} from "workbench-shared/http/workbench-daemon-lifecycle";
 
 const DAEMON_ROOT = __dirname;
 const DAEMON_PACKAGE_ROOT = path.resolve(DAEMON_ROOT, "..");
@@ -67,6 +72,13 @@ const sendSleepMessage = (message: DaemonSleepMessage) => new Promise<void>((res
   if (!process.connected || !process.send) { reject(new Error("Daemon host IPC is unavailable.")); return; }
   process.send(message, error => error ? reject(error) : resolve());
 });
+const reportDiagnostic = (diagnostic: DaemonDiagnosticMessage["diagnostic"]) => {
+  if (process.env.WORKBENCH_SCENARIO_DIAGNOSTICS !== "1" || !process.connected || !process.send) return;
+  const message = { type: "workbench-daemon-diagnostic", diagnostic } satisfies DaemonDiagnosticMessage;
+  process.send(message, error => {
+    if (error) logError("daemon", `diagnostic relay failed: ${error.message.slice(0, 500)}`);
+  });
+};
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
@@ -274,6 +286,7 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonPr
       "turn recovery: report failure",
     ),
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
+    reportDiagnostic,
     runTurnRecoveryTask: async (owner, label, task) => await featureHost.run(
       "turnRecovery",
       async (currentOwner) => {

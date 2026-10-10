@@ -454,12 +454,15 @@ function ThreadGenericDynamicToolCallItem ({
               ))}
             </span>
           ) : null}
+          {item.resultExpiredAt ? (
+            <span className="ml-2 text-[0.78em] text-fg/muted">Result expired after 1 day.</span>
+          ) : null}
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       renderContent={() => <ThreadToolCallDetails
         invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
-        output={formatToolCallOutput({ content: item.contentItems })}
+        output={item.resultExpiredAt ? null : formatToolCallOutput({ content: item.contentItems })}
       />}
     />
   );

@@ -53,6 +53,26 @@ test("byte eviction retains recently read entries and oversized replacement remo
   } finally { database.close(); }
 });
 
+test("age eviction uses last access and preserves the exact cutoff", () => {
+  const database = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(database);
+    let now = 100;
+    const repository = new GitArcProposalDiffRepository(database, () => now);
+    repository.write(value("old"), 100_000);
+    now = 200;
+    repository.write(value("boundary"), 100_000);
+    repository.write(value("refreshed"), 100_000);
+    now = 300;
+    assert.deepEqual(repository.read(value("refreshed")), value("refreshed").changes);
+
+    assert.equal(repository.evictOlderThan(200), 1);
+    assert.equal(repository.read(value("old")), null);
+    assert.deepEqual(repository.read(value("boundary")), value("boundary").changes);
+    assert.deepEqual(repository.read(value("refreshed")), value("refreshed").changes);
+  } finally { database.close(); }
+});
+
 test("legacy binary patch payloads read as a miss and leave storage", () => {
   const database = new Database(":memory:");
   try {

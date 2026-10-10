@@ -50,6 +50,7 @@ import {
   interactionTables,
   itemTables,
   operationSourceTables,
+  threadPayloadRetentionTables,
   workbenchDatabaseTables,
 } from "../workbench-database-schema.ts";
 import {
@@ -353,6 +354,13 @@ export default class WorkbenchTranscriptRepository {
         thread,
         turns,
         loadedTurnIds,
+        expiredItemPayloads: this.#rowsByItemIds(
+          threadPayloadRetentionTables.itemPayloadRetention,
+          threadItems.map(({ id }) => id),
+        ).map(({ expired_at, item_id }) => ({ expiredAt: expired_at, itemId: item_id })),
+        expiredTurnPayloads: this.#all(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
+          whereIn: { turn_id: loadedTurnIds },
+        })).map(({ expired_at, turn_id }) => ({ expiredAt: expired_at, turnId: turn_id })),
         hasPreviousTurns: firstLoadedTurnIndex !== undefined
           && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex),
         rows,
@@ -687,6 +695,9 @@ export default class WorkbenchTranscriptRepository {
     }
     const index = this.#createCanonicalSettlementIndex(scope.threadId);
     for (const turnId of scope.completeTurnIds) {
+      if (this.#one(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
+        where: { turn_id: turnId },
+      }))) continue;
       const itemObservations = scope.observations.filter((
         observation,
       ): observation is Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => (
@@ -1181,6 +1192,9 @@ export default class WorkbenchTranscriptRepository {
     }
     if (observation.kind === "item") {
       if (!isSupportedWorkbenchTranscriptItem(observation.item)) return observation.threadId;
+      if (this.#one(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
+        where: { turn_id: observation.turnId },
+      }))) return observation.threadId;
       const existing = this.#admitItem({
         itemPosition: observation.itemPosition,
         publicItemId: observation.publicItemId ?? (observation.item.type === "contextCompaction"
@@ -1194,6 +1208,11 @@ export default class WorkbenchTranscriptRepository {
         allowUnmaterializedTurn: mode !== "live",
         canonicalIndex,
       });
+      if (this.#one(selectRows(threadPayloadRetentionTables.itemPayloadRetention, {
+        where: { item_id: existing.id },
+      })) && [
+        "commandExecution", "dynamicToolCall", "functionCallOutput", "mcpToolCall",
+      ].includes(observation.item.type)) return observation.threadId;
       if (observation.item.type === "contextCompaction") {
         // Workbench settled this compaction; a later native echo can neither reopen nor restate it.
         if (this.#isSettledContextCompaction(existing.id)) return observation.threadId;

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - IsolatedWorkbenchOptions: select external identities and injectable readiness deadlines.
+ * - IsolatedWorkbenchOptions: select external identities, live child output and injectable readiness deadlines.
+ * - IsolatedWorkbenchProcessEvent: typed child output or structured daemon diagnostics.
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
  * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
@@ -40,11 +41,28 @@ import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient"
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
 import { WORKBENCH_RELOAD_METHOD } from "../../shared/workbench/daemon-reload";
 import { WorkbenchProjectsPayloadSchema } from "../../shared/workbench/project/project-state";
+import {
+  DaemonDiagnosticMessageSchema,
+  type DaemonDiagnosticMessage,
+} from "../../shared/http/workbench-daemon-lifecycle";
 
 const NodeWebSocket = createRequire(new URL("../../app/package.json", import.meta.url))("ws") as
   new (url: string, options: { origin: string }) => WebSocket;
 
 type Message = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message: string }; workbenchEventStreamSequence?: number };
+
+export type IsolatedWorkbenchProcessEvent =
+  | {
+    kind: "output";
+    source: "app" | "daemon" | "host";
+    stream: "stderr" | "stdout";
+    text: string;
+  }
+  | {
+    kind: "diagnostic";
+    source: "daemon";
+    diagnostic: DaemonDiagnosticMessage["diagnostic"];
+  };
 
 export interface IsolatedWorkbenchOptions {
   codexIdentity?: boolean;
@@ -57,6 +75,7 @@ export interface IsolatedWorkbenchOptions {
   };
   stateHome?: string;
   readinessSignal?: () => AbortSignal;
+  processEvent?: (event: IsolatedWorkbenchProcessEvent) => void;
 }
 
 interface IsolatedWorkbenchSignalTarget {
@@ -182,6 +201,7 @@ export default class IsolatedWorkbench {
     private readonly claudeModelEndpoint: string | null,
     private readonly openCodeIdentity: OpenCodeFixtureIdentity | null,
     private readonly stateHome: string | null,
+    private readonly processEvent?: IsolatedWorkbenchOptions["processEvent"],
     private readonly readinessSignal?: () => AbortSignal,
   ) {
     this.signal = AbortSignal.any([signal, this.cancellation.signal]);
@@ -250,6 +270,7 @@ export default class IsolatedWorkbench {
         options.claudeModelEndpoint ?? null,
         options.openCodeIdentity,
         options.stateHome ?? null,
+        options.processEvent,
         options.readinessSignal,
       );
     } catch (error) {
@@ -272,6 +293,7 @@ export default class IsolatedWorkbench {
     claudeModelEndpoint: string | null,
     openCodeIdentity: IsolatedWorkbenchOptions["openCodeIdentity"],
     stateHome: string | null,
+    processEvent?: IsolatedWorkbenchOptions["processEvent"],
     readinessSignal?: () => AbortSignal,
   ) {
     const project = path.join(root, "projects", "fixture");
@@ -359,6 +381,7 @@ export default class IsolatedWorkbench {
       claudeModelEndpoint,
       privateOpenCodeIdentity,
       stateHome,
+      processEvent,
       readinessSignal,
     );
   }
@@ -385,7 +408,7 @@ export default class IsolatedWorkbench {
     await this.startDaemon("lifecycle", this.signal);
   }
 
-  async exerciseManagedProcessReload(expectedProjectRoot: string) {
+  async exerciseManagedProcessReload(expectedProjectRoot: string, beforeReload?: () => Promise<void>) {
     this.signal.throwIfAborted();
     this.closed = false;
     this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
@@ -401,7 +424,10 @@ export default class IsolatedWorkbench {
       await client.start();
       return client;
     };
-    let control = await openControl();
+    const control = await openControl();
+    const releaseControlObservation = control.subscribe(() => {
+      for (const observer of this.observers) observer();
+    });
     try {
       this.markPhase("waking host-owned daemon");
       await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
@@ -421,23 +447,34 @@ export default class IsolatedWorkbench {
         path.resolve(project.rootPath).toLowerCase() === path.resolve(expectedProjectRoot).toLowerCase());
       assert.ok(includesExpectedProject(await request(initial, "project/catalog/read", {})),
         "Managed daemon must discover the retained checkout before reload");
+      await beforeReload?.();
       this.markPhase("requesting managed server:process reload");
       await request(initial, WORKBENCH_RELOAD_METHOD, { scopes: ["server:process"] });
-      this.markPhase("waiting for the old host crash unit to exit");
-      await this.until(() => this.serviceChild?.exited === true, this.signal);
-      await control.close();
-      this.serviceChild = null;
-      this.markPhase("replacing the host in its supervision session");
-      await this.startService(this.signal);
-      control = await openControl();
-      await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
+      const replacementReady = () => {
+        const snapshot = control.getSnapshot().snapshot;
+        return snapshot?.identity.state === "ready"
+          && snapshot.daemonOrigin !== null
+          && snapshot.daemonOrigin !== initial.origin;
+      };
+      this.markPhase("waiting for the managed daemon replacement");
+      await this.until(() => (
+        control.getSnapshot().snapshot?.identity.state === "sleeping" || replacementReady()
+      ), this.signal);
+      if (!replacementReady()) {
+        this.markPhase("waking the sleeping managed daemon");
+        await control.request({ method: "service/daemon/wake", retry: false }, this.signal);
+        await this.until(replacementReady, this.signal);
+      }
       const replacement = await readDaemonEndpoint(endpointPath);
       assert.ok(replacement, "Managed replacement must publish its endpoint");
       assert.notEqual(replacement.instanceId, initial.instanceId, "Managed reload must replace the process");
       assert.ok(includesExpectedProject(await request(replacement, "project/catalog/read", {})),
         "Managed replacement must rediscover the same retained checkout");
       this.markPhase("managed replacement served its retained project catalogue");
-    } finally { await control.close(); }
+    } finally {
+      releaseControlObservation();
+      await control.close();
+    }
   }
 
   private async startDaemon(prefixProof: string, signal: AbortSignal) {
@@ -457,9 +494,11 @@ export default class IsolatedWorkbench {
       ...createSpawnOptions(path.join(this.project, "daemon"), env, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
-    const collect = (chunk: Buffer) => {
-      this.log += chunk.toString();
+    const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
+      const text = chunk.toString();
+      this.log += text;
       appendFileSync(path.join(this.root, "daemon.log"), chunk);
+      this.processEvent?.({ kind: "output", source: "daemon", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("daemon", child, {
       onOutput: collect,
@@ -468,6 +507,11 @@ export default class IsolatedWorkbench {
     this.child = owned;
     let readinessError: Error | null = null;
     child.on("message", message => {
+      const diagnostic = DaemonDiagnosticMessageSchema.safeParse(message);
+      if (diagnostic.success) {
+        this.processEvent?.({ kind: "diagnostic", source: "daemon", diagnostic: diagnostic.data.diagnostic });
+        return;
+      }
       const ready = WorkbenchDaemonReadySchema.safeParse(message);
       if (!ready.success || ready.data.endpoint.pid !== child.pid) {
         readinessError = new Error("Isolated daemon sent an invalid ready message");
@@ -571,6 +615,7 @@ stream_max_retries = 0
       WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
       WORKBENCH_STARTUP_DIAGNOSTICS: "1",
+      ...(this.processEvent ? { WORKBENCH_SCENARIO_DIAGNOSTICS: "1" } : {}),
       WORKBENCH_DAEMON_LOOP: "1",
       WORKBENCH_SERVICE_MANAGED: "1",
       WORKBENCH_TEMPORARY_ROOT: path.join(projectRootPath, ".workbench", "tmp"),
@@ -614,15 +659,22 @@ stream_max_retries = 0
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
     let output = "";
-    const collect = (chunk: Buffer) => {
-      output += chunk.toString();
+    const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
+      const text = chunk.toString();
+      output += text;
       appendFileSync(path.join(this.root, "service.log"), chunk);
+      this.processEvent?.({ kind: "output", source: "host", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("host", child, {
       onOutput: collect,
       onChange: () => { for (const observer of this.observers) observer(); },
     });
     this.serviceChild = owned;
+    child.on("message", message => {
+      const diagnostic = DaemonDiagnosticMessageSchema.safeParse(message);
+      if (!diagnostic.success) return;
+      this.processEvent?.({ kind: "diagnostic", source: "daemon", diagnostic: diagnostic.data.diagnostic });
+    });
     this.markPhase("waiting for host readiness");
     await this.until(() => {
       owned.assertRunning();
@@ -652,9 +704,11 @@ stream_max_retries = 0
       ...createSpawnOptions(this.project, { ...this.environment(path.dirname(this.project)), TSX_TSCONFIG_PATH: path.join(this.project, "app/tsconfig.json") }, true),
       windowsVerbatimArguments: false, stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
-    const collect = (chunk: Buffer) => {
-      this.appLog += chunk.toString();
+    const collect = ({ chunk, stream }: { chunk: Buffer; stream: "stderr" | "stdout" }) => {
+      const text = chunk.toString();
+      this.appLog += text;
       appendFileSync(path.join(this.root, "app.log"), chunk);
+      this.processEvent?.({ kind: "output", source: "app", stream, text });
     };
     const owned = new IsolatedWorkbenchProcess("app", child, {
       onOutput: collect,

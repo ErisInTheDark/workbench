@@ -145,6 +145,13 @@ export default class GitArcProposalDiffRepository {
     })();
   }
 
+  evictOlderThan(cutoff: number) {
+    return this.database.prepare(`
+      DELETE FROM workbench_git_arc_proposal_diffs
+      WHERE last_accessed_at < ?
+    `).run(cutoff).changes;
+  }
+
   private one(statement: ReturnType<typeof selectRows<typeof gitArcProposalDiffTables.gitArcProposalDiffs>>) {
     const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, statement);
     return this.database.prepare(compiled.sql).get(...compiled.parameters) as CacheRow | undefined;

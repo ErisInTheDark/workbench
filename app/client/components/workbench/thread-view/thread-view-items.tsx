@@ -1690,10 +1690,42 @@ function ThreadCommandExecutionDetails ({
   const commandOutcome = getThreadCommandExecutionOutcome(item.status, item.exitCode);
   const visibleDurationMs = useThreadItemLiveDuration(item.durationMs, activeStartedAtMs);
   const outcomeCommandDisplay = useMemo(
-    () => getThreadCommandOutcomeDisplay(commandDisplay, commandOutcome),
-    [commandDisplay, commandOutcome],
+    () => {
+      const display = commandDisplay.summaryParts.length || !item.resultExpiredAt ? commandDisplay : {
+        ...commandDisplay,
+        ongoingSummaryParts: [
+          { text: "Running ", type: "text" as const },
+          { clamp: true, text: commandDisplay.unwrappedCommand, type: "text" as const, variant: "code" as const },
+        ],
+        ongoingSummaryText: `Running ${commandDisplay.unwrappedCommand}`,
+        summaryKind: "raw" as const,
+        summaryParts: [{
+          clamp: true,
+          text: commandDisplay.unwrappedCommand,
+          type: "text" as const,
+          variant: "code" as const,
+        }],
+        summaryText: commandDisplay.unwrappedCommand,
+      };
+      return getThreadCommandOutcomeDisplay(display, commandOutcome);
+    },
+    [commandDisplay, commandOutcome, item.resultExpiredAt],
   );
   const approval = useThreadItemApproval(item.id);
+  if (item.resultExpiredAt) {
+    return (
+      <ThreadDisclosure
+        className="py-2"
+        summary={(
+          <>
+            <ThreadCommandSummary approval={approval} display={outcomeCommandDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />
+            <span className="ml-2 text-[0.78em] text-fg/muted">Result expired after 1 day.</span>
+          </>
+        )}
+        renderContent={() => null}
+      />
+    );
+  }
   const messageCommand = parseWorkbenchMessageCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const subagentCommand = parseWorkbenchSubagentCommand(commandDisplay.unwrappedCommand, item.commandActions);
   const resolvedSubagentTargets = subagentCommand
@@ -2639,6 +2671,9 @@ function ThreadRenderableBlockViewComponent ({
 
   switch (block.item.type) {
     case "functionCallOutput": {
+      if (block.item.resultExpiredAt) {
+        return <p className="py-2 text-[0.92em] text-fg/muted">Result expired after 1 day.</p>;
+      }
       const item = readWorkbenchToolOutput(block.item);
       if (!item) return <ThreadGenericItem item={block.item} />;
       const timeline = findWorkbenchThreadItemTimelineEntry(item.id, itemTimeline);

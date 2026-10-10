@@ -39,6 +39,93 @@ const assetPattern = /^([a-f0-9]{64})\.(png|jpg|webp|gif)$/u;
 export default class WorkbenchTranscriptAssetStore {
   constructor(private readonly database: Database.Database) {}
 
+  collectOrphans(createdBefore: number): number {
+    return this.database.transaction(() => {
+      const candidates = this.database.prepare(`
+      SELECT asset.digest
+      FROM transcript_assets AS asset
+      WHERE asset.created_at < @createdBefore
+        AND NOT EXISTS (
+          SELECT 1 FROM transcript_asset_refs ref
+          WHERE ref.asset_digest = asset.digest
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM thread_browse_entries entry
+          WHERE entry.asset_digest = asset.digest
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM transcript_asset_addresses address
+          WHERE address.digest = asset.digest
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM thread_user_message_parts part
+                JOIN thread_items item ON item.id = part.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(COALESCE(part.url, '') || COALESCE(part.text, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_held_steer_parts part
+                JOIN thread_held_steers steer ON steer.id = part.steer_id
+                WHERE steer.thread_id = address.thread_id
+                  AND instr(COALESCE(part.url, '') || COALESCE(part.text, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_tool_output_parts part
+                JOIN thread_items item ON item.id = part.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(COALESCE(part.image_url, '') || COALESCE(part.text, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_callable_dynamic_content content
+                JOIN thread_items item ON item.id = content.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(COALESCE(content.url, '') || COALESCE(content.text, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_callable_mcp_result_content content
+                JOIN thread_items item ON item.id = content.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(COALESCE(content.text, '') || COALESCE(content.opaque_json, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_callable_mcp_results result
+                JOIN thread_items item ON item.id = result.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(COALESCE(result.structured_content_json, '') || COALESCE(result.meta_json, ''), address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM thread_item_unknown body
+                JOIN thread_items item ON item.id = body.item_id
+                WHERE item.thread_id = address.thread_id
+                  AND instr(body.safe_json, address.asset_name) > 0
+              )
+              OR EXISTS (
+                SELECT 1
+                FROM transcript_native_records record
+                WHERE record.thread_id = address.thread_id
+                  AND instr(record.payload_json, address.asset_name) > 0
+              )
+            )
+        )
+      `).all({ createdBefore }) as Array<{ digest: string }>;
+      for (let offset = 0; offset < candidates.length; offset += 500) {
+        const digests = candidates.slice(offset, offset + 500).map(({ digest }) => digest);
+        const placeholders = digests.map(() => "?").join(", ");
+        this.database.prepare(`DELETE FROM transcript_asset_addresses WHERE digest IN (${placeholders})`).run(...digests);
+        this.database.prepare(`DELETE FROM transcript_assets WHERE digest IN (${placeholders})`).run(...digests);
+      }
+      return candidates.length;
+    })();
+  }
+
   write(input: TranscriptAssetWrite): Omit<TranscriptAssetContent, "bytes"> {
     if (!(input.bytes instanceof Uint8Array) || !input.bytes.length) throw new Error("Transcript image bytes are empty or invalid.");
     const extension = extensions[input.mimeType];

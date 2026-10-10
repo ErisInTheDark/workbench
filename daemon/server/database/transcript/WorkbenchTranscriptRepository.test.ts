@@ -20,6 +20,7 @@ import type { WorkbenchFileChangeItem } from "workbench-shared/workbench/thread/
 import type { WorkbenchItemId } from "workbench-shared/workbench/identity";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
+import WorkbenchTranscriptRetentionRepository from "../retention/WorkbenchTranscriptRetentionRepository.ts";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./WorkbenchTranscriptIdentityRepository.ts";
 import type {
@@ -2816,6 +2817,68 @@ test("a Workbench compaction adopts its later native reference before the provid
     assert.deepEqual(readCompactions(repository), [{
       turnId: "live", status: "inProgress", startedAt: 100, completedAt: null,
     }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("provider replay cannot restore expired result or turn payloads", () => {
+  const { database, repository } = createRepository();
+  const command: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {
+    kind: "item",
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+    lifecycle: "completed",
+    observedAt: 3,
+    item: {
+      aggregatedOutput: "large result",
+      command: "inspect",
+      commandActions: [],
+      cwd: "C:/project",
+      durationMs: 1,
+      exitCode: 0,
+      id: "command",
+      pluginId: null,
+      processId: null,
+      scriptPath: null,
+      source: "agent",
+      status: "completed",
+      type: "commandExecution",
+    },
+  };
+  const providerReplay = () => providerTurnScope([turnObservation("turn", 0), command], ["turn"]);
+  try {
+    repository.settle([threadObservation(), providerReplay()]);
+    const retention = new WorkbenchTranscriptRetentionRepository(database);
+    assert.equal(retention.expire({
+      expiredAt: 1_000, resultCutoff: 100, transcriptCutoff: 0,
+    }).expiredResults, 1);
+
+    repository.settle([providerReplay()]);
+    assert.equal(
+      database.prepare("SELECT output_text FROM thread_operation_process_sources").pluck().get(),
+      null,
+    );
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_item_payload_retention").pluck().get(), 1);
+
+    database.prepare(`
+      INSERT INTO workbench_thread_states
+        (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      VALUES ('thread', 'topLevel', 'codex', 'Thread', 10, 1)
+    `).run();
+    database.prepare(`
+      INSERT INTO workbench_thread_retention(thread_id, settled_at)
+      VALUES ('thread', 10)
+      ON CONFLICT(thread_id) DO UPDATE SET settled_at = excluded.settled_at
+    `).run();
+    assert.equal(retention.expire({
+      expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100,
+    }).expiredTurns, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
+
+    repository.settle([providerReplay()]);
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 0);
+    assert.equal(database.prepare("SELECT COUNT(*) FROM thread_turn_payload_retention").pluck().get(), 1);
   } finally {
     database.close();
   }

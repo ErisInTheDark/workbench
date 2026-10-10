@@ -9,7 +9,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import WorkbenchWorkspaceClient from "../../app/client/workbench/app/WorkbenchWorkspaceClient";
 import WorkbenchPresentationClient from "../../app/client/workbench/state/WorkbenchPresentationClient";
-import IsolatedWorkbench from "./IsolatedWorkbench";
+import IsolatedWorkbench, { type IsolatedWorkbenchOptions } from "./IsolatedWorkbench";
 import { seedLifecycleTranscript } from "./lifecycle-fixture";
 import { captureThreadStateMigrationSource, verifyThreadStateMigrationSource, isolateThreadStateMigrationSource } from "./thread-state-migration-fixture";
 import type { WorkbenchProjectsPayload } from "../../shared/types";
@@ -28,13 +28,40 @@ import WorkbenchNetworkRepository from "../../daemon/host/network/WorkbenchNetwo
 import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
 import { serviceTableInventory } from "../../shared/state/workbench-service-schema";
 import { ProjectDiscoverySettingsResultSchema } from "../../shared/workbench/project/project-discovery-settings";
+import { formatWorkbenchDatabaseDiagnostic } from "../../shared/database/workbench-database-diagnostic";
+
+type ScenarioProcessEvent = Parameters<NonNullable<IsolatedWorkbenchOptions["processEvent"]>>[0];
+
+function reportLifecycleProcessEvent(event: ScenarioProcessEvent) {
+  if (event.kind !== "diagnostic") return;
+  if (event.diagnostic.source === "startup") {
+    const status = event.diagnostic.phase === "pending"
+      ? "pending"
+      : `ok in ${Math.round(event.diagnostic.elapsedMs ?? 0)}ms`;
+    process.stdout.write(`[scenario:startup] reload source baseline ${status}\n`);
+    return;
+  }
+  const line = formatWorkbenchDatabaseDiagnostic(event.diagnostic);
+  if (event.diagnostic.level === "warn") process.stderr.write(`[scenario:database] ${line}\n`);
+  else process.stdout.write(`[scenario:database] ${line}\n`);
+}
 
 test("forward database migration preserves data and the real app can use it", {
   skip: process.env.WORKBENCH_LIFECYCLE_TEST_FILE !== "test/scenarios/lifecycle.scenario.test.ts",
-  // Leave the outer five-minute runner budget room to retire children and clean up.
-  timeout: 240_000,
+  // Leave the outer twenty-one-minute runner budget room to retire children and clean up.
+  timeout: 1_200_000,
 }, async t => {
-  const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, { codexIdentity: false });
+  const firstRetention = Promise.withResolvers<void>();
+  const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, {
+    codexIdentity: false,
+    processEvent: event => {
+      reportLifecycleProcessEvent(event);
+      if (event.kind === "diagnostic"
+        && event.diagnostic.source === "database"
+        && event.diagnostic.operation === "retention"
+        && event.diagnostic.phase === "completed") firstRetention.resolve();
+    },
+  });
   console.log(`migration fixture: ${runtime.root}`);
   const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
   const presentationDatabase = path.join(runtime.dataRootPath, "app", "presentation-state.sqlite3");
@@ -66,7 +93,10 @@ test("forward database migration preserves data and the real app can use it", {
       });
     } finally { await legacyApp.close(); }
     runtime.markPhase("reloading a host-owned daemon with retained discovery roots");
-    await runtime.exerciseManagedProcessReload(path.resolve(process.cwd(), ".."));
+    await runtime.exerciseManagedProcessReload(
+      path.resolve(process.cwd(), ".."),
+      () => firstRetention.promise,
+    );
     await runtime.stop();
     runtime.markPhase("verifying forward migration and retained data");
     await verifyThreadStateMigrationSource(captured);

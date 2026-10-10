@@ -49,8 +49,26 @@ function observations(): WorkbenchThreadGitObservations {
     gitArc: {
       ...common, phase: "active", claimedPaths: ["z.ts", "a.ts"], stashedPaths: [],
       proposals: [
-        { proposalId: "second", status: "proposed", rootId: "root-b" },
-        { proposalId: "first", status: "committed" },
+        {
+          proposalId: "second", status: "proposed", rootId: "root-b",
+          summary: {
+            changes: [{ additions: 2, deletions: 1, kind: "update", path: "src/two.ts" }],
+            committedSha: null,
+            description: "keep details",
+            mode: "commit",
+            title: "second proposal",
+          },
+        },
+        {
+          proposalId: "first", status: "committed",
+          summary: {
+            changes: null,
+            committedSha: "b".repeat(40),
+            description: "",
+            mode: "amend",
+            title: "first proposal",
+          },
+        },
       ],
       members: [{ ...member, phase: "active", claimedPaths: ["member.ts"], stashedPaths: [], proposals: [] }],
     },

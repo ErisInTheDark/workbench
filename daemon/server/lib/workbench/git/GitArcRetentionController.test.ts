@@ -79,8 +79,29 @@ test("expired plan-only thread cleanup removes its refs without touching another
   }), false, "saved work blocks pruning even beneath a plan with no live claims");
   await assert.rejects(controller.pruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
-  }), /saved work/i);
+  }), /actionable work/i);
   await registry.set({ ...planOnly, savedStash: null }, planOnly.checkpointCommit);
+  assert.equal(await controller.canPruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), false, "a pending proposal remains actionable without live claims");
+  await assert.rejects(controller.pruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), /actionable work/i);
+  const rescindedCommit = await repository.createCommitFromTree(
+    await repository.resolveTree(baseCommit),
+    baseCommit,
+    proposalMessage({ ...metadata, status: "rescinded" }),
+  );
+  await repository.updateRef(
+    `${proposalNamespace("codex", "partial-thread")}/${proposalId}`,
+    rescindedCommit,
+    proposalCommit,
+  );
+  await registry.set({ ...planOnly, savedStash: null, stackTip: baseCommit }, planOnly.checkpointCommit);
+  assert.equal(await controller.canPruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), false, "a stack tip remains actionable without live claims");
+  await registry.set({ ...planOnly, savedStash: null, stackTip: null }, planOnly.checkpointCommit);
   assert.equal(await controller.canPruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
   }), true);

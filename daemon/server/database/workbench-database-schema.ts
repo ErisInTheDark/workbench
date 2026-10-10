@@ -17,6 +17,7 @@
  * searchTables/SearchSchemaRows: current workspace-search projection registry.
  * usageTables/UsageSchemaRows: durable token, rate-limit, and claim-session facts.
  * transcriptIdentityTables/TranscriptIdentitySchemaRows: permanent identity and compatibility aliases.
+ * threadPayloadRetentionTables: explicit item and turn payload-expiry evidence.
  * gitArcProposalDiffTables: immutable Git arc proposal diff cache table map.
  * instructionTombstoneTables: durable retired instruction file receipt table map.
  * projectTables/ProjectSchemaRows: canonical project storage, roots, and aliases.
@@ -71,6 +72,10 @@ import { approvalReviewSchemaHistory } from "../lib/workbench/database/schema/ap
 import { threadTodoSchemaHistory } from "../lib/workbench/database/schema/thread-todo-schema.ts";
 import { threadAddressedFeedbackSchemaHistory } from "../lib/workbench/database/schema/thread-addressed-feedback-schema.ts";
 import { threadVisSchemaHistory } from "../lib/workbench/database/schema/thread-vis-schema.ts";
+import {
+  threadPayloadRetentionSchemaHistory,
+  threadPayloadRetentionTables,
+} from "../lib/workbench/database/schema/thread-payload-retention-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -95,6 +100,7 @@ export { transcriptIdentityTables } from "workbench-shared/workbench/database/sc
 export type { TranscriptIdentitySchemaRows } from "workbench-shared/workbench/database/schema/transcript-identity-schema";
 export { gitArcProposalDiffTables } from "../lib/workbench/database/schema/git-arc-proposal-diff-schema.ts";
 export { instructionTombstoneTables } from "../lib/workbench/database/schema/instruction-tombstone-schema.ts";
+export { threadPayloadRetentionTables };
 
 export const workbenchDatabaseSchema = defineRelationalThreadStateSchema(databaseReleases.relationalThreadState.version);
 
@@ -141,6 +147,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       threadTodoSchemaHistory,
       threadAddressedFeedbackSchemaHistory,
       threadVisSchemaHistory,
+      threadPayloadRetentionSchemaHistory,
     ],
   });
 }

@@ -243,7 +243,7 @@ async function fixture(context: TestContext) {
 
 test("opening an existing browser database backs it up before upgrading", async (context) => {
   const { directory, registry } = await fixture(context);
-  const defaultDiagnostics = captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
   const browserDirectory = path.join(directory, "browser-state");
   await fs.mkdir(browserDirectory);
   const databasePath = path.join(browserDirectory, `${BROWSER_A}.sqlite3`);
@@ -252,8 +252,6 @@ test("opening an existing browser database backs it up before upgrading", async 
   old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','retained',0,1)").run();
   old.close();
   assert.equal(globalPreference(records(await registry.readBrowser(BROWSER_A)), "theme")?.preference.value, "retained");
-  assert.ok(defaultDiagnostics.some(message => message.includes("migrate")),
-    "callers without a diagnostic owner must retain visible database progress");
   const backups = path.join(browserDirectory, "backups", path.basename(databasePath));
   const files = await fs.readdir(backups).catch(error => {
     if (error.code === "ENOENT") return [];

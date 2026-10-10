@@ -12,6 +12,7 @@ import WorkbenchCommandApprovalController from "./WorkbenchCommandApprovalContro
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import WorkbenchDatabaseRetentionController from "./database/retention/WorkbenchDatabaseRetentionController";
 import WorkbenchTranscriptController from "./database/transcript/WorkbenchTranscriptController";
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
@@ -47,6 +48,7 @@ export default ReloadableNode.define<
     const database = new WorkbenchDatabaseController({
       databasePath,
       beforeMigration: handoffState ? (backupPath) => { handoffState.checkpointPath = backupPath; } : undefined,
+      onDiagnostic: context.reportDiagnostic,
     });
     if (handoffState) handoffState.releaseCandidate = () => database.abortPreparation();
     const threadIdentity = new WorkbenchThreadIdentityController(database);
@@ -64,6 +66,7 @@ export default ReloadableNode.define<
       },
     });
     const transcript = new WorkbenchTranscriptController(database, captureGaps);
+    const retention = new WorkbenchDatabaseRetentionController(database);
     // The database owns the worker isolates, so their heaps are reported from here.
     const memory = new WorkbenchMemoryReporter({
       readWorkerHeaps: () => database.readWorkerHeaps(),
@@ -77,6 +80,7 @@ export default ReloadableNode.define<
         const failures: unknown[] = [];
         for (const close of [
           () => memory.dispose(),
+          () => retention.dispose(),
           () => transcript.dispose(),
           () => threadIdentity.dispose(),
           () => transcriptIdentity.dispose(),
@@ -94,7 +98,7 @@ export default ReloadableNode.define<
       activate: () => { committed = true; },
       deactivate: () => { committed = false; },
       // After the whole graph commits: samples during a stalled startup would read as liveness to the host watchdog.
-      afterCommit: () => { memory.start(); },
+      afterCommit: () => { memory.start(); retention.start(); },
       // Retirement begins after commit (or terminal shutdown), before dependant disposal.
       beginRuntimeDrain: () => database.retireSuspendedAdmission(),
       beginHandoff: () => {
@@ -119,8 +123,13 @@ export default ReloadableNode.define<
         await mkdir(dirname(databasePath), { recursive: true });
         signal?.throwIfAborted();
         const databaseStartedAt = performance.now();
+        const readinessPulse = setInterval(() => {
+          console.info(`[startup] daemon database is still opening after ${Math.round((performance.now() - databaseStartedAt) / 1_000)}s`);
+        }, 30_000);
+        readinessPulse.unref();
         if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info("[startup] daemon database opening and verifying retained state");
-        await transcript.start();
+        try { await transcript.start(); }
+        finally { clearInterval(readinessPulse); }
         if (process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1") console.info(`[startup] daemon database and transcript ready in ${Math.round(performance.now() - databaseStartedAt)}ms`);
         signal?.throwIfAborted();
         const identitiesStartedAt = performance.now();

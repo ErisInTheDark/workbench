@@ -62,6 +62,8 @@ export default function ThreadRenderSurface({
   const projectRoots = createThreadProjectRoots(thread);
   const render = useMemo(() => thread ? projectThreadRenderTurns(thread) : null, [thread]);
   const projection = sql?.projection;
+  const transcriptExpired = projection?.turns.length
+    && projection.turns.every(turn => turn.payloadExpiredAt != null && turn.items.length === 0);
   const threadId = projection?.thread.id ?? thread?.id ?? "empty";
   const cwd = context.projectRootPath ?? projection?.thread.projectRoot ?? thread?.cwd ?? ".";
   const workspaceRoots = context.workspaceRoots ?? projectRoots;
@@ -110,7 +112,7 @@ export default function ThreadRenderSurface({
               {sql.loading ? "Loading..." : "Load older turns"}
             </button>
           ) : null}
-          {sql.projection ? (
+          {sql.projection && !transcriptExpired ? (
             <ThreadTranscriptProjection
               projection={sql.projection}
               liveTurnId={liveTurn?.id ?? null}
@@ -127,7 +129,7 @@ export default function ThreadRenderSurface({
               inlineMentionSources={context.inlineMentionSources}
               hiddenReasoningStep={context.hiddenReasoningStep}
             />
-          ) : <p className="text-fg/muted">{emptyMessage}</p>}
+          ) : <p className="text-fg/muted">{transcriptExpired ? "Transcript expired 3 days after settlement." : emptyMessage}</p>}
         </>
       ) : render?.thread.turnHistory.length ? render.thread.turnHistory.map(entry => {
         const turn = turnsById.get(entry.turnId);

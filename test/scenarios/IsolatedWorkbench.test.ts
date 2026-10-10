@@ -10,6 +10,7 @@ import { captureTestOutput } from "../capture-test-output.mts";
 import IsolatedWorkbench, {
   IsolatedWorkbenchSignalCleanup,
   removeIsolatedWorkbenchWorkspace,
+  type IsolatedWorkbenchProcessEvent,
   type IsolatedWorkbenchOptions,
 } from "./IsolatedWorkbench";
 
@@ -19,6 +20,7 @@ async function runtime(
   readinessSignal?: () => AbortSignal,
   programs?: { app: string; host: string },
   prepareOpenCode?: (source: string) => Promise<IsolatedWorkbenchOptions["openCodeIdentity"]>,
+  processEvent?: IsolatedWorkbenchOptions["processEvent"],
 ) {
   captureTestOutput(context, process.stdout, text => text.startsWith("[scenario] "));
   captureTestOutput(context, process.stderr, text => text.startsWith("Scenario diagnostics retained: "));
@@ -44,6 +46,7 @@ async function runtime(
   return await IsolatedWorkbench.create(source, signal, {
     codexIdentity: false, readinessSignal,
     openCodeIdentity: await prepareOpenCode?.(source),
+    processEvent,
   });
 }
 
@@ -129,6 +132,50 @@ test("owned host and app can stop and reopen without retaining old processes", a
       assert.equal((await fixture.stop()).app, 0);
       for (const pid of [host, app]) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("opt-in process output remains live and retained in diagnostics", async context => {
+  const events: IsolatedWorkbenchProcessEvent[] = [];
+  const fixture = await runtime(context, context.signal, undefined, {
+    host: `
+      process.send({
+        type: "workbench-daemon-diagnostic",
+        diagnostic: {
+          source: "database", operation: "verify", phase: "pending", level: "info",
+          detail: "fixture database", elapsedMs: null, progress: null,
+        },
+      });
+      process.send({
+        type: "workbench-daemon-diagnostic",
+        diagnostic: {
+          source: "startup", operation: "reloadSourceBaseline", phase: "pending", elapsedMs: null,
+        },
+      });
+      ${hostProgram}
+    `,
+    app: `
+      console.log("fixture-live-output");
+      console.log("listening at http://127.0.0.1:12345");
+      process.on("message", message => {
+        if (message.type === "workbench-scenario-close") process.exit(0);
+      });
+    `,
+  }, undefined, event => events.push(event));
+  try {
+    await fixture.startApp();
+    assert.ok(events.some(event =>
+      event.kind === "output" && event.source === "app"
+      && event.stream === "stdout" && event.text.includes("fixture-live-output")));
+    assert.ok(events.some(event =>
+      event.kind === "diagnostic" && event.diagnostic.source === "database"
+      && event.diagnostic.operation === "verify"));
+    assert.ok(events.some(event =>
+      event.kind === "diagnostic" && event.diagnostic.source === "startup"
+      && event.diagnostic.operation === "reloadSourceBaseline"));
+    assert.match(await fs.readFile(path.join(fixture.root, "app.log"), "utf8"), /fixture-live-output/u);
   } finally {
     await fixture.close();
   }

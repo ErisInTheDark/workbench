@@ -118,27 +118,28 @@ export type ThreadItem =
     type: "agentMessage"; id: string; text: string; phase: MessagePhase | null;
     memoryCitation: MemoryCitation | null; delivery: AgentMessageDelivery | null; questions: AsyncUserInputQuestion[] | null;
   }
-  | ({ type: "functionCallOutput"; id: string } & TurnToolOutput)
+  | ({ type: "functionCallOutput"; id: string; resultExpiredAt?: number } & TurnToolOutput)
   | { type: "plan"; id: string; text: string }
   | { type: "reasoning"; id: string; summary: string[]; content: string[] }
   | {
     type: "commandExecution"; id: string; pluginId: string | null; scriptPath: string | null;
     command: string; cwd: string; processId: string | null; source: CommandExecutionSource;
     status: CommandExecutionStatus; commandActions: CommandAction[]; aggregatedOutput: string | null;
-    exitCode: number | null; durationMs: number | null;
+    exitCode: number | null; durationMs: number | null; resultExpiredAt?: number;
   }
   | { type: "fileChange"; id: string; changes: FileUpdateChange[]; status: PatchApplyStatus }
   | {
     type: "mcpToolCall"; id: string; server: string; tool: string; status: McpToolCallStatus; arguments: JsonValue;
     appContext: McpToolCallAppContext | null; mcpAppResourceUri?: string; pluginId: string | null;
     readOnlyHint: boolean | null; result: McpToolCallResult | null; error: McpToolCallError | null; durationMs: number | null;
-    toolCallGroupId?: string;
+    toolCallGroupId?: string; resultExpiredAt?: number;
   }
   | {
     type: "dynamicToolCall"; id: string; namespace: string | null; tool: string; arguments: JsonValue;
     status: DynamicToolCallStatus; contentItems: DynamicToolCallOutputContentItem[] | null; success: boolean | null; durationMs: number | null;
     toolCallGroupId?: string;
     metadata?: JsonValue;
+    resultExpiredAt?: number;
     /** Live presentation only; callable-source persistence deliberately excludes this field. */
     patchPreview?: ToolPatchPreviewFile[];
   }

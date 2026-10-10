@@ -2,7 +2,8 @@
  * WorkbenchDatabaseControllerState: complete database-controller lifecycle state.
  * WorkbenchDatabaseRequestPayload: typed request payloads admitted by the database worker.
  * WorkbenchDatabaseRequest: correlated requests admitted by the database worker.
- * WorkbenchDatabaseResponse: typed responses returned by the database worker.
+ * WorkbenchDatabaseResponse: typed request responses returned by the database worker.
+ * WorkbenchDatabaseWorkerMessage: correlated responses plus out-of-band diagnostics.
  * WORKBENCH_DATABASE_READ_CLASSES/WorkbenchDatabaseReadClass: pure-read priority classes, most urgent first (live transcript, interactive state, history query, stats aggregates).
  * isBackgroundDatabaseReadClass: classes that must leave a reader free for interactive work.
  * getWorkbenchDatabaseReadClass/isWorkbenchDatabaseReadRequest: classify pure reads for the reader pool.
@@ -10,6 +11,7 @@
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
  */
 import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type { WorkbenchDatabaseDiagnosticEvent } from "workbench-shared/database/workbench-database-diagnostic";
 import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsRepository.ts";
 import type { WorkbenchClaimedRoot } from "./stats/WorkbenchClaimStatsRepository.ts";
 import type { WorkbenchClaimStatsRequest, WorkbenchClaimStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
@@ -89,6 +91,10 @@ import type { ThreadVisCommand, ThreadVisResult } from "./vis/WorkbenchThreadVis
 import type { ThreadTodoCommand, ThreadTodoResult } from "./todos/WorkbenchThreadTodoStore.ts";
 import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+import type {
+  WorkbenchTranscriptRetentionCutoffs,
+  WorkbenchTranscriptRetentionResult,
+} from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
 
@@ -129,6 +135,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "resume"; restoreBackupPath?: string }
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
+  | { type: "runRetention"; cutoffs: WorkbenchTranscriptRetentionCutoffs; proposalCacheCutoff: number }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
   | { type: "readGitArcProposalDiff"; identity: GitArcProposalDiffCacheIdentity }
   | { type: "writeGitArcProposalDiff"; value: GitArcProposalDiffCacheValue; maxBytes: number }
@@ -265,6 +272,16 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "suspended" }
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
+  | {
+    id: number;
+    type: "retentionResult";
+    result: WorkbenchTranscriptRetentionResult & {
+      expiredAssets: number;
+      expiredProposalCaches: number;
+      fullCompaction: boolean;
+      reclaimedPages: number;
+    };
+  }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
   | { id: number; type: "gitArcProposalDiff"; changes: GitCheckpointFileChange[] | null }
   | { id: number; type: "threadIdentity"; identity: WorkbenchThreadIdentityRecord | null }
@@ -312,3 +329,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "closed" }
   | { id: number; type: "requestFailure"; message: string }
   | { id: number; type: "fatalFailure"; message: string };
+
+export type WorkbenchDatabaseWorkerMessage =
+  | WorkbenchDatabaseResponse
+  | { type: "diagnostic"; diagnostic: WorkbenchDatabaseDiagnosticEvent };

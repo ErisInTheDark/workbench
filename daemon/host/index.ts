@@ -9,6 +9,7 @@ import WorkbenchRotatingLog from "../../shared/process/WorkbenchRotatingLog.ts";
 import { describeErrorCauseChain } from "../../shared/process/error-cause-chain.ts";
 
 import WorkbenchService from "./WorkbenchService.ts";
+import type { DaemonDiagnosticMessage } from "../../shared/http/workbench-daemon-lifecycle.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 // Windows' native supervisor owns persistence; Linux's Node host owns it here.
@@ -21,6 +22,12 @@ const logger = new WorkbenchProcessLogger({
   writeOutput: text => write(text),
   writeError: text => write(text, true),
 });
+const relayDiagnostic = (message: DaemonDiagnosticMessage) => {
+  if (!process.connected || !process.send) return;
+  process.send(message, error => {
+    if (error) logger.error("host", `Database diagnostic relay failed: ${error.message.slice(0, 500)}`);
+  });
+};
 process.once("exit", () => fileLog?.close());
 
 async function main() {
@@ -29,6 +36,7 @@ async function main() {
   const service = new WorkbenchService({
     root, session,
     foreground: process.env.WORKBENCH_FOREGROUND_PIPE === "1",
+    onDiagnostic: relayDiagnostic,
     warn: message => logger.error("host", message),
     restart: fatal => setImmediate(() => stop("supervisor replacement", fatal ? 78 : 1)),
     stop: () => stop("explicit shutdown", 0),

@@ -3,19 +3,19 @@
  * - defineThreadGitObservationSchema: preserve absent, null and ordered Git observations.
  */
 import {
-  booleanInteger, check, ColumnDefinition, defineTable, enumText, foreignKey, integer, literal,
+  booleanInteger, check, ColumnDefinition, defineTable, enumText, evolveTable, foreignKey, integer, literal,
   primaryKey, sql, text, unique, type TableDefinition,
 } from "workbench-shared/database/schema/schema-definition";
 import {
-  createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
+  addColumns, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 
 export function defineThreadGitObservationSchema(schemaVersion: number) {
-  function install<Table extends TableDefinition>(table: Table) {
+  function install<Table extends TableDefinition>(table: Table, tableSchemaVersion = schemaVersion) {
     return defineTableHistory({
       current: table,
-      versions: [tableVersion({ schemaVersion, table, migration: createTable(table) })],
+      versions: [tableVersion({ schemaVersion: tableSchemaVersion, table, migration: createTable(table) })],
     });
   }
 
@@ -83,7 +83,7 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
     path: text().notNull(),
   }, (table) => ({ constraints: [primaryKey([table.entry_id, table.path_index])] })));
 
-  const proposals = install(defineTable("workbench_thread_git_proposals", {
+  const proposalsV1 = defineTable("workbench_thread_git_proposals", {
     entry_id: text().notNull(),
     observation_kind: enumText("arc").notNull(),
     proposal_index: integer().notNull().nonNegative(),
@@ -97,7 +97,53 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
         table: "workbench_thread_git_entries", columns: ["id", "observation_kind"], onDelete: "CASCADE",
       }),
     ],
-  })));
+  }));
+  const proposalsTable = evolveTable(proposalsV1, {
+    add: {
+      summary_title: text(),
+      summary_description: text(),
+      summary_mode: enumText("amend", "commit"),
+      summary_committed_sha: text(),
+      summary_changes_known: booleanInteger(),
+    },
+  });
+  const proposals = defineTableHistory({
+    current: proposalsTable,
+    versions: [
+      tableVersion({ schemaVersion, table: proposalsV1, migration: createTable(proposalsV1) }),
+      tableVersion({
+        schemaVersion: databaseReleases.boundedPayloadRetention.version,
+        table: proposalsTable,
+        migration: addColumns({
+          from: proposalsV1,
+          to: proposalsTable,
+          columns: [
+            "summary_title", "summary_description", "summary_mode",
+            "summary_committed_sha", "summary_changes_known",
+          ],
+        }),
+      }),
+    ],
+  });
+
+  const proposalChanges = install(defineTable("workbench_thread_git_proposal_changes", {
+    entry_id: text().notNull(),
+    proposal_index: integer().notNull().nonNegative(),
+    change_index: integer().notNull().nonNegative(),
+    path: text().notNull(),
+    kind: enumText("add", "delete", "update").notNull(),
+    additions: integer().notNull().nonNegative(),
+    deletions: integer().notNull().nonNegative(),
+  }, (table) => ({
+    constraints: [
+      primaryKey([table.entry_id, table.proposal_index, table.change_index]),
+      foreignKey([table.entry_id, table.proposal_index], {
+        table: "workbench_thread_git_proposals",
+        columns: ["entry_id", "proposal_index"],
+        onDelete: "CASCADE",
+      }),
+    ],
+  })), databaseReleases.boundedPayloadRetention.version);
 
   const memberRoots = install(defineTable("workbench_thread_git_member_roots", {
     entry_id: text().notNull(),
@@ -116,8 +162,8 @@ export function defineThreadGitObservationSchema(schemaVersion: number) {
   return {
     tables: {
       observations: observations.current, entries: entries.current, paths: paths.current,
-      proposals: proposals.current, memberRoots: memberRoots.current,
+      proposals: proposals.current, proposalChanges: proposalChanges.current, memberRoots: memberRoots.current,
     },
-    history: defineSubsystemHistory([observations, entries, paths, proposals, memberRoots]),
+    history: defineSubsystemHistory([observations, entries, paths, proposals, proposalChanges, memberRoots]),
   };
 }

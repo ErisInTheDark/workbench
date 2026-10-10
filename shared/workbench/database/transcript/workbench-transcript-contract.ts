@@ -103,6 +103,8 @@ export interface WorkbenchTranscriptSnapshot {
   /** Approval outcomes of tool items in the loaded turns; a live update may carry only new ones. */
   approvalOutcomes?: WorkbenchApprovalOutcomeEntry[];
   hasPreviousTurns: boolean;
+  expiredItemPayloads?: { expiredAt: number; itemId: number }[];
+  expiredTurnPayloads?: { expiredAt: number; turnId: string }[];
   loadedTurnIds: string[];
   rows: WorkbenchTranscriptSnapshotRows;
   thread: SelectRow<typeof coreTables.workbenchThreads>;
@@ -136,7 +138,10 @@ export function conformWorkbenchTranscriptSnapshot(
 
   const repairedPaths: DatabaseConformancePath[] = [];
   const issues: DatabaseConformanceIssue[] = [];
-  const knownRootKeys = new Set(["thread", "turns", "loadedTurnIds", "hasPreviousTurns", "rows", "approvalOutcomes"]);
+  const knownRootKeys = new Set([
+    "thread", "turns", "loadedTurnIds", "hasPreviousTurns", "rows", "approvalOutcomes",
+    "expiredItemPayloads", "expiredTurnPayloads",
+  ]);
   const approvalOutcomes = value.approvalOutcomes === undefined ? undefined
     : Array.isArray(value.approvalOutcomes) && value.approvalOutcomes.every(isApprovalOutcome) ? value.approvalOutcomes
       : (issues.push(invalidValue(["approvalOutcomes"])), undefined);
@@ -155,6 +160,24 @@ export function conformWorkbenchTranscriptSnapshot(
     issues.push(invalidValue(["loadedTurnIds"]));
   }
   if (typeof value.hasPreviousTurns !== "boolean") issues.push(invalidValue(["hasPreviousTurns"]));
+  const expiredItemPayloads = Array.isArray(value.expiredItemPayloads)
+    ? value.expiredItemPayloads.filter((entry): entry is { expiredAt: number; itemId: number } => (
+      isRecord(entry) && Number.isInteger(entry.itemId) && typeof entry.expiredAt === "number"
+    ))
+    : [];
+  if (value.expiredItemPayloads !== undefined
+    && (!Array.isArray(value.expiredItemPayloads) || expiredItemPayloads.length !== value.expiredItemPayloads.length)) {
+    issues.push(invalidValue(["expiredItemPayloads"]));
+  }
+  const expiredTurnPayloads = Array.isArray(value.expiredTurnPayloads)
+    ? value.expiredTurnPayloads.filter((entry): entry is { expiredAt: number; turnId: string } => (
+      isRecord(entry) && typeof entry.turnId === "string" && typeof entry.expiredAt === "number"
+    ))
+    : [];
+  if (value.expiredTurnPayloads !== undefined
+    && (!Array.isArray(value.expiredTurnPayloads) || expiredTurnPayloads.length !== value.expiredTurnPayloads.length)) {
+    issues.push(invalidValue(["expiredTurnPayloads"]));
+  }
 
   const rawRowsValue = isRecord(value.rows) ? value.rows : {};
   const rowsValue = normalizeLegacyTranscriptRows(rawRowsValue, repairedPaths);
@@ -186,6 +209,8 @@ export function conformWorkbenchTranscriptSnapshot(
       turns: turns.data,
       loadedTurnIds: loadedTurnIds as string[],
       hasPreviousTurns: value.hasPreviousTurns as boolean,
+      expiredItemPayloads,
+      expiredTurnPayloads,
       rows: rows as WorkbenchTranscriptSnapshotRows,
       ...(approvalOutcomes ? { approvalOutcomes } : {}),
     },

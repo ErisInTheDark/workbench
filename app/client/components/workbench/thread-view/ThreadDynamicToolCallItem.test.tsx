@@ -110,6 +110,25 @@ test("a failed dynamic tool keeps its summary visible without opening its detail
   assert.doesNotMatch(html, /<details[^>]*\bopen=/u);
 });
 
+test("expired dynamic results retain the tool summary and explain the missing body", () => {
+  const item: DynamicItem = {
+    arguments: { query: "needle" },
+    contentItems: null,
+    durationMs: 9,
+    id: "dynamic-expired",
+    namespace: "functions",
+    resultExpiredAt: 1_000,
+    status: "completed",
+    success: true,
+    tool: "custom_tool",
+    type: "dynamicToolCall",
+  };
+  const html = renderToStaticMarkup(createElement(ThreadDynamicToolCallItem, { item }));
+
+  assert.match(html, /custom_tool/u);
+  assert.match(html, /Result expired after 1 day\./u);
+});
+
 test("an unanswered questionnaire starts open", () => {
   const item: DynamicItem = {
     arguments: {

@@ -158,6 +158,18 @@ test("canonical projection keeps a proposal in place as its collapsed git arc ca
   assert.doesNotMatch(html, /data-thread-checkpoint-card=/u);
 });
 
+test("expired command results bypass specialised cards and retain the command envelope", () => {
+  const expired = {
+    ...command("expired", 'wb git arc propose --title "Expired body" -- src/one.ts'),
+    resultExpiredAt: 1_000,
+  };
+  const html = renderItems([expired]);
+
+  assert.match(html, /Result expired after 1 day\./u);
+  assert.match(html, /wb git arc propose/u);
+  assert.doesNotMatch(html, /data-thread-git-arc-card=/u);
+});
+
 test("native incoming messages and screenshots render once per identity after provider echo reconciliation", async () => {
   const assetUrl = "/api/transcript-assets/codex/thread/screenshot.png";
   const expectedUrl = getWorkbenchTranscriptAssetUrl(assetUrl, `/api/workspace/assets/${assetDaemonId}`);

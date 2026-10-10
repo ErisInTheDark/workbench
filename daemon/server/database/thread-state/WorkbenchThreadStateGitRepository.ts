@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   WorkbenchGitArcLifecycleStateSchema, WorkbenchGitArcPlanStateSchema,
-  type WorkbenchGitArcLifecycleState, type WorkbenchGitArcPlanState,
+  type WorkbenchGitArcLifecycleState, type WorkbenchGitArcPlanState, type WorkbenchGitArcProposalSummary,
 } from "workbench-shared/workbench/thread/thread-state";
 
 export interface WorkbenchThreadGitObservations {
@@ -35,15 +35,40 @@ type PlanMember = NonNullable<WorkbenchGitArcPlanState["members"]>[number];
 type GitObservationRow = { id: string; thread_id: string; observation_kind: ObservationKind; has_value: 0 | 1 };
 type GitPathRow = { entry_id: string; path_index: number; path: string };
 type GitRootRow = { entry_id: string; root_index: number; root_id: string };
-type GitProposalRow = { entry_id: string; proposal_index: number; proposal_id: string; root_id: string | null; status: "committed" | "proposed" };
+type GitProposalRow = {
+  entry_id: string;
+  proposal_index: number;
+  proposal_id: string;
+  root_id: string | null;
+  status: "committed" | "proposed";
+  summary_title: string | null;
+  summary_description: string | null;
+  summary_mode: "amend" | "commit" | null;
+  summary_committed_sha: string | null;
+  summary_changes_known: 0 | 1 | null;
+};
+type GitProposalChangeRow = {
+  entry_id: string;
+  proposal_index: number;
+  change_index: number;
+  path: string;
+  kind: "add" | "delete" | "update";
+  additions: number;
+  deletions: number;
+};
 interface GitReadBatch {
   entries: Map<string, GitEntry[]>;
   paths: Map<string, GitPathRow[]>;
   roots: Map<string, GitRootRow[]>;
   proposals: Map<string, GitProposalRow[]>;
+  proposalChanges: Map<string, GitProposalChangeRow[]>;
 }
 
 export default class WorkbenchThreadStateGitRepository {
+  private readonly hasProposalChanges = Boolean(this.database.prepare(`
+    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_thread_git_proposal_changes'
+  `).get());
+
   constructor(private readonly database: Database.Database) {}
 
   read(threadId: string): WorkbenchThreadGitObservations {
@@ -67,11 +92,19 @@ export default class WorkbenchThreadStateGitRepository {
         .all(...ids) as GitRootRow[];
       const proposals = this.database.prepare(`SELECT * FROM workbench_thread_git_proposals WHERE entry_id IN (${entrySelection}) ORDER BY proposal_index`)
         .all(...ids) as GitProposalRow[];
+      const proposalChanges = this.hasProposalChanges
+        ? this.database.prepare(`
+          SELECT * FROM workbench_thread_git_proposal_changes
+          WHERE entry_id IN (${entrySelection})
+          ORDER BY proposal_index, change_index
+        `).all(...ids) as GitProposalChangeRow[]
+        : [];
       const batch: GitReadBatch = {
         entries: Map.groupBy(entries, entry => entry.observation_id),
         paths: Map.groupBy(paths, entry => entry.entry_id),
         roots: Map.groupBy(roots, entry => entry.entry_id),
         proposals: Map.groupBy(proposals, entry => entry.entry_id),
+        proposalChanges: Map.groupBy(proposalChanges, entry => entry.entry_id),
       };
       const byThread = Map.groupBy(observations, observation => observation.thread_id);
       for (const id of ids) result.set(id, this.decode(byThread.get(id) ?? [], batch));
@@ -133,8 +166,8 @@ export default class WorkbenchThreadStateGitRepository {
       { checkpointCommit, intentName, intentDescription, updatedAt }
     );
     const member = ({ harness, repoRoot, rootId, rootIds, threadId }: ArcMember | PlanMember) => ({ harness, threadId, repoRoot, rootId, rootIds });
-    const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status }) => (
-      { proposalId, status, ...(rootId === undefined ? {} : { rootId }) }
+    const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status, summary }) => (
+      { proposalId, status, ...(rootId === undefined ? {} : { rootId }), ...(summary === undefined ? {} : { summary }) }
     ));
     const result: WorkbenchThreadGitObservations = {};
     if (value.gitArc !== undefined) {
@@ -217,11 +250,29 @@ export default class WorkbenchThreadStateGitRepository {
     paths.forEach((path, pathIndex) => insertPath.run(id, pathIndex, path));
     if (arc) {
       const insertProposal = this.database.prepare(`
-        INSERT INTO workbench_thread_git_proposals(entry_id, observation_kind, proposal_index, proposal_id, root_id, status)
-        VALUES (?, 'arc', ?, ?, ?, ?)
+        INSERT INTO workbench_thread_git_proposals(
+          entry_id, observation_kind, proposal_index, proposal_id, root_id, status,
+          summary_title, summary_description, summary_mode, summary_committed_sha, summary_changes_known
+        )
+        VALUES (?, 'arc', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertProposalChange = this.database.prepare(`
+        INSERT INTO workbench_thread_git_proposal_changes(
+          entry_id, proposal_index, change_index, path, kind, additions, deletions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       value.proposals.forEach((proposal, proposalIndex) => {
-        insertProposal.run(id, proposalIndex, proposal.proposalId, proposal.rootId ?? null, proposal.status);
+        const summary = proposal.summary;
+        insertProposal.run(
+          id, proposalIndex, proposal.proposalId, proposal.rootId ?? null, proposal.status,
+          summary?.title ?? null, summary?.description ?? null, summary?.mode ?? null,
+          summary?.committedSha ?? null, summary ? Number(summary.changes !== null) : null,
+        );
+        summary?.changes?.forEach((change, changeIndex) => {
+          insertProposalChange.run(
+            id, proposalIndex, changeIndex, change.path, change.kind, change.additions, change.deletions,
+          );
+        });
       });
     }
     if (member) {
@@ -269,7 +320,25 @@ export default class WorkbenchThreadStateGitRepository {
     return proposals.map((proposal) => ({
       proposalId: proposal.proposal_id, status: proposal.status,
       ...(proposal.root_id === null ? {} : { rootId: proposal.root_id }),
+      ...(proposal.summary_title === null ? {} : {
+        summary: {
+          changes: proposal.summary_changes_known
+            ? this.readProposalChanges(entryId, proposal.proposal_index, batch)
+            : null,
+          committedSha: proposal.summary_committed_sha,
+          description: proposal.summary_description!,
+          mode: proposal.summary_mode!,
+          title: proposal.summary_title,
+        } satisfies WorkbenchGitArcProposalSummary,
+      }),
     }));
+  }
+
+  private readProposalChanges(entryId: string, proposalIndex: number, batch: GitReadBatch) {
+    const changes = (batch.proposalChanges.get(entryId) ?? [])
+      .filter((change) => change.proposal_index === proposalIndex);
+    this.requireOrdered(changes.map((change) => change.change_index));
+    return changes.map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind, path }));
   }
 
   private requireOrdered(indices: readonly number[]) {

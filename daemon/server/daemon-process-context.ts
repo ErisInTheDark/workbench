@@ -13,6 +13,7 @@ import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryControl
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestController";
 import type { DaemonSleepPorts } from "./WorkbenchDaemonSleepController";
+import type { DaemonDiagnosticMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
 
 export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
   "daemonSleep",
@@ -53,6 +54,7 @@ export interface DaemonProcessContext {
   reportWebSocketDelivery(delivery: WorkbenchWebSocketDelivery): void;
   reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
+  reportDiagnostic(diagnostic: DaemonDiagnosticMessage["diagnostic"]): void;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;
   threadTransitions: WorkbenchThreadTransitionCoordinator;
 }

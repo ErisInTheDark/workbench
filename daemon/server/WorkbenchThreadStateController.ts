@@ -245,7 +245,7 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 }
 
 export default class WorkbenchThreadStateController {
-  private static readonly SETTLED_GIT_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
+  private static readonly RESOLVED_GIT_RETENTION_MS = 24 * 60 * 60 * 1_000;
   private active = true;
   private readonly archives: WorkbenchThreadArchiveController;
   private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
@@ -525,7 +525,10 @@ export default class WorkbenchThreadStateController {
     for (const [key, entry] of state.entries) {
       if (entry.entryKind === "draft") continue;
       const settledAt = entry.lifecycle.settled ? entry.settledAt ?? now : null;
-      const gitHistoryCleanedAt = entry.lifecycle.settled && entry.settledAt !== null
+      const resolutionAt = this.gitRetentionEpoch({ ...entry, settledAt });
+      const gitHistoryCleanedAt = resolutionAt !== null
+        && entry.gitHistoryCleanedAt !== null
+        && entry.gitHistoryCleanedAt >= resolutionAt
         ? entry.gitHistoryCleanedAt
         : null;
       const timed = { ...entry, gitHistoryCleanedAt, settledAt };
@@ -539,17 +542,25 @@ export default class WorkbenchThreadStateController {
     return changed;
   }
 
-  private expiredSettledRecords(state: ProjectState) {
-    const cutoff = this.now() - WorkbenchThreadStateController.SETTLED_GIT_RETENTION_MS;
-    return [...state.entries.entries()].flatMap(([key, entry]) => (
-      entry.entryKind !== "draft"
-      && entry.lifecycle.settled
-      && entry.settledAt !== null
-      && entry.settledAt <= cutoff
-      && (entry.gitHistoryCleanedAt === null || entry.gitHistoryCleanedAt < entry.settledAt)
-        ? [{ identity: entry.identity, key, settledAt: entry.settledAt }]
-        : []
-    ));
+  private gitRetentionEpoch(entry: Exclude<WorkbenchThreadStateEntry, { entryKind: "draft" }>) {
+    if (entry.gitArc?.phase === "resolved") {
+      const resolvedAt = Date.parse(entry.gitArc.updatedAt);
+      return Number.isFinite(resolvedAt) ? resolvedAt : null;
+    }
+    return entry.gitArc ? null : entry.lifecycle.settled ? entry.settledAt ?? null : null;
+  }
+
+  private expiredGitRecords(state: ProjectState) {
+    const cutoff = this.now() - WorkbenchThreadStateController.RESOLVED_GIT_RETENTION_MS;
+    return [...state.entries.entries()].flatMap(([key, entry]) => {
+      if (entry.entryKind === "draft") return [];
+      const resolvedAt = this.gitRetentionEpoch(entry);
+      return resolvedAt !== null
+        && resolvedAt < cutoff
+        && (entry.gitHistoryCleanedAt === null || entry.gitHistoryCleanedAt < resolvedAt)
+        ? [{ identity: entry.identity, key, resolvedAt }]
+        : [];
+    });
   }
 
   private acceptedIntentEntry(input: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId; pinned?: boolean }): WorkbenchThreadSidebarEntry {
@@ -1663,7 +1674,7 @@ export default class WorkbenchThreadStateController {
     const reconcilePromise = (async () => {
       try {
         let retentionFailure: string | null = null;
-        const expiredRecords = this.expiredSettledRecords(state);
+        const expiredRecords = this.expiredGitRecords(state);
         if (expiredRecords.length && this.options.pruneExpiredGitState) {
           try {
             const deferred = await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ identity }) => identity));
@@ -1676,8 +1687,7 @@ export default class WorkbenchThreadStateController {
               if (
                 !current
                 || current.entryKind === "draft"
-                || !current.lifecycle.settled
-                || current.settledAt !== expired.settledAt
+                || this.gitRetentionEpoch(current) !== expired.resolvedAt
               ) continue;
               state.entries.set(expired.key, { ...current, gitHistoryCleanedAt });
               cleanedKeys.push(expired.key);

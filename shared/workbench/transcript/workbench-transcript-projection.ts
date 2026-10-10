@@ -41,6 +41,7 @@ export interface WorkbenchProjectedTranscriptTurn extends Omit<Turn, "items"> {
   itemTimeline: WorkbenchThreadItemTimelineEntry[];
   items: WorkbenchProjectedTranscriptItem[];
   turnIndex: number;
+  payloadExpiredAt?: number | null;
 }
 
 export interface WorkbenchTranscriptProjection extends TranscriptSideEntries {
@@ -149,7 +150,7 @@ export function projectWorkbenchTranscript(
       if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.public_id);
       if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.public_id);
     }
-    const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows);
+    const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows, snapshot.expiredItemPayloads);
     if ("issues" in itemProjection) {
       return { issues: itemProjection.issues, success: false };
     }
@@ -183,6 +184,7 @@ export function projectWorkbenchTranscript(
       aliasesByItemId.set(sourceId, aliases);
     }
     const orderedTurns = [...snapshot.turns].sort((left, right) => left.turn_index - right.turn_index);
+    const expiredTurnPayloads = new Map((snapshot.expiredTurnPayloads ?? []).map(({ expiredAt, turnId }) => [turnId, expiredAt]));
     const projectedTurns: WorkbenchProjectedTranscriptTurn[] = orderedTurns
       .filter(({ id }) => loadedTurnIds.has(id))
       .map((turn) => {
@@ -212,6 +214,7 @@ export function projectWorkbenchTranscript(
           startedAt: seconds(turn.started_at),
           status: turnStatus(turn.state),
           turnIndex: turn.turn_index,
+          payloadExpiredAt: expiredTurnPayloads.get(turn.id) ?? null,
         };
       });
     const projectedTurnById = new Map(projectedTurns.map((turn) => [turn.id, turn]));

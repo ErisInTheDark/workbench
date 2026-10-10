@@ -1,4 +1,4 @@
-/* No production exports. Protect wb tool call counting by period and project scope, excluding native tools, with per-bucket calls. */
+/* No production exports. Protect live/retained wb tool counts, period/project scope, native exclusion, and bucket callers. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -78,4 +78,32 @@ test("tool calls count per tool inside the period and project scope, merging Cod
     assert.deepEqual(todayOnly.bucketStarts, [today]);
     assert.deepEqual(todayOnly.workbench.find(({ tool }) => tool === "rg")?.buckets, [1]);
   } finally { database.close(); }
+});
+
+test("expired daily aggregates merge with live calls without changing project or thread semantics", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    const transcript = new WorkbenchTranscriptRepository(database);
+    seedThread(transcript, "main", testProjectIds.project, [
+      { at: today + 1, item: mcp("live", "wb", "rg", "failed") },
+    ]);
+    database.prepare(`
+      INSERT INTO thread_tool_daily_aggregates
+        (project_id, thread_id, day, tool_name, call_count, failure_count)
+      VALUES (?, 'main', ?, 'rg', 2, 0)
+    `).run(testProjectIds.project, Math.floor((today - day) / day));
+
+    const result = new WorkbenchToolStatsRepository(database)
+      .read([testProjectIds.project], statsPeriodShape("7d", null, now), now);
+    assert.deepEqual(result.workbench.map(({ calls, failed, threads, tool }) => ({
+      calls, failed, threads, tool,
+    })), [{ calls: 3, failed: 1, threads: 1, tool: "rg" }]);
+    assert.equal(result.threadCount, 1);
+    assert.deepEqual(result.workbench[0]?.buckets.slice(-2), [2, 1]);
+    assert.deepEqual(result.workbench[0]?.bucketThreads.slice(-2).map(bucket => bucket.map(({ calls }) => calls)), [[2], [1]]);
+  } finally {
+    database.close();
+  }
 });

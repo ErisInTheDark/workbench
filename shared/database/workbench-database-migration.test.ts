@@ -11,6 +11,7 @@ import { captureTestOutput } from "../../test/capture-test-output.mts";
 
 import Database from "better-sqlite3";
 import { DATABASE_LOG_PREFIX } from "./database-log-format.ts";
+import type { WorkbenchDatabaseDiagnosticEvent } from "./workbench-database-diagnostic.ts";
 import { defineTable, integer, text } from "./schema/schema-definition.ts";
 import {
   applyWorkbenchDatabaseSchema, createTable, defineSubsystemHistory, defineTableHistory,
@@ -70,16 +71,24 @@ async function completedBackups(directory: string) {
 
 test("backup includes committed WAL data and the schema removed by the upgrade", async context => {
   const { database, backups } = await fixture(context);
-  const diagnostics: string[] = [];
+  const diagnostics: WorkbenchDatabaseDiagnosticEvent[] = [];
   database.prepare("INSERT INTO records VALUES (1, 'only-in-old-schema', 'retained')").run();
   database.exec("CREATE TABLE extension(payload BLOB); INSERT INTO extension VALUES (x'010203')");
   assert.ok((await fs.stat(`${database.name}-wal`)).size > 0);
   await migrateWorkbenchDatabase(database, schema, {
-    diagnostic: (level, message) => { if (level === "info") diagnostics.push(message); },
+    diagnosticEvent: event => diagnostics.push(event),
   });
-  assert.ok(diagnostics.some(message => message.includes("backup")));
-  assert.ok(diagnostics.some(message => message.includes("verify")));
-  assert.ok(diagnostics.some(message => message.includes("migrate")));
+  assert.deepEqual(
+    diagnostics.map(({ operation, phase }) => [operation, phase]),
+    [
+      ["backup", "pending"],
+      ["verify", "pending"],
+      ["verify", "completed"],
+      ["backup", "completed"],
+      ["migration", "pending"],
+      ["migration", "completed"],
+    ],
+  );
   const names = await completedBackups(backups);
   assert.equal(names.length, 1, "upgrade requires one completed backup");
   const backup = new Database(path.join(backups, names[0]!), { readonly: true, fileMustExist: true });
@@ -92,7 +101,7 @@ test("backup includes committed WAL data and the schema removed by the upgrade",
   } finally { backup.close(); }
   const reported = diagnostics.length;
   await migrateWorkbenchDatabase(database, schema, {
-    diagnostic: (level, message) => { if (level === "info") diagnostics.push(message); },
+    diagnosticEvent: event => diagnostics.push(event),
   });
   assert.equal(diagnostics.length, reported);
   assert.deepEqual(await completedBackups(backups), names, "unchanged schema must not create another backup");
@@ -111,7 +120,7 @@ test("same-version startup does not inspect retained backups", async context => 
   assert.equal(backupReads, 0, "A current schema must not scan backup history");
 });
 
-test("retention prunes only expired duplicates protected by the fresh verified checkpoint", async context => {
+test("retention globally bounds ordinary checkpoints behind the fresh verified survivor", async context => {
   const { database, backups } = await fixture(context, 2);
   await fs.mkdir(backups, { recursive: true });
   const now = Date.now();
@@ -125,6 +134,8 @@ test("retention prunes only expired duplicates protected by the fresh verified c
     await fs.utimes(file, time, time);
     history.push(file);
   }
+  await fs.writeFile(`${history[0]}-wal`, "sidecar");
+  await fs.writeFile(`${history[0]}-shm`, "sidecar");
   const checked: string[] = [];
   const pragma = Database.prototype.pragma;
   context.mock.method(Database.prototype, "pragma", function (this: Database.Database, ...args: Parameters<typeof pragma>) {
@@ -133,10 +144,12 @@ test("retention prunes only expired duplicates protected by the fresh verified c
   });
   await migrateWorkbenchDatabase(database, retentionSchema, { now: () => now });
   assert.deepEqual(checked, [], "retention must trust the checkpoint verified by this migration instead of rescanning history");
-  assert.equal((await completedBackups(backups)).length, 5);
+  assert.equal((await completedBackups(backups)).length, 1);
+  await assert.rejects(fs.stat(`${history[0]}-wal`), { code: "ENOENT" });
+  await assert.rejects(fs.stat(`${history[0]}-shm`), { code: "ENOENT" });
 });
 
-test("retention leaves expired duplicates from historical schema generations untouched", async context => {
+test("retention bounds historical schema generations once a new checkpoint is verified", async context => {
   const { database, backups } = await fixture(context, 2);
   await fs.mkdir(backups, { recursive: true });
   const history: string[] = [];
@@ -156,8 +169,8 @@ test("retention leaves expired duplicates from historical schema generations unt
     return pragma.apply(this, args);
   });
   await migrateWorkbenchDatabase(database, retentionSchema);
-  assert.deepEqual(checked, [], "an unrelated upgrade must not inspect historical checkpoint contents");
-  for (const file of history) assert.ok((await fs.stat(file)).isFile());
+  assert.deepEqual(checked, [], "a fresh verified survivor avoids rescanning historical checkpoints");
+  for (const file of history) await assert.rejects(fs.stat(file), { code: "ENOENT" });
 });
 
 test("explicit same-version backups capture WAL data without migrating or changing the source", async context => {
@@ -272,7 +285,7 @@ test("failed migration retains a readable pre-upgrade backup", async context => 
 });
 
 for (const ages of [[1, 2, 3, 4, 5, 6, 7], [0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3, 4]]) {
-  test(`retention keeps newest five and every backup at most three days old (${ages.length} backups)`, async context => {
+  test(`retention keeps one recent predecessor beside the verified checkpoint (${ages.length} backups)`, async context => {
     const { database, directory, backups } = await fixture(context, 2);
     const now = Date.UTC(2026, 8, 8);
     await fs.mkdir(backups, { recursive: true });
@@ -295,7 +308,7 @@ for (const ages of [[1, 2, 3, 4, 5, 6, 7], [0.1, 0.2, 0.3, 0.4, 0.5, 1, 2, 3, 4]
     await migrateWorkbenchDatabase(database, retentionSchema, { now: () => now });
     const remaining = new Set(await fs.readdir(backups));
     for (const [index, name] of names.entries()) {
-      assert.equal(remaining.has(name), index < 4 || ages[index]! <= 3, "the new checkpoint counts towards the five retained backups");
+      assert.equal(remaining.has(name), index === 0 && ages[index]! <= 7, "only the newest recent predecessor survives");
     }
     assert.ok(remaining.has("manual.sqlite3"));
     assert.ok(remaining.has(directoryName));
@@ -333,7 +346,7 @@ test("empty first installation creates no backup", async context => {
   } finally { fresh.close(); }
 });
 
-test("retention preserves the latest checkpoint per schema and never prunes failed upgrades", async context => {
+test("retention bounds ordinary and failed-upgrade checkpoints globally", async context => {
   const { database, backups } = await fixture(context);
   const checkpoint = await preserveWorkbenchDatabaseBackup(database, backups);
   await fs.utimes(checkpoint, new Date(0), new Date(0));
@@ -345,7 +358,25 @@ test("retention preserves the latest checkpoint per schema and never prunes fail
   const archive = await preserveWorkbenchDatabaseBackup(database, path.join(backups, "failed-upgrades"));
   await fs.utimes(archive, new Date(0), new Date(0));
   await migrateWorkbenchDatabase(database, retentionSchema);
-  assert.ok((await fs.stat(checkpoint)).isFile(), "last checkpoint for old schema must survive retention");
-  assert.ok((await fs.stat(archive)).isFile(), "failed upgrades are outside automatic retention");
-  assert.equal((await completedBackups(backups)).length, 6);
+  await assert.rejects(fs.stat(checkpoint), { code: "ENOENT" });
+  await assert.rejects(fs.stat(archive), { code: "ENOENT" });
+  assert.equal((await completedBackups(backups)).length, 1);
+});
+
+test("failed-upgrade archives keep at most two recent copies", async context => {
+  const { database, backups } = await fixture(context, 2);
+  const now = Date.UTC(2026, 8, 8);
+  const failedDirectory = path.join(backups, "failed-upgrades");
+  const archives: string[] = [];
+  for (const age of [1, 2, 3, 31]) {
+    const archive = await preserveWorkbenchDatabaseBackup(database, failedDirectory);
+    await fs.utimes(archive, new Date(now - age * day), new Date(now - age * day));
+    archives.push(archive);
+  }
+
+  await migrateWorkbenchDatabase(database, retentionSchema, { now: () => now });
+
+  assert.deepEqual(new Set(await completedBackups(failedDirectory)), new Set(
+    archives.slice(0, 2).map(file => path.basename(file)),
+  ));
 });

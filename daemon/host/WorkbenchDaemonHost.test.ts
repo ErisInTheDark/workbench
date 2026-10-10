@@ -337,6 +337,44 @@ test("wake coalesces callers and resolves only after child-bound readiness", asy
   assert.equal(host.snapshot().state, "ready");
 });
 
+test("structured daemon diagnostics relay without changing readiness", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-diagnostic-relay-");
+  const child = fakeChild();
+  const clock = new FakeClock();
+  const spawned = event();
+  const diagnostics: object[] = [];
+  const host = new WorkbenchDaemonHost({
+    projectRootPath: temporary.path, environment: {}, now: clock.now, sleep: clock.sleep,
+    loggerFactory: () => fakeLog([]),
+    onDiagnostic: message => diagnostics.push(message),
+    spawnDaemon: () => { spawned.resolve(); return child; },
+    terminateChild: async () => { child.emit("exit", 0, null); },
+  });
+  context.after(async () => { await host.stop(); await temporary.dispose(); });
+  const waking = host.wake();
+  await spawned.promise;
+  child.emit("message", {
+    type: "workbench-daemon-diagnostic",
+    diagnostic: {
+      source: "database", operation: "verify", phase: "pending", level: "info",
+      detail: "workbench.sqlite3", elapsedMs: null, progress: null,
+    },
+  });
+  child.emit("message", {
+    type: "workbench-daemon-diagnostic",
+    diagnostic: {
+      source: "startup", operation: "reloadSourceBaseline", phase: "pending", elapsedMs: null,
+    },
+  });
+  assert.equal(host.snapshot().state, "starting");
+  assert.deepEqual(diagnostics.map(message => (
+    message as { diagnostic: { source: string } }
+  ).diagnostic.source), ["database", "startup"]);
+  reportReady(child);
+  await waking;
+  assert.equal(host.snapshot().state, "ready");
+});
+
 test("daemon failures empty the exited run and relaunch in-host with backoff that readiness resets", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-wake-failed-");
   const clock = new FakeClock();

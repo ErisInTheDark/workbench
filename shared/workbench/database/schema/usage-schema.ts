@@ -9,6 +9,7 @@
  * - gitClaimThreadFileDays: daily claim activity.
  * - gitClaimImports: claim import checkpoints.
  * - threadUsageImports: usage import checkpoints.
+ * - threadToolDailyAggregates: permanent compact call and failure totals for expired tool payloads.
  * - usageTables: current usage table registry.
  * - UsageSchemaRows: usage row types.
  * - usageSchemaHistory: additive and conversion steps.
@@ -382,6 +383,22 @@ const threadUsageImportsHistory = defineTableHistory({
 });
 export const threadUsageImports = threadUsageImportsHistory.current;
 
+const threadToolDailyAggregatesV1 = defineTable("thread_tool_daily_aggregates", {
+  project_id: text().notNull().references("workbench_projects", "id"),
+  thread_id: text().notNull().references("workbench_threads", "id", { onDelete: "CASCADE" }),
+  day: integer().notNull().nonNegative(),
+  tool_name: text().notNull(),
+  call_count: integer().notNull().nonNegative(),
+  failure_count: integer().notNull().nonNegative(),
+}, (table) => ({
+  constraints: [primaryKey([table.project_id, table.thread_id, table.day, table.tool_name])],
+}));
+const threadToolDailyAggregatesHistory = initialHistory(
+  threadToolDailyAggregatesV1,
+  databaseReleases.boundedPayloadRetention.version,
+);
+export const threadToolDailyAggregates = threadToolDailyAggregatesHistory.current;
+
 export const usageTables = Object.freeze({
   threadContextUsage,
   accountRateLimitSamples,
@@ -390,6 +407,7 @@ export const usageTables = Object.freeze({
   gitClaimSessions,
   gitClaimThreadFileDays,
   threadUsageImports,
+  threadToolDailyAggregates,
   threadUsageModelAttributions,
   threadTurnUsage,
 });
@@ -406,4 +424,5 @@ export const usageSchemaHistory = defineSubsystemHistory([
   ownProjectReferences(gitClaimThreadFileDaysHistory),
   ownProjectReferences(gitClaimImportsHistory),
   ownProjectReferences(threadUsageImportsHistory),
+  threadToolDailyAggregatesHistory,
 ]);

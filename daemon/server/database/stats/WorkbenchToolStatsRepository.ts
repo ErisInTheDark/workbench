@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_TOOL_SERVERS: MCP server names that serve wb tools across providers.
- * - default WorkbenchToolStatsRepository: count wb tool calls per tool in a period and project scope, with per-bucket calls and each bucket's top calling threads.
+ * - default WorkbenchToolStatsRepository: merge live and retained wb tool counts by period, project, bucket, and top threads.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tools-contract";
@@ -10,6 +10,7 @@ import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workb
 export const WORKBENCH_TOOL_SERVERS: readonly string[] = ["wb", "wbex"];
 
 const MAX_BUCKET_THREADS = 3;
+const DAY_MS = 86_400_000;
 
 interface Period {
   bucketMs: number;
@@ -42,9 +43,19 @@ export default class WorkbenchToolStatsRepository {
     `;
     // One row per tool, bucket and thread: totals, distinct threads and each bucket's top callers all fold from it.
     const calls = period.count ? this.database.prepare(`
-      SELECT c.tool_name tool, CAST((i.created_at - @start) / @bucket AS INTEGER) bucket, i.thread_id thread_id,
-        COUNT(*) calls, SUM(t.state = 'failed') failed
-      ${scope}
+      SELECT tool, bucket, thread_id, SUM(calls) calls, SUM(failed) failed
+      FROM (
+        SELECT c.tool_name tool, CAST((i.created_at - @start) / @bucket AS INTEGER) bucket, i.thread_id thread_id,
+          COUNT(*) calls, SUM(t.state = 'failed') failed
+        ${scope}
+        GROUP BY tool, bucket, thread_id
+        UNION ALL
+        SELECT aggregate.tool_name, CAST((aggregate.day * ${DAY_MS} - @start) / @bucket AS INTEGER),
+          aggregate.thread_id, aggregate.call_count, aggregate.failure_count
+        FROM thread_tool_daily_aggregates aggregate
+        WHERE aggregate.day * ${DAY_MS} >= @start AND aggregate.day * ${DAY_MS} < @end
+          AND (@projects IS NULL OR aggregate.project_id IN (SELECT value FROM json_each(@projects)))
+      )
       GROUP BY tool, bucket, thread_id
     `).all(parameters) as Array<{ bucket: number; calls: number; failed: number; thread_id: string; tool: string }> : [];
 

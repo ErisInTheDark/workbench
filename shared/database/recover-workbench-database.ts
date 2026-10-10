@@ -44,6 +44,9 @@ export default async function recoverWorkbenchDatabase(
   } finally { database.close(); }
   await restoreWorkbenchDatabaseBackup(checkpoint, databasePath);
   const safePath = archive.replace(/[\r\n]/g, " ").slice(0, 500);
-  reportWorkbenchDatabaseDiagnostic(diagnostic, "info",
-    `[database] restored schema ${schema.currentVersion} from schema ${installedVersion}; failed-upgrade archive ${safePath}`);
+  reportWorkbenchDatabaseDiagnostic(diagnostic, {
+    source: "database", operation: "recovery", phase: "completed", level: "info",
+    detail: `restored schema ${schema.currentVersion} from schema ${installedVersion}; failed-upgrade archive ${safePath}`,
+    elapsedMs: null, progress: null,
+  });
 }

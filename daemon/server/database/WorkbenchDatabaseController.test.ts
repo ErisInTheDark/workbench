@@ -1,16 +1,17 @@
 /*
- * No production exports. Node tests protect the native worker lifecycle, exact schema inventory, transcript materialization, search, and relational discriminator constraints.
+ * No production exports. Node tests protect worker lifecycle, schema inventory, retention reclaim, transcript materialization, search, and relational constraints.
  */
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
-import { mkdtemp, readdir, rename, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rename, rm, stat } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { join } from "node:path";
 import { test } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import { DATABASE_LOG_PREFIX } from "workbench-shared/database/database-log-format";
+import type { WorkbenchDatabaseDiagnosticEvent } from "workbench-shared/database/workbench-database-diagnostic";
 
 import Database from "better-sqlite3";
 
@@ -110,6 +111,71 @@ test("fresh database is ready without a prepared project catalogue", async () =>
     assert.equal(controller.readInitialProjectCatalog(), null);
   } finally {
     await controller.close();
+    await temporary.dispose();
+  }
+});
+
+test("retention enables incremental reclaim and physically shrinks a historical database", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-reclaim-");
+  const databasePath = join(temporary.path, "workbench.sqlite3");
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  const seeded = new Database(databasePath);
+  seeded.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(seeded);
+  seeded.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
+  seeded.prepare(`
+    INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+    VALUES ('thread', ?, '/repo', 'thread', 1, 1, 1, 1)
+  `).run(testProjectIds.project);
+  const digest = "a".repeat(64);
+  seeded.prepare(`
+    INSERT INTO transcript_assets(digest, mime_type, byte_length, storage_key, created_at)
+    VALUES (?, 'image/png', 8388608, '/api/transcript-assets/thread/image.png', 1)
+  `).run(digest);
+  seeded.prepare("INSERT INTO transcript_asset_content(digest, bytes) VALUES (?, zeroblob(8388608))").run(digest);
+  seeded.prepare(`
+    INSERT INTO transcript_asset_addresses(thread_id, address, asset_name, digest)
+    VALUES ('thread', 'thread', ?, ?)
+  `).run(`${digest}.png`, digest);
+  seeded.close();
+  const beforeBytes = (await stat(databasePath)).size;
+  const diagnostics: WorkbenchDatabaseDiagnosticEvent[] = [];
+  const controller = new WorkbenchDatabaseController({
+    databasePath,
+    onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+  });
+  try {
+    const result = await controller.runRetention({
+      expiredAt: 10_000_000,
+      resultCutoff: 0,
+      transcriptCutoff: 0,
+    }, 0);
+    assert.equal(result.expiredAssets, 1);
+    assert.equal(result.fullCompaction, true);
+    assert.ok(result.reclaimedPages > 1_000);
+    assert.deepEqual(
+      diagnostics.filter(diagnostic => diagnostic.operation === "retention").map(diagnostic => diagnostic.phase),
+      ["pending", "completed"],
+    );
+    assert.deepEqual(
+      diagnostics.filter(diagnostic => diagnostic.operation === "compaction").map(diagnostic => diagnostic.phase),
+      ["pending", "completed"],
+    );
+  } finally {
+    await controller.close();
+  }
+  try {
+    const afterBytes = (await stat(databasePath)).size;
+    assert.ok(afterBytes < beforeBytes / 2, `${afterBytes} should be less than half of ${beforeBytes}`);
+    const inspection = new Database(databasePath, { readonly: true, fileMustExist: true });
+    try {
+      assert.equal(inspection.pragma("auto_vacuum", { simple: true }), 2);
+      assert.deepEqual(inspection.pragma("foreign_key_check"), []);
+    } finally {
+      inspection.close();
+    }
+  } finally {
     await temporary.dispose();
   }
 });

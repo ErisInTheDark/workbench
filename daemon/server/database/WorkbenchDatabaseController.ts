@@ -72,12 +72,18 @@ import type {
     WorkbenchDatabaseRequest,
     WorkbenchDatabaseRequestPayload,
     WorkbenchDatabaseResponse,
+    WorkbenchDatabaseWorkerMessage,
 } from "./workbench-database-protocol";
 import { getWorkbenchDatabaseReadClass } from "./workbench-database-protocol";
 import WorkbenchDatabaseReadPool, { type WorkbenchDatabaseReader } from "./WorkbenchDatabaseReadPool";
+import {
+  formatWorkbenchDatabaseDiagnostic,
+  type WorkbenchDatabaseDiagnosticEvent,
+} from "workbench-shared/database/workbench-database-diagnostic";
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
+  onDiagnostic?(diagnostic: WorkbenchDatabaseDiagnosticEvent): void;
   prepareProjects?(signal: AbortSignal): Promise<WorkbenchProjectPreparation>;
   databasePath: string;
   workerUrl?: URL;
@@ -105,6 +111,7 @@ interface DatabaseSuspension {
 
 export default class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   readonly #beforeMigration: WorkbenchDatabaseControllerOptions["beforeMigration"];
+  readonly #onDiagnostic: WorkbenchDatabaseControllerOptions["onDiagnostic"];
   readonly #prepareProjects: WorkbenchDatabaseControllerOptions["prepareProjects"];
   #preparation: AbortController | null = null;
   #initialProjects: WorkbenchProjectStartup | null = null;
@@ -122,8 +129,15 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
   #suspension: DatabaseSuspension | null = null;
   #termination: Promise<number> | null = null;
 
-  constructor({ beforeMigration, prepareProjects, databasePath, workerUrl = new URL("./workbench-database-worker-bootstrap.mjs", import.meta.url) }: WorkbenchDatabaseControllerOptions) {
+  constructor({
+    beforeMigration,
+    onDiagnostic,
+    prepareProjects,
+    databasePath,
+    workerUrl = new URL("./workbench-database-worker-bootstrap.mjs", import.meta.url),
+  }: WorkbenchDatabaseControllerOptions) {
     this.#beforeMigration = beforeMigration;
+    this.#onDiagnostic = onDiagnostic;
     this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
     this.#worker = new Worker(workerUrl);
@@ -132,7 +146,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       settle: response => this.#settle(response),
       fail: error => this.#fail(error),
     });
-    this.#worker.on("message", (response: WorkbenchDatabaseResponse) => this.#settle(response));
+    this.#worker.on("message", (message: WorkbenchDatabaseWorkerMessage) => this.#receive(message));
     this.#worker.on("error", (error) => this.#fail(error));
     this.#worker.on("exit", (code) => {
       if (this.#state !== "closed" && this.#state !== "failed") {
@@ -572,6 +586,18 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     if (response.type !== "mutationResult") {
       throw new WorkbenchDatabaseFailure(`Unexpected Git arc proposal diff mutation response: ${response.type}`);
     }
+  }
+
+  async runRetention(
+    cutoffs: Extract<WorkbenchDatabaseRequestPayload, { type: "runRetention" }>["cutoffs"],
+    proposalCacheCutoff: number,
+  ) {
+    await this.start();
+    const response = await this.#request({ type: "runRetention", cutoffs, proposalCacheCutoff });
+    if (response.type !== "retentionResult") {
+      throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${response.type}`);
+    }
+    return response.result;
   }
 
   async readTranscriptProviderCursor(threadId: string, turnId: string) {
@@ -1037,6 +1063,17 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       return;
     }
     pending.resolve(response);
+  }
+
+  #receive(message: WorkbenchDatabaseWorkerMessage) {
+    if (message.type !== "diagnostic") {
+      this.#settle(message);
+      return;
+    }
+    const line = formatWorkbenchDatabaseDiagnostic(message.diagnostic);
+    if (message.diagnostic.level === "warn") console.warn(line);
+    else console.info(line);
+    this.#onDiagnostic?.(message.diagnostic);
   }
 
   #fail(error: unknown) {

@@ -21,7 +21,12 @@ const { killProcessTreeAsync } = createRequire(import.meta.url)("../server/proce
 import DaemonHealthWatchdog from "./DaemonHealthWatchdog.ts";
 import DaemonProcessContainer from "./DaemonProcessContainer.ts";
 import WorkbenchDaemonHealthClient from "./WorkbenchDaemonHealthClient.ts";
-import { DaemonSleepMessageSchema, type DaemonHostMessage } from "../../shared/http/workbench-daemon-lifecycle.ts";
+import {
+  DaemonDiagnosticMessageSchema,
+  DaemonSleepMessageSchema,
+  type DaemonDiagnosticMessage,
+  type DaemonHostMessage,
+} from "../../shared/http/workbench-daemon-lifecycle.ts";
 
 /** Consecutive daemon failures back off from RESTART_DELAY_SECONDS, doubling up to this cap. */
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -44,6 +49,7 @@ interface RunnerLog {
 
 export interface WorkbenchDaemonHostOptions {
   hasDemand?(): boolean;
+  onDiagnostic?(message: DaemonDiagnosticMessage): void;
   onSleep?(): Promise<void>;
   environment?: NodeJS.ProcessEnv;
   healthClient?: Pick<WorkbenchDaemonHealthClient, "probe">;
@@ -442,6 +448,12 @@ export default class WorkbenchDaemonHost {
       endpoint: null, failure: null,
     };
     const acceptReady = (message: object) => {
+      const diagnostic = DaemonDiagnosticMessageSchema.safeParse(message);
+      if (diagnostic.success) {
+        this.options.onDiagnostic?.(diagnostic.data);
+        wake.wake();
+        return;
+      }
       const sleep = DaemonSleepMessageSchema.safeParse(message);
       if (sleep.success) {
         if (sleep.data.type === "workbench-daemon-sleep-request") {

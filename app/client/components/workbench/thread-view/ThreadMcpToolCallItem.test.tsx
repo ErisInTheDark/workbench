@@ -140,6 +140,16 @@ test("Workbench questionnaire MCP calls stay out of thread command history", () 
   assert.doesNotMatch(html, /mcp__wb__request_user_input/u);
 });
 
+test("expired MCP results keep invocation disclosure without pretending the body is empty", () => {
+  const html = renderOpenedMcp({
+    item: makeItem({ result: null, resultExpiredAt: 1_000 }),
+    route: null,
+  });
+
+  assert.match(html, /Result expired after 1 day\./u);
+  assert.match(html, /git_add/u);
+});
+
 test("claim transfers use Git arc cards outside coordination and file paragraphs inside it", () => {
   const render = (items: McpItem[]) => renderToStaticMarkup(createElement(ThreadTurnDetails, {
     defaultOpenCompletedWork: true,

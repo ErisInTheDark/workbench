@@ -2344,7 +2344,7 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   assert.equal(stored.records[0]?.settledAt, 1_000);
   assert.equal(stored.records[0]?.gitHistoryCleanedAt, null);
 
-  now += 13 * 24 * 60 * 60 * 1_000;
+  now += 23 * 60 * 60 * 1_000;
   await controller.refresh(fixtureProjectIds["project"]);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(pruned.length, 0);
@@ -2361,7 +2361,7 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   await controller.handleRequest("observer", {
     identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   });
-  now += 14 * 24 * 60 * 60 * 1_000 + 1;
+  now += 24 * 60 * 60 * 1_000 + 1;
   deferNextPrune = true;
   await controller.refresh(fixtureProjectIds["project"]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).freshness === "fresh", "Deferred retention did not reconcile.");
@@ -2389,7 +2389,7 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   await controller.handleRequest("observer", {
     identity: providerEntry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
   });
-  now += 14 * 24 * 60 * 60 * 1_000 + 1;
+  now += 24 * 60 * 60 * 1_000 + 1;
   rejectNextPrune = true;
   await controller.refresh(fixtureProjectIds["project"]);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds["project"])).error?.includes("git-retention: Retention cleanup failed.") === true, "Failed retention cleanup did not surface.");
@@ -2404,6 +2404,55 @@ test("continuous settlement prunes once per durable epoch, retries failures, and
   }, "Retried retention cleanup was not persisted.");
   stored = await readProjectState<{ records: Array<{ gitHistoryCleanedAt?: number | null }> }>(root, "project");
   assert.equal(stored.records[0]?.gitHistoryCleanedAt, now);
+  await controller.dispose();
+  await temporary.dispose();
+});
+
+test("resolved Git history expires after 24 hours independently of thread settlement", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-resolved-git-retention-");
+  const resolvedAt = Date.parse("2026-09-01T00:00:00.000Z");
+  let now = resolvedAt + 24 * 60 * 60 * 1_000;
+  const pruned: Array<Array<{ harness: string; threadId: string }>> = [];
+  const providerEntry: WorkbenchThreadSidebarEntry = {
+    activityAt: resolvedAt,
+    entryKind: "thread",
+    gitArc: {
+      checkpointCommit: "a".repeat(40),
+      claimedPaths: [],
+      intentDescription: "",
+      intentName: "resolved work",
+      phase: "resolved",
+      proposals: [],
+      updatedAt: new Date(resolvedAt).toISOString(),
+    },
+    identity: { harness: "codex", threadId: fixtureThreadIds.retained },
+    lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Resolved work",
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    now: () => now,
+    pruneExpiredGitState: async (_projectId, identities) => { pruned.push(identities); },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+      await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      return [];
+    },
+    storageRoot: temporary.path,
+  });
+  await controller.readProject(fixtureProjectIds.project);
+  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds.project)).freshness === "fresh", "Initial resolved state did not reconcile.");
+
+  await controller.refresh(fixtureProjectIds.project);
+  await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds.project)).freshness === "fresh", "Boundary refresh did not finish.");
+  assert.deepEqual(pruned, [], "the exact 24-hour boundary is retained");
+
+  now += 1;
+  await controller.refresh(fixtureProjectIds.project);
+  await waitFor(() => pruned.length === 1, "Resolved Git state did not expire after 24 hours.");
+  assert.deepEqual(pruned[0], [providerEntry.identity]);
+  const retained = (await controller.getSnapshot(fixtureProjectIds.project)).entries.find(entry => entry.entryKind !== "draft");
+  assert.equal(retained?.lifecycle.settled, false);
   await controller.dispose();
   await temporary.dispose();
 });

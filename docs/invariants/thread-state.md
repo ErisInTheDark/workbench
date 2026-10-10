@@ -6,6 +6,7 @@
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.
+- Transcript payload retention uses the current settlement generation. Restoring or re-settling starts a new generation; old tombstones never suppress new turns.
 - Thread activity time advances only when the canonical transcript admits a new thread item, to that item's observed time. Providers and lifecycle transitions never set it.
 - A dependent-snooze source owns its target set. Target readiness removes one membership. Only an empty set wakes the source.
 - A thread has one live turn: admitting a turn settles earlier unsettled turns, and their undelivered agent-message steers resend into the new turn.
