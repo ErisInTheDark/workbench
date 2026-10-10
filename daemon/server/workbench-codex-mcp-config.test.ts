@@ -42,6 +42,8 @@ test("adds separated direct and Code Mode wb servers while preserving caller con
   assert.deepEqual((result.config as { mcp_servers: Record<string, unknown> }).mcp_servers.docs, {
     url: "https://example.com/mcp",
   });
+  assert.equal(servers.wb.supports_parallel_tool_calls, true);
+  assert.equal(servers.wbex.supports_parallel_tool_calls, undefined);
   assert.deepEqual(servers.wb.omit_tools_from, ["direct", "deferred"]);
   assert.deepEqual(servers.wbex.omit_tools_from, ["code_mode", "deferred"]);
   assert.deepEqual(servers.wbex.disabled_tools, servers.wb.enabled_tools);

@@ -54,6 +54,7 @@ export function withWorkbenchCodexMcpConfig(
           enabled_tools: codeModeToolNames,
           omit_tools_from: ["direct", "deferred"],
           required: true,
+          supports_parallel_tool_calls: true,
           tool_timeout_sec: WORKBENCH_CODE_MODE_MCP_TOOL_TIMEOUT_SECONDS,
           url: getWorkbenchMcpUrl(bridgeUrl, projectLocal, subagent),
         },
