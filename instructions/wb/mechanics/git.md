@@ -10,8 +10,8 @@
 ## Workbench Git Plans and Arcs
 
 ### lifecycle and claims
-overall:
 <docs tools="git_arc_status">
+overall:
 - On user-triggered events like questionnaire responses and new turns, reflexively use <tool id="git_arc_status" />. User actions before events can change routing; status cheaply catches you up
 </docs>
 

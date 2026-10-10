@@ -199,6 +199,7 @@ On needed refactor, but TRULY out of scope for current task, state in brief as p
 <shell:pwsh>
 - Avoid PowerShell `Remove-Item`.
 - Avoid imprecise PowerShell `Get-ChildItem`, it can hang.
+- Use PowerShell `Get-Process` over `Get-CimInstance`; `Get-CimInstance` requires leaving sandbox.
 </shell:pwsh>
 - Edit/patch/write tools create folders automatically; do not manually mkdir.
 <docs tools="rg">- Use <tool id="rg" /> for project search. Pass each native `rg` argument as one `args` item. Empty output means no matches. Use shell `rg` only when the typed tool is unavailable.</docs>
