@@ -1,24 +1,24 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the CLI-only build view tree.
+ * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the CLI-only build view tree and edit sessions.
  */
 import path from "node:path";
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { GitArcRejectionError, gitArcRejectionIssue } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcClaimsSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
+import { GitArcEditOperationsSchema } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { GitArcStatusFullSchema } from "workbench-shared/workbench/git/git-arc-status";
 import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
 import { WORKBENCH_GIT_PLAN_COMMANDS } from "./git-plan-command-definitions";
 import { WORKBENCH_GIT_ARC_PROPOSAL_COMMANDS } from "./git-arc-proposal-commands";
 
-import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { preservePowerShellTrailingPaths, WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
   defineWorkbenchAgentCommand,
   postWorkbenchAgentCommand,
 } from "./workbench-agent-command-definition";
-import { readGitClaimPathFile } from "./git-claim-path-file";
+import { readGitClaimPathFile, readProjectJsonFile } from "./git-claim-path-file";
 
 const requiredText = z.string().trim().min(1);
 const paths = z.array(requiredText);
@@ -128,37 +128,89 @@ const continueArc = defineWorkbenchAgentCommand({
   },
 });
 
-const moveSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("operands"), operands: z.array(requiredText).min(2) }).strict(),
-  z.object({ kind: z.literal("maps"), mappings: z.array(z.object({ destination: requiredText, source: requiredText }).strict()).min(1) }).strict(),
-  z.object({ confirm: z.boolean().default(false), kind: z.literal("regex"), pattern: requiredText, replacement: z.string(), roots: requiredPaths }).strict(),
-]);
+const editRoot = requiredText.optional().describe("Workspace root id; defaults to the caller's project root.");
 
-function moveToJson(move: GitArcMoveArguments): z.input<typeof moveSchema> {
-  if (move.kind === "operands") return { kind: move.kind, operands: [...move.operands] };
-  if (move.kind === "maps") return { kind: move.kind, mappings: move.mappings.map(({ destination, source }) => ({ destination, source })) };
-  return { confirm: move.confirm, kind: move.kind, pattern: move.pattern, replacement: move.replacement, roots: [...move.roots] };
+function editRootFlag(args: string[], values: string[] = [], repeatable: string[] = []) {
+  return new WorkbenchAgentCommandFlags(args, { repeatable, values: ["--root", ...values] });
 }
 
-const move = defineWorkbenchAgentCommand({
-  description: "Move paths while automatically claiming the source and destination sides in this thread's active arc.",
-  helpGroups: ["git-arc"],
-  words: ["git", "arc", "mv"],
-  usage: "wb git arc mv (<source>... <destination> | --map <source> <destination>... | [--confirm] --regex <pattern> --replace <replacement> -- <root> [<root>...])",
-  inputSchema: z.object({ move: moveSchema, rootId: requiredText.optional() }).strict(),
+const editStart = defineWorkbenchAgentCommand({
+  description: "Preview an edit session of ordered moves (with path reference rewrites) and regex replacements, reporting claim intersections. Writes no files.",
+  helpGroups: ["git-arc-edit"],
+  hideFromMcp: true,
+  words: ["git", "arc", "edit", "start"],
+  usage: "wb git arc edit start (--operations-json <file> | --operations <json>) [--root <root>]",
+  inputSchema: z.object({
+    operations: GitArcEditOperationsSchema.optional(),
+    operationsFile: requiredText.optional(),
+    rootId: editRoot,
+  }).strict().refine(input => (input.operations === undefined) !== (input.operationsFile === undefined), "Supply exactly one of --operations-json or --operations."),
   parseCliArgs(args) {
-    const normalizedArgs = args.includes("--regex") || args.includes("--replace")
-      ? preservePowerShellTrailingPaths(args, { boolean: ["--confirm"], values: ["--regex", "--replace"] })
-      : args;
-    return { move: moveToJson(parseGitArcMoveArguments(normalizedArgs)), rootId: undefined };
+    const flags = editRootFlag(args, ["--operations", "--operations-json"]);
+    const inline = flags.optional("--operations");
+    let operations: z.input<typeof GitArcEditOperationsSchema> | undefined;
+    if (inline !== null) {
+      try {
+        operations = JSON.parse(inline);
+      } catch (error) {
+        throw new Error(`--operations must be JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return { operations, operationsFile: flags.optional("--operations-json") ?? undefined, rootId: flags.optional("--root") ?? undefined };
+  },
+  async buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    const operations = input.operations ?? await readProjectJsonFile(cwd, input.operationsFile!, GitArcEditOperationsSchema, "edit operations");
+    return postWorkbenchAgentCommand("/api/git-checkpoint", {
+      action: "arcEditStart", ...baseBody(callerHarness, callerThreadId, cwd), operations,
+      ...(input.rootId ? { rootId: input.rootId } : {}),
+    }, "git-arc-edit");
+  },
+});
+
+const editView = defineWorkbenchAgentCommand({
+  description: "Page through the edit session's changed files and line numbers, or diff selected files or lines.",
+  effects: { idempotent: true, readOnly: true },
+  helpGroups: ["git-arc-edit"],
+  hideFromMcp: true,
+  words: ["git", "arc", "edit", "view"],
+  usage: "wb git arc edit view [--page <n>] [--diff <path>[:<line>]]... [--root <root>]",
+  inputSchema: z.object({ diffs: paths.default([]), page: z.number().int().positive().default(1), rootId: editRoot }).strict(),
+  parseCliArgs(args) {
+    const flags = editRootFlag(args, ["--page"], ["--diff"]);
+    return { diffs: flags.repeated("--diff"), page: flags.optionalNonNegativeInteger("--page") ?? 1, rootId: flags.optional("--root") ?? undefined };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "arcMove", ...baseBody(callerHarness, callerThreadId, cwd), move: input.move,
+      action: "arcEditView", ...baseBody(callerHarness, callerThreadId, cwd), diffs: input.diffs, page: input.page,
       ...(input.rootId ? { rootId: input.rootId } : {}),
-    }, "git-arc-mv");
+    }, "git-arc-edit");
   },
 });
+
+function editStep(step: "apply" | "revert" | "end", description: string, effects: { destructive?: boolean } = {}) {
+  const action = step === "apply" ? "arcEditApply" : step === "revert" ? "arcEditRevert" : "arcEditEnd";
+  return defineWorkbenchAgentCommand({
+    description,
+    effects: { idempotent: false, ...effects },
+    helpGroups: ["git-arc-edit"],
+    hideFromMcp: true,
+    words: ["git", "arc", "edit", step],
+    usage: `wb git arc edit ${step} [--root <root>]`,
+    inputSchema: z.object({ rootId: editRoot }).strict(),
+    parseCliArgs(args) {
+      return { rootId: editRootFlag(args).optional("--root") ?? undefined };
+    },
+    buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+      return postWorkbenchAgentCommand("/api/git-checkpoint", {
+        action, ...baseBody(callerHarness, callerThreadId, cwd), ...(input.rootId ? { rootId: input.rootId } : {}),
+      }, "git-arc-edit");
+    },
+  });
+}
+
+const editApply = editStep("apply", "Wait until no other thread claims a touched Git-visible file, then recompute, claim and write the session atomically.");
+const editRevert = editStep("revert", "Undo the applied session while keeping later edits; text conflicts become editable markers.", { destructive: true });
+const editEnd = editStep("end", "Keep the applied session's changes (or discard a preview) and drop the session.", { destructive: true });
 
 const release = defineWorkbenchAgentCommand({
   description: "Release clean claims, or transfer selected live claims and/or saved stash atomically to an owned subagent without changing workspace content.",
@@ -478,7 +530,11 @@ export const WORKBENCH_GIT_ARC_COMMANDS = [
   claims,
   adopt,
   status,
-  move,
+  editStart,
+  editView,
+  editApply,
+  editRevert,
+  editEnd,
   release,
   stash,
   unstash,

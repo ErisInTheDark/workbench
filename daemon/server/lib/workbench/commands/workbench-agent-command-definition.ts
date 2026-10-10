@@ -28,7 +28,7 @@ export type WorkbenchAgentCommandResponseKind =
   | "git-arc-compare"
   | "git-arc-continue"
   | "git-arc-diff"
-  | "git-arc-mv"
+  | "git-arc-edit"
   | "git-arc-plan"
   | "git-arc-propose"
   | "git-arc-release"

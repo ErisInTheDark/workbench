@@ -86,12 +86,17 @@ unbornTest("unborn arc drift, collisions, moves and restore preserve ownership",
   assert.equal(unchanged.unchanged, true);
   assert.deepEqual(unchanged.releasedClaims, []);
   assert.deepEqual(unchanged.scopePaths, ["one.txt"]);
-  const moved = await controller.moveInArc({
-    ...identity, move: { kind: "maps", mappings: [{ source: "one.txt", destination: "moved.txt" }] },
+  const owner = { ...identity, harness: "codex" as const };
+  const noPending = async () => [];
+  await controller.editSessions.start({
+    checkPending: noPending, owner,
+    operations: [{ from: "one.txt", includeIgnored: false, kind: "move", references: [], to: "moved.txt" }],
   });
+  assert.equal((await controller.editSessions.tryApply({ checkPending: noPending, owner })).kind, "applied");
   assert.equal(await fs.readFile(path.join(source, "moved.txt"), "utf8"), "appeared later\n");
-  await controller.restore({ ...identity, checkpointCommit: moved.checkpointCommit, paths: ["moved.txt"] });
+  await controller.editSessions.revert({ checkPending: noPending, owner });
   await assert.rejects(fs.access(path.join(source, "moved.txt")));
+  assert.equal(await fs.readFile(path.join(source, "one.txt"), "utf8"), "appeared later\n");
   await controller.releaseArc({ ...identity, disown: false });
   assert.equal(await repository.readRef("HEAD"), null);
 });

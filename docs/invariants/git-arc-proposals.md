@@ -1,4 +1,4 @@
-- Git arc commit proposals only become invalid if HEAD movement intersects their changed files, their owner loses claims covering them, or restore discards the owner's claimed work. Continuing, claim edits, moves and unstash never invalidate them. Status lists every unavailable proposal with its reason; ownership transfer receipts also list those they invalidate.
+- Git arc commit proposals only become invalid if HEAD movement intersects their changed files, their owner loses claims covering them, or restore discards the owner's claimed work. Continuing, claim edits, edit session applies and unstash never invalidate them. Status lists every unavailable proposal with its reason; ownership transfer receipts also list those they invalidate.
 - A thread's pending proposals never share live paths. Propose rejects overlap unless it replaces that proposal.
 - Content amend proposals against pushed targets become fresh-commit proposals using `freshTitle`; detached HEAD and unknown remote state still reject.
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
@@ -22,3 +22,4 @@
 - Stacked proposals commit only after lower chain proposals resolve, replaying onto HEAD when their paths match the tip; otherwise unavailable.
 - Stash creation and restoration reject while any pending stack layer shapes the thread baseline; stacking rejects while saved work exists. Saved work may transfer onto inherited pending layers, but not onto recipient-owned pending layers.
 - Agent file edits and removals reject paths in the owner's unsealed pending proposals; stacking or rescinding unblocks them. Amend on a rescinded proposal revives it over current work and supersedes the original.
+- Arc edit sessions compute ordered moves/replacements as a target tree from one snapshot of exactly their touched paths, including opted-in ignored files. Apply waits for claims on Git-visible paths, recomputes, and writes atomically with rollback; revert three-way reverse-applies onto current content, leaving text conflicts as markers.

@@ -10,10 +10,10 @@ import GitArcRegistry from "./GitArcRegistry";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
-import { PATH_MOVER_ARC_READY_FIXTURE, PATH_MOVER_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
+import { SRC_ARC_READY_FIXTURE, SRC_BASE_FIXTURE } from "./WorkbenchGitTestFixtures";
 
 test("a started folder claims only its current files, leaving new files and folder removal to the owner", async (context) => {
-  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
+  const fixture = await new GitTestFixtureCache().copy(SRC_BASE_FIXTURE);
   context.after(fixture.dispose);
   const controller = new WorkbenchGitCheckpointController();
   const registry = new GitArcRegistry(await WorkbenchGitRepository.open(fixture.root));
@@ -37,7 +37,7 @@ test("a started folder claims only its current files, leaving new files and fold
 });
 
 test("continuing an arc stored with a folder claim converts it to file claims", async (context) => {
-  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
+  const fixture = await new GitTestFixtureCache().copy(SRC_BASE_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
   const head = await repository.currentHead();
@@ -60,7 +60,7 @@ test("continuing an arc stored with a folder claim converts it to file claims", 
 });
 
 test("strict addition reads only ownership before rejecting overlap and preserves claim mutation safeguards", async (context) => {
-  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_ARC_READY_FIXTURE);
+  const fixture = await new GitTestFixtureCache().copy(SRC_ARC_READY_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
   const controller = new WorkbenchGitCheckpointController();

@@ -1000,7 +1000,7 @@ test("failed Git mutations still refresh durable arc projection once", async () 
   assert.equal(refreshCount, 1);
 });
 
-test("plan creation and applied arc moves refresh Git arc state while move previews do not", async () => {
+test("plan creation and edit session endings refresh Git arc state while edit views do not", async () => {
   let refreshCount = 0;
   const feature = new WorkbenchGitArcFeature({
     identities: gitFixtureIdentities(),
@@ -1022,18 +1022,13 @@ test("plan creation and applied arc moves refresh Git arc state while move previ
   })).status, 200);
   assert.equal(refreshCount, 1);
 
-  assert.equal((await feature.executeRequest({
-    action: "arcMove",
-    move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
-    ...common,
-  })).status, 200);
+  Object.defineProperty(Reflect.get(feature, "controller"), "editSessions", {
+    value: { end: async () => ({ phase: "ended" }), view: async () => ({ phase: "preview" }) },
+  });
+  assert.equal((await feature.executeRequest({ action: "arcEditView", ...common })).status, 200);
   assert.equal(refreshCount, 1);
 
-  assert.equal((await feature.executeRequest({
-    action: "arcMove",
-    move: { kind: "operands", operands: ["src/a.ts", "tests/a.ts"] },
-    ...common,
-  })).status, 200);
+  assert.equal((await feature.executeRequest({ action: "arcEditEnd", ...common })).status, 200);
   assert.equal(refreshCount, 2);
 });
 

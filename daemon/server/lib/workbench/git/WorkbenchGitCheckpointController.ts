@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack, proposal and claim-view owners; orchestrate inspection, file-claiming moves and restoration.
+ * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack, proposal, claim-view and edit-session owners; orchestrate inspection, edit-session claiming and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
@@ -9,13 +9,12 @@
  * - GitArcActiveClaim/GitArcPlanState/GitArcProposalStatus: active, planned and proposal state.
  * - GitArcInspectionSnapshot: one shared repository, HEAD, tree and registry view per inspection.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected ownership paths.
- * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcMoveResult/GitArcRetentionResult: controller results.
+ * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcRetentionResult: controller results.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type {
-  GitArcMoveRequest,
   GitArcProposalCommitEntry,
   GitArcStackResult,
   GitCheckpointFileChange,
@@ -35,8 +34,8 @@ import GitArcRegistry, {
 } from "./GitArcRegistry";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import { createGitArcDiffPage, type GitArcDiffPage } from "workbench-shared/workbench/git/git-arc-diff-pages";
-import GitArcPathMover, { type GitArcResolvedMove } from "./GitArcPathMover";
-import { expandGitArcClaimPaths, expandGitArcMoveClaimPaths } from "./git-arc-claim-expansion";
+import GitArcEditSessionController, { type GitArcEditArcPort } from "./GitArcEditSessionController";
+import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import GitArcPlanController, {
   createGitArcNoopResult,
   GitCheckpointDirtyPathsError,
@@ -162,14 +161,6 @@ export interface GitCheckpointCompareResult {
 
 export interface GitCheckpointDiffResult extends GitCheckpointCompareResult, GitArcDiffPage {}
 
-export interface GitArcMoveResult extends GitCheckpointCreateResult {
-  additionalClaims: string[];
-  mappings: GitArcResolvedMove[];
-  matchedPathCount: number;
-  mode: "applied" | "preview";
-  remainingMatchCount: number;
-}
-
 interface ReadCheckpointResult {
   checkpointCommit: string;
   checkpointRef: string;
@@ -241,6 +232,9 @@ export default class WorkbenchGitCheckpointController {
   private readonly stashes: GitArcStashController;
   private readonly transfers: GitArcOwnershipTransferController;
   private readonly views: GitArcClaimViewController;
+  /** Active-arc facts and claim publication edit sessions borrow. */
+  readonly editArcPort: GitArcEditArcPort;
+  readonly editSessions: GitArcEditSessionController;
 
   constructor(
     proposalDiffs = new GitArcProposalDiffController(),
@@ -253,6 +247,13 @@ export default class WorkbenchGitCheckpointController {
     this.stashes = new GitArcStashController(resolveThreadIdentity);
     this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);
     this.views = new GitArcClaimViewController(this.proposals, resolveThreadIdentity);
+    this.editArcPort = {
+      activeClaimPaths: async identity => await this.findActiveArcClaimPaths(identity),
+      claimAndWrite: async input => await this.claimArcEditPaths(input),
+      findClaimCollisions: async (identity, paths) => await this.findEditClaimCollisions(identity, paths),
+      releaseClaims: async input => await this.removeFromArc(input),
+    };
+    this.editSessions = new GitArcEditSessionController(this.editArcPort, resolveThreadIdentity);
   }
 
   /** The worktree as one owner builds it; hold the repository read gate around this only. */
@@ -557,7 +558,7 @@ export default class WorkbenchGitCheckpointController {
       harness,
       intentDescription: active.intentDescription,
       intentName: nextMetadata.intentName ?? active.intentName,
-      // Proposals are frozen snapshots validated at commit time, so moves keep every one listed and committable.
+      // Proposals are frozen snapshots validated at commit time, so edit sessions keep every one listed and committable.
       proposalId: active.proposalId,
       proposalIds: active.proposalIds,
       retainedArc: undefined,
@@ -908,8 +909,32 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(() => this.lifecycle.claims({ ...input, inherit: true, removePaths: input.paths }));
   }
 
-  async moveInArc({ cwd, harness: rawHarness, move, threadId }: ControllerInput & { move: GitArcMoveRequest }): Promise<GitArcMoveResult> {
-    return await GitObjectReadSession.run<GitArcMoveResult>(async () => {
+  /** Live claims of the caller's active arc, or null when it has none. */
+  private async findActiveArcClaimPaths({ cwd, harness, threadId }: ControllerInput) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const active = await this.registry(repository).find({ harness: normalizeHarness(harness), threadId });
+    return active?.phase === "active" ? active.claimedPaths : null;
+  }
+
+  private async findEditClaimCollisions({ cwd, harness, threadId }: ControllerInput, paths: string[]) {
+    const repository = await WorkbenchGitRepository.open(cwd);
+    return findGitArcCollisions(await this.registry(repository).list(), { harness: normalizeHarness(harness), threadId }, paths)
+      .map(({ entry, overlaps }) => ({
+        owner: (entry.phase === "plan" && entry.retainedArc ? entry.retainedArc.intentName : entry.intentName) || entry.threadId,
+        paths: [...new Set(overlaps.map(({ requestedPath }) => requestedPath))],
+        threadId: entry.threadId,
+      }));
+  }
+
+  /**
+   * Claims exact Git-visible edit paths in the caller's active arc. `write` changes the worktree inside successor
+   * publication, so a failed publication leaves its rollback to the writer.
+   */
+  private async claimArcEditPaths({ claimPaths, cwd, harness: rawHarness, threadId, write }: ControllerInput & {
+    claimPaths: string[];
+    write: (publish: () => Promise<void>, additionalClaims: string[]) => Promise<void>;
+  }) {
+    return await GitObjectReadSession.run(async () => {
       const { active, checkpoint, harness, metadata, registry, repository } = await this.requireMutableActiveArc({ cwd, harness: rawHarness, threadId });
       const currentHead = await repository.headOrNull();
       const drift = await new GitArcStackController(repository, this.resolveThreadIdentity)
@@ -920,54 +945,17 @@ export default class WorkbenchGitCheckpointController {
       if (drift.changedPaths.length) {
         throw new Error(`Claimed paths no longer match the arc baseline: ${drift.changedPaths.join(", ")}`);
       }
-
-      const mover = new GitArcPathMover(repository);
-      const resolved = await mover.resolve(move);
-      // Both sides become file claims; existing folder claims convert alongside them.
-      const candidates = await expandGitArcMoveClaimPaths(repository, resolved.mappings);
       const claimed = new GitArcPathSet(metadata.scopePaths);
-      const additionalClaims = candidates.filter((candidate) => !claimed.covers(candidate));
-      const scopePaths = [...new Set([
-        ...await expandGitArcClaimPaths(repository, metadata.scopePaths),
-        ...candidates.filter((candidate) => claimed.covers(candidate)),
-        ...additionalClaims,
-      ])].sort((left, right) => left.localeCompare(right));
-
-      if (move.kind === "regex" && !move.confirm) {
-        return {
-          additionalClaims,
-          checkpointCommit: checkpoint.checkpointCommit,
-          checkpointRef: checkpoint.checkpointRef,
-          intentName: metadata.intentName ?? null,
-          kind: "arc",
-          mappings: resolved.mappings,
-          matchedPathCount: resolved.matchedPathCount,
-          mode: "preview",
-          remainingMatchCount: resolved.remainingMatchCount,
-          repoRoot: repository.root,
-          scopePaths: metadata.scopePaths,
-        };
-      }
-
+      const additionalClaims = claimPaths.filter((candidate) => !claimed.covers(candidate));
       await rejectIgnoredGitArcPaths(repository, additionalClaims);
-
-      const tree = await repository.writeTreeWithPathsFromSource(
-        currentHead,
-        checkpoint.checkpointCommit,
-        metadata.scopePaths,
-      );
-      const successor = await this.createActiveSuccessor({
+      // Existing folder claims convert to file claims alongside the new ones.
+      const scopePaths = [...new Set([...await expandGitArcClaimPaths(repository, metadata.scopePaths), ...claimPaths])]
+        .sort((left, right) => left.localeCompare(right));
+      const tree = await repository.writeTreeWithPathsFromSource(currentHead, checkpoint.checkpointCommit, metadata.scopePaths);
+      return await this.createActiveSuccessor({
         active, harness, metadata, parent: currentHead, registry, repository, scopePaths, threadId, tree,
-        withPublish: async (publish) => await mover.apply(resolved.mappings, publish),
+        withPublish: async (publish) => await write(publish, additionalClaims),
       });
-      return {
-        ...successor,
-        additionalClaims,
-        mappings: resolved.mappings,
-        matchedPathCount: resolved.matchedPathCount,
-        mode: "applied",
-        remainingMatchCount: resolved.remainingMatchCount,
-      };
     });
   }
 

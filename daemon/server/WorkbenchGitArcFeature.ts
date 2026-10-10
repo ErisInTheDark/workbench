@@ -45,6 +45,8 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import GitArcProposalDiffController, { type GitArcProposalDiffStore } from "./lib/workbench/git/GitArcProposalDiffController";
+import GitArcClaimMutations from "./GitArcClaimMutations";
+import type { GitArcEditOwner, GitArcEditPendingCheck } from "./lib/workbench/git/GitArcEditSessionController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 const UNSTASH_CONFLICT_CONTEXT = "Git arc unstash left editable conflict markers. Inspect `wb git arc status` and resolve the markers before continuing.";
@@ -81,7 +83,7 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
   "arcAdoptSource",
   "arcTransferClaims",
   "planClaims", "arcClaims",
-  "arcAdd", "arcAdopt", "arcContinue", "arcMove", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
+  "arcAdd", "arcAdopt", "arcContinue", "arcRelease", "arcRemove", "arcStart", "arcStack", "arcStash", "arcUnstack", "arcUnstash", "arcDiscardStash", "plan", "planAdd", "planAdopt", "planRemove", "planStart",
   "proposalCommit", "proposalCommitMany", "proposalCreate", "proposalRescind", "restore",
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
@@ -118,8 +120,13 @@ function liveCollisionOwner(entry: GitArcCollisionError["collisions"][number]["e
 }
 
 function mutatesGitArcState(request: GitCheckpointRequest) {
-  return GIT_ARC_STATE_MUTATION_ACTIONS.has(request.action)
-    && !(request.action === "arcMove" && request.move.kind === "regex" && !request.move.confirm);
+  return GIT_ARC_STATE_MUTATION_ACTIONS.has(request.action);
+}
+
+type GitArcEditRequest = Extract<GitCheckpointRequest, { action: `arcEdit${string}` }>;
+
+function isGitArcEditRequest(request: GitCheckpointRequest): request is GitArcEditRequest {
+  return request.action.startsWith("arcEdit");
 }
 
 function requireInspectionModifiedSince(value: number | undefined) {
@@ -162,8 +169,7 @@ export default class WorkbenchGitArcFeature {
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
   /** Running batched acceptances by owner: process-local facts overlaid on the observed lifecycle. */
   private readonly acceptances = new Map<string, { landingId: string | null; queuedIds: string[] }>();
-  private claimRevision = 0;
-  private readonly claimWaiters = new Set<() => void>();
+  private readonly claimMutations = new GitArcClaimMutations();
 
   constructor(private readonly options: WorkbenchGitArcFeatureOptions) {
     this.proposalDiffs = new GitArcProposalDiffController({ store: options.proposalDiffStore });
@@ -360,6 +366,13 @@ export default class WorkbenchGitArcFeature {
           throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
         }
       }
+      if (isGitArcEditRequest(effectiveRequest)) {
+        try {
+          return Response.json(await this.executeEdit(project, effectiveRequest, owner, signal));
+        } catch (error) {
+          throw new GitArcFailureException(await this.createFailure(project.project.id, effectiveRequest, error));
+        }
+      }
       if (mutatesGitArcState(effectiveRequest)) this.fencePendingCardReads(project.cwd);
       const execute = async () => {
         try {
@@ -485,7 +498,7 @@ export default class WorkbenchGitArcFeature {
           return response;
         } finally {
           if (mutatesGitArcState(effectiveRequest)) {
-            this.notifyClaimMutation();
+            this.claimMutations.notify();
             await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
             if (adoptionSource) await this.refreshThreadGitArcState(project.project.id, adoptionSource.harness, adoptionSource.threadId);
             if (transferDestination) await this.refreshThreadGitArcState(project.project.id, transferDestination.harness, transferDestination.threadId);
@@ -508,15 +521,69 @@ export default class WorkbenchGitArcFeature {
     owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
     callerSignal?: AbortSignal,
   ) {
-    const signal = callerSignal
-      ? AbortSignal.any([callerSignal, this.disposal.signal])
-      : this.disposal.signal;
-    while (true) {
-      signal.throwIfAborted();
-      const revision = this.claimRevision;
-      const attempt = await this.tryStartWaitingPlan(project, request, owner, signal);
-      if (attempt.kind === "started") return attempt.result;
-      await this.waitForClaimMutation(revision, signal);
+    const signal = this.lifecycleSignal(callerSignal);
+    const attempt = await this.claimMutations.waitUntil(async () => await this.tryStartWaitingPlan(project, request, owner, signal), signal);
+    return attempt.result;
+  }
+
+  private lifecycleSignal(callerSignal?: AbortSignal) {
+    return callerSignal ? AbortSignal.any([callerSignal, this.disposal.signal]) : this.disposal.signal;
+  }
+
+  /** Edit sessions run outside the generic dispatch: apply long-waits for claims and writes the worktree itself. */
+  private async executeEdit(
+    project: AgentEndpointProjectResolution,
+    request: GitArcEditRequest,
+    owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
+    callerSignal?: AbortSignal,
+  ) {
+    const root = request.rootId ? project.project.roots.find(({ id }) => id === request.rootId) : project.root;
+    if (!root) throw new Error(`Unknown workspace root: ${request.rootId}`);
+    const editOwner: GitArcEditOwner = { cwd: root.root, harness: owner.harness, threadId: owner.threadId };
+    const sessions = this.controller.editSessions;
+    const checkPending: GitArcEditPendingCheck = async (absolutePaths) => (
+      (await this.workspaceController.checkActiveClaimPaths(project, owner.harness, owner.threadId, absolutePaths))
+        .pendingProposals?.flatMap(({ paths }) => paths) ?? []
+    );
+    const signal = this.lifecycleSignal(callerSignal);
+    const read = this.options.transitions.read ?? this.options.transitions.run;
+    const mutate = async <Result>(operation: () => Promise<Result>) => {
+      this.fencePendingCardReads(project.cwd);
+      try {
+        return await this.options.transitions.run(project.cwd, operation);
+      } finally {
+        this.claimMutations.notify();
+        await this.observeLocalClaimSnapshot(project, owner.harness, owner.threadId);
+        await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
+      }
+    };
+    switch (request.action) {
+      case "arcEditStart":
+        return await read.call(this.options.transitions, project.cwd, async () => await sessions.start({
+          checkPending, operations: request.operations, owner: editOwner, ...(request.rootId ? { rootId: request.rootId } : {}), signal,
+        }));
+      case "arcEditView":
+        return await read.call(this.options.transitions, project.cwd, async () => await sessions.view({
+          diffs: request.diffs, owner: editOwner, page: request.page,
+        }));
+      case "arcEditApply": {
+        const before = await this.options.getThreadClaimContext(project.project.id, owner.harness, owner.threadId);
+        if (!before) throw new Error("The managed thread is not available for Git arc ownership.");
+        if (before.lifecycle.settled) throw new Error("A settled thread cannot apply an edit session.");
+        const applied = await this.claimMutations.waitUntil(async () => await this.options.transitions.run(project.cwd, async () => {
+          const attempt = await sessions.tryApply({ checkPending, owner: editOwner, signal });
+          if (attempt.kind === "applied") this.fencePendingCardReads(project.cwd);
+          return attempt;
+        }), signal);
+        this.claimMutations.notify();
+        await this.observeLocalClaimSnapshot(project, owner.harness, owner.threadId);
+        await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
+        return applied.result;
+      }
+      case "arcEditRevert":
+        return await mutate(async () => await sessions.revert({ checkPending, owner: editOwner }));
+      case "arcEditEnd":
+        return await mutate(async () => await sessions.end({ owner: editOwner }));
     }
   }
 
@@ -582,41 +649,16 @@ export default class WorkbenchGitArcFeature {
       return attempt;
     } finally {
       if (mutationStarted) {
-        this.notifyClaimMutation();
+        this.claimMutations.notify();
         await this.refreshThreadGitArcState(project.project.id, owner.harness, owner.threadId);
       }
     }
   }
 
-  private async waitForClaimMutation(revision: number, signal: AbortSignal) {
-    if (revision !== this.claimRevision) return;
-    await new Promise<void>((resolve, reject) => {
-      let finished = false;
-      const finish = (error?: unknown) => {
-        if (finished) return;
-        finished = true;
-        this.claimWaiters.delete(wake);
-        signal.removeEventListener("abort", abort);
-        error === undefined ? resolve() : reject(error);
-      };
-      const wake = () => finish();
-      const abort = () => finish(signal.reason ?? new Error("Git arc wait was interrupted."));
-      this.claimWaiters.add(wake);
-      signal.addEventListener("abort", abort, { once: true });
-      if (revision !== this.claimRevision) wake();
-      else if (signal.aborted) abort();
-    });
-  }
-
-  private notifyClaimMutation() {
-    this.claimRevision += 1;
-    for (const wake of [...this.claimWaiters]) wake();
-  }
-
   dispose() {
     this.disposal.abort(new Error("Git arc feature disposed."));
     this.proposalDiffs.dispose();
-    this.notifyClaimMutation();
+    this.claimMutations.notify();
   }
 
   private async coalesceCardRead(cwd: string, request: GitCheckpointRequest, execute: () => Promise<Response>) {
@@ -909,7 +951,6 @@ export default class WorkbenchGitArcFeature {
       case "arcContinue": return Response.json(await this.controller.continueArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcAdd": return Response.json(await this.controller.addToArc({ ...common, paths: input.paths }));
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));
-      case "arcMove": return Response.json(await this.controller.moveInArc({ ...common, move: input.move }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown }));
       case "arcStack": return Response.json(await this.controller.stackArc({ ...common, title: input.title }));
@@ -973,6 +1014,12 @@ export default class WorkbenchGitArcFeature {
         ...(input.confirmRestore !== undefined ? { confirmRestore: input.confirmRestore } : {}),
         ...(input.paths ? { paths: input.paths } : {}),
       }));
+      case "arcEditStart":
+      case "arcEditView":
+      case "arcEditApply":
+      case "arcEditRevert":
+      case "arcEditEnd":
+        throw new Error("Edit sessions run through their own ingress.");
     }
   }
 }

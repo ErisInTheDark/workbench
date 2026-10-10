@@ -1,9 +1,10 @@
 /*
  * Exports:
  * - default ThreadGitArcCollapsedSummary: compose established result rows beneath a closed Git arc card.
- * - ThreadGitArcCollapsedSummaryContent: typed commit, file, claim, move, or count preview content.
- * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows: normalise parsed operation changes for file-row presentation.
+ * - ThreadGitArcCollapsedSummaryContent: typed commit, file, claim, or count preview content.
+ * - createThreadGitArcCompareSummaryRows/createThreadGitArcDiffSummaryRows/createThreadGitArcEditSummaryRows: normalise parsed operation changes for file-row presentation.
  */
+import type { GitArcEditFile } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { FileUpdateChange } from "workbench-shared/workbench/thread/workbench-thread-items";
 
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
@@ -15,7 +16,6 @@ import {
   ThreadFileChangePreviewList,
   type ThreadFileChangeListChange,
 } from "./ThreadFileChangeItem";
-import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export type ThreadGitArcCollapsedSummaryContent =
@@ -23,8 +23,21 @@ export type ThreadGitArcCollapsedSummaryContent =
   | { commits: Array<{ key: string; summary: ThreadCommitSummary | null }>; kind: "commits" }
   | { changes: ThreadFileChangeListChange[]; kind: "files" }
   | { kind: "claims"; label: string; marker: ThreadClaimMarker; paths: string[]; totalCount: number }
-  | { kind: "moves"; mappings: Array<{ destination: string; source: string }> }
   | { kind: "counts"; rows: Array<{ label: string; marker: ThreadClaimMarker }> };
+
+/** Edit session rows; moved files render at their new path with their source as the move origin. */
+export function createThreadGitArcEditSummaryRows (files: readonly GitArcEditFile[]): ThreadFileChangeListChange[] {
+  return files.map((file, sourceChangeIndex) => ({
+    change: {
+      diff: "",
+      kind: { move_path: file.movedFrom ?? null, type: "update" },
+      path: file.path,
+    },
+    sourceChangeIndex,
+    sourceItemId: "git-arc-edit-preview",
+    summaryTotals: { additions: file.additions, deletions: file.deletions },
+  }));
+}
 
 export function createThreadGitArcCompareSummaryRows (changes: readonly {
   additions: number;
@@ -83,18 +96,14 @@ export default function ThreadGitArcCollapsedSummary ({
     ? content.commits.length
     : content.kind === "files"
       ? Math.min(content.changes.length, 2)
-      : content.kind === "moves"
-        ? Math.min(content.mappings.length, 2)
-        : content.kind === "claims"
-          ? Math.min(content.paths.length, 2)
-          : Math.min(content.rows.length, 2);
+      : content.kind === "claims"
+        ? Math.min(content.paths.length, 2)
+        : Math.min(content.rows.length, 2);
   const totalCount = content.kind === "commits"
     ? content.commits.length
     : content.kind === "files"
       ? content.changes.length
-      : content.kind === "moves"
-        ? content.mappings.length
-        : content.kind === "claims" ? content.totalCount : content.rows.length;
+      : content.kind === "claims" ? content.totalCount : content.rows.length;
   const remainingCount = totalCount - visibleCount;
 
   return (
@@ -110,14 +119,6 @@ export default function ThreadGitArcCollapsedSummary ({
         <ThreadFileChangePreviewList
           changes={content.changes.slice(0, 2)}
           projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          workspaceRoots={workspaceRoots}
-        />
-      ) : content.kind === "moves" ? (
-        <ThreadGitArcMoveList
-          inset={false}
-          mappings={content.mappings.slice(0, 2)}
           projectId={projectId}
           projectRootPath={projectRootPath}
           workspaceRoots={workspaceRoots}

@@ -505,7 +505,11 @@ export default class WorkbenchWorkspaceGitArcController {
         }
         return await this.executeInspection(project, members, request, options.modifiedSince);
       }
-      case "arcMove": return await this.executeMove(project, members, request);
+      case "arcEditStart":
+      case "arcEditView":
+      case "arcEditApply":
+      case "arcEditRevert":
+      case "arcEditEnd": throw new Error("Edit sessions run through their own ingress.");
       case "proposalCreate": return await this.createProposal(project, members, request);
       case "proposalState":
       case "proposalCommit":
@@ -1313,30 +1317,6 @@ export default class WorkbenchWorkspaceGitArcController {
       members: aggregatedMembers,
       unclaimedDirtPaths,
     };
-  }
-
-  private translateMove(root: ResolvedProjectRoot, move: Extract<GitCheckpointRequest, { action: "arcMove" }>["move"]) {
-    const absolute = (value: string) => path.isAbsolute(value) ? value : path.resolve(root.root, value);
-    if (move.kind === "maps") return { ...move, mappings: move.mappings.map(({ destination, source }) => ({ destination: absolute(destination), source: absolute(source) })) };
-    if (move.kind === "regex") return { ...move, roots: move.roots.map(absolute) };
-    return { ...move, operands: move.operands.map(absolute) };
-  }
-
-  private async executeMove(
-    project: AgentEndpointProjectResolution,
-    members: readonly RepoMember[],
-    request: Extract<GitCheckpointRequest, { action: "arcMove" }>,
-  ) {
-    const root = this.findRoot(project, request.rootId ?? project.root.id);
-    const member = this.memberForRoot(members, root);
-    const values = await this.runMembers([member], async () => await this.local.moveInArc({
-      cwd: member.repoRoot, harness: request.harness, move: this.translateMove(root, request.move), threadId: request.threadId,
-    }), undefined, request.move.kind === "regex" && !request.move.confirm ? "read" : "write", {
-      harness: request.harness,
-      project,
-      threadId: request.threadId,
-    });
-    return this.aggregateResults(project, values);
   }
 
   private async createProposal(

@@ -6,9 +6,7 @@
  * - GitArcPlanClaimsSchema: replacement or inherited planning scope.
  * - GitArcRootPathsSchema/GitArcRootPaths and GitArcPlanRootSchema/GitArcPlanRoot: root-qualified path selections.
  * - GitArcMemberRefSchema/GitArcMemberRef and GitArcInspectionMemberRefSchema/GitArcInspectionMemberRef: lifecycle and inspection refs.
- * - GitArcMoveMappingSchema/GitArcMoveRequestSchema: bounded explicit and regex moves.
- * - GitArcMoveMapping/GitArcMoveRequest: validated move requests.
- * - GitCheckpointRequestSchema/GitCheckpointRequest: stateless checkpoint requests.
+ * - GitCheckpointRequestSchema/GitCheckpointRequest: stateless checkpoint and edit session requests.
  * - GitCheckpointFileChangeSchema/GitCheckpointFileChange: per-file inspection changes.
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
@@ -20,6 +18,7 @@
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "../provider/provider-key.ts";
+import { GitArcEditOperationsSchema } from "./git-arc-edit-contracts";
 import { GitArcFailureSchema } from "./git-arc-failures";
 import { GitArcStackedProposalSchema } from "./git-arc-receipts";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
@@ -87,26 +86,6 @@ export type GitArcRootPaths = z.infer<typeof GitArcRootPathsSchema>;
 export type GitArcPlanRoot = z.infer<typeof GitArcPlanRootSchema>;
 export type GitArcMemberRef = z.infer<typeof GitArcMemberRefSchema>;
 export type GitArcInspectionMemberRef = z.infer<typeof GitArcInspectionMemberRefSchema>;
-
-export const GitArcMoveMappingSchema = z.object({
-  destination: nonEmptyString,
-  source: nonEmptyString,
-});
-
-export const GitArcMoveRequestSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("operands"), operands: z.array(nonEmptyString).min(2) }),
-  z.object({ kind: z.literal("maps"), mappings: z.array(GitArcMoveMappingSchema).min(1).max(200) }),
-  z.object({
-    confirm: z.boolean(),
-    kind: z.literal("regex"),
-    pattern: nonEmptyString,
-    replacement: z.string(),
-    roots: checkpointPaths,
-  }),
-]);
-
-export type GitArcMoveMapping = z.infer<typeof GitArcMoveMappingSchema>;
-export type GitArcMoveRequest = z.infer<typeof GitArcMoveRequestSchema>;
 
 const checkpointBaseRequest = {
   cwd: nonEmptyString,
@@ -226,11 +205,22 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("arcStack"), title: nonEmptyString, ...checkpointBaseRequest }).strict(),
   z.object({ action: z.literal("arcUnstack"), ...checkpointBaseRequest }).strict(),
   z.object({
-    action: z.literal("arcMove"),
-    move: GitArcMoveRequestSchema,
+    action: z.literal("arcEditStart"),
+    operations: GitArcEditOperationsSchema,
     rootId: rootId.optional(),
     ...checkpointBaseRequest,
-  }),
+  }).strict(),
+  z.object({
+    action: z.literal("arcEditView"),
+    /** `path` or `path:line` targets whose patch, or hunks covering the line, are returned. */
+    diffs: optionalCheckpointPaths.default([]),
+    page: z.number().int().positive().default(1),
+    rootId: rootId.optional(),
+    ...checkpointBaseRequest,
+  }).strict(),
+  z.object({ action: z.literal("arcEditApply"), rootId: rootId.optional(), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcEditRevert"), rootId: rootId.optional(), ...checkpointBaseRequest }).strict(),
+  z.object({ action: z.literal("arcEditEnd"), rootId: rootId.optional(), ...checkpointBaseRequest }).strict(),
   z.object({
     action: z.literal("compare"),
     paths: checkpointPaths.optional(),

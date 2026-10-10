@@ -15,7 +15,6 @@ import {
   readGitArcValue,
 } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
-import { parseGitArcMoveArguments, type GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { parseGitClaimArguments } from "workbench-shared/workbench/git/git-claim-arguments";
 import { parseUnifiedDiffFileChanges } from "workbench-shared/workbench/thread/unified-diff";
 import { CommandMatcher } from "./core";
@@ -25,6 +24,8 @@ import type { CommandMatcherDefinition } from "./types";
 import {
   getUnknownGitArcCommandRoute,
   getWorkbenchCommandRendering,
+  isGitArcEditStep,
+  type GitArcEditStep,
   type GitCheckpointCommitCommandIntent,
   type WorkbenchCommandPresentationName,
   type WorkbenchGitArcOperation,
@@ -42,7 +43,7 @@ const ARC_MATCHER_IDS = {
   compare: "git-arc.compare",
   continue: "git-arc.continue",
   diff: "git-arc.diff",
-  mv: "git-arc.mv",
+  edit: "git-arc.edit",
   plan: "git-arc.plan",
   propose: "git-arc.propose",
   release: "git-arc.release",
@@ -65,9 +66,9 @@ export interface GitArcCommandIntent {
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
+  editStep?: GitArcEditStep;
   intentName: string | null;
   layerTitle?: string;
-  move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
   source?: { name?: string; threadId?: string };
@@ -121,17 +122,11 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     presentationName: "git_arc_continue",
   }),
   CommandMatcher({
-    id: ARC_MATCHER_IDS.mv,
+    id: ARC_MATCHER_IDS.edit,
     match: ({ stage }) => {
       const intent = parseGitArcCommand(stage.text.trim());
-      if (intent?.action !== "mv") return null;
-      const preview = intent.move?.kind === "regex" && !intent.move.confirm;
-      return getWorkbenchCommandRendering("git_arc_mv", {
-        move: {
-          confirm: !preview,
-          kind: intent.move?.kind ?? "operands",
-        },
-      })?.result ?? null;
+      if (intent?.action !== "edit" || !intent.editStep) return null;
+      return getWorkbenchCommandRendering("git_arc_edit", { editStep: intent.editStep })?.result ?? null;
     },
   }),
   createMatcher({
@@ -237,18 +232,9 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   if (!action || !(action in ARC_MATCHER_IDS) || action === "plan" || action === "planStart" || action === "unknown") return null;
   cursor += 2;
 
-  if (action === "mv") {
-    try {
-      const move = parseGitArcMoveArguments(tokens.slice(cursor));
-      const paths = move.kind === "operands"
-        ? move.operands
-        : move.kind === "maps"
-          ? move.mappings.flatMap(({ destination, source }) => [source, destination])
-          : move.roots;
-      return { action, intentName: null, move, paths, ref: null };
-    } catch {
-      return null;
-    }
+  if (action === "edit") {
+    const step = tokens[cursor];
+    return isGitArcEditStep(step) ? { action, editStep: step, intentName: null, paths: [], ref: null } : null;
   }
   if (action === "stack") {
     const [flag, value, ...extra] = tokens.slice(cursor);

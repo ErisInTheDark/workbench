@@ -86,8 +86,9 @@ export default class GitArcHistoryRewriter {
     const excludedRefs = new Set(options.excludeRefs ?? []);
     const refs = (await this.repository.listRefsWithValues("refs/worktree/agents"))
       .filter(({ ref }) => !excludedRefs.has(ref));
+    // Edit sessions are parentless snapshot chains outside branch history, so rewrites never touch them.
     const missingRefs = refs.filter(({ objectType, ref }) => (
-      objectType === "missing" && /\/(?:(?:arc-outcomes|checkpoint-proposals|checkpoints)\/|claim-loss$|arc-stash$)/u.test(ref)
+      objectType === "missing" && /\/(?:(?:arc-outcomes|checkpoint-proposals|checkpoints)\/|claim-loss$|arc-stash$|edit-session$)/u.test(ref)
     ));
     for (const entry of missingRefs.slice(0, 20)) {
       warnings.push(`Skipped unreadable Workbench ref ${entry.ref}: missing object ${entry.value}`);

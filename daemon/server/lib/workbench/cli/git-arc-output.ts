@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc response.
+ * - renderGitArcOutput/renderGitArcResponse: render CLI text and typed MCP facts from one Git arc or edit session response.
  */
 import type { WorkbenchAgentCliRequest } from "./workbench-agent-cli-commands";
+import { formatGitArcEditText, GitArcEditResultSchema } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { escapeGitArcValue, formatGitArcTextReceipt, GitArcStackedProposalSchema, projectGitArcReceipt, projectGitArcStackedProposalReceipt, type GitArcAction, type GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { GIT_ARC_DIFF_TRAILER_PREFIX } from "workbench-shared/workbench/git/git-arc-diff-pages";
 import { normalizeDaemonReloadScopes } from "workbench-shared/workbench/daemon-reload";
@@ -31,6 +32,12 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     return {
       text: formatGitArcStatus(status, full),
       structuredContent: { kind: "success", version: 1, receipt: null, status: projectGitArcStatus(status, full), changes: [], diff: null },
+    };
+  }
+  if (request.responseKind === "git-arc-edit") {
+    return {
+      text: formatGitArcEditText(GitArcEditResultSchema.parse(payload)),
+      structuredContent: { kind: "success", version: 1, receipt: null, status: {}, changes: [], diff: null },
     };
   }
   if (!payload) return {
@@ -102,11 +109,6 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
       } : {}),
       ...(string(payload, "rootId") ? { rootId: string(payload, "rootId") } : {}),
       reloadScopes: normalizeDaemonReloadScopes(paths(payload, "reloadScopes")),
-      ...(action === "mv" ? {
-        mode: payload.mode === "preview" ? "preview" : "applied",
-        mappings: rows(payload, "mappings").map((mapping) => ({ source: string(mapping, "source"), destination: string(mapping, "destination") })),
-        matchedPathCount: number(payload, "matchedPathCount"), remainingMatchCount: number(payload, "remainingMatchCount"),
-      } : {}),
     };
     receipt = projectGitArcReceipt(receipt);
     lines.push(formatGitArcTextReceipt(receipt));
@@ -157,7 +159,6 @@ export function renderGitArcResponse(request: WorkbenchAgentCliRequest, payload:
     lines.push(request.body?.action === "proposalRescind" ? `Rescinded proposal ${escapeGitArcValue(proposalId)}`
       : proposalId ? `Proposal ready ${escapeGitArcValue(proposalId)}` : "No uncommitted changes to propose.");
   }
-  if (action === "mv" && payload.mode === "preview") lines.push("Preview only. Use --confirm to apply this batch, then preview remaining matches.");
   if (action === "restore") {
     const restored = paths(payload, "restoredPaths");
     lines.push(`restored ${restored.length}`, ...restored.map(escapeGitArcValue));

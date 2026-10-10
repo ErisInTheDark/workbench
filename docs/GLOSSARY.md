@@ -10,6 +10,7 @@
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |
 | thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
 | thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
+| arc edit session | Per-thread previewable, revertible batch of ordered moves/regex replacements run via `wb git arc edit`; claims Git-visible touched files in the active arc; stored at the thread's `edit-session` ref |
 | thread attention | Amber when unsnoozed; purple when snoozed. Existing snooze wake rules apply. |
 | thread display order | Durable manual ordering for pinned, snoozed, and settled sidebar sections. Main remains automatically ordered by claims, lifecycle, and activity. |
 | dependent snooze | Durable thread state containing one or more target threads. Each target clears only after completion with no live Git claims. The source wakes when none remain. |

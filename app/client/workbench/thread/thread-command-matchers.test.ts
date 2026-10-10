@@ -208,7 +208,6 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
       title: "Inspect",
       userVisibleSimpleVersion: "Asked Lumi to inspect.",
     };
-    case "git_arc_mv": return { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } };
     case "browse_run": return { commands: ["snapshot --compact"], session: "rendering" };
     case "browse_stop": return { force: true, session: "rendering" };
     case "browse_forget": return { force: false, session: "rendering" };
@@ -439,7 +438,6 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ['wb message --thread review-target --message "progress"', "message", { message: "progress", threadId: "review-target" }],
     ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
     ["wb git arc wait", "git_arc_wait", {}],
-    ["wb git arc mv --regex ^src --replace test -- src", "git_arc_mv", { move: { confirm: false, kind: "regex", pattern: "^src", replacement: "test", roots: ["src"] } }],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc stash", "git_arc_stash", {}],
     ["wb git arc unstash", "git_arc_unstash", {}],
@@ -1108,34 +1106,12 @@ test("Workbench Git commands route to bounded selection, commit, plan, and arc o
   });
   assertRouteOnlyDisplay(adoption, "git-arc.claims");
 
-  const movePreview = getThreadCommandDisplay({
-    command: "wb git arc mv --regex ^src/(.+)$ --replace tests/$1 -- src",
-    commandActions: [],
-    cwd: PROJECT_ROOT,
-    projectRootPath: PROJECT_ROOT,
-  });
-  assertRouteOnlyDisplay(movePreview, "git-arc.mv");
-
-  const moveApplied = getThreadCommandDisplay({
-    command: "wb git arc mv src/one.ts tests/src/one.ts",
-    commandActions: [],
-    cwd: PROJECT_ROOT,
-    projectRootPath: PROJECT_ROOT,
-  });
-  assertRouteOnlyDisplay(moveApplied, "git-arc.mv");
-  assert.deepEqual(parseGitArcCommand("wb git arc mv --map src/one.ts tests/one.ts --map src/two.ts tests/two.ts"), {
-    action: "mv",
-    intentName: null,
-    move: {
-      kind: "maps",
-      mappings: [
-        { destination: "tests/one.ts", source: "src/one.ts" },
-        { destination: "tests/two.ts", source: "src/two.ts" },
-      ],
-    },
-    paths: ["src/one.ts", "tests/one.ts", "src/two.ts", "tests/two.ts"],
-    ref: null,
-  });
+  for (const step of ["start --operations-json ops.json", "view --diff src/a.ts:3", "apply", "revert", "end"]) {
+    const edit = getThreadCommandDisplay({ command: `wb git arc edit ${step}`, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+    assertRouteOnlyDisplay(edit, "git-arc.edit");
+  }
+  assert.equal(parseGitArcCommand("wb git arc edit apply")?.editStep, "apply");
+  assert.equal(parseGitArcCommand("wb git arc edit unknown"), null);
 
   const removal = getThreadCommandDisplay({
     command: "wb git arc claims --inherit -- -src/old.ts",

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcItem: render shared Git arc lifecycle, status and recovery cards.
+ * - default ThreadGitArcItem: render shared Git arc lifecycle, edit session, status and recovery cards.
  */
 "use client";
 
@@ -12,23 +12,26 @@ import {
   type GitArcFailure,
   type GitArcFailureAction,
 } from "workbench-shared/workbench/git/git-arc-failures";
+import type { GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitArcCommandAction, GitArcCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
+import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
 import { SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadDisclosure from "./ThreadDisclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadGitArcCollapsedSummary, {
+  createThreadGitArcEditSummaryRows,
   type ThreadGitArcCollapsedSummaryContent,
 } from "./ThreadGitArcCollapsedSummary";
-import type { ThreadFileChangeListChange } from "./ThreadFileChangeItem";
+import { ThreadFileChangeTotals, type ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
-import ThreadGitArcMoveList from "./ThreadGitArcMoveList";
+import ThreadGitArcEditDetails from "./ThreadGitArcEditDetails";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
 import { ThreadReadonlyCommitCard } from "./ThreadCheckpointCommitCard";
@@ -41,7 +44,7 @@ const ACTION_LABELS = {
   compare: { completed: "Compared", failed: "Failed to compare", inProgress: "Comparing", timedOut: "Timed out comparing" },
   continue: { completed: "Continued", failed: "Failed to continue", inProgress: "Continuing", timedOut: "Timed out continuing" },
   diff: { completed: "Diffed", failed: "Failed to diff", inProgress: "Diffing", timedOut: "Timed out diffing" },
-  mv: { completed: "Moved", failed: "Failed to move", inProgress: "Moving", timedOut: "Timed out moving" },
+  edit: { completed: "Edited", failed: "Failed to edit", inProgress: "Editing", timedOut: "Timed out editing" },
   plan: { completed: "Planned", failed: "Failed to plan", inProgress: "Planning", timedOut: "Timed out planning" },
   planStart: { completed: "Started", failed: "Failed to create and start", inProgress: "Creating and starting", timedOut: "Timed out creating and starting" },
   propose: { completed: "Proposed", failed: "Failed to propose", inProgress: "Proposing", timedOut: "Timed out proposing" },
@@ -60,8 +63,21 @@ function actionState (outcome: ThreadCommandExecutionOutcome) {
   return outcome === "completed" ? "completed" : outcome === "inProgress" ? "inProgress" : outcome === "timedOut" ? "timedOut" : "failed";
 }
 
-function failureAction (action: GitArcCommandAction): GitArcFailureAction {
-  const actions: Record<GitArcCommandAction, GitArcFailureAction> = {
+const EDIT_STEP_LABELS: Record<GitArcEditStep, Record<keyof typeof ACTION_LABELS["edit"], string>> = {
+  apply: { completed: "Applied edit", failed: "Failed to apply edit", inProgress: "Applying edit", timedOut: "Timed out applying edit" },
+  end: { completed: "Ended edit", failed: "Failed to end edit", inProgress: "Ending edit", timedOut: "Timed out ending edit" },
+  revert: { completed: "Reverted edit", failed: "Failed to revert edit", inProgress: "Reverting edit", timedOut: "Timed out reverting edit" },
+  start: { completed: "Previewed edit", failed: "Failed to preview edit", inProgress: "Previewing edit", timedOut: "Timed out previewing edit" },
+  view: { completed: "Viewed edit", failed: "Failed to view edit", inProgress: "Viewing edit", timedOut: "Timed out viewing edit" },
+};
+
+const EDIT_STEP_FAILURE_ACTIONS: Record<GitArcEditStep, GitArcFailureAction> = {
+  apply: "arcEditApply", end: "arcEditEnd", revert: "arcEditRevert", start: "arcEditStart", view: "arcEditView",
+};
+
+function failureAction (commandIntent: GitArcCommandIntent): GitArcFailureAction {
+  if (commandIntent.action === "edit") return commandIntent.editStep ? EDIT_STEP_FAILURE_ACTIONS[commandIntent.editStep] : "unknown";
+  const actions: Record<Exclude<GitArcCommandAction, "edit">, GitArcFailureAction> = {
     adopt: "arcAdoptSource",
     claims: "arcClaims",
     scope: "arcScope",
@@ -69,7 +85,6 @@ function failureAction (action: GitArcCommandAction): GitArcFailureAction {
     compare: "compare",
     continue: "arcContinue",
     diff: "diff",
-    mv: "arcMove",
     plan: "planClaims",
     planStart: "planStart",
     propose: "proposalCreate",
@@ -83,21 +98,7 @@ function failureAction (action: GitArcCommandAction): GitArcFailureAction {
     unstash: "arcUnstash",
     unknown: "unknown",
   };
-  return actions[action];
-}
-
-function attemptedMoveMappings (commandIntent: GitArcCommandIntent) {
-  const move = commandIntent.move;
-  if (!move || move.kind === "regex") return [];
-  if (move.kind === "maps") return move.mappings;
-  if (move.operands.length === 2) {
-    return [{ destination: move.operands[1]!, source: move.operands[0]! }];
-  }
-  const destination = move.operands.at(-1)!;
-  return move.operands.slice(0, -1).map((source) => ({
-    destination: `${destination.replace(/[\\/]+$/u, "")}/${source.split(/[\\/]/u).at(-1)}`,
-    source,
-  }));
+  return actions[commandIntent.action];
 }
 
 function failureClaimPaths (failure: ReturnType<typeof parseGitArcFailureReceipt>) {
@@ -118,6 +119,7 @@ export default function ThreadGitArcItem ({
   commandIntent,
   durationMs,
   durationPresentation = "default",
+  editResult = null,
   failureReason,
   interruptedBySteer = false,
   name = null,
@@ -137,6 +139,8 @@ export default function ThreadGitArcItem ({
   commandIntent: GitArcCommandIntent;
   durationMs: number | null;
   durationPresentation?: "default" | "waited";
+  /** Parsed edit session output for `edit` commands. */
+  editResult?: GitArcEditResult | null;
   failureReason?: string | null;
   interruptedBySteer?: boolean;
   /** Names the card's subject (a proposal title) instead of the arc intent. */
@@ -157,15 +161,13 @@ export default function ThreadGitArcItem ({
   const state = interruptedBySteer ? "interrupted" : actionState(outcome);
   const defaultOpen = commandIntent.action === "status"
     || commandIntent.action === "unknown"
-    || Boolean(receipt?.conflictedPaths?.length);
+    || Boolean(receipt?.conflictedPaths?.length || editResult?.conflictedPaths.length);
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const presentationContext = useContext(ThreadGitArcPresentationContext);
   const adoptPaths = commandIntent.adoptPaths ?? [];
   const adoptPathSet = new Set(adoptPaths);
-  const movePreview = commandIntent.action === "mv" && (
-    receipt?.mode === "preview"
-    || (!receipt && commandIntent.move?.kind === "regex" && !commandIntent.move.confirm)
-  );
+  const editRows = editResult ? createThreadGitArcEditSummaryRows(editResult.files) : [];
+  const summaryRows = editResult ? editRows : operationSummaryRows;
   const ref = receipt?.ref ?? commandIntent.ref;
   const memberRefs = receipt?.memberRefs ?? [];
   const claimedPaths = receipt?.claimedPaths ?? [];
@@ -180,8 +182,8 @@ export default function ThreadGitArcItem ({
   ] : [];
   const selectedPaths = receipt?.selectedPaths ?? commandIntent.paths;
   const ordinarySelectedPaths = selectedPaths.filter((candidate) => !adoptPathSet.has(candidate));
-  const labels = movePreview
-    ? { completed: "Previewed", failed: "Failed to preview moves", inProgress: "Previewing moves", timedOut: "Timed out previewing moves" }
+  const labels = commandIntent.action === "edit" && commandIntent.editStep
+    ? EDIT_STEP_LABELS[commandIntent.editStep]
     : commandIntent.action === "release" && commandIntent.toSubagent
       ? {
         completed: `Transferred claims to ${commandIntent.toSubagent}`,
@@ -200,10 +202,9 @@ export default function ThreadGitArcItem ({
             : adoptPaths.length && commandIntent.action === "planStart"
               ? { completed: "Adopted changes and started", failed: "Failed to adopt and start", inProgress: "Adopting changes and starting", timedOut: "Timed out adopting changes and starting" }
               : ACTION_LABELS[commandIntent.action];
-  const moveMappings = commandIntent.action === "mv" ? receipt?.mappings ?? attemptedMoveMappings(commandIntent) : [];
   const receiptFailure = state === "failed" || state === "timedOut" ? parseGitArcFailureReceipt(failureReason ?? "") : null;
   const failure = interruptedBySteer ? null : typedFailure ?? receiptFailure ?? (state === "failed"
-    ? createGitArcOperationRejected(failureAction(commandIntent.action), failureReason?.trim() || "This Git arc action did not complete.")
+    ? createGitArcOperationRejected(failureAction(commandIntent), failureReason?.trim() || "This Git arc action did not complete.")
     : null);
   const currentPlan = presentationContext?.gitArcPlan ?? null;
   const requestedPlanRef = failure?.code === "planDrift" ? failure.planRef : commandIntent.ref;
@@ -214,6 +215,7 @@ export default function ThreadGitArcItem ({
   const stackedProposals = stackAction ? receipt?.stackedProposals ?? null : null;
   const stackedProposalCount = stackAction ? stackedProposals?.length ?? receipt?.proposals?.length ?? null : null;
   const planName = name
+    ?? (editResult ? `edit session ${editResult.session}` : commandIntent.action === "edit" ? "edit session" : null)
     ?? (stackAction ? receipt?.layer ?? commandIntent.layerTitle : null)
     ?? receipt?.intentName
     ?? commandIntent.intentName
@@ -350,13 +352,11 @@ export default function ThreadGitArcItem ({
     ? stackedProposals?.length
       ? { commits: stackedProposals.map((summary) => ({ key: summary.proposalId, summary })), kind: "commits" }
       : null
-    : moveMappings.length
-    ? { kind: "moves", mappings: moveMappings }
-    : operationSummaryRows.length
+    : summaryRows.length
       ? {
         changes: failedStartDrift
-          ? operationSummaryRows.map(row => ({ ...row, danger: true, presentationLabel: primaryPathLabel }))
-          : [...operationSummaryRows],
+          ? summaryRows.map(row => ({ ...row, danger: true, presentationLabel: primaryPathLabel }))
+          : [...summaryRows],
         kind: "files",
       }
       : firstClaimSummaryGroup
@@ -400,12 +400,7 @@ export default function ThreadGitArcItem ({
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span className={state === "failed" || state === "timedOut" ? "text-[color:var(--danger)]" : "text-text"}>
-              {state === "interrupted" ? "Interrupted by your steer"
-                : commandIntent.action === "mv" && state === "completed"
-                ? movePreview
-                  ? `Previewed ${moveMappings.length} ${moveMappings.length === 1 ? "move" : "moves"}`
-                  : `Moved ${moveMappings.length} ${moveMappings.length === 1 ? "path" : "paths"}`
-                : labels[state]}
+              {state === "interrupted" ? "Interrupted by your steer" : labels[state]}
             </span>
             {commandIntent.action === "rescind" || commandIntent.action === "status" ? null : <span className="min-w-0 truncate font-medium text-text">{planName}</span>}
             {commandIntent.action === "rescind" && commandIntent.proposalId ? (
@@ -418,7 +413,12 @@ export default function ThreadGitArcItem ({
             ) : null}
             {ref ? <span className="font-mono text-[0.86em] text-fg/muted">{ref.slice(0, 8)}</span> : null}
             {memberRefs.length > 1 ? <span className="text-[0.86em] text-fg/muted">{memberRefs.length} roots</span> : null}
-            {operationSummaryRows.length ? (
+            {editResult ? (
+              <span className="inline-flex items-center gap-2 text-[0.86em] text-fg/muted">
+                {editResult.fileCount} {editResult.fileCount === 1 ? "file" : "files"}
+                <ThreadFileChangeTotals additions={editResult.additions} deletions={editResult.deletions} />
+              </span>
+            ) : operationSummaryRows.length ? (
               <ThreadGitArcChangeTotals changes={operationSummaryRows.map(row => ({
                 path: row.change.path,
                 ...(row.summaryTotals ?? row.diff ?? parseUnifiedDiff(row.change.diff)),
@@ -433,11 +433,13 @@ export default function ThreadGitArcItem ({
         )}
         summaryClassName="text-[0.82em] leading-[1.45] text-fg/muted"
       >
-        {commandIntent.action === "mv" && !ignoredFailure ? (
-          <ThreadGitArcMoveList
-            mappings={moveMappings}
+        {editResult ? (
+          <ThreadGitArcEditDetails
+            projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
+            result={editResult}
+            rows={editRows}
             workspaceRoots={workspaceRoots}
           />
         ) : null}

@@ -2,8 +2,9 @@
  * Exports:
  * - UNBORN_FIXTURE: repository before its first commit.
  * - THREAD_GIT_BASE_FIXTURE: basic thread repository.
- * - PATH_MOVER_BASE_FIXTURE: source paths for move tests.
- * - PATH_MOVER_ARC_READY_FIXTURE: claimed move sources.
+ * - SRC_BASE_FIXTURE: one tracked file under src.
+ * - SRC_ARC_READY_FIXTURE: an active arc claiming src.
+ * - EDIT_SESSION_ARC_READY_FIXTURE: importer/imported files plus an active arc for edit session tests.
  * - THREAD_GIT_LINEAR_FIXTURE: linear thread commit graph.
  * - CONTROLLER_BASE_FIXTURE: controller test base.
  * - HISTORY_LINEAR_FIXTURE: linear rewrite history.
@@ -91,16 +92,14 @@ export const THREAD_GIT_BASE_FIXTURE = {
   name: "thread-git-base",
 } satisfies GitTestFixtureSpec;
 
-export const PATH_MOVER_BASE_FIXTURE = {
+export const SRC_BASE_FIXTURE = {
   commits: [{ files: { "src/one.test.ts": "one\n" }, message: "initial" }],
-  name: "path-mover-base",
+  name: "src-base",
 } satisfies GitTestFixtureSpec;
 
-export const PATH_MOVER_ARC_READY_FIXTURE = {
-  commits: PATH_MOVER_BASE_FIXTURE.commits,
-  name: "path-mover-arc-ready",
-  // Revision 2: starting the `src` plan claims its files, not the folder.
-  revision: 2,
+export const SRC_ARC_READY_FIXTURE = {
+  commits: SRC_BASE_FIXTURE.commits,
+  name: "src-arc-ready",
   prepare: async ({ repositoryRoot }) => {
     const controller = new WorkbenchGitCheckpointController();
     const plan = await controller.createPlan({
@@ -116,6 +115,32 @@ export const PATH_MOVER_ARC_READY_FIXTURE = {
       harness: "codex",
       threadId: "move-thread",
     });
+    return {};
+  },
+} satisfies GitTestFixtureSpec;
+
+export const EDIT_SESSION_ARC_READY_FIXTURE = {
+  commits: [{
+    files: {
+      ".gitignore": ".local/\n",
+      "docs/notes.md": "See [widget](../src/components/Widget.tsx).\n",
+      "src/app.tsx": "import Widget from \"./components/Widget\";\nimport { helper } from \"@/lib/helper\";\n\nexport default Widget;\n",
+      "src/components/Widget.tsx": "export default function Widget() {\n  return null;\n}\n",
+      "src/lib/helper.ts": "export const helper = \"Widget\";\n",
+    },
+    message: "initial",
+  }],
+  name: "edit-session-arc-ready",
+  prepare: async ({ repositoryRoot }) => {
+    const controller = new WorkbenchGitCheckpointController();
+    const plan = await controller.createPlan({
+      cwd: repositoryRoot,
+      harness: "codex",
+      intentName: "edit session",
+      paths: ["docs/notes.md"],
+      threadId: "edit-thread",
+    });
+    await controller.startArc({ checkpointCommit: plan.checkpointCommit, cwd: repositoryRoot, harness: "codex", threadId: "edit-thread" });
     return {};
   },
 } satisfies GitTestFixtureSpec;
@@ -315,11 +340,14 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(APP_RELOAD_DIRT_FIXTURE, 1),
   ], nested: false }],
   ["GitArcLifecycleController.test.ts", { fixtures: [
-    demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
-    demand(PATH_MOVER_BASE_FIXTURE, 2),
+    demand(SRC_ARC_READY_FIXTURE, 1),
+    demand(SRC_BASE_FIXTURE, 2),
   ], nested: false }],
   ["git-arc-claim-expansion.test.ts", { fixtures: [
-    demand(PATH_MOVER_BASE_FIXTURE, 2),
+    demand(SRC_BASE_FIXTURE, 1),
+  ], nested: false }],
+  ["GitArcEditSessionController.test.ts", { fixtures: [
+    demand(EDIT_SESSION_ARC_READY_FIXTURE, 5),
   ], nested: false }],
   ["GitArcPlanController.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 3),
@@ -329,10 +357,6 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: false }],
   ["GitClaimHistoryReader.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, 2),
-  ], nested: false }],
-  ["GitArcPathMover.test.ts", { fixtures: [
-    demand(PATH_MOVER_BASE_FIXTURE, 4),
-    demand(PATH_MOVER_ARC_READY_FIXTURE, 1),
   ], nested: false }],
   ["GitArcRetentionController.test.ts", { fixtures: [
     demand(CONTROLLER_PARTIAL_READY_FIXTURE, 1),

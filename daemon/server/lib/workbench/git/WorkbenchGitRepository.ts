@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitRepository: own Git processes, object decoding, paths, snapshots and atomic publication for one repository.
- * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, merge, snapshot and publication facts.
+ * - GitCommitPathChange/GitHeadMovement/GitRefUpdate/GitResolvedBlob/GitResolvedCommit/GitResolvedCommitRef/GitTreeFile/GitWorktreeMergeResult/GitWorktreeSnapshot: typed history, object, file, merge, snapshot and publication facts.
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
@@ -144,6 +144,12 @@ export interface GitResolvedCommit {
 }
 
 export type GitResolvedCommitRef = GitResolvedCommit & { ref: string };
+
+/** One file's exact blob bytes and Git mode. */
+export interface GitTreeFile {
+  bytes: Buffer;
+  mode: string;
+}
 
 export interface GitWorktreeSnapshot {
   head: string | null;
@@ -780,6 +786,41 @@ export default class WorkbenchGitRepository {
       }
       return { changedPaths: resolved.map(swap => swap.changedPaths), tree: edits.size ? await this.trees.withEdits(base, edits) : base };
     });
+  }
+
+  /** `base` with each file path set to the given bytes and mode, or removed when null; writes loose objects only. */
+  async writeTreeWithFiles(baseTreeish: string | null, files: ReadonlyMap<string, GitTreeFile | null>) {
+    return await GitObjectReadSession.run(async () => {
+      const base = await this.resolveTree(baseTreeish);
+      const edits = new Map<string, GitTreeEdit>();
+      for (const [filePath, file] of files) {
+        edits.set(filePath, file ? { id: await this.objects.writeObject("blob", file.bytes), mode: file.mode } : null);
+      }
+      return await this.trees.withEdits(base, edits);
+    });
+  }
+
+  /** Raw blob bytes and modes at file paths of a tree; null where the tree holds no file. */
+  async readTreeFiles(treeish: string | null, paths: readonly string[]) {
+    return await GitObjectReadSession.run(async () => {
+      const entries = await this.trees.entriesAt(await this.resolveTree(treeish), paths);
+      const ids = [...new Set([...entries.values()].flatMap(entry => entry ? [entry.id] : []))];
+      const objects = ids.length ? await GitObjectReadSession.read(this.root, ids) : [];
+      const bytesById = new Map(ids.map((id, index) => [id, objects[index]?.contents ?? null]));
+      return new Map(paths.map((filePath): [string, GitTreeFile | null] => {
+        const entry = entries.get(filePath);
+        const bytes = entry ? bytesById.get(entry.id) : null;
+        return [filePath, entry && bytes ? { bytes, mode: entry.mode } : null];
+      }));
+    });
+  }
+
+  /** Untracked files Git ignores beneath the scopes, file by file. */
+  async listIgnoredWorktreePaths(scopes: readonly string[]) {
+    const candidates = [...new Set(parseNullPaths(await this.run([
+      "ls-files", "-z", "--others", "--ignored", "--exclude-standard", ...this.scopePathspecs(scopes),
+    ])))].sort((left, right) => left.localeCompare(right));
+    return filterPathsByScopes(candidates, scopes);
   }
 
   /** Whether every commit is reachable from `descendant`, in one walk; unreadable commits are never proven reachable. */

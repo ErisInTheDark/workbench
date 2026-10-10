@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchGitArcOperation: Git operation intent and scope deltas.
+ * - WorkbenchGitArcOperation/GitArcEditStep/isGitArcEditStep: Git operation intent, scope deltas and edit session steps.
  * - GitCheckpointCommitCommandIntent: proposal-card message and explicit or target-resolved commit mode.
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
@@ -23,7 +23,6 @@ import {
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
 
-import type { GitArcMoveArguments } from "workbench-shared/workbench/git/git-arc-move-arguments";
 import { CommandMatcher } from "./core";
 import {
   createEmptyCommandSummaryStats,
@@ -92,7 +91,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_unstack",
   "git_arc_wait",
   "git_arc_continue",
-  "git_arc_mv",
+  "git_arc_edit",
   "git_arc_release",
   "git_arc_compare",
   "git_arc_diff",
@@ -108,15 +107,23 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
 
 export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTATION_NAMES[number];
 
+const GIT_ARC_EDIT_STEPS = ["start", "view", "apply", "revert", "end"] as const;
+export type GitArcEditStep = typeof GIT_ARC_EDIT_STEPS[number];
+
+export function isGitArcEditStep(value: string | null | undefined): value is GitArcEditStep {
+  return GIT_ARC_EDIT_STEPS.includes(value as GitArcEditStep);
+}
+
 export type WorkbenchGitArcOperation = {
-  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "mv" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "stack" | "start" | "stash" | "unstack" | "unstash" | "unknown";
+  action: "adopt" | "claims" | "scope" | "status" | "compare" | "continue" | "diff" | "edit" | "plan" | "planStart" | "propose" | "release" | "rescind" | "restore" | "stack" | "start" | "stash" | "unstack" | "unstash" | "unknown";
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
+  /** Edit session step requested by `edit`. */
+  editStep?: GitArcEditStep;
   intentName: string | null;
   /** Stack layer title requested by `stack`. */
   layerTitle?: string;
-  move?: GitArcMoveArguments;
   paths: string[];
   proposalId?: string | null;
   source?: { name?: string; threadId?: string };
@@ -471,7 +478,7 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_compare: "compare",
     git_arc_continue: "continue",
     git_arc_diff: "diff",
-    git_arc_mv: "mv",
+    git_arc_edit: "edit",
     git_arc_propose: "propose",
     git_arc_release: "release",
     git_arc_rescind: "rescind",
@@ -496,29 +503,7 @@ export function getUnknownGitArcCommandRoute(): WorkbenchCommandRoute {
 function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }) {
   const action = gitArcAction(name);
   if (!action) return null;
-  const move = asRecord(args.move);
-  const moveKind = readString(move?.kind);
-  const parsedMove: GitArcMoveArguments | undefined = moveKind === "operands"
-    ? { kind: "operands", operands: readStringArray(move?.operands) }
-    : moveKind === "maps" && Array.isArray(move?.mappings)
-      ? {
-        kind: "maps",
-        mappings: move.mappings.flatMap((entry) => {
-          const mapping = asRecord(entry);
-          const source = readString(mapping?.source);
-          const destination = readString(mapping?.destination);
-          return source && destination ? [{ destination, source }] : [];
-        }),
-      }
-      : moveKind === "regex"
-        ? {
-          confirm: readBoolean(move?.confirm),
-          kind: "regex",
-          pattern: readString(move?.pattern) ?? "",
-          replacement: readString(move?.replacement) ?? "",
-          roots: readStringArray(move?.roots),
-        }
-        : undefined;
+  const editStep = readString(args.editStep);
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
   const combined = name === "git_plan_claims" || name === "git_plan_start" || name === "git_arc_claims";
   const pathField = combined ? "addPaths" : "paths";
@@ -538,7 +523,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(action === "release" && readString(args.toSubagent) ? { toSubagent: readString(args.toSubagent)! } : {}),
     intentName,
     ...(action === "stack" && readString(args.title) ? { layerTitle: readString(args.title)! } : {}),
-    ...(parsedMove ? { move: parsedMove } : {}),
+    ...(action === "edit" && isGitArcEditStep(editStep) ? { editStep } : {}),
     paths,
     ...(proposalId ? { proposalId } : {}),
     ...(action === "adopt" ? { source: {
@@ -568,7 +553,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     compare: "git-arc.compare",
     continue: "git-arc.continue",
     diff: "git-arc.diff",
-    mv: "git-arc.mv",
+    edit: "git-arc.edit",
     plan: "git-arc.plan",
     planStart: "git-arc.plan-start",
     propose: "git-arc.propose",

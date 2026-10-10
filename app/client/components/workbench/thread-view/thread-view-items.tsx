@@ -47,6 +47,7 @@ import {
   isAgentScreenshotSteerUserMessage,
 } from "workbench-shared/workbench/thread/thread-steer-markers";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { isUndeliveredInitialOptimisticInputItem } from "../../../workbench/thread/thread-optimistic-items";
 import {
   readWorkbenchAgentMessageInput,
@@ -1798,6 +1799,7 @@ function ThreadCommandExecutionDetails ({
         commandIntent={gitArcCommandIntent}
         statusOutput={gitArcCommandIntent.action === "status" ? item.aggregatedOutput ?? "" : undefined}
         durationMs={visibleDurationMs ?? null}
+        editResult={gitArcCommandIntent.action === "edit" ? parseGitArcEditText(item.aggregatedOutput ?? "") : null}
         failureReason={commandOutcome === "failed" || commandOutcome === "declined" || commandOutcome === "timedOut"
           ? item.aggregatedOutput
           : null}

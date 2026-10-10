@@ -56,7 +56,7 @@ export const GitArcInvalidatedProposalSchema = z.object({ proposalId: z.string()
 export type GitArcInvalidatedProposal = z.infer<typeof GitArcInvalidatedProposalSchema>;
 
 export const GitArcReceiptSchema = z.object({
-  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "mv", "plan", "propose", "release", "remove", "restore", "stack", "stash", "start", "unstack", "unstash"]),
+  action: z.enum(["add", "adopt", "claims", "scope", "compare", "continue", "diff", "plan", "propose", "release", "remove", "restore", "stack", "stash", "start", "unstack", "unstash"]),
   /** Stack layer title sealed or reopened by stack/unstack. */
   layer: z.string().min(1).optional(),
   additionalClaims: z.array(z.string().min(1)).optional(),
@@ -84,10 +84,6 @@ export const GitArcReceiptSchema = z.object({
   rootId: z.string().min(1).optional(),
   reloadScopes: z.array(z.string().regex(DAEMON_RELOAD_SCOPE_PATTERN)).optional(),
   ref: z.string().regex(/^[a-f0-9]{7,64}$/iu),
-  matchedPathCount: z.number().int().nonnegative().optional(),
-  mappings: z.array(z.object({ destination: z.string().min(1), source: z.string().min(1) })).optional(),
-  mode: z.enum(["applied", "preview"]).optional(),
-  remainingMatchCount: z.number().int().nonnegative().optional(),
   selectedPaths: z.array(z.string().min(1)).optional(),
   version: z.literal(1),
 });
@@ -134,10 +130,6 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     ...(visible(receipt.invalidatedProposals) ? { invalidatedProposals: receipt.invalidatedProposals } : {}),
     ...(receipt.planningDrift?.some((drift) => drift.paths.length)
       ? { planningDrift: receipt.planningDrift.filter((drift) => drift.paths.length) } : {}),
-    ...(receipt.mode ? { mode: receipt.mode } : {}),
-    ...(receipt.matchedPathCount === undefined ? {} : { matchedPathCount: receipt.matchedPathCount }),
-    ...(receipt.remainingMatchCount === undefined ? {} : { remainingMatchCount: receipt.remainingMatchCount }),
-    ...(receipt.mappings === undefined ? {} : { mappings: receipt.mappings }),
   });
 }
 
@@ -215,13 +207,6 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
     lines.push(`previous-plan ${drift.previousRef}`);
     list("changed", drift.paths);
   }
-  if (receipt.mode) lines.push(`mode ${receipt.mode}`);
-  if (receipt.matchedPathCount !== undefined) lines.push(`matched ${receipt.matchedPathCount}`);
-  if (receipt.remainingMatchCount !== undefined) lines.push(`remaining ${receipt.remainingMatchCount}`);
-  if (receipt.mappings) {
-    lines.push(`mappings ${receipt.mappings.length}`);
-    for (const mapping of receipt.mappings) lines.push(`${escapeGitArcValue(mapping.source)}\t${escapeGitArcValue(mapping.destination)}`);
-  }
   lines.push("end arc");
   return lines.join("\n");
 }
@@ -276,14 +261,13 @@ function parseTextReceipt(output: string) {
     } else if (lists[key]) {
       result[lists[key]!] = take(count(value)).map(readGitArcValue);
       if (key === "claimed") result.fullScope = true;
-    } else if (key === "claimed-count" || key === "planned-count" || key === "adopted-count" || key === "matched" || key === "remaining") {
+    } else if (key === "claimed-count" || key === "planned-count" || key === "adopted-count") {
       if (!/^\d+$/u.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("Invalid arc count.");
       const counts = {
         "claimed-count": "claimedPathCount", "planned-count": "plannedPathCount", "adopted-count": "adoptedPathCount",
-        matched: "matchedPathCount", remaining: "remainingMatchCount",
       };
       result[counts[key]] = Number(value);
-    } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "mode" || key === "layer") {
+    } else if (key === "ref" || key === "intent" || key === "root" || key === "proposal" || key === "layer") {
       result[key === "intent" ? "intentName" : key === "root" ? "rootId" : key === "proposal" ? "proposalId" : key] = readGitArcValue(value);
     } else if (key === "sealed") {
       result.stackedProposals = take(count(value)).map(row => GitArcStackedProposalReceiptSchema.parse(JSON.parse(row)));
@@ -295,7 +279,7 @@ function parseTextReceipt(output: string) {
       if (!previousRef) throw new Error("Missing previous plan ref.");
       drift.push({ previousRef, paths: take(count(value)).map(readGitArcValue) });
       previousRef = null;
-    } else if (key === "members" || key === "accepted" || key === "mappings" || key === "proposals" || key === "invalidated") {
+    } else if (key === "members" || key === "accepted" || key === "proposals" || key === "invalidated") {
       const field = key === "members" ? "memberRefs" : key === "accepted" ? "acceptedProposals" : key === "invalidated" ? "invalidatedProposals" : key;
       result[field] = take(count(value)).map((row) => {
         const parts = row.split("\t");
@@ -305,8 +289,7 @@ function parseTextReceipt(output: string) {
         return key === "members" ? { rootId: first, ref: second }
           : key === "accepted" ? { proposalId: first, commitSha: second }
           : key === "proposals" ? { proposalId: first, status: second }
-          : key === "invalidated" ? { proposalId: first, reason: second }
-          : { source: first, destination: second };
+          : { proposalId: first, reason: second };
       });
     } else throw new Error("Unknown arc section.");
   }

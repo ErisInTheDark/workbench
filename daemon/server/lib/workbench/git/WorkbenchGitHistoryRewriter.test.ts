@@ -1,4 +1,4 @@
-/* No production exports. Tests protect linear amendments, multi-commit identity rewrites, unchanged trees, conflict rollback, scoped snapshots and commit remapping. */
+/* No production exports. Tests protect linear amendments, multi-commit identity rewrites, unchanged trees, conflict rollback, scoped snapshots, commit remapping and untouched edit sessions. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -82,9 +82,13 @@ async function checkContentAmend({ repositoryOwner, root, selectionStore, target
   const beforeLater = await fs.readFile(path.join(root, "later.txt"));
   const owner = await WorkbenchThreadGit.create({ cwd: root, selectionStore, threadId: "thread-one" });
   await owner.add(["selected.txt"]);
+  const editSessionRef = "refs/worktree/agents/codex/thread-one/edit-session";
+  const editSession = await repositoryOwner.createCommitFromTree(await repositoryOwner.resolveTree(oldHead), null, "edit session");
+  await repositoryOwner.updateRef(editSessionRef, editSession);
 
   const result = await owner.commit("amended target", target);
 
+  assert.equal(await repositoryOwner.readRef(editSessionRef), editSession, "edit sessions sit outside rewritten history");
   assert.notEqual(result.commit, oldHead);
   assert.equal(result.rewrittenCommitCount, 2);
   assert.equal(await repositoryOwner.readBlob(`${result.amendedCommit}:selected.txt`), "amended\n");

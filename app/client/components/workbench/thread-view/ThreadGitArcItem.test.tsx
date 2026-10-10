@@ -1,13 +1,15 @@
 /*
  * Exports:
- * - No production exports; tests protect Git arc card defaults and collapsed result summaries.
+ * - No production exports; tests protect Git arc card defaults, collapsed result summaries and edit session output parsing.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { formatGitArcEditText, parseGitArcEditText, type GitArcEditResult } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import type { GitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
+import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/workbench-command-rendering";
 import type { GitArcCommandAction, GitArcCommandIntent } from "../../../workbench/thread/thread-command-matchers";
 import {
   createThreadGitArcCompareSummaryRows,
@@ -68,7 +70,7 @@ test("status and unknown Git arc cards start open while operation cards start cl
   for (const action of ["status", "unknown"] as const) {
     assert.match(renderCard(action), /<details[^>]*\bopen=/u, action);
   }
-  for (const action of ["mv", "compare", "diff", "claims", "scope", "continue", "plan", "planStart", "release", "rescind", "restore", "start", "stash", "unstash"] as const) {
+  for (const action of ["edit", "compare", "diff", "claims", "scope", "continue", "plan", "planStart", "release", "rescind", "restore", "start", "stash", "unstash"] as const) {
     assert.doesNotMatch(renderCard(action), /<details[^>]*\bopen=/u, action);
   }
 });
@@ -99,16 +101,45 @@ test("closed claim cards show representative icon rows and a remaining count", (
   assert.match(html, /data-project-file-relative-path="src\/one\.ts"/u);
 });
 
-test("closed move cards show source and destination samples", () => {
-  const html = renderCard("mv", receipt("mv", {
-    mappings: [{ destination: "src/new.ts", source: "src/old.ts" }],
-    mode: "applied",
-  }));
+function editOutput(values: Partial<GitArcEditResult>) {
+  return formatGitArcEditText({
+    additionalClaims: [], additions: 3, blockedDirtyPaths: [], blockedPendingPaths: [], collisions: [], conflictedPaths: [],
+    deletions: 1, diffs: [], fileCount: 2, files: [
+      { additions: 1, binary: false, deletions: 1, ignored: false, lines: [1], movedFrom: "src/old.ts", path: "src/new.ts" },
+      { additions: 2, binary: false, deletions: 0, ignored: false, lines: [4, 5], path: "src/app.ts" },
+    ],
+    ignoredFileCount: 0, page: 1, pageCount: 1, phase: "applied", releasedClaims: [], session: "abc12345", skippedFileCount: 0, warnings: [],
+    ...values,
+  });
+}
 
-  assert.match(html, /src\/old\.ts/u);
-  assert.match(html, /src\/new\.ts/u);
-  assert.match(html, /data-project-file-relative-path="src\/old\.ts"/u);
+function renderEditCard(step: GitArcEditStep, output: string) {
+  return renderToStaticMarkup(createElement(ThreadGitArcItem, {
+    commandIntent: { ...intent("edit"), editStep: step },
+    durationMs: 12,
+    editResult: parseGitArcEditText(output),
+    outcome: "completed",
+    projectId: "project",
+    receipt: null,
+  }));
+}
+
+test("closed edit cards read the CLI output and show moved files at their destination with session totals", () => {
+  const html = renderEditCard("apply", editOutput({}));
+
+  assert.match(html, /Applied edit/u);
+  assert.match(html, /edit session abc12345/u);
   assert.match(html, /data-project-file-relative-path="src\/new\.ts"/u);
+  assert.match(html, /data-project-file-relative-path="src\/app\.ts"/u);
+  assert.match(html, />\+3</u);
+  assert.match(html, />-1</u);
+});
+
+test("reverted edit cards with conflicts open on the files to resolve", () => {
+  const html = renderEditCard("revert", editOutput({ conflictedPaths: ["src/app.ts"], phase: "reverted" }));
+
+  assert.match(html, /<details[^>]*\bopen=/u);
+  assert.match(html, /Resolve conflict markers/u);
 });
 
 test("closed compare cards show two file samples, totals, and a remaining count", () => {

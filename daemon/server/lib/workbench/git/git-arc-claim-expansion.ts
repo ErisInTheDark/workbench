@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - expandGitArcClaimPaths: turn folder paths into exact claims on the Git-visible files they contain right now.
- * - expandGitArcMoveClaimPaths: claim both sides of path moves, deriving folder destinations from their source files.
  */
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -34,20 +33,5 @@ export async function expandGitArcClaimPaths(repository: WorkbenchGitRepository,
   return sortedUnique(paths.flatMap((scope) => {
     const contained = filesUnder(scope);
     return contained.length ? contained : [scope];
-  }));
-}
-
-/** Moves are claimed before they run, so a folder destination has no files yet to list. */
-export async function expandGitArcMoveClaimPaths(
-  repository: WorkbenchGitRepository,
-  mappings: readonly { destination: string; source: string }[],
-) {
-  if (!mappings.length) return [];
-  const sources = mappings.map(({ source }) => source);
-  const filesUnder = filesUnderScopes(await repository.listWorktreePaths(sources), sources);
-  return sortedUnique(mappings.flatMap(({ destination, source }) => {
-    const contained = filesUnder(source);
-    if (!contained.length) return [source, destination];
-    return contained.flatMap((file) => [file, `${destination}${file.slice(source.length)}`]);
   }));
 }

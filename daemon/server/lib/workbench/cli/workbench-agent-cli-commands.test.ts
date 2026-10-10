@@ -23,6 +23,7 @@ import {
 } from "./workbench-agent-cli-commands.ts";
 import { adaptWorkbenchAgentCliResponse } from "./workbench-agent-cli-responses.ts";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
+import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-receipts";
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
@@ -889,41 +890,26 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
     "git", "arc", "diff", "--page", "2", "--", "src/file.ts",
   ], gitOptions)).kind, "error");
 
-  const move = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "mv", "src/old.ts", "src/new.ts",
+  const editStart = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "edit", "start", "--operations", JSON.stringify([{ kind: "replace", pattern: "\\bOld\\b", replacement: "New" }]),
   ], gitOptions);
-  assert.equal(move.kind, "request");
-  assert.equal(move.request.responseKind, "git-arc-mv");
-  assert.deepEqual(move.request.body, {
-    action: "arcMove",
+  assert.equal(editStart.kind, "request");
+  assert.equal(editStart.request.responseKind, "git-arc-edit");
+  assert.deepEqual(editStart.request.body, {
+    action: "arcEditStart",
     cwd: "C:/workspace",
     harness: "codex",
-    move: { kind: "operands", operands: ["src/old.ts", "src/new.ts"] },
+    operations: [{ flags: "", globs: [], includeIgnored: false, kind: "replace", pattern: "\\bOld\\b", replacement: "New", roots: ["."] }],
     threadId: "thread-1",
   });
-
-  const regexMove = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "mv", "--regex", "^src/(.+)$", "--replace", "tests/$1", "--", "src",
+  const editView = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "edit", "view", "--page", "2", "--diff", "src/a.ts:4", "--diff", "src/b.ts",
   ], gitOptions);
-  assert.equal(regexMove.kind, "request");
-  assert.deepEqual(regexMove.request.body, {
-    action: "arcMove",
-    cwd: "C:/workspace",
-    harness: "codex",
-    move: { confirm: false, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
-    threadId: "thread-1",
+  assert.equal(editView.kind, "request");
+  assert.deepEqual(editView.request.body, {
+    action: "arcEditView", cwd: "C:/workspace", diffs: ["src/a.ts:4", "src/b.ts"], harness: "codex", page: 2, threadId: "thread-1",
   });
-  const launcherNormalizedRegexMove = await parseWorkbenchAgentCliCommand([
-    "git", "arc", "mv", "--confirm", "--regex", "^src/(.+)$", "--replace", "tests/$1", "src",
-  ], gitOptions);
-  assert.equal(launcherNormalizedRegexMove.kind, "request");
-  assert.deepEqual(launcherNormalizedRegexMove.request.body, {
-    action: "arcMove",
-    cwd: "C:/workspace",
-    harness: "codex",
-    move: { confirm: true, kind: "regex", pattern: "^src/(.+)$", replacement: "tests/$1", roots: ["src"] },
-    threadId: "thread-1",
-  });
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "edit", "start", "--operations", "not json"], gitOptions)).kind, "error");
 
   const release = await parseWorkbenchAgentCliCommand(["git", "arc", "release"], gitOptions);
   assert.equal(release.kind, "request");
@@ -1886,24 +1872,17 @@ test("adapts semantic text, useful JSON, native documents, and plain errors", ()
       { ref: planRef, rootId: "api" },
       { ref: successorRef, rootId: "web" },
   ]);
-  const movePreview = adapt("git-arc-mv", {
-    additionalClaims: ["src/old.ts", "tests/old.ts"],
-    checkpointCommit: planRef,
-    intentName: "Move tests",
-    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
-    matchedPathCount: 3,
-    mode: "preview",
-    remainingMatchCount: 2,
-    scopePaths: ["src/existing.ts"],
-  }, { action: "arcMove" });
-  assert.equal(parseGitArcReceipt(movePreview.stdout)?.mode, "preview");
-  assert.equal(parseGitArcReceipt(movePreview.stdout)?.remainingMatchCount, 2);
-  assert.deepEqual(parseGitArcReceipt(movePreview.stdout)?.mappings, [{ destination: "tests/old.ts", source: "src/old.ts" }]);
-  assert.equal(parseGitArcReceipt(adapt("git-arc-mv", {
-    additionalClaims: ["tests/old.ts"], checkpointCommit: successorRef,
-    mappings: [{ destination: "tests/old.ts", source: "src/old.ts" }],
-    matchedPathCount: 1, mode: "applied", remainingMatchCount: 0, scopePaths: ["src/old.ts", "tests/old.ts"],
-  }, { action: "arcMove" }).stdout)?.mode, "applied");
+  const editPreview = adapt("git-arc-edit", {
+    additions: 1, collisions: [{ owner: "other work", paths: ["src/b.ts"], threadId: "sibling" }], deletions: 1,
+    diffs: [{ path: "src/b.ts", patch: "@@ -1 +1 @@\n-old\n+new" }], fileCount: 1, ignoredFileCount: 0,
+    files: [{ additions: 1, deletions: 1, lines: [1], movedFrom: "src/a.ts", path: "src/b.ts" }],
+    page: 1, pageCount: 1, phase: "preview", session: "abc12345", skippedFileCount: 0,
+  }, { action: "arcEditStart" });
+  const parsedEdit = parseGitArcEditText(editPreview.stdout);
+  assert.deepEqual(parsedEdit?.files.map(({ movedFrom, path }) => ({ movedFrom, path })), [{ movedFrom: "src/a.ts", path: "src/b.ts" }]);
+  assert.deepEqual(parsedEdit?.collisions, [{ owner: "other work", paths: ["src/b.ts"], threadId: "sibling" }]);
+  assert.match(editPreview.stdout, /^diff src\/b\.ts\n@@ -1 \+1 @@/mu);
+  assert.match(editPreview.stdout, /Apply waits until the other threads release/u);
   const largeStack = adapt("git-arc-stack", {
     checkpointCommit: successorRef,
     intentName: "Large fixture stack",

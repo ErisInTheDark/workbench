@@ -6,7 +6,7 @@
 </docs>
 <workspace:project>
 <!-- Outer region: only policy that genuinely applies to every arc tool. Each line names the tools it is about, so prompt cost lands where it belongs. -->
-<docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_mv git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack">
+<docs tools="git_plan_claims git_plan_start git_arc_start git_arc_wait git_arc_continue git_arc_claims git_arc_adopt git_arc_stash git_arc_unstash git_arc_release git_arc_status git_arc_compare git_arc_diff git_arc_restore git_arc_propose git_arc_rescind git_arc_reword git_arc_stack git_arc_unstack">
 ## Workbench Git Plans and Arcs
 
 ### lifecycle and claims
@@ -26,6 +26,8 @@ scope and phases:
 claims and safety:
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
 - Arc-managed edits require claims. Gitignored files need none.
+<!-- Agents otherwise burn hundreds of read/edit calls on mechanical renames and risk substring replacements; edit sessions preview, claim and revert as one unit. -->
+- File moves and multi-file replacements in Git-visible files require `wb git arc edit`; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.
 <docs tools="git_plan_claims git_arc_claims">
 - Adopt intentional command-caused dirt for inclusion in proposals.
 </docs>
@@ -120,12 +122,6 @@ follow-up scope:
 </docs>
 <docs tools="git_arc_status">
 - Recover a lost proposal response with <tool id="git_arc_status" /> before retrying, never as a preflight.
-</docs>
-
-<docs tools="git_arc_mv">
-### move paths
-- <tool id="git_arc_mv" /> performs approved path moves; source and destination stay claimed and the ordinary Git index stays unchanged.
-- Its `move` value accepts explicit operands, explicit source/destination mappings, or regex preview/confirmation. Confirm a regex preview, then preview again when more matches remain.
 </docs>
 
 ### compare or diff an arc

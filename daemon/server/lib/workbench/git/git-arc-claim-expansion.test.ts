@@ -1,16 +1,16 @@
-/* No production exports. Wards that folder claims become the Git-visible files they hold, and moves claim derived destinations. */
+/* No production exports. Wards that folder claims become the Git-visible files they hold. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { expandGitArcClaimPaths, expandGitArcMoveClaimPaths } from "./git-arc-claim-expansion.ts";
+import { expandGitArcClaimPaths } from "./git-arc-claim-expansion.ts";
 import GitTestFixtureCache from "./GitTestFixtureCache.ts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository.ts";
-import { PATH_MOVER_BASE_FIXTURE } from "./WorkbenchGitTestFixtures.ts";
+import { SRC_BASE_FIXTURE } from "./WorkbenchGitTestFixtures.ts";
 
 test("folders expand to their tracked and untracked files while files, missing and empty paths stay exact", async (context) => {
-  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
+  const fixture = await new GitTestFixtureCache().copy(SRC_BASE_FIXTURE);
   context.after(fixture.dispose);
   const root = fixture.root;
   await fs.mkdir(path.join(root, "src", "deep"), { recursive: true });
@@ -27,14 +27,4 @@ test("folders expand to their tracked and untracked files while files, missing a
   );
   await fs.unlink(path.join(root, "src", "one.test.ts"));
   assert.deepEqual(await expandGitArcClaimPaths(repository, ["src"]), ["src/deep/new.ts", "src/one.test.ts"], "deleted tracked files stay claimable");
-});
-
-test("folder moves claim each source file and its destination", async (context) => {
-  const fixture = await new GitTestFixtureCache().copy(PATH_MOVER_BASE_FIXTURE);
-  context.after(fixture.dispose);
-  const repository = new WorkbenchGitRepository(fixture.root);
-  assert.deepEqual(await expandGitArcMoveClaimPaths(repository, [
-    { source: "src", destination: "lib" },
-    { source: "README.md", destination: "docs/README.md" },
-  ]), ["docs/README.md", "lib/one.test.ts", "README.md", "src/one.test.ts"].sort((left, right) => left.localeCompare(right)));
 });
