@@ -13,6 +13,7 @@
 <docs tools="git_arc_status">
 overall:
 - On user-triggered events like questionnaire responses and new turns, reflexively use <tool id="git_arc_status" />. User actions before events can change routing; status cheaply catches you up
+- Use compact status first. Request `full` only when a returned count is insufficient, and only for needed groups.
 </docs>
 
 scope and phases:
@@ -26,8 +27,10 @@ scope and phases:
 claims and safety:
 <!-- Failure: agents ask permission to edit ignored files after arc tools correctly skip them. -->
 - Arc-managed edits require claims. Gitignored files need none.
+<docs tools="git_arc_edit">
 <!-- Agents otherwise burn hundreds of read/edit calls on mechanical renames and risk substring replacements; edit sessions preview, claim and revert as one unit. -->
 - File moves and multi-file replacements in Git-visible files require `wb git arc edit`; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.
+</docs>
 <docs tools="git_plan_claims git_arc_claims">
 - Adopt intentional command-caused dirt for inclusion in proposals.
 </docs>

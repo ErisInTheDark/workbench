@@ -663,14 +663,15 @@ export default class GitArcProposalController {
     const stackedPending = new Map<string, Array<{ proposalId: string; title: string }>>();
     const accepted: Array<{ proposalId: string; title: string; commitSha: string }> = [];
     const unavailable: Array<{ proposalId: string; title: string; reason: string }> = [];
-    const dismissed = new Set(entry?.acceptedVisibility?.dismissed ?? []);
+    const visibility = entry ? acceptedVisibility(entry) : { dismissed: [], viewed: [] };
+    const hiddenAccepted = new Set([...visibility.dismissed, ...visibility.viewed]);
     // Committed metadata is final, so one batched read settles those rows without per-proposal resolution.
     const summaries = new Map((await this.store(repository).readProposalSummaries(harness, input.threadId, proposalIds))
       .map(summary => [summary.proposalId, summary]));
     for (const proposalId of proposalIds) {
       const summary = summaries.get(proposalId);
       if (summary?.status === "committed") {
-        if (summary.committedSha && !dismissed.has(proposalId)) {
+        if (summary.committedSha && !hiddenAccepted.has(proposalId)) {
           accepted.push({ proposalId, title: summary.title, commitSha: summary.committedSha });
         }
         continue;
@@ -684,7 +685,7 @@ export default class GitArcProposalController {
         if (layer) stackedPending.set(layer.tipCommit, [...stackedPending.get(layer.tipCommit) ?? [], { proposalId, title: metadata.title }]);
         else pending.push({ proposalId, title: metadata.title });
       }
-      if (metadata.status === "committed" && metadata.committedSha && !dismissed.has(proposalId)) {
+      if (metadata.status === "committed" && metadata.committedSha && !hiddenAccepted.has(proposalId)) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
       }
       if (metadata.status === "unavailable") {
