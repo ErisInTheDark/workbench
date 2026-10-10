@@ -27,6 +27,7 @@ import WorkbenchCoreNode from "./WorkbenchCoreNode";
 import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
+import WorkbenchExecReaperNode from "./WorkbenchExecReaperNode";
 import WorkbenchInstructionsNode from "./WorkbenchInstructionsNode";
 import WorkbenchCodexInstructionNode from "./WorkbenchCodexInstructionNode";
 
@@ -41,7 +42,7 @@ export default ReloadableNode.define<
   DaemonProviderNotification
 >()({
   access: "agent",
-  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode],
+  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode, WorkbenchExecReaperNode],
   create: (context, build) => {
     const databasePath = join(context.dataRootPath, "daemon", "workbench.sqlite3");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;

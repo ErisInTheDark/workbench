@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, and prepare tools for its native sandbox.
+ * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, prepare tools for its native sandbox, and expose the executor's command roots for reaping.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { ProviderToolMetadata, WorkbenchProviderTools } from "./provider-execution";
 import CodexShellController, { WORKBENCH_SHELL_SANDBOX_CAPABILITY, WORKBENCH_SHELL_TOOL_DESCRIPTION } from "./CodexShellController";
 import type CodexSandboxAclController from "./CodexSandboxAclController";
+import type CodexExecServer from "./CodexExecServer";
 import { allowCodexApplyPatch, denyCodexApplyPatch, parseCodexApplyPatchClaimHook } from "./lib/workbench/codex-apply-patch-claim-hook";
 import { describePendingProposalDenial } from "./lib/workbench/file-claim-check";
 import {
@@ -14,6 +15,11 @@ import {
 
 export default class CodexToolsController implements WorkbenchProviderTools {
   readonly prepareExecution: WorkbenchProviderTools["prepareExecution"];
+  /** The executor's command roots and a sandboxed runner, for reaping commands an earlier executor left running. */
+  readonly processes: {
+    executor: Pick<CodexExecServer, "generation" | "onRoot">;
+    runSandboxed: CodexShellController["runSandboxed"];
+  } | null;
 
   constructor(private readonly options: {
     readCallerThread(nativeThreadId: NativeThreadId): Promise<{ id: WorkbenchThreadId; cwd: string }>;
@@ -21,8 +27,11 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     /** Repairs Windows sandbox write ACEs on patch targets so the sandboxed apply_patch can write them. */
     sandboxAcl?: Pick<CodexSandboxAclController, "ensureWritable">;
     shell: Pick<CodexShellController, "prepare"> & Partial<Pick<CodexShellController, "prepareAdmitted" | "runSandboxed">>;
+    executor?: Pick<CodexExecServer, "generation" | "onRoot">;
   }) {
     this.prepareExecution = options.shell.prepareAdmitted?.bind(options.shell);
+    const runSandboxed = options.shell.runSandboxed;
+    this.processes = options.executor && runSandboxed ? { executor: options.executor, runSandboxed } : null;
   }
 
   async patchClaims(...[input, check, signal]: Parameters<WorkbenchProviderTools["patchClaims"]>) {

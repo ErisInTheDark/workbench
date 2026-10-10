@@ -1,4 +1,4 @@
-/* No exports. Exercises native transport ordering, cancellation isolation and executor retirement. */
+/* No exports. Exercises native transport ordering, cancellation settling on terminate acknowledgement, termination before retirement, and command root markers. */
 import assert from "node:assert/strict";
 import { PassThrough, Writable } from "node:stream";
 import { ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -6,7 +6,9 @@ import { test } from "node:test";
 import CodexExecServer from "./CodexExecServer";
 import type { CodexExecRequest } from "./codex-exec-protocol";
 
-function fixture(autoInitialize = true) {
+function fixture(autoInitialize: boolean | NodeJS.Platform = true) {
+  const platform: NodeJS.Platform = typeof autoInitialize === "string" ? autoInitialize : "linux";
+  if (typeof autoInitialize === "string") autoInitialize = true;
   const calls: { id: number; method: string; params: { processId: string } }[] = [];
   const waiting: (() => void)[] = [];
   const child = Object.assign(new ChildProcess(), {
@@ -39,16 +41,20 @@ function fixture(autoInitialize = true) {
   }
   let retired = 0;
   const errors: string[] = [];
+  let releaseGrace!: () => void;
+  const grace = new Promise<void>(resolve => { releaseGrace = resolve; });
   const owner = new CodexExecServer({
     cwd: process.cwd(), spawnProcess: () => child,
     retireProcess: async () => { retired++; child.emit("close", 0); },
     reportError: message => errors.push(message),
+    terminationGrace: () => grace,
+    platform,
   });
   const request: CodexExecRequest = {
     command: ["test"], cwd: process.cwd(), permissions: { type: "disabled" },
     workspaceRoots: [process.cwd()], windowsSandboxLevel: "elevated", windowsSandboxPrivateDesktop: true,
   };
-  return { owner, child, next, reply, reject, event, finish, request, errors, retired: () => retired };
+  return { owner, child, next, reply, reject, event, finish, request, errors, releaseGrace, retired: () => retired };
 }
 
 test("concurrent commands retain interleaved output through exit until streams close", async t => {
@@ -90,6 +96,104 @@ test("cancellation during start terminates only that command after admission", a
   assert.equal((await second).stdout, "unaffected");
 });
 
+test("a stop before start is acknowledged still terminates, and its acknowledgement settles the call", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const cancel = new AbortController();
+  const command = f.owner.execute(f.request, cancel.signal);
+  const rejected = assert.rejects(command, /stopped by user/);
+  const start = await f.next("process/start");
+  cancel.abort(new Error("stopped by user"));
+  const terminate = await f.next("process/terminate");
+  assert.equal(terminate.params.processId, start.params.processId);
+  f.reply(terminate.id, { running: false });
+  await rejected;
+});
+
+test("an acknowledged stop settles the call even when the executor never reports the command closed", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const cancel = new AbortController();
+  const command = f.owner.execute(f.request, cancel.signal);
+  const rejected = assert.rejects(command, /stopped by user/);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  await Promise.resolve();
+  cancel.abort(new Error("stopped by user"));
+  const terminate = await f.next("process/terminate");
+  f.reply(terminate.id, { running: false });
+  await rejected;
+});
+
+test("retirement terminates live commands through the executor before ending its process tree", async () => {
+  const f = fixture();
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const rejected = assert.rejects(command, /retiring|connection closed/);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  const disposed = f.owner.dispose();
+  const terminate = await f.next("process/terminate");
+  assert.equal(terminate.params.processId, start.params.processId);
+  assert.equal(f.retired(), 0, "the sandbox runner ends its job before the executor tree is killed");
+  f.reply(terminate.id, { running: false });
+  await disposed;
+  await rejected;
+  assert.equal(f.retired(), 1);
+});
+
+test("retirement still ends the executor when it never acknowledges termination", async () => {
+  const f = fixture();
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const rejected = assert.rejects(command, /retiring|connection closed/);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  const disposed = f.owner.dispose();
+  await f.next("process/terminate");
+  f.releaseGrace();
+  await disposed;
+  await rejected;
+  assert.equal(f.retired(), 1);
+});
+
+test("a command's root marker is stripped from its output and reported until it settles", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const events: string[] = [];
+  f.owner.onRoot(event => events.push(event.kind === "root" ? `root ${event.pid} ${event.startedAt}` : "settled"));
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  const stderr = (text: string) => f.event("process/output", start.params.processId, { stream: "stderr", chunk: Buffer.from(text).toString("base64") });
+  stderr("<!--wb-exec-root 42");
+  stderr(" 133-->\r\nreal error");
+  f.finish(start.params.processId, "out");
+  assert.deepEqual(await command, { exitCode: 0, stdout: "out", stderr: "real error" });
+  assert.deepEqual(events, ["root 42 133", "settled"]);
+});
+
+test("Windows pwsh commands report their root process first; other commands run unchanged", async t => {
+  const f = fixture("win32");
+  t.after(() => { f.releaseGrace(); return f.owner.dispose(); });
+  void f.owner.execute({ ...f.request, command: ["pwsh", "-NoProfile", "-Command", "Get-Date"] }, new AbortController().signal).catch(() => undefined);
+  void f.owner.execute({ ...f.request, command: ["node", "-e", "1"] }, new AbortController().signal).catch(() => undefined);
+  const marked = (await f.next("process/start")).params as unknown as { argv: string[] };
+  const plain = (await f.next("process/start", 1)).params as unknown as { argv: string[] };
+  assert.deepEqual(marked.argv.slice(0, 3), ["pwsh", "-NoProfile", "-Command"]);
+  assert.match(marked.argv[3]!, /^\[Console\]::Error\.WriteLine\('<!--wb-exec-root '.*; Get-Date$/u);
+  assert.deepEqual(plain.argv, ["node", "-e", "1"]);
+});
+
+test("stderr without a root marker is passed through untouched", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  f.event("process/output", start.params.processId, { stream: "stderr", chunk: Buffer.from("<!-- not ours").toString("base64") });
+  f.finish(start.params.processId, "");
+  assert.equal((await command).stderr, "<!-- not ours");
+});
+
 test("transport loss rejects active commands and does not replay them", async () => {
   const f = fixture();
   const command = f.owner.execute(f.request, new AbortController().signal);
@@ -107,7 +211,10 @@ test("explicit disposal retires starting commands and waits for the owned tree",
   const command = f.owner.execute(f.request, new AbortController().signal);
   const rejected = assert.rejects(command, /retiring|connection closed/);
   await f.next("process/start");
-  await f.owner.dispose();
+  const disposed = f.owner.dispose();
+  const terminate = await f.next("process/terminate");
+  f.reply(terminate.id, { running: false });
+  await disposed;
   await rejected;
   assert.equal(f.retired(), 1);
 });

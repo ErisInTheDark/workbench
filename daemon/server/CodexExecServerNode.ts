@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair and the machine-wide expensive-command slots; reloadable shell orchestration lives in a child.
+ * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair and the machine-wide expensive-command slots, stopping running commands when it is replaced; reloadable shell orchestration lives in a child.
  */
 import ReloadableNode from "./ReloadableNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
@@ -34,6 +34,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     return {
       registrations: { codexExecutor: executor, codexSandboxAcl: sandboxAcl, commandCapacity },
       start: () => undefined,
+      // Replacing the executor interrupts its commands: stop them now through their runners instead of waiting out the drain.
+      beginRuntimeDrain: () => {
+        void executor.cancelAll(new Error("The sandbox executor is restarting; this command was stopped.")).catch(error => {
+          logError("codex-exec", `Stopping commands for an executor restart failed: ${String(error).slice(0, 400)}`);
+        });
+      },
       beginHandoff: () => ({
         // A half-propagated tree is safe but leaves agents read-only until the successor rescans it.
         waitForIdle: () => sandboxAcl.idle(),
@@ -41,7 +47,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           void retire().catch(error => logError("codex-exec", `Executor retirement failed: ${String(error).slice(0, 400)}`));
         },
         detach: () => undefined,
-        resume: () => undefined,
+        // A rolled-back replacement keeps this executor, so it admits commands again.
+        resume: () => { executor.resume(); },
         commit: retire,
       }),
       dispose: retire,

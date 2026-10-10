@@ -83,6 +83,7 @@ const databaseReleases = Object.freeze({
   threadVisEnders: release(73, "15b9de53ec6acaa147dfe8965540d05d6f1a4df2b81cb1bbeaa2c977a29ebb23"),
   boundedPayloadRetention: release(74, "0b8b95e9e54103f888595c009337c3b1dc200b7bd3ff6b6534761fa97f3bf20b"),
   threadVisContextsAndAnswers: release(75, "1a4ccfdd2928eb9f9987d83abd4414d258de835ff02130a40873e5ed0d328a08"),
+  execRoots: release(76, "94edfd3cb0a08668eef7d37f76e8e1390cd8a3dd620ca513dd16b883266d1abb"),
 });
 
 export default databaseReleases;

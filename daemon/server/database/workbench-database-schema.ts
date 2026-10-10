@@ -72,6 +72,7 @@ import { approvalReviewSchemaHistory } from "../lib/workbench/database/schema/ap
 import { threadTodoSchemaHistory } from "../lib/workbench/database/schema/thread-todo-schema.ts";
 import { threadAddressedFeedbackSchemaHistory } from "../lib/workbench/database/schema/thread-addressed-feedback-schema.ts";
 import { threadVisSchemaHistory } from "../lib/workbench/database/schema/thread-vis-schema.ts";
+import { execRootSchemaHistory } from "../lib/workbench/database/schema/exec-roots-schema.ts";
 import {
   threadPayloadRetentionSchemaHistory,
   threadPayloadRetentionTables,
@@ -148,6 +149,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       threadAddressedFeedbackSchemaHistory,
       threadVisSchemaHistory,
       threadPayloadRetentionSchemaHistory,
+      execRootSchemaHistory,
     ],
   });
 }
