@@ -228,7 +228,7 @@ export default function WorkbenchThreadListItem({
   );
   const target = targetForEntry(entry);
   const facts = useThread.summary(entry.entryKind === "draft" ? null : entry.identity.threadId)?.summary.facts;
-  const todoCount = facts?.todoCount ?? 0;
+  const requiredTodoCount = facts?.requiredTodoCount ?? 0;
   const {
     activityAt, claimedPaths, group, Icon, lifecycle, showProposedCommit,
     stashed, stashedPaths, status, statusClassName, statusTone, tooltipStatus, waiting,
@@ -251,7 +251,7 @@ export default function WorkbenchThreadListItem({
   </span>;
   const archived = entry.entryKind === "thread" && group === "archived";
   const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
-  const { baseAction, shiftAction } = getThreadRowActions(entry, group);
+  const { baseAction, shiftAction } = getThreadRowActions(entry, group, { requiredTodoCount });
   const action = isShiftPressed && shiftAction ? shiftAction : baseAction;
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;
@@ -260,7 +260,7 @@ export default function WorkbenchThreadListItem({
     : `${project.name || project.id}, ${WorkbenchProjectLabel.getDisplayPath(project)}, ` : "";
   const gitWorkLabels = [
     hasComposerDraft ? "unsent draft" : "",
-    todoCount ? `${todoCount} ${todoCount === 1 ? "todo" : "todos"}` : "",
+    requiredTodoCount ? `${requiredTodoCount} required ${requiredTodoCount === 1 ? "todo" : "todos"}` : "",
     proposalCount ?`${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
     activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
     stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
@@ -374,7 +374,7 @@ export default function WorkbenchThreadListItem({
           <Icon className={`mr-1.5 ${statusClassName}`} size={16} />
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} todoCount={todoCount} />
+            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={16} /></span> : null}
             {trailing ?? rowTime}
           </span>
@@ -405,7 +405,7 @@ export default function WorkbenchThreadListItem({
           ) : undefined}
           metadata={(
             <span className="grid items-center">
-              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} todoCount={todoCount} />
+              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             </span>
           )}
           statusIcon={<Icon className={statusClassName} size={16} />}

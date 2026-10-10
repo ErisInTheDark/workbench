@@ -176,11 +176,11 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
   assert.ok(shrunk.kind === "threadSummaries");
   assert.deepEqual(Object.keys(shrunk.summaries), [secondId]);
 
-  summaries.set(secondId, createThreadSummary(second, { todoCount: 4 }));
+  summaries.set(secondId, createThreadSummary(second, { requiredTodoCount: 4 }));
   announce(secondId);
   const counted = f.updates.at(-1)!.value;
   assert.ok(counted.kind === "threadSummaries");
-  assert.deepEqual(counted.summaries[secondId]?.facts, { todoCount: 4 });
+  assert.deepEqual(counted.summaries[secondId]?.facts, { requiredTodoCount: 4 });
 
   const rows = f.observe({ kind: "projectThreads", projectIds: [a] });
   assert.throws(() => f.owner.retarget("connection", {

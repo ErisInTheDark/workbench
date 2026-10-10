@@ -34,7 +34,7 @@
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
- * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
+ * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git and required-todo blockers, terminal settlement, and aggregate wake readiness.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/hasUnarchivedSidebarWork: classify project placement and ordered thread sections.
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
@@ -756,12 +756,14 @@ export function hasUnarchivedSidebarWork(entries: readonly SidebarRow[]) {
   return entries.some(entry => entry.entryKind !== "subagent" && !entry.metadata.archived);
 }
 
-export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow) {
+/** `requiredTodoCount` comes from the thread's summary; remaining required todos hold settlement like live claims. */
+export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow, { requiredTodoCount = 0 }: { requiredTodoCount?: number } = {}) {
   return entry.entryKind !== "draft"
     && !entry.waitingFor
     && !entry.lifecycle.settled
     && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")
-    && !gitArcPreventsThreadSettlement(entry.gitArc);
+    && !gitArcPreventsThreadSettlement(entry.gitArc)
+    && !requiredTodoCount;
 }
 
 export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly SidebarRow[]) {

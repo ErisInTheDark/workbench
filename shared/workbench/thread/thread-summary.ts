@@ -17,8 +17,8 @@ import {
 export const ThreadSummaryFactsSchema = z.object({
   /** Context compaction is running now. */
   compacting: z.boolean().optional(),
-  /** Follow-up todos the thread holds. */
-  todoCount: z.number().int().nonnegative().optional(),
+  /** Required follow-up todos the thread still holds; they keep it from settling. */
+  requiredTodoCount: z.number().int().nonnegative().optional(),
 });
 export type ThreadSummaryFacts = z.infer<typeof ThreadSummaryFactsSchema>;
 
@@ -37,7 +37,7 @@ export function createThreadSummary(entry: ThreadSource, facts: ThreadSummaryFac
   return {
     facts: {
       ...(facts.compacting ? { compacting: true } : {}),
-      ...(facts.todoCount ? { todoCount: facts.todoCount } : {}),
+      ...(facts.requiredTodoCount ? { requiredTodoCount: facts.requiredTodoCount } : {}),
     },
     row: projectSidebarRow(entry) as WorkbenchThreadSidebarThreadRow,
   };

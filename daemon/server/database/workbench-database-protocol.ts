@@ -113,7 +113,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "threadGoals"; command: ThreadGoalCommand }
   | { type: "threadVis"; command: ThreadVisCommand }
   | { type: "threadTodos"; command: ThreadTodoCommand }
-  | { type: "threadTodoCounts" }
+  | { type: "threadRequiredTodoCounts" }
   | { type: "threadAddressedFeedback"; command: ThreadAddressedFeedbackCommand }
   | { type: "projectStore"; command: ProjectStoreCommand }
   | { type: "readLegacyDiffArtifact"; input: LegacyDiffArtifactReference }
@@ -256,7 +256,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGoals"; result: ThreadGoalState }
   | { id: number; type: "threadVis"; result: ThreadVisResult }
   | { id: number; type: "threadTodos"; result: ThreadTodoResult }
-  | { id: number; type: "threadTodoCounts"; counts: Record<string, number> }
+  | { id: number; type: "threadRequiredTodoCounts"; counts: Record<string, number> }
   | { id: number; type: "threadAddressedFeedback"; result: WorkbenchThreadAddressedFeedback[] }
   | { id: number; type: "projectStore"; result: ProjectStoreResult }
   | { id: number; type: "legacyDiffArtifact"; diff: string | null }

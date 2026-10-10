@@ -25,6 +25,7 @@ export function getThreadStopIntent(entry: Extract<WorkbenchThreadSidebarEntry, 
 export function getThreadRowActions(
   entry: WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry,
   group: WorkbenchThreadSidebarGroup,
+  { requiredTodoCount = 0 }: { requiredTodoCount?: number } = {},
 ): { baseAction: ThreadRowAction | null; shiftAction: ThreadRowAction | null } {
   if (entry.entryKind === "draft") return { baseAction: "discard", shiftAction: null };
   const hasQuestionnaire = "canCompleteQuestionnaire" in entry
@@ -33,7 +34,7 @@ export function getThreadRowActions(
   const canComplete = isWorkbenchSidebarThreadCompletionAvailable(entry)
     && entry.lifecycle.kind === "needsAttention"
     && (!entry.waitingFor || hasQuestionnaire);
-  const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry);
+  const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry, { requiredTodoCount });
   const baseAction = group === "settled" || group === "archived" ? "restore" : group === "snoozed" ? "wake"
     : canComplete ? "snooze" : settlementAvailable ? "settle" : null;
   const shiftAction = entry.entryKind === "subagent" ? null

@@ -16,8 +16,8 @@ export interface WorkbenchThreadSummaryIndexPorts {
   peekProject(projectId: ProjectId): WorkbenchThreadSidebarSnapshot | null;
   readProject(projectId: ProjectId): Promise<WorkbenchThreadSidebarSnapshot>;
   subscribeProjects(listener: (projectId: ProjectId) => void): () => void;
-  /** Every thread's todo count, read once; later counts arrive through `setTodoCount`. */
-  readTodoCounts(): Promise<ReadonlyMap<string, number>>;
+  /** Every thread's required todo count, read once; later counts arrive through `setRequiredTodoCount`. */
+  readRequiredTodoCounts(): Promise<ReadonlyMap<string, number>>;
   warn(message: string): void;
 }
 
@@ -35,10 +35,10 @@ export default class WorkbenchThreadSummaryIndex {
 
   constructor(private readonly ports: WorkbenchThreadSummaryIndexPorts) {
     this.stop = ports.subscribeProjects(projectId => this.projectChanged(projectId));
-    this.seeded = ports.readTodoCounts().then(counts => {
-      for (const [threadId, todoCount] of counts) {
+    this.seeded = ports.readRequiredTodoCounts().then(counts => {
+      for (const [threadId, requiredTodoCount] of counts) {
         // A todo change during the seed read is newer than the seed.
-        if (this.facts.get(threadId)?.todoCount === undefined) this.setFact(threadId, { todoCount });
+        if (this.facts.get(threadId)?.requiredTodoCount === undefined) this.setFact(threadId, { requiredTodoCount });
       }
     }, error => {
       ports.warn(`Thread todo counts could not be read: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
@@ -80,8 +80,8 @@ export default class WorkbenchThreadSummaryIndex {
     this.setFact(threadId, { compacting });
   }
 
-  setTodoCount(threadId: string, todoCount: number) {
-    this.setFact(threadId, { todoCount });
+  setRequiredTodoCount(threadId: string, requiredTodoCount: number) {
+    this.setFact(threadId, { requiredTodoCount });
   }
 
   dispose() {

@@ -9,7 +9,7 @@ import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
@@ -294,10 +294,12 @@ function createWorkbenchCoreFeature(
     store: command => database.executeThreadTodos(command),
     resolve: resolveCanonicalThread,
     changed: (threadId, todos) => {
-      threadSummaries?.setTodoCount(threadId, todos.length);
+      threadSummaries?.setRequiredTodoCount(threadId, todos.filter(({ required }) => required).length);
       for (const listener of runtimeListeners) listener(threadId, { todos });
     },
   });
+  /** Required todos keep a thread from settling, exactly like live claims. */
+  const hasRequiredTodos = async (threadId: WorkbenchThreadId) => (await threadTodos.read(threadId)).some(({ required }) => required);
   /** Cancels this generation's vis browser calls when the core node is disposed. */
   const visBrowseLifetime = new AbortController();
   const vis = new WorkbenchVisController({
@@ -470,6 +472,7 @@ function createWorkbenchCoreFeature(
   const subagents = new WorkbenchSubagentFeature({
     identities: threadIdentity,
     queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
+    hasRequiredTodos,
     provider,
     // Read lazily: the approval owner is built after subagents but within this same node.
     liveApprovals: () => approvals.list(),
@@ -535,6 +538,7 @@ function createWorkbenchCoreFeature(
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
+    hasRequiredTodos,
     compactThread: input => threadContextRollover.acceptSummary(input),
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: logThreadStateWarning,
@@ -549,7 +553,7 @@ function createWorkbenchCoreFeature(
     peekProject: projectId => threadStateController.peekProject(projectId),
     readProject: projectId => threadStateController.readProject(projectId),
     subscribeProjects: listener => threadStateController.subscribeProjects(listener),
-    readTodoCounts: () => database.readThreadTodoCounts(),
+    readRequiredTodoCounts: () => database.readThreadRequiredTodoCounts(),
     warn: logThreadStateWarning,
   });
   const summaries = threadSummaries;

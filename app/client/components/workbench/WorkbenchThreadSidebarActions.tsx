@@ -407,7 +407,10 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
 
-    if (group === "archived" || (entry.entryKind !== "draft" && isWorkbenchThreadSettlementAvailable(entry))) {
+    // The row that opened this menu leases its summary, so its required todos are known here.
+    const requiredTodoCount = entry.entryKind === "draft" ? 0
+      : client.mounted?.threadSummaries?.get(entry.identity.threadId)?.summary.facts.requiredTodoCount ?? 0;
+    if (group === "archived" || (entry.entryKind !== "draft" && isWorkbenchThreadSettlementAvailable(entry, { requiredTodoCount }))) {
       items.push({ id: "conclude-separator", kind: "separator" }, {
         controls: group === "archived" ? [{
           checked: false,

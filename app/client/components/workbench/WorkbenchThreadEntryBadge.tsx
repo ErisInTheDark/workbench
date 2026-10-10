@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadEntryBadge: show ordered draft, todo, proposal, live-claim, and saved-stash indicators.
+ * - default WorkbenchThreadEntryBadge: show ordered draft, required-todo, proposal, live-claim, and saved-stash indicators.
  */
 "use client";
 
@@ -32,7 +32,7 @@ export default function WorkbenchThreadEntryBadge({
   hasComposerDraft,
   proposalCount = 0,
   stashedCount,
-  todoCount = 0,
+  requiredTodoCount = 0,
 }: {
   /** Active claims, including any rolled up from subagents. */
   claimedCount: number;
@@ -40,10 +40,10 @@ export default function WorkbenchThreadEntryBadge({
   /** Lifecycle proposals, including proposals grouped into sealed stack layers. */
   proposalCount?: number;
   stashedCount: number;
-  /** Follow-up todos the thread holds. */
-  todoCount?: number;
+  /** Required follow-up todos the thread still holds; optional ones stay in the thread's own panel. */
+  requiredTodoCount?: number;
 }) {
-  if (!hasComposerDraft && !todoCount && !proposalCount && !claimedCount && !stashedCount) return null;
+  if (!hasComposerDraft && !requiredTodoCount && !proposalCount && !claimedCount && !stashedCount) return null;
   return (
     <span className="inline-flex items-center gap-1.5">
       {hasComposerDraft ? (
@@ -51,9 +51,9 @@ export default function WorkbenchThreadEntryBadge({
           <ComposerDraftIcon size={16} />
         </span>
       ) : null}
-      {todoCount ? (
-        <span aria-label={`${todoCount} ${todoCount === 1 ? "todo" : "todos"}`} className="inline-flex items-center gap-0.5" data-role="thread-todos">
-          <ClipboardListIcon size={16} /><span>{todoCount}</span>
+      {requiredTodoCount ? (
+        <span aria-label={`${requiredTodoCount} required ${requiredTodoCount === 1 ? "todo" : "todos"}`} className="inline-flex items-center gap-0.5" data-role="thread-todos">
+          <ClipboardListIcon size={16} /><span>{requiredTodoCount}</span>
         </span>
       ) : null}
       {proposalCount ? <ProposalCount count={proposalCount} /> : null}

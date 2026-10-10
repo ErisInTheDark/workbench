@@ -7,7 +7,7 @@ import type { MouseEvent } from "react";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { gitArcPreventsThreadSettlement, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
@@ -80,10 +80,12 @@ function SubagentTabLink({
   tab: SubagentTab;
 }) {
   const settled = Boolean(tab.subagent?.lifecycle?.settled);
-  const terminal = tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped";
   const parsedProjectId = ProjectIdSchema.safeParse(projectId).data ?? null;
   const threadId = WorkbenchThreadIdSchema.parse(tab.id);
   const summary = useThread.summary(threadId)?.summary ?? null;
+  // Live claims and required todos hold settlement, so the option is absent, matching thread rows.
+  const settleable = (tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped")
+    && !gitArcPreventsThreadSettlement(summary?.row.gitArc) && !summary?.facts.requiredTodoCount;
   const hasComposerDraft = useWorkbenchComposerDraftPresence(projectId, tab.id);
   const claimedCount = summary?.row.gitArc?.claimedPaths.length ?? 0;
   const stashedCount = summary?.row.gitArc?.stashedPaths?.length ?? 0;
@@ -105,7 +107,7 @@ function SubagentTabLink({
             id: "restore",
             label: "Restore subagent",
             onSelect: () => onToggleSettlement(false),
-          }] : terminal ? [{
+          }] : settleable ? [{
             icon: <SettleThreadIcon size={16} />,
             id: "settle",
             label: "Settle subagent",
@@ -139,7 +141,7 @@ function SubagentTabLink({
           {tab.suffix ? <span className="text-fg/muted">{tab.suffix}</span> : null}
           <span className="text-[0.72rem] font-normal text-fg/muted empty:hidden">
             <WorkbenchThreadEntryBadge claimedCount={claimedCount} hasComposerDraft={hasComposerDraft} stashedCount={stashedCount}
-              todoCount={summary?.facts.todoCount ?? 0} />
+              requiredTodoCount={summary?.facts.requiredTodoCount ?? 0} />
           </span>
         </Tab>
       </WorkbenchThreadHoverTooltip>

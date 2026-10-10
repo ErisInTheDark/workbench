@@ -1,7 +1,7 @@
 /*
  * Exports: none. Tests protect subagent settle: a late terminal lifecycle is awaited,
  * a still-working child still errors at the deadline, a runtime drain aborts the wait,
- * and a refused mutation surfaces as failure instead of false success.
+ * and a refused mutation surfaces as failure naming held claims or required todos instead of false success.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -57,9 +57,11 @@ async function createHarness() {
   let gitArc: unknown = null;
   let lifecycle: Lifecycle = { kind: "working" };
   let refuseMutation = false;
+  let requiredTodos = false;
   const mutations: Array<Record<string, unknown>> = [];
   const controller = new WorkbenchSubagentController({
     identities: database.identities.threads,
+    hasRequiredTodos: async () => requiredTodos,
     publicThreadId: async () => { throw new Error("Settle does not publish thread identities."); },
     provider: () => { throw new Error("Settle does not call providers."); },
     stopThread: async () => { throw new Error("Settle does not stop threads."); },
@@ -82,6 +84,7 @@ async function createHarness() {
     setGitArc: (next: unknown) => { gitArc = next; },
     setLifecycle: (next: Lifecycle) => { lifecycle = next; },
     setRefuseMutation: (next: boolean) => { refuseMutation = next; },
+    setRequiredTodos: (next: boolean) => { requiredTodos = next; },
     settle: (): Promise<JsonRpcResponse> => controller.handleRequest({
       id: 1,
       method: "workbench/subagent/settle",
@@ -157,4 +160,17 @@ test("a refused mutation surfaces failure instead of false success", async (cont
   assert.match(response.error?.message ?? "", /still holds live Git arc claims and cannot be settled/u);
   assert.equal(response.result, undefined);
   assert.equal(harness.mutations.length, 1);
+});
+
+test("a settle held by required todos names them", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const harness = await createHarness();
+  context.after(() => harness.controller.dispose());
+  harness.setLifecycle({ kind: "completed" });
+  harness.setRequiredTodos(true);
+  harness.setRefuseMutation(true);
+
+  const response = await harness.settle();
+  assert.match(response.error?.message ?? "", /still holds required todos and cannot be settled/u);
+  assert.equal(response.result, undefined);
 });

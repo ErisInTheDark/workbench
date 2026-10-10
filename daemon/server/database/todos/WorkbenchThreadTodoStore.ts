@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTodoCommand: atomic thread-todo reads and edits, each scoped to one thread; todo ids are serials within it.
  * - ThreadTodoResult: the thread's todos after one command, plus what the command changed.
- * - default WorkbenchThreadTodoStore: own per-thread follow-up todos in SQLite, handing out each thread's next serial and counting every thread's todos.
+ * - default WorkbenchThreadTodoStore: own per-thread follow-up todos in SQLite, handing out each thread's next serial and counting every thread's required todos.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
@@ -37,9 +37,9 @@ const toTodo = (row: ThreadTodoRow): WorkbenchThreadTodo => ({
 export default class WorkbenchThreadTodoStore {
   constructor(private readonly database: Database.Database) {}
 
-  /** How many todos each thread holds; threads without todos are absent. */
-  counts(): Record<string, number> {
-    const rows = this.database.prepare("SELECT thread_id, COUNT(*) AS count FROM workbench_thread_todos GROUP BY thread_id")
+  /** How many required todos each thread holds; threads without any are absent. */
+  requiredCounts(): Record<string, number> {
+    const rows = this.database.prepare("SELECT thread_id, COUNT(*) AS count FROM workbench_thread_todos WHERE required = 1 GROUP BY thread_id")
       .all() as Array<{ thread_id: string; count: number }>;
     return Object.fromEntries(rows.map(({ thread_id: threadId, count }) => [threadId, count]));
   }

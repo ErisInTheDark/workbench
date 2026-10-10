@@ -86,6 +86,8 @@ export interface WorkbenchThreadStateFeatureContext {
     pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
+  /** Whether the thread still holds required follow-up todos, which keep it from settling. */
+  hasRequiredTodos?(threadId: WorkbenchThreadId): Promise<boolean>;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   compactThread?(input: { cwd: string; summary: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): Promise<void>;
@@ -233,6 +235,7 @@ export default class WorkbenchThreadStateFeature {
           : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId);
         return Boolean(state && (state.claimedPaths.length || ("phase" in state && state.phase === "stashed")));
       },
+      ...(context.hasRequiredTodos ? { hasRequiredTodos: (threadId: WorkbenchThreadId) => context.hasRequiredTodos!(threadId) } : {}),
       runGitArcReadTransition: async (projectId, operation) => {
         const project = await context.resolveProjectById(projectId);
         const read = context.transitions.read ?? context.transitions.run;

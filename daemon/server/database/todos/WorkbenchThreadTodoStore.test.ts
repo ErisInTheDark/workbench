@@ -47,7 +47,7 @@ test("todos stay in creation order and every edit is scoped to its own thread", 
   assert.equal(todos.execute({ kind: "setText", threadId, id: second.id, text: " polish more " }).todos[0]?.text, "polish more");
 
   assert.deepEqual(todos.execute({ kind: "setRequired", threadId, id: second.id, required: true }).todos, [{ ...second, text: "polish more", required: true }]);
-  assert.deepEqual(todos.counts(), { [threadId]: 1, [otherThreadId]: 1 }, "counts follow every thread's current todos");
+  assert.deepEqual(todos.requiredCounts(), { [threadId]: 1 }, "only required todos count, per thread");
 });
 
 test("addressed feedback keeps first-recorded order, ignores repeats, and clears per thread", async context => {

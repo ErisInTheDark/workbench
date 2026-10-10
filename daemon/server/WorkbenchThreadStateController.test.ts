@@ -4326,6 +4326,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
   let gitArcTransitions = 0;
   let terminalHasGitArc = false;
   let terminalGitArcResolved = false;
+  let terminalHasRequiredTodos = false;
   const terminal: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1,
     entryKind: "thread",
@@ -4354,6 +4355,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
       assert.equal(insideGitArcTransition, true);
       return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
     },
+    hasRequiredTodos: async threadId => terminalHasRequiredTodos && threadId === "terminal",
     onProject: snapshot => { published.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });
@@ -4455,6 +4457,12 @@ test("manual status persists, restores settled threads, and rejects provider-own
   await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/status/set", projectId: fixtureProjectIds["project"], status: "stopped",
   });
+  terminalHasRequiredTodos = true;
+  const todoSettle = await controller.handleRequest("observer", {
+    identity: terminal.identity, method: "workbench/thread-state/settle", projectId: fixtureProjectIds["project"],
+  });
+  assert.equal("result" in todoSettle ? (todoSettle.result as { accepted?: boolean }).accepted : true, false, "required todos hold settlement like live claims");
+  terminalHasRequiredTodos = false;
   const stoppedSettle = await controller.handleRequest("observer", {
     identity: terminal.identity, method: "workbench/thread-state/settle", projectId: fixtureProjectIds["project"],
   });

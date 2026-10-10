@@ -29,7 +29,7 @@ function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
     peekProject: () => snapshot,
     readProject: async () => snapshot,
     subscribeProjects: listener => { notify = listener; return () => {}; },
-    readTodoCounts: async () => todoCounts,
+    readRequiredTodoCounts: async () => todoCounts,
     warn: message => { throw new Error(message); },
   });
   index.subscribe(threadId => changed.push(threadId));
@@ -42,11 +42,11 @@ function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
   };
 }
 
-test("a read summary carries its seeded todo count and stays the same object until it changes", async () => {
+test("a read summary carries its seeded required todo count and stays the same object until it changes", async () => {
   const h = harness(new Map([["a", 3]]));
   const summary = await h.index.read("a");
   assert.equal(summary?.row.title, "first");
-  assert.deepEqual(summary?.facts, { todoCount: 3 });
+  assert.deepEqual(summary?.facts, { requiredTodoCount: 3 });
   assert.equal(h.index.peek("a"), summary);
   assert.equal(await h.index.read("missing"), null);
 });
@@ -66,13 +66,13 @@ test("project changes re-project only threads whose row changed, and a thread th
 
 test("pushed facts announce read threads and wait for unread ones", async () => {
   const h = harness();
-  h.index.setTodoCount("a", 2);
+  h.index.setRequiredTodoCount("a", 2);
   assert.deepEqual(h.changed, []);
-  assert.deepEqual((await h.index.read("a"))?.facts, { todoCount: 2 });
+  assert.deepEqual((await h.index.read("a"))?.facts, { requiredTodoCount: 2 });
   h.index.setCompacting("a", true);
   h.index.setCompacting("a", true);
   assert.deepEqual(h.changed, ["a"], "repeating a fact changes nothing");
-  assert.deepEqual(h.index.peek("a")?.facts, { compacting: true, todoCount: 2 });
-  h.index.setTodoCount("a", 0);
+  assert.deepEqual(h.index.peek("a")?.facts, { compacting: true, requiredTodoCount: 2 });
+  h.index.setRequiredTodoCount("a", 0);
   assert.deepEqual(h.index.peek("a")?.facts, { compacting: true }, "zero counts read as absent");
 });
