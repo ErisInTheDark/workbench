@@ -4,6 +4,7 @@
  */
 "use client";
 import type { ThreadCommandDetailRow, ThreadCommandDetailTarget } from "../../../workbench/thread/thread-command-matchers";
+import { createEmptyCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
@@ -57,11 +58,7 @@ function ThreadStructuredCommandDetailRow({ hideSharedContext, projectFilePaths,
     claimedBy: "command-detail-row", omitFromDisplay: false, ongoingSummaryParts: row.summaryParts,
     ongoingSummaryText: "", shell: null, showShell: false, summaryKind: "matched",
     summaryParts: row.summaryParts, summaryText: "",
-    summaryStats: {
-      deletedPaths: 0, gitCheckpointCreates: 0, gitCheckpointDiffs: 0, gitCheckpointRestores: 0,
-      gitDiffChecks: 0, gitStatusChecks: 0, listedFiles: 0, otherCommands: 0, pathChecks: 0,
-      readFiles: 0, searchedFiles: 0, skillLoads: 0, typescriptBuilds: 0, typescriptValidations: 0, webRequests: 0,
-    },
+    summaryStats: createEmptyCommandSummaryStats(),
   }} projectFilePaths={projectFilePaths} projectId={projectId} />;
   return (
     <span className="inline-flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 gap-y-1 align-bottom">

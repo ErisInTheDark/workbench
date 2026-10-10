@@ -13,7 +13,7 @@
  * - ThreadCommandDetailTarget: semantic target metadata for polished command substep rows. Keywords: thread, command, detail, target.
  * - ThreadCommandDetailRow: optional row rendered inside command disclosures for structured command substeps. Keywords: thread, command, details, sequence.
  * - ThreadCommandSummaryStats: aggregate command-summary counts for grouped command labels. Keywords: thread, command, summary, aggregate.
- * - ThreadCommandSummaryDisplay: shared summary-display metadata for single-command and grouped command labels. Keywords: thread, command, summary, shell.
+ * - ThreadCommandSummaryDisplay: shared summary-display metadata for single-command and grouped command labels, including dedicated-row ownership. Keywords: thread, command, summary, shell.
  * - ThreadCommandDisplay: parsed command-summary metadata for single thread command rendering. Keywords: thread, command, summary, shell, omit.
  * - CommandDisplayContext: public input for thread command display parsing. Keywords: thread, command, context.
  * - ParsedCommandDisplayContext: unwrapped command context shared by matcher helpers. Keywords: thread, command, context.
@@ -118,6 +118,7 @@ export interface ThreadCommandSummaryStats {
   skillLoads: number;
   typescriptBuilds: number;
   typescriptValidations: number;
+  visChecks: number;
   webRequests: number;
 }
 
@@ -127,6 +128,8 @@ export interface ThreadCommandSummaryDisplay {
   hideCommandCwd?: boolean;
   hideCommandOutput?: boolean;
   omitFromDisplay: boolean;
+  /** A dedicated renderer draws this command; an omitted summary must not hide it, and it groups only when a stat names it. */
+  ownRow?: boolean;
   ongoingSummaryParts: ThreadCommandDisplayPart[];
   ongoingSummaryText: string;
   shell: CommandShell;
@@ -176,6 +179,8 @@ export interface CommandMatcherResult {
   hideCommandOutput?: boolean;
   hide?: boolean;
   omitFromDisplay?: boolean;
+  /** See `ThreadCommandSummaryDisplay.ownRow`. */
+  ownRow?: boolean;
   ongoingSummaryParts: ThreadCommandDisplayPart[];
   remainingCommand?: string | null;
   stop?: boolean;

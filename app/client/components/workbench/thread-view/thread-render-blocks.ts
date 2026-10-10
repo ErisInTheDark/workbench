@@ -38,7 +38,7 @@ import {
   getNativeToolDisplay,
   getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem,
   isNativeFileOperation, getNativeFileChanges,
-  isBrowseCommandMatcherClaim, isThreadContextMatcherClaim,
+  isBrowseCommandMatcherClaim, isGitArcWaitMatcherClaim, isThreadContextMatcherClaim,
   isWorkbenchTaskStatusMatcherClaim, isWorkbenchTaskTitleSetMatcherClaim,
   parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand, parseWorkbenchThreadRecallCommand,
   type CommandShell,
@@ -46,6 +46,7 @@ import {
   type WorkbenchThreadRecallOperation,
 } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchSubagentCommandTarget } from "../../../workbench/thread/command-matchers/workbench-cli";
+import { countKnownCommandSummaryStats } from "../../../workbench/thread/command-matchers/helpers";
 import { getWorkbenchSubagentCommandTargetKey } from "../../../workbench/thread/thread-subagents";
 import { omitThreadReasoningStep, type ThreadReasoningStepReference } from "./thread-reasoning-display";
 import { isThreadWebSearchPlaceholder } from "./thread-web-search-state";
@@ -159,12 +160,7 @@ export function hasSameBlockTimeline(
 export function isHiddenCommandExecution(command: string) {
   if (/^report_intent(?:\s|$)/i.test(command.trim())) return true;
   const display = getThreadCommandDisplay({ command, commandActions: [], cwd: "" });
-  const dedicated = getGitArcMatcherAction(display.claimedBy)
-    || isThreadContextMatcherClaim(display.claimedBy)
-    || isWorkbenchTaskStatusMatcherClaim(display.claimedBy)
-    || isWorkbenchTaskTitleSetMatcherClaim(display.claimedBy)
-    || display.claimedBy?.split(",").some(claim => claim === "workbench-cli.subagent" || claim === "workbench-cli.vis");
-  return display.omitFromDisplay && !dedicated;
+  return display.omitFromDisplay && !display.ownRow;
 }
 
 export function hasReasoningSteps(item: Extract<ThreadItem, { type: "reasoning" }>) {
@@ -576,6 +572,8 @@ export type CommandSequenceRenderSegment =
   | { items: [CommandSequenceItem]; kind: "approval" }
   | { action: NonNullable<ReturnType<typeof getGitArcMatcherAction>>; item: CommandItem; kind: "gitArc" }
   | { item: CommandItem; kind: "message" }
+  /** A command its dedicated renderer draws, which no grouped summary could name. */
+  | { item: CommandItem; kind: "ownRow" }
   | { item: CommandItem; kind: "subagent" }
   | { item: CommandSequenceItem; kind: "subagentQueueCheck" }
   | { item: CommandItem; kind: "threadContext"; operation: WorkbenchThreadRecallOperation }
@@ -629,6 +627,10 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
     }
     const gitArcAction = getGitArcMatcherAction(display.claimedBy);
     if (gitArcAction) { flushCommands(); flushWaits(); segments.push({ action: gitArcAction, kind: "gitArc", item }); continue; }
+    // A grouped label is built only from stats, so a dedicated row joins a group only when a stat names it.
+    if (display.ownRow && !countKnownCommandSummaryStats(display.summaryStats)) {
+      flushCommands(); flushWaits(); segments.push({ item, kind: "ownRow" }); continue;
+    }
     const message = parseWorkbenchMessageCommand(display.unwrappedCommand, item.commandActions);
     if (message) { flushCommands(); flushWaits(); segments.push({ kind: "message", item }); continue; }
     if (readThreadSubagentCoordinationQueueCheck(item)) {
@@ -689,14 +691,16 @@ export function getWorkedBlockRows(block: ThreadRenderableBlock, context: Comman
     if (segment.kind === "subagentWait") {
       return [{ block: { kind: "commandSequence" as const, items: segment.group.entries.map(entry => entry.item) }, eligible: true }];
     }
-    const subagent = segment.kind === "subagent" ? parseWorkbenchSubagentCommand(
-      getThreadCommandDisplay({ command: segment.item.command, commandActions: segment.item.commandActions, cwd: segment.item.cwd, shell: segment.item.shell, ...context }).unwrappedCommand,
-      segment.item.commandActions,
-    ) : null;
+    const display = segment.kind === "subagent" || segment.kind === "ownRow"
+      ? getThreadCommandDisplay({ command: segment.item.command, commandActions: segment.item.commandActions, cwd: segment.item.cwd, shell: segment.item.shell, ...context })
+      : null;
+    const subagent = segment.kind === "subagent" && display ? parseWorkbenchSubagentCommand(display.unwrappedCommand, segment.item.commandActions) : null;
     return [{
       block: { kind: "commandSequence" as const, items: [segment.item] },
       eligible: (segment.kind === "gitArc" && segment.action !== "propose") || segment.kind === "threadContext"
-        || Boolean(subagent && subagent.action !== "create"),
+        || Boolean(subagent && subagent.action !== "create")
+        // Arc waits are routine work like other arc actions; todo, feedback and vis rows stay visible.
+        || (segment.kind === "ownRow" && isGitArcWaitMatcherClaim(display?.claimedBy)),
     }];
   });
 }

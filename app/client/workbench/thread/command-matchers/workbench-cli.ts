@@ -7,8 +7,9 @@
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
  * - parseWorkbenchVisCommand: parse `wb vis start|end|read|snapshot|screenshot <path>` for its vis item.
+ * - parseWorkbenchTodoCommand: parse `wb todo` list, add and remove calls for their todo row.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, feedback, vis, todo, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
@@ -20,7 +21,10 @@ import {
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
-import { getWorkbenchCommandRendering, WORKBENCH_VIS_ACTIONS, type WorkbenchFeedbackOperation, type WorkbenchVisOperation } from "./workbench-command-rendering";
+import {
+  getWorkbenchCommandRendering, WORKBENCH_VIS_ACTIONS,
+  type WorkbenchFeedbackOperation, type WorkbenchTodoOperation, type WorkbenchVisOperation,
+} from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "profiles" | "settle" | "stop" | "wait";
 
@@ -83,6 +87,27 @@ export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation
   const paths = rest.filter((token, index) => token !== "--" && (projectAt < 0 || (index !== projectAt && index !== projectAt + 1)));
   const known = WORKBENCH_VIS_ACTIONS.find(candidate => candidate === action);
   return known && paths.length === 1 ? { action: known, path: paths[0]! } : null;
+}
+
+/** `wb todo [--required|--optional] [-- <text>]` lists or adds; `wb todo remove -- <id>...` removes. */
+export function parseWorkbenchTodoCommand(command: string): WorkbenchTodoOperation | null {
+  const tokens = tokenizeCommand(command.trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "todo" || tokens.includes("--help")) return null;
+  const separator = tokens.indexOf("--", 2);
+  const options = tokens.slice(2, separator >= 0 ? separator : undefined);
+  const rest = separator >= 0 ? tokens.slice(separator + 1) : [];
+  if (options[0] === "remove") {
+    const ids = rest.map(Number);
+    return options.length === 1 && ids.length && ids.every(id => Number.isInteger(id) && id > 0) ? { action: "remove", ids } : null;
+  }
+  if (options.some(option => option !== "--required" && option !== "--optional")) return null;
+  const text = rest.join(" ").trim();
+  return text ? { action: "add", required: options.includes("--required"), text } : options.length ? null : { action: "list" };
+}
+
+function todoRenderingArguments(operation: WorkbenchTodoOperation) {
+  return operation.action === "add" ? { required: operation.required, text: operation.text }
+    : operation.action === "remove" ? { ids: operation.ids } : {};
 }
 
 export type WorkbenchTaskTitleCommand =
@@ -409,6 +434,16 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       if (summaryParts.length) return null;
       const operation = parseWorkbenchVisCommand(stage.text);
       return operation ? getWorkbenchCommandRendering(`vis_${operation.action}`, { path: operation.path })?.result ?? null : null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.todo",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const operation = parseWorkbenchTodoCommand(stage.text);
+      return operation
+        ? getWorkbenchCommandRendering(operation.action === "remove" ? "todo_remove" : "todo", todoRenderingArguments(operation))?.result ?? null
+        : null;
     },
   }),
   CommandMatcher({

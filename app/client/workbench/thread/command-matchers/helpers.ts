@@ -120,6 +120,7 @@ export function createEmptyCommandSummaryStats(): ThreadCommandSummaryStats {
     skillLoads: 0,
     typescriptBuilds: 0,
     typescriptValidations: 0,
+    visChecks: 0,
     webRequests: 0,
   };
 }
@@ -144,21 +145,10 @@ export function mergeCommandSummaryStats(
   return target;
 }
 
+/** Every named stat; only `otherCommands` lacks a category of its own. */
 export function countKnownCommandSummaryStats(stats: ThreadCommandSummaryStats) {
-  return stats.readFiles
-    + stats.deletedPaths
-    + stats.gitCheckpointCreates
-    + stats.gitCheckpointDiffs
-    + stats.gitCheckpointRestores
-    + stats.skillLoads
-    + stats.searchedFiles
-    + stats.listedFiles
-    + stats.gitDiffChecks
-    + stats.gitStatusChecks
-    + stats.pathChecks
-    + stats.typescriptBuilds
-    + stats.typescriptValidations
-    + stats.webRequests;
+  return (Object.keys(stats) as Array<keyof ThreadCommandSummaryStats>)
+    .reduce((total, key) => key === "otherCommands" ? total : total + stats[key], 0);
 }
 
 export function summarizeDisplayParts(parts: ThreadCommandDisplayPart[]) {

@@ -2,6 +2,7 @@
  * Exports:
  * - GIT_CHECKPOINT_COMMAND_MATCHERS: named arc command presentation.
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: specialised arc routes.
+ * - isGitArcWaitMatcherClaim/parseGitArcWaitRef: identify a CLI arc wait and its target plan ref.
  * - parseGitArcCommand/GitArcCommandIntent/GitArcCommandAction: canonical arc command intent.
  * - parseGitArcReceipt: persisted successful arc facts.
  * - parseGitCheckpointCompareOutput: per-file change counts.
@@ -201,6 +202,17 @@ export function isGitCheckpointDiffMatcherClaim(claimedBy: string | null | undef
 
 export function isGitCheckpointCommitMatcherClaim(claimedBy: string | null | undefined) {
   return includesMatcher(claimedBy, ARC_MATCHER_IDS.propose);
+}
+
+export function isGitArcWaitMatcherClaim(claimedBy: string | null | undefined) {
+  return includesMatcher(claimedBy, "git-arc.wait");
+}
+
+/** The inactive plan `wb git arc wait` targets; null waits on the registered plan. */
+export function parseGitArcWaitRef(command: string) {
+  const tokens = tokenizeCommand(String(command ?? "").trim()) ?? [];
+  const index = tokens.indexOf("--ref");
+  return index >= 0 ? tokens[index + 1] ?? null : null;
 }
 
 export function getGitArcMatcherAction(claimedBy: string | null | undefined): GitArcCommandAction | null {

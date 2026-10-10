@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useContext, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
@@ -34,9 +34,8 @@ import {
   createThreadGitArcCompareSummaryRows,
   createThreadGitArcDiffSummaryRows,
 } from "./ThreadGitArcCollapsedSummary";
-import { ObservedThreadGitArcIntersectionCard } from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
-import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import ThreadGitArcWaitItem from "./ThreadGitArcWaitItem";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import MarkdownRender from "../../ui/MarkdownRender";
@@ -45,6 +44,7 @@ import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
+import ThreadTodoCommandItem from "./ThreadTodoCommandItem";
 import ThreadVisCommandItem from "./ThreadVisCommandItem";
 import { formatToolCallOutput } from "./format-thread-tool-call";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
@@ -103,7 +103,6 @@ export default function ThreadWorkbenchCommandItem({
     item.durationMs,
     delegatesLiveDuration ? null : activeStartedAtMs,
   );
-  const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
   const typed = useMemo(() => {
     const result = operation.kind === "gitArc" || operation.kind === "gitArcWait"
       || operation.kind === "subagent" && operation.operation.action === "wait"
@@ -161,45 +160,33 @@ export default function ThreadWorkbenchCommandItem({
       />
     );
   }
+  if (operation.kind === "todo") {
+    return (
+      <ThreadTodoCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={operation.operation}
+        outcome={outcome === "inProgress" ? "inProgress" : outcome === "completed" ? "completed" : "failed"}
+        output={output}
+      />
+    );
+  }
   if (operation.kind === "gitArcWait") {
-    if (gitArcOutcome !== "inProgress") {
-      return (
-        <ThreadGitArcItem
-          commandIntent={{
-            action: "start",
-            intentName: null,
-            paths: [],
-            ref: operation.ref,
-          }}
-          durationMs={visibleDurationMs ?? null}
-          durationPresentation="waited"
-          failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
-          interruptedBySteer={interruptedBySteer}
-          outcome={gitArcOutcome}
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          receipt={structured?.kind === "success" ? structured.receipt : hasStructuredResult ? null : parseGitArcReceipt(output)}
-          typedFailure={structured?.kind === "failure" ? structured.failure : null}
-          workspaceRoots={workspaceRoots}
-        />
-      );
-    }
-    if (
-      outcome === "inProgress"
-      && gitArcPresentation?.onOpenThread
-      && gitArcPresentation.projectId
-    ) {
-      return (
-        <ObservedThreadGitArcIntersectionCard
-          harness={gitArcPresentation.harness}
-          mode="wait"
-          onOpenThread={gitArcPresentation.onOpenThread}
-          threadId={threadId}
-        />
-      );
-    }
-    return null;
+    return (
+      <ThreadGitArcWaitItem
+        durationMs={visibleDurationMs ?? null}
+        failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
+        interruptedBySteer={interruptedBySteer}
+        outcome={gitArcOutcome}
+        planRef={operation.ref}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        receipt={structured?.kind === "success" ? structured.receipt : hasStructuredResult ? null : parseGitArcReceipt(output)}
+        threadId={threadId}
+        typedFailure={structured?.kind === "failure" ? structured.failure : null}
+        workspaceRoots={workspaceRoots}
+      />
+    );
   }
   if (operation.kind === "gitArc") {
     const intent = operation.operation;

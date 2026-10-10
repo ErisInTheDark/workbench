@@ -73,6 +73,8 @@ import {
   isBrowseCommandMatcherClaim,
   isGitCheckpointCompareMatcherClaim,
   isGitCheckpointDiffMatcherClaim,
+  isGitArcWaitMatcherClaim,
+  parseGitArcWaitRef,
   parseWorkbenchMessageCommand,
   parseWorkbenchSubagentCommand,
   parseBrowseSequenceCommandOutput,
@@ -83,6 +85,7 @@ import {
   parseGitArcReceipt,
   parseWorkbenchFeedbackCommand,
   parseWorkbenchFeedbackId,
+  parseWorkbenchTodoCommand,
   parseWorkbenchVisCommand,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
@@ -108,6 +111,7 @@ import {
   createThreadGitArcDiffSummaryRows,
 } from "./ThreadGitArcCollapsedSummary";
 import ThreadGitArcItem from "./ThreadGitArcItem";
+import ThreadGitArcWaitItem from "./ThreadGitArcWaitItem";
 import { readThreadGitArcProposalTranscriptItem } from "./thread-git-arc-presentation";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDisplay from "./ThreadCommandDisplay";
@@ -122,6 +126,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
+import ThreadTodoCommandItem from "./ThreadTodoCommandItem";
 import ThreadVisCommandItem from "./ThreadVisCommandItem";
 import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
@@ -1779,6 +1784,33 @@ function ThreadCommandExecutionDetails ({
       />
     );
   }
+  const todoCommand = parseWorkbenchTodoCommand(commandDisplay.unwrappedCommand);
+  if (todoCommand) {
+    return (
+      <ThreadTodoCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={todoCommand}
+        outcome={commandOutcome === "inProgress" ? "inProgress" : commandOutcome === "completed" ? "completed" : "failed"}
+        output={item.aggregatedOutput ?? ""}
+      />
+    );
+  }
+  if (isGitArcWaitMatcherClaim(commandDisplay.claimedBy)) {
+    return (
+      <ThreadGitArcWaitItem
+        durationMs={visibleDurationMs ?? null}
+        failureReason={commandOutcome === "completed" || commandOutcome === "inProgress" ? null : item.aggregatedOutput}
+        outcome={commandOutcome}
+        planRef={parseGitArcWaitRef(commandDisplay.unwrappedCommand)}
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        receipt={gitArcReceipt}
+        threadId={threadId}
+        workspaceRoots={workspaceRoots}
+      />
+    );
+  }
   const visCommand = parseWorkbenchVisCommand(commandDisplay.unwrappedCommand);
   if (visCommand) {
     return (
@@ -2445,14 +2477,14 @@ function ThreadCommandSequence ({
             threadId={threadId}
             workspaceRoots={workspaceRoots}
           />
-        ) : segment.kind === "subagentQueueCheck" ? (
+        ) : segment.kind === "subagentQueueCheck" || segment.kind === "ownRow" ? (
           <ThreadRegularCommandItem
             browseResultEntries={browseResultEntries}
             inlineMentionSources={inlineMentionSources}
             isMostRecent={isMostRecent && index === renderSegments.length - 1}
             item={segment.item}
             itemTimeline={itemTimeline}
-            key={`subagent-queue-check:${segment.item.id}`}
+            key={`${segment.kind}:${segment.item.id}`}
             knownSkills={knownSkills}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
@@ -2756,7 +2788,8 @@ function ThreadRenderableBlockViewComponent ({
       });
       const isMcpFailure = block.item.status === "failed" || Boolean(block.item.error);
       if (shouldUseWorkbenchMcpSpecializedRenderer(route, isMcpFailure) && route?.kind === "specialized" && (
-        threadCwdPath || route.operation.kind === "feedback" || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
+        threadCwdPath || route.operation.kind === "feedback" || route.operation.kind === "todo"
+        || route.operation.kind === "gitArc" || route.operation.kind === "gitArcWait"
       )) {
         return (
           <ThreadWorkbenchCommandItem

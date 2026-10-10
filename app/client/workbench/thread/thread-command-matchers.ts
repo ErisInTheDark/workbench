@@ -10,17 +10,18 @@
  * - ThreadCommandDisplay: parsed command-summary metadata for thread command rendering.
  * - formatThreadCommandPath: resolve command paths into project-relative forward-slash display text.
  * - isBrowseCommandMatcherClaim/parseBrowseSequenceCommandOutput: detect and parse wb Browse command output.
- * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
+ * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim/isGitArcWaitMatcherClaim/parseGitArcWaitRef: detect arc matcher ids for specialised rendering.
  * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
  * - parseWorkbenchFeedbackId: read the stored report id from a wb feedback acknowledgement.
  * - parseWorkbenchVisCommand/WorkbenchVisOperation: parse a `wb vis` call for its vis item.
+ * - parseWorkbenchTodoCommand/WorkbenchTodoOperation: parse a `wb todo` call for its todo row.
  * - parseWorkbenchFeedbackCommand/parseWorkbenchMessageCommand/parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb feedback/message/subagent/task-title actions and identify standalone title sets.
  * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.
  * - parseGitCheckpointDiffArtifactId: parse compact checkpoint diff output for a stored full-diff artifact id.
  * - parseGitCheckpointDiffOutput: parse checkpoint diff command output into file-change display entries.
  * - getThreadCommandDisplay: reuse immutable command contexts, unwrap shell launchers, and describe common command patterns.
- * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label.
+ * - getThreadCommandBlockDisplay: aggregate multiple command displays into one grouped summary label that counts every item.
  * - getThreadCommandExecutionOutcome/getThreadCommandOutcomeDisplay: classify command lifecycle results and select completed or ongoing structured grammar.
  * - getThreadMcpToolCallOutcome/getThreadSubagentWaitMcpOutcome/isThreadMcpWaitInterruptedBySteer: classify wb MCP call lifecycles, counting a wait ended by an incoming message as completed.
  * - getWorkbenchMcpCommandDisplay/getWorkbenchMcpCommandRoute/getWorkbenchCommandRouteSummaryDisplay: map recorded wb MCP calls and resolved routes into summary or dedicated renderer operations.
@@ -52,8 +53,10 @@ import {
     isGitCheckpointCommitMatcherClaim,
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
+    isGitArcWaitMatcherClaim,
     parseGitArcCommand,
     parseGitArcReceipt,
+    parseGitArcWaitRef,
     parseGitCheckpointCommitCommand,
     parseGitCheckpointCompareOutput,
     parseGitCheckpointDiffArtifactId,
@@ -106,6 +109,7 @@ import {
     parseWorkbenchSubagentCommand,
     parseWorkbenchTaskStatusCommand,
     parseWorkbenchTaskTitleCommand,
+    parseWorkbenchTodoCommand,
     parseWorkbenchVisCommand,
     type WorkbenchTaskStatusCommand,
     WORKBENCH_CLI_COMMAND_MATCHERS,
@@ -272,6 +276,15 @@ const COMMAND_BLOCK_SUMMARY_CATEGORIES: Array<{
       : `restoring git checkpoints ${count} times`,
   },
   {
+    key: "visChecks",
+    format: (count) => count === 1
+      ? "checked a vis"
+      : `checked vis ${count} times`,
+    formatOngoing: (count) => count === 1
+      ? "checking a vis"
+      : `checking vis ${count} times`,
+  },
+  {
     key: "webRequests",
     format: (count) => count === 1
       ? "made a web request"
@@ -288,19 +301,20 @@ export {
     isGitCheckpointCommitMatcherClaim,
     isGitCheckpointCompareMatcherClaim,
     isGitCheckpointDiffMatcherClaim,
+    isGitArcWaitMatcherClaim,
     isThreadContextMatcherClaim,
     isWorkbenchTaskStatusMatcherClaim,
     isWorkbenchTaskTitleSetMatcherClaim,
     parseBrowseSequenceCommandOutput,
     parseGitArcCommand,
-    parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
+    parseGitArcReceipt, parseGitArcWaitRef, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
     parseGitCheckpointProposalId, parseWorkbenchFeedbackCommand, parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
-    parseWorkbenchThreadRecallCommand, parseWorkbenchVisCommand, getWorkbenchThreadRecallSummaryDisplay
+    parseWorkbenchThreadRecallCommand, parseWorkbenchTodoCommand, parseWorkbenchVisCommand, getWorkbenchThreadRecallSummaryDisplay
 };
 export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay, parseWorkbenchFeedbackId } from "./command-matchers/workbench-command-rendering";
-export type { WorkbenchCommandRoute, WorkbenchFeedbackOperation, WorkbenchSpecializedOperation, WorkbenchVisOperation } from "./command-matchers/workbench-command-rendering";
+export type { WorkbenchCommandRoute, WorkbenchFeedbackOperation, WorkbenchSpecializedOperation, WorkbenchTodoOperation, WorkbenchVisOperation } from "./command-matchers/workbench-command-rendering";
 export type {
     CommandShell,
     GitArcCommandAction,
@@ -501,7 +515,8 @@ export function getThreadCommandBlockDisplay({
         shell: item.shell,
         workspaceRoots,
       });
-    for (const key of getKnownCommandSummaryCategoryKeys(display.summaryStats)) {
+    const categories = getKnownCommandSummaryCategoryKeys(display.summaryStats);
+    for (const key of categories) {
       if (seenSummaryCategories.has(key)) {
         continue;
       }
@@ -510,6 +525,8 @@ export function getThreadCommandBlockDisplay({
       summaryCategoryOrder.push(key);
     }
     mergeCommandSummaryStats(summaryStats, display.summaryStats);
+    // The label is built only from stats, so an item no category names still counts, never vanishing from its group.
+    if (!categories.length && !display.summaryStats.otherCommands) summaryStats.otherCommands += 1;
   }
 
   const summaryText = formatCommandBlockSummaryText(summaryStats, items.length, summaryCategoryOrder);

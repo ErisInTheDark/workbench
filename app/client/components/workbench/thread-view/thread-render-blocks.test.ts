@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and CLI calls with dedicated rows staying visible.
+ * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and CLI calls with dedicated rows staying visible and ungrouped unless a label names them.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -464,10 +464,37 @@ test("consecutive non-final agent messages share one commentary block until anot
   ]);
 });
 
-test("CLI vis calls reach their dedicated row instead of being hidden as specialized output", () => {
-  for (const action of ["start", "end", "read", "snapshot", "screenshot"]) {
-    assert.equal(isHiddenCommandExecution(`wb vis ${action} mockups/chart.tsx`), false, action);
+test("every CLI command with a dedicated renderer stays visible", () => {
+  for (const command of [
+    ...["start", "end", "read", "snapshot", "screenshot"].map(action => `wb vis ${action} mockups/chart.tsx`),
+    "wb git arc wait --ref abc123", "wb git arc start", "wb subagent wait --name Lumi",
+    "wb task completed", 'wb task set --title "new"', "wb thread recall",
+    "wb todo --required -- fix it", "wb todo remove -- 3",
+  ]) {
+    assert.equal(isHiddenCommandExecution(command), false, command);
   }
+});
+
+test("dedicated rows no group label could name stand alone, while named vis checks still group", () => {
+  const result = rows([
+    command("before"),
+    command("todo", "wb todo --required -- fix it"),
+    command("start", "wb vis start mockups/a.tsx"),
+    command("feedback", 'wb feedback --channel wb --category waste --title "Noise" -- report'),
+    command("shot", "wb vis screenshot mockups/a.tsx"),
+    command("after"),
+    mcp("todo-mcp", "todo", { text: "from mcp" }),
+    command("wait", "wb git arc wait"),
+  ]);
+  assert.deepEqual(result.map(({ block, eligible }) => [getRenderableBlockItems(block).map(({ id }) => id), eligible]), [
+    [["before"], true],
+    [["todo"], false],
+    [["start"], false],
+    [["feedback"], false],
+    [["shot", "after"], true],
+    [["todo-mcp"], false],
+    [["wait"], true],
+  ]);
 });
 
 test("native plan items are excluded from render blocks", () => {

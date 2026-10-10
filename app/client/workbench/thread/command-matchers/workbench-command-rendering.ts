@@ -6,6 +6,7 @@
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
  * - parseWorkbenchFeedbackId: read the stored report id from a feedback call's acknowledgement.
  * - WORKBENCH_VIS_ACTIONS/WorkbenchVisOperation: one vis session start, end, answer read or browser snapshot/screenshot shared by CLI and MCP presentation.
+ * - WorkbenchTodoOperation: one wb todo list, add or remove intent.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -177,8 +178,15 @@ export interface WorkbenchVisOperation {
   path: string;
 }
 
+/** A `wb todo` call: list, add one todo, or remove todos by id. */
+export type WorkbenchTodoOperation =
+  | { action: "add"; required: boolean; text: string }
+  | { action: "list" }
+  | { action: "remove"; ids: number[] };
+
 export type WorkbenchSpecializedOperation =
   | { kind: "feedback"; operation: WorkbenchFeedbackOperation }
+  | { kind: "todo"; operation: WorkbenchTodoOperation }
   | { kind: "vis"; operation: WorkbenchVisOperation }
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
   | { kind: "gitArcWait"; ref: string | null }
@@ -242,6 +250,7 @@ function rendering({
   hideCommandOutput = false,
   omitFromDisplay = false,
   ongoing,
+  ownRow = false,
   stats,
   summary,
 }: {
@@ -251,6 +260,7 @@ function rendering({
   hideCommandOutput?: boolean;
   omitFromDisplay?: boolean;
   ongoing: string | ThreadCommandDisplayPart[];
+  ownRow?: boolean;
   stats?: Partial<ThreadCommandSummaryStats>;
   summary: string | ThreadCommandDisplayPart[];
 }): WorkbenchCommandRendering {
@@ -261,6 +271,7 @@ function rendering({
       hideCommandCwd,
       hideCommandOutput,
       omitFromDisplay,
+      ownRow,
       ongoingSummaryParts: typeof ongoing === "string" ? [CommandMatcher.Text(ongoing)] : ongoing,
       remainingCommand: null,
       stop: true,
@@ -321,6 +332,7 @@ function specialized(
       claimedBy,
       result: CommandMatcher.Result({
         omitFromDisplay: true,
+        ownRow: true,
         ongoingSummaryParts: [],
         remainingCommand: null,
         stop: true,
@@ -328,6 +340,20 @@ function specialized(
         summaryStats: stats,
       }),
     },
+  } satisfies WorkbenchCommandRoute;
+}
+
+/** A specialized route that also keeps a readable summary, for fallbacks that cannot reach its dedicated renderer. */
+function specializedWithSummary(
+  claimedBy: string,
+  operation: WorkbenchSpecializedOperation,
+  ongoing: ThreadCommandDisplayPart[],
+  summary: ThreadCommandDisplayPart[],
+) {
+  return {
+    kind: "specialized",
+    operation,
+    rendering: rendering({ claimedBy, ongoing, ownRow: true, summary }),
   } satisfies WorkbenchCommandRoute;
 }
 
@@ -731,27 +757,30 @@ export function getWorkbenchCommandRoute(
         const kind = [readString(args.channel), readString(args.category)].filter(Boolean).join(" ") || "agent";
         return simple("workbench-cli.feedback", actionTarget("Reporting ", `${kind} feedback`), actionTarget("Reported ", `${kind} feedback`));
       }
-      const summaryRendering = simple(
+      return specializedWithSummary(
         "workbench-cli.feedback",
+        { kind: "feedback", operation },
         actionTarget("Reporting ", operation.title),
         actionTarget("Reported ", operation.title),
-      ).rendering;
-      return {
-        kind: "specialized",
-        operation: { kind: "feedback", operation },
-        rendering: summaryRendering,
-      };
+      );
     }
     case "todo": {
-      const text = readString(args.text)?.split("\n")[0]?.trim();
-      if (!text) return simple("workbench-cli.todo", actionTarget("Listing ", "todos"), actionTarget("Listed ", "todos"));
-      const kind = readBoolean(args.required) ? "required todo " : "todo ";
-      return simple("workbench-cli.todo", actionTarget(`Adding ${kind}`, text), actionTarget(`Added ${kind}`, text));
+      const text = readString(args.text)?.trim();
+      if (!text) {
+        return specializedWithSummary("workbench-cli.todo", { kind: "todo", operation: { action: "list" } },
+          actionTarget("Listing ", "todos"), actionTarget("Listed ", "todos"));
+      }
+      const required = readBoolean(args.required);
+      const kind = required ? "required todo " : "todo ";
+      const firstLine = text.split("\n")[0]!.trim();
+      return specializedWithSummary("workbench-cli.todo", { kind: "todo", operation: { action: "add", required, text } },
+        actionTarget(`Adding ${kind}`, firstLine), actionTarget(`Added ${kind}`, firstLine));
     }
     case "todo_remove": {
       const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is number => typeof id === "number") : [];
       const target = ids.length ? ids.map(id => `#${id}`).join(", ") : "todos";
-      return simple("workbench-cli.todo", actionTarget("Removing ", target), actionTarget("Removed ", target));
+      return specializedWithSummary("workbench-cli.todo", { kind: "todo", operation: { action: "remove", ids } },
+        actionTarget("Removing ", target), actionTarget("Removed ", target));
     }
     case "vis_start":
     case "vis_end":
@@ -760,7 +789,9 @@ export function getWorkbenchCommandRoute(
     case "vis_screenshot": {
       const path = readString(args.path)?.trim();
       const action = WORKBENCH_VIS_ACTIONS.find(action => name === `vis_${action}`)!;
-      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }) : null;
+      // Browser checks are routine enough to group; the stat names them in the block summary.
+      const stats = action === "snapshot" || action === "screenshot" ? { visChecks: 1 } : undefined;
+      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }, stats) : null;
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));
@@ -839,6 +870,7 @@ export function getWorkbenchCommandRouteSummaryDisplay(
     hideCommandCwd: result.hideCommandCwd,
     hideCommandOutput: result.hideCommandOutput,
     omitFromDisplay: result.omitFromDisplay ?? false,
+    ...(result.ownRow ? { ownRow: true } : {}),
     ongoingSummaryParts: result.ongoingSummaryParts,
     ongoingSummaryText: summarizeDisplayParts(result.ongoingSummaryParts),
     shell: null,

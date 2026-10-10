@@ -74,6 +74,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
       hideCommandCwd = false,
       hideCommandOutput = false,
       omitFromDisplay = false,
+      ownRow = false,
       ongoingSummaryParts,
       remainingCommand,
       stop = false,
@@ -86,6 +87,7 @@ export const CommandMatcher: CommandMatcherBuilder = Object.assign(
         hideCommandCwd,
         hideCommandOutput,
         omitFromDisplay,
+        ownRow,
         ongoingSummaryParts,
         remainingCommand,
         stop,
@@ -132,6 +134,7 @@ export function runThreadCommandMatchers(
   let hideCommandCwd = false;
   let hideCommandOutput = false;
   let omitFromDisplay = false;
+  let ownRow = false;
   let remainingCommand: string | null = context.unwrappedCommand;
 
   for (let index = 0; index < MAX_MATCH_STEPS && remainingCommand; index += 1) {
@@ -178,6 +181,7 @@ export function runThreadCommandMatchers(
     hideCommandCwd ||= matchedResult.hideCommandCwd === true;
     hideCommandOutput ||= matchedResult.hideCommandOutput === true;
     omitFromDisplay ||= matchedResult.omitFromDisplay === true;
+    ownRow ||= matchedResult.ownRow === true;
 
     if (shouldRenderSummaryParts && summaryParts.length) {
       summaryParts.push(CommandMatcher.Separator());
@@ -216,6 +220,7 @@ export function runThreadCommandMatchers(
     hideCommandCwd: hideCommandCwd || undefined,
     hideCommandOutput: hideCommandOutput || undefined,
     omitFromDisplay,
+    ...(ownRow ? { ownRow } : {}),
     ongoingSummaryParts,
     ongoingSummaryText: summarizeDisplayParts(ongoingSummaryParts),
     showShell: hadUnmatchedRemainder,

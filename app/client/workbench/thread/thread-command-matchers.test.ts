@@ -18,6 +18,7 @@ import {
 import {
   getGitArcMatcherAction,
   getNativeFileChanges,
+  getThreadCommandBlockDisplay,
   getThreadCommandDisplay,
   isNativeFileOperation,
   getThreadCommandExecutionOutcome,
@@ -38,6 +39,7 @@ import {
   parseWorkbenchTaskStatusCommand,
   parseWorkbenchTaskTitleCommand,
   parseWorkbenchThreadRecallCommand,
+  parseWorkbenchTodoCommand,
 } from "./thread-command-matchers.ts";
 
 const require = createRequire(import.meta.url);
@@ -341,6 +343,35 @@ test("feedback CLI and MCP routes preserve one titled report intent", () => {
   assert.equal(route?.kind, "specialized");
   if (route?.kind !== "specialized" || route.operation.kind !== "feedback") assert.fail("Expected feedback route");
   assert.deepEqual(route.operation.operation, expected);
+});
+
+test("todo CLI and MCP calls share one intent and own their row", () => {
+  const cases = [
+    ["wb todo --required -- fix the gremlin", "todo", { required: true, text: "fix the gremlin" }, { action: "add", required: true, text: "fix the gremlin" }],
+    ["wb todo -- polish", "todo", { text: "polish" }, { action: "add", required: false, text: "polish" }],
+    ["wb todo", "todo", {}, { action: "list" }],
+    ["wb todo remove -- 2 5", "todo_remove", { ids: [2, 5] }, { action: "remove", ids: [2, 5] }],
+  ] satisfies Array<[string, string, JsonValue, unknown]>;
+  for (const [command, tool, argumentsValue, operation] of cases) {
+    assert.deepEqual(parseWorkbenchTodoCommand(command), operation, command);
+    assert.equal(getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT }).ownRow, true, command);
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue, server: "wb", tool });
+    if (route?.kind !== "specialized" || route.operation.kind !== "todo") assert.fail(`Expected todo route for ${tool}`);
+    assert.deepEqual(route.operation.operation, operation, command);
+  }
+  for (const command of ["wb todo --required", "wb todo remove -- nope", "wb todo --help", "wb todo --bogus -- text"]) {
+    assert.equal(parseWorkbenchTodoCommand(command), null, command);
+  }
+});
+
+test("a grouped command label counts every item, naming vis checks and never dropping unnamed ones", () => {
+  const block = (...commands: string[]) => getThreadCommandBlockDisplay({
+    items: commands.map(command => ({ command, commandActions: [], cwd: PROJECT_ROOT })),
+    projectRootPath: PROJECT_ROOT,
+  }).summaryText;
+  assert.equal(block("wb vis snapshot mockups/a.tsx", "wb vis screenshot mockups/a.tsx"), "Checked vis 2 times");
+  assert.equal(block("wb vis screenshot mockups/a.tsx", 'wb toc "docs/guide.md"'), "Checked a vis, ran 1 other command");
+  assert.equal(block('wb toc "docs/a.md"', 'wb toc "docs/b.md"'), "Ran 2 commands");
 });
 
 test("simple typed wb MCP calls share argument-sensitive CLI presentations", () => {
