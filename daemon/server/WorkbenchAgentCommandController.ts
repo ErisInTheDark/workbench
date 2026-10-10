@@ -21,6 +21,7 @@ import WorkbenchRipgrepController from "./WorkbenchRipgrepController";
 import WorkbenchAgentCommandLiveScenarioController from "./WorkbenchAgentCommandControllerLiveScenario";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_VIS_RENDER_BODY_BYTES = 24 * 1024 * 1024;
 const RELOAD_POLL_INTERVAL_MS = 250;
 interface WorkbenchAgentDirectPort {
   executeMessageWaitRequest?: (body: object, signal: AbortSignal, lifetimeSignal?: AbortSignal) => Promise<Response>;
@@ -41,6 +42,9 @@ interface WorkbenchAgentDirectPort {
   executeToolStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFeedbackSubmit?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeTodoRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  executeVisRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  /** Hands piped project-command output to the vis run waiting on `runId`; false when no run waits. */
+  acceptVisRender?: (runId: string, content: string) => boolean;
   executeFeedbackStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Human-only project store access; command parsing already rejected managed callers. */
@@ -78,13 +82,13 @@ const SUBAGENT_ACTION_METHODS = {
   stop: "workbench/subagent/stop",
 } as const;
 
-async function readBody(request: http.IncomingMessage) {
+async function readBody(request: http.IncomingMessage, limit = MAX_REQUEST_BODY_BYTES) {
   const chunks: Buffer[] = [];
   let length = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > MAX_REQUEST_BODY_BYTES) throw new Error("Workbench agent command request is too large.");
+    if (length > limit) throw new Error("Workbench agent command request is too large.");
     chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -224,7 +228,9 @@ export default class WorkbenchAgentCommandController {
         sendText(response, 403, "Workbench agent commands are available only over loopback.\n");
         return;
       }
-      const form = new URLSearchParams(await readBody(request));
+      // Piped vis output may reach the vis document limit, URL-encoded; only that route admits it.
+      const visRender = new URL(request.url ?? "/", "http://localhost").searchParams.get("input") === "vis-render";
+      const form = new URLSearchParams(await readBody(request, visRender ? MAX_VIS_RENDER_BODY_BYTES : MAX_REQUEST_BODY_BYTES));
       const argv = form.getAll("arg");
       const cwd = form.get("cwd")?.trim() || "";
       const callerThreadId = form.get("callerThreadId")?.trim() || null;
@@ -233,6 +239,16 @@ export default class WorkbenchAgentCommandController {
       active.label = `wb ${argv[0]?.trim() || "command"}`;
       if (!cwd || argv.length > 256 || argv.some((arg) => arg.length > 65_536 || arg.includes("\0"))) {
         sendText(response, 400, "A valid Workbench agent command request is required.\n");
+        return;
+      }
+      if (visRender || (argv[0] === "vis" && argv[1] === "render")) {
+        const runId = argv.length === 4 && argv[0] === "vis" && argv[1] === "render" && argv[2] === "--run" ? argv[3]! : null;
+        if (!visRender || !runId || !this.direct.acceptVisRender) {
+          sendText(response, 400, "wb vis render only accepts piped output: <command> | wb vis render --run <id>\n");
+          return;
+        }
+        const accepted = this.direct.acceptVisRender(runId, form.get("stdin") ?? "");
+        sendText(response, accepted ? 200 : 404, accepted ? "" : "This vis run is unknown or already finished.\n");
         return;
       }
       if (argv.length === 2 && argv[0] === "__hook"
@@ -421,6 +437,10 @@ export default class WorkbenchAgentCommandController {
     if (request.path === "/internal/todo" && request.body) {
       if (!this.direct.executeTodoRequest) throw new Error("Thread todos are not configured.");
       return await this.direct.executeTodoRequest(request.body, signal);
+    }
+    if (request.path === "/internal/vis" && request.body) {
+      if (!this.direct.executeVisRequest) throw new Error("Vis sessions are not configured.");
+      return await this.direct.executeVisRequest(request.body, signal);
     }
     if (request.path === "/internal/feedback" && request.body) {
       if (!this.direct.executeFeedbackSubmit) throw new Error("Agent feedback is not configured.");

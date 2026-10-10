@@ -109,8 +109,14 @@ if (( hook_mode == 1 )); then
   curl_args+=(--connect-timeout 2)
   curl_args+=(--data-urlencode "hookInput@-")
 fi
+# A vis command pipes its rendered output here; the larger body is admitted only on this route.
+command_path="/daemon/agent-command"
+if [[ "${1:-}" == "vis" && "${2:-}" == "render" ]]; then
+  curl_args+=(--data-urlencode "stdin@-")
+  command_path="/daemon/agent-command?input=vis-render"
+fi
 
-curl "${curl_args[@]}" "$WORKBENCH_ORIGIN/daemon/agent-command" | route_response
+curl "${curl_args[@]}" "$WORKBENCH_ORIGIN$command_path" | route_response
 pipeline_status=("${PIPESTATUS[@]}")
 curl_status="${pipeline_status[0]}"
 response_status="${pipeline_status[1]}"

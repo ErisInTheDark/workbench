@@ -5,6 +5,7 @@
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
  * - parseWorkbenchFeedbackId: read the stored report id from a feedback call's acknowledgement.
+ * - WorkbenchVisOperation: one vis session start or end shared by CLI and MCP presentation.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -50,6 +51,8 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "feedback",
   "todo",
   "todo_remove",
+  "vis_start",
+  "vis_end",
   "request_user_input",
   "message",
   "message_wait",
@@ -156,8 +159,15 @@ export interface WorkbenchFeedbackOperation {
   title: string;
 }
 
+/** A vis session moment; CLI and MCP calls name the file the same way. */
+export interface WorkbenchVisOperation {
+  action: "start" | "end";
+  path: string;
+}
+
 export type WorkbenchSpecializedOperation =
   | { kind: "feedback"; operation: WorkbenchFeedbackOperation }
+  | { kind: "vis"; operation: WorkbenchVisOperation }
   | { kind: "gitArc"; operation: WorkbenchGitArcOperation }
   | { kind: "gitArcWait"; ref: string | null }
   | { kind: "message"; operation: WorkbenchMessageOperation }
@@ -752,6 +762,11 @@ export function getWorkbenchCommandRoute(
       const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is number => typeof id === "number") : [];
       const target = ids.length ? ids.map(id => `#${id}`).join(", ") : "todos";
       return simple("workbench-cli.todo", actionTarget("Removing ", target), actionTarget("Removed ", target));
+    }
+    case "vis_start":
+    case "vis_end": {
+      const path = readString(args.path)?.trim();
+      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action: name === "vis_start" ? "start" : "end", path } }) : null;
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));

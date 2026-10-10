@@ -45,6 +45,7 @@ import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
+import ThreadVisCommandItem from "./ThreadVisCommandItem";
 import { formatToolCallOutput } from "./format-thread-tool-call";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 
@@ -124,6 +125,17 @@ export default function ThreadWorkbenchCommandItem({
         operation={operation.operation}
         outcome={outcome}
         projectId={projectId}
+        threadId={threadId}
+      />
+    );
+  }
+  if (operation.kind === "vis") {
+    return (
+      <ThreadVisCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={operation.operation}
+        outcome={outcome === "inProgress" ? "inProgress" : outcome === "completed" ? "completed" : "failed"}
+        output={output}
         threadId={threadId}
       />
     );

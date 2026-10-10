@@ -13,6 +13,7 @@
  * - getGitArcMatcherAction/isGitCheckpointCompareMatcherClaim/isGitCheckpointDiffMatcherClaim/isGitCheckpointCommitMatcherClaim: detect arc matcher ids for specialised rendering.
  * - isThreadContextMatcherClaim/parseWorkbenchThreadRecallCommand/getWorkbenchThreadRecallSummaryDisplay: parse and present dedicated thread recall commands.
  * - parseWorkbenchFeedbackId: read the stored report id from a wb feedback acknowledgement.
+ * - parseWorkbenchVisCommand/WorkbenchVisOperation: parse a `wb vis start|end` call for its snapshot card.
  * - parseWorkbenchFeedbackCommand/parseWorkbenchMessageCommand/parseWorkbenchSubagentCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse semantic wb feedback/message/subagent/task-title actions and identify standalone title sets.
  * - parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse semantic completed/blocked task actions and identify dedicated status displays.
  * - parseGitArcCommand/parseGitArcReceipt/parseGitCheckpointCommitCommand/parseGitCheckpointCompareOutput/parseGitCheckpointProposalId: parse arc commands, receipts, comparison, and proposal output.
@@ -105,6 +106,7 @@ import {
     parseWorkbenchSubagentCommand,
     parseWorkbenchTaskStatusCommand,
     parseWorkbenchTaskTitleCommand,
+    parseWorkbenchVisCommand,
     type WorkbenchTaskStatusCommand,
     WORKBENCH_CLI_COMMAND_MATCHERS,
 } from "./command-matchers/workbench-cli";
@@ -294,11 +296,11 @@ export {
     parseGitArcReceipt, parseGitCheckpointCommitCommand, parseGitCheckpointCompareOutput, parseGitCheckpointDiffArtifactId,
     parseGitCheckpointDiffOutput,
     parseGitCheckpointProposalId, parseWorkbenchFeedbackCommand, parseWorkbenchMessageCommand, parseWorkbenchSubagentCommand, parseWorkbenchTaskStatusCommand, parseWorkbenchTaskTitleCommand,
-    parseWorkbenchThreadRecallCommand, getWorkbenchThreadRecallSummaryDisplay
+    parseWorkbenchThreadRecallCommand, parseWorkbenchVisCommand, getWorkbenchThreadRecallSummaryDisplay
 };
 export { getWorkbenchMcpCommandDisplay, getWorkbenchMcpCommandRoute, getWorkbenchMcpShellCommandItem, shouldUseWorkbenchMcpSpecializedRenderer };
 export { getWorkbenchCommandRouteSummaryDisplay, parseWorkbenchFeedbackId } from "./command-matchers/workbench-command-rendering";
-export type { WorkbenchCommandRoute, WorkbenchFeedbackOperation, WorkbenchSpecializedOperation } from "./command-matchers/workbench-command-rendering";
+export type { WorkbenchCommandRoute, WorkbenchFeedbackOperation, WorkbenchSpecializedOperation, WorkbenchVisOperation } from "./command-matchers/workbench-command-rendering";
 export type {
     CommandShell,
     GitArcCommandAction,

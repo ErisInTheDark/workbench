@@ -85,6 +85,7 @@ import type { ThreadGitSelectionCommand, ThreadGitSelectionResult } from "./git/
 import type { ProjectStoreCommand, ProjectStoreResult } from "./store/WorkbenchProjectStoreRepository.ts";
 import type { ThreadSkillCommand, ThreadSkillState } from "./skills/WorkbenchThreadSkillStore.ts";
 import type { ThreadGoalCommand, ThreadGoalState } from "./goals/WorkbenchThreadGoalStore.ts";
+import type { ThreadVisCommand, ThreadVisResult } from "./vis/WorkbenchThreadVisStore.ts";
 import type { ThreadTodoCommand, ThreadTodoResult } from "./todos/WorkbenchThreadTodoStore.ts";
 import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
@@ -104,6 +105,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "threadGitSelection"; command: ThreadGitSelectionCommand }
   | { type: "threadSkills"; command: ThreadSkillCommand }
   | { type: "threadGoals"; command: ThreadGoalCommand }
+  | { type: "threadVis"; command: ThreadVisCommand }
   | { type: "threadTodos"; command: ThreadTodoCommand }
   | { type: "threadAddressedFeedback"; command: ThreadAddressedFeedbackCommand }
   | { type: "projectStore"; command: ProjectStoreCommand }
@@ -244,6 +246,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }
   | { id: number; type: "threadSkills"; result: ThreadSkillState }
   | { id: number; type: "threadGoals"; result: ThreadGoalState }
+  | { id: number; type: "threadVis"; result: ThreadVisResult }
   | { id: number; type: "threadTodos"; result: ThreadTodoResult }
   | { id: number; type: "threadAddressedFeedback"; result: WorkbenchThreadAddressedFeedback[] }
   | { id: number; type: "projectStore"; result: ProjectStoreResult }

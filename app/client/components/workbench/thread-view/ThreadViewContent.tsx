@@ -5,7 +5,7 @@
 "use client";
 import { useThread } from "../use-thread";
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
 
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
@@ -72,6 +72,10 @@ import useThreadLiveActivity from "./use-thread-live-activity";
 import useThreadTodoSelection from "./use-thread-todo-selection";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadWorkLifecycleCard from "./ThreadWorkLifecycleCard";
+import ThreadVisSessionCard from "./ThreadVisSessionCard";
+import ThreadVisUserEndedItem from "./ThreadVisUserEndedItem";
+import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
+import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadMessageBoard from "./ThreadMessageBoard";
@@ -335,6 +339,15 @@ export default memo(function ThreadViewContent ({
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const active = useThread(projectId, activeTarget, "view");
   const activeTurns = useThread.turns(active.store);
+  // Live vis cards and the user's own "ended vis" transcript notes share one observation.
+  const visQuery = useMemo(() => ({ kind: "threadVis" as const, threadId: ThreadReferenceSchema.parse(activeThreadId) }), [activeThreadId]);
+  const vis = useWorkspaceObservation(useContext(WorkbenchWorkspaceContext), visQuery).value?.data ?? null;
+  const visNotes = useMemo(() => (vis?.userEnded ?? []).map((ended) => ({
+    key: `vis-ended:${ended.sessionId}`, atMs: ended.endedAt, node: <ThreadVisUserEndedItem ended={ended} />,
+  })), [vis?.userEnded]);
+  const visActions = useMemo(() => ({
+    onEnd: (sessionId: string) => { void daemon?.threads.vis.end({ threadId: activeThreadId, sessionId }).catch((error: unknown) => console.error("Ending the vis session failed.", error)); },
+  }), [activeThreadId, daemon]);
   const { pending: activePendingUserInputRequest } = useThread.questionnaire(active.store);
   const { entries: activeApprovalEntries } = useThread.approvals(active.store);
   const observeGitArcProposal = active.actions.observeGitArcProposal;
@@ -1171,6 +1184,7 @@ export default memo(function ThreadViewContent ({
                     }}
                     projection={activeTranscriptProjection}
                     liveTurnId={activeTurns.liveTurnId}
+                    localNotes={visNotes}
                     relatedThreadsById={relatedThreadsById}
                     subagents={subagents}
                     workspaceRoots={workspaceFileLinkRoots}
@@ -1230,6 +1244,7 @@ export default memo(function ThreadViewContent ({
             threadId={activeThread.id}
           />
         ) : null}
+        {activeThread && !isDraftThreadView && vis?.sessions.length ? <ThreadVisSessionCard sessions={vis.sessions} {...visActions} /> : null}
         {/* Observed heads learn the working directory with the transcript; the card's Git requests need it. */}
         {activeThread && !isDraftThreadView ? (
           <ThreadWorkLifecycleCard

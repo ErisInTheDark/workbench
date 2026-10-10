@@ -20,6 +20,7 @@
  * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity; a `threadRow` query observes one by thread id.
  * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
+ * Queries include a thread's live `threadVis` sessions and one stored `visSnapshot`.
  */
 import { z } from "zod";
 import {
@@ -57,6 +58,7 @@ import { ObservationDeltaSchema, observationShape, type ObservationShape } from 
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
 import { ProviderKeySchema } from "../provider/provider-key";
+import { VisSnapshotKindSchema, VisSnapshotSchema, VisThreadSchema, type VisLiveSession } from "../vis/vis-contract";
 import {
   WorkbenchThreadSidebarRowSchema, WorkbenchThreadSidebarRowSnapshotSchema,
   WorkbenchThreadSidebarRowVersionSchema, sidebarRowKey,
@@ -102,6 +104,8 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("stats"), request: WorkbenchStatsReadRequestSchema }).strict(),
   z.object({ kind: z.literal("archivedThreads"), projectIds: z.array(ProjectIdSchema), limit: archivedLimit }).strict(),
+  z.object({ kind: z.literal("threadVis"), threadId: ThreadReferenceSchema }).strict(),
+  z.object({ kind: z.literal("visSnapshot"), sessionId: z.uuid(), snapshotKind: VisSnapshotKindSchema }).strict(),
 ]);
 export type DaemonWorkspaceQuery = z.infer<typeof DaemonWorkspaceQuerySchema>;
 export const DaemonWorkspaceObserveSchema = z.object({
@@ -179,6 +183,8 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
   z.object({ ...envelope, kind: z.literal("archivedThreads"), projects: z.array(archivedProject) }).strict(),
+  z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("visSnapshot"), data: VisSnapshotSchema.nullable() }).strict(),
 ]);
 export type DaemonWorkspaceObservation = z.infer<typeof DaemonWorkspaceObservationSchema>;
 
@@ -225,6 +231,10 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     projects: z.array(WorkspaceProjectReferenceSchema).nullable(),
     limit: archivedLimit,
   }).strict(),
+  /** A thread's live vis sessions, from the daemon that owns the thread. */
+  z.object({ kind: z.literal("threadVis"), threadId: ThreadReferenceSchema }).strict(),
+  /** One stored vis moment; the thread routes it to its daemon. */
+  z.object({ kind: z.literal("visSnapshot"), threadId: ThreadReferenceSchema, sessionId: z.uuid(), snapshotKind: VisSnapshotKindSchema }).strict(),
 ]);
 export type WorkspaceQuery = z.infer<typeof WorkspaceQuerySchema>;
 
@@ -388,6 +398,8 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("reloadOperation"), data: WorkbenchReloadOperationSchema }).strict(),
   z.object({ ...envelope, kind: z.literal("stats"), ...statsObservation }).strict(),
   z.object({ ...envelope, kind: z.literal("archivedThreads"), data: WorkspaceArchivedThreadsSchema }).strict(),
+  z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("visSnapshot"), data: VisSnapshotSchema.nullable() }).strict(),
 ]);
 export type WorkspaceObservation = z.infer<typeof WorkspaceObservationSchema>;
 
@@ -533,6 +545,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
+    case "threadVis": return { schema, fields: { data: visThreadShape } };
     default: return { schema };
   }
 }
@@ -560,9 +573,16 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     case "appState": return { schema, fields: { data: appStateShape() } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
     case "threadRow": return { schema, fields: { data: observationShape.object(threadRowShape) } };
+    case "threadVis": return { schema, fields: { data: visThreadShape } };
     default: return { schema };
   }
 }
+
+// A rendering flag flip ships one session's field, not every session's whole document.
+const visThreadShape = observationShape.object({
+  schema: VisThreadSchema,
+  fields: { sessions: observationShape.keyed((session: VisLiveSession) => session.sessionId, VisThreadSchema.shape.sessions.element) },
+});
 
 /** App state rows key by their table's primary key, so one draft or preference write ships one row. */
 function appStateShape() {

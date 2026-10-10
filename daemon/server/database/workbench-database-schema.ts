@@ -70,6 +70,7 @@ import { agentFeedbackSchemaHistory } from "../lib/workbench/database/schema/age
 import { approvalReviewSchemaHistory } from "../lib/workbench/database/schema/approval-review-schema.ts";
 import { threadTodoSchemaHistory } from "../lib/workbench/database/schema/thread-todo-schema.ts";
 import { threadAddressedFeedbackSchemaHistory } from "../lib/workbench/database/schema/thread-addressed-feedback-schema.ts";
+import { threadVisSchemaHistory } from "../lib/workbench/database/schema/thread-vis-schema.ts";
 
 export { projectTables } from "workbench-shared/workbench/database/schema/project-schema";
 export type { ProjectSchemaRows } from "workbench-shared/workbench/database/schema/project-schema";
@@ -139,6 +140,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       approvalReviewSchemaHistory,
       threadTodoSchemaHistory,
       threadAddressedFeedbackSchemaHistory,
+      threadVisSchemaHistory,
     ],
   });
 }

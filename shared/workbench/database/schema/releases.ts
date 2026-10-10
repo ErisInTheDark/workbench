@@ -79,6 +79,8 @@ const databaseReleases = Object.freeze({
   feedbackTitles: release(69, "030b52a213a6a454a12bdb6d98ada00d8d31be106ed9e17f2879f17b2ddca1a7"),
   threadTodos: release(70, "3a773072fa5636ee989e2385a4cebfd1d1dbb828e653ac2ae0d2beeec894045a"),
   threadTodoNumbers: release(71, "5cc370886a6b6c01664310ef3549b30785318559184e43a3c02c5aa1fbf71247"),
+  threadVis: release(72, "80641e33a164d4ca28217b0465453574492b2802c9969cfa8497be4e26189d3b"),
+  threadVisEnders: release(73, "15b9de53ec6acaa147dfe8965540d05d6f1a4df2b81cb1bbeaa2c977a29ebb23"),
 });
 
 export default databaseReleases;

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_CORE_FEATURE_KEYS: feature keys owned by the core lifecycle node.
- * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, thread skills and todos, questionnaire waits, live approvals, harness routing, and supervisors.
+ * - default WorkbenchCoreFeature: core node value and lifecycle owner for state, Git, thread skills, todos and vis sessions, questionnaire waits, live approvals, harness routing, and supervisors.
  */
 import type { ReloadableNodeInstance } from "./ReloadableNode";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
@@ -30,6 +30,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "threadContextRollover",
   "threadSkills",
   "threadTodos",
+  "vis",
   "transcriptReader",
   "transcriptReconciliation",
   "turnRecoveryFailures",

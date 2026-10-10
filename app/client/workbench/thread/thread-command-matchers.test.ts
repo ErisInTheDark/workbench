@@ -191,6 +191,8 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     };
     case "request_user_input": return { questions: [{ header: "details", id: "details", options: [], question: "What should change?" }] };
     case "task_set": return { title: "Render typed wb tools" };
+    case "vis_start":
+    case "vis_end": return { path: "mockups/chart.html" };
     case "task_completed":
     case "task_blocked": return {};
     case "message_wait":

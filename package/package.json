@@ -31,6 +31,7 @@
     "index.d.ts",
     "store-definitions.mjs",
     "StoreCommandRunner.mjs",
+    "wb.schema.json",
     "README.md"
   ],
   "dependencies": {

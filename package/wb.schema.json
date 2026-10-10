@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "Editor schema reference; ignored by Workbench.",
+      "type": "string"
+    },
+    "vis": {
+      "type": "object",
+      "properties": {
+        "css": {
+          "description": "Compiles CSS for .html and .svg vis files containing <link rel=\"workbench-css\">.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "minItems": 1,
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "description": "Argument vector run from the project root, inside the calling thread's sandbox. Its stdout is the result. {file}, {root} and {input} are substituted."
+            },
+            "input": {
+              "description": "Written to a temporary file named by {input}, for tools that read an entry file rather than arguments.",
+              "type": "string",
+              "maxLength": 16000
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        "build": {
+          "description": "Builds .tsx and .jsx vis files; prints JSON { document, inputs }.",
+          "type": "object",
+          "properties": {
+            "command": {
+              "minItems": 1,
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "description": "Argument vector run from the project root, inside the calling thread's sandbox. Its stdout is the result. {file}, {root} and {input} are substituted."
+            },
+            "input": {
+              "description": "Written to a temporary file named by {input}, for tools that read an entry file rather than arguments.",
+              "type": "string",
+              "maxLength": 16000
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "description": "Live visual drafts agents show with vis_start."
+    }
+  },
+  "additionalProperties": false,
+  "description": "Project-owned Workbench settings, read from .wb.json at the project root."
+}

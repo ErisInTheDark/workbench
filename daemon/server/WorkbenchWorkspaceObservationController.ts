@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move); publish typed keyed deltas after each first value.
+ * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, and live vis sessions); publish typed keyed deltas after each first value.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -23,6 +23,7 @@ import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbe
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
 import type WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
+import type WorkbenchVisController from "./vis/WorkbenchVisController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchStatsInvalidation } from "./stats/WorkbenchStatsObservation";
 
@@ -89,6 +90,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
+    vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
     runtime?: {
       read(threadId: string, harness: string): Promise<ThreadRuntime>;
@@ -174,6 +176,37 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         const opened = handle;
         observation.stopTree = () => opened.release();
         this.update(observation, { kind: "accountLimits", ...opened.read() });
+        break;
+      }
+      case "threadVis": {
+        const vis = this.owners.vis;
+        if (!vis) {
+          this.update(observation, { kind: "threadVis", phase: "unavailable", failure: "Vis sessions are unavailable.", data: null });
+          break;
+        }
+        const handle = vis.observe(request.query.threadId, () => {
+          this.update(observation, { kind: "threadVis", phase: "current", failure: null, data: handle.read() });
+        });
+        observation.stopTree = () => handle.release();
+        this.update(observation, { kind: "threadVis", phase: "current", failure: null, data: handle.read() });
+        break;
+      }
+      case "visSnapshot": {
+        const vis = this.owners.vis;
+        const query = request.query;
+        if (!vis) {
+          this.update(observation, { kind: "visSnapshot", phase: "unavailable", failure: "Vis sessions are unavailable.", data: null });
+          break;
+        }
+        // Snapshots never change; one read settles the observation.
+        void vis.readSnapshot(query.sessionId, query.snapshotKind).then(data => {
+          this.update(observation, { kind: "visSnapshot", phase: data ? "current" : "unavailable",
+            failure: data ? null : "This vis snapshot is no longer stored.", data });
+        }, error => {
+          const message = failure(error);
+          this.owners.warn(`Vis snapshot read failed: ${message}`);
+          this.update(observation, { kind: "visSnapshot", phase: "failed", failure: message, data: null });
+        });
         break;
       }
       case "workingTreeSummary": {
@@ -298,6 +331,8 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
+      case "threadVis": return { ...envelope, kind: "threadVis", phase: "pending", failure: null, data: null };
+      case "visSnapshot": return { ...envelope, kind: "visSnapshot", phase: "pending", failure: null, data: null };
     }
   }
 

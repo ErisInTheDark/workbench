@@ -540,6 +540,11 @@ export default class WorkbenchWorkspaceRequestController {
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
         interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
         break;
+      case "threadVis":
+      case "visSnapshot":
+        interest.owner = this.options.threads.observe(request.query.threadId, refresh);
+        interest.stop.push(this.options.sources.subscribe(refresh));
+        break;
       case "stats":
         // Daemons connect and projects gain locations after the view asks; each change re-targets the fan-out.
         interest.stop.push(this.options.sources.subscribe(refresh), this.options.workspace.subscribe(refresh));
@@ -593,6 +598,8 @@ export default class WorkbenchWorkspaceRequestController {
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
+      case "threadVis": return { ...base, kind: "threadVis", data: null };
+      case "visSnapshot": return { ...base, kind: "visSnapshot", data: null };
       case "appState": return { ...base, kind: "appState", data: null };
     }
   }
@@ -710,6 +717,8 @@ export default class WorkbenchWorkspaceRequestController {
         return;
       }
       case "stats": this.projectStats(interest); return;
+      case "threadVis":
+      case "visSnapshot": this.relayThreadVis(interest); return;
       case "threadOwner":
       case "thread": {
         const owner = interest.owner?.getSnapshot() ?? { phase: "pending" as const, failure: null };
@@ -739,6 +748,34 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "thread", owner, phase: fact?.phase ?? phase, failure: fact?.failure ?? failure,
           data: value?.data ?? null, runtime: value?.runtime ?? {} });
       }
+    }
+  }
+
+  /** Vis lives on the daemon that owns the thread, so the relay follows the thread's owner. */
+  private relayThreadVis(interest: Interest) {
+    const query = interest.request.query;
+    if (query.kind !== "threadVis" && query.kind !== "visSnapshot") return;
+    const owner = interest.owner?.getSnapshot() ?? { phase: "pending" as const, failure: null };
+    const key = owner.phase === "current" ? `${owner.location.daemonId}/${owner.identity.threadId}` : null;
+    if (interest.thread?.key !== key) {
+      const previous = interest.thread;
+      interest.thread = null;
+      previous?.observation.release();
+      const source = owner.phase === "current" ? this.options.sources.get(owner.location.daemonId) : undefined;
+      if (source && key && owner.phase === "current") {
+        const threadId = ThreadReferenceSchema.parse(owner.identity.threadId);
+        interest.thread = { key, observation: source.observe(query.kind === "threadVis"
+          ? { kind: "threadVis", threadId }
+          : { kind: "visSnapshot", sessionId: query.sessionId, snapshotKind: query.snapshotKind }, () => this.refresh(interest)) };
+      }
+    }
+    const fact = interest.thread?.observation.getSnapshot();
+    const phase = fact?.phase ?? (owner.phase === "conflict" ? "failed" : owner.phase);
+    const failure = fact?.failure ?? (owner.phase === "current" ? null : owner.failure);
+    if (query.kind === "threadVis") {
+      this.update(interest, { kind: "threadVis", phase, failure, data: fact?.value?.kind === "threadVis" ? fact.value.data : null });
+    } else {
+      this.update(interest, { kind: "visSnapshot", phase, failure, data: fact?.value?.kind === "visSnapshot" ? fact.value.data : null });
     }
   }
 

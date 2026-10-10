@@ -26,6 +26,7 @@ import { WORKBENCH_STATS_COMMANDS } from "./stats-command-definitions";
 import { WORKBENCH_FEEDBACK_COMMANDS } from "./feedback-command-definition";
 import { WORKBENCH_STORE_COMMANDS } from "./store-command-definitions";
 import { WORKBENCH_TODO_COMMANDS } from "./todo-command-definitions";
+import { WORKBENCH_VIS_COMMANDS } from "./vis-command-definitions";
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
@@ -36,6 +37,7 @@ const WORKBENCH_AGENT_COMMANDS: readonly WorkbenchAgentCommandDefinition[] = Obj
   ...WORKBENCH_STATS_COMMANDS,
   ...WORKBENCH_FEEDBACK_COMMANDS,
   ...WORKBENCH_TODO_COMMANDS,
+  ...WORKBENCH_VIS_COMMANDS,
   ...WORKBENCH_RIPGREP_COMMANDS,
   ...WORKBENCH_FILE_REMOVAL_COMMANDS,
   ...WORKBENCH_SKILL_COMMANDS,

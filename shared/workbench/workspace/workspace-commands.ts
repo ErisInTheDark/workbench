@@ -78,7 +78,7 @@ export const workspaceCommandRoutes = {
   "thread/todo/required/set": "thread",
   "thread/todo/text/set": "thread",
   "thread/feedback/addressed/clear": "thread",
-  "thread/skills/read": "thread",
+  "thread/vis/end": "thread",  "thread/skills/read": "thread",
   "thread/skills/deactivate": "thread",
   "voice/configuration/read": "installation",
   "voice/configuration/write": "installation",

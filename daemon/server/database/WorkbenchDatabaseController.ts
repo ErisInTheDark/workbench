@@ -10,6 +10,7 @@ import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtif
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
 import type { ThreadSkillCommand } from "./skills/WorkbenchThreadSkillStore";
 import type { ThreadGoalCommand } from "./goals/WorkbenchThreadGoalStore";
+import type { ThreadVisCommand } from "./vis/WorkbenchThreadVisStore";
 import type { ThreadTodoCommand } from "./todos/WorkbenchThreadTodoStore";
 import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore";
 import type { ProjectStoreCommand } from "./store/WorkbenchProjectStoreRepository";
@@ -312,6 +313,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "threadGoals", command });
     if (response.type !== "threadGoals") throw new WorkbenchDatabaseFailure(`Unexpected thread goal response: ${response.type}`);
+    return response.result;
+  }
+
+  async executeThreadVis(command: ThreadVisCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadVis", command });
+    if (response.type !== "threadVis") throw new WorkbenchDatabaseFailure(`Unexpected thread vis response: ${response.type}`);
     return response.result;
   }
 

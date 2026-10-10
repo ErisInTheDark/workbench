@@ -51,6 +51,7 @@ import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
 import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
 import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
 import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
+import WorkbenchVisController from "./vis/WorkbenchVisController";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
@@ -275,6 +276,30 @@ function createWorkbenchCoreFeature(
       for (const listener of runtimeListeners) listener(threadId, { todos });
     },
   });
+  const vis = new WorkbenchVisController({
+    store: command => database.executeThreadVis(command),
+    resolveRoot: async session => {
+      try {
+        return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session" })).root.rootPath;
+      } catch {
+        // Expected when the project left the catalogue; its session simply stops being live here.
+        return null;
+      }
+    },
+    // Project vis commands run as the session's thread, in its sandbox, with nothing writable and no network.
+    runCommand: session => async ({ command, cwd }, signal) => {
+      const key = installedProviderKeys.find(key => key === session.harness);
+      const prepare = key ? providers.get(key).tools?.prepareExecution : undefined;
+      if (!prepare) throw new Error(`Provider ${session.harness} cannot run sandboxed commands.`);
+      const prepared = await prepare({
+        caller: { harness: session.harness, threadId: WorkbenchThreadIdSchema.parse(session.threadId), cwd: session.cwd },
+        command, cwd, permissions: { mode: "restricted", writableRoots: [], network: false },
+      }, signal);
+      return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
+    },
+    scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
+    log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
+  });
   const threadAddressedFeedback = new WorkbenchThreadAddressedFeedbackController({
     store: command => database.executeThreadAddressedFeedback(command),
     resolve: resolveCanonicalThread,
@@ -484,6 +509,11 @@ function createWorkbenchCoreFeature(
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     transitions: worktreeGitTransitions,
+    pruneThreadVis: threadIds => vis.prune(threadIds),
+  });
+  // A settled thread's live vis sessions end with a final snapshot, so no live card outlives its thread.
+  const unsubscribeVisSettlement = threadState.controller.subscribe((_projectId, entry) => {
+    if (lease.isCurrent() && entry.entryKind !== "draft" && entry.lifecycle.settled) void vis.endThread(entry.identity.threadId);
   });
   const queues = subagentQueues = new WorkbenchSubagentQueueController({
     resolveProjectFromCwd: async cwd => (
@@ -660,7 +690,7 @@ function createWorkbenchCoreFeature(
     settlement: turnSettlement,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
-    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, recordSkillActivations,
+    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, vis, recordSkillActivations,
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
@@ -813,6 +843,7 @@ function createWorkbenchCoreFeature(
     approvals,
     voiceSettings,
     browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
+    vis,
     threadContextRollover,
     workingTree,
     accountLimits,
@@ -854,6 +885,7 @@ function createWorkbenchCoreFeature(
       if (!initialCatalog) return;
       stats.start();
       browseSessionCleanup.start();
+      void vis.start();
       for (const [phase, start] of [
         ["composer profiles", () => profileStore.start()],
         ["project discovery", () => projectCatalog.readCatalog()],
@@ -876,6 +908,8 @@ function createWorkbenchCoreFeature(
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unsubscribeAgentMessageDelivery();
+      unsubscribeVisSettlement();
+      vis.dispose();
       unfinishedTurns.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();
@@ -936,6 +970,7 @@ function createWorkbenchCoreFeature(
       stats.start();
       reportPhase("browse session cleanup startup");
       browseSessionCleanup.start();
+      void vis.start();
       if (startupDiagnostics) console.info("[startup] daemon core ready");
     },
   });

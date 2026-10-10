@@ -229,7 +229,7 @@ export const workbenchThreadActions = {
     params: WorkbenchThreadTargetSchema.extend({ id: z.number().int().nonnegative(), text: WorkbenchThreadTodoTextSchema }), result: ok,
   },
   "thread/feedback/addressed/clear": { params: WorkbenchThreadTargetSchema, result: ok },
-  "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
+  "thread/vis/end": { params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid() }), result: ok },  "thread/skills/read": { params: WorkbenchThreadTargetSchema, result: skillsResult },
   "thread/skills/deactivate": { params: WorkbenchThreadTargetSchema.extend({ path: z.string().min(1) }), result: skillsResult },
 } as const;
 export type WorkbenchThreadActionMap = {

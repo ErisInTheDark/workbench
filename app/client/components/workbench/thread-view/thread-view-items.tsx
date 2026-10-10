@@ -81,6 +81,7 @@ import {
   parseGitArcReceipt,
   parseWorkbenchFeedbackCommand,
   parseWorkbenchFeedbackId,
+  parseWorkbenchVisCommand,
   type ThreadCommandSummaryDisplay,
   type ThreadCommandDetailRow,
 } from "../../../workbench/thread/thread-command-matchers";
@@ -119,6 +120,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
+import ThreadVisCommandItem from "./ThreadVisCommandItem";
 import ThreadMarkdown from "./ThreadMarkdown";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadPlanSummary from "./ThreadPlanSummary";
@@ -1738,6 +1740,18 @@ function ThreadCommandExecutionDetails ({
         operation={feedbackCommand}
         outcome={commandOutcome}
         projectId={projectId}
+        threadId={threadId}
+      />
+    );
+  }
+  const visCommand = parseWorkbenchVisCommand(commandDisplay.unwrappedCommand);
+  if (visCommand) {
+    return (
+      <ThreadVisCommandItem
+        durationMs={visibleDurationMs ?? null}
+        operation={visCommand}
+        outcome={commandOutcome === "inProgress" ? "inProgress" : commandOutcome === "completed" ? "completed" : "failed"}
+        output={item.aggregatedOutput ?? ""}
         threadId={threadId}
       />
     );

@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - default ThreadTranscriptProjection: render canonical SQLite transcript items through the established UI.
+ * - default ThreadTranscriptProjection: render canonical SQLite transcript items through the established UI, with
+ *   user-only notes placed among turns by time.
  */
 "use client";
 
-import { Fragment, useMemo, useState, type Ref } from "react";
+import { Fragment, useMemo, useState, type ReactNode, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -67,7 +68,13 @@ export default function ThreadTranscriptProjection({
   relatedThreadsById,
   subagents,
   workspaceRoots,
+  localNotes = [],
 }: {
+  /**
+   * User-only transcript notes (never part of the agent's transcript), each placed after the last loaded turn that
+   * started at or before `atMs`. Notes older than the loaded history wait until that history loads.
+   */
+  localNotes?: ReadonlyArray<{ key: string; atMs: number; node: ReactNode }>;
   canLoadPreviousTurn: boolean;
   hiddenReasoningStep?: ThreadReasoningStepReference | null;
   historySentinelRef: Ref<HTMLDivElement>;
@@ -106,6 +113,19 @@ export default function ThreadTranscriptProjection({
     () => mergeAdjacentTurnSegments(projection.display.segments),
     [projection.display.segments],
   );
+  // Each note follows its turn's last segment; turn start times are seconds.
+  const notesAfterSegment = new Map<string, ReactNode[]>();
+  const leadingNotes: ReactNode[] = [];
+  for (const note of [...localNotes].sort((left, right) => left.atMs - right.atMs)) {
+    const owner = renderSegments.findLast((segment) => {
+      const startedAt = turnsById.get(segment.turnId)?.startedAt;
+      return typeof startedAt === "number" && startedAt * 1_000 <= note.atMs;
+    });
+    const anchor = owner ? renderSegments.findLast((segment) => segment.turnId === owner.turnId) : undefined;
+    const placed = <div key={note.key}>{note.node}</div>;
+    if (anchor) notesAfterSegment.set(anchor.id, [...notesAfterSegment.get(anchor.id) ?? [], placed]);
+    else if (!canLoadPreviousTurn) leadingNotes.push(placed);
+  }
 
   return (
     <>
@@ -117,6 +137,7 @@ export default function ThreadTranscriptProjection({
           No turns were returned for this thread yet.
         </p>
       ) : null}
+      {leadingNotes}
       {renderSegments.map((segment) => {
         const turn = turnsById.get(segment.turnId);
         if (!turn) return null;
@@ -163,6 +184,7 @@ export default function ThreadTranscriptProjection({
                 />
               </section>
             </ThreadMeasuredContent>
+            {notesAfterSegment.get(segment.id)}
           </Fragment>
         );
       })}

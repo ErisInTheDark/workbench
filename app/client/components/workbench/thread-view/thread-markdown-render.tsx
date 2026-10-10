@@ -42,6 +42,7 @@ import ThreadMarkdownSectionActions from "./ThreadMarkdownSectionActions";
 import ThreadNotice from "./ThreadNotice";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
+import ThreadVisFrame from "./ThreadVisFrame";
 
 // reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
@@ -730,13 +731,7 @@ function ThreadCodeBlock ({
         </pre>
         {svgPreviewSrcDoc ? (
           <div className="absolute inset-0 overflow-auto p-[0.95rem]">
-            <iframe
-              className="block size-full border-0 bg-transparent scheme-light-dark"
-              key={svgPreviewSrcDoc}
-              sandbox="allow-scripts"
-              srcDoc={svgPreviewSrcDoc}
-              title="SVG code block preview"
-            />
+            <ThreadVisFrame className="size-full" document={svgPreviewSrcDoc} key={svgPreviewSrcDoc} title="SVG code block preview" />
           </div>
         ) : null}
       </div>

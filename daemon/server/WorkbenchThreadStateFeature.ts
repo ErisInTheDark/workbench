@@ -90,6 +90,8 @@ export interface WorkbenchThreadStateFeatureContext {
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   compactThread?(input: { cwd: string; summary: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): Promise<void>;
   log?: (message: string) => void;
+  /** Deletes expired settled threads' vis sessions and snapshots. */
+  pruneThreadVis?(threadIds: readonly WorkbenchThreadId[]): Promise<void>;
   resolveProjectById(projectId: string): Promise<ProjectRecord>;
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
@@ -189,8 +191,11 @@ export default class WorkbenchThreadStateFeature {
       },
       interruptQuestionnaire: (projectId, harness, threadId, questionnaire) => this.interruptQuestionnaire(projectId, harness, threadId, questionnaire),
       getProjectCatalog: context.getProjectCatalog,
-      ...(context.gitArcs.pruneThreadHistories ? {
+      ...(context.gitArcs.pruneThreadHistories || context.pruneThreadVis ? {
         pruneExpiredGitState: async (projectId, identities) => {
+          // Vis snapshots share the settled-thread retention window and never defer.
+          await context.pruneThreadVis?.(identities.map(({ threadId }) => threadId));
+          if (!context.gitArcs.pruneThreadHistories) return [];
           const project = await context.resolveProjectById(projectId);
           const result = await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
           const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));

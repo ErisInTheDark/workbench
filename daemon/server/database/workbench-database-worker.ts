@@ -41,6 +41,7 @@ import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOu
 import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
 import WorkbenchThreadSkillStore from "./skills/WorkbenchThreadSkillStore.ts";
 import WorkbenchThreadGoalStore from "./goals/WorkbenchThreadGoalStore.ts";
+import WorkbenchThreadVisStore from "./vis/WorkbenchThreadVisStore.ts";
 import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
@@ -279,6 +280,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "threadGoals") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadGoals", result: new WorkbenchThreadGoalStore(database).execute(request.command) });
+    return;
+  }
+  if (request.type === "threadVis") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "threadVis", result: new WorkbenchThreadVisStore(database).execute(request.command) });
     return;
   }
   if (request.type === "threadTodos") {

@@ -7,6 +7,8 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands/questionnaire-command-definition";
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
+import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
+import { formatVisSessionResult } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
@@ -240,6 +242,29 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
             : await todos.renderRemove(identity.threadId, request.ids);
         return new Response(text, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
       },
+      executeVisRequest: async (body, signal) => {
+        const parsed = WorkbenchVisRequestSchema.safeParse(body);
+        if (!parsed.success) return new Response("Invalid vis arguments.\n", { headers: { "Content-Type": "text/plain; charset=utf-8" }, status: 400 });
+        const request = parsed.data;
+        const { identity, binding } = await nativeTarget(request.threadId, request.cwd, request.harness);
+        const { project, root } = await projectCatalog.resolveAgentEndpointProjectFromCwd(request.cwd, { endpointName: "Vis session" });
+        signal.throwIfAborted();
+        const vis = build.get("vis");
+        const text = (kind: "start" | "end", result: { sessionId: string; path: string; failure: string | null }) =>
+          `${formatVisSessionResult(kind, result.sessionId, result.path)}${result.failure ? `\nRendered with a problem: ${result.failure}` : ""}\n`;
+        try {
+          const body = request.action === "start"
+            ? text("start", await vis.startSession({
+              threadId: identity.threadId, harness: binding.harness, cwd: request.cwd, projectId: project.id, rootPath: root.rootPath, path: request.path,
+            }))
+            : text("end", await vis.endSession({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }));
+          return new Response(body, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          return Response.json({ error: error instanceof Error ? error.message : "Vis request failed." }, { status: 400 });
+        }
+      },
+      acceptVisRender: (runId, content) => build.get("vis").acceptRender(runId, content),
       executeFeedbackStats: async (body, signal) => await feedback.read(body, signal),
       executeFileRemoval: async (body, signal) => await fileRemoval.execute(body, signal),
       executeProjectStoreRequest: async (body, signal) => {
@@ -303,7 +328,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload shared wb CLI and MCP command execution without replacing core state.",
   lifecycle: "atomic",
   provides: ["agentCommand"],
-  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity"],
+  requires: ["database", "gitArc", "harnesses", "messages", "repo", "projectCatalog", "projectStore", "questionnaires", "reloadDirt", "stats", "subagents", "subagentQueues", "threadGit", "threadSkills", "threadState", "threadTodos", "transcript", "threadIdentity", "transcriptIdentity", "vis"],
   safeAll: true,
   scope: "server:commands",
 });

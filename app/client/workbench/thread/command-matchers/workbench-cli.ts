@@ -6,6 +6,7 @@
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
+ * - parseWorkbenchVisCommand: parse `wb vis start|end <path>` for its snapshot card.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
@@ -19,7 +20,7 @@ import {
 import { CommandMatcher } from "./core";
 import { tokenizeCommand } from "./helpers";
 import type { CommandMatcherDefinition } from "./types";
-import { getWorkbenchCommandRendering, type WorkbenchFeedbackOperation } from "./workbench-command-rendering";
+import { getWorkbenchCommandRendering, type WorkbenchFeedbackOperation, type WorkbenchVisOperation } from "./workbench-command-rendering";
 
 export type WorkbenchSubagentCommandAction = "create" | "list" | "profiles" | "settle" | "stop" | "wait";
 
@@ -71,6 +72,14 @@ export function parseWorkbenchFeedbackCommand(command: string): WorkbenchFeedbac
     report,
     title,
   };
+}
+
+export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation | null {
+  const tokens = tokenizeCommand(command.trim());
+  if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "vis") return null;
+  const action = tokens[2];
+  const paths = tokens.slice(3).filter(token => token !== "--");
+  return (action === "start" || action === "end") && paths.length === 1 ? { action, path: paths[0]! } : null;
 }
 
 export type WorkbenchTaskTitleCommand =
@@ -389,6 +398,14 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
         report: operation.report,
         title: operation.title,
       })?.result ?? null : null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.vis",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const operation = parseWorkbenchVisCommand(stage.text);
+      return operation ? getWorkbenchCommandRendering(operation.action === "start" ? "vis_start" : "vis_end", { path: operation.path })?.result ?? null : null;
     },
   }),
   CommandMatcher({
