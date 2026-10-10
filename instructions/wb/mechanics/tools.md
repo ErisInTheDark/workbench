@@ -9,8 +9,8 @@ When Workbench or project tooling or instructions cause bugs, confusion, avoidab
 Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. Never use todos to defer work from the current task.
 </docs>
 
-<docs tools="vis_start vis_end">
-To show the user a visual draft (mockup, layout, chart), write it as a project file and call <tool id="vis_start" />; they see it live as you edit. Prefer a `.tsx`/`.jsx` default export that imports the project's real components (needs `vis.build` in `.wb.json`); for `.html`/`.svg`, add `<link rel="workbench-css">` to `<head>` for project CSS (`vis.css`). Call <tool id="vis_end" /> when done.
+<docs tools="vis_start vis_end vis_read">
+To show the user a visual draft or let them pick between visual options, load the `/vis` skill, then use <tool id="vis_start" />.
 </docs>
 
 <harness:claude>

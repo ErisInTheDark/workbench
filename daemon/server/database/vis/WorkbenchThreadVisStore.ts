@@ -1,12 +1,18 @@
 /*
  * Exports:
+ * - ThreadVisStoredBuild: the build context a stored session renders in.
  * - ThreadVisStoredSession: one stored vis session and who it runs as.
- * - ThreadVisCommand: atomic vis session starts, ends, reads and retention deletes.
- * - ThreadVisResult: the sessions and snapshot one command produced.
- * - default WorkbenchThreadVisStore: own vis sessions and their start and end snapshots in SQLite.
+ * - ThreadVisCommand: atomic vis session starts, ends, answers, reads and retention deletes.
+ * - ThreadVisResult: the sessions, snapshot or answers one command produced.
+ * - default WorkbenchThreadVisStore: own vis sessions, their start and end snapshots, and their answers in SQLite.
  */
 import type Database from "better-sqlite3";
-import type { VisSnapshot, VisSnapshotKind, VisUserEnded } from "workbench-shared/workbench/vis/vis-contract";
+import type { VisAnswer, VisSnapshot, VisSnapshotKind, VisUserEnded } from "workbench-shared/workbench/vis/vis-contract";
+
+/** Answers kept per session; older ones are dropped as new ones arrive. */
+const ANSWERS_PER_SESSION = 100;
+
+export type ThreadVisStoredBuild = { kind: "caller" } | { kind: "folder"; root: string } | { kind: "default" };
 
 export interface ThreadVisStoredSession {
   sessionId: string;
@@ -15,6 +21,7 @@ export interface ThreadVisStoredSession {
   cwd: string;
   projectId: string;
   path: string;
+  build: ThreadVisStoredBuild;
   startedAt: number;
   endedAt: number | null;
 }
@@ -28,6 +35,10 @@ export type ThreadVisCommand =
   | { kind: "readActive" }
   | { kind: "readUserEnded"; threadId: string }
   | { kind: "readSnapshot"; sessionId: string; snapshotKind: VisSnapshotKind }
+  /** Records one answer for a live session of the thread; returns no sessions when it is not live. */
+  | { kind: "answer"; threadId: string; sessionId: string; sentAt: number; value: string }
+  /** Answers of the thread's newest session on `path`, live or ended, oldest first. */
+  | { kind: "readAnswers"; threadId: string; path: string }
   | { kind: "delete"; threadIds: readonly string[] };
 
 export interface ThreadVisResult {
@@ -35,17 +46,25 @@ export interface ThreadVisResult {
   snapshot: VisSnapshot | null;
   /** Sessions the user ended, oldest first; filled only by `readUserEnded`. */
   userEnded?: VisUserEnded[];
+  /** Filled only by `readAnswers`. */
+  answers?: VisAnswer[];
 }
 
 interface SessionRow {
   id: string; thread_id: string; harness: string; cwd: string; project_id: string; path: string;
+  build_kind: "caller" | "folder" | "default" | null; build_root: string | null;
   started_at: number; ended_at: number | null;
+}
+
+function build(row: SessionRow): ThreadVisStoredBuild {
+  if (row.build_kind === "default") return { kind: "default" };
+  return row.build_kind === "folder" && row.build_root ? { kind: "folder", root: row.build_root } : { kind: "caller" };
 }
 
 function session(row: SessionRow): ThreadVisStoredSession {
   return {
     sessionId: row.id, threadId: row.thread_id, harness: row.harness, cwd: row.cwd, projectId: row.project_id,
-    path: row.path, startedAt: row.started_at, endedAt: row.ended_at,
+    path: row.path, build: build(row), startedAt: row.started_at, endedAt: row.ended_at,
   };
 }
 
@@ -59,8 +78,12 @@ export default class WorkbenchThreadVisStore {
           const { session: value, snapshot } = command;
           if (this.#active(value.threadId, value.path)) throw new Error(`A vis session is already live on ${value.path}; end it first.`);
           this.database.prepare(`INSERT INTO workbench_thread_vis_sessions
-            (id, thread_id, harness, cwd, project_id, path, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`)
-            .run(value.sessionId, value.threadId, value.harness, value.cwd, value.projectId, value.path, value.startedAt);
+            (id, thread_id, harness, cwd, project_id, path, build_kind, build_root, started_at, ended_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
+            .run(
+              value.sessionId, value.threadId, value.harness, value.cwd, value.projectId, value.path,
+              value.build.kind, value.build.kind === "folder" ? value.build.root : null, value.startedAt,
+            );
           this.#snapshot(value.sessionId, "start", snapshot);
           return { sessions: [{ ...value, endedAt: null }], snapshot: null };
         }
@@ -98,6 +121,26 @@ export default class WorkbenchThreadVisStore {
               capturedAt: row.captured_at, document: row.document, failure: row.failure,
             } : null,
           };
+        }
+        case "answer": {
+          const row = this.database.prepare("SELECT * FROM workbench_thread_vis_sessions WHERE id = ? AND thread_id = ? AND ended_at IS NULL")
+            .get(command.sessionId, command.threadId) as SessionRow | undefined;
+          if (!row) return { sessions: [], snapshot: null };
+          const { next } = this.database.prepare(`SELECT COALESCE(MAX(sequence), -1) + 1 AS next
+            FROM workbench_thread_vis_answers WHERE session_id = ?`).get(row.id) as { next: number };
+          this.database.prepare("INSERT INTO workbench_thread_vis_answers (session_id, sequence, sent_at, value) VALUES (?, ?, ?, ?)")
+            .run(row.id, next, command.sentAt, command.value);
+          this.database.prepare("DELETE FROM workbench_thread_vis_answers WHERE session_id = ? AND sequence <= ?")
+            .run(row.id, next - ANSWERS_PER_SESSION);
+          return { sessions: [session(row)], snapshot: null };
+        }
+        case "readAnswers": {
+          const row = this.database.prepare(`SELECT id FROM workbench_thread_vis_sessions
+            WHERE thread_id = ? AND path = ? ORDER BY started_at DESC LIMIT 1`).get(command.threadId, command.path) as { id: string } | undefined;
+          const answers = row ? (this.database.prepare(`SELECT sent_at, value FROM workbench_thread_vis_answers
+            WHERE session_id = ? ORDER BY sequence`).all(row.id) as Array<{ sent_at: number; value: string }>)
+            .map(({ sent_at, value }) => ({ sessionId: row.id, sentAt: sent_at, value })) : [];
+          return { sessions: [], snapshot: null, answers };
         }
         case "delete": {
           const remove = this.database.prepare("DELETE FROM workbench_thread_vis_sessions WHERE thread_id = ?");

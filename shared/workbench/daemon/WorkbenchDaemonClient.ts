@@ -261,7 +261,9 @@ class WorkbenchDaemonClient {
       clear: (params: WorkbenchDaemonParams<"thread/feedback/addressed/clear">) => this.request("thread/feedback/addressed/clear", params),
     },
     vis: {
-      end: (params: WorkbenchDaemonParams<"thread/vis/end">) => this.request("thread/vis/end", params),    },
+      end: (params: WorkbenchDaemonParams<"thread/vis/end">) => this.request("thread/vis/end", params),
+      answer: (params: WorkbenchDaemonParams<"thread/vis/answer">) => this.request("thread/vis/answer", params),
+    },
     skills: {
       read: (params: WorkbenchDaemonParams<"thread/skills/read">) => this.request("thread/skills/read", params),
       deactivate: (params: WorkbenchDaemonParams<"thread/skills/deactivate">) => this.request("thread/skills/deactivate", params),

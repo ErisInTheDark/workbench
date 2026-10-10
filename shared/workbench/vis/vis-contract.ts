@@ -9,6 +9,9 @@
  * - VisThreadSchema/VisThread: every active vis session of one thread, plus the ones the user ended.
  * - VisSnapshotSchema/VisSnapshot: the stored document of one session moment.
  * - formatVisSessionResult/parseVisSessionResult: the tool acknowledgement that carries a session id to transcript cards.
+ * - VisProject/parseVisProject: the build context a session renders in: the caller's project, another folder's `.wb.json`, or Workbench's default kit.
+ * - VIS_MAX_ANSWER_LENGTH/VisAnswerSchema/VisAnswer: one JSON value a vis sent back through `wb.send`.
+ * - formatVisAnswers: the `wb vis read` text for one session's answers.
  */
 import { z } from "zod";
 
@@ -71,6 +74,45 @@ export type VisSnapshot = z.infer<typeof VisSnapshotSchema>;
 /** CLI and MCP calls both acknowledge with this line, so transcript cards can find their snapshot. */
 export function formatVisSessionResult(kind: VisSnapshotKind, sessionId: string, path: string) {
   return `${kind === "start" ? "Started" : "Ended"} vis session ${sessionId} on ${path}.`;
+}
+
+export type VisProject =
+  /** The caller's project and its `.wb.json`. */
+  | { kind: "caller" }
+  /** A folder relative to the caller's cwd, built with that folder's `.wb.json`. */
+  | { kind: "folder"; path: string }
+  /** Workbench's own build, where `workbench/vis` is importable. */
+  | { kind: "default" };
+
+export function parseVisProject(value: string | undefined): VisProject {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed || trimmed === ".") return { kind: "caller" };
+  if (trimmed === "default" || trimmed === "none") return { kind: "default" };
+  return { kind: "folder", path: trimmed };
+}
+
+/** A vis may send at most this many characters of JSON per message. */
+export const VIS_MAX_ANSWER_LENGTH = 16_384;
+
+export const VisAnswerSchema = z.object({
+  sessionId: z.uuid(),
+  sentAt: timestamp,
+  /** The JSON text the vis sent. */
+  value: z.string().min(1).max(VIS_MAX_ANSWER_LENGTH),
+}).strict();
+export type VisAnswer = z.infer<typeof VisAnswerSchema>;
+
+/** `wb vis read` output: newest answers last, labelled as page-sent rather than verified user input. */
+export function formatVisAnswers({ answers, live, path }: { answers: readonly VisAnswer[]; live: boolean; path: string }) {
+  const state = live ? "live" : "ended";
+  if (!answers.length) return `No answers yet from the vis on ${path} (session ${state}).\n`;
+  const shown = answers.slice(-20);
+  return [
+    `${answers.length} answer${answers.length === 1 ? "" : "s"} from the vis on ${path} (session ${state}), newest last.`,
+    "Sent by the page while the user had it focused; not verified user input.",
+    ...(shown.length < answers.length ? [`(${answers.length - shown.length} older omitted)`] : []),
+    ...shown.map(({ sentAt, value }) => `- ${new Date(sentAt).toISOString()} ${value}`),
+  ].join("\n") + "\n";
 }
 
 export function parseVisSessionResult(output: string) {

@@ -347,6 +347,11 @@ export default memo(function ThreadViewContent ({
   })), [vis?.userEnded]);
   const visActions = useMemo(() => ({
     onEnd: (sessionId: string) => { void daemon?.threads.vis.end({ threadId: activeThreadId, sessionId }).catch((error: unknown) => console.error("Ending the vis session failed.", error)); },
+    // The card shows whether the answer was recorded, so a failure reaches the user there.
+    onAnswer: async (sessionId: string, value: string) => {
+      if (!daemon) throw new Error("Workbench is not connected.");
+      await daemon.threads.vis.answer({ threadId: activeThreadId, sessionId, value });
+    },
   }), [activeThreadId, daemon]);
   const { pending: activePendingUserInputRequest } = useThread.questionnaire(active.store);
   const { entries: activeApprovalEntries } = useThread.approvals(active.store);

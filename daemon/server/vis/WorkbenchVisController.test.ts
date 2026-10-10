@@ -1,9 +1,10 @@
-/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, ending and resuming. */
+/* No production exports. Protect vis session snapshots, render-in-flight publication, coalesced re-renders, CSS failures keeping the last render, build contexts, answers, ending and resuming. */
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import type { VisAnswer } from "workbench-shared/workbench/vis/vis-contract";
 import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
 import WorkbenchVisController from "./WorkbenchVisController";
 
@@ -19,6 +20,7 @@ async function fixture(context: TestContext) {
   const root = temporary.path;
   const sessions = new Map<string, ThreadVisStoredSession>();
   const snapshots = new Map<string, { document: string | null; failure: string | null }>();
+  const answers: VisAnswer[] = [];
   const store = async (command: ThreadVisCommand): Promise<ThreadVisResult> => {
     switch (command.kind) {
       case "start": sessions.set(command.session.sessionId, { ...command.session, endedAt: null });
@@ -29,19 +31,31 @@ async function fixture(context: TestContext) {
       } break;
       case "readActive": return { sessions: [...sessions.values()].filter(({ endedAt }) => endedAt === null), snapshot: null };
       case "readUserEnded": return { sessions: [], snapshot: null, userEnded: [] };
+      case "answer": {
+        const live = sessions.get(command.sessionId);
+        if (!live || live.endedAt !== null || live.threadId !== command.threadId) break;
+        answers.push({ sessionId: command.sessionId, sentAt: command.sentAt, value: command.value });
+        return { sessions: [live], snapshot: null };
+      }
+      case "readAnswers": return { sessions: [], snapshot: null, answers };
       default: break;
     }
     return { sessions: [], snapshot: null };
   };
   const watchers = new Map<string, () => void>();
   // `next.stdout` is what the producer pipes into `wb vis render`; the fake shell delivers it like the real CLI would.
-  const css = { gates: [] as Array<ReturnType<typeof gate>>, commands: [] as string[][], next: { exitCode: 0, stdout: ".a{}", stderr: "" } };
+  const css = {
+    gates: [] as Array<ReturnType<typeof gate>>, commands: [] as string[][], cwds: [] as string[],
+    next: { exitCode: 0, stdout: ".a{}", stderr: "" },
+  };
+  const workbenchRoot = path.join(root, "workbench-checkout");
   const create = (): WorkbenchVisController => {
     const controller: WorkbenchVisController = new WorkbenchVisController({
       store,
       resolveRoot: async () => root,
-      runCommand: () => async ({ command }) => {
+      runCommand: () => async ({ command, cwd }) => {
         css.commands.push(command);
+        css.cwds.push(cwd);
         const held = css.gates.shift();
         if (held) await held.promise;
         const runId = /--run '([^']+)'$/u.exec(command.at(-1) ?? "")?.[1];
@@ -49,6 +63,7 @@ async function fixture(context: TestContext) {
         return { ...css.next, stdout: "" };
       },
       scratchDirectory: path.join(root, ".scratch"),
+      workbenchRoot,
       watch: (file, onChange) => { watchers.set(file, onChange); return () => watchers.delete(file); },
       now: () => 100,
       log: () => undefined,
@@ -57,9 +72,9 @@ async function fixture(context: TestContext) {
   };
   const file = path.join(root, "mock.html");
   const start = (controller: WorkbenchVisController) => controller.startSession({
-    threadId: "thread", harness: "codex", cwd: root, projectId: "project", rootPath: root, path: "mock.html",
+    threadId: "thread", harness: "codex", cwd: root, projectId: "project", rootPath: root, path: "mock.html", project: { kind: "caller" },
   });
-  return { root, file, create, start, snapshots, sessions, watchers, css };
+  return { root, file, create, start, snapshots, sessions, watchers, css, workbenchRoot };
 }
 
 /** Resolves on the first publication whose thread state passes `accept`; file reads are real I/O, so no tick count works. */
@@ -129,7 +144,9 @@ test("a component re-renders when a file its build read changes, and watching fo
   const button = path.join(f.root, "Button.tsx");
   f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>one</p>", inputs: ["mock.tsx", "Button.tsx", "node_modules/react/index.js"] }), stderr: "" };
   const controller = f.create();
-  await controller.startSession({ threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx" });
+  await controller.startSession({
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "caller" },
+  });
   assert.deepEqual([...f.watchers.keys()].sort(), [button, entry].sort(), "dependencies are watched; node_modules is not");
 
   f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>two</p>", inputs: ["mock.tsx"] }), stderr: "" };
@@ -169,8 +186,51 @@ test("ending snapshots the current file and stops watching; a new generation res
   assert.equal(f.watchers.size, 0);
   await assert.rejects(second.endSession({ threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" }), /No vis session is live/u);
   await assert.rejects(f.create().startSession({
-    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "../outside.html",
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "../outside.html", project: { kind: "caller" },
   }), /ENOENT|inside the caller's project/u);
   assert.equal(await readFile(f.file, "utf8"), "<p>end</p>");
   second.dispose();
+});
+
+test("a session builds in its chosen context, and a resumed session keeps it", async context => {
+  const f = await fixture(context);
+  const entry = path.join(f.root, "mock.tsx");
+  await writeFile(entry, "export default () => null;");
+  // No `.wb.json` in the caller's project: the default context needs none.
+  f.css.next = { exitCode: 0, stdout: JSON.stringify({ document: "<p>kit</p>", inputs: ["../mock.tsx", "../../kit-outside-the-project/index.ts"] }), stderr: "" };
+  const first = f.create();
+  await first.startSession({
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "default" },
+  });
+  assert.equal(f.css.cwds[0], f.workbenchRoot, "the default context runs in Workbench's checkout");
+  assert.ok(f.css.commands[0]?.at(-1)?.includes("'--kit'"), "and builds with the kit");
+  assert.deepEqual([...f.watchers.keys()], [entry], "the caller's file is watched; Workbench's kit is not");
+  first.dispose();
+
+  const resumed = f.create();
+  await resumed.start();
+  await until(resumed, session => session.render !== null);
+  assert.equal(f.css.cwds.at(-1), f.workbenchRoot, "a resumed session still builds in the default context");
+  resumed.dispose();
+
+  const folder = path.join(f.root, "other");
+  await assert.rejects(resumed.startSession({
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "folder", path: "other" },
+  }), /not a folder/u);
+  await mkdir(folder);
+  await assert.rejects(f.create().startSession({
+    threadId: "thread", harness: "codex", cwd: f.root, projectId: "project", rootPath: f.root, path: "mock.tsx", project: { kind: "folder", path: "other" },
+  }), /no \.wb\.json/u);
+});
+
+test("answers are JSON from a live session and read back for its file", async context => {
+  const f = await fixture(context);
+  await writeFile(f.file, "<p>x</p>");
+  const controller = f.create();
+  const { sessionId } = await f.start(controller);
+  await assert.rejects(controller.answer("thread", sessionId, "not json"), /must be JSON/u);
+  await controller.answer("thread", sessionId, "{\"pick\":\"a\"}");
+  const read = await controller.readAnswers({ threadId: "thread", cwd: f.root, rootPath: f.root, path: "mock.html" });
+  assert.deepEqual(read, { path: "mock.html", live: true, answers: [{ sessionId, sentAt: 100, value: "{\"pick\":\"a\"}" }] });
+  controller.dispose();
 });

@@ -8,7 +8,7 @@ import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
 import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
-import { formatVisSessionResult } from "workbench-shared/workbench/vis/vis-contract";
+import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
 import {
   WorkbenchHeapSnapshotRequestSchema, WorkbenchSocketSpyRequestSchema, formatWorkbenchSocketSpy,
@@ -255,9 +255,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         try {
           const body = request.action === "start"
             ? text("start", await vis.startSession({
-              threadId: identity.threadId, harness: binding.harness, cwd: request.cwd, projectId: project.id, rootPath: root.rootPath, path: request.path,
+              threadId: identity.threadId, harness: binding.harness, cwd: request.cwd, projectId: project.id, rootPath: root.rootPath,
+              path: request.path, project: parseVisProject(request.project),
             }))
-            : text("end", await vis.endSession({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }));
+            : request.action === "end"
+              ? text("end", await vis.endSession({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }))
+              : formatVisAnswers(await vis.readAnswers({ threadId: identity.threadId, cwd: request.cwd, rootPath: root.rootPath, path: request.path }));
           return new Response(body, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
         } catch (error) {
           if (signal.aborted) throw error;

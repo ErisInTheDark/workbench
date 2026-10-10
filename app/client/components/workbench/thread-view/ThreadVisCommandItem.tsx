@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadVisCommandItem: render a vis start or end call as a closed disclosure that shows the document snapshotted at that moment.
+ * - default ThreadVisCommandItem: render a vis start or end call as a closed disclosure that shows the document snapshotted at that
+ *   moment, and an answer read as one that shows what the agent read.
  */
 "use client";
 
@@ -48,7 +49,9 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
   const result = parseVisSessionResult(output);
   const verb = operation.action === "start"
     ? outcome === "inProgress" ? "Starting vis on" : outcome === "failed" ? "Could not start vis on" : "Started vis on"
-    : outcome === "inProgress" ? "Ending vis on" : outcome === "failed" ? "Could not end vis on" : "Ended vis on";
+    : operation.action === "end"
+      ? outcome === "inProgress" ? "Ending vis on" : outcome === "failed" ? "Could not end vis on" : "Ended vis on"
+      : outcome === "inProgress" ? "Reading answers from" : outcome === "failed" ? "Could not read answers from" : "Read answers from";
   const summary = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className="shrink-0">{verb}</span>
@@ -56,6 +59,17 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
       {durationMs === null ? null : <ThreadDurationText className="shrink-0 text-[0.78em] text-fg/muted" durationMs={durationMs} />}
     </span>
   );
+  if (operation.action === "read" && outcome === "completed") {
+    return (
+      <Disclosure
+        className="py-2"
+        contentClassName="mt-2 pl-6"
+        renderContent={() => <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[0.8em] text-fg/muted">{output.trim()}</pre>}
+        summary={summary}
+        summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
+      />
+    );
+  }
   if (!result || outcome !== "completed") {
     return (
       <div className="py-2 text-[0.92em] leading-[1.6] text-fg/muted">

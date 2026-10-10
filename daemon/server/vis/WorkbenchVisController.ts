@@ -4,19 +4,24 @@
  * - default WorkbenchVisController: own live vis sessions for one daemon generation. Starting and ending snapshot the
  *   rendered file; between them a change to the file (or, for built components, any file the build read) keeps the
  *   last render and marks one in flight, and only a finished render replaces it. Live sessions survive reloads
- *   through storage and resume on start.
+ *   through storage and resume on start. Each session builds in its caller's project, another folder's `.wb.json`,
+ *   or Workbench's default kit, and stores the answers its vis sends back.
  */
 import { randomUUID } from "node:crypto";
 import { watch as watchDirectory } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import {
-  isVisPath, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES,
-  type VisLiveSession, type VisSnapshotKind, type VisThread, type VisUserEnded,
+  isVisPath, VIS_MAX_ANSWER_LENGTH, VIS_MAX_DOCUMENT_LENGTH, VIS_MAX_SOURCE_BYTES,
+  type VisLiveSession, type VisProject, type VisSnapshotKind, type VisThread, type VisUserEnded,
 } from "workbench-shared/workbench/vis/vis-contract";
 import { renderVisDocument, visWantsCss } from "workbench-shared/workbench/vis/vis-document";
-import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
-import { buildVisDocument, compileVisCss, VisRenderRuns, type VisCommandRunner } from "./vis-project-command";
+import type { ThreadVisCommand, ThreadVisResult, ThreadVisStoredBuild, ThreadVisStoredSession } from "../database/vis/WorkbenchThreadVisStore";
+import { WORKBENCH_PROJECT_CONFIG_FILE } from "workbench-shared/workbench/project-config/workbench-project-config";
+import {
+  buildVisDocument, compileVisCss, VisRenderRuns, WORKBENCH_DEFAULT_VIS_CONFIG,
+  type VisBuildContext, type VisCommandRunner,
+} from "./vis-project-command";
 
 export interface WorkbenchVisControllerOptions {
   store(command: ThreadVisCommand): Promise<ThreadVisResult>;
@@ -26,6 +31,8 @@ export interface WorkbenchVisControllerOptions {
   runCommand(session: ThreadVisStoredSession): VisCommandRunner;
   /** Workbench-owned directory for project command input files. */
   scratchDirectory: string;
+  /** Workbench's checkout, where the default context's commands run. */
+  workbenchRoot: string;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
   watch?(file: string, onChange: () => void): () => void;
   now?(): number;
@@ -42,7 +49,9 @@ interface Rendered {
 interface Live {
   stored: ThreadVisStoredSession;
   file: string;
+  /** The caller's project root; the file lives inside it. */
   rootPath: string;
+  context: VisBuildContext;
   state: VisLiveSession;
   /** Aborts this session's in-flight render; replaced only by ending. */
   readonly cancel: AbortController;
@@ -99,19 +108,23 @@ export default class WorkbenchVisController {
     return this.#runs.accept(runId, content);
   }
 
-  async startSession(input: { threadId: string; harness: string; cwd: string; projectId: string; rootPath: string; path: string }) {
+  async startSession(input: {
+    threadId: string; harness: string; cwd: string; projectId: string; rootPath: string; path: string; project: VisProject;
+  }) {
     await this.start();
     const { file, display } = await this.#resolve(input.rootPath, input.cwd, input.path);
+    const build = await this.#resolveBuild(input.cwd, input.project);
     const stored: ThreadVisStoredSession = {
       sessionId: randomUUID(), threadId: input.threadId, harness: input.harness, cwd: input.cwd,
-      projectId: input.projectId, path: display, startedAt: this.#now(), endedAt: null,
+      projectId: input.projectId, path: display, build, startedAt: this.#now(), endedAt: null,
     };
     if (this.#findLive(input.threadId, display)) throw new Error(`A vis session is already live on ${display}; end it first.`);
-    const rendered = await this.#render(stored, file, input.rootPath, this.#lifetime.signal);
+    const context = this.#context(build, input.rootPath);
+    const rendered = await this.#render(stored, file, input.rootPath, context, this.#lifetime.signal);
     if (rendered.document === null) throw new Error(rendered.failure ?? `Unable to read ${display}.`);
     const { endedAt: _, ...session } = stored;
     await this.#options.store({ kind: "start", session, snapshot: { capturedAt: stored.startedAt, document: rendered.document, failure: rendered.failure } });
-    const live = this.#begin(stored, file, input.rootPath, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure);
+    const live = this.#begin(stored, file, input.rootPath, context, { document: rendered.document, renderedAt: stored.startedAt }, rendered.failure);
     this.#watch(live, rendered.inputs);
     return { sessionId: stored.sessionId, path: display, failure: rendered.failure };
   }
@@ -151,6 +164,22 @@ export default class WorkbenchVisController {
     const live = this.#live.get(sessionId);
     if (!live || live.stored.threadId !== threadId) throw new Error("That vis session is no longer live.");
     return await this.#end(live, "user");
+  }
+
+  /** A value the user's vis sent through `wb.send`; the card only forwards messages from its own focused frame. */
+  async answer(threadId: string, sessionId: string, value: string) {
+    if (value.length > VIS_MAX_ANSWER_LENGTH) throw new Error("Vis answers are limited to 16 KB of JSON.");
+    try { JSON.parse(value); }
+    catch { throw new Error("Vis answers must be JSON."); }
+    const { sessions } = await this.#options.store({ kind: "answer", threadId, sessionId, sentAt: this.#now(), value });
+    if (!sessions.length) throw new Error("That vis session is no longer live.");
+  }
+
+  /** Answers of the caller's newest session on `path`, live or ended. */
+  async readAnswers(input: { threadId: string; cwd: string; rootPath: string; path: string }) {
+    const { display } = await this.#resolve(input.rootPath, input.cwd, input.path, false);
+    const { answers = [] } = await this.#options.store({ kind: "readAnswers", threadId: input.threadId, path: display });
+    return { path: display, answers, live: this.#findLive(input.threadId, display) !== null };
   }
 
   read(threadId: string): VisThread {
@@ -201,7 +230,7 @@ export default class WorkbenchVisController {
       if (this.#lifetime.signal.aborted) return;
       const rootPath = await this.#options.resolveRoot(stored);
       if (!rootPath) continue;
-      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, null, null);
+      const live = this.#begin(stored, path.resolve(rootPath, stored.path), rootPath, this.#context(stored.build, rootPath), null, null);
       this.#watch(live, null);
       this.#changed(live);
     }
@@ -216,13 +245,27 @@ export default class WorkbenchVisController {
     return { file, display: path.relative(root, file).replaceAll("\\", "/") };
   }
 
+  async #resolveBuild(cwd: string, project: VisProject): Promise<ThreadVisStoredBuild> {
+    if (project.kind !== "folder") return project;
+    const root = await realpath(path.resolve(cwd, project.path)).catch(() => null);
+    if (!root || !(await stat(root)).isDirectory()) throw new Error(`The vis project ${project.path} is not a folder.`);
+    const config = await stat(path.join(root, WORKBENCH_PROJECT_CONFIG_FILE)).catch(() => null);
+    if (!config?.isFile()) throw new Error(`The vis project ${project.path} has no ${WORKBENCH_PROJECT_CONFIG_FILE}.`);
+    return { kind: "folder", root };
+  }
+
+  #context(build: ThreadVisStoredBuild, projectRoot: string): VisBuildContext {
+    if (build.kind === "default") return { rootPath: this.#options.workbenchRoot, config: WORKBENCH_DEFAULT_VIS_CONFIG };
+    return { rootPath: build.kind === "folder" ? build.root : projectRoot, config: null };
+  }
+
   #findLive(threadId: string, display: string) {
     return [...this.#live.values()].find(({ stored }) => stored.threadId === threadId && stored.path === display) ?? null;
   }
 
-  #begin(stored: ThreadVisStoredSession, file: string, rootPath: string, render: VisLiveSession["render"], failure: string | null) {
+  #begin(stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext, render: VisLiveSession["render"], failure: string | null) {
     const live: Live = {
-      stored, file, rootPath, running: null, again: false, watched: new Map(),
+      stored, file, rootPath, context, running: null, again: false, watched: new Map(),
       cancel: new AbortController(),
       state: { sessionId: stored.sessionId, path: stored.path, startedAt: stored.startedAt, render, rendering: false, failure },
     };
@@ -267,7 +310,7 @@ export default class WorkbenchVisController {
     const signal = AbortSignal.any([this.#lifetime.signal, live.cancel.signal]);
     do {
       live.again = false;
-      const rendered = await this.#render(live.stored, live.file, live.rootPath, signal);
+      const rendered = await this.#render(live.stored, live.file, live.rootPath, live.context, signal);
       if (signal.aborted || this.#live.get(live.stored.sessionId) !== live) return;
       this.#watch(live, rendered.inputs);
       // A failed step keeps the previous render; with nothing to keep, an unstyled document is better than none.
@@ -285,7 +328,7 @@ export default class WorkbenchVisController {
   async #end(live: Live, endedBy: "agent" | "user" = "agent") {
     this.#drop(live);
     await live.running?.catch(() => undefined);
-    const rendered = await this.#render(live.stored, live.file, live.rootPath, this.#lifetime.signal);
+    const rendered = await this.#render(live.stored, live.file, live.rootPath, live.context, this.#lifetime.signal);
     const capturedAt = this.#now();
     await this.#options.store({
       kind: "end", threadId: live.stored.threadId, path: live.stored.path, endedBy,
@@ -307,17 +350,19 @@ export default class WorkbenchVisController {
     this.#publish(live.stored.threadId);
   }
 
-  async #render(stored: ThreadVisStoredSession, file: string, rootPath: string, signal: AbortSignal): Promise<Rendered> {
+  async #render(stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext, signal: AbortSignal): Promise<Rendered> {
     const command = {
-      file, rootPath, signal, run: this.#options.runCommand(stored), runs: this.#runs,
+      file, context, signal, run: this.#options.runCommand(stored), runs: this.#runs,
       scratchPath: path.join(this.#options.scratchDirectory, `${stored.sessionId}-${randomUUID()}`),
     };
     if (isComponent(file)) {
       try {
         const built = await buildVisDocument(command);
-        // Inputs outside the project are dependencies (node_modules aside, nothing there is edited); only project files are watched.
-        const inputs = built.inputs.map((input) => path.resolve(rootPath, input))
-          .filter((input) => isWithin(rootPath, input) && !input.split(path.sep).includes("node_modules"));
+        // Only the caller's project and a configured build folder are watched: anything else (Workbench's kit,
+        // node_modules) is a dependency nobody edits mid-session.
+        const watchRoots = context.config ? [rootPath] : [rootPath, context.rootPath];
+        const inputs = built.inputs.map((input) => path.resolve(context.rootPath, input))
+          .filter((input) => watchRoots.some((root) => isWithin(root, input)) && !input.split(path.sep).includes("node_modules"));
         return { document: built.document, failure: null, inputs };
       } catch (error) {
         return { document: null, failure: signal.aborted ? null : `Build: ${message(error)}`, inputs: null };

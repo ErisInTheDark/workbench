@@ -60,7 +60,7 @@ export interface WorkbenchThreadActionOwners {
   goals: Pick<WorkbenchThreadGoalController, "set" | "clear">;
   todos: Pick<WorkbenchThreadTodoController, "add" | "remove" | "setRequired" | "setText">;
   addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "clear">;
-  vis: Pick<import("./vis/WorkbenchVisController").default, "endById">;
+  vis: Pick<import("./vis/WorkbenchVisController").default, "answer" | "endById">;
   /** Record skills an accepted submission activated. */
   recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
   warn(message: string): void;
@@ -217,7 +217,12 @@ export default class WorkbenchThreadActionController {
     "thread/vis/end": async input => {
       await this.owners.vis.endById(input.threadId, input.sessionId);
       return { ok: true };
-    },    "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
+    },
+    "thread/vis/answer": async input => {
+      await this.owners.vis.answer(input.threadId, input.sessionId, input.value);
+      return { ok: true };
+    },
+    "thread/skills/read": async input => ({ skills: await this.owners.skills.read(input.threadId) }),
     "thread/skills/deactivate": async input => ({ skills: await this.owners.skills.deactivate(input.threadId, input.path) }),
     "thread/steer/resend": input => this.resendSteer(input),
     "thread/steer/dismiss": input => this.dismissSteer(input),

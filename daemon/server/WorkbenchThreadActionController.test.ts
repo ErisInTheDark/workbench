@@ -62,7 +62,7 @@ function fixture(providerWarning?: string) {
     goals: { set: unused, clear: unused },
     todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
     addressedFeedback: { clear: unused },
-    vis: { endById: unused },
+    vis: { answer: unused, endById: unused },
     recordSkillActivations: async () => undefined,
     state: {
       getCanonicalThreadEntry: async () => null,

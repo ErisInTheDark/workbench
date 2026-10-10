@@ -3,13 +3,14 @@
  * - VisCommandRunner: runs one shell command as a thread, inside that thread's sandbox.
  * - VisRenderRuns: hands out run ids and collects what `wb vis render` delivers for them.
  * - visShellCommand: pipe a quoted argument vector into `wb vis render` through the user's login shell.
- * - compileVisCss/buildVisDocument: run a project's `vis.css` or `vis.build` command for one file.
+ * - VisBuildContext/WORKBENCH_DEFAULT_VIS_CONFIG: where a session's commands run, and Workbench's own default-kit commands.
+ * - compileVisCss/buildVisDocument: run a context's `vis.css` or `vis.build` command for one file.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBENCH_PROJECT_CONFIG_FILE } from "workbench-shared/workbench/project-config/workbench-project-config";
-import { expandVisProjectCommand, VisBuildOutputSchema } from "workbench-shared/workbench/vis/vis-project-config";
+import { expandVisProjectCommand, VisBuildOutputSchema, type VisProjectCommand } from "workbench-shared/workbench/vis/vis-project-config";
 import { readWorkbenchProjectConfig } from "../project-config/read-workbench-project-config";
 
 export type VisCommandRunner = (
@@ -59,22 +60,45 @@ function bounded(text: string) {
   return trimmed.length > 1_200 ? `${trimmed.slice(0, 1_200)}…` : trimmed;
 }
 
-async function readCommand(rootPath: string, kind: "css" | "build") {
-  const { config, ignored } = await readWorkbenchProjectConfig(rootPath);
+/**
+ * Where a session's commands run. `config` is fixed for Workbench's default context; projects read theirs from
+ * `.wb.json` at `rootPath` on every render, so edits apply without restarting the session.
+ */
+export interface VisBuildContext {
+  rootPath: string;
+  config: { css?: VisProjectCommand; build?: VisProjectCommand } | null;
+}
+
+/** Workbench's own build, run from its checkout: Workbench Tailwind, and `.tsx` files may import `workbench/vis`. */
+export const WORKBENCH_DEFAULT_VIS_CONFIG: NonNullable<VisBuildContext["config"]> = {
+  css: {
+    command: ["node", "app/node_modules/@tailwindcss/cli/dist/index.mjs", "--input", "{input}"],
+    input: "@import \"{root}/app/client/tailwind.css\";\n@source \"{file}\";\n",
+  },
+  build: { command: ["node", "--disable-warning=ExperimentalWarning", "--import", "tsx", "scripts/vis-build.mts", "--kit", "{file}"] },
+};
+
+async function readCommand(context: VisBuildContext, kind: "css" | "build") {
+  if (context.config) {
+    const command = context.config[kind];
+    if (!command) throw new Error(`Workbench's default vis context has no ${kind} command.`);
+    return command;
+  }
+  const { config, ignored } = await readWorkbenchProjectConfig(context.rootPath);
   const command = config.vis?.[kind];
   if (!command) {
     const need = kind === "css" ? "This file asks for project CSS" : "Rendering .tsx and .jsx files needs a project build";
     const invalid = ignored.filter((entry) => entry === "(top level)" || entry.startsWith("(the whole") || entry === "vis" || entry.startsWith(`vis.${kind}`));
     throw new Error(invalid.length
       ? `${need}, but ${WORKBENCH_PROJECT_CONFIG_FILE} has an invalid vis.${kind} (${invalid.join(", ")}), so it was ignored.`
-      : `${need}, but ${WORKBENCH_PROJECT_CONFIG_FILE} at the project root has no vis.${kind} command.`);
+      : `${need}, but ${path.join(context.rootPath, WORKBENCH_PROJECT_CONFIG_FILE)} has no vis.${kind} command. Configure it, or start the session with project "default" to use Workbench's kit.`);
   }
   return command;
 }
 
 interface ProjectCommandInput {
   file: string;
-  rootPath: string;
+  context: VisBuildContext;
   /** A Workbench-owned file the command can read through `{input}`; removed afterwards. */
   scratchPath: string;
   run: VisCommandRunner;
@@ -83,16 +107,16 @@ interface ProjectCommandInput {
 }
 
 async function runProjectCommand(kind: "css" | "build", input: ProjectCommandInput) {
-  const configured = await readCommand(input.rootPath, kind);
+  const configured = await readCommand(input.context, kind);
   input.signal.throwIfAborted();
-  const expanded = expandVisProjectCommand(configured, { file: input.file, root: input.rootPath, input: input.scratchPath });
+  const expanded = expandVisProjectCommand(configured, { file: input.file, root: input.context.rootPath, input: input.scratchPath });
   const render = input.runs.open();
   try {
     if (expanded.input !== null) {
       await mkdir(path.dirname(input.scratchPath), { recursive: true });
       await writeFile(input.scratchPath, expanded.input, "utf8");
     }
-    const result = await input.run({ command: visShellCommand(expanded.command, render.runId), cwd: input.rootPath }, input.signal);
+    const result = await input.run({ command: visShellCommand(expanded.command, render.runId), cwd: input.context.rootPath }, input.signal);
     const label = kind === "css" ? "CSS" : "build";
     if (result.exitCode !== 0) throw new Error(`The ${label} command exited with code ${result.exitCode}.\n${bounded(result.stderr || result.stdout)}`);
     const content = render.take();

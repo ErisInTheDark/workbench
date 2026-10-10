@@ -315,6 +315,8 @@ function createWorkbenchCoreFeature(
       return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
     },
     scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
+    // This file lives at daemon/server in the Workbench checkout the default vis context builds from.
+    workbenchRoot: path.resolve(import.meta.dirname, "..", ".."),
     log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
   });
   const threadAddressedFeedback = new WorkbenchThreadAddressedFeedbackController({

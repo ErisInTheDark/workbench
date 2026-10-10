@@ -6,7 +6,7 @@
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
  * - WorkbenchTaskStatusCommand/parseWorkbenchTaskStatusCommand/isWorkbenchTaskStatusMatcherClaim: parse task completion actions and identify standalone successful displays.
  * - parseWorkbenchFeedbackCommand: parse one titled feedback report for its dedicated disclosure.
- * - parseWorkbenchVisCommand: parse `wb vis start|end <path>` for its snapshot card.
+ * - parseWorkbenchVisCommand: parse `wb vis start|end|read <path>` for its snapshot or answers card.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
  * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, task, token, message, subagent, and reload commands.
  */
@@ -78,8 +78,10 @@ export function parseWorkbenchVisCommand(command: string): WorkbenchVisOperation
   const tokens = tokenizeCommand(command.trim());
   if (!tokens || !/^wb(?:\.cmd)?$/iu.test(tokens[0] ?? "") || tokens[1] !== "vis") return null;
   const action = tokens[2];
-  const paths = tokens.slice(3).filter(token => token !== "--");
-  return (action === "start" || action === "end") && paths.length === 1 ? { action, path: paths[0]! } : null;
+  const rest = tokens.slice(3);
+  const projectAt = action === "start" ? rest.indexOf("--project") : -1;
+  const paths = rest.filter((token, index) => token !== "--" && (projectAt < 0 || (index !== projectAt && index !== projectAt + 1)));
+  return (action === "start" || action === "end" || action === "read") && paths.length === 1 ? { action, path: paths[0]! } : null;
 }
 
 export type WorkbenchTaskTitleCommand =
@@ -405,7 +407,7 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage, summaryParts }) => {
       if (summaryParts.length) return null;
       const operation = parseWorkbenchVisCommand(stage.text);
-      return operation ? getWorkbenchCommandRendering(operation.action === "start" ? "vis_start" : "vis_end", { path: operation.path })?.result ?? null : null;
+      return operation ? getWorkbenchCommandRendering(`vis_${operation.action}`, { path: operation.path })?.result ?? null : null;
     },
   }),
   CommandMatcher({

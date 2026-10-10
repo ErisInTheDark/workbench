@@ -2,7 +2,9 @@
  * No exports. Builds one .tsx/.jsx vis file for this repository: bundles its default export with React in memory,
  * expands Tailwind variant groups like the app build, compiles the app's Tailwind for it, and prints
  * `{ document, inputs }` to stdout. Writes no files, so it runs in a read-only sandbox.
- * Usage: node --import tsx scripts/vis-build.mts <file>
+ * With `--kit` (Workbench's default vis context) the file may live in any project: it imports `workbench/vis`,
+ * React and its own relative files, always against Workbench's copies, never repository paths.
+ * Usage: node --import tsx scripts/vis-build.mts [--kit] <file>
  */
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -17,9 +19,21 @@ const requireFromApp = createRequire(path.join(app, "package.json"));
 const esbuild: typeof import("esbuild") = requireFromApp("esbuild");
 const tailwindCli = path.join(path.dirname(requireFromApp.resolve("@tailwindcss/cli/package.json")), "dist", "index.mjs");
 
-const file = process.argv[2];
-if (!file) throw new Error("Usage: vis-build.mts <file>");
+const args = process.argv.slice(2);
+const kit = args[0] === "--kit";
+const file = kit ? args[1] : args[0];
+if (!file) throw new Error("Usage: vis-build.mts [--kit] <file>");
 const entry = path.resolve(file);
+const visKit = path.join(app, "client", "components", "vis-kit", "index.ts");
+
+/** Kit mockups resolve `workbench/vis` to the kit, and React to the app's single copy even beside a project's own. */
+const kitPlugin: import("esbuild").Plugin = {
+  name: "workbench-vis-kit",
+  setup(build) {
+    build.onResolve({ filter: /^workbench\/vis$/ }, () => ({ path: visKit }));
+    build.onResolve({ filter: /^react(?:-dom)?(?:\/.*)?$/ }, (args) => ({ path: requireFromApp.resolve(args.path) }));
+  },
+};
 
 const bundled = await esbuild.build({
   absWorkingDir: root,
@@ -30,9 +44,9 @@ const bundled = await esbuild.build({
   logLevel: "silent",
   metafile: true,
   minify: true,
-  // Mockups import project files by repository path (`app/client/...`) and React from the app's dependencies.
-  nodePaths: [root, path.join(app, "node_modules")],
-  plugins: [{
+  // Repository mockups import project files by repository path (`app/client/...`); everything takes React from the app.
+  nodePaths: kit ? [path.join(app, "node_modules")] : [root, path.join(app, "node_modules")],
+  plugins: [...(kit ? [kitPlugin] : []), {
     name: "variant-groups",
     setup(build) {
       // esbuild filters are Go regular expressions, so no `u` flag.
@@ -82,7 +96,9 @@ const document = [
   "<!doctype html><html><head><meta charset=\"utf-8\">",
   `<style>${css.replace(/<\/style/giu, "<\\/style")}</style>`,
   "</head><body class=\"bg-bg text-text\"><div id=\"root\"></div>",
-  `<script>${script.replace(/<\/script/giu, "<\\/script")}</script>`,
+  // `</script`, `<!--` and `<script` inside the bundle (Markdown handling has all three) would end or re-nest the
+  // element; `\x3C` reads as `<` in every string, template and regular expression the minifier can emit.
+  `<script>${script.replace(/<(?=\/script|!--|script)/giu, "\\x3C")}</script>`,
   "</body></html>",
 ].join("");
 process.stdout.write(JSON.stringify({ document, inputs }));

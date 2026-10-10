@@ -5,7 +5,7 @@
  * - WorkbenchMessageOperation: global thread-message intent with its user-visible simple version.
  * - WorkbenchFeedbackOperation: titled feedback intent shared by CLI and MCP presentation.
  * - parseWorkbenchFeedbackId: read the stored report id from a feedback call's acknowledgement.
- * - WorkbenchVisOperation: one vis session start or end shared by CLI and MCP presentation.
+ * - WorkbenchVisOperation: one vis session start, end or answer read shared by CLI and MCP presentation.
  * - WorkbenchSubagentOperation: subagent operation intent.
  * - WorkbenchCommandRendering: shared renderer result.
  * - isWorkbenchCommandPresentationName: recognise supported presentation names.
@@ -52,6 +52,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "todo_remove",
   "vis_start",
   "vis_end",
+  "vis_read",
   "request_user_input",
   "message",
   "message_wait",
@@ -166,9 +167,9 @@ export interface WorkbenchFeedbackOperation {
   title: string;
 }
 
-/** A vis session moment; CLI and MCP calls name the file the same way. */
+/** A vis session moment or answer read; CLI and MCP calls name the file the same way. */
 export interface WorkbenchVisOperation {
-  action: "start" | "end";
+  action: "start" | "end" | "read";
   path: string;
 }
 
@@ -749,9 +750,11 @@ export function getWorkbenchCommandRoute(
       return simple("workbench-cli.todo", actionTarget("Removing ", target), actionTarget("Removed ", target));
     }
     case "vis_start":
-    case "vis_end": {
+    case "vis_end":
+    case "vis_read": {
       const path = readString(args.path)?.trim();
-      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action: name === "vis_start" ? "start" : "end", path } }) : null;
+      const action = name === "vis_start" ? "start" : name === "vis_end" ? "end" : "read";
+      return path ? specialized("workbench-cli.vis", { kind: "vis", operation: { action, path } }) : null;
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));
