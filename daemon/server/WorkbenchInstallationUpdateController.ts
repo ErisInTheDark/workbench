@@ -13,6 +13,7 @@ import {
   type InstallationRepairJournal, type InstallationUpdate, type InstallationPullResult,
 } from "workbench-shared/workbench/installation-update";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 type GitResult = { code: number; stdout: string; stderr: string };
@@ -68,7 +69,7 @@ export default class WorkbenchInstallationUpdateController {
     this.journalPath = path.join(options.dataRoot ?? resolveWorkbenchDataRoot(), ...INSTALLATION_REPAIR_JOURNAL_SEGMENTS);
     this.git = options.git ?? (args => new Promise((resolve, reject) => {
       execFile("git", args, {
-        cwd: options.repoRoot, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        cwd: options.repoRoot, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
         maxBuffer: 16 * 1024 * 1024, windowsHide: true,
       }, (error, stdout, stderr) => {
         if (error && typeof error.code !== "number") { reject(error); return; }
@@ -234,6 +235,7 @@ export default class WorkbenchInstallationUpdateController {
       const prediction = await this.recompute();
       if (prediction.state !== "available") throw new Error("Installation update is not available for a clean pull.");
       const fromSha = (await this.required(["rev-parse", "HEAD"])).trim();
+      await new WorkbenchGitRepository(this.options.repoRoot).clearOrphanedIndexLock();
       const result = await this.git(prediction.ahead
         ? ["rebase", "--autostash", "@{u}"] : ["merge", "--ff-only", "@{u}"]);
       if (result.code) {

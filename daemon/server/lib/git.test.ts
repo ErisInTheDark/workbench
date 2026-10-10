@@ -1,5 +1,6 @@
 /*
- * No production exports. Protect read-only origin parsing without checkout trust and Git-directory classification.
+ * No production exports. Protect read-only origin parsing without checkout trust, Git-directory classification,
+ * and lock-free explorer change reads.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -8,7 +9,7 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { readGitProjectMetadata, resolveGitDirectory } from "./git";
+import { getGitChanges, readGitProjectMetadata, resolveGitDirectory } from "./git";
 
 const execute = promisify(execFile);
 const readerPath = path.join(__dirname, "git.ts");
@@ -78,6 +79,30 @@ test("local config parsing preserves Git syntax, separate directories, absent or
     await assert.rejects(readGitProjectMetadata(checkout));
     await fs.rename(config, path.join(metadata, "saved-config"));
     assert.deepEqual(await readGitProjectMetadata(checkout), { origin: null, linkedWorktree: false, commonGitDirectory });
+  } finally { await temporary.dispose(); }
+});
+
+test("explorer changes report real edits without writing the shared index", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-changes-");
+  const root = temporary.path;
+  const git = async (...args: string[]) => await execute("git", ["-C", root, ...args], { windowsHide: true });
+  try {
+    await git("init", "-q");
+    await fs.writeFile(path.join(root, "touched.txt"), "same\n");
+    await fs.writeFile(path.join(root, "edited.txt"), "one\n");
+    await git("add", ".");
+    await git("-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "commit", "-qm", "fixture");
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    await fs.utimes(path.join(root, "touched.txt"), future, future);
+    await fs.writeFile(path.join(root, "edited.txt"), "one\ntwo\n");
+    await fs.writeFile(path.join(root, "untracked.txt"), "a\nb\n");
+    const index = await fs.readFile(path.join(root, ".git", "index"));
+
+    assert.deepEqual(await getGitChanges(root), {
+      "edited.txt": { additions: 1, deletions: 0 },
+      "untracked.txt": { additions: 3, deletions: 0 },
+    });
+    assert.deepEqual(await fs.readFile(path.join(root, ".git", "index")), index);
   } finally { await temporary.dispose(); }
 });
 

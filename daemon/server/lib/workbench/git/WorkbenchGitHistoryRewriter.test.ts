@@ -379,8 +379,10 @@ async function checkIndexLock(context: TestContext, { repositoryOwner: gitReposi
   const headBefore = await gitRepository.currentHead();
   const indexBefore = await git(root, ["diff", "--cached", "--binary"]);
   const lockPath = path.resolve(root, (await git(root, ["rev-parse", "--git-path", "index.lock"])).trim());
-  await fs.writeFile(lockPath, "locked\n", "utf8");
-  context.after(async () => { await fs.rm(lockPath, { force: true }); });
+  // A live writer keeps its lock handle open; unheld incomplete locks are recovered as orphans instead.
+  const lock = await fs.open(lockPath, "wx");
+  await lock.writeFile("locked\n", "utf8");
+  context.after(async () => { await lock.close(); await fs.rm(lockPath, { force: true }); });
 
   await assert.rejects(rewriter.amend({
     message: "locked amendment",
@@ -391,6 +393,7 @@ async function checkIndexLock(context: TestContext, { repositoryOwner: gitReposi
   assert.equal(await fs.readFile(path.join(root, "selected.txt"), "utf8"), "locked amendment\n");
   assert.equal(await git(root, ["diff", "--cached", "--binary"]), indexBefore);
 
+  await lock.close();
   await fs.rm(lockPath, { force: true });
   const committed = await rewriter.amend({
     message: "locked amendment",

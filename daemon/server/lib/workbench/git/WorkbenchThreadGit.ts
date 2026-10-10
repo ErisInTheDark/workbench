@@ -159,7 +159,7 @@ export default class WorkbenchThreadGit {
       "--no-renames",
       "--",
       ...pathspecs,
-    ]));
+    ], { ...process.env, GIT_OPTIONAL_LOCKS: "0" }));
     if (!changedPaths.length) {
       throw new Error("No changed files were found under the requested paths.");
     }
@@ -249,6 +249,7 @@ export default class WorkbenchThreadGit {
         `--pathspec-from-file=${pathspecFilePath}`,
         "--pathspec-file-nul",
       ];
+      await new WorkbenchGitRepository(this.repoRoot).clearOrphanedIndexLock();
       await runGit(this.repoRoot, ["add", "-A", ...pathspecArguments]);
       await runGit(this.repoRoot, [
         "commit",

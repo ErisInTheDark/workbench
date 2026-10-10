@@ -25,10 +25,7 @@ export default class WorkbenchWorkingTreeRepository {
   constructor(readonly git: WorkbenchGitRepository) {}
 
   async summary(): Promise<string[]> {
-    const status = await this.git.run(
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
-      { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
-    );
+    const status = await this.git.run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
     return status.split("\0")
       .filter(Boolean)
       .map(entry => entry.slice(3));

@@ -10,7 +10,8 @@
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
- * that fit the command line, with at most four Git processes in flight.
+ * that fit the command line, with at most four Git processes in flight. Git children never take optional index locks;
+ * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree) first clear provably orphaned locks.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -20,6 +21,7 @@ import { promisify } from "node:util";
 
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import GitIndexLock from "./GitIndexLock";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
@@ -57,6 +59,11 @@ function gitProcessLimit(): GitProcessLimit {
       else active -= 1;
     }
   };
+}
+
+/** Reads never opportunistically lock the real index; explicit index writers are unaffected by this setting. */
+function withoutOptionalLocks(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, GIT_OPTIONAL_LOCKS: "0" };
 }
 
 function isStdoutCapacityError(error: unknown) {
@@ -257,7 +264,7 @@ export default class WorkbenchGitRepository {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
       encoding: "utf8",
-      env,
+      env: withoutOptionalLocks(env),
       maxBuffer: GIT_MAX_BUFFER,
       signal,
       windowsHide: true,
@@ -289,7 +296,7 @@ export default class WorkbenchGitRepository {
     return await new Promise<{ exitCode: number; stdout: string }>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
-        env,
+        env: withoutOptionalLocks(env),
         signal,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -317,7 +324,7 @@ export default class WorkbenchGitRepository {
     return await new Promise<Buffer>((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.root,
-        env,
+        env: withoutOptionalLocks(env),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
@@ -1163,14 +1170,21 @@ export default class WorkbenchGitRepository {
     ])), scopes);
   }
 
+  /** Every real-index writer calls this first, so a lock stranded by a dead writer never needs manual removal. */
+  async clearOrphanedIndexLock() {
+    return await GitIndexLock.clearOrphan(await realIndexPath(this));
+  }
+
   async resetMixedPaths(commit: string, paths: string[]) {
     if (!paths.length) return;
+    await this.clearOrphanedIndexLock();
     await this.runWithInput([
       "reset", "--mixed", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul", commit,
     ], pathspecInput(paths));
   }
 
   async writeIndexTree() {
+    await this.clearOrphanedIndexLock();
     return (await this.run(["write-tree"])).trim();
   }
 
@@ -1206,9 +1220,16 @@ export default class WorkbenchGitRepository {
 
   async restorePaths(source: string | null, paths: string[]) {
     if (!paths.length) return;
+    // `restore --worktree` still locks the index to refresh restored entries' stat info.
+    await this.clearOrphanedIndexLock();
     await this.runWithInput([
       "restore", "--source", await this.contentBase(source), "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
     ], pathspecInput(paths));
+  }
+
+  async restoreWorktree(source: string) {
+    await this.clearOrphanedIndexLock();
+    await this.run(["restore", "--source", source, "--worktree", "--", "."]);
   }
 
   async remotes() {

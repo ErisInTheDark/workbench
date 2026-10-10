@@ -1260,7 +1260,7 @@ export default class WorkbenchGitCheckpointController {
         await Promise.all(addedPaths.map(async (filePath) => {
           await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
         }));
-        await repository.run(["restore", "--source", checkpoint.checkpointCommit, "--worktree", "--", "."]);
+        await repository.restoreWorktree(checkpoint.checkpointCommit);
         const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
           committedSha: null,
           proposalId: null,

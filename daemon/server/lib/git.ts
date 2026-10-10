@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - getGitChanges: summarise tracked and untracked project changes for the explorer.
+ * - getGitChanges: summarise tracked and untracked project changes for the explorer without writing the index.
  * - getHeadFileContent: read a tracked file from HEAD when available.
  * - listGitVisibleFiles: list tracked and non-ignored untracked paths, optionally narrowed by Git pathspecs.
  * - isGitTrackedFile: report whether Git tracks a project-relative path in its index.
@@ -186,59 +186,55 @@ function isVisibleGitPath(filePath: string) {
   return filePath && !filePath.split("/").some((segment) => ignoredNames.has(segment));
 }
 
+/**
+ * Porcelain `git diff` refreshes stat info by taking the real index lock whenever it meets stat-dirty files, and
+ * GIT_OPTIONAL_LOCKS does not stop it. So counts come from a non-refreshing diff, which also lists stat-only files,
+ * while lock-free `status` supplies the real changed and untracked sets.
+ */
 export async function getGitChanges(rootDir: string): Promise<Record<string, ChangeSummary>> {
   const changes = new Map<string, ChangeSummary>();
-  const diffArgs = (await hasHeadCommit(rootDir))
-    ? ["diff", "--numstat", "HEAD", "--"]
-    : ["diff", "--numstat", "--"];
+  // Unquoted paths so non-ASCII names match the NUL-separated status set.
+  const diffArgs = [
+    "-c", "diff.autoRefreshIndex=false", "-c", "core.quotePath=false", "diff", "--numstat",
+    ...await hasHeadCommit(rootDir) ? ["HEAD"] : [], "--",
+  ];
 
+  let changedPaths: Set<string>;
+  const untrackedPaths: string[] = [];
+  let numstat: string;
   try {
-    const { stdout } = await runGit(rootDir, diffArgs);
-
-    for (const line of stdout.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-
-      const parts = line.split("\t");
-      if (parts.length < 3) {
-        continue;
-      }
-
-      const additions = Number.parseInt(parts[0], 10) || 0;
-      const deletions = Number.parseInt(parts[1], 10) || 0;
-      const filePath = normalizeDiffPath(parts.slice(2).join("\t"));
-
-      if (!isVisibleGitPath(filePath)) {
-        continue;
-      }
-
-      mergeChange(changes, filePath, additions, deletions);
+    const [status, diff] = await Promise.all([
+      runGit(rootDir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]),
+      runGit(rootDir, diffArgs),
+    ]);
+    changedPaths = new Set();
+    for (const entry of status.stdout.split("\0")) {
+      if (entry.length < 4) continue;
+      const filePath = entry.slice(3);
+      if (entry.startsWith("?? ")) untrackedPaths.push(filePath);
+      else changedPaths.add(filePath);
     }
+    numstat = diff.stdout;
   } catch {
     return {};
   }
 
-  try {
-    const { stdout } = await runGit(rootDir, ["ls-files", "--others", "--exclude-standard", "--"]);
+  for (const line of numstat.split(/\r?\n/)) {
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const filePath = normalizeDiffPath(parts.slice(2).join("\t"));
+    if (!changedPaths.has(filePath) || !isVisibleGitPath(filePath)) continue;
+    mergeChange(changes, filePath, Number.parseInt(parts[0], 10) || 0, Number.parseInt(parts[1], 10) || 0);
+  }
 
-    for (const line of stdout.split(/\r?\n/)) {
-      const filePath = line.trim().replace(/\\/g, "/");
-      if (!isVisibleGitPath(filePath)) {
-        continue;
-      }
-
-      const absolutePath = path.resolve(rootDir, filePath);
-
-      try {
-        const contents = await fs.readFile(absolutePath, "utf8");
-        mergeChange(changes, filePath, countLines(contents), 0);
-      } catch {
-        mergeChange(changes, filePath, 1, 0);
-      }
+  for (const filePath of untrackedPaths) {
+    if (!isVisibleGitPath(filePath)) continue;
+    try {
+      const contents = await fs.readFile(path.resolve(rootDir, filePath), "utf8");
+      mergeChange(changes, filePath, countLines(contents), 0);
+    } catch {
+      mergeChange(changes, filePath, 1, 0);
     }
-  } catch {
-    return Object.fromEntries(changes);
   }
 
   return Object.fromEntries(changes);

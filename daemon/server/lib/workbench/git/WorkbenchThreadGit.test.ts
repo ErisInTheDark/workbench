@@ -127,6 +127,18 @@ threadGitTest("commits selected paths at commit time while preserving unrelated 
   await assert.rejects(owner.commit("nothing selected"), /no selected files/u);
 });
 
+threadGitTest("commits over an index lock stranded by a dead writer", async (context) => {
+  if (process.platform !== "win32") { context.skip("handle-exclusivity proof is Windows-only"); return; }
+  const { repoRoot, selectionStore } = await createRepository(context);
+  await write(repoRoot, "selected.txt", "selected over stale lock\n");
+  const owner = await WorkbenchThreadGit.create({ cwd: repoRoot, selectionStore, threadId: "thread-one" });
+  await owner.add(["selected.txt"]);
+  await fs.writeFile(path.join(repoRoot, ".git", "index.lock"), "");
+  context.mock.method(console, "warn", () => {});
+
+  assert.deepEqual((await owner.commit("commit after orphaned lock")).committedPaths, ["selected.txt"]);
+  assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "selected over stale lock\n");});
+
 threadGitTest("uses the repository's configured commit hooks", async (context) => {
   const { repoRoot, selectionStore } = await createRepository(context);
   const hookPath = path.join(repoRoot, ".git", "hooks", "pre-commit");

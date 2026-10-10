@@ -328,7 +328,7 @@ test("normalizes the index before atomic ref publication and keeps retries idemp
   ]);
 });
 
-test("new-file index locks block ref publication until the same operation retries", async (context) => {
+test("live index locks block ref publication; once their writer dies, the same operation recovers", async (context) => {
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
@@ -336,6 +336,8 @@ test("new-file index locks block ref publication until the same operation retrie
   const headRef = await repository.symbolicHead();
   assert.ok(headRef);
   await fs.writeFile(path.join(fixture.root, "new-file.ts"), "new file\n", "utf8");
+  await fs.writeFile(path.join(fixture.root, "unrelated.ts"), "staged elsewhere\n", "utf8");
+  await repository.run(["add", "--", "unrelated.ts"]);
   const tree = await repository.writeScopedWorktreeTree(["new-file.ts"]);
   const commit = await repository.createCommitFromTree(tree, oldHead, "add new file");
   const request = {
@@ -344,17 +346,24 @@ test("new-file index locks block ref publication until the same operation retrie
     updates: [{ newValue: commit, oldValue: oldHead, ref: headRef }],
   };
   const lockPath = path.resolve(fixture.root, (await repository.run(["rev-parse", "--git-path", "index.lock"])).trim());
-  await fs.writeFile(lockPath, "locked\n", "utf8");
+  // A writer that created the lock and has not written yet, like the killed Git that strands a zero-byte lock.
+  const writer = await fs.open(lockPath, "wx");
   context.after(async () => { await fs.rm(lockPath, { force: true }); });
 
-  await assert.rejects(repository.publishRefsAfterIndexNormalization(request), /index\.lock/u);
+  try {
+    await assert.rejects(repository.publishRefsAfterIndexNormalization(request), /index\.lock/u);
+  } finally {
+    await writer.close();
+  }
   assert.equal(await repository.currentHead(), oldHead);
   assert.match(await repository.run(["status", "--short", "--", "new-file.ts"]), /^\?\? new-file\.ts/mu);
 
-  await fs.rm(lockPath, { force: true });
+  if (process.platform !== "win32") await fs.rm(lockPath, { force: true });
+  context.mock.method(console, "warn", () => {});
   await repository.publishRefsAfterIndexNormalization(request);
   assert.equal(await repository.currentHead(), commit);
   assert.equal(await repository.run(["status", "--short", "--", "new-file.ts"]), "");
+  assert.equal((await repository.run(["diff", "--cached", "--name-only"])).trim(), "unrelated.ts");
 });
 
 test("every ref transaction advances generation even when ref values repeat", async (context) => {

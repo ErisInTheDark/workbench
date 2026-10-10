@@ -896,8 +896,10 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   await git(source, ["add", "--", "unchecked.txt"]);
   const headBeforeLock = await repository.currentHead();
   const lockPath = path.resolve(source, (await git(source, ["rev-parse", "--git-path", "index.lock"])).trim());
-  await fs.writeFile(lockPath, "locked\n", "utf8");
-  context.after(async () => { await fs.rm(lockPath, { force: true }); });
+  // A live writer keeps its lock handle open; unheld incomplete locks are recovered as orphans instead.
+  const lock = await fs.open(lockPath, "wx");
+  await lock.writeFile("locked\n", "utf8");
+  context.after(async () => { await lock.close(); await fs.rm(lockPath, { force: true }); });
   await assert.rejects(controller.commitProposal({
     cwd: source,
     description: "",
@@ -917,6 +919,7 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   const locked = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
   assert.equal(locked?.phase, "active");
   assert.deepEqual(locked?.claimedPaths, ["one.txt", "two.txt"]);
+  await lock.close();
   await fs.rm(lockPath, { force: true });
   const acceptance = {
     cwd: source,
