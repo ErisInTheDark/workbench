@@ -284,7 +284,6 @@ export default class WorkbenchAppEventSocketController {
       const operation = (async () => {
         if (!this.options.routes.admitSocket(request)) throw new Error("App network grant was revoked.");
         if (input.method === "app/reload/all" || input.method === "app/update/pull") {
-          if (!this.options.routes.canManageApp(request)) throw new Error("This device cannot reload or update the app.");
           const operations = this.options.runtime?.operations;
           if (!operations) throw new Error("App reload controls are unavailable.");
           const admission = input.method === "app/reload/all"
