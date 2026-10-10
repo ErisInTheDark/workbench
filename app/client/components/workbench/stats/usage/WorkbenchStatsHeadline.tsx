@@ -3,8 +3,8 @@
  * - default WorkbenchStatsHeadline: headline cost, tokens, threads, turns, and cache rate over their trend, each compared with the previous period.
  */
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsSparkline from "../WorkbenchStatsSparkline";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
+import Sparkline from "../../../ui/Sparkline";
 import { compactNumber, formatMoney, formatPercent, statsDelta } from "../stats-formatters";
 
 /** Only spend has a good direction; other counts change without being better or worse. */
@@ -65,7 +65,7 @@ export default function WorkbenchStatsHeadline() {
         const primary = Boolean(card.primary);
         return (
           <div className={`relative min-w-0 overflow-hidden rounded-lg px-3 pb-3 pt-2.5 ${primary ? "col-span-2 sm:col-span-1" : ""}`} key={card.label}>
-            {"value" in card ? <WorkbenchStatsSparkline className={card.trendClassName} values={card.trend} /> : null}
+            {"value" in card ? <Sparkline className={card.trendClassName} values={card.trend} /> : null}
             <dt className="relative text-[0.72rem] font-medium text-fg/muted">{card.label}</dt>
             {"value" in card ? (
               <>
@@ -80,9 +80,9 @@ export default function WorkbenchStatsHeadline() {
               // Same line boxes as the figures, so the cards keep their height when numbers land.
               <>
                 <dd className={`m-0 mt-0.5 flex items-center ${primary ? "h-[2.375rem]" : "h-[1.856rem]"}`}>
-                  <WorkbenchStatsSkeleton className={primary ? "h-7 w-28" : "h-5 w-16"} />
+                  <Skeleton className={primary ? "h-7 w-28" : "h-5 w-16"} />
                 </dd>
-                <dd className="m-0 flex h-[1.05rem] items-center"><WorkbenchStatsSkeleton className="h-2.5 w-20" /></dd>
+                <dd className="m-0 flex h-[1.05rem] items-center"><Skeleton className="h-2.5 w-20" /></dd>
               </>
             )}
           </div>

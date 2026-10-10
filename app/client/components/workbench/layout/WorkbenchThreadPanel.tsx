@@ -21,7 +21,7 @@ import type WorkbenchComposerProfileController from "../../../workbench/state/Wo
 import resolveThreadActivityTimestampMs from "../thread-view/thread-activity-timestamp";
 import { getThreadTitle } from "../thread-view/thread-view-formatters";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import WorkbenchProjectIcon from "../WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "../WorkbenchProjectLocationLabel";
@@ -151,7 +151,7 @@ export default function WorkbenchThreadPanel ({
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onMinimizeToggle ? (
-              <WorkbenchIconButton
+              <IconButton
                 type="button"
                 title={isMinimized ? "Expand panel" : "Minimize panel"}
                 label={isMinimized ? "Expand panel" : "Minimize panel"}
@@ -160,7 +160,7 @@ export default function WorkbenchThreadPanel ({
               >
                 {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-              </WorkbenchIconButton>
+              </IconButton>
             ) : null}
             <div className="flex items-center gap-1.5" hidden={isMinimized}>
               <WorkbenchZoomButton
@@ -176,7 +176,7 @@ export default function WorkbenchThreadPanel ({
               />
             </div>
             {onClose ? (
-              <WorkbenchIconButton
+              <IconButton
                 type="button"
                 title="Close panel"
                 label="Close panel"
@@ -185,7 +185,7 @@ export default function WorkbenchThreadPanel ({
               >
                 <PanelCloseIcon size={16} />
                 <span className="sr-only">Close panel</span>
-              </WorkbenchIconButton>
+              </IconButton>
             ) : null}
           </div>
         </div>

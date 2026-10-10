@@ -11,7 +11,7 @@ import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { ThreadCommitRow, type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
-import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import { DisclosureStaticRow } from "../../ui/Disclosure";
 import {
   ThreadFileChangePreviewList,
   type ThreadFileChangeListChange,
@@ -137,7 +137,7 @@ export default function ThreadGitArcCollapsedSummary ({
       ) : (
         <div className="space-y-1 py-2">
           {content.rows.slice(0, 2).map((row) => (
-            <ThreadDisclosureStaticRow
+            <DisclosureStaticRow
               className="!py-0.5"
               key={`${row.marker}:${row.label}`}
               marker={<ThreadClaimMarkerIcon marker={row.marker} />}

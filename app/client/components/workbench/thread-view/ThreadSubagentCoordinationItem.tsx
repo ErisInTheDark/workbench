@@ -6,7 +6,7 @@
 
 import { Fragment, type ReactNode } from "react";
 
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import { useThreadLiveDuration } from "./use-thread-live-duration";
 
@@ -25,7 +25,7 @@ export default function ThreadSubagentCoordinationItem({
 }) {
   const visibleDurationMs = useThreadLiveDuration(durationMs, activeStartedAtMs);
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-1"
       keepMounted
@@ -52,6 +52,6 @@ export default function ThreadSubagentCoordinationItem({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       {children}
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

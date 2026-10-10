@@ -6,10 +6,10 @@
 import { useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkSettings } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
-import WorkbenchModeRow from "./WorkbenchModeRow";
+import RadioRow from "../ui/RadioRow";
 import WorkbenchTextField from "./WorkbenchTextField";
-import PrimaryButton from "./PrimaryButton";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import PrimaryButton from "../ui/PrimaryButton";
+import IconButton from "../ui/IconButton";
 import { ExternalLinkIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon } from "./workbench-icons";
 
 const modes = [
@@ -55,7 +55,7 @@ export default function WorkbenchNetworkConnectionForm() {
   }}>
     <div className="flex flex-wrap items-center gap-3">
       <span className="text-sm text-text">Connection type</span>
-      <WorkbenchModeRow ariaLabel="Connection type" options={modes.filter(mode => mode.value !== "localhost" || snapshot.capabilities?.trustHost)}
+      <RadioRow ariaLabel="Connection type" options={modes.filter(mode => mode.value !== "localhost" || snapshot.capabilities?.trustHost)}
         value={value.mode} disabled={disabled} onChange={mode => edit({ mode })} />
     </div>
     <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
@@ -76,8 +76,8 @@ export default function WorkbenchNetworkConnectionForm() {
     {!snapshot.localPort?.editable && snapshot.localPort ? <p className="m-0 text-xs text-fg/muted">Local port is controlled by WORKBENCH_APP_PORT.</p> : null}
     {!snapshot.capabilities?.settingsApply ? <p role="status" className="m-0 text-sm text-fg/muted">Reload client:network, then refresh to use the updated connection controls.</p> : null}
     <div className="flex items-center gap-2">
-      <WorkbenchIconButton type="submit" label="Apply connection settings" disabled={disabled || !dirty}><SaveIcon className="size-4" /></WorkbenchIconButton>
-      <WorkbenchIconButton label="Reset connection changes" disabled={busy || !draft} onClick={() => { setDraft(null); setError(""); }}><ResetIcon className="size-4" /></WorkbenchIconButton>
+      <IconButton type="submit" label="Apply connection settings" disabled={disabled || !dirty}><SaveIcon className="size-4" /></IconButton>
+      <IconButton label="Reset connection changes" disabled={busy || !draft} onClick={() => { setDraft(null); setError(""); }}><ResetIcon className="size-4" /></IconButton>
     </div>
     {snapshot.change ? <div className="flex flex-col gap-2 text-sm">
       <p className="m-0 text-fg/muted">{snapshot.change.phase === "failed"

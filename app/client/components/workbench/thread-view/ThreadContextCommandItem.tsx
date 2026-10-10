@@ -27,7 +27,7 @@ import {
   BookSearchDashedIcon,
   BookSearchIcon,
 } from "../workbench-icons";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadRecallOutput from "./ThreadRecallOutput";
@@ -138,7 +138,7 @@ export default function ThreadContextCommandItem ({
       : "Thread Recall";
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2"
       defaultOpen={defaultOpen}
@@ -177,6 +177,6 @@ export default function ThreadContextCommandItem ({
           <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No Thread Recall output captured.</p>
         )}
       </ThreadPreviewFrame>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

@@ -9,7 +9,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import useThreadPresentedText from "./use-thread-presented-text";
 
 function joinClasses (...values: Array<string | undefined>) {
@@ -55,7 +55,7 @@ function ThreadReasoningSection({
     turnId,
   });
   return (
-    <ThreadMarkdown
+    <MarkdownRender
       inlineMentionSources={inlineMentionSources}
       markdown={markdown.replaceAll(/\n\n/g, "\n").trim()}
       threadCwdPath={threadCwdPath}

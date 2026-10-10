@@ -113,7 +113,7 @@ import ThreadCommandDisplay from "./ThreadCommandDisplay";
 import ThreadCommandDetailRows from "./ThreadCommandDetailRows";
 import ThreadContextCompactionItem from "./ThreadContextCompactionItem";
 import ThreadContextCommandItem from "./ThreadContextCommandItem";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "./ThreadProgressiveWindow";
 import ThreadGenericItem from "./ThreadGenericItem";
@@ -122,7 +122,7 @@ import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadVisCommandItem from "./ThreadVisCommandItem";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMcpToolCallItem from "./ThreadMcpToolCallItem";
 import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadReasoningItem from "./ThreadReasoningItem";
@@ -488,7 +488,7 @@ function ThreadUserInputLine ({
     case "text": {
       const text = input.text.trim();
       return (
-        <ThreadMarkdown
+        <MarkdownRender
           className="[&>p]:mb-[0.45em]"
           inlineMentionSources={inlineMentionSources}
           markdown={text || "No text captured."}
@@ -632,7 +632,7 @@ function ThreadShellStopAction({ itemId }: { itemId: string }) {
 }
 
 type ThreadMessageMarkdownProps = Pick<
-  ComponentProps<typeof ThreadMarkdown>,
+  ComponentProps<typeof MarkdownRender>,
   "inlineMentionSources" | "projectFilePaths" | "projectId" | "projectRootPath" | "threadCwdPath" | "workspaceRoots"
 >;
 
@@ -707,7 +707,7 @@ function ThreadSubagentWaitExchange ({
       <ThreadSubagentWaitItem
         disclosureContent={results.length ? (
           <div className="space-y-3">
-            {results.map((result) => <ThreadMarkdown {...markdownProps} key={result.id} markdown={result.text} />)}
+            {results.map((result) => <MarkdownRender {...markdownProps} key={result.id} markdown={result.text} />)}
           </div>
         ) : undefined}
         durationMs={timing.durationMs}
@@ -1210,7 +1210,7 @@ function ThreadAgentMessageItem ({
   return (
     <section className={copyRuns ? "relative py-2" : "py-2"}>
       <ThreadMarkdownSectionActionsProvider value={copyRuns ? renderBreakActions : null}>
-        <ThreadMarkdown
+        <MarkdownRender
           inlineMentionSources={inlineMentionSources}
           markdown={text}
           threadCwdPath={threadCwdPath}
@@ -1270,13 +1270,13 @@ function ThreadRecallPlanItem ({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={<ThreadPlanSummary markdown={markdown} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
-      <ThreadMarkdown
+      <MarkdownRender
         inlineMentionSources={inlineMentionSources}
         markdown={markdown}
         threadCwdPath={threadCwdPath}
@@ -1285,7 +1285,7 @@ function ThreadRecallPlanItem ({
         projectRootPath={projectRootPath}
         workspaceRoots={workspaceRoots}
       />
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -1345,7 +1345,7 @@ function ThreadReasoningSequence ({
 
   if (onlyStep && steps.length === 1 && !onlyStep.body) {
     return (
-      <ThreadDisclosureStaticRow
+      <DisclosureStaticRow
         summary={summary}
         summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       />
@@ -1353,7 +1353,7 @@ function ThreadReasoningSequence ({
   }
 
   const content = onlyStep && steps.length === 1 ? (
-    <ThreadMarkdown
+    <MarkdownRender
       className="text-[0.8em] text-fg/muted"
       inlineMentionSources={inlineMentionSources}
       markdown={onlyStep.body ?? ""}
@@ -1386,7 +1386,7 @@ function ThreadReasoningSequence ({
   );
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-4 pl-6"
       defaultOpen={isMostRecent}
@@ -1394,7 +1394,7 @@ function ThreadReasoningSequence ({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       {content}
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -1714,7 +1714,7 @@ function ThreadCommandExecutionDetails ({
   const approval = useThreadItemApproval(item.id);
   if (item.resultExpiredAt) {
     return (
-      <ThreadDisclosure
+      <Disclosure
         className="py-2"
         summary={(
           <>
@@ -1855,7 +1855,7 @@ function ThreadCommandExecutionDetails ({
         activeStartedAtMs={subagentWaitTiming?.activeStartedAtMs}
         disclosureContent={commandOutcome === "completed"
           ? item.aggregatedOutput?.trim() ? (
-            <ThreadMarkdown
+            <MarkdownRender
               inlineMentionSources={inlineMentionSources}
               markdown={item.aggregatedOutput.trim()}
               projectFilePaths={projectFilePaths}
@@ -1957,7 +1957,7 @@ function ThreadCommandExecutionDetails ({
           : target?.threadId ? { relation: "self", threadId: target.threadId } : null}
         thread={childThread}
       >
-        <ThreadMarkdown
+        <MarkdownRender
           inlineMentionSources={inlineMentionSources}
           markdown={messageCommand.message}
           projectFilePaths={projectFilePaths}
@@ -2267,7 +2267,7 @@ function ThreadRegularCommandSequence ({
   }
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
@@ -2294,7 +2294,7 @@ function ThreadRegularCommandSequence ({
           />
         ))}
       </>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -3305,7 +3305,7 @@ function ThreadTurnDetailsComponent ({
       }
 
       return (
-        <ThreadDisclosure
+        <Disclosure
           key={collapsedSection.id}
           className="py-2"
           contentClassName="mt-2 space-y-2 pl-6"
@@ -3344,7 +3344,7 @@ function ThreadTurnDetailsComponent ({
         ) : isCompleted ? (
           <div className="space-y-2">
             {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
-            <ThreadDisclosure
+            <Disclosure
               className="py-2"
               contentClassName="mt-2 space-y-2 pl-6"
               defaultOpen={defaultOpenCompletedWork}
@@ -3390,7 +3390,7 @@ function ThreadTurnDetailsComponent ({
       <section className={hideTopBorder ? "py-3" : "border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-3"}>
         <div className="space-y-2">
           {primaryUserBlock ? renderBlock(primaryUserBlock, 0, primaryUserBlocks, primaryUserBlock) : null}
-          <ThreadDisclosure
+          <Disclosure
             className="py-2"
             contentClassName="mt-2 space-y-2 pl-6"
             defaultOpen={defaultOpenCompletedWork}

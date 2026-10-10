@@ -1,7 +1,7 @@
 /* No production exports. Tests protect saved group visibility in press-drag selection. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getPressDragGroupItems, type PressDragMenuGroup } from "./WorkbenchPressDragMenu";
+import { getPressDragGroupItems, type PressDragMenuGroup } from "./PressDragMenu";
 
 test("closed groups offer no model selections while open and default groups do", () => {
   const group: PressDragMenuGroup = {

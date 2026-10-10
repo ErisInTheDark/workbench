@@ -7,7 +7,7 @@
 import type { ReactNode } from "react";
 import type { WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchStatsRange } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import WorkbenchModeRow from "../WorkbenchModeRow";
+import RadioRow from "../../ui/RadioRow";
 import WorkbenchProjectControl from "../WorkbenchProjectControl";
 import useStats from "./use-stats";
 import WorkbenchStatsStatus from "./WorkbenchStatsStatus";
@@ -60,7 +60,7 @@ export default function WorkbenchStatsControls({ error, tab }: { error: string; 
             />
           ) : null
         ) : (
-          <WorkbenchModeRow
+          <RadioRow
             ariaLabel="Projects included"
             onChange={stats.setMode}
             options={[
@@ -73,7 +73,7 @@ export default function WorkbenchStatsControls({ error, tab }: { error: string; 
             value={mode}
           />
         )}
-        <WorkbenchModeRow
+        <RadioRow
           ariaLabel="Statistics range"
           onChange={stats.setRange}
           options={RANGES.map(({ label, title, value }) => ({ ariaLabel: title, label, title, value }))}

@@ -6,7 +6,7 @@
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import ChevronIcon from "./ChevronIcon";
-import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import PressDragMenu from "../ui/PressDragMenu";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 
 type ControlProject = WorkbenchProjectOption | WorkbenchLogicalProject;
@@ -31,7 +31,7 @@ export default function WorkbenchProjectControl({
 }) {
   const label = projectLabel(project);
   return (
-    <WorkbenchPressDragMenu
+    <PressDragMenu
       label={`${action} ${label}. Click for the next selected project, or drag to choose one.`}
       disabled={disabled}
       triggerAppearance="plain"
@@ -54,6 +54,6 @@ export default function WorkbenchProjectControl({
       <WorkbenchProjectIcon project={project} variant="thread" />
       <span className="truncate">{label}</span>
       <ChevronIcon aria-hidden="true" className="shrink-0" size={14} />
-    </WorkbenchPressDragMenu>
+    </PressDragMenu>
   );
 }

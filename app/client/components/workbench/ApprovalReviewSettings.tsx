@@ -8,8 +8,8 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { APPROVAL_REVIEWERS, ApprovalReviewerIdSchema, type ApprovalReviewerId } from "workbench-shared/workbench/approval-review/approval-reviewers";
 import ApprovalReviewSettingsController, { type ApprovalReviewSettingsState } from "../../workbench/ApprovalReviewSettingsController";
 import { EyeIcon, EyeOffIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import IconButton from "../ui/IconButton";
+import { OptionCard } from "../ui/OptionCards";
 import WorkbenchTextField from "./WorkbenchTextField";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
@@ -30,7 +30,7 @@ export default function ApprovalReviewSettings() {
     {ApprovalReviewerIdSchema.options.map(id => {
       const reviewer = settings?.reviewers.find(item => item.id === id);
       const secret = APPROVAL_REVIEWERS[id].credential === "workbench-secret";
-      return <WorkbenchOptionCard key={id} density="tight" label={APPROVAL_REVIEWERS[id].label}
+      return <OptionCard key={id} density="tight" label={APPROVAL_REVIEWERS[id].label}
         isChecked={settings?.selected === id} disabled={!reviewer?.ready || state.busy}
         onClick={() => { if (settings?.selected !== id) void controller.select(id); }}
         inlineContent={secret
@@ -63,9 +63,9 @@ function ReviewerKey({ id, state, controller }: {
       type={revealed ? "text" : "password"} autoComplete="off" spellCheck={false} disabled={!state.settings}
       value={value} onChange={event => setValue(event.target.value)}
       onKeyDown={event => { if (event.key === "Enter") commit(); }} />
-    {value ? <WorkbenchIconButton type="button" size="small" display="hover-border" label={revealed ? `Hide ${label}` : `Show ${label}`}
+    {value ? <IconButton type="button" size="small" display="hover-border" label={revealed ? `Hide ${label}` : `Show ${label}`}
       aria-pressed={revealed} onClick={() => setRevealed(current => !current)}>
       {revealed ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
-    </WorkbenchIconButton> : null}
+    </IconButton> : null}
   </div>;
 }

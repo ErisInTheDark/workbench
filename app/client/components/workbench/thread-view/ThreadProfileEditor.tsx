@@ -17,9 +17,9 @@ import ChevronIcon from "../ChevronIcon";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ReloadIcon, ZapIcon } from "../workbench-icons";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import WorkbenchPopover from "../WorkbenchPopover";
-import WorkbenchPressDragSlider from "../WorkbenchPressDragSlider";
+import PressDragSlider from "../../ui/PressDragSlider";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
@@ -191,19 +191,19 @@ export default function ThreadProfileEditor ({
         {showsEffort || showsFastMode || capability ? <div className="grid [grid-template-columns:auto_1fr_auto_auto] pr-3">
           {showsEffort ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Effort</span>
-            <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
+            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
           </div> : null}
-          {showsFastMode ? <WorkbenchIconButton
+          {showsFastMode ? <IconButton
             size="small"
             label={settings.serviceTier === "fast" ? "Turn fast mode off" : "Turn fast mode on"}
             title={settings.serviceTier === "fast" ? "Fast mode is on" : "Fast mode is off"}
             aria-pressed={settings.serviceTier === "fast"}
             className="row-span-2 self-center ml-auto text-text"
             onClick={() => update({ serviceTier: settings.serviceTier === "fast" ? null : "fast" })}
-          ><ZapIcon size={16} className={settings.serviceTier === "fast" ? "fill-current" : undefined} /></WorkbenchIconButton> : null}
+          ><ZapIcon size={16} className={settings.serviceTier === "fast" ? "fill-current" : undefined} /></IconButton> : null}
           {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Context</span>
-            <WorkbenchPressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
+            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
           </div> : null}
         </div> : null}
         {block("agent", "Agent definition", state.agents.find((entry) => entry.path === settings.agentPath)?.name ?? getWorkbenchAgentPathLabel(settings.agentPath) ?? "Default agent", <ThreadAgentPicker

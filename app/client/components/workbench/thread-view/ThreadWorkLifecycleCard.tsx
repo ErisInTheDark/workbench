@@ -15,7 +15,7 @@ import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId, WorkbenchThread
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import WorkbenchWorkspaceContext, { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import ComposerReferencePills from "./ComposerReferencePills";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
@@ -23,7 +23,7 @@ import { BinIcon, ResetIcon } from "../workbench-icons";
 import GitArcIcon, { GitArcClaimIcon, GitArcUnclaimIcon } from "./GitArcIcon";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadClaimedFileList from "./ThreadClaimedFileList";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import ThreadGitArcProposalList from "./ThreadGitArcProposalList";
 import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
@@ -263,7 +263,7 @@ function GitArcLifecycleSections ({
             data-thread-git-arc-resolution="true"
             data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
           >
-            <ThreadDisclosure
+            <Disclosure
               contentClassName="mt-1 pl-1"
               summary={(
                 <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -359,7 +359,7 @@ function GitArcLifecycleSections ({
                 projectRootPath={projectRootPath}
                 workspaceRoots={workspaceRoots}
               />
-            </ThreadDisclosure>
+            </Disclosure>
           </div>
         ))}
         {failure || conflictedPaths.length ? (

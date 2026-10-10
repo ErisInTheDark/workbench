@@ -11,7 +11,7 @@ import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import { getUserMessageDeliveryState, type IncomingAgentMessageItem } from "./thread-render-blocks";
 
 function countLabel(count: number, noun: string) {
@@ -69,7 +69,7 @@ export default function ThreadIncomingAgentMessageGroup({
   subagents: readonly WorkbenchSubagentSummary[];
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       chevronSide="end"
       className="py-2"
       contentClassName="mt-1"
@@ -84,6 +84,6 @@ export default function ThreadIncomingAgentMessageGroup({
       summaryClassName="ml-auto w-fit text-[0.92em] leading-[1.6]"
     >
       {children}
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

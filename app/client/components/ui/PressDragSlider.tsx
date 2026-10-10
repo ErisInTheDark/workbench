@@ -1,23 +1,23 @@
 /*
  * Exports:
- * - default WorkbenchPressDragSlider: inline or popover numeric control with cancellable preview.
+ * - default PressDragSlider: inline or popover numeric control with cancellable preview.
  */
 "use client";
 
 import { useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type ComponentPropsWithRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import PressDragSliderController, { type PressDragSliderRange } from "./PressDragSliderController";
-import { positionWorkbenchPopover } from "./workbench-popover-geometry";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import WorkbenchRangeInput from "./WorkbenchRangeInput";
+import { positionWorkbenchPopover } from "../workbench/workbench-popover-geometry";
+import IconButton from "./IconButton";
+import WorkbenchRangeInput from "../workbench/WorkbenchRangeInput";
 
 function SliderTrigger ({ icon, label, children, ...props }: ComponentPropsWithRef<"button"> & { icon?: ReactNode; label: string }) {
   return icon
-    ? <WorkbenchIconButton {...props} label={label} display="hover-border">{icon}</WorkbenchIconButton>
+    ? <IconButton {...props} label={label} display="hover-border">{icon}</IconButton>
     : <button {...props} className={`enabled:cursor-pointer ${props.className ?? ""}`}>{children}</button>;
 }
 
-export default function WorkbenchPressDragSlider ({
+export default function PressDragSlider ({
   ref, value, min, max, step, label, format, colour, onChange, onPreview, disabled = false, valueText, valueOptions, presentation = "popover", icon, side = "above", subgrid,
 }: PressDragSliderRange & {
   label: string;

@@ -11,7 +11,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import type { WorkbenchFilePanelClient, WorkbenchFilePanelClientOptions, WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import type { WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import {
   workbenchDiffGutterClassName,
@@ -262,7 +262,7 @@ export default function WorkbenchFilePanel ({
           </div>
           <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
             {onMinimizeToggle ? (
-              <WorkbenchIconButton
+              <IconButton
                 type="button"
                 title={isMinimized ? "Expand panel" : "Minimize panel"}
                 label={isMinimized ? "Expand panel" : "Minimize panel"}
@@ -271,7 +271,7 @@ export default function WorkbenchFilePanel ({
               >
                 {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
                 <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-              </WorkbenchIconButton>
+              </IconButton>
             ) : null}
             <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
               <WorkbenchZoomButton
@@ -291,7 +291,7 @@ export default function WorkbenchFilePanel ({
               />
             </div>
             <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-              <WorkbenchIconButton
+              <IconButton
                 ref={saveFileButtonRef}
                 type="button"
                 title="Save current file"
@@ -301,8 +301,8 @@ export default function WorkbenchFilePanel ({
               >
                 <SaveIcon size={20} />
                 <span className="sr-only">Save current file</span>
-              </WorkbenchIconButton>
-              <WorkbenchIconButton
+              </IconButton>
+              <IconButton
                 ref={resetDraftButtonRef}
                 type="button"
                 title="Discard the current draft"
@@ -311,10 +311,10 @@ export default function WorkbenchFilePanel ({
               >
                 <BinIcon size={20} />
                 <span className="sr-only">Discard the current draft</span>
-              </WorkbenchIconButton>
+              </IconButton>
             </div>
             {onClose ? (
-              <WorkbenchIconButton
+              <IconButton
                 type="button"
                 title="Close panel"
                 label="Close panel"
@@ -323,7 +323,7 @@ export default function WorkbenchFilePanel ({
               >
                 <PanelCloseIcon size={16} />
                 <span className="sr-only">Close panel</span>
-              </WorkbenchIconButton>
+              </IconButton>
             ) : null}
           </div>
         </div>

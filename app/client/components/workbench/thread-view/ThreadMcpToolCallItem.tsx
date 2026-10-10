@@ -14,7 +14,7 @@ import {
   type WorkbenchCommandRoute,
 } from "../../../workbench/thread/thread-command-matchers";
 import ThreadDurationText from "./ThreadDurationText";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
 import { formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
@@ -84,7 +84,7 @@ export default function ThreadMcpToolCallItem ({
   }
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
       defaultOpen={false}

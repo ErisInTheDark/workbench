@@ -14,7 +14,7 @@ import {
 } from "../../workbench/app/workbench-app-port-client";
 import { readWorkbenchBrowserStateTransferId } from "../../workbench/state/workbench-browser-state-identity";
 import WorkbenchTextField from "./WorkbenchTextField";
-import PrimaryButton from "./PrimaryButton";
+import PrimaryButton from "../ui/PrimaryButton";
 import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 
 function boundedError(error: unknown) {

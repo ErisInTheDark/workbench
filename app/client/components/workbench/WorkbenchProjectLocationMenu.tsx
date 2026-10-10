@@ -6,7 +6,7 @@
 
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
-import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import PressDragMenu from "../ui/PressDragMenu";
 import WorkbenchProjectLocationLabel from "./WorkbenchProjectLocationLabel";
 import { FolderOpenIcon } from "./workbench-icons";
 
@@ -25,7 +25,7 @@ export default function WorkbenchProjectLocationMenu({
     folder.target.daemonId === selected?.daemonId && folder.target.projectId === selected?.projectId);
   const showOwners = new Set(folders.map(folder => folder.ownerProjectId)).size > 1;
   return (
-    <WorkbenchPressDragMenu
+    <PressDragMenu
       label={label}
       items={folders.map(folder => ({
         id: `${folder.target.daemonId}/${folder.target.projectId}`,
@@ -55,6 +55,6 @@ export default function WorkbenchProjectLocationMenu({
           hostname={current.hostname}
         /> : "Choose folder"}
       </span>
-    </WorkbenchPressDragMenu>
+    </PressDragMenu>
   );
 }

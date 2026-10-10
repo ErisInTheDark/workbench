@@ -20,7 +20,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-display-order";
 import type { WorkbenchPinnedThreadSummaryEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import Disclosure from "../ui/Disclosure";
 import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
@@ -29,7 +29,7 @@ import {
   type WorkbenchThreadStatusTone,
 } from "./workbench-thread-status-colors";
 import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, PinIcon, ProposedCommitThreadIcon, SnoozedThreadIcon, StoppedThreadIcon, WorkingThreadIcon, type IconProps } from "./workbench-icons";
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 import Draggable from "./drag/Draggable";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
@@ -247,7 +247,7 @@ export default function WorkbenchThreadFolder({
     />
   );
   const summary = (
-    <WorkbenchTooltip content={tooltip} enabled={!isDragActive} interactive>
+    <Tooltip content={tooltip} enabled={!isDragActive} interactive>
       <div className="min-w-0">
         {project ? fullSummary : open ? (
           <div className="grid min-h-11 min-w-0 grid-cols-[auto minmax(0, 1fr) auto] items-center py-1 pr-2 pl-2 md:min-h-0">
@@ -259,7 +259,7 @@ export default function WorkbenchThreadFolder({
           fullSummary
         )}
       </div>
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 
   return (
@@ -290,7 +290,7 @@ export default function WorkbenchThreadFolder({
             targetProjectId={project?.id}
             targetTitle={folder.title}
           />
-          <ThreadDisclosure
+          <Disclosure
             chevronClassName="hidden"
             className={`
               relative z-10 rounded-[0.8rem] transition-[background-color,opacity]
@@ -303,7 +303,7 @@ export default function WorkbenchThreadFolder({
             summaryClassName="min-h-11 text-fg/muted md:min-h-0"
           >
             {children}
-          </ThreadDisclosure>
+          </Disclosure>
         </div>
       )}
     </Draggable>

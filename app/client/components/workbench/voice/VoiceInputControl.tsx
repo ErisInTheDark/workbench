@@ -7,7 +7,7 @@ import { useContext, useEffect, useId, useLayoutEffect, useRef, useSyncExternalS
 import WorkbenchClientContext from "../workbench-client-context";
 import VoiceCaptureController from "../../../workbench/voice/VoiceCaptureController";
 import type { VoiceClientSnapshot } from "../../../workbench/voice/WorkbenchVoiceClient";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
 
 const idle: VoiceClientSnapshot = { fieldId: null, state: "idle", error: "" };
@@ -76,7 +76,7 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
     {voice.state !== "idle" ? <span role={voice.error ? "alert" : "status"} className="max-w-48 truncate text-xs text-fg/muted" title={voice.error}>
       {voice.error || voice.state}
     </span> : null}
-    <WorkbenchIconButton
+    <IconButton
       label="Hold to dictate" size="font" display="hover-border"
       pendingHalo={voice.locked}
       aria-pressed={voice.state === "listening"} aria-busy={voice.locked} disabled={voice.busy}
@@ -106,6 +106,6 @@ export default function VoiceInputControl({ voice }: { voice: ReturnType<typeof 
       <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="13" rx="3" />
       </svg>
-    </WorkbenchIconButton>
+    </IconButton>
   </div>;
 }

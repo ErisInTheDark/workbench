@@ -8,7 +8,7 @@ import type { WorkbenchAgentOption, WorkbenchComposerSettings, WorkbenchModelOpt
 import type { WorkbenchComposerProfileSlot } from "workbench-shared/types";
 import { getWorkbenchAgentPathLabel } from "workbench-shared/workbench/agent-paths";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import WorkbenchPressDragMenu, { type PressDragMenuItem } from "../WorkbenchPressDragMenu";
+import PressDragMenu, { type PressDragMenuItem } from "../../ui/PressDragMenu";
 import { BotIcon, ZapIcon } from "../workbench-icons";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { composerProfileRecency, orderComposerProfiles } from "./composer-profile-order";
@@ -69,7 +69,7 @@ export default function ThreadProfileQuickPicker({
       { id: "custom", content: "Custom", checked: selection.kind === "custom" },
     ];
   };
-  return <WorkbenchPressDragMenu
+  return <PressDragMenu
     label={`Composer profile: ${label}`}
     align="end"
     triggerClassName="text-text"
@@ -88,5 +88,5 @@ export default function ThreadProfileQuickPicker({
   >
     <BotIcon className="shrink-0" size={18} />
     {selectedLabel ? <span className="truncate font-semibold">{selectedLabel}</span> : null}
-  </WorkbenchPressDragMenu>;
+  </PressDragMenu>;
 }

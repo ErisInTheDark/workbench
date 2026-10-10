@@ -6,7 +6,7 @@
 
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import Disclosure from "../ui/Disclosure";
 import type { IconProps } from "./workbench-icons";
 import {
   useWorkbenchSidebarPreferences,
@@ -14,7 +14,7 @@ import {
 } from "./workbench-sidebar-preferences-context";
 
 type WorkbenchSidebarSectionDisclosureProps = Omit<
-  ComponentProps<typeof ThreadDisclosure>,
+  ComponentProps<typeof Disclosure>,
   "defaultOpen" | "initialOpen" | "leading" | "onToggle" | "open" | "summary"
 > & {
   actions?: ReactNode;
@@ -38,7 +38,7 @@ export default function WorkbenchSidebarSectionDisclosure({
   const disclosureClassName = ["pl-3", className].filter(Boolean).join(" ");
   const disclosureSummaryClassName = ["-ml-3", "h-11 text-fg/muted md:h-8", summaryClassName].filter(Boolean).join(" ");
   return (
-    <ThreadDisclosure
+    <Disclosure
       className={disclosureClassName}
       compactSummary
       leading={<Icon size={16} />}

@@ -7,7 +7,7 @@
 
 import type { WorkbenchAgentOption, WorkbenchComposerSettings } from "workbench-shared/types";
 import { areWorkbenchAgentPathsEqual } from "workbench-shared/workbench/agent-paths";
-import WorkbenchPressDragMenu, { type PressDragMenuItem } from "../WorkbenchPressDragMenu";
+import PressDragMenu, { type PressDragMenuItem } from "../../ui/PressDragMenu";
 
 interface ThreadAgentQuickChoice {
   id: string;
@@ -84,7 +84,7 @@ export default function ThreadAgentQuickPicker({
     })),
   ];
 
-  return <WorkbenchPressDragMenu
+  return <PressDragMenu
     label={`Composer agent: ${label}`}
     align="end"
     triggerClassName="max-w-48 truncate text-text"
@@ -101,5 +101,5 @@ export default function ThreadAgentQuickPicker({
     }}
   >
     <span className="truncate">{label}</span>
-  </WorkbenchPressDragMenu>;
+  </PressDragMenu>;
 }

@@ -1,20 +1,20 @@
 /*
  * Exports:
- * - default ThreadDisclosure: render a styled details/summary disclosure with controlled or uncontrolled open state and a leading or trailing chevron.
- * - ThreadDisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
+ * - default Disclosure: render a styled details/summary disclosure with controlled or uncontrolled open state and a leading or trailing chevron.
+ * - DisclosureStaticRow: disclosure-aligned static row or optional accessible action with a supplied marker.
  */
 "use client";
 
 import { useEffect, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
-import ChevronIcon from "../ChevronIcon";
-import { useThreadWindowPin } from "./ThreadMeasuredContent";
+import ChevronIcon from "../workbench/ChevronIcon";
+import { useThreadWindowPin } from "../workbench/thread-view/ThreadMeasuredContent";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-type ThreadDisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
+type DisclosureProps = Omit<ComponentPropsWithoutRef<"details">, "children"> & {
   chevronClassName?: string;
   /** `end` puts the chevron after the summary, pointing left while closed. */
   chevronSide?: "start" | "end";
@@ -46,7 +46,7 @@ function shouldPreventSummaryActionDefault(target: EventTarget | null) {
   return Boolean(target.closest("button, [data-thread-summary-action='true']"));
 }
 
-export default function ThreadDisclosure ({
+export default function Disclosure ({
   chevronClassName,
   chevronSide = "start",
   hideChevron = false,
@@ -67,7 +67,7 @@ export default function ThreadDisclosure ({
   summaryClassName,
   summaryContentClassName,
   ...props
-}: ThreadDisclosureProps) {
+}: DisclosureProps) {
   const isControlled = typeof open === "boolean";
   const defaultIsOpen = Boolean(defaultOpen ?? initialOpen);
   const [hasUserToggled, setHasUserToggled] = useState(false);
@@ -186,7 +186,7 @@ export default function ThreadDisclosure ({
   );
 }
 
-export function ThreadDisclosureStaticRow ({
+export function DisclosureStaticRow ({
   className,
   marker,
   markerClassName,

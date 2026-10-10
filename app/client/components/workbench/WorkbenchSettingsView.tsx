@@ -16,9 +16,9 @@ import WorkbenchEnvironmentSettings from "./environment/WorkbenchEnvironmentSett
 import SandboxNetworkSettings from "./SandboxNetworkSettings";
 import VoiceSettings from "./voice/VoiceSettings";
 import ThreadAutoCompactSettings from "./ThreadAutoCompactSettings";
-import WorkbenchFormSection from "./WorkbenchFormSection";
+import FormSection from "../ui/FormSection";
 import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import { OptionCard } from "../ui/OptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
@@ -92,7 +92,7 @@ function BrowseCapability({ daemon }: { daemon: WorkbenchDaemonClient }) {
       .finally(() => setLoading(false));
   }
   return <div className="py-1">
-    <WorkbenchOptionCard label="Raw Browse commands"
+    <OptionCard label="Raw Browse commands"
       description="Allow raw Browse CLI usage outside the sandbox."
       isSingleChoice={false} isChecked={settings.browseRawCommandsEnabled}
       disabled={loading} onClick={update} />
@@ -199,37 +199,37 @@ export default function WorkbenchSettingsView({
           </nav>
         </div>
         {page === "general" ? <>
-          <WorkbenchFormSection id="settings-appearance" title="Appearance">
+          <FormSection id="settings-appearance" title="Appearance">
             <WorkbenchSettingsPreferences keys={["theme", "editorFontSize"]} logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-editing" title="Editing">
+          </FormSection>
+          <FormSection id="settings-editing" title="Editing">
             <WorkbenchSettingsPreferences keys={["editorFontFamily", "editorSpellCheck", "composerSpellCheck"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-threads" title="Threads">
+          </FormSection>
+          <FormSection id="settings-threads" title="Threads">
             <WorkbenchSettingsPreferences keys={["threadCodeBlockWrap", "threadCodeDetails"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
             {daemonControl}
             {daemon ? <ThreadAutoCompactSettings key={daemonId} daemon={daemon} />
               : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-voice" title="Voice"><VoiceSettings /></WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></WorkbenchFormSection>
+          </FormSection>
+          <FormSection id="settings-voice" title="Voice"><VoiceSettings /></FormSection>
+          <FormSection id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></FormSection>
         </> : null}
         {page === "projects" ? <>
-          <WorkbenchFormSection id="settings-files" title="Files">
+          <FormSection id="settings-files" title="Files">
             <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-discovery" title="Discovery">
+          </FormSection>
+          <FormSection id="settings-discovery" title="Discovery">
             <div className="space-y-3 py-3">
               {daemonControl}
               {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
                 <WorkbenchProjectDiscoverySettings key={daemonId} onSaved={() => onGitRootsSaved(daemonId!)} />
               </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
             </div>
-          </WorkbenchFormSection>
-          {logicalProject ? <WorkbenchFormSection id="settings-environment" title="Environment">
+          </FormSection>
+          {logicalProject ? <FormSection id="settings-environment" title="Environment">
             <div className="space-y-3 py-3">
               <WorkbenchSettingsContextRow label="Folder" value={environmentFolder ? folderKey(environmentFolder) : ""}
                 options={environmentFolders.map(item => ({ id: folderKey(item), label: folderLabel(item) }))}
@@ -240,10 +240,10 @@ export default function WorkbenchSettingsView({
               </WorkbenchOperationsContext.Provider>
                 : <p role="status" className="text-sm text-fg/muted">No folder is available for this project.</p>}
             </div>
-          </WorkbenchFormSection> : null}
+          </FormSection> : null}
         </> : null}
         {page === "agents" ? <>
-          <WorkbenchFormSection id="settings-agent-network" title="Network access">
+          <FormSection id="settings-agent-network" title="Network access">
             {daemonControl}
             {logicalProject ? folderControl : null}
             {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
@@ -252,24 +252,24 @@ export default function WorkbenchSettingsView({
                 scope={logicalProject ? "project" : "global"} />
             </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
             {logicalProject && !folder ? <p role="status" className="text-sm text-fg/muted">No folder is available on this daemon.</p> : null}
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-capabilities" title="Capabilities">
+          </FormSection>
+          <FormSection id="settings-capabilities" title="Capabilities">
             {daemon ? <BrowseCapability key={daemonId} daemon={daemon} /> : null}
             {daemon ? <WorkbenchRepoPrerequisiteSettings key={`repo-${daemonId}`} daemon={daemon} /> : null}
-          </WorkbenchFormSection>
-          <WorkbenchFormSection id="settings-auto-approve" title="Auto-approve">
+          </FormSection>
+          <FormSection id="settings-auto-approve" title="Auto-approve">
             {daemonControl}
             {daemon ? <WorkbenchOperationsContext.Provider value={daemon}>
               <ApprovalReviewSettings key={daemonId} />
             </WorkbenchOperationsContext.Provider> : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
-          </WorkbenchFormSection>
-          {logicalProject ? <WorkbenchFormSection id="settings-permissions" title="Permissions">
+          </FormSection>
+          {logicalProject ? <FormSection id="settings-permissions" title="Permissions">
             {daemon && folder ? <WorkbenchOperationsContext.Provider value={daemon}>
               <CommandApprovalSettings key={`${daemonId}/${folder.target.projectId}`}
                 projectId={folder.target.projectId} folders={daemonFolders} />
             </WorkbenchOperationsContext.Provider>
               : <p role="status" className="text-sm text-fg/muted">Choose an available folder to edit permissions.</p>}
-          </WorkbenchFormSection> : null}
+          </FormSection> : null}
         </> : null}
         {page === "network" ? <WorkbenchNetworkSettings /> : null}
       </div>

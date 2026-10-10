@@ -9,7 +9,7 @@ import type { ProjectDiscoverySettingsResult } from "workbench-shared/workbench/
 import InputList from "./InputList";
 import { InputListRows, type InputListRow } from "./input-list-rows";
 import { ResetIcon, SaveIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
 const ISSUE_LABELS: Record<Extract<ProjectDiscoverySettingsResult, { accepted: false }>["issues"][number]["reason"], string> = {
@@ -130,10 +130,10 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
         rows={rows}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <WorkbenchIconButton
+        <IconButton
           label="Save Git roots" disabled={blocked} onClick={() => { void save(); }} type="button"
-        ><SaveIcon size={16} /></WorkbenchIconButton>
-        <WorkbenchIconButton
+        ><SaveIcon size={16} /></IconButton>
+        <IconButton
           label="Reset Git root changes"
           disabled={loading || saving || !available || !dirty}
           onClick={() => {
@@ -143,7 +143,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
             setStatus("");
           }}
           type="button"
-        ><ResetIcon size={16} /></WorkbenchIconButton>
+        ><ResetIcon size={16} /></IconButton>
       </div>
       {error ? <p role="alert" className="m-0 text-[0.8rem] text-danger">{error}</p> : null}
       {!available && !loading ? <button className="rounded-lg px-3 py-1.5 text-[0.83rem] text-accent hover:bg-accent-soft" onClick={() => setReloadKey(value => value + 1)} type="button">Retry connection</button> : null}

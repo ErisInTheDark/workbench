@@ -5,7 +5,7 @@
 "use client";
 import type { ReactNode } from "react";
 import type { ThreadCommandDisplay as CommandDisplay, ThreadCommandDetailRow, ThreadCommandSummaryDisplay } from "../../../workbench/thread/thread-command-matchers";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadCommandDetailRows from "./ThreadCommandDetailRows";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
 import ThreadCommandDetails from "./ThreadCommandDetails";
@@ -27,7 +27,7 @@ export default function ThreadCommandDisplay({ approval = null, command, display
   previewHeight?: string;
 }) {
   return (
-    <ThreadDisclosure className="py-2" contentClassName="mt-2 space-y-2 pl-6"
+    <Disclosure className="py-2" contentClassName="mt-2 space-y-2 pl-6"
       summary={<><ThreadCommandSummary approval={approval} display={summaryDisplay} projectFilePaths={projectFilePaths} projectId={projectId} />{meta}</>}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted">
       {display.cwdDisplay && !display.hideCommandCwd ? (
@@ -39,6 +39,6 @@ export default function ThreadCommandDisplay({ approval = null, command, display
       {children !== undefined ? children : browse ? <ThreadCommandDetails command={command} output={output} previewHeight={previewHeight} />
         : display.hideCommandOutput && (detailRows.length > 0 || !output?.trim()) ? null
           : <ThreadCodeDisplay header={<ThreadCommandHeader command={command} surface="framed" />} output={output?.trim() || undefined} preview previewHeight={previewHeight} variant="plain" />}
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

@@ -12,7 +12,7 @@ import {
   WorkbenchFeedbackReportSkeleton,
 } from "../stats/workspaces/WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackTag from "../stats/workspaces/WorkbenchStatsFeedbackTag";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 
 /** Mounts only once the disclosure opens, so the stored report is read on demand. */
@@ -64,7 +64,7 @@ export default function ThreadFeedbackCommandItem({
   threadId: string;
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       renderContent={() => (

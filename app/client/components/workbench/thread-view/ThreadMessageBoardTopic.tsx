@@ -19,12 +19,12 @@ import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import { ArrowRightIcon } from "../workbench-icons";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure from "./ThreadDisclosure";
-import ThreadMarkdown from "./ThreadMarkdown";
+import Disclosure from "../../ui/Disclosure";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSteerDecoration from "./ThreadSteerDecoration";
 
-export type ThreadMessageBoardMarkdownProps = Omit<ComponentProps<typeof ThreadMarkdown>, "markdown">;
+export type ThreadMessageBoardMarkdownProps = Omit<ComponentProps<typeof MarkdownRender>, "markdown">;
 
 const neutralBorderClassName = "border-[color-mix(in_srgb,var(--text)_12%,transparent)]";
 
@@ -194,7 +194,7 @@ export default function ThreadMessageBoardTopic({
     : neutralBorderClassName;
   return (
     <div className="group/topic relative">
-      <ThreadDisclosure
+      <Disclosure
         className="overflow-hidden rounded-[0.8rem]"
         contentClassName="bg-fg/4"
         hideChevron

@@ -20,9 +20,9 @@ import {
 } from "../../workbench/state/workbench-settings";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
 import { ResetIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import WorkbenchOptionCards, { WorkbenchOptionCard } from "./WorkbenchOptionCards";
-import WorkbenchStepSlider from "./WorkbenchStepSlider";
+import IconButton from "../ui/IconButton";
+import OptionCards, { OptionCard } from "../ui/OptionCards";
+import StepSlider from "../ui/StepSlider";
 
 const sizeSteps = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, index) => ({ label: String(index + 1), value }));
 
@@ -66,16 +66,16 @@ export default function WorkbenchSettingsPreferences({
     const unavailable = logicalProjectId
       ? state.schemaVersion < appStateReleases.logicalProjectPreferences.version
       : key === "threadCodeDetails" && state.schemaVersion < appStateReleases.threadCodeDetails.version;
-    const resetButton = override?.enabled ? <WorkbenchIconButton
+    const resetButton = override?.enabled ? <IconButton
       type="button" display="hover-border" label={`Reset ${definition.label} to global`}
       title={`Reset ${definition.label} to global`}
       className="absolute right-2 top-1/2 -translate-y-1/2 lg:-right-12"
       disabled={unavailable}
       onClick={() => reset(key)}
-    ><ResetIcon size={18} /></WorkbenchIconButton> : null;
+    ><ResetIcon size={18} /></IconButton> : null;
     if (definition.type === "boolean" && typeof value === "boolean") return <section key={key}
       className="relative rounded-[0.85rem] py-1">
-      <WorkbenchOptionCard label={definition.label} description={definition.description}
+      <OptionCard label={definition.label} description={definition.description}
         isSingleChoice={false} isChecked={value} disabled={unavailable}
         onClick={() => change(key, !value as never)} />
       {resetButton}
@@ -87,10 +87,10 @@ export default function WorkbenchSettingsPreferences({
         {definition.description ? <p className="m-0 mt-1 text-xs leading-5 text-fg/muted">{definition.description}</p> : null}
       </div>
       {key === "editorFontSize"
-        ? <WorkbenchStepSlider ariaLabel={definition.label} disabled={unavailable}
+        ? <StepSlider ariaLabel={definition.label} disabled={unavailable}
           value={typeof value === "number" ? value : 1.08} steps={sizeSteps}
           onChange={next => change(key, next as never)} />
-        : definition.options ? <WorkbenchOptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
+        : definition.options ? <OptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
           ariaLabel={definition.label} columns={definition.columns ?? "one"} disabled={unavailable}
           mode="radio" options={definition.options} value={value}
           onChange={next => change(key, next as never)} /> : null}

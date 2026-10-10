@@ -5,10 +5,10 @@
  * - default WorkbenchStatsActivity: stacked cost or token activity over the whole range, with period picking, category toggles, and unpriced-model disclosure.
  */
 import type { StatsTokenType } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import WorkbenchModeRow from "../../WorkbenchModeRow";
+import RadioRow from "../../../ui/RadioRow";
 import useStats from "../use-stats";
-import WorkbenchStatsStreamChart from "../WorkbenchStatsStreamChart";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import StreamChart from "../../../ui/StreamChart";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import { compactNumber, formatMoney, formatStatsBucket, providerLabel } from "../stats-formatters";
 import { STATS_TOKEN_SERIES } from "./stats-token-series";
 
@@ -45,7 +45,7 @@ export default function WorkbenchStatsActivity() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <h2 className="m-0 text-[1rem] font-semibold text-text" id="stats-activity-heading">Activity</h2>
-          <WorkbenchModeRow
+          <RadioRow
             ariaLabel="Activity measure"
             onChange={filters.setMetric}
             options={[{ label: "Cost", value: "cost" }, { label: "Tokens", value: "tokens" }]}
@@ -78,7 +78,7 @@ export default function WorkbenchStatsActivity() {
       </div>
       {stats ? (
         <div className={`[--hue-chroma:55%] ${statsRevealClassName} ${statsReloadingClassName(loading)}`}>
-          <WorkbenchStatsStreamChart
+          <StreamChart
             buckets={buckets}
             emptyLabel="No usage in this period"
             formatBucket={(startedAt) => formatStatsBucket(startedAt, unit)}
@@ -92,9 +92,9 @@ export default function WorkbenchStatsActivity() {
       ) : (
         // The chart's own geometry: the stream, the date row, and the readout.
         <div aria-hidden="true" className="space-y-3">
-          <WorkbenchStatsSkeleton className="h-48 rounded-none" style={{ clipPath: SKELETON_STREAM }} />
-          <div className="flex h-[1.02rem] items-center justify-between"><WorkbenchStatsSkeleton className="h-2.5 w-12" /><WorkbenchStatsSkeleton className="h-2.5 w-12" /></div>
-          <div className="flex min-h-10 items-start"><WorkbenchStatsSkeleton className="mt-1 h-3 w-40" /></div>
+          <Skeleton className="h-48 rounded-none" style={{ clipPath: SKELETON_STREAM }} />
+          <div className="flex h-[1.02rem] items-center justify-between"><Skeleton className="h-2.5 w-12" /><Skeleton className="h-2.5 w-12" /></div>
+          <div className="flex min-h-10 items-start"><Skeleton className="mt-1 h-3 w-40" /></div>
         </div>
       )}
       {unpriced.length ? (

@@ -7,7 +7,7 @@
 import { composerReferenceKey, type ComposerReference } from "workbench-shared/workbench/thread/composer-reference";
 import { WorkbenchFeedbackReportDisplay } from "../stats/workspaces/WorkbenchStatsFeedbackReport";
 import WorkbenchPill from "../WorkbenchPill";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import { AsteriskIcon, BugIcon, ClipboardListIcon, MegaphoneIcon } from "../workbench-icons";
 
 /** Hue utilities are listed whole so Tailwind can see them. */
@@ -54,7 +54,7 @@ export default function ComposerReferencePills({ className = "", onRemove, refer
                 <div className="max-h-[min(24rem,60vh)] w-max max-w-[min(32rem,80vw)] overflow-auto text-[0.84rem] text-text">
                   {reference.kind === "feedback" ? (
                     <WorkbenchFeedbackReportDisplay category={reference.category} clamp={false} report={reference.report} title={reference.title} />
-                  ) : <ThreadMarkdown markdown={reference.text} />}
+                  ) : <MarkdownRender markdown={reference.text} />}
                 </div>
               )}
             >

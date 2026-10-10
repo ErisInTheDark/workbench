@@ -33,8 +33,8 @@ import {
 import ChevronIcon from "../ChevronIcon";
 import ProjectFilePath from "../ProjectFilePath";
 import { CheckIcon, CopyIcon, PreviewIcon, WrapTextIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import ThreadDisclosure from "./ThreadDisclosure";
+import IconButton from "../../ui/IconButton";
+import Disclosure from "../../ui/Disclosure";
 import ThreadFileList from "./ThreadFileList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadInlineIcon from "./ThreadInlineIcon";
@@ -428,7 +428,7 @@ function renderThreadPlanBlock (
 ) {
   const content = renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`);
   const disclosure = (
-    <ThreadDisclosure
+    <Disclosure
       className={sectionActions === undefined ? BLOCK_SPACING_CLASS : undefined}
       contentClassName="mt-2"
       initialOpen
@@ -445,7 +445,7 @@ function renderThreadPlanBlock (
       >
         {content.length ? content : <p className={BLOCK_SPACING_CLASS}><br /></p>}
       </ThreadPreviewFrame>
-    </ThreadDisclosure>
+    </Disclosure>
   );
   if (sectionActions === undefined) return disclosure;
   // A closed <details> hides non-summary children, so section actions hang from a wrapper that owns the spacing.
@@ -460,14 +460,14 @@ function renderThreadPlanBlock (
 function renderThreadDetailsBlock (block: Extract<ParsedBlock, { type: "details" }>, options: MarkdownParseOptions, keyPrefix: string) {
   return (
     <div className={BLOCK_SPACING_CLASS} key={keyPrefix}>
-      <ThreadDisclosure
+      <Disclosure
         contentClassName="mt-[0.25em] pl-[1.625rem]"
         initialOpen={block.open}
         summary={renderThreadInlineMarkdown(block.summary, options, `${keyPrefix}-summary`)}
         summaryClassName="font-semibold !text-text"
       >
         {renderThreadMarkdownBlocks(block.text, options, `${keyPrefix}-content`)}
-      </ThreadDisclosure>
+      </Disclosure>
     </div>
   );
 }
@@ -661,7 +661,7 @@ function ThreadCodeBlock ({
           {header.fileLink ? renderThreadInlineNodes([header.fileLink], `${keyPrefix}-header-file`, options) : null}
         </span>
         <div className="flex shrink-0 items-center gap-1">
-          <WorkbenchIconButton
+          <IconButton
             type="button"
             label="Copy code block"
             display="hover-border"
@@ -677,9 +677,9 @@ function ThreadCodeBlock ({
             <span className="hidden group-data-[thread-codeblock-copy-state=copied]:block" data-thread-codeblock-copy-icon="check">
               <CheckIcon size={16} />
             </span>
-          </WorkbenchIconButton>
+          </IconButton>
           {isSvgCodeBlock ? (
-            <WorkbenchIconButton
+            <IconButton
               type="button"
               label={isSvgPreviewing ? "Show SVG source" : "Preview SVG code block"}
               display="hover-border"
@@ -691,9 +691,9 @@ function ThreadCodeBlock ({
               title={isSvgPreviewing ? "Show SVG source" : "Preview SVG code block"}
             >
               <PreviewIcon size={16} />
-            </WorkbenchIconButton>
+            </IconButton>
           ) : null}
-          <WorkbenchIconButton
+          <IconButton
             type="button"
             label="Toggle code block line wrapping"
             display="hover-border"
@@ -705,7 +705,7 @@ function ThreadCodeBlock ({
             title="Toggle code block line wrapping"
           >
             <WrapTextIcon size={16} />
-          </WorkbenchIconButton>
+          </IconButton>
         </div>
       </div>
       <div className="relative min-h-[2.8rem]" data-thread-codeblock-body="true">

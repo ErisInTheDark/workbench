@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchStepSlider: stepped settings range, with optional compact track/value presentation.
+ * - default StepSlider: stepped settings range, with optional compact track/value presentation.
  */
 
 "use client";
 
-import WorkbenchRangeInput from "./WorkbenchRangeInput";
+import WorkbenchRangeInput from "../workbench/WorkbenchRangeInput";
 
-type WorkbenchStepSliderProps<T extends number> = {
+type StepSliderProps<T extends number> = {
   ariaLabel: string;
   disabled?: boolean;
   compact?: boolean;
@@ -27,14 +27,14 @@ function getClosestStepIndex<T extends number> (steps: Array<{ value: T }>, valu
   ), 0);
 }
 
-export default function WorkbenchStepSlider<T extends number> ({
+export default function StepSlider<T extends number> ({
   ariaLabel,
   disabled = false,
   compact = false,
   onChange,
   steps,
   value,
-}: WorkbenchStepSliderProps<T>) {
+}: StepSliderProps<T>) {
   const activeIndex = getClosestStepIndex(steps, value);
   const maxIndex = Math.max(0, steps.length - 1);
 

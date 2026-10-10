@@ -11,11 +11,11 @@ import {
   type WorkbenchFeedbackSort,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
-import WorkbenchModeRow from "../../WorkbenchModeRow";
+import RadioRow from "../../../ui/RadioRow";
 import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchWorkspaceContext from "../../WorkbenchWorkspaceContext";
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import WorkbenchStatsFeedbackReport, { WorkbenchFeedbackReportSkeleton } from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
 import {
@@ -110,7 +110,7 @@ export default function WorkbenchStatsFeedback() {
       {!feedback ? (
         // Category tags, then a few report cards.
         <div aria-hidden="true" className="space-y-3">
-          <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <WorkbenchStatsSkeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
+          <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <Skeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
           {[0, 1, 2].map((index) => <WorkbenchFeedbackReportSkeleton index={index} key={index} />)}
         </div>
       ) : !feedback.total ? (
@@ -146,7 +146,7 @@ export default function WorkbenchStatsFeedback() {
               })}
             </div>
             <div className="ml-auto">
-              <WorkbenchModeRow
+              <RadioRow
                 ariaLabel="Feedback order"
                 onChange={setSort}
                 options={[

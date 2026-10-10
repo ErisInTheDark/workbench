@@ -6,11 +6,11 @@
 import { useState } from "react";
 import type { WorkbenchNetworkAction, WorkbenchNetworkGroup } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
-import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import WorkbenchModeRow from "./WorkbenchModeRow";
+import PressDragMenu from "../ui/PressDragMenu";
+import IconButton from "../ui/IconButton";
+import RadioRow from "../ui/RadioRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
-import PrimaryButton from "./PrimaryButton";
+import PrimaryButton from "../ui/PrimaryButton";
 import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon } from "./workbench-icons";
 
 export default function WorkbenchNetworkAccessSettings() {
@@ -69,11 +69,11 @@ export default function WorkbenchNetworkAccessSettings() {
         const name = app?.label ?? "unavailable";
         return <div key={kind} className="flex items-center gap-2">
           <span className="text-fg/muted">{kind === "dns" ? "Nameserver" : "Owner"}</span>
-          {canManage && !busy ? <WorkbenchPressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
+          {canManage && !busy ? <PressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
             items={members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span>{member.label}<span className="ml-2 text-xs text-fg/muted">{availability(member.nodeId)}</span></span> }))}
             onSelect={nodeId => choose(kind, nodeId)}>
             <span className="inline-flex items-center gap-1 font-medium">{name}<ChevronDownIcon className="size-3" /></span>
-          </WorkbenchPressDragMenu> : <span className="font-medium text-text">{name}</span>}
+          </PressDragMenu> : <span className="font-medium text-text">{name}</span>}
           <span className="text-xs text-fg/muted">{availability(id)}</span>
         </div>;
       })}
@@ -92,7 +92,7 @@ export default function WorkbenchNetworkAccessSettings() {
     </div> : null}
     <div className="flex flex-wrap items-center gap-3">
     <span className="text-text">App access</span>
-    <WorkbenchModeRow ariaLabel="Remote app access" value={policy.access} disabled={busy || !canManage || stale}
+    <RadioRow ariaLabel="Remote app access" value={policy.access} disabled={busy || !canManage || stale}
       options={[
         { value: "all", label: "all tailnet devices", ariaLabel: "Allow all tailnet devices", icon: <HomeIcon className="size-4" /> },
         { value: "selected", label: "selected devices", ariaLabel: "Allow selected devices per app", icon: <LockIcon className="size-4" /> },
@@ -137,8 +137,8 @@ export default function WorkbenchNetworkAccessSettings() {
     </div> : null}
     {error ? <p className="m-0 text-danger" role="alert">{error}</p> : null}
     {draft ? <div className="flex gap-2">
-      <WorkbenchIconButton label="Save access" disabled={busy || stale || !canManage} onClick={saveAccess}><SaveIcon className="size-4" /></WorkbenchIconButton>
-      <WorkbenchIconButton label="Reset access changes" disabled={busy} onClick={() => setDraft(null)}><ResetIcon className="size-4" /></WorkbenchIconButton>
+      <IconButton label="Save access" disabled={busy || stale || !canManage} onClick={saveAccess}><SaveIcon className="size-4" /></IconButton>
+      <IconButton label="Reset access changes" disabled={busy} onClick={() => setDraft(null)}><ResetIcon className="size-4" /></IconButton>
     </div> : null}
   </section>;
 }

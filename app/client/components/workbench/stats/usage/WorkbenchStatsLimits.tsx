@@ -5,8 +5,8 @@
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "../../../../workbench/rate-limit-display";
 import useStats from "../use-stats";
-import WorkbenchStatsChart from "../WorkbenchStatsChart";
-import WorkbenchStatsSkeleton, { statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import LineChart from "../../../ui/LineChart";
+import Skeleton, { statsRevealClassName } from "../../../ui/Skeleton";
 import { formatPercent, formatResetIn } from "../stats-formatters";
 import { rationThresholds } from "./stats-ration";
 
@@ -52,11 +52,11 @@ export default function WorkbenchStatsLimits() {
         <div className="flex flex-wrap gap-x-8 gap-y-5">
           {[0, 1].map((index) => (
             <div className="min-w-0 flex-[1_1_15rem] space-y-2.5 sm:max-w-[24rem]" key={index}>
-              <WorkbenchStatsSkeleton className="h-4 w-32" />
-              <WorkbenchStatsSkeleton className="h-3 w-full" />
-              <WorkbenchStatsSkeleton className="h-1.5 w-full rounded-full" />
-              <WorkbenchStatsSkeleton className="h-3 w-full" />
-              <WorkbenchStatsSkeleton className="h-1.5 w-full rounded-full" />
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-1.5 w-full rounded-full" />
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-1.5 w-full rounded-full" />
             </div>
           ))}
         </div>
@@ -104,7 +104,7 @@ export default function WorkbenchStatsLimits() {
                   <details className="text-[0.72rem] text-fg/muted">
                     <summary className="w-fit cursor-pointer rounded-md px-1 hover:bg-fg/6 hover:text-text">History</summary>
                     <div className="mt-2">
-                      <WorkbenchStatsChart
+                      <LineChart
                         buckets={limit.samples.map(({ observedAt }) => observedAt)}
                         fixedMaximum={100}
                         formatValue={formatPercent}

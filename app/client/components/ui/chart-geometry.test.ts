@@ -1,7 +1,7 @@
 /* No exports. Keywords: chart, transforms, scaling, gaps, regression tests. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chartMaximum, chartPointerIndex, chartSegments, chartX, chartY } from "./stats-chart-geometry.ts";
+import { chartMaximum, chartPointerIndex, chartSegments, chartX, chartY } from "./chart-geometry.ts";
 
 test("pointer selection inverts the actual plot transform, including padded and skewed SVGs", () => {
   for (const matrix of [

@@ -22,7 +22,7 @@ import type { GitArcEditStep } from "../../../workbench/thread/command-matchers/
 import { SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import GitArcIcon from "./GitArcIcon";
 import ThreadClaimedFileList, { type ThreadClaimMarker } from "./ThreadClaimedFileList";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadGitArcCollapsedSummary, {
   createThreadGitArcEditSummaryRows,
@@ -391,7 +391,7 @@ export default function ThreadGitArcItem ({
       data-thread-git-arc-card={commandIntent.action}
       onClick={openClosedCard}
     >
-      <ThreadDisclosure
+      <Disclosure
         contentClassName={state === "inProgress" ? "mt-1" : "mt-1 border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)]"}
         leading={leadingIcon}
         leadingLabel={leadingLabel}
@@ -489,7 +489,7 @@ export default function ThreadGitArcItem ({
           />
         )) : null}
         {inventoryLists.length ? scopeUpdate ? (
-          <ThreadDisclosure
+          <Disclosure
             summary="Full inventory"
             renderContent={() => inventoryLists}
           />
@@ -539,7 +539,7 @@ export default function ThreadGitArcItem ({
           />
         ) : null}
         {!fullInventory && showNestedClaims ? (
-          <ThreadDisclosure
+          <Disclosure
             className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] py-1.5"
             contentClassName={flushClaimLists ? undefined : "pl-1"}
             summary={`${claimedPaths.length} claimed ${claimedPaths.length === 1 ? "file" : "files"}`}
@@ -553,7 +553,7 @@ export default function ThreadGitArcItem ({
               projectRootPath={projectRootPath}
               workspaceRoots={workspaceRoots}
             />
-          </ThreadDisclosure>
+          </Disclosure>
         ) : null}
         {commandIntent.action === "unstash" && receipt?.conflictedPaths?.length ? (
           <div className="border-t border-[color-mix(in_srgb,var(--text)_8%,transparent)] pt-1.5">
@@ -569,7 +569,7 @@ export default function ThreadGitArcItem ({
             <p className="px-2 pb-1 text-[0.78em] text-fg/muted">Edit the markers directly. No Git continuation or abort command is required.</p>
           </div>
         ) : null}
-      </ThreadDisclosure>
+      </Disclosure>
       {!isOpen && collapsedContent ? (
         <ThreadGitArcCollapsedSummary
           content={collapsedContent}

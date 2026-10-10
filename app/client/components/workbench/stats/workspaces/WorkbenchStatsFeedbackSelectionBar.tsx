@@ -5,10 +5,10 @@
  * - default WorkbenchStatsFeedbackSelectionBar: sticky summary of selected feedback with hold-to-delete and address actions.
  */
 import type { WorkbenchFeedbackCategory } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import PrimaryButton from "../../PrimaryButton";
+import PrimaryButton from "../../../ui/PrimaryButton";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
 import WorkbenchStickyCard from "../../WorkbenchStickyCard";
-import WorkbenchTooltip from "../../WorkbenchTooltip";
+import Tooltip from "../../../ui/Tooltip";
 import { BinIcon, BotIcon } from "../../workbench-icons";
 
 const DELETE_HOLD_MS = 1_000;
@@ -42,7 +42,7 @@ export default function WorkbenchStatsFeedbackSelectionBar({ addressBlocked, bus
         <PrimaryButton className={buttonClassName} disabled={busy} holdToConfirmMs={DELETE_HOLD_MS} onClick={onDelete} tone="danger">
           <BinIcon className="mr-1.5" size={14} />Delete
         </PrimaryButton>
-        {addressBlocked ? <WorkbenchTooltip content={addressBlocked} placement="top">{address}</WorkbenchTooltip> : address}
+        {addressBlocked ? <Tooltip content={addressBlocked} placement="top">{address}</Tooltip> : address}
       </div>
       {error ? <p className="m-0 mt-1.5 pl-1.5 text-[0.74rem] text-danger">{error}</p> : null}
     </WorkbenchStickyCard>

@@ -10,7 +10,7 @@ import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 
 import WorkbenchComposerProfileContext from "../WorkbenchComposerProfileContext";
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
 
 export default function ThreadSubagentCreateItem ({
@@ -51,7 +51,7 @@ export default function ThreadSubagentCreateItem ({
   if (unwrapped) {
     return (
       <>
-        <ThreadDisclosureStaticRow
+        <DisclosureStaticRow
           summary={summary}
           summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
         />
@@ -61,7 +61,7 @@ export default function ThreadSubagentCreateItem ({
   }
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       defaultOpen={active}
@@ -69,6 +69,6 @@ export default function ThreadSubagentCreateItem ({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadSubagentUserMessage>{children}</ThreadSubagentUserMessage>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

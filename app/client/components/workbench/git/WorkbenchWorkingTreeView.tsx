@@ -1,7 +1,7 @@
 /* Exports: default WorkbenchWorkingTreeView: compose file navigation and sticky diff review beneath the shell header. */
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { BackArrowIcon, OpenThreadIcon } from "../workbench-icons";
 import WorkbenchGitComposer from "./WorkbenchGitComposer";
 import WorkbenchGitDiffView from "./WorkbenchGitDiffView";

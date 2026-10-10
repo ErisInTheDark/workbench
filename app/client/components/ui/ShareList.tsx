@@ -1,10 +1,10 @@
 /*
  * Exports:
  * - StatsShareRow: one ranked row with its share of the largest row.
- * - default WorkbenchStatsShareList: ranked rows with slim share underlines; rows with onSelect act as filters; null rows hold the list's shape while loading.
+ * - default ShareList: ranked rows with slim share underlines; rows with onSelect act as filters; null rows hold the list's shape while loading.
  */
 import type { CSSProperties, ReactNode } from "react";
-import WorkbenchStatsSkeleton, { statsRevealClassName } from "./WorkbenchStatsSkeleton";
+import Skeleton, { statsRevealClassName } from "./Skeleton";
 
 export interface StatsShareRow {
   key: string;
@@ -23,7 +23,7 @@ export interface StatsShareRow {
 
 const rowClassName = "relative flex min-h-9 w-full min-w-0 items-center justify-between gap-3 rounded-md px-2 pb-1.5 text-left";
 
-export default function WorkbenchStatsShareList({ barClassName = "bg-fg/40", empty, loadingRows = 4, rows, trackClassName = "bg-fg/6" }: {
+export default function ShareList({ barClassName = "bg-fg/40", empty, loadingRows = 4, rows, trackClassName = "bg-fg/6" }: {
   barClassName?: string;
   empty: string;
   /** Placeholder rows while loading; the usual length of the list. */
@@ -38,9 +38,9 @@ export default function WorkbenchStatsShareList({ barClassName = "bg-fg/40", emp
       <ol aria-hidden="true" className="m-0 grid grid-cols-1 gap-y-0.5 p-0">
         {Array.from({ length: loadingRows }, (_, index) => (
           <li className={`list-none ${rowClassName}`} key={index}>
-            <WorkbenchStatsSkeleton className="h-3" style={{ width: `${Math.max(20, 55 - index * 9)}%` }} />
-            <WorkbenchStatsSkeleton className="h-3 w-10" />
-            <WorkbenchStatsSkeleton className="absolute inset-x-2 bottom-1 h-[3px] rounded-full" />
+            <Skeleton className="h-3" style={{ width: `${Math.max(20, 55 - index * 9)}%` }} />
+            <Skeleton className="h-3 w-10" />
+            <Skeleton className="absolute inset-x-2 bottom-1 h-[3px] rounded-full" />
           </li>
         ))}
       </ol>

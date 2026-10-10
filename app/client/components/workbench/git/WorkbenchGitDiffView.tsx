@@ -1,8 +1,8 @@
 /* Exports: default WorkbenchGitDiffView: coordinate shared diff controls, loading and specialised previews. */
 "use client";
 import { useEffect, useState } from "react";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import WorkbenchModeRow from "../WorkbenchModeRow";
+import IconButton from "../../ui/IconButton";
+import RadioRow from "../../ui/RadioRow";
 import { RefreshCwIcon } from "../workbench-icons";
 import WorkbenchGitImageDiff from "./WorkbenchGitImageDiff";
 import WorkbenchGitMarkdownDiff from "./WorkbenchGitMarkdownDiff";
@@ -27,14 +27,14 @@ export default function WorkbenchGitDiffView () {
       <span className="pointer-events-none absolute -inset-x-2 inset-y-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) 70%, transparent)]" aria-hidden="true" />
       <span className="min-w-0 truncate text-fg/muted" title={file?.path}>{file?.path ?? "Changes"}</span>
       {!image ? <div className="flex flex-wrap items-center justify-between gap-2">
-        <WorkbenchModeRow ariaLabel="Diff layout" value={effectiveMode} onChange={setMode} options={[
+        <RadioRow ariaLabel="Diff layout" value={effectiveMode} onChange={setMode} options={[
           { value: "unified", label: "Unified", ariaLabel: "Unified diff", icon: null },
           { value: "split", label: "Split", ariaLabel: "Split diff", icon: null },
           ...(markdown ? [{ value: "markdown" as const, label: "Markdown", ariaLabel: "Markdown diff", icon: null }] : []),
         ]} />
         {effectiveMode !== "markdown" ? <span className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-fg/muted">Whitespace changes</span>
-          <WorkbenchModeRow ariaLabel="Whitespace changes" value={whitespace ? "shown" : "hidden"}
+          <RadioRow ariaLabel="Whitespace changes" value={whitespace ? "shown" : "hidden"}
             onChange={value => setWhitespace(value === "shown")} options={[
               { value: "hidden", label: "Hidden", ariaLabel: "Hide whitespace changes", icon: null },
               { value: "shown", label: "Shown", ariaLabel: "Show whitespace changes", icon: null },
@@ -43,7 +43,7 @@ export default function WorkbenchGitDiffView () {
       </div> : null}
     </div>
     {snapshot.contentError ? <div role="alert" className="py-3 text-sm text-danger">{snapshot.contentError}
-      <WorkbenchIconButton label="Retry diff" onClick={() => { void state.loadContent(); }}><RefreshCwIcon size={16} /></WorkbenchIconButton>
+      <IconButton label="Retry diff" onClick={() => { void state.loadContent(); }}><RefreshCwIcon size={16} /></IconButton>
     </div> : null}
     {loading ? <div role="status" aria-label="Loading diff" className="space-y-3 py-3">
       {Array.from({ length: 10 }, (_, index) => <div key={index} className="flex gap-4" aria-hidden="true">

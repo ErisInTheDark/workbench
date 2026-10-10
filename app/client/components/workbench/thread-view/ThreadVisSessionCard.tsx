@@ -11,11 +11,11 @@ import appStateReleases from "workbench-shared/state/workbench-app-state-release
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import LoaderIcon from "../LoaderIcon";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { RefreshCwIcon, XIcon } from "../workbench-icons";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadVisFrame from "./ThreadVisFrame";
 
 function readOpen(records: readonly WorkbenchClientStateRecord[]) {
@@ -36,12 +36,12 @@ function SessionActions({ onEnd, onReload, session }: {
 }) {
   return (
     <span className="ml-auto flex shrink-0 items-center gap-0.5" data-thread-summary-action="true">
-      <WorkbenchIconButton display="hover-border" label={`Reload the frame for ${session.path}`} onClick={() => onReload(session.sessionId)} size="compact">
+      <IconButton display="hover-border" label={`Reload the frame for ${session.path}`} onClick={() => onReload(session.sessionId)} size="compact">
         <RefreshCwIcon size={14} />
-      </WorkbenchIconButton>
-      <WorkbenchIconButton display="hover-border" label={`End vis on ${session.path}`} onClick={() => onEnd(session.sessionId)} size="compact">
+      </IconButton>
+      <IconButton display="hover-border" label={`End vis on ${session.path}`} onClick={() => onEnd(session.sessionId)} size="compact">
         <XIcon size={16} />
-      </WorkbenchIconButton>
+      </IconButton>
     </span>
   );
 }
@@ -106,7 +106,7 @@ export default function ThreadVisSessionCard({ onEnd, sessions }: {
   const updatedAt = Math.max(0, ...sessions.map(({ render }) => render?.renderedAt ?? 0));
   return (
     <section className="w-full overflow-hidden rounded-[0.9rem] border border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2" data-thread-vis-card="true">
-      <ThreadDisclosure
+      <Disclosure
         onToggle={(event) => setOpen(event.currentTarget.open)}
         open={open}
         summary={(
@@ -123,7 +123,7 @@ export default function ThreadVisSessionCard({ onEnd, sessions }: {
         {sessions.map((session) => (
           <VisSession actions={lone ? null : { onEnd, onReload, session }} key={session.sessionId} reloads={reloads[session.sessionId] ?? 0} session={session} />
         ))}
-      </ThreadDisclosure>
+      </Disclosure>
     </section>
   );
 }

@@ -7,7 +7,7 @@
 import type { ReactNode } from "react";
 
 import { PanelCloseIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 
 interface ThreadComposerPickerHeaderAction {
   disabled?: boolean;
@@ -40,7 +40,7 @@ export default function ThreadComposerPickerHeader({
       </div>
       <div className="flex shrink-0 items-center gap-2 self-start">
         {actions.map((action) => (
-          <WorkbenchIconButton
+          <IconButton
             key={action.label}
             label={action.label}
             aria-pressed={action.isActive}
@@ -48,14 +48,14 @@ export default function ThreadComposerPickerHeader({
             onClick={action.onClick}
           >
             {action.icon}
-          </WorkbenchIconButton>
+          </IconButton>
         ))}
-        <WorkbenchIconButton
+        <IconButton
           label={closeLabel}
           onClick={onClose}
         >
           <PanelCloseIcon size={16} />
-        </WorkbenchIconButton>
+        </IconButton>
       </div>
     </div>
   );

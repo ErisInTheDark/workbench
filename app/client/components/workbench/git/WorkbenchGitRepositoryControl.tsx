@@ -1,6 +1,6 @@
 /* Exports: default WorkbenchGitRepositoryControl: repository navigation and branch metadata within the shell header. */
 "use client";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import WorkbenchTag from "../WorkbenchTag";
 import { ChevronDownIcon } from "../workbench-icons";

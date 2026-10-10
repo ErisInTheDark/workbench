@@ -200,7 +200,7 @@ import WorkbenchComposerProfileProvider from "./workbench/WorkbenchComposerProfi
 import type { WorkbenchContextMenuDefinition } from "./workbench/WorkbenchContextMenuContext";
 import WorkbenchContextMenuProvider from "./workbench/WorkbenchContextMenuProvider";
 import WorkbenchFolderSidebar from "./workbench/WorkbenchFolderSidebar";
-import WorkbenchIconButton from "./workbench/WorkbenchIconButton";
+import IconButton from "./ui/IconButton";
 import WorkbenchProjectControl from "./workbench/WorkbenchProjectControl";
 import WorkbenchProjectIcon from "./workbench/WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "./workbench/WorkbenchProjectLocationLabel";
@@ -2366,7 +2366,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             projectSummaries={projectThreadSummaries}
           />
           {usesDesktopSidebarCollapse ? (
-            <WorkbenchIconButton
+            <IconButton
               type="button"
               label={isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
               display="hover-border"
@@ -2376,10 +2376,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             >
               {isEffectiveDesktopSidebarCollapsed ? <SidebarExpandIcon size={20} /> : <SidebarCollapseIcon size={20} />}
               <span className="sr-only">{isEffectiveDesktopSidebarCollapsed ? "Show sidebar" : "Hide sidebar"}</span>
-            </WorkbenchIconButton>
+            </IconButton>
           ) : null}
           {isEffectiveDesktopSidebarCollapsed && showMosaicView ? (
-            <WorkbenchIconButton
+            <IconButton
               type="button"
               label="Drag to create a new thread panel"
               display="hover-border"
@@ -2397,7 +2397,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             >
               <SparkleIcon size={20} />
               <span className="sr-only">Drag to create a new thread panel</span>
-            </WorkbenchIconButton>
+            </IconButton>
           ) : null}
           <MobilePaneTrack
             browseProjectId={explorer.currentProjectId}
@@ -2414,7 +2414,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <span className="min-w-0 truncate">workbench</span>
                     <WorkbenchConnectionSpinner />
                   </span>
-                  <WorkbenchIconButton
+                  <IconButton
                     label="Open workspace search"
                     display="hover-border"
                     onClick={() => searchController.open()}
@@ -2423,8 +2423,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <SearchIcon size={20} />
                     <span className="sr-only">Open workspace search</span>
-                  </WorkbenchIconButton>
-                  <WorkbenchIconButton
+                  </IconButton>
+                  <IconButton
                     as="a"
                     label="Open statistics"
                     display="hover-border"
@@ -2434,8 +2434,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <StatsIcon size={20} />
                     <span className="sr-only">Open statistics</span>
-                  </WorkbenchIconButton>
-                  <WorkbenchIconButton
+                  </IconButton>
+                  <IconButton
                     as="a"
                     label="Open settings"
                     display="hover-border"
@@ -2445,7 +2445,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   >
                     <GearIcon size={20} />
                     <span className="sr-only">Open settings</span>
-                  </WorkbenchIconButton>
+                  </IconButton>
                 </header>
                 <WorkbenchThreadSidebarActionsProvider
                   onPresentationDraftDeleted={(draftId, logicalProjectId) => {
@@ -2559,7 +2559,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <WorkbenchSidebarSectionDisclosure
                       actions={(
                         <div className="flex items-center gap-1">
-                          <WorkbenchIconButton
+                          <IconButton
                             type="button"
                             label={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             display="hover-border"
@@ -2576,8 +2576,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             <span className="sr-only">
                               {showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             </span>
-                          </WorkbenchIconButton>
-                          <WorkbenchIconButton
+                          </IconButton>
+                          <IconButton
                             type="button"
                             label="Create in project"
                             display="hover-border"
@@ -2591,7 +2591,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           >
                             <NewEntryIcon size={16} />
                             <span className="sr-only">Create in project</span>
-                          </WorkbenchIconButton>
+                          </IconButton>
                         </div>
                       )}
                       contentClassName="space-y-2"
@@ -2732,7 +2732,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     )}
                   </div>
                   <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-                    <WorkbenchIconButton
+                    <IconButton
                       type="button"
                       label="Back to file explorer"
                       display="hover-border"
@@ -2745,7 +2745,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     >
                       <BackArrowIcon size={20} />
                       <span className="sr-only">Back to file explorer</span>
-                    </WorkbenchIconButton>
+                    </IconButton>
                     <div className="flex items-center gap-1.5">
                       {showGitView ? <WorkbenchGitRefreshButton /> : null}
                       <WorkbenchZoomButton
@@ -2760,7 +2760,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       />
                     </div>
                     <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView || showStatsView || Boolean(routeView)}>
-                      <WorkbenchIconButton
+                      <IconButton
                         id="save-file"
                         ref={saveFileButtonRef}
                         type="button"
@@ -2771,8 +2771,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       >
                         <SaveIcon size={20} />
                         <span className="sr-only">Save current file</span>
-                      </WorkbenchIconButton>
-                      <WorkbenchIconButton
+                      </IconButton>
+                      <IconButton
                         id="reset-draft"
                         ref={resetDraftButtonRef}
                         type="button"
@@ -2782,7 +2782,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       >
                         <BinIcon size={20} />
                         <span className="sr-only">Discard the current draft</span>
-                      </WorkbenchIconButton>
+                      </IconButton>
                     </div>
                   </div>
                 </div>

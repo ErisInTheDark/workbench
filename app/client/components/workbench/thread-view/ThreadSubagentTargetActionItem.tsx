@@ -8,7 +8,7 @@ import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 
 interface ThreadSubagentTargetActionEntry {
   fallbackName?: string | null;
@@ -30,7 +30,7 @@ export default function ThreadSubagentTargetActionItem ({
     ? active ? "Settling " : "Settled "
     : active ? "Stopping " : "Stopped ";
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={(
@@ -54,6 +54,6 @@ export default function ThreadSubagentTargetActionItem ({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <></>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

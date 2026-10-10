@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchModeRow: render a compact pill row of mutually exclusive Workbench modes.
+ * - default RadioRow: render a compact pill row of mutually exclusive Workbench modes.
  */
 "use client";
 
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 
-type WorkbenchModeRowOption<T extends string> = {
+type RadioRowOption<T extends string> = {
   ariaLabel?: string;
   disabled?: boolean;
   icon?: ReactNode;
@@ -15,7 +15,7 @@ type WorkbenchModeRowOption<T extends string> = {
   value: T;
 };
 
-export default function WorkbenchModeRow<T extends string>({
+export default function RadioRow<T extends string>({
   ariaLabel,
   disabled = false,
   onChange,
@@ -25,7 +25,7 @@ export default function WorkbenchModeRow<T extends string>({
   ariaLabel: string;
   disabled?: boolean;
   onChange: (value: T) => void;
-  options: readonly WorkbenchModeRowOption<T>[];
+  options: readonly RadioRowOption<T>[];
   value: T;
 }) {
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);

@@ -9,7 +9,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { getSleepDisplay } from "../../../workbench/thread/generic-item-matchers/sleep";
 import { SnoozedThreadIcon } from "../workbench-icons";
-import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
 
 export default function ThreadSleepItem({
@@ -35,7 +35,7 @@ export default function ThreadSleepItem({
   }, [display.ticking, startedAt]);
 
   return (
-    <ThreadDisclosureStaticRow
+    <DisclosureStaticRow
       marker={<SnoozedThreadIcon size={16} />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       summary={<ThreadSummaryText text={`${display.completed ? "Slept" : "Sleeping"} for ${display.seconds}s`} />}

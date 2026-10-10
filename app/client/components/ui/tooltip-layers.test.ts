@@ -3,10 +3,10 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WorkbenchTooltipLayers } from "./workbench-tooltip-layers.ts";
+import { TooltipLayers } from "./tooltip-layers.ts";
 
 function harness() {
-  const layers = new WorkbenchTooltipLayers();
+  const layers = new TooltipLayers();
   const closed: string[] = [];
   const open = (name: string, node: { layer?: number; owner?: symbol | null; parent?: symbol | null }, safeX?: number) => {
     const id = Symbol(name);

@@ -1267,9 +1267,7 @@ export default memo(function ThreadViewContent ({
         ) : null}
         {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
         {agentTabs ? (
-          <div className="mt-6">
-            <div className="flex flex-wrap items-center gap-0.5">{agentTabs}</div>
-          </div>
+          <div className="mt-6">{agentTabs}</div>
         ) : null}
           </div>
         {activeThread && !isDraftThreadView ? (

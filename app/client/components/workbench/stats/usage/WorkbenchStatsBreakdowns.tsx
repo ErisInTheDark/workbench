@@ -7,8 +7,8 @@
 import { useMemo, type ReactNode } from "react";
 import type { StatsActivityMetric } from "../WorkbenchStatsStore";
 import useStats from "../use-stats";
-import { statsReloadingClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsShareList, { type StatsShareRow } from "../WorkbenchStatsShareList";
+import { statsReloadingClassName } from "../../../ui/Skeleton";
+import ShareList, { type StatsShareRow } from "../../../ui/ShareList";
 import WorkbenchStatsThreadRanking from "./WorkbenchStatsThreadRanking";
 import { compactNumber, formatMoney, providerLabel, statsModelName, statsModelSource } from "../stats-formatters";
 import { statsModelHues, statsModelHueStyle } from "./stats-model-colours";
@@ -60,7 +60,7 @@ export default function WorkbenchStatsBreakdowns() {
       <div className={`grid gap-x-8 gap-y-6 ${showProjects ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
         {showProjects ? (
           <Panel title="Projects">
-            <WorkbenchStatsShareList
+            <ShareList
               empty="No project usage."
               rows={rows(metric, stats?.projects ?? null, 8, (item) => ({
                 key: item.logicalProjectId ?? `${item.daemonId ?? ""}/${item.projectId}`,
@@ -72,7 +72,7 @@ export default function WorkbenchStatsBreakdowns() {
           </Panel>
         ) : null}
         <Panel title="Providers">
-          <WorkbenchStatsShareList
+          <ShareList
             empty="No provider usage."
             loadingRows={2}
             rows={rows(metric, stats?.providers ?? null, 6, (item) => ({
@@ -84,7 +84,7 @@ export default function WorkbenchStatsBreakdowns() {
           />
         </Panel>
         <Panel title="Models">
-          <WorkbenchStatsShareList
+          <ShareList
             empty="No model usage."
             rows={rows(metric, stats?.models ?? null, 8, (item) => ({
               key: `${item.provider}:${item.model ?? ""}`,

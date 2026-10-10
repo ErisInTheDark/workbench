@@ -12,7 +12,7 @@ import { partitionReloadScopes } from "workbench-shared/reload/reload-scope-part
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { useWorkbenchAppConnectionInterrupted } from "../../workbench/app/WorkbenchAppRpcContext";
 import ChevronIcon from "./ChevronIcon";
-import PrimaryButton from "./PrimaryButton";
+import PrimaryButton from "../ui/PrimaryButton";
 import WorkbenchStickyCard from "./WorkbenchStickyCard";
 import WorkbenchUpdateAvailable, { hasVisibleInstallationUpdate } from "./WorkbenchUpdateAvailable";
 import {

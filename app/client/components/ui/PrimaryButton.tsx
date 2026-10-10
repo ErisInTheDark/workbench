@@ -14,7 +14,7 @@ import {
   type TransitionEvent,
 } from "react";
 
-import WorkbenchSpinningBorder from "./WorkbenchSpinningBorder";
+import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
 
 type PrimaryButtonShape = "pill" | "circle";
 type PrimaryButtonTone = "attention" | "danger" | "default";

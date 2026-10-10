@@ -3,10 +3,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { WORKING_TREE_STASH_MESSAGE } from "workbench-shared/workbench/git/working-tree-message";
 import { editWorkingTreeMessage, WORKING_TREE_SUBJECT_LIMIT } from "../../../workbench/git/working-tree-message";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import PlaintextEditable, { type PlaintextEditableHandle } from "../thread-view/PlaintextEditable";
 import StickyComposerSurface from "../thread-view/StickyComposerSurface";
-import WorkbenchModeRow from "../WorkbenchModeRow";
+import RadioRow from "../../ui/RadioRow";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
@@ -88,7 +88,7 @@ export default function WorkbenchGitComposer ({ getViewport }: { getViewport ():
         onClick={() => state.reviewHead()}>Load current HEAD message</button> : null}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="mr-auto text-fg/muted">{snapshot.selections.length} files selected{snapshot.selections.some(selection => selection.lineIds !== null) ? " · partial changes" : ""}</span>
-        <WorkbenchModeRow ariaLabel="Git action mode" value={draft.mode} disabled={snapshot.busy}
+        <RadioRow ariaLabel="Git action mode" value={draft.mode} disabled={snapshot.busy}
           onChange={mode => state.setMode(mode)} options={[
             { value: "commit", label: "Commit", ariaLabel: "Commit", icon: null },
             { value: "amend", label: "Amend", ariaLabel: "Amend", icon: null },

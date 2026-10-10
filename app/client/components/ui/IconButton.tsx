@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchIconButton: circular or multi-glyph pill action or link with shared border, focus, pressed and invalid styling.
+ * - default IconButton: circular or multi-glyph pill action or link with shared border, focus, pressed and invalid styling.
  */
 "use client";
 
 import type { ComponentPropsWithRef } from "react";
-import WorkbenchSpinningBorder from "./WorkbenchSpinningBorder";
+import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
 
-type WorkbenchIconButtonProps = {
+type IconButtonProps = {
   label: string;
   /** A pill holds several glyphs side by side at the circle's height. */
   shape?: "circle" | "pill";
@@ -20,9 +20,9 @@ type WorkbenchIconButtonProps = {
   | (Omit<ComponentPropsWithRef<"a">, "aria-label"> & { as: "a" })
 );
 
-export default function WorkbenchIconButton({
+export default function IconButton({
   label, shape = "circle", size = "medium", tone = "default", display = "bordered", pendingHalo = false, className = "", title = label, children, ...props
-}: WorkbenchIconButtonProps) {
+}: IconButtonProps) {
   const sizeClassName = shape === "pill"
     // Each child gets a circle-sized cell, so glyphs sit as far apart as separate buttons would.
     ? `[&>*]:(flex h-full items-center justify-center) ${size === "font" ? "h-[1.75em] [&>*]:min-w-[1.75em]"

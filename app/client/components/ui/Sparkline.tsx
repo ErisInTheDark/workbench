@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - default WorkbenchStatsSparkline: decorative filled trend line that sits behind a headline value.
+ * - default Sparkline: decorative filled trend line that sits behind a headline value.
  */
 import { useId } from "react";
 
 /** Gaps (null) are skipped so a day without input does not read as a zero hit rate. */
-export default function WorkbenchStatsSparkline({ className = "", values }: {
+export default function Sparkline({ className = "", values }: {
   className?: string;
   values: readonly (number | null)[];
 }) {

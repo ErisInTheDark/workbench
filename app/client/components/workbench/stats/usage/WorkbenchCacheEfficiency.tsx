@@ -5,9 +5,9 @@
 import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
 import useStats from "../use-stats";
-import WorkbenchStatsShareList from "../WorkbenchStatsShareList";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsStreamChart from "../WorkbenchStatsStreamChart";
+import ShareList from "../../../ui/ShareList";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
+import StreamChart from "../../../ui/StreamChart";
 import { compactNumber, formatPercent, formatStatsBucket } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
 
@@ -38,13 +38,13 @@ export default function WorkbenchCacheEfficiency() {
       {!cache ? (
         <div aria-hidden="true" className="grid gap-8 lg:grid-cols-2">
           <div className="space-y-2">
-            <WorkbenchStatsSkeleton className="h-4 w-28" />
-            <WorkbenchStatsSkeleton className="h-40 w-full opacity-60" />
-            <WorkbenchStatsSkeleton className="h-3 w-24" />
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-40 w-full opacity-60" />
+            <Skeleton className="h-3 w-24" />
           </div>
           <div className="space-y-2">
-            <WorkbenchStatsSkeleton className="mx-2 h-3 w-56" />
-            <WorkbenchStatsShareList empty="" loadingRows={3} rows={null} />
+            <Skeleton className="mx-2 h-3 w-56" />
+            <ShareList empty="" loadingRows={3} rows={null} />
           </div>
         </div>
       ) : hitRate === null ? (
@@ -53,7 +53,7 @@ export default function WorkbenchCacheEfficiency() {
         <div className={`grid gap-8 lg:grid-cols-2 ${statsRevealClassName}`}>
           <div className="min-w-0 space-y-2">
             <h3 className="m-0 text-[0.74rem] font-semibold text-fg/muted">Hit rate per period</h3>
-            <WorkbenchStatsStreamChart
+            <StreamChart
               buckets={cache.buckets.map((bucket) => bucket.startedAt)}
               className="h-40"
               formatBucket={(startedAt) => formatStatsBucket(startedAt, stats?.bucketUnit ?? "day")}
@@ -66,7 +66,7 @@ export default function WorkbenchCacheEfficiency() {
           </div>
           <div className="min-w-0 space-y-2">
             <h3 className="m-0 px-2 text-[0.74rem] font-semibold text-fg/muted">Lowest hit rates · threads with 500K+ uncached input</h3>
-            <WorkbenchStatsShareList
+            <ShareList
               // Opaque, so the red uncached track never tints the hit share.
               barClassName="bg-[color-mix(in_srgb,var(--text)_22%,var(--bg))]"
               empty="No large threads missed the cache."

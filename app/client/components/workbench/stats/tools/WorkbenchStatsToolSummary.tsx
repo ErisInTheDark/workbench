@@ -4,8 +4,8 @@
  */
 import type { ReactNode } from "react";
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsSparkline from "../WorkbenchStatsSparkline";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
+import Sparkline from "../../../ui/Sparkline";
 import { compactNumber } from "../stats-formatters";
 import { summariseStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tool-value";
 
@@ -18,14 +18,14 @@ function Card({ children, detail, label, primary = false, trend }: {
 }) {
   return (
     <div className={`relative min-w-0 overflow-hidden rounded-lg px-3 pb-3 pt-2.5 ${primary ? "col-span-2 sm:col-span-1" : ""}`}>
-      {trend ? <WorkbenchStatsSparkline className="text-hue-170" values={trend} /> : null}
+      {trend ? <Sparkline className="text-hue-170" values={trend} /> : null}
       <dt className="relative text-[0.72rem] font-medium text-fg/muted">{label}</dt>
       {children === null ? (
         <>
           <dd className={`m-0 mt-0.5 flex items-center ${primary ? "h-[2.375rem]" : "h-[1.856rem]"}`}>
-            <WorkbenchStatsSkeleton className={primary ? "h-7 w-24" : "h-5 w-16"} />
+            <Skeleton className={primary ? "h-7 w-24" : "h-5 w-16"} />
           </dd>
-          <dd className="m-0 flex h-[1.05rem] items-center"><WorkbenchStatsSkeleton className="h-2.5 w-24" /></dd>
+          <dd className="m-0 flex h-[1.05rem] items-center"><Skeleton className="h-2.5 w-24" /></dd>
         </>
       ) : (
         <>

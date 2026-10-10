@@ -4,7 +4,7 @@
  */
 "use client";
 import type { WorkbenchAgentOption } from "workbench-shared/types";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import { OptionCard } from "../../ui/OptionCards";
 
 export default function ThreadAgentPicker ({
 	agents,
@@ -28,9 +28,9 @@ export default function ThreadAgentPicker ({
 				<p className="mt-3 mb-0 text-[0.84em] leading-[1.6] text-fg/muted">Loading agents...</p>
 			) : (
 				<div className="mt-1 grid gap-2">
-					<WorkbenchOptionCard density="tight" isChecked={selectedAgentPath === null} label="Default agent" onClick={() => onSelectAgent(null)} />
+					<OptionCard density="tight" isChecked={selectedAgentPath === null} label="Default agent" onClick={() => onSelectAgent(null)} />
 					{agents.map((agent) => (
-						<WorkbenchOptionCard
+						<OptionCard
 							key={agent.path}
 							density="tight"
 							showMarker={false}

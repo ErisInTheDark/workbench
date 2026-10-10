@@ -4,7 +4,7 @@
  */
 "use client";
 
-import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import PressDragMenu from "../ui/PressDragMenu";
 import { ChevronDownIcon } from "./workbench-icons";
 
 export default function WorkbenchSettingsContextRow ({
@@ -18,7 +18,7 @@ export default function WorkbenchSettingsContextRow ({
   options: readonly { id: string; label: string }[];
   onSelect: (id: string) => void;
 }) {
-  return <WorkbenchPressDragMenu
+  return <PressDragMenu
     label={`Choose ${label.toLowerCase()}`}
     items={options.map(option => ({
       id: option.id,
@@ -36,5 +36,5 @@ export default function WorkbenchSettingsContextRow ({
     <span className="mr-1 shrink-0 text-fg/80 text-sm">{label}</span>
     <span className="min-w-0 max-w-72 truncate font-medium text-text">{options.find(option => option.id === value)?.label ?? "Choose"}</span>
     <ChevronDownIcon size={16} />
-  </WorkbenchPressDragMenu>;
+  </PressDragMenu>;
 }

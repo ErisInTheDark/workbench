@@ -5,7 +5,7 @@
 import type { ParsedInlineNode } from "../../../workbench/markdown/markdown-parse";
 import { projectFilePathPillClassName } from "../../../workbench/project/project-file-path";
 import ProjectFilePath from "../ProjectFilePath";
-import WorkbenchTooltip from "../WorkbenchTooltip";
+import Tooltip from "../../ui/Tooltip";
 
 type FileLink = Extract<ParsedInlineNode, { type: "projectFileLink" }>;
 
@@ -17,7 +17,7 @@ export default function ThreadFileList({
   projectId?: string | null;
 }) {
   return (
-    <WorkbenchTooltip
+    <Tooltip
       content={(
         <div className="flex min-w-0 flex-col items-start gap-1">
           {files.map((file, index) => (
@@ -44,6 +44,6 @@ export default function ThreadFileList({
       >
         {files.length} files
       </span>
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 }

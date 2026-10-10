@@ -9,7 +9,7 @@ import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats
 import { useWorkbenchProjectNavigation } from "../../../../workbench/navigation/use-workbench-project-navigation";
 import WorkbenchThreadHoverTooltip from "../../WorkbenchThreadHoverTooltip";
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import Skeleton, { statsRevealClassName } from "../../../ui/Skeleton";
 import { compactNumber, formatMoney, providerLabel, statsModelName } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
 import { statsModelHueStyle } from "./stats-model-colours";
@@ -32,10 +32,10 @@ export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
         {[0, 1, 2, 3].map((index) => (
           <li className="list-none space-y-2 px-2 pb-2 pt-1.5" key={index}>
             <span className="flex h-[1.2rem] items-center justify-between gap-3">
-              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${50 - index * 8}%` }} />
-              <WorkbenchStatsSkeleton className="h-3 w-12" />
+              <Skeleton className="h-3" style={{ width: `${50 - index * 8}%` }} />
+              <Skeleton className="h-3 w-12" />
             </span>
-            <WorkbenchStatsSkeleton className="h-1.5 rounded-full" style={{ width: `${90 - index * 18}%` }} />
+            <Skeleton className="h-1.5 rounded-full" style={{ width: `${90 - index * 18}%` }} />
           </li>
         ))}
       </ol>

@@ -7,8 +7,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { WorkbenchAgentOption, WorkbenchComposerProfile, WorkbenchComposerProfileSlot, WorkbenchComposerSettings, WorkbenchModelOption } from "workbench-shared/types";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import IconButton from "../../ui/IconButton";
+import { OptionCard } from "../../ui/OptionCards";
 import { BinIcon, SparkleIcon } from "../workbench-icons";
 import PlaintextEditable from "./PlaintextEditable";
 import ThreadPickerGroupMoveButton from "./ThreadPickerGroupMoveButton";
@@ -88,7 +88,7 @@ export default function ThreadProfilePicker ({ agents, currentSettings, models, 
     const agent = agents.find(({ path }) => path === profile.agentPath) ?? null;
     const label = getComposerProfileDisplayLabel(profile, agent?.name, model?.displayName);
     const active = selection.kind === "profile" && selection.profileId === profile.id;
-    return <WorkbenchOptionCard
+    return <OptionCard
       key={profile.id}
       density="tight"
       isChecked={active}
@@ -98,17 +98,17 @@ export default function ThreadProfilePicker ({ agents, currentSettings, models, 
       labelEditor={active ? <ProfileNameEditable fallback={label} name={profile.name} onCommit={(name) => { void controller.updateProfile(profile.id, { name }); }} /> : undefined}
       actions={<>
         {projectId ? <ThreadPickerGroupMoveButton direction={profile.scope.kind === "global" ? "down" : "up"} disabled={profile.scope.kind === "project" && profile.agentSource === "project"} label={profile.scope.kind === "global" ? `Move ${label} to this project` : `Promote ${label} globally`} onClick={() => { void controller.updateProfile(profile.id, { scope: profile.scope.kind === "global" ? { kind: "project", projectId } : { kind: "global" } }); }} /> : null}
-        <WorkbenchIconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></WorkbenchIconButton>
+        <IconButton size="small" tone="danger" label={`Remove ${label}`} onClick={() => { void controller.deleteProfile(profile.id); }}><BinIcon size={16} /></IconButton>
       </>}
       description={!active ? <span className="line-clamp-2">{profile.description}</span> : undefined}
     >
       {active ? <ProfileDescriptionEditable description={profile.description} onCommit={(description) => { void controller.updateProfile(profile.id, { description }); }} /> : null}
-    </WorkbenchOptionCard>;
+    </OptionCard>;
   };
 
   return <section aria-label="Composer profiles">
     <div role="group" aria-label="Composer profiles" className="mt-1 grid gap-2">
-      <WorkbenchOptionCard density="tight" isChecked={selection.kind === "custom"} label="Custom" onClick={() => { void controller.selectCustom(slot, currentSettings); }} />
+      <OptionCard density="tight" isChecked={selection.kind === "custom"} label="Custom" onClick={() => { void controller.selectCustom(slot, currentSettings); }} />
       <p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Global</p>{globals.map(renderProfile)}
       {projectId ? <><p className="mt-2 mb-0 px-1 text-[0.78em] font-semibold uppercase tracking-[0.12em] text-fg/muted">Project</p>{projects.map(renderProfile)}</> : null}
     </div>

@@ -6,7 +6,7 @@
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import { ClipboardListIcon, FlagFilledIcon, FlagIcon } from "../workbench-icons";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
@@ -79,7 +79,7 @@ export default function ThreadStatusRow({ live, skills, todos }: {
             ) : <span className="flex-1" />}
             {skills ? <span className="flex max-w-[60%] shrink-0 items-center">{skills}</span> : null}
             {todos ? (
-              <WorkbenchIconButton
+              <IconButton
                 aria-controls={panelsId}
                 aria-expanded={panel === "todos"}
                 aria-pressed={panel === "todos"}
@@ -94,7 +94,7 @@ export default function ThreadStatusRow({ live, skills, todos }: {
                   <ClipboardListIcon size={14} />
                   {todos.count ? <span className="text-[0.74rem] font-semibold tabular-nums">{todos.count}</span> : null}
                 </span>
-              </WorkbenchIconButton>
+              </IconButton>
             ) : null}
           </div>
           {open ? (

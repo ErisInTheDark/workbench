@@ -8,9 +8,9 @@ import { useState } from "react";
 
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import WorkbenchPill from "../WorkbenchPill";
-import WorkbenchTooltip from "../WorkbenchTooltip";
+import Tooltip from "../../ui/Tooltip";
 import { EllipsisIcon } from "../workbench-icons";
 
 const VISIBLE_SKILLS = 4;
@@ -62,11 +62,11 @@ export default function ThreadSkillPills ({
     <span className="flex min-w-0 items-center gap-1">
       {list(skills.slice(0, VISIBLE_SKILLS), "Active skills")}
       {hidden.length ? (
-        <WorkbenchTooltip content={<div className="max-w-[min(24rem,80vw)]">{list(hidden, "More active skills")}</div>} interactive placement="top">
-          <WorkbenchIconButton display="hover-border" label={`${hidden.length} more active skills`} size="compact" title="">
+        <Tooltip content={<div className="max-w-[min(24rem,80vw)]">{list(hidden, "More active skills")}</div>} interactive placement="top">
+          <IconButton display="hover-border" label={`${hidden.length} more active skills`} size="compact" title="">
             <EllipsisIcon size={14} />
-          </WorkbenchIconButton>
-        </WorkbenchTooltip>
+          </IconButton>
+        </Tooltip>
       ) : null}
       {error ? <span className="ml-1 text-[0.72em] text-danger" role="alert">{error}</span> : null}
     </span>

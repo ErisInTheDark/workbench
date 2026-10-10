@@ -8,9 +8,9 @@ import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import ProjectFilePath from "../../ProjectFilePath";
 import WorkbenchThreadReferenceList from "../../WorkbenchThreadReferenceList";
-import WorkbenchTooltip from "../../WorkbenchTooltip";
+import Tooltip from "../../../ui/Tooltip";
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import { compactNumber } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
 
@@ -77,7 +77,7 @@ export default function WorkbenchClaimHotspots() {
       {!stats ? (
         // Clouds run three to five lines; holding that height keeps the feedback below from jumping.
         <div aria-hidden="true" className="flex min-h-44 flex-wrap content-center items-center justify-center gap-x-5 gap-y-4 py-2">
-          {SKELETON_WORDS.map(([width, height], index) => <WorkbenchStatsSkeleton className={`${width} ${height}`} key={index} />)}
+          {SKELETON_WORDS.map(([width, height], index) => <Skeleton className={`${width} ${height}`} key={index} />)}
         </div>
       ) : !cloud.length ? <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>{pending ? "Reading claims…" : "No claims in this period."}</p> : (
         <ul
@@ -97,7 +97,7 @@ export default function WorkbenchClaimHotspots() {
                 key={`${hotspot.projectId}:${hotspot.rootId}:${hotspot.path}`}
                 style={{ fontSize: `${0.78 + weight * 0.8}rem`, fontWeight: weight > 0.5 ? 600 : 500, opacity: 0.6 + weight * 0.4 }}
               >
-                <WorkbenchTooltip
+                <Tooltip
                   content={(
                     <ClaimantList
                       hotspot={hotspot}
@@ -118,7 +118,7 @@ export default function WorkbenchClaimHotspots() {
                       disambiguationPaths={hotspots.filter((row) => row.projectId === hotspot.projectId).map((row) => qualify(row.rootId, row.path))}
                     />
                   </span>
-                </WorkbenchTooltip>
+                </Tooltip>
               </li>
             );
           })}

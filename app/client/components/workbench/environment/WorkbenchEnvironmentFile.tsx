@@ -11,7 +11,7 @@ import { envHighlightClassName, tokenizeEnv } from "../../../workbench/environme
 import ChevronIcon from "../ChevronIcon";
 import PlaintextEditable from "../thread-view/PlaintextEditable";
 import { ResetIcon, SaveIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 
 const editorClassName = `
   block min-h-[4lh] whitespace-pre-wrap wrap-anywhere px-3 py-2 font-mono text-[0.82rem] leading-5 outline-none
@@ -63,14 +63,14 @@ export default function WorkbenchEnvironmentFile({
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <WorkbenchIconButton type="button" label={`Save ${file.path}`} display="hover-border" size="small"
+            <IconButton type="button" label={`Save ${file.path}`} display="hover-border" size="small"
               disabled={!file.dirty || busy} pendingHalo={busy} onClick={() => { void controller.save(file.path); }}>
               <SaveIcon size={16} />
-            </WorkbenchIconButton>
-            <WorkbenchIconButton type="button" label={`Discard unsaved changes to ${file.path}`} display="hover-border" size="small"
+            </IconButton>
+            <IconButton type="button" label={`Discard unsaved changes to ${file.path}`} display="hover-border" size="small"
               tone="danger" disabled={!file.dirty || busy} onClick={() => { void controller.discard(file.path); }}>
               <ResetIcon size={16} />
-            </WorkbenchIconButton>
+            </IconButton>
             {file.error ? <p role="alert" className="m-0 text-xs text-danger">{file.error}</p> : null}
           </div>
         </> : null}

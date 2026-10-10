@@ -43,7 +43,7 @@ import {
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { CompactIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";

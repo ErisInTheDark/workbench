@@ -6,7 +6,7 @@
 import type { ThreadCommandDetailRow, ThreadCommandDetailTarget } from "../../../workbench/thread/thread-command-matchers";
 import { CheckIcon, ClockIcon, PlayIcon, WarningIcon } from "../workbench-icons";
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import ThreadUserImage from "./ThreadUserImage";
@@ -120,11 +120,11 @@ export default function ThreadCommandDetailRows({ rows, projectFilePaths, projec
       const summary = <ThreadStructuredCommandDetailRow hideSharedContext={hideSharedContext} projectFilePaths={projectFilePaths} projectId={projectId} row={getDetailRowSummary(row)} />;
       const hasExpandableContent = shouldRenderFramedDetailTarget(row) || Boolean(row.imageUrl || row.imageUrls?.length);
       return <ThreadMeasuredContent key={row.id}><div className="space-y-1">
-        {hasExpandableContent ? <ThreadDisclosure className="py-1" contentClassName="space-y-1"
+        {hasExpandableContent ? <Disclosure className="py-1" contentClassName="space-y-1"
           leading={renderCommandDetailStateIcon(row)} leadingClassName={getCommandDetailStateMarkerClassName(row)}
           leadingLabel={getCommandDetailStateLabel(row)} summary={summary} summaryClassName="text-[0.9em] leading-[1.55]">
           <ThreadCommandDetailResultBlock row={row} /><ThreadCommandDetailImageBlock row={row} />
-        </ThreadDisclosure> : <ThreadDisclosureStaticRow className="py-1" summary={summary} summaryClassName="text-[0.9em] leading-[1.55]" />}
+        </Disclosure> : <DisclosureStaticRow className="py-1" summary={summary} summaryClassName="text-[0.9em] leading-[1.55]" />}
       </div></ThreadMeasuredContent>;
     })}
   </div>;

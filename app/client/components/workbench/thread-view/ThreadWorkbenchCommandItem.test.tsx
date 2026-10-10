@@ -21,7 +21,7 @@ import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "
 import ThreadFeedbackCommandItem from "./ThreadFeedbackCommandItem";
 import ThreadWorkbenchCommandItem from "./ThreadWorkbenchCommandItem";
 import ThreadGitArcItem from "./ThreadGitArcItem";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { createFakeStatsWorkspace, TEST_STATS_THREAD_LOCATION, testFeedbackItem, testFeedbackReportSection } from "../stats/stats-test-store";
@@ -39,8 +39,8 @@ function OpenedSpecialized(props: ComponentProps<typeof ThreadWorkbenchCommandIt
   if (!isValidElement<ComponentProps<typeof ThreadGitArcItem>>(rendered) || rendered.type !== ThreadGitArcItem) return rendered;
   const card = ThreadGitArcItem(rendered.props);
   return cloneElement(card, {}, Children.map(card.props.children, child => (
-    isValidElement(child) && child.type === ThreadDisclosure
-      ? cloneElement(child as ReactElement<ComponentProps<typeof ThreadDisclosure>>, { open: true })
+    isValidElement(child) && child.type === Disclosure
+      ? cloneElement(child as ReactElement<ComponentProps<typeof Disclosure>>, { open: true })
       : child
   )));
 }

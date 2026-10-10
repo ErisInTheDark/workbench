@@ -5,7 +5,7 @@
 "use client";
 
 import type { Ref } from "react";
-import WorkbenchPressDragSlider from "./WorkbenchPressDragSlider";
+import PressDragSlider from "../ui/PressDragSlider";
 import { ZoomInIcon } from "./workbench-icons";
 
 export default function WorkbenchZoomButton({
@@ -22,7 +22,7 @@ export default function WorkbenchZoomButton({
   onChange: (value: number) => void;
   onPreview?: (value: number | null) => void;
 }) {
-  return <WorkbenchPressDragSlider
+  return <PressDragSlider
     ref={ref}
     label={label}
     disabled={disabled}

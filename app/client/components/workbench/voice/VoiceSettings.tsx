@@ -5,10 +5,10 @@ import { useContext, useEffect, useSyncExternalStore } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type VoiceSettingsController from "../../../workbench/voice/VoiceSettingsController";
 import WorkbenchClientContext from "../workbench-client-context";
-import WorkbenchPressDragMenu from "../WorkbenchPressDragMenu";
+import PressDragMenu from "../../ui/PressDragMenu";
 import ThreadHarnessControl from "../thread-view/ThreadHarnessControl";
 import LoaderIcon from "../LoaderIcon";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import { OptionCard } from "../../ui/OptionCards";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { CheckIcon, XIcon } from "../workbench-icons";
 
@@ -27,7 +27,7 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
   const pending = ["loading", "saving", "preparing"].includes(state.status);
 
   return <section aria-label="Voice input" className="grid gap-2 rounded-[0.85rem] py-1">
-    <WorkbenchOptionCard
+    <OptionCard
       label="Voice input"
       density="tight"
       isChecked={state.inputEnabled}
@@ -35,7 +35,7 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
       disabled={!state.canToggle}
       onClick={() => { void controller.setEnabled(!state.inputEnabled); }}
       inlineContent={<>
-      <WorkbenchPressDragMenu
+      <PressDragMenu
         label="Voice harness"
         items={installedProviderKeys.map(harness => ({
           id: harness, checked: state.harness === harness,
@@ -45,8 +45,8 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
           const harness = installedProviderKeys.find(harness => harness === id);
           if (harness) void controller.selectHarness(harness);
         }}
-      ><ThreadHarnessControl harness={state.harness} inline /></WorkbenchPressDragMenu>
-      <WorkbenchPressDragMenu
+      ><ThreadHarnessControl harness={state.harness} inline /></PressDragMenu>
+      <PressDragMenu
         label="Voice model"
         items={models.map(model => ({
           id: model.id, checked: selectedModel === model.id,
@@ -58,7 +58,7 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
         <span className="max-w-64 truncate">
           {state.models.find(model => model.id === selectedModel)?.displayName || selectedModel || "Select model"}
         </span>
-      </WorkbenchPressDragMenu>
+      </PressDragMenu>
       <span role="status" aria-label={state.status} title={state.status} className="inline-flex items-center gap-1 text-xs text-fg/muted">
         {pending ? <LoaderIcon size={12} /> : state.status === "ready" ? <CheckIcon size={12} /> : <XIcon size={12} />}
       </span>
@@ -76,6 +76,6 @@ function VoiceSelectors({ controller }: { controller: VoiceSettingsController })
     {state.catalogueError ? <div role="alert" className="text-sm text-danger">
       {state.catalogueError} <button type="button" className="rounded px-2 py-1 hover:bg-button-hover" onClick={() => { void controller.loadModels(); }}>Retry models</button>
     </div> : state.catalogue === "ready" && !models.length ? <p role="status" className="m-0 text-xs text-fg/muted">No models available.</p> : null}
-    </WorkbenchOptionCard>
+    </OptionCard>
   </section>;
 }

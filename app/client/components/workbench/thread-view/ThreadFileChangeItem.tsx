@@ -27,7 +27,7 @@ import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon } from "../workbench-icons";
 import ThreadCodeDisplay from "./ThreadCodeDisplay";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import { getThreadFileChangeMotionIdentity } from "./ThreadEntryMotionController";
 import { ThreadEntryMotion } from "./thread-scroll-viewport-context";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -418,7 +418,7 @@ function ThreadFileChangeRows ({
     return (
       <ThreadEntryMotion enabled={animateEntries} identity={getThreadFileChangeMotionIdentity(change.sourceItemId, change.sourceChangeIndex)} key={key}>
         {(animate) => change.detailsAvailable ? (
-          <ThreadDisclosure
+          <Disclosure
             className={animate ? `block ${enterMotionClassName} py-0.5` : "py-0.5"}
             contentClassName="mt-2 pl-6"
             summary={summary}
@@ -426,9 +426,9 @@ function ThreadFileChangeRows ({
           >
             {changes[index].showDiff !== false ? <ThreadFileChangeDetails parsedChange={change} projectFilePaths={projectFilePaths} projectId={projectId} /> : null}
             {changes[index].details}
-          </ThreadDisclosure>
+          </Disclosure>
         ) : change.staticMarker ? (
-          <ThreadDisclosureStaticRow
+          <DisclosureStaticRow
             className={animate ? `block ${enterMotionClassName} !py-0.5` : "!py-0.5"}
             markerClassName={change.danger ? "text-danger" : undefined}
             summary={summary}
@@ -489,7 +489,7 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
   const danger = item.status === "failed" || item.status === "declined";
   return (
     <div data-thread-file-change-outcome={item.status}>
-      <ThreadDisclosureStaticRow
+      <DisclosureStaticRow
         className="!py-0.5"
         markerClassName={danger ? "text-danger" : undefined}
         summary={<ThreadSummaryText text={label} />}
@@ -611,9 +611,9 @@ export default function ThreadFileChangeItem ({
           return (
             <div className="space-y-0.5" key={item.id}>
               {evidence ? (
-                <ThreadDisclosure summary={label}><NativeFileEvidence evidence={evidence} /></ThreadDisclosure>
+                <Disclosure summary={label}><NativeFileEvidence evidence={evidence} /></Disclosure>
               ) : (
-                <ThreadDisclosureStaticRow className="!py-0.5" summary={label} summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted" />
+                <DisclosureStaticRow className="!py-0.5" summary={label} summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted" />
               )}
             </div>
           );

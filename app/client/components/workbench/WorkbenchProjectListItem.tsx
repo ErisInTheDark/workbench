@@ -11,7 +11,7 @@ import type { DisplaySidebarProject, LogicalSidebarProject, ProjectSidebarProjec
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 
 function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
@@ -96,7 +96,7 @@ export default function WorkbenchProjectListItem({
     </div>
   );
   return (
-    <WorkbenchTooltip content={<ProjectTooltipContent entry={entry} />} enabled={showTooltip} interactive>
+    <Tooltip content={<ProjectTooltipContent entry={entry} />} enabled={showTooltip} interactive>
       <div
         className="group/project-row relative isolate m-0 min-h-11 rounded-[0.8rem] md:min-h-0"
       >
@@ -132,6 +132,6 @@ export default function WorkbenchProjectListItem({
           />
         {content}
       </div>
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 }

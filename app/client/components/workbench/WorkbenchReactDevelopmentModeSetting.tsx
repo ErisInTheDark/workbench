@@ -10,7 +10,7 @@ import {
   readWorkbenchAppSettings,
   updateWorkbenchAppSettings,
 } from "../../workbench/app/workbench-app-settings-client";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import { OptionCard } from "../ui/OptionCards";
 import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 
 function boundedError(error: unknown) {
@@ -80,7 +80,7 @@ export default function WorkbenchReactDevelopmentModeSetting() {
 
   return (
     <section className="space-y-2 rounded-[0.85rem] py-1">
-      <WorkbenchOptionCard
+      <OptionCard
         description={description}
         disabled={isLoading || isSaving || !isAvailable}
         isChecked={requested}

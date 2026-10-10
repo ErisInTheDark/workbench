@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - isWorkbenchTooltipPointerSupported: identify pointer input that can intentionally activate a hover tooltip. Keywords: tooltip, pointer, mouse, touch.
- * - WorkbenchTooltipPlacement: which side of its trigger a tooltip opens on.
- * - getWorkbenchTooltipPosition: place a tooltip beside (right) or above its trigger, clamped inside viewport gutters.
- * - isPointWithinWorkbenchTooltipArea: test trigger and optional interactive-surface pointer proximity. Keywords: tooltip, hover, proximity, interaction.
+ * - isTooltipPointerSupported: identify pointer input that can intentionally activate a hover tooltip. Keywords: tooltip, pointer, mouse, touch.
+ * - TooltipPlacement: which side of its trigger a tooltip opens on.
+ * - getTooltipPosition: place a tooltip beside (right) or above its trigger, clamped inside viewport gutters.
+ * - isPointWithinTooltipArea: test trigger and optional interactive-surface pointer proximity. Keywords: tooltip, hover, proximity, interaction.
  */
 
 const TOOLTIP_ANCHOR_GAP_PX = 8;
@@ -11,7 +11,7 @@ const TOOLTIP_VIEWPORT_GUTTER_PX = 12;
 
 type TooltipRect = Pick<DOMRect, "bottom" | "height" | "left" | "right" | "top" | "width">;
 
-export function isWorkbenchTooltipPointerSupported(pointerType: string) {
+export function isTooltipPointerSupported(pointerType: string) {
   return pointerType === "mouse";
 }
 
@@ -22,7 +22,7 @@ function pointWithinExpandedRect(x: number, y: number, rect: TooltipRect, distan
     && y <= rect.bottom + distance;
 }
 
-export function isPointWithinWorkbenchTooltipArea(
+export function isPointWithinTooltipArea(
   x: number,
   y: number,
   triggerRect: TooltipRect,
@@ -34,9 +34,9 @@ export function isPointWithinWorkbenchTooltipArea(
     || Boolean(interactive && tooltipRect && pointWithinExpandedRect(x, y, tooltipRect, hoverDistancePx));
 }
 
-export type WorkbenchTooltipPlacement = "right" | "top";
+export type TooltipPlacement = "right" | "top";
 
-export function getWorkbenchTooltipPosition({
+export function getTooltipPosition({
   anchorGapPx = TOOLTIP_ANCHOR_GAP_PX,
   placement = "right",
   tooltipHeight,
@@ -47,7 +47,7 @@ export function getWorkbenchTooltipPosition({
   viewportWidth,
 }: {
   anchorGapPx?: number;
-  placement?: WorkbenchTooltipPlacement;
+  placement?: TooltipPlacement;
   tooltipHeight: number;
   /** Only top placement centres on the measured width. */
   tooltipWidth?: number;

@@ -9,7 +9,7 @@ import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/th
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import ThreadAgentIncomingMessage from "./ThreadAgentIncomingMessage";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import type { ThreadSteerState } from "./ThreadSteerDecoration";
 
 export default function ThreadIncomingAgentMessageItem({
@@ -19,7 +19,7 @@ export default function ThreadIncomingAgentMessageItem({
   subagent,
   timestamp,
   ...markdownProps
-}: Omit<ComponentProps<typeof ThreadMarkdown>, "markdown"> & {
+}: Omit<ComponentProps<typeof MarkdownRender>, "markdown"> & {
   /** One sender's messages, oldest first; the bubble is attributed to the first. */
   messages: readonly [WorkbenchAgentMessage, ...WorkbenchAgentMessage[]];
   /** Resend/dismiss controls for undelivered messages. */

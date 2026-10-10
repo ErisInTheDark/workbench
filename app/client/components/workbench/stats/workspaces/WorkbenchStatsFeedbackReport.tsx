@@ -12,14 +12,14 @@ import type {
   WorkbenchFeedbackCategory,
   WorkbenchFeedbackItem,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import ThreadMarkdown from "../../thread-view/ThreadMarkdown";
+import MarkdownRender from "../../../ui/MarkdownRender";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import WorkbenchThreadButton from "../../WorkbenchThreadButton";
 import { FlameIcon, HarnessIcon } from "../../workbench-icons";
 import { feedbackImportanceTone } from "./stats-feedback-presentation";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
 import { statsThreadIdentity } from "../stats-thread-identity";
-import WorkbenchStatsSkeleton from "../WorkbenchStatsSkeleton";
+import Skeleton from "../../../ui/Skeleton";
 
 /** Clamped text only offers expansion when it actually overflows at the current width. */
 function useClampOverflow(enabled: boolean, expanded: boolean) {
@@ -73,7 +73,7 @@ export function WorkbenchFeedbackReportDisplay({
         `}
         ref={ref}
       >
-        <ThreadMarkdown markdown={report} projectId={projectId} />
+        <MarkdownRender markdown={report} projectId={projectId} />
       </div>
       {clamp && (overflowing || expanded) ? (
         <button
@@ -92,9 +92,9 @@ export function WorkbenchFeedbackReportDisplay({
 export function WorkbenchFeedbackReportSkeleton({ index = 0 }: { index?: number }) {
   return (
     <div aria-hidden="true" className="space-y-2 py-2">
-      <WorkbenchStatsSkeleton className="h-3 w-40" />
-      <WorkbenchStatsSkeleton className="h-3" style={{ width: `${88 - index * 14}%` }} />
-      <WorkbenchStatsSkeleton className="h-3" style={{ width: `${62 - index * 10}%` }} />
+      <Skeleton className="h-3 w-40" />
+      <Skeleton className="h-3" style={{ width: `${88 - index * 14}%` }} />
+      <Skeleton className="h-3" style={{ width: `${62 - index * 10}%` }} />
     </div>
   );
 }

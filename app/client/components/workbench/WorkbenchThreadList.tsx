@@ -50,7 +50,7 @@ import {
 import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import Disclosure from "../ui/Disclosure";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { CheckIcon, SnoozedThreadIcon, SparkleIcon } from "./workbench-icons";
@@ -756,7 +756,7 @@ export default function WorkbenchThreadList ({
           ? <ul className="m-0 flex flex-col gap-1 p-0">{list.mainEntries.map((entry) => renderEntry(entry, undefined, null, "main"))}</ul>
           : null}
         {list.snoozedItems.length ? (
-          <ThreadDisclosure
+          <Disclosure
             className="mt-2"
             keepMounted
             hideChevron={true}
@@ -766,10 +766,10 @@ export default function WorkbenchThreadList ({
             summaryClassName="pl-2 text-[0.72rem] font-medium leading-[1.5] text-fg/muted"
           >
             {renderSection(list.snoozedItems, "snoozed")}
-          </ThreadDisclosure>
+          </Disclosure>
         ) : priorityTarget("snoozed")}
         {historyItems.length || archivedThreadCount ? (
-          <ThreadDisclosure
+          <Disclosure
             className="mt-2"
             hideChevron={true}
             open={preferences.settledThreadsOpen}
@@ -794,7 +794,7 @@ export default function WorkbenchThreadList ({
                 Load {nextSettledThreadCount} more
               </button>
             ) : null}
-          </ThreadDisclosure>
+          </Disclosure>
         ) : null}
       </div>
       {layoutError ? <p role="alert" className="m-0 pr-2 text-[0.84rem] leading-6 text-danger">{layoutError}</p> : null}

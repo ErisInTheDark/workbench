@@ -8,7 +8,7 @@ import {
   type WorkbenchHarnessId,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import { GitArcConflictIcon, GitArcWaitIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import { useThreadClaimIntersections } from "../use-workbench-client";
@@ -69,13 +69,13 @@ export default function ThreadGitArcIntersectionCard({
       </h2>
       <WorkbenchThreadReferenceList references={references(intersections.activeEntries, !stashed)} onOpenThread={onOpenThread} />
       {!waiting && !compact && plannedThreadCount ? (
-        <ThreadDisclosure
+        <Disclosure
           contentClassName="pb-1"
           summary={`Also intersecting planned work in ${plannedThreadSummary}`}
           summaryClassName="px-3 py-2 text-[0.78em] font-medium leading-[1.45]"
         >
           <WorkbenchThreadReferenceList references={references(intersections.plannedEntries, true)} onOpenThread={onOpenThread} />
-        </ThreadDisclosure>
+        </Disclosure>
       ) : null}
     </section>
   );

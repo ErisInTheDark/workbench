@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef } from "react";
 
 import { createCopyFeedbackController } from "../../../workbench/dom/clipboard-copy-feedback";
 import { CheckIcon, CopyIcon, WarningIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 
 const commentaryCopyFeedbackController = createCopyFeedbackController({
   attribute: "data-thread-commentary-copy-state",
@@ -45,7 +45,7 @@ export default function ThreadCommentaryActionRow({
       `}
       data-thread-commentary-actions={placement}
     >
-      <WorkbenchIconButton
+      <IconButton
         ref={setButtonRef}
         className={`
           group
@@ -66,7 +66,7 @@ export default function ThreadCommentaryActionRow({
         <span className="hidden group-data-[thread-commentary-copy-state=failed]:block">
           <WarningIcon size={14} />
         </span>
-      </WorkbenchIconButton>
+      </IconButton>
     </div>
   );
 }

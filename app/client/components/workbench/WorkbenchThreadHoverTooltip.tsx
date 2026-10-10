@@ -10,7 +10,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 import { describeThreadEntry } from "./thread-entry-presentation";
 import { useThread } from "./use-thread";
 import { ThreadTooltipContent } from "./WorkbenchThreadListItem";
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 
 interface ThreadIdentity { harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId }
 
@@ -40,16 +40,16 @@ function LoadedThreadTooltip({ agentName, harness, projectId, threadId, title }:
 export default function WorkbenchThreadHoverTooltip({ agentName, children, placement, thread, title }: {
   /** Shown before the thread title, e.g. a coloured subagent name. */
   agentName?: ReactNode;
-  children: ComponentProps<typeof WorkbenchTooltip>["children"];
-  placement?: ComponentProps<typeof WorkbenchTooltip>["placement"];
+  children: ComponentProps<typeof Tooltip>["children"];
+  placement?: ComponentProps<typeof Tooltip>["placement"];
   /** Null renders the trigger alone, for threads Workbench cannot open. */
   thread: ThreadIdentity | null;
   title: string;
 }) {
   if (!thread) return children;
   return (
-    <WorkbenchTooltip content={<LoadedThreadTooltip {...thread} agentName={agentName} title={title} />} interactive placement={placement}>
+    <Tooltip content={<LoadedThreadTooltip {...thread} agentName={agentName} title={title} />} interactive placement={placement}>
       {children}
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 }

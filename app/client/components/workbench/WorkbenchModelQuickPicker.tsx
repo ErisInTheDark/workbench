@@ -10,7 +10,7 @@ import { useWorkbenchModelCatalogues } from "./use-workbench-client";
 import { useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "./workbench-icons";
 import { groupWorkbenchModels, type WorkbenchGroupedModel } from "./workbench-model-groups";
-import WorkbenchPressDragMenu, { type PressDragMenuGroup } from "./WorkbenchPressDragMenu";
+import PressDragMenu, { type PressDragMenuGroup } from "../ui/PressDragMenu";
 
 export default function WorkbenchModelQuickPicker ({
   allowedHarnesses, harness, modelName, providerLabel, modelId, threadId, onOpen, onSelect,
@@ -58,7 +58,7 @@ export default function WorkbenchModelQuickPicker ({
       };
     }),
   }));
-  return <WorkbenchPressDragMenu
+  return <PressDragMenu
     label={`Composer model: ${providerLabel} ${modelName}`}
     groupNavigationLabel="Model sections"
     align="end"
@@ -69,5 +69,5 @@ export default function WorkbenchModelQuickPicker ({
       const choice = choices.get(id);
       if (choice) onSelect(choice);
     }}
-  ><HarnessIcon harness={harness} size={18} className="shrink-0" /><span className="truncate">{modelName}</span></WorkbenchPressDragMenu>;
+  ><HarnessIcon harness={harness} size={18} className="shrink-0" /><span className="truncate">{modelName}</span></PressDragMenu>;
 }

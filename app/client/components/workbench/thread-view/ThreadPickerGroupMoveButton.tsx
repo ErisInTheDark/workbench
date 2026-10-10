@@ -3,7 +3,7 @@
  * - default ThreadPickerGroupMoveButton: circular up/down group-transfer action.
  */
 "use client";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import { ChevronDownIcon, ChevronUpIcon } from "../workbench-icons";
 
 export default function ThreadPickerGroupMoveButton({ direction, disabled = false, label, onClick }: {
@@ -12,7 +12,7 @@ export default function ThreadPickerGroupMoveButton({ direction, disabled = fals
   label: string;
   onClick: () => void;
 }) {
-  return <WorkbenchIconButton size="small" disabled={disabled} label={label} onClick={(event) => { event.stopPropagation(); onClick(); }}>
+  return <IconButton size="small" disabled={disabled} label={label} onClick={(event) => { event.stopPropagation(); onClick(); }}>
     {direction === "up" ? <ChevronUpIcon size={16} /> : <ChevronDownIcon size={16} />}
-  </WorkbenchIconButton>;
+  </IconButton>;
 }

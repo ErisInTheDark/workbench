@@ -30,9 +30,9 @@ import {
   isWorkbenchApprovalDecisionQuestion,
   isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { FeatherIcon, SendHorizontalIcon, XIcon } from "../workbench-icons";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import { OptionCard } from "../../ui/OptionCards";
 import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -466,7 +466,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                 <div className={compact ? "mt-2 space-y-0.5" : "mt-3 space-y-2"}>
                   {useQuickResponseLayout && quickResponseOption ? (
                     <div className="flex items-stretch gap-2">
-                      <WorkbenchOptionCard
+                      <OptionCard
                         className="min-w-0 flex-1"
                         description={quickResponseOption.description}
                         disabled={isSubmitting || isAttaching}
@@ -479,7 +479,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           void handleQuickResponse(question, quickResponseOption.label);
                         }}
                       />
-                      <WorkbenchOptionCard
+                      <OptionCard
                         ariaLabel="Write a custom response"
                         className={joinClasses(
                           "shrink-0 self-stretch !items-center justify-center",
@@ -509,7 +509,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
 
                         if (isReadOnlyMode) {
                           return (
-                            <WorkbenchOptionCard
+                            <OptionCard
                               key={optionId}
                               description={option.description}
                               isChecked={isChecked}
@@ -524,7 +524,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         }
 
                         return (
-                          <WorkbenchOptionCard
+                          <OptionCard
                             key={optionId}
                             disabled={isSubmitting}
                             description={option.description}

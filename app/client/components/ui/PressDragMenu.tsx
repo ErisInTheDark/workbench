@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection, and an optional heading.
+ * - default PressDragMenu: fit-content anchored menu (centred by default, opening above or below by room) with press-drag, click, touch and keyboard selection, and an optional heading.
  * - PressDragMenuItem/PressDragMenuGroup: stable action and optional grouped navigation content.
  * - getPressDragGroupItems: items available from a saved-open group.
  */
@@ -8,11 +8,11 @@
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import ChevronIcon from "./ChevronIcon";
+import ChevronIcon from "../workbench/ChevronIcon";
 import { transitionPressDragMenu, type PressDragMenuEvent, type PressDragMenuState } from "./press-drag-menu-state";
-import { positionWorkbenchPopover } from "./workbench-popover-geometry";
-import WorkbenchMenuAction from "./WorkbenchMenuAction";
-import WorkbenchMenuSurface from "./WorkbenchMenuSurface";
+import { positionWorkbenchPopover } from "../workbench/workbench-popover-geometry";
+import WorkbenchMenuAction from "../workbench/WorkbenchMenuAction";
+import WorkbenchMenuSurface from "../workbench/WorkbenchMenuSurface";
 
 export interface PressDragMenuItem {
   id: string;
@@ -45,7 +45,7 @@ function viewportBounds () {
 
 type MenuPlacement = { style: CSSProperties; below: boolean };
 
-export default function WorkbenchPressDragMenu ({
+export default function PressDragMenu ({
   children, label, heading, getItems, items: suppliedItems, groups, groupNavigationLabel = "Menu sections", onOpen, onSelect, onActivate, triggerAppearance = "default", triggerClassName, align = "center", disabled = false,
 }: {
   children: ReactNode;

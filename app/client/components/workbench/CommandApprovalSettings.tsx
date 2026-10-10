@@ -11,7 +11,7 @@ import CommandApprovalSettingsController from "../../workbench/CommandApprovalSe
 import InputList from "./InputList";
 import { InputListRows, type InputListRow } from "./input-list-rows";
 import { ResetIcon, SaveIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
 
@@ -87,14 +87,14 @@ function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: 
     <InputList idPrefix="command-prefix" placeholder="Command prefix" rowLabel="Command prefix"
       disabled={state.loading} rows={rows} onRowsChange={setRows} />
     <div className="flex items-center gap-2">
-      <WorkbenchIconButton type="button" label="Save command prefixes" disabled={!dirty || state.loading}
+      <IconButton type="button" label="Save command prefixes" disabled={!dirty || state.loading}
         onClick={() => { void controller.save(workdir, add, removeIds); }}>
         <SaveIcon size={16} />
-      </WorkbenchIconButton>
-      <WorkbenchIconButton type="button" label="Reset command prefix changes" disabled={!dirty || state.loading}
+      </IconButton>
+      <IconButton type="button" label="Reset command prefix changes" disabled={!dirty || state.loading}
         onClick={() => setRows(rowsFor(saved))}>
         <ResetIcon size={16} />
-      </WorkbenchIconButton>
+      </IconButton>
     </div>
     {state.loading ? <p role="status" className="m-0 text-xs text-fg/muted">Loading approvals...</p> : null}
     {state.error ? <p role="alert" className="m-0 text-xs text-danger">{state.error}</p> : null}

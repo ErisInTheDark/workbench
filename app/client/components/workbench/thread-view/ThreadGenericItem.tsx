@@ -9,7 +9,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type { WorkbenchProjectedGenericItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { matchThreadGenericItem } from "../../../workbench/thread/thread-generic-item-matchers";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadSleepItem from "./ThreadSleepItem";
 import ThreadSummaryText from "./ThreadSummaryText";
 
@@ -30,7 +30,7 @@ export default function ThreadGenericItem({
     return <ThreadSleepItem key={item.id} durationMs={match.durationMs} timeline={timeline} turnStatus={turnStatus} />;
   }
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={<ThreadSummaryText text="generic thread item" />}

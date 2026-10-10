@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - WorkbenchOptionCard: selectable card with optional contained editing, content and actions.
- * - default WorkbenchOptionCards: radio/checkbox-style option row group.
+ * - OptionCard: selectable card with optional contained editing, content and actions.
+ * - default OptionCards: radio/checkbox-style option row group.
  */
 
 "use client";
 
 import type { ReactNode } from "react";
 
-import { WorkbenchCheckboxMarker } from "./WorkbenchCheckbox";
-import { workbenchOptionHoverClassName, workbenchOptionSelectedClassName } from "./workbench-class-names";
+import { WorkbenchCheckboxMarker } from "../workbench/WorkbenchCheckbox";
+import { workbenchOptionHoverClassName, workbenchOptionSelectedClassName } from "../workbench/workbench-class-names";
 
-type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
+type OptionCardsProps<T extends string | boolean | number> = {
   ariaLabel: string;
   columns?: "one" | "two";
   disabled?: boolean;
@@ -25,7 +25,7 @@ type WorkbenchOptionCardsProps<T extends string | boolean | number> = {
   value: T;
 };
 
-type WorkbenchOptionCardProps = {
+type OptionCardProps = {
   actions?: ReactNode;
   ariaLabel?: string;
   children?: ReactNode;
@@ -50,7 +50,7 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-export function WorkbenchOptionCard ({
+export function OptionCard ({
   actions,
   ariaLabel,
   children,
@@ -69,7 +69,7 @@ export function WorkbenchOptionCard ({
   presentation = "card",
   showMarker = true,
   wrapLabel = false,
-}: WorkbenchOptionCardProps) {
+}: OptionCardProps) {
   const optionDescription = typeof description === "string" ? description.trim() : description;
   const compactInline = presentation === "compact-inline";
   const compactPresentation = presentation !== "card";
@@ -208,7 +208,7 @@ export function WorkbenchOptionCard ({
   );
 }
 
-export default function WorkbenchOptionCards<T extends string | boolean | number> ({
+export default function OptionCards<T extends string | boolean | number> ({
   ariaLabel,
   columns = "two",
   disabled = false,
@@ -216,7 +216,7 @@ export default function WorkbenchOptionCards<T extends string | boolean | number
   onChange,
   options,
   value,
-}: WorkbenchOptionCardsProps<T>) {
+}: OptionCardsProps<T>) {
   return (
     <div
       aria-label={ariaLabel}
@@ -229,7 +229,7 @@ export default function WorkbenchOptionCards<T extends string | boolean | number
       {options.map((option) => {
         const isSelected = value === option.value;
         return (
-          <WorkbenchOptionCard
+          <OptionCard
             key={String(option.value)}
             disabled={disabled}
             description={option.description}

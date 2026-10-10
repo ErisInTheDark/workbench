@@ -7,8 +7,8 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, THREAD_AUTO_COMPACT_LIMITS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import ThreadAutoCompactSettingsController from "../../workbench/ThreadAutoCompactSettingsController";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
-import WorkbenchStepSlider from "./WorkbenchStepSlider";
+import { OptionCard } from "../ui/OptionCards";
+import StepSlider from "../ui/StepSlider";
 
 function steps({ min, max, step }: { min: number; max: number; step: number }, label: (value: number) => string) {
   return Array.from({ length: (max - min) / step + 1 }, (_, index) => {
@@ -29,14 +29,14 @@ export default function ThreadAutoCompactSettings({ daemon }: { daemon: Workbenc
   const settings = state.settings ?? DEFAULT_THREAD_AUTO_COMPACT_SETTINGS;
   const disabled = !state.settings || state.pending;
   return <section className="py-1">
-    <WorkbenchOptionCard label="Auto-compact" density="tight" isSingleChoice={false}
+    <OptionCard label="Auto-compact" density="tight" isSingleChoice={false}
       isChecked={settings.enabled} disabled={disabled}
       onClick={() => { void controller.update({ enabled: !settings.enabled }); }}
       inlineContent={<>
-        <WorkbenchStepSlider compact ariaLabel="Auto-compact token threshold" disabled={disabled}
+        <StepSlider compact ariaLabel="Auto-compact token threshold" disabled={disabled}
           steps={tokenSteps} value={settings.tokenThreshold}
           onChange={tokenThreshold => { void controller.update({ tokenThreshold }); }} />
-        <WorkbenchStepSlider compact ariaLabel="Auto-compact idle threshold" disabled={disabled}
+        <StepSlider compact ariaLabel="Auto-compact idle threshold" disabled={disabled}
           steps={idleSteps} value={settings.idleMinutes}
           onChange={idleMinutes => { void controller.update({ idleMinutes }); }} />
       </>}
@@ -45,6 +45,6 @@ export default function ThreadAutoCompactSettings({ daemon }: { daemon: Workbenc
         {state.error} <button type="button" className="rounded px-2 py-1 hover:bg-button-hover"
           onClick={() => { void controller.load(); }}>Retry</button>
       </p> : null}
-    </WorkbenchOptionCard>
+    </OptionCard>
   </section>;
 }

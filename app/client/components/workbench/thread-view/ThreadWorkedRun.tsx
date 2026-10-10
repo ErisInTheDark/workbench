@@ -5,7 +5,7 @@
 "use client";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { FoldWorkedRunIcon, UnfoldWorkedRunIcon } from "../workbench-icons";
-import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import { ThreadFileChangeTotals } from "./ThreadFileChangeItem";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
@@ -93,7 +93,7 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
   return (
     <div ref={element} className="min-w-0 space-y-2">
       {state === "collapsed" ? (
-        <ThreadDisclosureStaticRow
+        <DisclosureStaticRow
           onClick={() => setState(revealWorkedRun())}
           summary={<span className="inline-flex flex-wrap items-baseline gap-2">
             {durationMs === null ? "Worked" : <>Worked for <ThreadDurationText durationMs={durationMs} /></>}

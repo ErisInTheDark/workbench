@@ -6,7 +6,7 @@
  */
 import { useTime } from "../../workbench/time/use-time";
 import { formatLongTimestamp, formatThreadRelativeTimestamp } from "./thread-view/thread-view-formatters";
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 
 const RELATIVE_TIME_REFRESH_MS = 30_000;
 
@@ -23,8 +23,8 @@ export default function WorkbenchRelativeTime({ className, label, timestampMs, t
   if (!Number.isFinite(date.getTime()) || timestampMs <= 0) return null;
   const long = formatLongTimestamp(timestampMs);
   return (
-    <WorkbenchTooltip content={<span className="whitespace-nowrap">{label ? `${label}: ${long}` : long}</span>} enabled={tooltip} placement="top">
+    <Tooltip content={<span className="whitespace-nowrap">{label ? `${label}: ${long}` : long}</span>} enabled={tooltip} placement="top">
       <time className={className} dateTime={date.toISOString()}>{formatThreadRelativeTimestamp(timestampMs / 1_000, now)}</time>
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 }

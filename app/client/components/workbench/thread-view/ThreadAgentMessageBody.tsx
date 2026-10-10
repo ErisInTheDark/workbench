@@ -7,7 +7,7 @@
 
 import { useState, type ComponentProps, type KeyboardEvent, type MouseEvent } from "react";
 
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 
 export interface ThreadAgentMessageBodyPart {
   markdown: string;
@@ -17,12 +17,12 @@ export interface ThreadAgentMessageBodyPart {
 export default function ThreadAgentMessageBody({
   parts,
   ...markdownProps
-}: Omit<ComponentProps<typeof ThreadMarkdown>, "markdown"> & { parts: readonly ThreadAgentMessageBodyPart[] }) {
+}: Omit<ComponentProps<typeof MarkdownRender>, "markdown"> & { parts: readonly ThreadAgentMessageBodyPart[] }) {
   const [isFull, setIsFull] = useState(false);
   // Messages sit a markdown paragraph gap apart in both views, so a bundle reads like one message's paragraphs.
   const fullMarkdown = (
     <div className="space-y-[0.9em]">
-      {parts.map((part, index) => <ThreadMarkdown {...markdownProps} key={index} markdown={part.markdown} />)}
+      {parts.map((part, index) => <MarkdownRender {...markdownProps} key={index} markdown={part.markdown} />)}
     </div>
   );
   if (!parts.some((part) => part.userVisibleSimpleVersion)) return fullMarkdown;
@@ -48,9 +48,9 @@ export default function ThreadAgentMessageBody({
       {isFull ? fullMarkdown : (
         <div className="space-y-[0.9em]">
           {parts.map((part, index) => part.userVisibleSimpleVersion
-            ? <ThreadMarkdown {...markdownProps} key={index} markdown={part.userVisibleSimpleVersion} />
+            ? <MarkdownRender {...markdownProps} key={index} markdown={part.userVisibleSimpleVersion} />
             // A message without a simple version shows in full even in the simple view.
-            : <ThreadMarkdown {...markdownProps} key={index} markdown={part.markdown} />)}
+            : <MarkdownRender {...markdownProps} key={index} markdown={part.markdown} />)}
         </div>
       )}
     </div>

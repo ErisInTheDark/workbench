@@ -15,7 +15,7 @@ import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
 import { NewEntryIcon } from "./workbench-explorer";
 import { EllipsisIcon, HomeIcon, ProjectIcon } from "./workbench-icons";
 import WorkbenchDaemonStartupFailure from "./WorkbenchDaemonStartupFailure";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
@@ -109,7 +109,7 @@ export default function ProjectSidebar ({
           <div className="flex items-center gap-1">
             {preferences.projectsOpen ? null
               : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
-            <WorkbenchIconButton
+            <IconButton
               as="a"
               href="/"
               label="Home"
@@ -119,8 +119,8 @@ export default function ProjectSidebar ({
               onClick={onHomeClick}
             >
               <HomeIcon size={16} />
-            </WorkbenchIconButton>
-            <WorkbenchIconButton
+            </IconButton>
+            <IconButton
               as="a"
               href={createProjectHref}
               label="New project"
@@ -132,7 +132,7 @@ export default function ProjectSidebar ({
             >
               <NewEntryIcon size={16} />
               <span className="sr-only">New project</span>
-            </WorkbenchIconButton>
+            </IconButton>
           </div>
         )}
         icon={ProjectIcon}

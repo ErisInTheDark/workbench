@@ -23,9 +23,9 @@ import {
   getSingleQuestionnaireSummaryLabel,
 } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
 import ThreadBubbleCopyButton from "./ThreadBubbleCopyButton";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadToolCallDetails from "./ThreadToolCallDetails";
@@ -248,7 +248,7 @@ function ThreadQuestionnaireTranscriptPreview ({
             </div>
           ) : null}
           <div className="group/thread-bubble relative ml-auto w-fit max-w-[min(42rem,86%)] rounded-[1.15rem] bg-fg/6 px-4 py-3 text-left leading-[1.55] text-text">
-            <ThreadMarkdown
+            <MarkdownRender
               className="text-[0.98em] leading-[1.55] [&_h3]:mb-[0.2em] [&_h3]:text-[1.15em] [&_p]:leading-[1.55]"
               inlineMentionSources={inlineMentionSources}
               markdown={pair.answerMarkdown}
@@ -360,7 +360,7 @@ function ThreadQuestionnaireToolCallItem ({
   const [isOpen, setIsOpen] = useState(item.status !== "completed" || !response);
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
       open={isOpen}
@@ -405,7 +405,7 @@ function ThreadQuestionnaireToolCallItem ({
         </div>
         {response ? <ThreadMessageTimestamp align="right" timestampSeconds={answeredAt === null ? null : answeredAt / 1_000} /> : null}
       </>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -432,7 +432,7 @@ function ThreadGenericDynamicToolCallItem ({
   if (hasCapturedChildren && !showCodeDetails && outcome !== "failed") return null;
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
       summary={(

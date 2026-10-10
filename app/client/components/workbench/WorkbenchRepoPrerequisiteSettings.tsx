@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { VirtualRepoAvailability } from "workbench-shared/workbench/repo/virtual-repo-contract";
 import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
 
 const WINFSP_DOWNLOAD_URL = "https://winfsp.dev/rel/";
@@ -88,11 +88,11 @@ export default function WorkbenchRepoPrerequisiteSettings ({ daemon }: { daemon:
         {showWinFsp ? <WorkbenchLinkButton href={WINFSP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
           Download WinFsp<ExternalLinkIcon aria-hidden="true" className="size-4" />
         </WorkbenchLinkButton> : null}
-        <WorkbenchIconButton display="hover-border" size="small"
+        <IconButton display="hover-border" size="small"
           label={checking ? "Checking prerequisites" : "Recheck prerequisites"}
           disabled={checking} aria-busy={checking} onClick={check}>
           <RefreshCwIcon className={`size-4 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} />
-        </WorkbenchIconButton>
+        </IconButton>
       </div>
     </div>
   </div>;

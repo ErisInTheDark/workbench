@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchStatsChart: render one focusable, inspectable nullable multi-series graph.
+ * - default LineChart: render one focusable, inspectable nullable multi-series graph.
  */
 "use client";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./stats-chart-geometry";
+import { chartMaximum, chartPointerIndex, chartSegments as segments, chartX as xAt, chartY as yAt } from "./chart-geometry";
 
 interface ChartSeries {
   colour?: string;
@@ -15,7 +15,7 @@ interface ChartSeries {
   icon?: ReactNode;
 }
 
-export default function WorkbenchStatsChart ({
+export default function LineChart ({
   buckets,
   formatValue,
   series,

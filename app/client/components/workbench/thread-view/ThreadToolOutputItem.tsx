@@ -10,9 +10,9 @@ import { readWorkbenchAgentMessageItem } from "workbench-shared/workbench/thread
 import type { WorkbenchToolOutput } from "workbench-shared/workbench/thread/thread-tool-output";
 import { getSubagentSummary } from "../../../workbench/thread/thread-subagents";
 import ThreadAgentScreenshotItem from "./ThreadAgentScreenshotItem";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadIncomingAgentMessageItem from "./ThreadIncomingAgentMessageItem";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadUserImage from "./ThreadUserImage";
 
 export default function ThreadToolOutputItem({
@@ -20,7 +20,7 @@ export default function ThreadToolOutputItem({
   subagents,
   timestamp,
   ...markdownProps
-}: Omit<ComponentProps<typeof ThreadMarkdown>, "markdown"> & {
+}: Omit<ComponentProps<typeof MarkdownRender>, "markdown"> & {
   item: WorkbenchToolOutput;
   subagents: readonly WorkbenchSubagentSummary[];
   timestamp?: ReactNode;
@@ -36,7 +36,7 @@ export default function ThreadToolOutputItem({
   }
   const parts = typeof item.output === "string" ? [{ type: "input_text" as const, text: item.output }] : item.output;
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-2 pl-6"
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
@@ -45,7 +45,7 @@ export default function ThreadToolOutputItem({
         <span className="thread-item-disclosure-prominent-text-portion font-medium text-text">{[item.namespace, item.name].filter(Boolean).join(".")}</span>
       </>}
       renderContent={() => parts.map((part, index) => part.type === "input_text"
-        ? <ThreadMarkdown {...markdownProps} key={index} markdown={part.text} />
+        ? <MarkdownRender {...markdownProps} key={index} markdown={part.text} />
         : <ThreadUserImage key={index} alt="Tool output image" src={part.image_url} />)}
     />
   );

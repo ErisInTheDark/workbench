@@ -11,7 +11,7 @@ import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
 
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadSummaryText from "./ThreadSummaryText";
@@ -89,7 +89,7 @@ export default function ThreadSubagentWaitItem ({
 
   if (outcome === "completed" && !disclosureContent) {
     return (
-      <ThreadDisclosureStaticRow
+      <DisclosureStaticRow
         summary={summary}
         summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
       />
@@ -97,7 +97,7 @@ export default function ThreadSubagentWaitItem ({
   }
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       defaultOpen={active}
@@ -165,6 +165,6 @@ export default function ThreadSubagentWaitItem ({
           {selectedEntry.content}
         </ThreadPreviewFrame>
       ) : null}
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

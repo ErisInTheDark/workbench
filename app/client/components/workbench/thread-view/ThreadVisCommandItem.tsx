@@ -10,7 +10,7 @@ import { parseVisSessionResult } from "workbench-shared/workbench/vis/vis-contra
 import type { WorkbenchVisOperation } from "../../../workbench/thread/thread-command-matchers";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadVisFrame from "./ThreadVisFrame";
 
@@ -65,7 +65,7 @@ export default function ThreadVisCommandItem({ durationMs, operation, outcome, o
     );
   }
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       renderContent={() => <VisSnapshotContent sessionId={result.sessionId} snapshotKind={result.kind} threadId={threadId} />}

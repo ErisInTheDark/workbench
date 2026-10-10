@@ -10,8 +10,8 @@ import {
   parseWorkbenchThreadRecallOutput,
   type WorkbenchThreadRecallOutputRecord,
 } from "../../../workbench/thread/thread-recall-output";
-import ThreadDisclosure from "./ThreadDisclosure";
-import ThreadMarkdown from "./ThreadMarkdown";
+import Disclosure from "../../ui/Disclosure";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadSummaryText from "./ThreadSummaryText";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 
@@ -39,13 +39,13 @@ function ThreadRecallQuestionnaire({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={<ThreadSummaryText text="Questionnaire response" />}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
-      <ThreadMarkdown
+      <MarkdownRender
         markdown={record.text}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
@@ -53,7 +53,7 @@ function ThreadRecallQuestionnaire({
         threadCwdPath={threadCwdPath}
         workspaceRoots={workspaceRoots}
       />
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -81,7 +81,7 @@ export default function ThreadRecallOutput({
         if (segment.type === "markdown") {
           return (
             <ThreadMeasuredContent key={`markdown:${index}`}>
-            <ThreadMarkdown
+            <MarkdownRender
               markdown={segment.markdown}
               projectFilePaths={projectFilePaths}
               projectId={projectId}

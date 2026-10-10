@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadMarkdown: render cached thread markdown with project, workspace, and external absolute file links. Keywords: thread markdown, file links, external git roots.
+ * - default MarkdownRender: render cached thread markdown with project, workspace, and external absolute file links. Keywords: thread markdown, file links, external git roots.
  * - Local helpers: bound rendered Markdown and external-root caches, then classify safe append presentation. Keywords: cache, markdown, append, presentation.
  */
 "use client";
@@ -8,12 +8,12 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ResolveExternalFileLinkRootsResponse } from "workbench-shared/types";
-import { collectPlaintextAbsoluteFileLinkPaths } from "../../../workbench/markdown/markdown-file-autolinks";
-import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
-import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { deriveMarkdownAppendPresentation } from "../../../workbench/markdown/markdown-append-presentation";
-import { renderThreadMarkdown } from "./thread-markdown-render";
-import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
+import { collectPlaintextAbsoluteFileLinkPaths } from "../../workbench/markdown/markdown-file-autolinks";
+import type { InlineMentionHighlightSources } from "../../workbench/thread/inline-mention-highlights";
+import { normalizeWorkbenchPath, type WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
+import { deriveMarkdownAppendPresentation } from "../../workbench/markdown/markdown-append-presentation";
+import { renderThreadMarkdown } from "../workbench/thread-view/thread-markdown-render";
+import { useWorkbenchDaemonClient } from "../workbench/WorkbenchWorkspaceContext";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -244,7 +244,7 @@ function renderCachedThreadMarkdown(
   return renderedMarkdown;
 }
 
-export default memo(function ThreadMarkdown ({
+export default memo(function MarkdownRender ({
   className,
   inlineMentionSources,
   markdown,

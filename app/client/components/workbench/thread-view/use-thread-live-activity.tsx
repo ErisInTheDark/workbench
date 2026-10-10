@@ -13,7 +13,7 @@ import type { ThreadTextPresentationSource } from "../../../workbench/thread/Thr
 import { enterMotionClassName } from "../../../tailwind/enter-motion-classes";
 import { shimmerTextClassName } from "../../../tailwind/shimmer-text-classes";
 import { LoaderIcon } from "../workbench-icons";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import { projectThreadReasoningMarkdown } from "./thread-reasoning-display";
 import { ThreadWebSearchActionRow } from "./ThreadWebSearchItem";
 import useThreadPresentedText from "./use-thread-presented-text";
@@ -88,7 +88,7 @@ export default function useThreadLiveActivity({
       <div className="flex h-full flex-col">
         {showReasoning ? (
           <ThreadScrollViewport resetKey={`${threadId}:${turnId}:reasoning`} className="flex-[0 1 auto] max-h-[30%] overscroll-contain border-b border-fg-alpha/16 [& [data-thread-scroll-end=true]]:[scroll-margin-block-start: 0]" contentClassName="px-3 py-2">
-            {reasoningDisplay?.body ? <ThreadMarkdown
+            {reasoningDisplay?.body ? <MarkdownRender
               className="text-[0.8em] text-fg/muted"
               inlineMentionSources={inlineMentionSources}
               markdown={reasoningDisplay.body}

@@ -11,13 +11,13 @@ import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbenc
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { CheckCheckIcon, GitArcStackIcon } from "../workbench-icons";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 
 function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -215,7 +215,7 @@ export default function ThreadGitArcProposalList({
   const anchors = [
     // Unmounted anchors just park their cards, so a long accepted history costs nothing until opened.
     ...(acceptedProposals.length ? [(
-      <ThreadDisclosure
+      <Disclosure
         {...groupDisclosureProps}
         data-thread-git-arc-accepted-group="true"
         key="accepted"
@@ -229,14 +229,14 @@ export default function ThreadGitArcProposalList({
         )}
       >
         {acceptedProposals.map(({ proposalId }) => anchor(proposalId))}
-      </ThreadDisclosure>
+      </Disclosure>
     )] : []),
     ...layerGroups.map((group) => {
       const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
       const pending = layerPendingIds.length;
       const lowest = group === lowestPendingGroup;
       return (
-        <ThreadDisclosure
+        <Disclosure
           {...groupDisclosureProps}
           data-thread-git-arc-stack-layer={layer.layerId}
           // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
@@ -268,7 +268,7 @@ export default function ThreadGitArcProposalList({
           )}
         >
           {layerProposals.map(({ proposalId }) => anchor(proposalId))}
-        </ThreadDisclosure>
+        </Disclosure>
       );
     }),
     ...trailingProposals.map(({ proposalId }) => anchor(proposalId)),
@@ -285,7 +285,7 @@ export default function ThreadGitArcProposalList({
     <ThreadCheckpointCommitActionsContext.Provider value={commitActions}>
       {collapsible ? (
         <>
-          <ThreadDisclosure
+          <Disclosure
             // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
             keepMounted
             onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -295,7 +295,7 @@ export default function ThreadGitArcProposalList({
           >
             {open ? failureRow : null}
             {anchors}
-          </ThreadDisclosure>
+          </Disclosure>
           {open ? null : failureRow}
         </>
       ) : (

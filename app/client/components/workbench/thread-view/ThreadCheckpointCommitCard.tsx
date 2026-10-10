@@ -16,12 +16,12 @@ import type { GitCheckpointProposal } from "workbench-shared/workbench/git/check
 import { createGitArcOperationRejected, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { GitArcChangeTotal } from "workbench-shared/workbench/git/git-arc-receipts";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { AsteriskIcon, CheckIcon, GitArcProposalIcon, PlusIcon } from "../workbench-icons";
-import WorkbenchModeRow from "../WorkbenchModeRow";
+import RadioRow from "../../ui/RadioRow";
 import PlaintextEditable from "./PlaintextEditable";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadGitArcFailure from "./ThreadGitArcFailure";
 import { ThreadFileChangeList, type ThreadFileChangeListChange } from "./ThreadFileChangeItem";
 import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
@@ -102,7 +102,7 @@ export function ThreadReadonlyCommitCard({
 
 export function ThreadCommitRow({ summary }: { summary: Pick<ThreadCommitSummary, "changes" | "committedSha" | "title"> | null }) {
   return (
-    <ThreadDisclosureStaticRow
+    <DisclosureStaticRow
       className="!py-0.5"
       marker={<GitArcProposalIcon size={16} />}
       markerLabel="commit"
@@ -374,7 +374,7 @@ export default function ThreadCheckpointCommitCard({
 
       <div data-thread-checkpoint-card-changes="true">
         {pending && !paths.length ? (
-          <ThreadDisclosureStaticRow
+          <DisclosureStaticRow
             className="mt-1.5 py-0.5"
             marker={<span className="size-3 rounded workbench-skeleton" />}
             summaryClassName="text-[0.82em] leading-[1.5]"
@@ -385,7 +385,7 @@ export default function ThreadCheckpointCommitCard({
               </span>
             )}
           />
-        ) : <ThreadDisclosure
+        ) : <Disclosure
           className="mt-1.5 py-0.5"
           contentClassName="mt-1 rounded-[0.65rem] bg-fg/4 px-2"
           summary={(
@@ -408,7 +408,7 @@ export default function ThreadCheckpointCommitCard({
                   />
                 ) : null}
                 {interactive && proposal?.status === "proposed" && freshCommitAvailable ? (
-                  <WorkbenchModeRow
+                  <RadioRow
                     ariaLabel="Commit mode"
                     disabled={committing}
                     onChange={onCommitModeChange}
@@ -534,7 +534,7 @@ export default function ThreadCheckpointCommitCard({
             </p>
           )}
           {interactive && proposal?.status === "proposed" && proposal.unclaimedDirtAvailable ? (
-            <ThreadDisclosure
+            <Disclosure
               className="py-1"
               contentClassName="pl-6"
               summary="Unclaimed dirt"
@@ -572,9 +572,9 @@ export default function ThreadCheckpointCommitCard({
               ) : (
                 <p className="m-0 py-2 text-[0.82em] text-fg/muted" role="status">Loading unclaimed changes...</p>
               )}
-            </ThreadDisclosure>
+            </Disclosure>
           ) : null}
-        </ThreadDisclosure>}
+        </Disclosure>}
       </div>
     </article>
   );

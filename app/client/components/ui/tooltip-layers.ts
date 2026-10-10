@@ -1,14 +1,14 @@
 /*
  * Exports:
- * - WorkbenchTooltipNode: one open tooltip's place among layers and nested triggers.
- * - WorkbenchTooltipLayers: own which tooltips are open, per-layer root exclusivity, cascading closes, and the pointer safe-area chain.
- * - workbenchTooltipLayers: the registry shared by every tooltip in the document.
+ * - TooltipNode: one open tooltip's place among layers and nested triggers.
+ * - TooltipLayers: own which tooltips are open, per-layer root exclusivity, cascading closes, and the pointer safe-area chain.
+ * - tooltipLayers: the registry shared by every tooltip in the document.
  *
  * A tooltip whose trigger sits inside another tooltip's trigger is a nested child: it joins its parent's panel on the
  * same layer. A tooltip whose trigger sits inside another tooltip's content is owned by it and opens one layer higher.
  */
 
-export interface WorkbenchTooltipNode {
+export interface TooltipNode {
   id: symbol;
   layer: number;
   /** The tooltip whose content holds this trigger, one layer below. */
@@ -17,12 +17,12 @@ export interface WorkbenchTooltipNode {
   parent: symbol | null;
 }
 
-interface OpenTooltip extends WorkbenchTooltipNode {
+interface OpenTooltip extends TooltipNode {
   close: () => void;
   isPointerLocallySafe: (x: number, y: number) => boolean;
 }
 
-export class WorkbenchTooltipLayers {
+export class TooltipLayers {
   #open = new Map<symbol, OpenTooltip>();
 
   isOpen(id: symbol) {
@@ -30,7 +30,7 @@ export class WorkbenchTooltipLayers {
   }
 
   /** Opening a root closes every other root on its layer, and with them everything they hold open. */
-  open(node: WorkbenchTooltipNode, ports: Pick<OpenTooltip, "close" | "isPointerLocallySafe">) {
+  open(node: TooltipNode, ports: Pick<OpenTooltip, "close" | "isPointerLocallySafe">) {
     if (node.parent === null) {
       for (const other of [...this.#open.values()]) {
         if (other.id !== node.id && other.layer === node.layer && other.parent === null && this.#open.has(other.id)) this.close(other.id);
@@ -60,4 +60,4 @@ export class WorkbenchTooltipLayers {
   }
 }
 
-export const workbenchTooltipLayers = new WorkbenchTooltipLayers();
+export const tooltipLayers = new TooltipLayers();

@@ -8,10 +8,10 @@ import { useEffect, useRef, useState, type Dispatch, type KeyboardEvent, type Re
 
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderList } from "workbench-shared/workbench/project/project-creation";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { BackArrowIcon, FolderClosedIcon, FolderGit2Icon, PlusIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import { displayFolderPath, FolderPickerState, type FolderPickerAction, type FolderPickerFolder } from "./folder-picker-state";
 
 type Listing = { key: string; phase: "loading" } | { key: string; phase: "ready"; value: ProjectFolderList }
@@ -188,13 +188,13 @@ export default function WorkbenchFolderPicker ({ dispatch, state }: {
   return (
     <div className="overflow-hidden rounded-[0.8rem] border border-text/16 bg-text/[0.03]">
       <div className="flex min-h-10 items-center gap-1 border-b border-text/16 py-1 pl-1 pr-1">
-        <WorkbenchIconButton
+        <IconButton
           label="Up one folder"
           display="hover-border"
           size="compact"
           disabled={state.path === null}
           onClick={goUp}
-        ><BackArrowIcon size={14} /></WorkbenchIconButton>
+        ><BackArrowIcon size={14} /></IconButton>
         <nav aria-label="Folder path" className="flex min-w-0 flex-1 items-center overflow-x-auto scrollbar-hover-reveal">
           {crumbs.map((crumb, index) => {
             const last = index === crumbs.length - 1;

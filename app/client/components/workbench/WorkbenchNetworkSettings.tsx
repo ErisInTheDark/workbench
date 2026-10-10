@@ -6,15 +6,15 @@
 import { useContext, useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
-import PrimaryButton from "./PrimaryButton";
+import PrimaryButton from "../ui/PrimaryButton";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import WorkbenchNetworkAccessSettings from "./WorkbenchNetworkAccessSettings";
 import WorkbenchDaemonDiscovery from "./WorkbenchDaemonDiscovery";
 import WorkbenchNetworkConnectionForm from "./WorkbenchNetworkConnectionForm";
 import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
-import ThreadDisclosure from "./thread-view/ThreadDisclosure";
+import Disclosure from "../ui/Disclosure";
 import { CheckIcon, ExternalLinkIcon } from "./workbench-icons";
 
 function NetworkSettingsContent () {
@@ -78,25 +78,25 @@ function NetworkSettingsContent () {
           {appUrl ? <>
             <a className="min-w-0 break-all font-mono text-accent" href={appUrl} target="_blank" rel="noreferrer">{appUrl}</a>
             <WorkbenchCopyButton label="Copy app address" text={appUrl} />
-            <WorkbenchIconButton as="a" label="Open app" size="small" display="hover-border" href={appUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></WorkbenchIconButton>
+            <IconButton as="a" label="Open app" size="small" display="hover-border" href={appUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></IconButton>
           </> : <span className="text-fg/muted">not yet available</span>}
         </div>
-        {service && tailnetUrl ? <ThreadDisclosure summary="Access this app from another device" contentClassName="flex flex-col gap-2 pt-3">
+        {service && tailnetUrl ? <Disclosure summary="Access this app from another device" contentClassName="flex flex-col gap-2 pt-3">
           {network.client.canAccessFromAnotherDevice() ? <>
             <p className="m-0 text-fg/muted">Open this address on the other device, then download and trust the certificate in Networking.</p>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-fg/muted">Tailnet IP access</span>
               <code className="min-w-0 break-all text-text">{tailnetUrl}</code>
               <WorkbenchCopyButton label="Copy tailnet IP address" text={tailnetUrl} />
-              <WorkbenchIconButton as="a" label="Open tailnet IP address" size="small" display="hover-border" href={tailnetUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></WorkbenchIconButton>
+              <IconButton as="a" label="Open tailnet IP address" size="small" display="hover-border" href={tailnetUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></IconButton>
             </div>
             <WorkbenchQrCode text={tailnetUrl} />
           </> : <p className="m-0 text-fg/muted">Enable another device for this app under Shared network → App access.</p>}
-        </ThreadDisclosure> : null}
+        </Disclosure> : null}
         {snapshot.configuration.group ? <div id="settings-app-access" className="scroll-mt-24">
-          <ThreadDisclosure summary="Shared network" contentClassName="pt-3">
+          <Disclosure summary="Shared network" contentClassName="pt-3">
             <WorkbenchNetworkAccessSettings />
-          </ThreadDisclosure>
+          </Disclosure>
         </div> : null}
         {busy && editable ? <PrimaryButton
           onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>

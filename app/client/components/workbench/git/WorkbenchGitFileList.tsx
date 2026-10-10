@@ -9,7 +9,7 @@ import { useWorkbenchClientController } from "../workbench-client-context";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
-import ThreadDisclosure from "../thread-view/ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import { FileAddIcon, FileDeleteIcon, FileMoveIcon, FileUpdateIcon, OpenThreadIcon } from "../workbench-icons";
 import { useWorkingTree, useWorkingTreeDaemonId, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
@@ -141,7 +141,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
           ? logicalOwner ? projectHref(createLogicalExistingThreadRoute(logicalOwner.id,
             { kind: "provider", ...target })) : undefined
           : projectHref(createThreadRoute(owner.projectId, { kind: "provider", ...target })) : undefined;
-        return <ThreadDisclosure key={id} summaryClassName="py-1" summary={owner ? (
+        return <Disclosure key={id} summaryClassName="py-1" summary={owner ? (
           <WorkbenchThreadListItem entry={owner.entry} projectId={ProjectIdSchema.parse(owner.projectId)}
             compact={false} presentation="disclosure-summary" href={undefined} showTooltip={false}
             action={href ? {
@@ -153,7 +153,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
             } : undefined} />
         ) : <span className="text-sm text-fg/muted">Claimed thread unavailable</span>}>
           {files.filter(file => file.ownerIds.includes(id)).map(row)}
-        </ThreadDisclosure>;
+        </Disclosure>;
       })}
     </div>
     <dialog ref={dialog} onClose={() => setDiscard(null)} className="max-w-md rounded-2xl bg-bg p-6 text-text shadow-float backdrop:bg-black/40">

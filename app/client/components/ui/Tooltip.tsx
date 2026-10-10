@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchTooltip: clone a trigger without wrapper DOM and own a delayed portal tooltip, opening right of or above it.
+ * - default Tooltip: clone a trigger without wrapper DOM and own a delayed portal tooltip, opening right of or above it.
  *   Tooltips on triggers nested inside another trigger stack in the outermost tooltip's panel; tooltips on triggers
- *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in workbench-tooltip-layers.
+ *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in tooltip-layers.
  */
 "use client";
 
@@ -26,12 +26,12 @@ import {
 import { createPortal } from "react-dom";
 
 import {
-  getWorkbenchTooltipPosition,
-  isWorkbenchTooltipPointerSupported,
-  isPointWithinWorkbenchTooltipArea,
-  type WorkbenchTooltipPlacement,
-} from "./workbench-tooltip-geometry";
-import { workbenchTooltipLayers } from "./workbench-tooltip-layers";
+  getTooltipPosition,
+  isTooltipPointerSupported,
+  isPointWithinTooltipArea,
+  type TooltipPlacement,
+} from "./tooltip-geometry";
+import { tooltipLayers } from "./tooltip-layers";
 
 const DEFAULT_DELAY_MS = 500;
 const DEFAULT_HOVER_DISTANCE_PX = 12;
@@ -45,7 +45,7 @@ interface TooltipPosition {
   top: number;
 }
 
-interface WorkbenchTooltipTriggerProps {
+interface TooltipTriggerProps {
   "aria-controls"?: string;
   "aria-describedby"?: string;
   "aria-expanded"?: boolean;
@@ -79,7 +79,7 @@ function getLayerHost(layer: number) {
   const existing = layerHosts.get(layer);
   if (existing?.isConnected) return existing;
   const host = document.createElement("div");
-  host.dataset.workbenchTooltipLayer = String(layer);
+  host.dataset.tooltipLayer = String(layer);
   host.style.cssText = `position:fixed;inset:0;pointer-events:none;z-index:${BASE_LAYER_Z_INDEX + layer}`;
   document.body.append(host);
   layerHosts.set(layer, host);
@@ -98,7 +98,7 @@ function viewport() {
   };
 }
 
-export default function WorkbenchTooltip({
+export default function Tooltip({
   children,
   content,
   delayMs = DEFAULT_DELAY_MS,
@@ -107,13 +107,13 @@ export default function WorkbenchTooltip({
   interactive = false,
   placement = "right",
 }: {
-  children: ReactElement<WorkbenchTooltipTriggerProps>;
+  children: ReactElement<TooltipTriggerProps>;
   content: ReactNode;
   delayMs?: number;
   enabled?: boolean;
   hoverDistancePx?: number;
   interactive?: boolean;
-  placement?: WorkbenchTooltipPlacement;
+  placement?: TooltipPlacement;
 }) {
   const ownerRef = useRef(Symbol("workbench-tooltip"));
   const id = ownerRef.current;
@@ -147,14 +147,14 @@ export default function WorkbenchTooltip({
   }, [clearShowTimer]);
 
   const hide = useCallback(() => {
-    if (workbenchTooltipLayers.isOpen(id)) workbenchTooltipLayers.close(id);
+    if (tooltipLayers.isOpen(id)) tooltipLayers.close(id);
     else reset();
   }, [id, reset]);
 
   const isPointerLocallySafe = useCallback((x: number, y: number) => {
     const trigger = triggerRef.current;
     if (!trigger) return false;
-    return isPointWithinWorkbenchTooltipArea(
+    return isPointWithinTooltipArea(
       x,
       y,
       trigger.getBoundingClientRect(),
@@ -167,12 +167,12 @@ export default function WorkbenchTooltip({
   const show = useCallback(() => {
     if (!enabled || !triggerRef.current) return;
     clearShowTimer();
-    if (workbenchTooltipLayers.isOpen(id)) return;
+    if (tooltipLayers.isOpen(id)) return;
     nestedIn?.showNow();
-    workbenchTooltipLayers.open({ id, layer, owner, parent: nestedIn?.id ?? null }, { close: reset, isPointerLocallySafe });
+    tooltipLayers.open({ id, layer, owner, parent: nestedIn?.id ?? null }, { close: reset, isPointerLocallySafe });
     if (!nestedIn) {
       setPosition({
-        ...getWorkbenchTooltipPosition({ placement, tooltipHeight: 0, triggerRect: triggerRef.current.getBoundingClientRect(), ...viewport() }),
+        ...getTooltipPosition({ placement, tooltipHeight: 0, triggerRect: triggerRef.current.getBoundingClientRect(), ...viewport() }),
         ready: false,
       });
     }
@@ -188,14 +188,14 @@ export default function WorkbenchTooltip({
   }, [delayMs, enabled, show, visible]);
 
   const reconcilePointer = useCallback((x: number, y: number) => {
-    if (workbenchTooltipLayers.isOpen(id) ? !workbenchTooltipLayers.isPointerSafe(id, x, y) : !isPointerLocallySafe(x, y)) hide();
+    if (tooltipLayers.isOpen(id) ? !tooltipLayers.isPointerSafe(id, x, y) : !isPointerLocallySafe(x, y)) hide();
   }, [hide, id, isPointerLocallySafe]);
 
   useEffect(() => {
     setMounted(true);
     return () => {
       clearShowTimer();
-      if (workbenchTooltipLayers.isOpen(id)) workbenchTooltipLayers.close(id);
+      if (tooltipLayers.isOpen(id)) tooltipLayers.close(id);
     };
   }, [clearShowTimer, id]);
 
@@ -232,7 +232,7 @@ export default function WorkbenchTooltip({
     const updatePosition = () => {
       const measured = panel.getBoundingClientRect();
       setPosition({
-        ...getWorkbenchTooltipPosition({
+        ...getTooltipPosition({
           placement,
           tooltipHeight: measured.height,
           tooltipWidth: measured.width,
@@ -274,11 +274,11 @@ export default function WorkbenchTooltip({
     "aria-haspopup": enabled && interactive ? "dialog" : childProps["aria-haspopup"],
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => {
       childProps.onPointerEnter?.(event);
-      if (isWorkbenchTooltipPointerSupported(event.pointerType)) beginShowing();
+      if (isTooltipPointerSupported(event.pointerType)) beginShowing();
     },
     onPointerLeave: (event: ReactPointerEvent<HTMLElement>) => {
       childProps.onPointerLeave?.(event);
-      if (isWorkbenchTooltipPointerSupported(event.pointerType)) reconcilePointer(event.clientX, event.clientY);
+      if (isTooltipPointerSupported(event.pointerType)) reconcilePointer(event.clientX, event.clientY);
     },
     ref: setTriggerRef,
   });

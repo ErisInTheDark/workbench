@@ -10,11 +10,11 @@ import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/ty
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "../workbench-icons";
-import WorkbenchIconButton from "../WorkbenchIconButton";
-import { WorkbenchOptionCard } from "../WorkbenchOptionCards";
+import IconButton from "../../ui/IconButton";
+import { OptionCard } from "../../ui/OptionCards";
 import WorkbenchTag from "../WorkbenchTag";
 import type { WorkbenchGroupedModel, WorkbenchModelGroup } from "../workbench-model-groups";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 
 function formatContextWindow (tokens: number | null) {
 	if (!tokens) {
@@ -119,7 +119,7 @@ export default function ThreadModelPicker ({
 			.some(id => favouriteKeys.has(`${harness}\0${id}`));
 
 		return (
-			<WorkbenchOptionCard
+			<OptionCard
 				key={`${harness}:${model.id}`}
 				density="tight"
 				className="min-w-0"
@@ -135,13 +135,13 @@ export default function ThreadModelPicker ({
 						{featureList.map((feature, index) => <WorkbenchTag key={index}>{feature}</WorkbenchTag>)}
 					</span> : null}
 				</span>}
-				actions={<WorkbenchIconButton
+				actions={<IconButton
 					size="small"
 					disabled={favouritesDisabled}
 					label={`${favourite ? "Unfavourite" : "Favourite"} ${model.displayName}`}
 					aria-pressed={favourite}
 					onClick={() => onToggleFavourite(entry)}
-				><StarIcon size={16} className={favourite ? "fill-current" : undefined} /></WorkbenchIconButton>}
+				><StarIcon size={16} className={favourite ? "fill-current" : undefined} /></IconButton>}
 			/>
 		);
 	};
@@ -165,7 +165,7 @@ export default function ThreadModelPicker ({
 					</button>)}
 				</nav>
 				<div className="min-w-0 flex-grow">
-					{groups.map(group => <ThreadDisclosure key={group.id}
+					{groups.map(group => <Disclosure key={group.id}
 						data-model-group={group.id}
 						role="group" aria-label={group.label}
 						className="pb-3"
@@ -184,7 +184,7 @@ export default function ThreadModelPicker ({
 						</div> : group.harness && loadingByHarness[group.harness] ? <p role="status" className="m-0 text-xs text-fg/muted">Loading models...</p>
 							: group.harness && errorByHarness[group.harness] ? <p role="alert" className="m-0 text-xs text-danger">{errorByHarness[group.harness]}</p>
 								: <p className="m-0 text-xs text-fg/muted">No models here yet.</p>}
-					</ThreadDisclosure>)}
+					</Disclosure>)}
 				</div>
 			</div>
 		</div>

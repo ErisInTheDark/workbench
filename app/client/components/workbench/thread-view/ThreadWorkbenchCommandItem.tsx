@@ -39,7 +39,7 @@ import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadAgentMessageBody from "./ThreadAgentMessageBody";
 import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
@@ -79,7 +79,7 @@ export default function ThreadWorkbenchCommandItem({
   workspaceRoots,
 }: {
   activeStartedAtMs?: number | null;
-  inlineMentionSources?: Parameters<typeof ThreadMarkdown>[0]["inlineMentionSources"];
+  inlineMentionSources?: Parameters<typeof MarkdownRender>[0]["inlineMentionSources"];
   item: McpToolCallItem;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
@@ -371,7 +371,7 @@ export default function ThreadWorkbenchCommandItem({
     return (
       <ThreadSubagentWaitItem
         disclosureContent={interruptedBySteer ? undefined : outcome === "completed" && output.trim() ? (
-          <ThreadMarkdown
+          <MarkdownRender
             inlineMentionSources={inlineMentionSources}
             markdown={output.trim()}
             projectFilePaths={projectFilePaths}

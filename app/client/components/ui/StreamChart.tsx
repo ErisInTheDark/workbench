@@ -3,10 +3,10 @@
 /*
  * Exports:
  * - StatsStreamSeries: one stacked category with its colour and per-bucket values; null marks an unavailable bucket.
- * - default WorkbenchStatsStreamChart: stacked, smoothly curved bucket bands that are pointer- and keyboard-inspectable, with a live readout and optional bucket picking.
+ * - default StreamChart: stacked, smoothly curved bucket bands that are pointer- and keyboard-inspectable, with a live readout and optional bucket picking.
  */
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { chartPointerIndex, chartSmoothPath, chartX } from "./stats-chart-geometry";
+import { chartPointerIndex, chartSmoothPath, chartX } from "./chart-geometry";
 
 export interface StatsStreamSeries {
   key: string;
@@ -36,7 +36,7 @@ function runs(values: readonly (number | null)[], count: number) {
   return result;
 }
 
-export default function WorkbenchStatsStreamChart({
+export default function StreamChart({
   buckets, className = "h-48", emptyLabel, formatBucket, formatValue, label, maximum: fixedMaximum, minimum = 0, onPick, picked = null, series, total,
 }: {
   buckets: readonly number[];

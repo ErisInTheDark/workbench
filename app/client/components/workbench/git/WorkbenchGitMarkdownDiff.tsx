@@ -2,7 +2,7 @@
 "use client";
 import { useMemo } from "react";
 import { describeWorkingTreeDiff } from "workbench-shared/workbench/git/working-tree-selection";
-import ThreadMarkdown from "../thread-view/ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
 export default function WorkbenchGitMarkdownDiff() {
@@ -28,13 +28,13 @@ export default function WorkbenchGitMarkdownDiff() {
         ${change.type === "addition" ? "bg-emerald-500/10" : "bg-red-500/10"}
       `}>
         <span className="text-xs text-fg/muted">{change.type === "addition" ? "Added" : "Removed"}</span>
-        <ThreadMarkdown markdown={change.text} projectId={state.projectId} />
+        <MarkdownRender markdown={change.text} projectId={state.projectId} />
       </div>)}
     </section>
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {(["before", "after"] as const).map(side => <section key={side} className="min-w-0">
         <h3 className="text-sm font-medium">{side === "before" ? "Before" : "After"}</h3>
-        <ThreadMarkdown markdown={snapshot.preview![side] ?? "*File does not exist in this version.*"} projectId={state.projectId} />
+        <MarkdownRender markdown={snapshot.preview![side] ?? "*File does not exist in this version.*"} projectId={state.projectId} />
       </section>)}
     </div>
   </div>;

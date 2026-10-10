@@ -15,10 +15,10 @@ import {
   type ProjectCreateResult,
   type ProjectTemplate,
 } from "workbench-shared/workbench/project/project-creation";
-import PrimaryButton from "../PrimaryButton";
+import PrimaryButton from "../../ui/PrimaryButton";
 import type { WorkbenchRouteViewProps } from "../route-views/workbench-route-views";
 import { useWorkbenchClientController } from "../workbench-client-context";
-import WorkbenchFormSection from "../WorkbenchFormSection";
+import FormSection from "../../ui/FormSection";
 import WorkbenchSettingsContextRow from "../WorkbenchSettingsContextRow";
 import WorkbenchTextField from "../WorkbenchTextField";
 import { displayFolderPath, FolderPickerState } from "./folder-picker-state";
@@ -91,10 +91,10 @@ export default function WorkbenchNewProjectView ({ route, navigateToRoute }: Wor
       className="mx-auto flex w-full max-w-content flex-col px-5 pt-1 text-text"
       onSubmit={event => { event.preventDefault(); void create(); }}
     >
-      <WorkbenchFormSection title="Location" description="Choose a folder inside one of your project roots. Double-click a folder to open it.">
+      <FormSection title="Location" description="Choose a folder inside one of your project roots. Double-click a folder to open it.">
         <WorkbenchFolderPicker dispatch={dispatch} state={picker} />
-      </WorkbenchFormSection>
-      <WorkbenchFormSection title="Template" description="Starter files written before the repository is initialised.">
+      </FormSection>
+      <FormSection title="Template" description="Starter files written before the repository is initialised.">
         <div className="py-1">
           <WorkbenchSettingsContextRow
             label="Template"
@@ -103,8 +103,8 @@ export default function WorkbenchNewProjectView ({ route, navigateToRoute }: Wor
             onSelect={id => { const next = TEMPLATES.find(item => item.id === id); if (next) setTemplate(next.id); }}
           />
         </div>
-      </WorkbenchFormSection>
-      <WorkbenchFormSection title={<label htmlFor={nameId}>Name</label>} description="The new project's folder name.">
+      </FormSection>
+      <FormSection title={<label htmlFor={nameId}>Name</label>} description="The new project's folder name.">
         <WorkbenchTextField
           id={nameId}
           className="w-full"
@@ -117,7 +117,7 @@ export default function WorkbenchNewProjectView ({ route, navigateToRoute }: Wor
           placeholder="my-project"
         />
         {nameProblem ? <p id={`${nameId}-issue`} role="alert" className="m-0 pt-1 text-[0.8rem] text-danger">{nameProblem}</p> : null}
-      </WorkbenchFormSection>
+      </FormSection>
       <div className="mt-6 flex items-center justify-between gap-3 pb-10 pt-3">
         <p
           role={error ? "alert" : "status"}

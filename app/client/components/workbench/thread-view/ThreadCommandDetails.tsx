@@ -5,7 +5,7 @@
 "use client";
 
 import ThreadCodeDisplay, { ThreadCommandHeader } from "./ThreadCodeDisplay";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 
 export default function ThreadCommandDetails ({
   command,
@@ -17,7 +17,7 @@ export default function ThreadCommandDetails ({
   previewHeight?: string;
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-1"
       contentClassName="pt-1 pl-6"
       summary="Command details"
@@ -30,6 +30,6 @@ export default function ThreadCommandDetails ({
         previewHeight={previewHeight}
         variant="plain"
       />
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

@@ -14,7 +14,7 @@ import type { WorkbenchReloadOperation } from "workbench-shared/reload/workbench
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 import type { WorkbenchAppRuntimeStore, WorkbenchDaemonRuntimeStore } from "workbench-shared/types";
 import { useWorkbenchAppConnectionInterrupted } from "../../workbench/app/WorkbenchAppRpcContext";
-import PrimaryButton from "./PrimaryButton";
+import PrimaryButton from "../ui/PrimaryButton";
 import { BotIcon } from "./workbench-icons";
 
 const PULL_HOLD_MS = 1_000;

@@ -8,10 +8,10 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 
 import { WORKBENCH_THREAD_GOAL_MAX_LENGTH, type WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
 import { WORKBENCH_THREAD_TODO_MAX_LENGTH, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
-import WorkbenchIconButton from "../WorkbenchIconButton";
+import IconButton from "../../ui/IconButton";
 import { AsteriskIcon, AsteriskOffIcon, FlagFilledIcon, FlagIcon, XIcon } from "../workbench-icons";
 import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
-import ThreadMarkdown from "./ThreadMarkdown";
+import MarkdownRender from "../../ui/MarkdownRender";
 import type { ThreadTodoSelection } from "./use-thread-todo-selection";
 
 const rowClassName = "group/row flex min-w-0 items-start gap-1 rounded-[0.6rem] px-1 transition-colors";
@@ -117,7 +117,7 @@ function RowButtons ({ disabled = false, onRemove, onToggleRequired, removeLabel
 }) {
   return (
     <span className="flex shrink-0 items-center py-0.5">
-      <WorkbenchIconButton
+      <IconButton
         aria-pressed={required}
         className={required || disabled ? "" : revealClassName}
         disabled={disabled}
@@ -127,8 +127,8 @@ function RowButtons ({ disabled = false, onRemove, onToggleRequired, removeLabel
         size="compact"
       >
         {required ? <AsteriskIcon size={14} /> : <AsteriskOffIcon size={14} />}
-      </WorkbenchIconButton>
-      <WorkbenchIconButton
+      </IconButton>
+      <IconButton
         className={disabled ? "" : revealClassName}
         disabled={disabled}
         display="hover-border"
@@ -138,7 +138,7 @@ function RowButtons ({ disabled = false, onRemove, onToggleRequired, removeLabel
         tone="danger"
       >
         <XIcon size={14} />
-      </WorkbenchIconButton>
+      </IconButton>
     </span>
   );
 }
@@ -250,7 +250,7 @@ export default function ThreadTodoPanel ({
                 placeholder="Todo"
                 value={todo.text}
               >
-                <ThreadMarkdown markdown={todo.text} />
+                <MarkdownRender markdown={todo.text} />
               </EditableText>
               <RowButtons
                 onRemove={() => run(() => onRemoveTodo(todo.id), "Unable to remove the todo.")}

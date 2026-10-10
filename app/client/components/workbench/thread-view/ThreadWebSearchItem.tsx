@@ -10,7 +10,7 @@
 import type { ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import ThreadDisclosure, { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
 import { truncateThreadText } from "./thread-view-formatters";
 import { isNonEmptyString, isThreadWebSearchPlaceholder } from "./thread-web-search-state";
@@ -471,7 +471,7 @@ export function ThreadWebSearchSequence ({
   }
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-1 pl-6"
       summary={getWebSearchSequenceSummary(visibleItems)}
@@ -479,14 +479,14 @@ export function ThreadWebSearchSequence ({
     >
       <div className="space-y-1">
         {visibleItems.map((item) => (
-          <ThreadDisclosureStaticRow
+          <DisclosureStaticRow
             key={item.id}
             summary={<ThreadWebSearchActionRow item={item} />}
             summaryClassName="text-[0.92em] leading-[1.6]"
           />
         ))}
       </div>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }
 
@@ -504,7 +504,7 @@ export default function ThreadWebSearchItem ({
   const shouldOpen = !item.action || item.action.type === "other";
 
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 space-y-3 pl-6"
       defaultOpen={shouldOpen}
@@ -512,6 +512,6 @@ export default function ThreadWebSearchItem ({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadWebSearchDetails item={item} output={output} />
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

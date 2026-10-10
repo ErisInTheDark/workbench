@@ -8,8 +8,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkbenchSandboxNetworkSetting } from "workbench-shared/workbench/provider/provider-settings";
 import { ResetIcon } from "./workbench-icons";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
-import WorkbenchIconButton from "./WorkbenchIconButton";
-import { WorkbenchOptionCard } from "./WorkbenchOptionCards";
+import IconButton from "../ui/IconButton";
+import { OptionCard } from "../ui/OptionCards";
 
 export default function SandboxNetworkSettings ({
   projectId,
@@ -82,7 +82,7 @@ export default function SandboxNetworkSettings ({
       const enabled = scope === "global" ? setting.globalEnabled : setting.effectiveEnabled;
       const hasProjectOverride = scope === "project" && setting.projectOverride !== null;
       return <div key={setting.provider} className="relative rounded-[0.85rem] py-1">
-      <WorkbenchOptionCard
+      <OptionCard
         className={hasProjectOverride ? "pr-12" : undefined}
         description={scope === "global"
           ? "Allow agents outbound network access."
@@ -96,7 +96,7 @@ export default function SandboxNetworkSettings ({
         }}
       />
       {hasProjectOverride ? (
-        <WorkbenchIconButton
+        <IconButton
           type="button"
           label={`Reset ${setting.label} to global`}
           display="hover-border"
@@ -108,7 +108,7 @@ export default function SandboxNetworkSettings ({
           }}
         >
           <ResetIcon size={20} />
-        </WorkbenchIconButton>
+        </IconButton>
       ) : null}
       </div>;
     })}

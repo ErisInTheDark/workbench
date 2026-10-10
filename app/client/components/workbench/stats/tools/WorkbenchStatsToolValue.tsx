@@ -8,10 +8,10 @@ import { useState, type PointerEvent } from "react";
 import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchStatsTools } from "workbench-shared/workbench/stats/workbench-stats-tools-contract";
 import WorkbenchThreadReferenceList from "../../WorkbenchThreadReferenceList";
-import WorkbenchTooltip from "../../WorkbenchTooltip";
+import Tooltip from "../../../ui/Tooltip";
 import useStats from "../use-stats";
-import WorkbenchStatsSkeleton, { statsReloadingClassName, statsRevealClassName } from "../WorkbenchStatsSkeleton";
-import WorkbenchStatsSparkline from "../WorkbenchStatsSparkline";
+import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
+import Sparkline from "../../../ui/Sparkline";
 import { compactNumber, formatStatsBucket } from "../stats-formatters";
 import { statsThreadIdentity } from "../stats-thread-identity";
 import { statsToolValueRows, type StatsToolSort, type StatsToolSortKey, type StatsToolValueRow } from "workbench-shared/workbench/stats/workbench-stats-tool-value";
@@ -86,13 +86,13 @@ function CallTrend({ bucketStarts, row, threads, unit }: {
   };
   if (!row.calls || last < 1) return <span className="relative block h-7 min-w-0 flex-1" />;
   return (
-    <WorkbenchTooltip
+    <Tooltip
       content={<PeriodDetail bucketStarts={bucketStarts} index={shown} row={row} threads={threads} unit={unit} />}
       interactive
       placement="top"
     >
       <span className="relative block h-7 min-w-0 flex-1 cursor-crosshair" onPointerLeave={() => setIndex(null)} onPointerMove={scrub}>
-        <WorkbenchStatsSparkline className="text-hue-170" values={row.buckets} />
+        <Sparkline className="text-hue-170" values={row.buckets} />
         {index !== null ? (
           <span
             aria-hidden="true"
@@ -101,7 +101,7 @@ function CallTrend({ bucketStarts, row, threads, unit }: {
           />
         ) : null}
       </span>
-    </WorkbenchTooltip>
+    </Tooltip>
   );
 }
 
@@ -191,10 +191,10 @@ export default function WorkbenchStatsToolValue() {
         <ol aria-hidden="true" className="m-0 grid gap-y-0.5 p-0">
           {Array.from({ length: 12 }, (_, index) => (
             <li className={`${columns} list-none px-2 py-1`} key={index}>
-              <WorkbenchStatsSkeleton className="h-3" style={{ width: `${70 - (index % 4) * 12}%` }} />
-              <span className="hidden h-7 items-center sm:flex"><WorkbenchStatsSkeleton className="h-1.5 w-full rounded-full opacity-60" /></span>
-              <WorkbenchStatsSkeleton className="hidden h-1.5 rounded-full sm:block" />
-              <WorkbenchStatsSkeleton className="ml-auto h-3 w-10" />
+              <Skeleton className="h-3" style={{ width: `${70 - (index % 4) * 12}%` }} />
+              <span className="hidden h-7 items-center sm:flex"><Skeleton className="h-1.5 w-full rounded-full opacity-60" /></span>
+              <Skeleton className="hidden h-1.5 rounded-full sm:block" />
+              <Skeleton className="ml-auto h-3 w-10" />
             </li>
           ))}
         </ol>

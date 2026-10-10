@@ -5,11 +5,11 @@
 "use client";
 
 import type { VisUserEnded } from "workbench-shared/workbench/vis/vis-contract";
-import { ThreadDisclosureStaticRow } from "./ThreadDisclosure";
+import { DisclosureStaticRow } from "../../ui/Disclosure";
 
 export default function ThreadVisUserEndedItem({ ended }: { ended: VisUserEnded }) {
   return (
-    <ThreadDisclosureStaticRow
+    <DisclosureStaticRow
       summary={(
         <span className="flex min-w-0 items-center gap-1.5 text-[0.92em] leading-[1.6]">
           <span className="shrink-0">You ended vis on</span>

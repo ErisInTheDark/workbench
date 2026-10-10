@@ -34,7 +34,7 @@ import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
 import WorkbenchDraftTitleIcons from "./WorkbenchDraftTitleIcons";
 import { useWorkbenchSubagentClaims, type WorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { formatLongTimestamp } from "./thread-view/thread-view-formatters";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
@@ -323,7 +323,7 @@ export default function WorkbenchThreadListItem({
         <rect x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="12.8" fill="color-mix(in srgb, var(--text) 4%, transparent)" stroke="currentColor" strokeWidth="1" strokeOpacity={strokeOpacity} strokeDasharray={hasDashedBorder ? "6 4" : undefined} vectorEffect="non-scaling-stroke" />
       </svg> : null}
       {presentation === "row" ? <ContextMenuCapability menu={contextMenu}>
-        <WorkbenchTooltip
+        <Tooltip
           content={showTooltip
             ? <ThreadTooltipContent activityAt={activityAt} claimedPaths={claimedPaths} extraDetails={tooltipDetails} Icon={Icon} projectId={projectId} snoozed={group === "snoozed"} status={tooltipStatus} statusClassName={statusClassName} stashed={stashed} subagentClaims={subagentClaims} title={entry.title} identity={entry.entryKind === "draft" ? undefined : entry.identity} />
             // Without the rich tooltip, the row still offers the full time its pointer-transparent timestamp cannot.
@@ -355,7 +355,7 @@ export default function WorkbenchThreadListItem({
             onDragStart={onDragStart}
             onPointerDown={onPointerDown}
           />
-        </WorkbenchTooltip>
+        </Tooltip>
       </ContextMenuCapability> : null}
       {dragTargets}
       {contextMenuButton}

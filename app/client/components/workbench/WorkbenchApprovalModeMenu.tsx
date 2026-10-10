@@ -11,7 +11,7 @@ import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from "react"
 import type { WorkbenchApprovalMode } from "workbench-shared/types";
 import ApprovalReviewSettingsController, { selectedReviewerReady } from "../../workbench/ApprovalReviewSettingsController";
 import { useWorkbenchDaemonClient } from "./WorkbenchWorkspaceContext";
-import WorkbenchPressDragMenu from "./WorkbenchPressDragMenu";
+import PressDragMenu from "../ui/PressDragMenu";
 import { ShieldAlertIcon, ShieldCheckIcon, ShieldQuestionIcon, type IconProps } from "./workbench-icons";
 
 type IconSize = NonNullable<IconProps["size"]>;
@@ -73,7 +73,7 @@ export default function WorkbenchApprovalModeMenu({
   onSelect: (mode: WorkbenchApprovalMode) => void;
 }) {
   return (
-    <WorkbenchPressDragMenu
+    <PressDragMenu
       label={`Unsandboxed shell usage: ${APPROVAL_MODE_OPTIONS[mode].label}`}
       heading="Unsandboxed shell usage"
       disabled={disabled}
@@ -85,6 +85,6 @@ export default function WorkbenchApprovalModeMenu({
       }}
     >
       <ModeLabel mode={mode} size={18} />
-    </WorkbenchPressDragMenu>
+    </PressDragMenu>
   );
 }

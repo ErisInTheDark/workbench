@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchFormSection: titled section shared by settings pages and full-page forms.
+ * - default FormSection: titled section shared by settings pages and full-page forms.
  */
 "use client";
 
 import type { ReactNode } from "react";
 
-export default function WorkbenchFormSection ({ id, title, description, children }: {
+export default function FormSection ({ id, title, description, children }: {
   id?: string;
   title: ReactNode;
   description?: ReactNode;

@@ -6,7 +6,7 @@
 
 import type { ReactNode } from "react";
 
-import WorkbenchTooltip from "./WorkbenchTooltip";
+import Tooltip from "../ui/Tooltip";
 import { XIcon } from "./workbench-icons";
 
 const fadeForRemove = `
@@ -89,5 +89,5 @@ export default function WorkbenchPill({
       ) : null}
     </span>
   );
-  return tooltip ? <WorkbenchTooltip content={tooltip} interactive placement="top">{pill}</WorkbenchTooltip> : pill;
+  return tooltip ? <Tooltip content={tooltip} interactive placement="top">{pill}</Tooltip> : pill;
 }

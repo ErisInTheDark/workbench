@@ -18,7 +18,7 @@ import ProjectFilePath from "../ProjectFilePath";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import { EllipsisIcon, SquareArrowRightEnterIcon, SquareArrowRightExitIcon } from "../workbench-icons";
 import ThreadAgentName from "./ThreadAgentName";
-import ThreadDisclosure from "./ThreadDisclosure";
+import Disclosure from "../../ui/Disclosure";
 import ThreadSubagentUserMessage from "./ThreadSubagentUserMessage";
 
 interface ThreadAgentMessageTargetProps {
@@ -136,7 +136,7 @@ export default function ThreadAgentMessageItem ({
   children: ReactNode;
 }) {
   return (
-    <ThreadDisclosure
+    <Disclosure
       className="py-2"
       contentClassName="mt-2 pl-6"
       summary={(
@@ -148,6 +148,6 @@ export default function ThreadAgentMessageItem ({
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
     >
       <ThreadAgentMessageBubble>{children}</ThreadAgentMessageBubble>
-    </ThreadDisclosure>
+    </Disclosure>
   );
 }

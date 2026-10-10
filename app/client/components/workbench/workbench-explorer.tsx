@@ -28,7 +28,7 @@ import {
   workbenchThreadListLabelClassName,
 } from "./workbench-class-names";
 import { BrowserSessionIcon, EyeIcon, EyeOffIcon, FilePlusIcon } from "./workbench-icons";
-import WorkbenchIconButton from "./WorkbenchIconButton";
+import IconButton from "../ui/IconButton";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 
 export const NewEntryIcon = FilePlusIcon;
@@ -338,7 +338,7 @@ export function ExplorerTree ({
                     <ExplorerModifiedDot hidden={!isModified} />
                     <ExplorerChangeSummary summary={changeSummary} />
                   </button>
-                  <WorkbenchIconButton
+                  <IconButton
                     type="button"
                     label={`Create in ${node.name}`}
                     display="hover-border"
@@ -351,7 +351,7 @@ export function ExplorerTree ({
                   >
                     <NewEntryIcon size={16} />
                     <span className="sr-only">{`Create in ${node.name}`}</span>
-                  </WorkbenchIconButton>
+                  </IconButton>
                 </div>
               </ContextMenuCapability>
               {isExpanded ? (
