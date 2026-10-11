@@ -11,6 +11,15 @@ if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
 fi
 unset WORKBENCH_CWD_REDIRECTED
 
+if [[ "$#" -eq 1 && "${1:-}" == "ports" ]]; then
+  checkout_cli="${WORKBENCH_CHECKOUT_CLI:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../../.." && pwd)/cli/dispatch.mjs}"
+  if [[ ! -f "$checkout_cli" ]]; then
+    printf '%s\n' 'Workbench checkout CLI is unavailable.' >&2
+    exit 1
+  fi
+  exec node --disable-warning=ExperimentalWarning "$checkout_cli" ports
+fi
+
 if [[ "${1:-}" == "test" && "${2:-}" != "live" ]]; then
   shift
   test_entry="${WORKBENCH_TEST_ENTRY:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd)/test/run-claimed-tests.mjs}"

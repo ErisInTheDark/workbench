@@ -31,6 +31,7 @@ export default class WorkbenchAgentCliEnvironment {
 
   async install(env: NodeJS.ProcessEnv = process.env) {
     const shellSource = await fs.readFile(this.shellSourcePath, "utf8");
+    const checkoutCli = path.resolve(path.dirname(this.shellSourcePath), "../../../../../cli/dispatch.mjs");
     const testEntry = path.resolve(path.dirname(this.shellSourcePath), "../../../../../test/run-claimed-tests.mjs");
     await fs.mkdir(this.runtimeDirectoryPath, { recursive: true });
 
@@ -43,7 +44,7 @@ export default class WorkbenchAgentCliEnvironment {
       assertManagedOrMissing(windowsShimPath),
     ]);
     await Promise.all([
-      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_DAEMON_ORIGIN_RESOLVER=" + quotePosixSingle(this.resolverSourcePath) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
+      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_CHECKOUT_CLI=" + quotePosixSingle(checkoutCli) + "\nexport WORKBENCH_DAEMON_ORIGIN_RESOLVER=" + quotePosixSingle(this.resolverSourcePath) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
       fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_DAEMON_ORIGIN_RESOLVER=${this.resolverSourcePath.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
     ]);
     // PowerShell consumes unquoted -- for .ps1 commands; let it resolve wb.cmd instead.

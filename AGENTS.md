@@ -56,6 +56,8 @@ CRITICAL INSTRUCTION EDITING RULES:
 
 Run `wb test` and `pnpm typecheck` from the repository root.
 
+`wb ports` lists active Workbench listeners by port, domain, and protocol.
+
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
 

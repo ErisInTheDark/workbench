@@ -146,6 +146,18 @@ test("keeps shortcut and repair local for humans and delegated for managed agent
   }
 });
 
+test("routes ports through the checkout dispatcher for human and managed callers", async (context) => {
+  const fixture = await dispatcherFixture();
+  context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));
+  for (const threadId of ["", "thread-one"]) {
+    const result = await execFileAsync("bash", [fixture.dispatcherPath, "ports"], {
+      cwd: fixture.root,
+      env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: threadId },
+    });
+    assert.equal(result.stdout, "human|cwd=preserved|args=[\"ports\"]\n");
+  }
+});
+
 test("does not discard extra shortcut arguments", async (context) => {
   const fixture = await dispatcherFixture();
   context.after(async () => await fs.rm(fixture.root, { force: true, recursive: true }));

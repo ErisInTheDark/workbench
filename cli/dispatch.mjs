@@ -12,9 +12,10 @@ const args = process.argv.slice(2);
 const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
 const command = view ? "view" : args.length === 0 ? "start" : args.length === 1 ? args[0] : null;
 try {
-  const human = ["start", "shortcut", "connect", "disconnect", "view", "repair"].includes(command);
+  const native = ["start", "shortcut", "connect", "disconnect", "view", "ports", "repair"].includes(command);
+  const humanOnly = ["start", "shortcut", "connect", "disconnect", "view", "repair"].includes(command);
   const managed = process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim();
-  if (human && managed) throw new Error("Managed threads cannot launch or configure Workbench services.");
+  if (humanOnly && managed) throw new Error("Managed threads cannot launch or configure Workbench services.");
   if (command === "repair" || isRepairPending(await readJournal())) {
     if (managed) throw new Error("Dependency update repair is pending. Ask the user to run `wb repair`.");
     const journal = await runRepair({ root, force: command === "repair" });
@@ -24,10 +25,15 @@ try {
   }
   if (command === "repair") {
     process.stdout.write("Workbench dependency repair complete. Run `wb` to launch.\n");
-  } else if (human) {
-    const entry = view ? "cli/process-view.ts" : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
+  } else if (native) {
+    const entry = view
+      ? "cli/process-view.ts"
+      : command === "ports"
+        ? "cli/workbench-ports.ts"
+        : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
     await new WorkbenchBootstrapCommand().run(process.execPath, [
-      "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry), ...(view ? args.slice(1) : [command]),
+      "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry),
+      ...(view ? args.slice(1) : command === "ports" ? [] : [command]),
     ], { cwd: root, interactive: view });
   } else {
     await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args]);
