@@ -19,6 +19,7 @@ import { ProjectIdSchema, type FolderId, type ProjectId } from "workbench-shared
 import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
+import { useThreads } from "./use-threads";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import { resolveSidebarCreateProject } from "./workbench-sidebar-create-project";
 
@@ -105,10 +106,10 @@ export default memo(function WorkbenchThreadSidebar({
   const errors = [...new Set(actions.projectThreadSidebars.projects
     .filter(sidebar => selection.includes(sidebar.projectId))
     .map(({ error }) => error).filter(Boolean))];
-  const explorer = client.explorer;
+  const listing = useThreads.status();
   const loading = logicalProjects && presentation
     // Logical lists render workspace rows; folder sidebars only describe the browse folder.
-    ? !explorer.workspaceThreads && explorer.isThreadsLoading && !explorer.threadsError
+    ? !listing.listed && listing.loading && !listing.error
     : actions.isLoading && !logicalProject && !selectedLocation && projects.length;
   if (loading) {
     return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;

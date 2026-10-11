@@ -8,7 +8,7 @@ import type {
   ThreadTextPresentationField,
   ThreadTextPresentationSource,
 } from "../../../workbench/thread/ThreadTextPresentationController";
-import { useWorkbenchThreadTextPresentationField } from "../use-workbench-client";
+import { useThread } from "../use-thread";
 
 export default function useThreadPresentedText({
   canonicalText,
@@ -27,7 +27,7 @@ export default function useThreadPresentedText({
   threadId: string;
   turnId: string;
 }) {
-  return useWorkbenchThreadTextPresentationField(source ? {
+  return useThread.presentedText(source ? {
     field,
     index,
     itemId,

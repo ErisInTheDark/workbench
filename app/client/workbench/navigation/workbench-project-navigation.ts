@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - default WorkbenchProjectNavigation: maintain current project addresses and resolve routes, hrefs, and live thread owners.
+ * - default WorkbenchProjectNavigation: maintain current project addresses, resolve routes, hrefs, and live thread owners, and notify subscribers when addresses change.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
   createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createProjectSelectionRoute, createWorkbenchHref,
   parseWorkbenchRouteFromLocation, withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
@@ -17,6 +18,8 @@ export default class WorkbenchProjectNavigation {
   private readonly addressOwners = new Map<string, Set<WorkbenchLogicalProject>>();
   private folders: readonly ProjectFolderOption[] = [];
   private attached: { daemonId: ProjectLocationReference["daemonId"]; hostname: string } | null = null;
+  private revision = 0;
+  private readonly listeners = new Set<() => void>();
 
   constructor(
     private projects: readonly WorkbenchProjectOption[],
@@ -38,7 +41,7 @@ export default class WorkbenchProjectNavigation {
     const attachedChanged = attached !== undefined
       && (this.attached?.daemonId !== attached?.daemonId || this.attached?.hostname !== attached?.hostname);
     if (attached !== undefined) this.attached = attached;
-    if (!attachedChanged && this.projects === projects && this.logicalProjects === logicalProjects
+    if (!attachedChanged && areDeeplyEqual(this.projects, projects) && this.logicalProjects === logicalProjects
       && this.aliases.length === aliases.length
       && this.aliases.every((alias, index) => alias.alias === aliases[index]?.alias
         && alias.projectId === aliases[index]?.projectId)) return;
@@ -47,7 +50,16 @@ export default class WorkbenchProjectNavigation {
     this.logicalProjects = logicalProjects;
     this.addressOwners.clear();
     this.rebuildAddressOwners();
+    this.revision += 1;
+    for (const listener of this.listeners) listener();
   }
+
+  /** Changes whenever `update` changes what routes and hrefs resolve to. */
+  getRevision = () => this.revision;
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
 
   private rebuildAddressOwners() {
     this.folders = projectFolderOptions(this.logicalProjects, this.projects, this.attached);

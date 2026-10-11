@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - ThreadSidebarClientOptions: app-owned draft mutation ports and view publication.
- * - default ThreadSidebarClient: source-qualified sidebar facts, selected-folder view and app draft actions.
+ * - default ThreadSidebarClient: source-qualified sidebar facts, the combined thread listing, selected-folder view and app draft actions.
  */
-import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type { WorkbenchLogicalThreadRow, WorkbenchThreadListing, WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { reuseEntries, reuseEqual, reuseKeyed } from "../structural-sharing";
 import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -24,6 +25,15 @@ export interface ThreadSidebarClientOptions {
   move(source: ProjectId, destination: ProjectId, draftId: DraftId): Promise<void>;
 }
 
+const EMPTY_LISTING: WorkbenchThreadListing = {
+  members: {}, rows: [], archivedCount: 0, status: { listed: false, loading: false, error: "" },
+};
+
+function rowKey(row: WorkbenchLogicalThreadRow) {
+  const id = row.entry.entryKind === "draft" ? `draft:${row.entry.draft.draftId}` : `thread:${row.entry.identity.threadId}`;
+  return `${row.logicalProjectId}\0${row.location.daemonId}/${row.location.projectId}\0${id}`;
+}
+
 export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore {
   private selected: ProjectLocationReference | null = null;
   private view: WorkbenchThreadSidebarSnapshot | null = null;
@@ -31,6 +41,8 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private sourceSidebars = new Map<string, WorkbenchThreadSidebarSnapshot>();
   private summaries: WorkbenchProjectThreadSummaries = { projects: [] };
   private readonly listeners = new Set<() => void>();
+  private listing: WorkbenchThreadListing = EMPTY_LISTING;
+  private readonly listingListeners = new Set<() => void>();
   private disposed = false;
   private readonly home: WorkbenchHomeThreadDisplayOrderSnapshot = {
     displayOrder: {}, revision: 0, updateKind: "homeThreadDisplayOrder",
@@ -62,6 +74,29 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
+  getListing = () => this.listing;
+  subscribeListing = (listener: () => void) => {
+    this.listingListeners.add(listener);
+    return () => { this.listingListeners.delete(listener); };
+  };
+
+  /** Unchanged members, rows, placement and folders keep their identity; listeners hear only real changes. */
+  acceptListing(next: WorkbenchThreadListing) {
+    if (this.disposed) return;
+    const previous = this.listing;
+    const members = reuseEntries(previous.members, next.members);
+    const rows = reuseKeyed(previous.rows, next.rows, rowKey);
+    const placement = reuseEqual(previous.placement, next.placement);
+    const folders = reuseEqual(previous.folders, next.folders);
+    const status = reuseEqual(previous.status, next.status);
+    if (members === previous.members && rows === previous.rows && placement === previous.placement
+      && folders === previous.folders && status === previous.status && next.archivedCount === previous.archivedCount) return;
+    this.listing = {
+      members, rows, status, archivedCount: next.archivedCount,
+      ...(placement ? { placement } : {}), ...(folders ? { folders } : {}),
+    };
+    for (const listener of this.listingListeners) listener();
+  }
 
   /** Rows are the listed rows whose detail is known; `projects` carries each listed location's load state. */
   acceptFacts(selected: ProjectLocationReference | null, rows: readonly WorkbenchProjectedThreadRow[],
@@ -117,6 +152,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     if (this.disposed) return Promise.resolve();
     this.disposed = true;
     this.listeners.clear();
+    this.listingListeners.clear();
     return Promise.resolve();
   }
 

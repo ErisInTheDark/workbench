@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendering tests protect project-qualified state in project and global observation modes.
+ * - No production exports; rendering tests protect project-qualified thread reads in project and global observation modes.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,12 +11,10 @@ import type { WorkbenchThreadSidebarStore } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
-import {
-  useThreadArcEntry, useThreadClaimIntersections, useThreadCollisionEntries,
-  useWorkbenchThreadSidebarEntry, useWorkbenchThreadTitleHistory,
-} from "./use-workbench-client";
+import { useThread } from "./use-thread";
 import ThreadStore, { type ThreadStoreActions } from "../../workbench/thread/ThreadStore";
 import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
+import ProjectFactsStore from "../../workbench/project/ProjectFactsStore";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -62,15 +60,16 @@ const globalStore = {
   getSnapshot: () => null,
   subscribe: () => () => undefined,
 } satisfies WorkbenchThreadSidebarStore;
+const pending = { getSnapshot: () => ({ phase: "pending" as const, failure: null, value: null }), release: () => {} };
 const client = {
   controls: null,
-  explorer: {} as WorkbenchClientController["explorer"],
   mounted: {
     networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
     presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
     workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
     voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
     projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
+    projectFacts: new ProjectFactsStore({ observe: () => pending }, () => {}),
     getThreadStore: (projectId, target) => new ThreadStore(projectId, target, () => ({
       feed: "observed", actions: {} as ThreadStoreActions, acquire: () => () => {}, recover: async () => {}, dispose: () => {},
     })),
@@ -96,7 +95,7 @@ const client = {
 } satisfies WorkbenchClientController;
 
 function ThreadStateProbe({ projectId }: { projectId: string }) {
-  const selected = useWorkbenchThreadSidebarEntry(fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), "codex", "thread");
+  const selected = useThread.sidebarEntry(fixtureIdentitySchemas.ProjectIdSchema.parse(projectId), "codex", "thread");
   return (
     <output>
       {selected
@@ -151,15 +150,15 @@ test("arc selectors read the owner's source, not a selected sidebar with the sam
       threadOwnerFor: () => ({ ...location, hostname: "local", rootPath: "/repo", displayPath: "repo" }) },
   } satisfies WorkbenchClientController;
   let result!: {
-    intersections: ReturnType<typeof useThreadClaimIntersections>;
-    collisions: ReturnType<typeof useThreadCollisionEntries>;
-    arcEntry: ReturnType<typeof useThreadArcEntry>;
+    intersections: ReturnType<typeof useThread.claimIntersections>;
+    collisions: ReturnType<typeof useThread.collisions>;
+    arcEntry: ReturnType<typeof useThread.arc>;
   };
   function Probe() {
     result = {
-      intersections: useThreadClaimIntersections("thread", "codex", "plan"),
-      collisions: useThreadCollisionEntries("thread", [{ harness: "codex", threadId: "blocker" }]),
-      arcEntry: useThreadArcEntry("thread", "codex"),
+      intersections: useThread.claimIntersections("thread", "codex", "plan"),
+      collisions: useThread.collisions("thread", [{ harness: "codex", threadId: "blocker" }]),
+      arcEntry: useThread.arc("thread", "codex"),
     };
     return null;
   }
@@ -175,9 +174,9 @@ test("title history actions target their project and preserve rejection", async 
     setThreadTitle: async (request: object) => { calls.push(request); return "old"; },
     updateThreadStateWithAcceptance: async (request: object) => { calls.push(request); return false; },
   } as WorkbenchClientController["controls"];
-  let history!: ReturnType<typeof useWorkbenchThreadTitleHistory>;
+  let history!: ReturnType<typeof useThread.titleHistory>;
   function Probe() {
-    history = useWorkbenchThreadTitleHistory(fixtureIdentitySchemas.ProjectIdSchema.parse("project"), "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"));
+    history = useThread.titleHistory(fixtureIdentitySchemas.ProjectIdSchema.parse("project"), "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"));
     return null;
   }
   renderToStaticMarkup(createElement(WorkbenchClientProvider, {

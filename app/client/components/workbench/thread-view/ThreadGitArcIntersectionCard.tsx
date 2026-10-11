@@ -14,7 +14,7 @@ import {
 import Disclosure from "../../ui/Disclosure";
 import { GitArcUnclaimIcon, GitArcWaitIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
-import { useThreadClaimIntersections } from "../use-workbench-client";
+import { useThread } from "../use-thread";
 import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
 type IntersectionMode = "plan" | "wait" | "stashed";
@@ -116,6 +116,6 @@ export function ObservedThreadGitArcIntersectionCard({ harness, mode = "plan", t
   presentation?: "compact" | "full";
   threadId: string;
 }) {
-  const observed = useThreadClaimIntersections(threadId, harness, mode === "stashed" ? "stashed" : "plan");
+  const observed = useThread.claimIntersections(threadId, harness, mode === "stashed" ? "stashed" : "plan");
   return <ThreadGitArcIntersectionCard {...card} {...observed} mode={mode} />;
 }

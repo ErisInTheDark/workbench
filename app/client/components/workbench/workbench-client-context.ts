@@ -1,19 +1,18 @@
 /*
  * Exports:
- * - WorkbenchClientController: mounted Workbench client and explorer read model. Keywords: client, controller, explorer.
- * - default WorkbenchClientContext: provide one mounted Workbench client to domain hooks. Keywords: React, context, provider.
+ * - WorkbenchClientController: the mounted Workbench client and its controls, stable for the whole mount.
+ * - default WorkbenchClientContext: provide one mounted Workbench client to domain hooks.
  * - useWorkbenchClientController: resolve the explicit or provided domain owner.
  */
 "use client";
 
 import { createContext, useContext } from "react";
 
-import type { ExplorerSnapshot, WorkbenchControls } from "workbench-shared/types";
+import type { WorkbenchControls } from "workbench-shared/types";
 import type { MountedWorkbenchClient } from "../../WorkbenchClient";
 
 export interface WorkbenchClientController {
   controls: WorkbenchControls | null;
-  explorer: ExplorerSnapshot;
   mounted: MountedWorkbenchClient | null;
 }
 

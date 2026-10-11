@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import { useWorkbenchClientController } from "./workbench-client-context";
+import { useThreads } from "./use-threads";
 
 import {
   DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
@@ -279,8 +280,9 @@ export default function WorkbenchThreadList ({
   const projectsById = useMemo(() => new Map<string, WorkbenchProjectOption | WorkbenchLogicalProject>(
     (logicalProjects ?? projects).map(project => [project.id, project] as const),
   ), [logicalProjects, projects]);
-  const threadPlacement = client.explorer.threadPlacement;
-  const threadMembers = client.explorer.threadMembers;
+  const threadPlacement = useThreads.placement();
+  const threadMembers = useThreads.members();
+  const listedArchivedCount = useThreads.archivedCount();
   const currentList = useMemo((): ThreadListShape => {
     const rows = logicalThreads ?? [];
     // Logical lists are placed by the app server; until membership arrives there is nothing to place.
@@ -376,7 +378,7 @@ export default function WorkbenchThreadList ({
   });
   const displayedSettledThreadCount = displayedHistoryItems.reduce((count, item) => count + itemThreadCount(item), 0);
   // Archived rows load in pages; count every archived thread so "Load more" reaches the unloaded ones.
-  const archivedThreadCount = Math.max(list.archivedEntries.length, client.explorer.archivedThreadCount ?? 0);
+  const archivedThreadCount = Math.max(list.archivedEntries.length, listedArchivedCount);
   const historyThreadCount = historyItems.reduce((count, item) => count + itemThreadCount(item), 0)
     - list.archivedEntries.length + archivedThreadCount;
   const remainingSettledThreadCount = historyThreadCount - displayedSettledThreadCount;

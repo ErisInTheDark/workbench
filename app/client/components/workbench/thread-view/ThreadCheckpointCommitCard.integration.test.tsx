@@ -124,7 +124,6 @@ function hiddenTailIds(itemGroups: readonly (readonly ThreadItem[])[], hideReaso
 test("transcript proposals are collapsed git arc cards named by their proposal; failures keep agent detail out", () => {
   const client: WorkbenchClientController = {
     controls: null,
-    explorer: {} as WorkbenchClientController["explorer"],
     mounted: null,
   };
   for (const transport of ["cli", "mcp"]) {

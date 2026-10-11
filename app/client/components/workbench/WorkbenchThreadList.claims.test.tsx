@@ -8,12 +8,13 @@ import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type {
-  ExplorerSnapshot, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption,
+  WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption,
 } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { getWorkbenchHomeThreadKey } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
+import ThreadSidebarClient from "../../workbench/thread/ThreadSidebarClient";
 import {
   WorkbenchThreadSidebarEntrySchema,
   type WorkbenchProjectThreadSidebars,
@@ -179,7 +180,7 @@ function renderThreads(
       children: () => createElement(
         WorkbenchClientProvider,
         {
-          client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+          client: { controls: null, mounted: null },
           children: createElement(
             WorkbenchContextMenuContext.Provider,
             { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
@@ -257,7 +258,7 @@ function renderHomeThreads({
     WorkbenchSidebarPreferencesProvider,
     {
       children: () => createElement(WorkbenchClientProvider, {
-        client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+        client: { controls: null, mounted: null },
         children: createElement(
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
@@ -329,15 +330,17 @@ test("logical thread eyebrows use each thread's daemon-qualified location", () =
   };
   // The app server places logical rows; the list renders that placement.
   const membership = projectWorkbenchThreadMembership(rows, presentation);
-  const explorer = {
-    threadPlacement: membership.placement,
-    threadMembers: Object.fromEntries(membership.members.flatMap(member => member.homeKey ? [[member.homeKey, member]] : [])),
-  } as ExplorerSnapshot;
+  const threadSidebar = new ThreadSidebarClient({ onChange: () => {}, remove: async () => {}, move: async () => {} });
+  threadSidebar.acceptListing({
+    placement: membership.placement,
+    members: Object.fromEntries(membership.members.flatMap(member => member.homeKey ? [[member.homeKey, member]] : [])),
+    rows, archivedCount: 0, status: { listed: true, loading: false, error: "" },
+  });
   const html = renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
       children: () => createElement(WorkbenchClientProvider, {
-        client: { controls: null, explorer, mounted: null },
+        client: { controls: null, mounted: { threadSidebar, threadOwnerFor: () => null } as never },
         children: createElement(
           WorkbenchContextMenuContext.Provider,
           { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
@@ -396,7 +399,6 @@ function renderThreadItemWithFacts(entry: WorkbenchThreadSidebarEntry, facts: { 
     {
       client: {
         controls: null,
-        explorer: {} as ExplorerSnapshot,
         mounted: {
           threadSidebar: null,
           threadSummaries: {

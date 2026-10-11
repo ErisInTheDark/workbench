@@ -14,9 +14,7 @@ import type { WorkbenchClientController } from "../../components/workbench/workb
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 import { useWorkbenchProjectNavigation } from "./use-workbench-project-navigation";
-import type { WorkbenchLogicalProject } from "workbench-shared/types";
 
-const emptyLogicalProjects: readonly WorkbenchLogicalProject[] = [];
 const emptySubscribe = (_listener: () => void) => () => {};
 
 export function useWorkbenchRoute(client: WorkbenchClientController) {
@@ -37,9 +35,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     [pathname, search],
   );
   const launchProjectId = stateSnapshot.records.find(record => record.kind === "lastLaunchTarget")?.projectId;
-  const resolved = (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation(
-    client.explorer.projects, state.getProjectAliases(), client.explorer.logicalProjects ?? emptyLogicalProjects,
-  ))
+  const resolved = (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation([], state.getProjectAliases()))
     .readRoute(locationSnapshot, launchProjectId);
   const route = useMemo(() => resolved, [
     locationSnapshot, resolved.projectId, resolved.threadOwnerProjectId,
@@ -76,7 +72,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     if (pathname !== "/" && pathname !== "/@/" && canonicalPath !== pathname) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
     }
-  }, [pathname, locationSnapshot, client.controls, client.explorer.projects, client.explorer.logicalProjects, href, navigateToRoute, route]);
+  }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route]);
 
   return {
     navigateToRoute,

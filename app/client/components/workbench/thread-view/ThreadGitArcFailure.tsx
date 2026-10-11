@@ -14,7 +14,7 @@ import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-import { useThreadCollisionEntries } from "../use-workbench-client";
+import { useThread } from "../use-thread";
 
 function identityKey(harness: string, threadId: string) {
   return `${harness.toLowerCase()}\0${threadId.toLowerCase()}`;
@@ -45,7 +45,7 @@ function LiveConflictOwners({
   onOpenThread: NonNullable<NonNullable<ContextType<typeof ThreadGitArcPresentationContext>>["onOpenThread"]>;
   threadId: string;
 }) {
-  const { entries, logicalProjectId, ownerProjectId } = useThreadCollisionEntries(
+  const { entries, logicalProjectId, ownerProjectId } = useThread.collisions(
     threadId,
     conflicts.map(({ owner }) => owner),
   );

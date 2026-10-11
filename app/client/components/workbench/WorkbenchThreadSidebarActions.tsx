@@ -27,14 +27,8 @@ import type {
 } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import { getThreadStopIntent } from "./thread-row-actions";
-import {
-  useWorkbenchHomeThreadDisplayOrder,
-  useWorkbenchHomeThreadDisplayOrderSupported,
-  useWorkbenchPinnedThreadLayout,
-  useWorkbenchProjectThreadSidebar,
-  useWorkbenchProjectThreadSidebars,
-  useWorkbenchProjectThreadSummaries,
-} from "./use-workbench-client";
+import { useProjects } from "./use-projects";
+import { useThreads } from "./use-threads";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -123,16 +117,14 @@ function WorkbenchThreadSidebarActionsProvider({
 }) {
   const client = useWorkbenchClientController();
   const controls = client.controls;
-  const logicalThreads = client.explorer.logicalThreads;
-  const presentation = client.mounted?.presentationClient?.snapshot().data;
+  const logicalThreads = useThreads.rows();
   // The app server projects saved folders from every listed row, including rows whose summary is still loading.
-  const threadFolders = client.explorer.threadFolders;
+  const threadFolders = useThreads.folders();
   const logicalProjectOrders = useMemo(() => new Map(Object.entries(threadFolders?.projects ?? {})
     .map(([projectId, folders]) => [projectId, { folders }] as const)), [threadFolders]);
   const logicalPinnedOrder = useMemo(() => threadFolders ? { folders: threadFolders.pinned } : null, [threadFolders]);
-  const threadSummariesById = useMemo(() =>
-    new Map(client.explorer.threads.map(thread => [thread.id, thread])),
-  [client.explorer.threads]);
+  const { threads } = useThreads();
+  const threadSummariesById = useMemo(() => new Map(threads.map(thread => [thread.id, thread])), [threads]);
   const qualifiedForEntry = useCallback((entry: ThreadListEntry) => {
     const id = entry.entryKind === "draft"
       ? isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId
@@ -146,24 +138,24 @@ function WorkbenchThreadSidebarActionsProvider({
     }
     return matches[0] ?? null;
   }, [logicalThreads]);
-  const currentSidebar = useWorkbenchProjectThreadSidebar(projectId);
-  const projectThreadSummaries = useWorkbenchProjectThreadSummaries();
-  const projectThreadSidebars = useWorkbenchProjectThreadSidebars();
-  const homeThreadDisplayOrder = useWorkbenchHomeThreadDisplayOrder();
-  const homeDisplayOrderSupported = useWorkbenchHomeThreadDisplayOrderSupported();
-  const pinnedThreadLayout = useWorkbenchPinnedThreadLayout();
+  const currentSidebar = useThreads.sidebar(projectId);
+  const projectThreadSummaries = useProjects.threads();
+  const projectThreadSidebars = useThreads.sidebars();
+  const { order: homeThreadDisplayOrder, supported: homeDisplayOrderSupported } = useThreads.homeOrder();
+  const pinnedThreadLayout = useThreads.pinnedLayout();
   const entries = currentSidebar?.entries ?? [];
   const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
 
+  const projectFacts = client.mounted?.projectFacts ?? null;
   const layoutProject = useCallback((id: string) => {
-    const projects = client.explorer.logicalProjects ?? [];
+    const projects = projectFacts?.getProjects() ?? [];
     const exact = projects.find(project => project.id === id);
     if (exact) return exact.id;
     const matches = projects.filter(project => project.locations.some(location => location.target.projectId === id));
     if (matches.length !== 1) throw new Error("The folder's app project identity is not available.");
     return matches[0]!.id;
-  }, [client.explorer.logicalProjects]);
+  }, [projectFacts]);
   const layoutKey = useCallback((key: string) => {
     if (key.startsWith("folder:")) return key;
     const qualified = parseProjectQualifiedThreadDisplayKey(key);
@@ -451,7 +443,7 @@ function WorkbenchThreadSidebarActionsProvider({
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
   }, [controls, logicalPinnedOrder, logicalProjectOrders, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
-    onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, presentation, projectId, threadFolders,
+    onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, threadFolders,
     projectThreadSidebars.projects, threadSummariesById, layoutKey, layoutProject, runDragMutation]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({

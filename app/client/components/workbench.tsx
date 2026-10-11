@@ -149,13 +149,9 @@ import WorkbenchDraftTitleIcons from "./workbench/WorkbenchDraftTitleIcons";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
 import ThreadView from "./workbench/thread-view/ThreadView";
 import ThreadShellTitleInput from "./workbench/ThreadShellTitleInput";
-import {
-    useWorkbenchClientMount,
-    useWorkbenchProjectThreadSidebar,
-    useWorkbenchProjectThreadSidebars,
-    useWorkbenchProjectThreadSummaries,
-    useWorkbenchThreads,
-} from "./workbench/use-workbench-client";
+import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
+import { useProjects } from "./workbench/use-projects";
+import { useThreads } from "./workbench/use-threads";
 import {
     workbenchFloatingToolbarClassName,
     workbenchFloatingToolbarGroupClassName,
@@ -416,12 +412,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       clientState.records.find(record => record.kind === "lastLaunchTarget")?.projectId);
   const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
   const activeDraftSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
-  const workbenchClient = useWorkbenchClientMount({
+  const workbenchMount = useWorkbenchClientMount({
     appRpc,
     clientStateController,
     getDomSurfaces: getWorkbenchDomSurfaces,
     initialRoute,
   });
+  const workbenchClient = workbenchMount.client;
   const { navigateToRoute, navigationState, route } = useWorkbenchRoute(workbenchClient);
   const openQualifiedThread = useCallback((row: WorkbenchLogicalThreadRow,
     selectedLogicalProjectId: string | null) => {
@@ -434,13 +431,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [navigateToRoute]);
   const projectHref = useWorkbenchProjectNavigation(workbenchClient);
   currentRouteRef.current = route;
-  const threads = useWorkbenchThreads(workbenchClient);
-  const explorer = workbenchClient.explorer;
+  const threads = useThreads(workbenchClient);
+  const explorer = workbenchMount.explorer;
   const displayedLogicalProjects = explorer.logicalProjects?.length
     ? explorer.logicalProjects
     : explorer.projects.length ? undefined : explorer.logicalProjects;
-  const projectThreadSidebars = useWorkbenchProjectThreadSidebars(workbenchClient);
-  const projectThreadSummaries = useWorkbenchProjectThreadSummaries(workbenchClient);
+  const projectThreadSidebars = useThreads.sidebars(workbenchClient);
+  const projectThreadSummaries = useProjects.threads(workbenchClient);
   const appProjectGroups = displayedLogicalProjects
     && (explorer.workspaceProjectGroupsPhase === "current"
       || explorer.workspaceProjectGroupsPhase === "stale")
@@ -495,7 +492,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const presentationState = workbenchClient.mounted?.presentationClient?.snapshot();
   const selectionError = (navigationState?.phase === "failed" ? navigationState.error ?? "" : "")
     || localSelectionError
-    || (workbenchClient.startup.phase === "failed" ? workbenchClient.startup.error ?? "" : "")
+    || (workbenchMount.startup.phase === "failed" ? workbenchMount.startup.error ?? "" : "")
     || (presentationState?.phase === "failed" ? presentationState.error ?? "" : "");
   const retryPresentation = useCallback(() => {
     void workbenchClient.mounted?.presentationClient?.refresh().catch(error =>
@@ -721,7 +718,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedThreadProjectId = route.view === "thread"
     ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
     : explorer.currentProjectId;
-  const selectedThreadSidebar = useWorkbenchProjectThreadSidebar(selectedThreadProjectId, workbenchClient);
+  const selectedThreadSidebar = useThreads.sidebar(selectedThreadProjectId, workbenchClient);
   const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(
     clientState.records,
     threadId => route.logical
@@ -2466,7 +2463,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     logicalSummaries={explorer.logicalSummaries}
                     logicalError={[
                       workbenchClient.mounted?.presentationClient?.snapshot().error,
-                      workbenchClient.projectSourceError,
+                      workbenchMount.projectSourceError,
                     ].filter(Boolean).join(" ") || null}
                     logicalLoading={workbenchClient.mounted?.presentationClient?.snapshot().phase === "loading"}
                     onProjectLinkClick={selectProjectFromLink}

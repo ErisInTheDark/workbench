@@ -18,6 +18,7 @@ import type {
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import type { WorkbenchClientController } from "./workbench-client-context";
+import ProjectFactsStore from "../../workbench/project/ProjectFactsStore";
 import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "./WorkbenchContextMenuProvider";
 import WorkbenchThreadTooltipDetails from "./WorkbenchThreadTooltipDetails";
@@ -26,6 +27,7 @@ import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { getWorkbenchThreadClaimIntersections } from "workbench-shared/workbench/thread/thread-state";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
+const pendingFacts = { getSnapshot: () => ({ phase: "pending" as const, failure: null, value: null }), release: () => {} };
 const fixtureIdentityValues = {
   WorkbenchThreadId: {
     "thread": fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
@@ -168,7 +170,6 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
   const source = ownerLocation ?? defaultOwnerLocation;
   return {
     controls: null,
-    explorer: {} as WorkbenchClientController["explorer"],
     mounted: {
       networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
       presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
@@ -178,6 +179,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
         getSnapshot: () => ({ candidates: [], paths: [], id: "project-files:fixture", status: "ready" }),
         subscribe: () => () => undefined,
       } as unknown as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
+      projectFacts: new ProjectFactsStore({ observe: () => pendingFacts }, () => {}),
       getThreadStore: () => { throw new Error("Unexpected thread view during static rendering."); },
       threadOwnerFor: () => ({
         ...source, hostname: "local", rootPath: "/project", displayPath: "project",

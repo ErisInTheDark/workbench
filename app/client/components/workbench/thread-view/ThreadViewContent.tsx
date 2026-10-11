@@ -51,7 +51,7 @@ import {
 } from "../../../workbench/thread/thread-subagents";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { ProjectFilePathDisplayProvider } from "../ProjectFilePath";
-import { useWorkbenchThreadFileIndex, useWorkbenchThreads } from "../use-workbench-client";
+import { useThreads } from "../use-threads";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
@@ -321,7 +321,7 @@ export default memo(function ThreadViewContent ({
   const rootThread = useThread(projectId, rootTarget);
   // ThreadView admits this subtree only while the root head is available.
   const thread = rootThread.head!;
-  const ownedFileIndex = useWorkbenchThreadFileIndex(thread.id, useOwnerFileIndex);
+  const ownedFileIndex = useThread.fileIndex(thread.id, useOwnerFileIndex);
   const projectFileCandidates = useOwnerFileIndex ? ownedFileIndex.snapshot.candidates : browseFileCandidates;
   const projectFileIndexId = useOwnerFileIndex ? ownedFileIndex.snapshot.id : browseFileIndexId;
   const projectFilePaths = useOwnerFileIndex ? ownedFileIndex.snapshot.paths : browseFilePaths;
@@ -329,7 +329,7 @@ export default memo(function ThreadViewContent ({
   const projectHref = useWorkbenchProjectNavigation();
   const { controller: composerProfileController, snapshot: composerProfileSnapshot } = useWorkbenchComposerProfiles();
   const activeThreadId = selectedThreadId ?? thread.id;
-  const threads = useWorkbenchThreads(undefined, thread.id);
+  const threads = useThreads(undefined, thread.id);
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const active = useThread(projectId, activeTarget, "view");

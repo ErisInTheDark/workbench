@@ -5,7 +5,7 @@ import type { WorkingTreeFile, WorkingTreeMutation } from "workbench-shared/work
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
-import { useWorkbenchClientController } from "../workbench-client-context";
+import { useProjects } from "../use-projects";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
@@ -21,7 +21,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
   const snapshot = useWorkingTreeSnapshot();
   const menu = useWorkbenchContextMenu();
   const projectHref = useWorkbenchProjectNavigation();
-  const client = useWorkbenchClientController();
+  const logicalProjects = useProjects();
   const daemonId = useWorkingTreeDaemonId();
   const [filter, setFilter] = useState("");
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
@@ -134,7 +134,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
       {ownerIds.map(id => {
         const owner = repository?.owners.find(owner => owner.id === id);
         const target = owner?.entry.entryKind !== "draft" ? owner?.entry.identity : null;
-        const logicalOwner = daemonId ? client.explorer.logicalProjects?.find(project =>
+        const logicalOwner = daemonId ? logicalProjects.find(project =>
           project.locations.some(location => location.daemonId === daemonId
             && location.target.projectId === owner?.projectId)) : null;
         const href = owner && target ? daemonId

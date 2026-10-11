@@ -13,7 +13,7 @@ import type { WorkbenchHarnessId, WorkbenchThreadLifecycle, WorkbenchThreadTarge
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import LoaderIcon from "../LoaderIcon";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
-import { useThreadClaimIntersections } from "../use-workbench-client";
+import { useThread } from "../use-thread";
 import {
   CheckCheckIcon, ClipboardListIcon, FlagFilledIcon, FlagIcon, GitArcIcon, GitArcProposalIcon, MegaphoneIcon, SlashIcon,
   WallpaperIcon,
@@ -66,7 +66,7 @@ export default function ThreadStatusArea({
   vis: { onAnswer: (sessionId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const { intersections, logicalProjectId, ownerProjectId } = useThreadClaimIntersections(threadId, harness, "plan");
+  const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
   const plannedOverlapCount = intersections.hasScope ? intersections.plannedEntries.length : 0;
   const overlapInSlot = !live && overlapCount > 0;

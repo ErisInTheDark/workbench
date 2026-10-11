@@ -1,7 +1,10 @@
-/* No exports. Protect source-qualified sidebar replacement and stable external-store snapshots. */
+/* No exports. Protect source-qualified sidebar replacement, stable external-store snapshots and quiet listing pushes. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadListing } from "workbench-shared/types";
+import {
+  DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema,
+} from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarRowSnapshot as WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
 import ThreadSidebarClient from "./ThreadSidebarClient";
@@ -74,5 +77,38 @@ test("owner rows stay source-qualified when no folder is selected for browsing",
   client.acceptFacts(null, [rows[0]!, { ...rows[1]!, entry: { ...rows[1]!.entry, title: "B updated" } }], projectsFor(a, b));
   assert.equal(client.getLocationSnapshot(a), firstA);
   assert.deepEqual(client.getLocationSnapshot(b)?.entries.map(entry => entry.title), ["B updated"]);
+  await client.dispose();
+});
+
+test("an equal listing push keeps every identity and stays silent; a changed row alone is replaced", async () => {
+  const location = { daemonId: DaemonIdSchema.parse(crypto.randomUUID()), projectId: ProjectIdSchema.parse("project") };
+  const logicalProjectId = LogicalProjectIdSchema.parse(crypto.randomUUID());
+  const entry = (threadId: string, title: string) => ({
+    entryKind: "thread" as const, identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse(threadId) },
+    title, activityAt: 1, metadata: { pinned: false, snoozed: false, archived: false as const },
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+  });
+  const listing = (bTitle: string): WorkbenchThreadListing => ({
+    rows: [entry("a", "A"), entry("b", bTitle)].map(item => ({ logicalProjectId, location, hostname: "local", rootPath: "/p", entry: item })),
+    members: {}, archivedCount: 2, status: { listed: true, loading: false, error: "" },
+  });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    remove: async () => { throw new Error("Unexpected mutation."); },
+    move: async () => { throw new Error("Unexpected mutation."); },
+  });
+  let notified = 0;
+  client.subscribeListing(() => { notified += 1; });
+  client.acceptListing(listing("B"));
+  const first = client.getListing();
+  client.acceptListing(structuredClone(listing("B")));
+  assert.equal(client.getListing(), first);
+  assert.equal(notified, 1);
+  client.acceptListing(listing("B renamed"));
+  const second = client.getListing();
+  assert.equal(notified, 2);
+  assert.equal(second.rows[0], first.rows[0]);
+  assert.notEqual(second.rows[1], first.rows[1]);
+  assert.equal(second.status, first.status);
   await client.dispose();
 });

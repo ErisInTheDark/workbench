@@ -4,7 +4,6 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import type { ExplorerSnapshot } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientContext from "../workbench-client-context";
 import ThreadStatusArea from "./ThreadStatusArea";
@@ -23,7 +22,7 @@ const feedback = [{
 
 function render(lifecycle: WorkbenchThreadLifecycle) {
   return renderToStaticMarkup(createElement(WorkbenchClientContext.Provider, {
-    value: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+    value: { controls: null, mounted: null },
   }, createElement(ThreadStatusArea, {
     addressedFeedback: feedback,
     gitArc: null,

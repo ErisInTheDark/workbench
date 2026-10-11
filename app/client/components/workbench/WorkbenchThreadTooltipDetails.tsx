@@ -21,10 +21,8 @@ import WorkbenchThreadDaemonScope from "./WorkbenchThreadDaemonScope";
 import ThreadTodoPill from "./thread-view/ThreadTodoPill";
 import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
-import {
-  useThreadArcEntry, useThreadClaimIntersections, useWorkbenchProjectThreadSummaries, useWorkbenchThreadFileIndex,
-  useWorkbenchThreadSidebarEntry,
-} from "./use-workbench-client";
+import { useProjects } from "./use-projects";
+import { useThread } from "./use-thread";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { ThreadTooltipSection } from "./WorkbenchThreadTooltipContent";
 
@@ -71,11 +69,11 @@ export default function WorkbenchThreadTooltipDetails({
   const roots = threadContext?.project.roots;
   const workspaceRoots = useMemo<readonly WorkspaceFileLinkRoot[]>(() => roots && roots.length > 1
     ? roots.map(root => ({ id: root.id, rootPath: root.rootPath })) : [], [roots]);
-  const sidebarEntry = useWorkbenchThreadSidebarEntry(projectId, harness, threadId);
-  const ownerArcEntry = useThreadArcEntry(threadId, harness);
-  const summaries = useWorkbenchProjectThreadSummaries();
-  const planIntersections = useThreadClaimIntersections(threadId, harness, "plan");
-  const stashedIntersections = useThreadClaimIntersections(threadId, harness, "stashed");
+  const sidebarEntry = useThread.sidebarEntry(projectId, harness, threadId);
+  const ownerArcEntry = useThread.arc(threadId, harness);
+  const summaries = useProjects.threads();
+  const planIntersections = useThread.claimIntersections(threadId, harness, "plan");
+  const stashedIntersections = useThread.claimIntersections(threadId, harness, "stashed");
   const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (
     entry.entryKind === "thread" && entry.identity.harness === harness && entry.identity.threadId === threadId
   ));
@@ -89,7 +87,7 @@ export default function WorkbenchThreadTooltipDetails({
   const stack = questionnaire.thread.entry?.gitArc ?? null;
   const pendingProposals = useMemo(() => gitArc?.proposals.filter(({ status }) => status === "proposed") ?? [], [gitArc]);
   const [commitActions] = useState(() => new ThreadCheckpointCommitActions());
-  const projectFilePaths = useWorkbenchThreadFileIndex(threadId, pendingProposals.length > 0).snapshot.paths;
+  const projectFilePaths = useThread.fileIndex(threadId, pendingProposals.length > 0).snapshot.paths;
   const questionnaireLoading = !pendingRequest && Boolean(entry && (
     ("pendingQuestionnaire" in entry && entry.pendingQuestionnaire)
     || ("canCompleteQuestionnaire" in entry && entry.canCompleteQuestionnaire)

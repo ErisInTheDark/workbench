@@ -6,7 +6,7 @@
 
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
-import { useWorkbenchModelCatalogues } from "./use-workbench-client";
+import { useThread } from "./use-thread";
 import { useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
 import { ClockIcon, HarnessIcon, StarIcon } from "./workbench-icons";
 import { groupWorkbenchModels, type WorkbenchGroupedModel } from "./workbench-model-groups";
@@ -24,7 +24,7 @@ export default function WorkbenchModelQuickPicker ({
   onOpen: () => void;
   onSelect: (entry: WorkbenchGroupedModel) => void;
 }) {
-  const modelCatalogues = useWorkbenchModelCatalogues(threadId);
+  const modelCatalogues = useThread.models(threadId);
   const clientState = useWorkbenchClientStateSnapshot();
   const favourites = clientState.records.flatMap(record =>
     record.kind === "modelPreference" && record.favourite

@@ -15,6 +15,7 @@ import { getWorkbenchMcpCommandRoute } from "../../../workbench/thread/thread-co
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
+import ProjectFactsStore from "../../../workbench/project/ProjectFactsStore";
 import WorkbenchProjectNavigation from "../../../workbench/navigation/workbench-project-navigation";
 import WorkbenchContextMenuProvider from "../WorkbenchContextMenuProvider";
 import ThreadGitArcPresentationContext, { type ThreadGitArcPresentation } from "./ThreadGitArcPresentationContext";
@@ -27,6 +28,8 @@ import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/wor
 import { createFakeStatsWorkspace, TEST_STATS_THREAD_LOCATION, testFeedbackItem, testFeedbackReportSection } from "../stats/stats-test-store";
 import { WorkbenchStatsProvider } from "../stats/use-stats";
 import WorkbenchStatsStore from "../stats/WorkbenchStatsStore";
+
+const pendingFacts = { getSnapshot: () => ({ phase: "pending" as const, failure: null, value: null }), release: () => {} };
 
 type McpItem = Extract<ThreadItem, { type: "mcpToolCall" }>;
 
@@ -272,13 +275,13 @@ function createClient(
   };
   return {
     controls: null,
-    explorer: {} as WorkbenchClientController["explorer"],
     mounted: store ? {
       networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
       presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
       workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
       voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],
       projectFileIndexStore: {} as NonNullable<WorkbenchClientController["mounted"]>["projectFileIndexStore"],
+      projectFacts: new ProjectFactsStore({ observe: () => pendingFacts }, () => {}),
       getThreadStore: () => { throw new Error("Unexpected thread view during command rendering."); },
       threadOwnerFor: () => ({
         ...ownerLocation, hostname: "local", rootPath: "/project", displayPath: "project",

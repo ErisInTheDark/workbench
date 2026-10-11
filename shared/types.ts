@@ -142,6 +142,7 @@
  * - TreeNode: project-tree node union.
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
+ * - WorkbenchThreadListing: the combined thread list's placement, members, rows, folders and load status.
  * - WorkbenchThreadSidebarStore: read-only live sidebar store contract.
  * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary.
  * - WorkbenchRouteLoadResult: route-load result.
@@ -1237,9 +1238,9 @@ export interface ExplorerSnapshot {
   logicalProjects?: WorkbenchLogicalProject[];
   logicalSummaries?: Record<string, WorkbenchLogicalProjectSummary>;
   /** Listed rows whose detail is known: thread summaries that have landed, and presentation drafts. */
-  logicalThreads?: WorkbenchLogicalThreadRow[];
+  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
   /** Every listed logical member by placement key, including those whose summary is still loading. */
-  threadMembers?: Record<string, import("./workbench/workspace/workspace-observation").WorkspaceThreadMember>;
+  threadMembers?: Readonly<Record<string, import("./workbench/workspace/workspace-observation").WorkspaceThreadMember>>;
   /** The app server's combined sidebar placement; archived page members are appended to `archived`. */
   threadPlacement?: import("./workbench/workspace/workspace-observation").WorkspaceThreadPlacement;
   threadFolders?: import("./workbench/workspace/workspace-observation").WorkspaceThreadFolders;
@@ -1267,8 +1268,23 @@ export interface ExplorerSnapshot {
   workbenchStorageRootPath: string;
 }
 
+export interface WorkbenchThreadListing {
+  /** The app server's combined placement with archived page members appended to `archived`; absent until rows land. */
+  placement?: import("./workbench/workspace/workspace-observation").WorkspaceThreadPlacement;
+  /** Every listed member by placement key, including those whose summary is still loading. */
+  members: Readonly<Record<string, import("./workbench/workspace/workspace-observation").WorkspaceThreadMember>>;
+  /** Listed rows whose detail is known: thread summaries that have landed, and presentation drafts. */
+  rows: readonly WorkbenchLogicalThreadRow[];
+  folders?: import("./workbench/workspace/workspace-observation").WorkspaceThreadFolders;
+  /** Archived threads in the selected projects, whether or not their rows are loaded. */
+  archivedCount: number;
+  status: { listed: boolean; loading: boolean; error: string };
+}
+
 export interface WorkbenchThreadSidebarStore {
   getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
+  getListing?: () => WorkbenchThreadListing;
+  subscribeListing?: (listener: () => void) => () => void;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarRowSnapshot | null;
   getHomeThreadDisplayOrderSupported?: () => boolean;

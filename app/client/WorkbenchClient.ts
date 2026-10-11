@@ -55,6 +55,7 @@ import WorkbenchProjectNavigation from "./workbench/navigation/workbench-project
 import WorkbenchRouteIntentController from "./workbench/navigation/WorkbenchRouteIntentController";
 import WorkbenchDaemonRuntimeClient from "./workbench/WorkbenchDaemonRuntimeClient";
 import WorkbenchProjectFileIndexStore from "./workbench/project/WorkbenchProjectFileIndexStore";
+import ProjectFactsStore from "./workbench/project/ProjectFactsStore";
 import WorkbenchThreadRuntimeStoreController from "./workbench/WorkbenchThreadRuntimeStore";
 import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import ThreadSummaryStore from "./workbench/thread/ThreadSummaryStore";
@@ -100,6 +101,7 @@ export interface MountedWorkbenchClient {
   draftContextFor(draftId: string): ViewContext | null;
   draftLocationFor(draftId: string): ProjectLocationReference | null;
   projectFileIndexStore: WorkbenchProjectFileIndexStore;
+  projectFacts: ProjectFactsStore;
   projectSourceErrors: { getSnapshot(): string; subscribe(listener: () => void): () => void };
   selectBrowseLocation(logicalProjectId: string, location: ProjectLocationReference): Promise<void>;
   /** Re-read one daemon's project catalogue, then the app presentation that maps its folders to logical projects. */
@@ -172,9 +174,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const threadSummaries = new ThreadSummaryStore(workspace);
   /** Summary leases for every listed thread member; a landing summary fills in its sidebar row. */
   const memberLeases = new Map<string, () => void>();
-  const projects = workspace.observe({ kind: "projects" }, factsChanged);
-  const groups = workspace.observe({ kind: "projectGroups" }, factsChanged);
-  const projectFacts = () => projects.getSnapshot().value?.data;
+  const projectFactsStore = new ProjectFactsStore(workspace, factsChanged);
+  const projectFacts = projectFactsStore.getData;
   const registrationFor = (daemonId: DaemonId) =>
     state?.getSnapshot().registrations.find(item => item.daemonId === daemonId)?.id ?? "";
   const folder = (location: ProjectLocationReference | null | undefined) => {
@@ -480,7 +481,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   }
 
   function selectRowsForRoute(route: WorkbenchRoute) {
-    if (groups.getSnapshot().phase === "failed") {
+    if (projectFactsStore.getGroups().phase === "failed") {
       selectRows(null);
       return;
     }
@@ -604,21 +605,29 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const listed = [...rowData?.members ?? [], ...archivedMembers];
       const logicalRows = materializeRows(listed).filter(
         (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null);
-      const threadMembers = Object.fromEntries(listed.flatMap(member => member.homeKey ? [[member.homeKey, member]] : []));
-      const archivedThreadCount = rowData?.projects.reduce((total, item) => total + (item.archivedCount ?? 0), 0) ?? 0;
+      const threadsError = rows?.getSnapshot().failure ?? threads.threadsError;
+      const isThreadsLoading = !!rows && !rows.getSnapshot().value;
+      sidebar.acceptListing({
+        members: Object.fromEntries(listed.flatMap(member => member.homeKey ? [[member.homeKey, member]] : [])),
+        rows: logicalRows,
+        archivedCount: rowData?.projects.reduce((total, item) => total + (item.archivedCount ?? 0), 0) ?? 0,
+        status: { listed: Boolean(rowData), loading: isThreadsLoading, error: threadsError },
+        ...(rowData ? { placement: placementWithArchived(rowData.placement, archivedMembers), folders: rowData.folders } : {}),
+      });
+      const listing = sidebar.getListing();
+      const groupFacts = projectFactsStore.getGroups();
       const snapshot: ExplorerSnapshot = {
         ...project, browseLocation, currentPath: activePath,
         workspaceProjects: facts, workspaceThreads: rowData ?? undefined,
-        workspaceProjectGroups: groups.getSnapshot().value?.data,
-        workspaceProjectGroupsPhase: groups.getSnapshot().phase,
+        workspaceProjectGroups: groupFacts.data ?? undefined,
+        workspaceProjectGroupsPhase: groupFacts.phase,
         logicalProjects: facts?.projects ?? [], logicalSummaries: facts?.summaries ?? {},
-        logicalThreads: logicalRows, archivedThreadCount, threadMembers,
-        threadPlacement: rowData ? placementWithArchived(rowData.placement, archivedMembers) : undefined,
-        threadFolders: rowData?.folders,
+        logicalThreads: listing.rows, archivedThreadCount: listing.archivedCount, threadMembers: listing.members,
+        threadPlacement: listing.placement, threadFolders: listing.folders,
         subagents: threads.subagents, threads: threads.threads,
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
-        isThreadsLoading: !!rows && !rows.getSnapshot().value,
-        threadsError: rows?.getSnapshot().failure ?? threads.threadsError,
+        isThreadsLoading,
+        threadsError,
         currentThreadId: threads.currentThreadId,
         locallyModifiedPaths: browseLocation ? fileDraftStoreFor(browseLocation).getLocallyModifiedPaths() : [],
         fontSize: fontSize?.preference.key === "editorFontSize" ? fontSize.preference.value : DEFAULT_EDITOR_FONT_SIZE,
@@ -971,8 +980,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   return {
     workspace, networkClient: network, presentationClient: presentation,
     navigation, projectNavigator, routeIntents, controls, voice, projectFileIndexStore,
+    projectFacts: projectFactsStore,
     projectSourceErrors: {
-      getSnapshot: () => [projects.getSnapshot().failure,
+      getSnapshot: () => [projectFactsStore.getFailure(),
         ...(projectFacts()?.catalogues.map(item => item.failure) ?? []),
         rows?.getSnapshot().failure, tree?.getSnapshot().failure].filter(Boolean).join(" "),
       subscribe: listener => { factListeners.add(listener); return () => { factListeners.delete(listener); }; },
@@ -1012,8 +1022,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     },
     dispose: () => {
       disposed = true;
-      projects.release();
-      groups.release();
+      projectFactsStore.dispose();
       rows?.release();
       previousRows?.release();
       archived?.handle.release();

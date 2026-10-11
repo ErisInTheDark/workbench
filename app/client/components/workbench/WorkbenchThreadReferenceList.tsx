@@ -12,7 +12,7 @@ import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-wo
 import { ProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import ProjectFileLinkList from "./ProjectFileLinkList";
-import { useWorkbenchProjectThreadSidebars } from "./use-workbench-client";
+import { useThreads } from "./use-threads";
 
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
 
@@ -30,7 +30,7 @@ export default function WorkbenchThreadReferenceList({
   onOpenThread?: (target: WorkbenchThreadTarget) => void;
 }) {
   const projectHref = useWorkbenchProjectNavigation();
-  const sidebars = useWorkbenchProjectThreadSidebars();
+  const sidebars = useThreads.sidebars();
   if (!references.length) return null;
   const projectFilePaths = references.flatMap(({ paths }) => paths ?? []);
   return (<>

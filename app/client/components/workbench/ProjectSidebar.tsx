@@ -15,7 +15,7 @@ import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuConte
 import {
   groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
 } from "./project-sidebar-groups";
-import { useWorkbenchProjectThreadSummaries } from "./use-workbench-client";
+import { useProjects } from "./use-projects";
 import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
 import { NewEntryIcon } from "./workbench-explorer";
 import { EllipsisIcon, HomeIcon, ProjectIcon } from "./workbench-icons";
@@ -111,7 +111,7 @@ export default function ProjectSidebar ({
 }) {
   const { preferences } = useWorkbenchSidebarPreferences();
   const client = useWorkbenchClientController();
-  const workspace = client.explorer.workspaceProjects;
+  const folders = useProjects.folders();
   const presentation = client.mounted?.presentationClient ?? null;
   const [folderError, setFolderError] = useState<string | null>(null);
   const folderMenus = useMemo(() => new Map<string, WorkbenchContextMenuDefinition>((logicalProjects ?? []).map(project =>
@@ -121,7 +121,7 @@ export default function ProjectSidebar ({
         setFolderError(error instanceof Error ? error.message : "Unable to change this project's folders.");
       });
     })] as const)), [logicalProjects, presentation]);
-  const summaries = useWorkbenchProjectThreadSummaries();
+  const summaries = useProjects.threads();
   const displayedProjects = logicalProjects ?? projects;
   const entriesByProjectId = useMemo(() => new Map<string, DisplaySidebarProject>(displayedProjects.map(project => {
     const summary = logicalProjects
@@ -240,7 +240,7 @@ export default function ProjectSidebar ({
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
           {!displayedProjects.length ? <WorkbenchDaemonStartupFailure className="px-2" /> : null}
           {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">
-            {logicalLoading || !workspace || workspace.catalogues.some(item => item.phase === "pending")
+            {logicalLoading || !folders || folders.catalogues.some(item => item.phase === "pending")
               ? "Loading projects..." : "No projects were found."}
           </p> : null}
         </nav>

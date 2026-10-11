@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useRef, useState, type Dispatch, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type Dispatch, type KeyboardEvent, type ReactNode } from "react";
 
 import type { DaemonId } from "workbench-shared/workbench/identity";
 import type { ProjectFolderList } from "workbench-shared/workbench/project/project-creation";
@@ -16,6 +16,8 @@ import { displayFolderPath, FolderPickerState, type FolderPickerAction, type Fol
 
 type Listing = { key: string; phase: "loading" } | { key: string; phase: "ready"; value: ProjectFolderList }
   | { key: string; phase: "failed"; error: string };
+const NO_DAEMONS: readonly never[] = [];
+const noSubscription = (_listener: () => void) => () => {};
 type DaemonRoots = { daemonId: DaemonId; hostname: string; roots: string[] | null; error: string | null };
 type Row = {
   key: string;
@@ -43,7 +45,9 @@ export default function WorkbenchFolderPicker ({ dispatch, state }: {
   state: FolderPickerState;
 }) {
   const mounted = useWorkbenchClientController().mounted;
-  const daemons = mounted?.presentationClient.snapshot().data?.daemons ?? [];
+  const presentation = mounted?.presentationClient ?? null;
+  const daemons = useSyncExternalStore(presentation?.subscribe ?? noSubscription,
+    () => presentation?.snapshot().data?.daemons ?? NO_DAEMONS, () => NO_DAEMONS);
   const daemonKey = daemons.map(daemon => `${daemon.id}:${daemon.hostname}`).join("\0");
   const [rootsRevision, setRootsRevision] = useState(0);
   const [roots, setRoots] = useState<DaemonRoots[] | null>(null);

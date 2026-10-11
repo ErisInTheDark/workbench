@@ -68,7 +68,7 @@ test("static previews do not claim to be loading and failures expose recovery in
   assert.doesNotMatch(idle, /aria-busy="true"|contenteditable="(?:true|plaintext-only)"|data-thread-checkpoint-commit-action/iu);
 
   const failed = renderToStaticMarkup(createElement(WorkbenchClientProvider, {
-    client: { controls: null, explorer: {} as WorkbenchClientController["explorer"], mounted: null },
+    client: { controls: null, mounted: null },
     children: createElement(ThreadCheckpointCommitCard, {
       ...pendingProps, state: { status: "error", error: "proposal read failed", retryable: true },
     }),

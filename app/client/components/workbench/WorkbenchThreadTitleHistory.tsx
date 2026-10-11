@@ -7,7 +7,7 @@
 import { useState } from "react";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import { useWorkbenchThreadTitleHistory } from "./use-workbench-client";
+import { useThread } from "./use-thread";
 import { PanelCloseIcon, ReapplyTitleIcon } from "./workbench-icons";
 
 export default function WorkbenchThreadTitleHistory({ projectId, harness, threadId }: {
@@ -15,7 +15,7 @@ export default function WorkbenchThreadTitleHistory({ projectId, harness, thread
   harness: WorkbenchHarness;
   threadId: WorkbenchThreadId;
 }) {
-  const history = useWorkbenchThreadTitleHistory(projectId, harness, threadId);
+  const history = useThread.titleHistory(projectId, harness, threadId);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const apply = async (kind: "reapply" | "dismiss", title: string) => {

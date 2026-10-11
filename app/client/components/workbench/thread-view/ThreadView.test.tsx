@@ -6,7 +6,6 @@ import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ComponentProps } from "react";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import type { ExplorerSnapshot } from "workbench-shared/types";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
 import ThreadView from "./ThreadView";
@@ -24,9 +23,7 @@ test("an unresolved existing-thread route shows its failure and retained owner",
     },
   } as ComponentProps<typeof ThreadView>;
   const html = renderToStaticMarkup(
-    <WorkbenchClientProvider client={{
-      controls: null, explorer: {} as ExplorerSnapshot, mounted: null,
-    }}>
+    <WorkbenchClientProvider client={{ controls: null, mounted: null }}>
       <ThreadView {...props} />
     </WorkbenchClientProvider>,
   );
@@ -37,7 +34,6 @@ test("an unresolved existing-thread route shows its failure and retained owner",
 test("a retained thread head does not turn pending project ownership into a failure", () => {
   const client = {
     controls: null,
-    explorer: {} as ExplorerSnapshot,
     mounted: {
       getThreadStore: () => ({
         getSlice: (name: keyof typeof EMPTY_THREAD_STORE_STATE) => name === "summary"
