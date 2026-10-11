@@ -17,6 +17,9 @@ interface Observer {
 
 interface Observers {
   root: HTMLElement;
+  /** Scrolled content; positions are measured against it so a gesture-time content offset cannot skew them. */
+  content: HTMLElement;
+  shiftScrollTop(delta: number): void;
   intersection(
     callback: (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void,
     range: ThreadContentVisibilityRange,
@@ -75,7 +78,7 @@ export default class ThreadViewportVisibilityController {
     const targetRect = target.getBoundingClientRect();
     const state = { visible: true, height: targetRect.height };
     const contentBottom = preserveReadingPosition
-      ? targetRect.bottom - this.observers.root.getBoundingClientRect().top + this.observers.root.scrollTop
+      ? targetRect.bottom - this.observers.content.getBoundingClientRect().top
       : 0;
     this.entries.set(target, { contentBottom, preserveReadingPosition, state, notify, range });
     notify(state);
@@ -170,10 +173,8 @@ export default class ThreadViewportVisibilityController {
     const current = this.entries.get(target);
     if (!current) return;
     const targetRect = current.preserveReadingPosition ? target.getBoundingClientRect() : null;
-    const rootRect = targetRect ? this.observers.root.getBoundingClientRect() : null;
-    const contentBottom = targetRect && rootRect
-      ? targetRect.bottom - rootRect.top + this.observers.root.scrollTop
-      : current.contentBottom;
+    const contentTop = targetRect ? this.observers.content.getBoundingClientRect().top : 0;
+    const contentBottom = targetRect ? targetRect.bottom - contentTop : current.contentBottom;
     if (state.visible === current.state.visible && state.height === current.state.height) {
       current.contentBottom = contentBottom;
       return;
@@ -185,9 +186,9 @@ export default class ThreadViewportVisibilityController {
       && current.state.height > 0
       && state.height > 0
       && state.height !== current.state.height
-      && current.contentBottom <= this.observers.root.scrollTop
+      && current.contentBottom <= this.observers.root.getBoundingClientRect().top - contentTop
     ) {
-      this.observers.root.scrollTop += state.height - current.state.height;
+      this.observers.shiftScrollTop(state.height - current.state.height);
     }
     current.contentBottom = contentBottom;
     current.state = state;

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, reader scroll settling, measured-window stability, and off-screen layout preservation.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, gesture-safe scroll correction, measured-window stability, and off-screen layout preservation.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -50,6 +50,9 @@ interface ActiveThreadScrollViewportProps extends Omit<ThreadScrollViewportProps
   forwardedRef: ForwardedRef<HTMLDivElement>;
 }
 
+// Back-to-back flings never settle, so the reserve must outlast a whole flinging session of history arriving above.
+// An empty spacer costs no paint, and this stays far below WebKit's ~33M px layout limit.
+const THREAD_SCROLL_TOUCH_RESERVE_PX = 1_000_000;
 const THREAD_SCROLL_DOWN_KEYS = new Set(["ArrowDown", "End", "PageDown"]);
 const THREAD_SCROLL_UP_KEYS = new Set(["ArrowUp", "Home", "PageUp"]);
 
@@ -71,6 +74,12 @@ function readScrollMetrics (viewport: HTMLDivElement): ThreadScrollMetrics {
     scrollHeight: viewport.scrollHeight,
     scrollTop: viewport.scrollTop,
   };
+}
+
+/** Older turns can still load, or the topmost progressive window still hides chunks. */
+function hasThreadContentAbove (content: HTMLElement) {
+  return Boolean(content.querySelector("[data-thread-history-above]"))
+    || Boolean(content.querySelector("[data-thread-progressive-window]")?.hasAttribute("data-thread-progressive-hidden"));
 }
 
 function isInteractiveScrollKeyTarget (target: EventTarget | null) {
@@ -95,24 +104,12 @@ function ActiveThreadScrollViewport ({
   const previousScrollTopRef = useRef(0);
   const touchClientYRef = useRef<number | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const reserveRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
   const progressiveWindowStartsRef = useRef(new Map<string, number>());
-  const settleRef = useRef<ThreadScrollSettleController | null>(null);
-  const settle = settleRef.current ??= new ThreadScrollSettleController({
-    schedule: (callback, delayMs) => {
-      const timer = window.setTimeout(callback, delayMs);
-      return () => window.clearTimeout(timer);
-    },
-  });
-  useEffect(() => () => {
-    visibility.current?.dispose();
-    visibility.current = null;
-  }, []);
-  useEffect(() => () => settle.dispose(), [settle]);
-
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
     const metrics = readScrollMetrics(viewport);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
@@ -122,6 +119,44 @@ function ActiveThreadScrollViewport ({
     if (reattached) bottomListeners.current.forEach(listener => listener());
     return proximity;
   }, []);
+  const settleRef = useRef<ThreadScrollSettleController | null>(null);
+  const settle = settleRef.current ??= new ThreadScrollSettleController({
+    schedule: (callback, delayMs) => {
+      const timer = window.setTimeout(callback, delayMs);
+      return () => window.clearTimeout(timer);
+    },
+    readScrollTop: () => viewportRef.current?.scrollTop ?? 0,
+    scrollBy: (delta) => {
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      viewport.scrollTop += delta;
+      previousScrollTopRef.current = viewport.scrollTop;
+      syncScrollProximity(viewport);
+    },
+    setContentOffset: (offsetPx) => {
+      const content = contentRef.current;
+      if (content) content.style.marginTop = offsetPx ? `${offsetPx}px` : "";
+    },
+    setScrollLocked: (locked) => {
+      const viewport = viewportRef.current;
+      if (viewport) viewport.style.overflowY = locked ? "hidden" : "";
+    },
+    setReserve: (heightPx) => {
+      const reserve = reserveRef.current;
+      if (reserve) reserve.style.height = heightPx ? `${heightPx}px` : "";
+    },
+    // Only touch scrolling needs it: wheel and trackpad corrections are plain scroll writes that already hold position.
+    readReserveTarget: () => {
+      const content = contentRef.current;
+      return content && window.matchMedia("(pointer: coarse)").matches && hasThreadContentAbove(content)
+        ? THREAD_SCROLL_TOUCH_RESERVE_PX : 0;
+    },
+  });
+  useEffect(() => () => {
+    visibility.current?.dispose();
+    visibility.current = null;
+  }, []);
+  useEffect(() => () => settle.dispose(), [settle]);
 
   const placeInitialViewportAtEnd = useCallback(() => {
     const viewport = viewportRef.current;
@@ -151,13 +186,15 @@ function ActiveThreadScrollViewport ({
     progressiveWindowing: true,
     progressiveWindowStarts: progressiveWindowStartsRef.current,
     getViewport: () => viewportRef.current,
-    isScrollSettled: () => settle.settled,
-    onScrollSettled: listener => settle.subscribe(listener),
+    shiftScrollTop: delta => settle.shift(delta),
     observeContent: (element, listener, range = "viewport", preserveReadingPosition = false) => {
       const root = viewportRef.current;
-      if (!root) return () => { };
+      const content = contentRef.current;
+      if (!root || !content) return () => { };
       visibility.current ??= new ThreadViewportVisibilityController({
         root,
+        content,
+        shiftScrollTop: delta => settle.shift(delta),
         intersection: (callback, observedRange, rootMarginPx) => new IntersectionObserver(callback, {
           root,
           rootMargin: observedRange === "viewport" ? "0px" : `${rootMarginPx}px 0px`,
@@ -177,8 +214,7 @@ function ActiveThreadScrollViewport ({
       return () => {
         if (viewportRef.current !== viewport) return;
         const preservedScrollTop = getPreservedThreadScrollTop(previousMetrics, readScrollMetrics(viewport));
-        if (preservedScrollTop !== null) viewport.scrollTop = preservedScrollTop;
-        previousScrollTopRef.current = viewport.scrollTop;
+        if (preservedScrollTop !== null) settle.shift(preservedScrollTop - viewport.scrollTop);
         syncScrollProximity(viewport);
       };
     },
@@ -193,11 +229,14 @@ function ActiveThreadScrollViewport ({
     const viewport = viewportRef.current;
     const content = contentRef.current;
     if (!viewport || !content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => placeInitialViewportAtEnd());
+    const observer = new ResizeObserver(() => {
+      placeInitialViewportAtEnd();
+      settle.reconcileReserve();
+    });
     observer.observe(content);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [placeInitialViewportAtEnd]);
+  }, [placeInitialViewportAtEnd, settle]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -347,6 +386,8 @@ function ActiveThreadScrollViewport ({
       data-thread-scroll-target="true"
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
+        {/* Room above the content that history arriving mid-fling fills without a scroll write. Outside the content so content-relative positions stay stable. */}
+        <div ref={reserveRef} className="shrink-0" aria-hidden="true" />
         <div ref={contentRef} className={joinClasses("min-h-full shrink-0", contentClassName)}>
           {children}
         </div>

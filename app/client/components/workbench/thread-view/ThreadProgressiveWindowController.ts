@@ -2,7 +2,7 @@
  * Exports:
  * - ProgressiveWindowView: current progressive-window geometry and hidden content count.
  * - ProgressiveWindowOptions: reading, revealing, and scroll-restoration boundary.
- * - default ThreadProgressiveWindowController: own bounded prepends, deferred while reader scrolling is unsettled, and pre-paint anchor restoration.
+ * - default ThreadProgressiveWindowController: own bounded prepends and pre-paint anchor restoration.
  */
 
 export interface ProgressiveWindowView {
@@ -12,8 +12,6 @@ export interface ProgressiveWindowView {
   readonly identity: object;
   readonly nearTop: boolean;
   readonly scrollTop: number;
-  /** False during reader touch or momentum; iOS halts or yanks a fling when scrollTop is restored mid-flight. */
-  readonly settled: boolean;
   readonly viewport: object;
 }
 
@@ -55,7 +53,7 @@ export default class ThreadProgressiveWindowController {
       if (!view) return;
     }
 
-    if (!view.settled || !view.nearTop || view.hiddenCount <= 0 || !view.anchor) return;
+    if (!view.nearTop || view.hiddenCount <= 0 || !view.anchor) return;
     this.#pending = { anchor: view.anchor, hiddenCount: view.hiddenCount };
     this.#options.reveal(Math.min(REVEAL_BATCH_SIZE, view.hiddenCount));
   }

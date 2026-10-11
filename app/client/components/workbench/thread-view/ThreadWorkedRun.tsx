@@ -41,18 +41,13 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
     const viewport = viewportContext.getViewport();
     if (!node || !viewport) return;
     if (state === "collapsed") {
-      const expand = () => {
-        // Layout above the reader changes only once touch and momentum settle; iOS halts a fling on scroll restoration.
-        if (!viewportContext.isScrollSettled()) return;
-        const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
-        if (next === state) return;
-        if (node.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().top) {
-          restoreLayout.current = viewportContext.preserveOffscreenLayout();
-        }
-        setState(next);
-      };
-      expand();
-      return viewportContext.onScrollSettled(expand);
+      const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
+      if (next === state) return;
+      if (node.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().top) {
+        restoreLayout.current = viewportContext.preserveOffscreenLayout();
+      }
+      setState(next);
+      return;
     }
     if (count < 3 || state === "awaitingAttachment") return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -61,7 +56,6 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       if (retired) return;
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      if (!viewportContext.isScrollSettled()) return;
       const bounds = node.getBoundingClientRect();
       const view = viewport.getBoundingClientRect();
       if (!viewport.clientHeight || !bounds.height) return;
@@ -86,14 +80,12 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
     intersection.observe(node);
     resize.observe(node);
     resize.observe(viewport);
-    const stopSettled = viewportContext.onScrollSettled(measure);
     measure();
     return () => {
       retired = true;
       if (timer !== null) clearTimeout(timer);
       intersection.disconnect();
       resize.disconnect();
-      stopSettled();
     };
   }, [count, initialInactive, newestActivityAt, state, viewportContext]);
   return (

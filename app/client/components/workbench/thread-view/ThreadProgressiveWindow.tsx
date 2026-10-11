@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadProgressiveWindowChunk: one stable exact-height transcript chunk.
- * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends, after reader scrolling settles, while preserving the reading anchor and restoring revealed extent across remounts.
+ * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends while preserving the reading anchor and restoring revealed extent across remounts.
  */
 "use client";
 
@@ -25,7 +25,6 @@ export interface ThreadProgressiveWindowChunk {
 }
 
 const INITIAL_CHUNK_COUNT = 1;
-const TOP_MARGIN_PX = 160;
 
 export default function ThreadProgressiveWindow({
   chunks,
@@ -73,10 +72,10 @@ export default function ThreadProgressiveWindow({
       },
       hiddenCount: visibleStartRef.current,
       identity: identityToken,
-      nearTop: sentinelRect.bottom > viewportRect.top - TOP_MARGIN_PX
+      // One screen ahead, so chunks usually land in the reserve before the reader reaches them.
+      nearTop: sentinelRect.bottom > viewportRect.top - scrollTarget.clientHeight
         && sentinelRect.top < viewportRect.bottom,
       scrollTop: scrollTarget.scrollTop,
-      settled: viewport.isScrollSettled(),
       viewport: scrollTarget,
     };
   }, [identityToken, viewport]);
@@ -85,7 +84,7 @@ export default function ThreadProgressiveWindow({
   }, []);
   const writeScrollTop = useCallback((scrollTop: number) => {
     const scrollTarget = viewport.getViewport();
-    if (scrollTarget) scrollTarget.scrollTop = scrollTop;
+    if (scrollTarget) viewport.shiftScrollTop(scrollTop - scrollTarget.scrollTop);
   }, [viewport]);
   const bindingsRef = useRef<ProgressiveWindowOptions>({ readView, reveal, writeScrollTop });
   bindingsRef.current = { readView, reveal, writeScrollTop };
@@ -107,18 +106,19 @@ export default function ThreadProgressiveWindow({
     const reconcile = () => controllerRef.current?.reconcile();
     const observer = new IntersectionObserver(reconcile, {
       root: scrollTarget,
-      rootMargin: `${TOP_MARGIN_PX}px 0px 0px`,
+      rootMargin: "100% 0px 0px",
     });
     observer.observe(sentinel);
-    const stopSettled = viewport.onScrollSettled(reconcile);
-    return () => {
-      observer.disconnect();
-      stopSettled();
-    };
+    return () => observer.disconnect();
   }, [viewport]);
   const visibleChunks = chunks.slice(boundedStart);
   return (
-    <div ref={rootRef} className="space-y-2" data-thread-progressive-window={identity}>
+    <div
+      ref={rootRef}
+      className="space-y-2"
+      data-thread-progressive-window={identity}
+      data-thread-progressive-hidden={boundedStart > 0 ? "true" : undefined}
+    >
       <div ref={sentinelRef} className="h-px" aria-hidden />
       {visibleChunks.map(chunk => (
         <div key={chunk.key} data-thread-progressive-window-chunk={chunk.key}>

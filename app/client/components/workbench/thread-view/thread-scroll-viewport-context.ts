@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, scroll settling, progressive-window and end controls, entry motion, worked-run state, and layout preservation.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, scroll correction, progressive-window and end controls, entry motion, worked-run state, and layout preservation.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
@@ -20,9 +20,8 @@ export interface ThreadScrollViewportContextValue {
   /** Revealed start per progressive window identity, so a windowed remount restores its measured height. */
   readonly progressiveWindowStarts: Map<string, number> | null;
   readonly getViewport: () => HTMLDivElement | null;
-  /** False while the reader's touch or momentum scroll is in flight. */
-  readonly isScrollSettled: () => boolean;
-  readonly onScrollSettled: (listener: () => void) => () => void;
+  /** Keep the reader's visual position after layout above them changed by `delta` px. The one scroll-correction path. */
+  readonly shiftScrollTop: (delta: number) => void;
   readonly observeContent: (
     element: HTMLElement,
     listener: (state: ThreadContentVisibility) => void,
@@ -40,8 +39,7 @@ const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue =
   progressiveWindowing: false,
   progressiveWindowStarts: null,
   getViewport: () => null,
-  isScrollSettled: () => true,
-  onScrollSettled: () => () => {},
+  shiftScrollTop: () => {},
   observeContent: () => () => {},
   preserveOffscreenLayout: () => () => {},
   setEndTarget: () => {},
