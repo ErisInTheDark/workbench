@@ -6,11 +6,12 @@
 
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type PointerEvent } from "react";
 
-import type { ThreadPayload, ThreadSummary } from "workbench-shared/types";
+import type { ThreadPayload } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
 import { useThread } from "../use-thread";
+import { useThreads } from "../use-threads";
 import { normalizeWorkbenchTimestampMs } from "workbench-shared/workbench/thread/thread-state";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
@@ -38,7 +39,6 @@ type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
 
 interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
-  fallbackThreadSummary?: ThreadSummary | null;
   sidebarToggleInset?: "collapsed" | "expanded";
   isFocused: boolean;
   isMinimized?: boolean;
@@ -56,7 +56,6 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
 }
 
 export default function WorkbenchThreadPanel ({
-  fallbackThreadSummary = null,
   sidebarToggleInset,
   isFocused,
   isMinimized = false,
@@ -90,6 +89,7 @@ export default function WorkbenchThreadPanel ({
     || threadViewProps.threadTarget?.kind === "subagent"
     ? client.mounted?.threadOwnerFor(threadId) : null;
   const panelThread = useThread(threadViewProps.projectId, threadViewProps.threadTarget, threadViewProps.routeOwned ? "route" : "summary");
+  const runtimeThreads = useThreads().threads;
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
   const initializedNewRef = useRef(false);
@@ -104,7 +104,7 @@ export default function WorkbenchThreadPanel ({
     onCreateDraftThread?.();
   }, [onCreateDraftThread, thread?.id, threadId]);
 
-  const fallbackSummary = fallbackThreadSummary?.id === threadId ? fallbackThreadSummary : null;
+  const fallbackSummary = runtimeThreads.find(summary => summary.id === threadId) ?? null;
   const threadDisplaySource = panelThread.draftDocument ?? thread ?? fallbackSummary;
   // Observed feeds have no document: the thread entry carries the title and activity.
   const threadActivityTimestampMs = threadDisplaySource

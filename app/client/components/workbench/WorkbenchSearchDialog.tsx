@@ -7,15 +7,15 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
 import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
 import { useWorkbenchClientController } from "./workbench-client-context";
+import { useProjects } from "./use-projects";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
@@ -28,14 +28,14 @@ export function findSearchThreadEntry(readSummary: (threadId: string) => Workspa
   return located.summary.row.identity.harness === result.harnessId ? located.summary.row : undefined;
 }
 
-export default function WorkbenchSearchDialog({ controller, projects, logicalProjects, logicalSummaries, projectSummaries }: {
+export default function WorkbenchSearchDialog({ controller, projects, logicalProjects }: {
   controller: WorkbenchSearchController;
   projects: readonly WorkbenchProjectOption[];
   logicalProjects?: readonly WorkbenchLogicalProject[];
-  logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
-  projectSummaries: WorkbenchProjectThreadSummaries;
 }) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const logicalSummaries = useProjects.summaries();
+  const projectSummaries = useProjects.threads();
   const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
   const inputRef = useRef<HTMLInputElement>(null);

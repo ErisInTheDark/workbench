@@ -25,7 +25,6 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   expandedDirectories: [""],
   fontSize: 1.08,
   isProjectLoading: false,
-  isThreadsLoading: false,
   locallyModifiedPaths: [],
   projectFileCandidates: ProjectTreeFileIndex.empty.candidates,
   projectFileIndexId: ProjectTreeFileIndex.empty.id,
@@ -35,9 +34,6 @@ const INITIAL_EXPLORER_SNAPSHOT: ExplorerSnapshot = {
   root: "Project",
   rootPath: "",
   roots: [],
-  subagents: [],
-  threads: [],
-  threadsError: "",
   tree: [],
   workbenchStorageRootPath: "",
 };

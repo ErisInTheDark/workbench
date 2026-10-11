@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadRuntimeController: internal accept port plus the provider-facing thread runtime store. Keywords: thread runtime, React, domain hook.
- * - default WorkbenchThreadRuntimeStore: cache and publish route-owned thread runtime state with stable snapshots. Keywords: thread, external store, selection.
+ * - default WorkbenchThreadRuntimeStore: cache and publish route-owned thread runtime state with stable snapshots, keeping an unchanged current thread's identity. Keywords: thread, external store, selection.
  */
 
 import type { WorkbenchThreadRuntimeSnapshot, WorkbenchThreadRuntimeStore as WorkbenchThreadRuntimeStoreContract } from "workbench-shared/types";
@@ -34,7 +34,8 @@ export default function WorkbenchThreadRuntimeStore(
       if (areWorkbenchThreadRuntimeSnapshotsEquivalent(snapshot, nextSnapshot)) {
         return;
       }
-      snapshot = nextSnapshot;
+      snapshot = areDeeplyEqual(snapshot.currentThread, nextSnapshot.currentThread)
+        ? { ...nextSnapshot, currentThread: snapshot.currentThread } : nextSnapshot;
       for (const listener of listeners) listener();
     },
     getSnapshot: () => snapshot,

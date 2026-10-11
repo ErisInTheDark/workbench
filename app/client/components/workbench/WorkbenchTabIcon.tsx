@@ -1,11 +1,17 @@
 /*
  * Exports:
- * - WorkbenchTabIconState: tab icon state derived from global thread status. Keywords: tab icon, favicon, thread, questionnaire, active.
- * - default WorkbenchTabIcon: synchronize the browser tab icon with Workbench thread status. Keywords: tab icon, favicon, thread, questionnaire, active.
+ * - WorkbenchTabIconState: tab icon state derived from global thread status.
+ * - default WorkbenchTabIcon: derive the tab icon state from sidebar threads and the current thread, and synchronize the browser tab icon with it.
  */
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+
+import {
+  isThreadStatusActive, isThreadStatusWaitingOnUserInput, threadAttentionLabels, threadLifecycleSignal,
+} from "./thread-attention";
+import { useProjects } from "./use-projects";
+import { useThreads } from "./use-threads";
 
 export type WorkbenchTabIconState = "default" | "questionnaire" | "active";
 
@@ -28,7 +34,16 @@ function ensureIconLink(rel: "icon" | "shortcut icon") {
   return link;
 }
 
-export default function WorkbenchTabIcon({ state }: { state: WorkbenchTabIconState }) {
+export default function WorkbenchTabIcon() {
+  const sidebars = useThreads.sidebars();
+  const summaries = useProjects.threads();
+  const currentThread = useThreads.current();
+  const attention = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
+  const signal = useMemo(() => threadLifecycleSignal(sidebars), [sidebars]);
+  const state: WorkbenchTabIconState = (currentThread && currentThread.id in attention
+    && isThreadStatusWaitingOnUserInput(currentThread.status)) || signal === "needsAttention"
+    ? "questionnaire"
+    : (currentThread && isThreadStatusActive(currentThread.status)) || signal === "working" ? "active" : "default";
   useEffect(() => {
     const href = TAB_ICON_HREFS[state];
     for (const rel of ["icon", "shortcut icon"] as const) {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - areExplorerSnapshotsEquivalent: compare visible explorer facts without thread activity timestamps.
+ * - areExplorerSnapshotsEquivalent: compare explorer snapshots structurally.
  * - MountedWorkbenchClient: rendering, editor and interaction owners for the mounted workspace.
  * - WorkbenchClient: bind app facts to views and warm source-scoped provider models on observed demand.
  */
@@ -103,6 +103,8 @@ export interface MountedWorkbenchClient {
   projectFileIndexStore: WorkbenchProjectFileIndexStore;
   projectFacts: ProjectFactsStore;
   projectSourceErrors: { getSnapshot(): string; subscribe(listener: () => void): () => void };
+  /** Hear any fact or view change, batched once per task; readers re-derive what they need and compare. */
+  subscribeChanges(listener: () => void): () => void;
   selectBrowseLocation(logicalProjectId: string, location: ProjectLocationReference): Promise<void>;
   /** Re-read one daemon's project catalogue, then the app presentation that maps its folders to logical projects. */
   refreshInstallationProjects(daemonId: DaemonId): Promise<PresentationSnapshot>;
@@ -117,15 +119,7 @@ export interface MountedWorkbenchClient {
 }
 
 export function areExplorerSnapshotsEquivalent(left: ExplorerSnapshot | null, right: ExplorerSnapshot) {
-  if (!left) return false;
-  const visible = (snapshot: ExplorerSnapshot) => ({
-    ...snapshot,
-    threads: snapshot.threads.map(({ updatedAt: _activity, ...thread }) => thread)
-      .sort((a, b) => `${a.harness}/${a.id}`.localeCompare(`${b.harness}/${b.id}`)),
-    subagents: snapshot.subagents.map(({ lastActivityAt: _activity, ...thread }) => thread)
-      .sort((a, b) => `${a.harness}/${a.threadId}`.localeCompare(`${b.harness}/${b.threadId}`)),
-  });
-  return areDeeplyEqual(visible(left), visible(right));
+  return left !== null && areDeeplyEqual(left, right);
 }
 
 function sameLocation(left: ProjectLocationReference | null | undefined, right: ProjectLocationReference | null | undefined) {
@@ -169,6 +163,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const fileDrafts = new Map<string, ReturnType<typeof FileDraftStore>>();
   const panels = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   const factListeners = new Set<() => void>();
+  const changeListeners = new Set<() => void>();
   const warn = (message: string, error?: unknown) => console.warn(message,
     error instanceof Error ? error.message.slice(0, 512) : error === undefined ? "" : "Workspace operation failed.");
   const threadSummaries = new ThreadSummaryStore(workspace);
@@ -598,7 +593,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (disposed) return;
       const project = projectClient.getSnapshot();
       const threads = threadClient.getSnapshot();
-      const facts = projectFacts();
       const fontSize = state?.records("globalPreference").find(item => item.preference.key === "editorFontSize");
       const { main: rowData, archivedMembers } = listedMembers();
       // Archived members ride their own paged observation; a member present in both is the main list's.
@@ -614,20 +608,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         status: { listed: Boolean(rowData), loading: isThreadsLoading, error: threadsError },
         ...(rowData ? { placement: placementWithArchived(rowData.placement, archivedMembers), folders: rowData.folders } : {}),
       });
-      const listing = sidebar.getListing();
-      const groupFacts = projectFactsStore.getGroups();
+      for (const listener of changeListeners) listener();
       const snapshot: ExplorerSnapshot = {
         ...project, browseLocation, currentPath: activePath,
-        workspaceProjects: facts, workspaceThreads: rowData ?? undefined,
-        workspaceProjectGroups: groupFacts.data ?? undefined,
-        workspaceProjectGroupsPhase: groupFacts.phase,
-        logicalProjects: facts?.projects ?? [], logicalSummaries: facts?.summaries ?? {},
-        logicalThreads: listing.rows, archivedThreadCount: listing.archivedCount, threadMembers: listing.members,
-        threadPlacement: listing.placement, threadFolders: listing.folders,
-        subagents: threads.subagents, threads: threads.threads,
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
-        isThreadsLoading,
-        threadsError,
         currentThreadId: threads.currentThreadId,
         locallyModifiedPaths: browseLocation ? fileDraftStoreFor(browseLocation).getLocallyModifiedPaths() : [],
         fontSize: fontSize?.preference.key === "editorFontSize" ? fontSize.preference.value : DEFAULT_EDITOR_FONT_SIZE,
@@ -987,6 +971,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         rows?.getSnapshot().failure, tree?.getSnapshot().failure].filter(Boolean).join(" "),
       subscribe: listener => { factListeners.add(listener); return () => { factListeners.delete(listener); }; },
     },
+    subscribeChanges: listener => { changeListeners.add(listener); return () => { changeListeners.delete(listener); }; },
     threadRuntime, threadSidebar: sidebar, threadSummaries,
     get threadTextPresentation() { return threadClient.textPresentation; },
     threadTextPresentationFor: id => rendererForThread(id).textPresentation,
@@ -1044,6 +1029,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       renderers.clear();
       lifetime.dispose();
       factListeners.clear();
+      changeListeners.clear();
     },
   };
 }

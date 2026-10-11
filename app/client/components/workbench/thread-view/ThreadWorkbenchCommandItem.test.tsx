@@ -303,6 +303,7 @@ function createClient(
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
       threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
+      subscribeChanges: () => () => undefined,
     } : null,
   };
 }

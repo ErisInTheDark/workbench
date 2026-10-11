@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebar: feed the combined thread list for the selected projects with bounded project errors and creation guards.
+ * - default WorkbenchThreadSidebar: feed the combined thread list for the selected projects, reading its rows and attention labels itself, with bounded project errors and creation guards.
  */
 "use client";
 
-import { memo, type PointerEvent, type ReactNode } from "react";
+import { memo, useMemo, type PointerEvent, type ReactNode } from "react";
 
 import type { WorkbenchControls, WorkbenchHarness, WorkbenchLogicalThreadRow, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
@@ -20,6 +20,8 @@ import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";
+import { useProjects } from "./use-projects";
+import { threadAttentionLabels } from "./thread-attention";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import { resolveSidebarCreateProject } from "./workbench-sidebar-create-project";
 
@@ -39,7 +41,6 @@ function findRow(
 
 interface WorkbenchThreadSidebarProps {
   activeDragPayload: WorkbenchDragPayload | null;
-  attentionLabelsByThreadId: Record<string, string | undefined>;
   attachedDaemonId?: string | null;
   createProjectId?: string;
   currentTarget: WorkbenchThreadTarget | null;
@@ -58,7 +59,6 @@ interface WorkbenchThreadSidebarProps {
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   showMosaicView: boolean;
   logicalProject?: WorkbenchLogicalProject | null;
-  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
   presentation?: PresentationSnapshot | null;
   controls?: WorkbenchControls | null;
   selectedLocation?: ProjectLocationReference | null;
@@ -70,7 +70,6 @@ interface WorkbenchThreadSidebarProps {
 
 export default memo(function WorkbenchThreadSidebar({
   activeDragPayload,
-  attentionLabelsByThreadId,
   attachedDaemonId,
   createProjectId,
   currentTarget,
@@ -85,7 +84,6 @@ export default memo(function WorkbenchThreadSidebar({
   renderThreadTooltipDetails,
   showMosaicView,
   logicalProject,
-  logicalThreads = [],
   presentation,
   controls,
   selectedLocation,
@@ -107,6 +105,10 @@ export default memo(function WorkbenchThreadSidebar({
     .filter(sidebar => selection.includes(sidebar.projectId))
     .map(({ error }) => error).filter(Boolean))];
   const listing = useThreads.status();
+  const logicalThreads = useThreads.rows();
+  const sidebars = useThreads.sidebars();
+  const summaries = useProjects.threads();
+  const attentionLabelsByThreadId = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
   const loading = logicalProjects && presentation
     // Logical lists render workspace rows; folder sidebars only describe the browse folder.
     ? !listing.listed && listing.loading && !listing.error

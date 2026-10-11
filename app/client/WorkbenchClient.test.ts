@@ -25,8 +25,8 @@ const noLayout = {
 } as unknown as PresentationSnapshot;
 /** The app server's membership for these rows, as the browser receives it. */
 const membership = (rows: WorkbenchLogicalThreadRow[]) => ({ ...projectWorkbenchThreadMembership(rows, noLayout), projects: [] });
-const memberTitles = (snapshot: ExplorerSnapshot | undefined) =>
-  Object.values(snapshot?.threadMembers ?? {}).map(member => member.title);
+const memberTitles = (client: ReturnType<typeof WorkbenchClient>) =>
+  Object.values(client.threadSidebar.getListing?.().members ?? {}).map(member => member.title);
 function facts(registered: boolean): WorkspaceProjects {
   return {
     projects: registered ? [{
@@ -166,11 +166,7 @@ test("project row observations hand off without blanking visible threads", async
   context.mock.method(console, "warn", (message: string) => warnings.push(message));
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();
-  const snapshots: ExplorerSnapshot[] = [];
-  const client = WorkbenchClient({
-    workspace: fixture.workspace,
-    onExplorerStateChange: snapshot => snapshots.push(snapshot),
-  });
+  const client = WorkbenchClient({ workspace: fixture.workspace });
   context.after(() => { client.dispose(); fixture.dispose(); });
   const secondId = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
   const secondLocation = { daemonId, projectId: ProjectIdSchema.parse("local://C:/git/app/other") };
@@ -201,7 +197,7 @@ test("project row observations hand off without blanking visible threads", async
   await socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
     data: membership([firstRow]) });
   await Promise.resolve();
-  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
+  assert.deepEqual(memberTitles(client), ["first"]);
 
   const beforeAdd = socket.sent.length;
   assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
@@ -211,7 +207,7 @@ test("project row observations hand off without blanking visible threads", async
   await socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
     data: membership([]) });
   await Promise.resolve();
-  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
+  assert.deepEqual(memberTitles(client), ["first"]);
   assert.equal(socket.sent.some(item => item.method === "workspace/release"
     && item.params.subscriptionId === firstQuery.params.subscriptionId), false);
 
@@ -219,7 +215,7 @@ test("project row observations hand off without blanking visible threads", async
   const superseded = await socket.request("workspace/release", beforeAdd,
     request => request.params.subscriptionId === added.params.subscriptionId);
   assert.equal(superseded.params.subscriptionId, added.params.subscriptionId);
-  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
+  assert.deepEqual(memberTitles(client), ["first"]);
 
   const beforeRetry = socket.sent.length;
   assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
@@ -235,7 +231,7 @@ test("project row observations hand off without blanking visible threads", async
     data: membership([firstRow, secondRow]) });
   await socket.request("workspace/release", beforeRetry,
     request => request.params.subscriptionId === firstQuery.params.subscriptionId);
-  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first", "second"]);
+  assert.deepEqual(memberTitles(client), ["first", "second"]);
 
   const beforeFailure = socket.sent.length;
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
@@ -245,8 +241,8 @@ test("project row observations hand off without blanking visible threads", async
   await socket.request("workspace/release", beforeFailure,
     request => request.params.subscriptionId === retry.params.subscriptionId);
   await Promise.resolve();
-  assert.deepEqual(memberTitles(snapshots.at(-1)), []);
-  assert.match(snapshots.at(-1)?.threadsError ?? "", /project rows unavailable/);
+  assert.deepEqual(memberTitles(client), []);
+  assert.match(client.threadSidebar.getListing?.().status.error ?? "", /project rows unavailable/);
   assert.ok(warnings.some(message => message.includes("Workspace query failed")));
 });
 

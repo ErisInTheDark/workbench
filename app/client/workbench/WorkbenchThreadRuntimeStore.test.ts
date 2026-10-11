@@ -76,6 +76,14 @@ test("thread runtime publishes meaningful background state without replacing rou
   assert.equal(notifications, 1);
 });
 
+test("a thread-list push keeps an equal current thread's identity for narrow readers", () => {
+  const initial = snapshot();
+  const runtime = WorkbenchThreadRuntimeStore(initial);
+  runtime.accept({ ...initial, currentThread: structuredClone(initial.currentThread), threads: [] });
+  assert.notEqual(runtime.getSnapshot(), initial);
+  assert.equal(runtime.getSnapshot().currentThread, initial.currentThread);
+});
+
 test("an equivalent selected thread retains the complete runtime snapshot", () => {
   const initial = snapshot();
   const runtime = WorkbenchThreadRuntimeStore(initial);

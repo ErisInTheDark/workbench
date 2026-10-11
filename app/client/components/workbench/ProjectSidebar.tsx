@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
-import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
 import { isDaemonOwnedProject } from "workbench-shared/workbench/project/workbench-project-projection";
@@ -84,7 +84,6 @@ export default function ProjectSidebar ({
   unarchivedProjectIds,
   emptySelectionMessage,
   logicalProjects,
-  logicalSummaries,
   logicalError,
   logicalLoading,
   createProjectHref,
@@ -100,7 +99,6 @@ export default function ProjectSidebar ({
   unarchivedProjectIds: ReadonlySet<string>;
   emptySelectionMessage?: string;
   logicalProjects?: readonly WorkbenchLogicalProject[];
-  logicalSummaries?: Readonly<Record<string, WorkbenchLogicalProjectSummary>>;
   logicalError?: string | null;
   logicalLoading?: boolean;
   createProjectHref?: string;
@@ -122,10 +120,11 @@ export default function ProjectSidebar ({
       });
     })] as const)), [logicalProjects, presentation]);
   const summaries = useProjects.threads();
+  const logicalSummaries = useProjects.summaries();
   const displayedProjects = logicalProjects ?? projects;
   const entriesByProjectId = useMemo(() => new Map<string, DisplaySidebarProject>(displayedProjects.map(project => {
     const summary = logicalProjects
-      ? logicalSummaries?.[project.id] ?? null
+      ? logicalSummaries[project.id] ?? null
       : summaries.projects.find(item => item.projectId === project.id) ?? null;
     return [project.id, { project, summary,
       activityAt: summary?.lastThreadUpdateAt ?? ("lastCommitTimeMs" in project ? project.lastCommitTimeMs : null) }];

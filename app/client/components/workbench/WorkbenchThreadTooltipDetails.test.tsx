@@ -150,7 +150,7 @@ async function renderDetails(
       harness: "codex",
       materialized,
       onOpenThread: () => undefined,
-      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+      fallbackProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       spellCheck: true,
       threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     }),
@@ -205,6 +205,7 @@ function createClient(store: WorkbenchThreadSidebarStore | null, ownerLocation?:
       threadTextPresentation: {} as NonNullable<WorkbenchClientController["mounted"]>["threadTextPresentation"],
       threadTextPresentationFor: () => null,
       projectSourceErrors: { getSnapshot: () => "", subscribe: () => () => undefined },
+      subscribeChanges: () => () => undefined,
     },
   };
 }

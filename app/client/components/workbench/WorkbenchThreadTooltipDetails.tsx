@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadTooltipDetails: one sidebar thread's tooltip sections in urgency order: questionnaire card, active claim overlap notice, the status panel's pending proposal list, waits, quiet intersections and required todos; proposals observe through the leased thread store on the thread's own daemon.
+ * - default WorkbenchThreadTooltipDetails: one sidebar thread's tooltip sections, read through the project that lists it, in urgency order: questionnaire card, active claim overlap notice, the status panel's pending proposal list, waits, quiet intersections and required todos; proposals observe through the leased thread store on the thread's own daemon.
  */
 "use client";
 
@@ -23,6 +23,7 @@ import ThreadUserInputRequest from "./thread-view/ThreadUserInputRequest";
 import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
 import { useProjects } from "./use-projects";
 import { useThread } from "./use-thread";
+import { useThreads } from "./use-threads";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { ThreadTooltipSection } from "./WorkbenchThreadTooltipContent";
 
@@ -47,7 +48,7 @@ export default function WorkbenchThreadTooltipDetails({
   materialized,
   onQuestionnaireError,
   onOpenThread,
-  projectId,
+  fallbackProjectId,
   spellCheck,
   threadId,
   parentThreadId,
@@ -56,11 +57,20 @@ export default function WorkbenchThreadTooltipDetails({
   materialized: boolean;
   onQuestionnaireError?: (message: string) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
-  projectId: ProjectId | "";
+  /** The project to read the thread through when no sidebar or summary lists it. */
+  fallbackProjectId: ProjectId | "";
   spellCheck: boolean;
   threadId: WorkbenchThreadId;
   parentThreadId?: WorkbenchThreadId;
 }) {
+  const sidebars = useThreads.sidebars();
+  const summaries = useProjects.threads();
+  const projectId = useMemo(() => sidebars.projects.find(({ entries }) => entries.some(candidate => (
+    candidate.entryKind !== "draft" && candidate.identity.harness === harness && candidate.identity.threadId === threadId
+  )))?.projectId ?? summaries.projects.find(({ pinnedThreads, unsettledThreads }) => (
+    pinnedThreads.some(candidate => candidate.entryKind === "thread" && candidate.identity.harness === harness && candidate.identity.threadId === threadId)
+    || unsettledThreads.some(candidate => candidate.identity.harness === harness && candidate.identity.threadId === threadId)
+  ))?.projectId ?? fallbackProjectId, [fallbackProjectId, harness, sidebars, summaries, threadId]);
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
   const threadContext = useWorkbenchClientController().mounted?.threadContextFor(threadId) ?? null;
@@ -71,7 +81,6 @@ export default function WorkbenchThreadTooltipDetails({
     ? roots.map(root => ({ id: root.id, rootPath: root.rootPath })) : [], [roots]);
   const sidebarEntry = useThread.sidebarEntry(projectId, harness, threadId);
   const ownerArcEntry = useThread.arc(threadId, harness);
-  const summaries = useProjects.threads();
   const planIntersections = useThread.claimIntersections(threadId, harness, "plan");
   const stashedIntersections = useThread.claimIntersections(threadId, harness, "stashed");
   const pinnedEntry = summaries.projects.find(project => project.projectId === projectId)?.pinnedThreads.find(entry => (

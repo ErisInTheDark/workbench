@@ -4,7 +4,8 @@
  *   `turns/questionnaire/approvals` read further slices of a leased store; `summary` leases one thread's batched summary
  *   for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous titles with
  *   rename/dismiss intent; `presentedText` subscribes to one exact streaming text field; `fileIndex` reads the owning
- *   folder's file suggestions; `models` reads the owner's account model cache; `claimIntersections/collisions/arc` select
+ *   folder's file suggestions; `models` reads the owner's account model cache; `subagent` reads a thread's subagent
+ *   relationship; `claimIntersections/collisions/arc` select
  *   narrow Git arc facts from the owner's source sidebar.
  */
 "use client";
@@ -195,6 +196,24 @@ useThread.models = function useThreadModels(threadId: string) {
     store?.getModelCatalogues ?? (() => EMPTY_MODEL_CATALOGUES),
     () => EMPTY_MODEL_CATALOGUES,
   );
+};
+
+const NO_SUBAGENT_KEY = () => "";
+
+/** A provider thread's subagent relationship (parent and harness) from the runtime; null when it is no subagent. */
+useThread.subagent = function useThreadSubagent(threadId: string | null, harness?: WorkbenchHarness, explicitClient?: WorkbenchClientController) {
+  const store = useWorkbenchClientController(explicitClient).mounted?.threadRuntime ?? null;
+  const getKey = useCallback(() => {
+    const relationship = threadId ? store?.getSnapshot().subagents.find(entry => entry.threadId === threadId
+      && (!harness || entry.harness === harness)) : null;
+    return relationship ? `${relationship.harness}\0${relationship.parentThreadId}` : "";
+  }, [harness, store, threadId]);
+  const key = useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store ? getKey : NO_SUBAGENT_KEY, NO_SUBAGENT_KEY);
+  return useMemo(() => {
+    if (!key) return null;
+    const [relationshipHarness, parentThreadId] = key.split("\0") as [WorkbenchHarness, string];
+    return { harness: relationshipHarness, parentThreadId };
+  }, [key]);
 };
 
 function useOwnerSource(threadId: string) {

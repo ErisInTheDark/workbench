@@ -1227,25 +1227,10 @@ export interface ProjectSnapshot {
 }
 
 export interface ExplorerSnapshot {
-  workspaceProjects?: import("./workbench/workspace/workspace-observation").WorkspaceProjects;
-  workspaceProjectGroups?: import("./workbench/workspace/workspace-observation").WorkspaceProjectGroups;
-  workspaceProjectGroupsPhase?: import("./workbench/workspace/workspace-observation").WorkspaceSourcePhase;
-  workspaceThreads?: import("./workbench/workspace/workspace-observation").WorkspaceThreadRows;
   browseLocation?: ProjectLocationReference | null;
   configuredDiscoveryRootPath: string | null;
   currentProjectId: ProjectId | "";
   projects: WorkbenchProjectOption[];
-  logicalProjects?: WorkbenchLogicalProject[];
-  logicalSummaries?: Record<string, WorkbenchLogicalProjectSummary>;
-  /** Listed rows whose detail is known: thread summaries that have landed, and presentation drafts. */
-  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
-  /** Every listed logical member by placement key, including those whose summary is still loading. */
-  threadMembers?: Readonly<Record<string, import("./workbench/workspace/workspace-observation").WorkspaceThreadMember>>;
-  /** The app server's combined sidebar placement; archived page members are appended to `archived`. */
-  threadPlacement?: import("./workbench/workspace/workspace-observation").WorkspaceThreadPlacement;
-  threadFolders?: import("./workbench/workspace/workspace-observation").WorkspaceThreadFolders;
-  /** Archived threads in the selected projects, whether or not their rows are loaded. */
-  archivedThreadCount?: number;
   root: string;
   rootPath: string;
   roots: WorkbenchProjectRoot[];
@@ -1254,16 +1239,12 @@ export interface ExplorerSnapshot {
   projectFileIndexId: string;
   projectFileIndexKey: string;
   projectFilePaths: readonly string[];
-  subagents: WorkbenchSubagentSummary[];
-  threads: ThreadSummary[];
   isProjectLoading: boolean;
-  isThreadsLoading: boolean;
   changes: Record<string, ChangeSummary>;
   currentPath: string;
   currentThreadId: string;
   expandedDirectories: string[];
   locallyModifiedPaths: string[];
-  threadsError: string;
   fontSize: number;
   workbenchStorageRootPath: string;
 }

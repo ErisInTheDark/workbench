@@ -1,16 +1,17 @@
 /*
  * Exports:
- * - useThreads: read and act on the route-owned thread collection; members read the sidebars, home and pinned ordering, and the combined thread listing (placement, members, rows, folders, archived count, load status).
+ * - useThreads: read and act on the route-owned thread collection; members read the current thread and documents alone, the sidebars and one sidebar draft, home and pinned ordering, and the combined thread listing (placement, members, rows, folders, archived count, load status).
  */
 "use client";
 
-import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "react";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 import type {
   WorkbenchControls, WorkbenchHarness, WorkbenchThreadListing, WorkbenchThreadRuntimeSnapshot,
 } from "workbench-shared/types";
 import type {
-  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchThreadStateRequest,
+  WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchThreadDraft, WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectThreadRowSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type { ProjectId } from "workbench-shared/workbench/identity";
@@ -91,6 +92,21 @@ export function useThreads(explicitClient?: WorkbenchClientController, threadId?
   }), [document, listModels, subscribeModelUpdates, runtime, updateState]);
 }
 
+function useRuntimeField<Value>(read: (snapshot: WorkbenchThreadRuntimeSnapshot) => Value, explicitClient?: WorkbenchClientController) {
+  const store = useWorkbenchClientController(explicitClient).mounted?.threadRuntime ?? null;
+  const getSnapshot = () => read(store?.getSnapshot() ?? EMPTY_THREAD_RUNTIME_SNAPSHOT);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
+}
+
+/** The route-owned current thread alone, so thread-list runtime pushes don't wake its readers. */
+useThreads.current = function useThreadsCurrent(explicitClient?: WorkbenchClientController) {
+  return useRuntimeField(snapshot => snapshot.currentThread, explicitClient);
+};
+
+useThreads.documents = function useThreadsDocuments(explicitClient?: WorkbenchClientController) {
+  return useRuntimeField(snapshot => snapshot.threadDocuments, explicitClient);
+};
+
 /** One project's sidebar in every observation mode; null while unknown. */
 useThreads.sidebar = function useThreadsSidebar(projectId: ProjectId | "" | null | undefined, explicitClient?: WorkbenchClientController) {
   const store = useSidebarStore(explicitClient);
@@ -101,13 +117,25 @@ useThreads.sidebar = function useThreadsSidebar(projectId: ProjectId | "" | null
   return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
 };
 
+/** One project sidebar draft by id; keeps its identity while the draft is unchanged. */
+useThreads.draft = function useThreadsDraft(projectId: ProjectId | "" | null | undefined, draftId: string,
+  explicitClient?: WorkbenchClientController) {
+  const store = useSidebarStore(explicitClient);
+  const kept = useRef<WorkbenchThreadDraft | null>(null);
+  const getSnapshot = useCallback(() => {
+    const entry = projectId && draftId ? store?.getProjectSnapshot(projectId)?.entries.find(candidate =>
+      candidate.entryKind === "draft" && candidate.draft.draftId === draftId) : null;
+    const next = entry?.entryKind === "draft" ? entry.draft : null;
+    if (!areDeeplyEqual(kept.current, next)) kept.current = next;
+    return kept.current;
+  }, [draftId, projectId, store]);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
+};
+
 useThreads.sidebars = function useThreadsSidebars(explicitClient?: WorkbenchClientController) {
   const store = useSidebarStore(explicitClient);
-  return useSyncExternalStore(
-    store?.subscribe ?? EMPTY_SUBSCRIBE,
-    store?.getProjectThreadSidebars ?? (() => EMPTY_PROJECT_THREAD_SIDEBARS),
-    () => EMPTY_PROJECT_THREAD_SIDEBARS,
-  );
+  const getSnapshot = store?.getProjectThreadSidebars ?? (() => EMPTY_PROJECT_THREAD_SIDEBARS);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, getSnapshot, getSnapshot);
 };
 
 /** Global home thread ordering and whether this client can change it. */
