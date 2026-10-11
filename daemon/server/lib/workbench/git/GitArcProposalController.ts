@@ -1101,10 +1101,8 @@ export default class GitArcProposalController {
     if (stackTip && (amend || revivalAmendSha)) throw new GitArcRejectionError({ reason: "amendOnPendingStack" });
     const requestedPaths = rawPaths?.length
       ? repository.normalizePaths(rawPaths)
-      : replacementTarget ?? revivalTarget
-        ? repository.normalizePaths((replacementTarget ?? revivalTarget)!.metadata.livePaths)
       : repository.normalizePaths(claimedPaths);
-    if (rawPaths?.length || revivalTarget) {
+    if (rawPaths?.length) {
       const claimed = new GitArcPathSet(claimedPaths);
       const outsideClaim = requestedPaths.filter((candidate) => !claimed.covers(candidate));
       if (outsideClaim.length) throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outsideClaim }, `Proposed paths must stay within the arc's claimed set: ${outsideClaim.join(", ")}`);
@@ -1148,21 +1146,40 @@ export default class GitArcProposalController {
       }
     }
     const baseCommit = amendTargetSha ? await repository.resolveParent(amendTargetSha) : liveBaseCommit;
-    let proposalTree = await repository.writeScopedWorktreeTree(requestedPaths, amendTargetSha ?? liveBaseCommit);
-    if (replacementTarget) {
-      let representedTree = await repository.resolveTree(liveBaseCommit);
-      for (const proposalId of proposalIds.filter(id => !sealedIds.has(id))) {
-        const proposal = await store.readProposal(harness, threadId, proposalId);
-        if (proposal.metadata.status !== "proposed") continue;
+    let representedTree: string | null = null;
+    let editedTree: string | null = null;
+    let unproposedPaths: string[] | null = null;
+    if (amendProposalId && !rawPaths?.length) {
+      representedTree = await repository.resolveTree(liveBaseCommit);
+      const pendingProposals = (await store.listProposals(harness, threadId))
+        .filter(proposal => proposal.metadata.status === "proposed" && !sealedIds.has(proposal.metadata.proposalId));
+      for (const proposal of pendingProposals) {
         representedTree = await repository.writeTreeWithPathsFromSource(
           representedTree,
           proposal.tree,
           proposal.metadata.livePaths,
         );
       }
-      const editedTree = await repository.writeScopedWorktreeTree(requestedPaths, representedTree);
-      const revisionPaths = await repository.listChangedPaths(representedTree, editedTree, requestedPaths);
-      if (revisionPaths.length) {
+      editedTree = await repository.writeScopedWorktreeTree(requestedPaths, representedTree);
+      unproposedPaths = await repository.listChangedPaths(representedTree, editedTree, requestedPaths);
+    }
+    let proposalTree: string;
+    if (replacementTarget) {
+      if (!representedTree || !editedTree || !unproposedPaths) {
+        representedTree = await repository.resolveTree(liveBaseCommit);
+        for (const proposalId of proposalIds.filter(id => !sealedIds.has(id))) {
+          const proposal = await store.readProposal(harness, threadId, proposalId);
+          if (proposal.metadata.status !== "proposed") continue;
+          representedTree = await repository.writeTreeWithPathsFromSource(
+            representedTree,
+            proposal.tree,
+            proposal.metadata.livePaths,
+          );
+        }
+        editedTree = await repository.writeScopedWorktreeTree(requestedPaths, representedTree);
+        unproposedPaths = await repository.listChangedPaths(representedTree, editedTree, requestedPaths);
+      }
+      if (unproposedPaths.length) {
         try {
           proposalTree = await repository.mergeTree(representedTree, replacementTarget.tree, editedTree);
         } catch (error) {
@@ -1171,7 +1188,7 @@ export default class GitArcProposalController {
       } else {
         proposalTree = replacementTarget.tree;
       }
-      const paths = [...new Set([...replacementTarget.metadata.paths, ...revisionPaths])].sort();
+      const paths = [...new Set([...replacementTarget.metadata.paths, ...unproposedPaths])].sort();
       return await this.publishPendingRevision({
         description,
         harness,
@@ -1184,7 +1201,9 @@ export default class GitArcProposalController {
         tree: proposalTree,
       });
     }
-    const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, requestedPaths);
+    const selectedPaths = unproposedPaths ?? requestedPaths;
+    proposalTree = await repository.writeScopedWorktreeTree(selectedPaths, amendTargetSha ?? liveBaseCommit);
+    const livePaths = await repository.listChangedPaths(liveBaseCommit, proposalTree, selectedPaths);
     if (!livePaths.length) throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected arc paths do not contain any working-tree changes to propose.");
     // Sealed proposals may overlap: later layers deliberately build on their files.
     await this.requireNoPendingOverlap(repository, harness, threadId, proposalIds.filter(id => !sealedIds.has(id)), livePaths);

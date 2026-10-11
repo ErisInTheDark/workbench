@@ -1135,16 +1135,17 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
     cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
   });
   assert.equal(stillPending.status, "proposed");
+  await fs.writeFile(path.join(source, "four.txt"), "newly claimed four\n");
   const continuedReplacement = await controller.createProposal({
     amend: true,
     amendProposalId: replacement.proposalId,
     cwd: source,
     description: "",
     harness: "codex",
-    paths: ["one.txt"],
     threadId: "partial-thread",
     title: "continued replacement",
   });
+  assert.deepEqual(continuedReplacement.paths, ["four.txt", "one.txt"]);
   assert.equal(continuedReplacement.sourceCheckpoint, successor.checkpointCommit);
   const continuedSuperseded = await controller.getProposal({
     cwd: source, harness: "codex", includeNewer: false, proposalId: replacement.proposalId, threadId: "partial-thread",
@@ -1152,6 +1153,9 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
   assert.equal(continuedSuperseded.status, "superseded");
   assert.equal(continuedSuperseded.supersededByProposalId, continuedReplacement.proposalId);
   assert.equal(continuedSuperseded.unavailableReason, null);
+  await controller.rescindProposal({
+    cwd: source, harness: "codex", proposalId: continuedReplacement.proposalId, threadId: "partial-thread",
+  });
 
   assert.deepEqual(await controller.rescindProposal({
     cwd: source, harness: "codex", proposalId: rescindTarget.proposalId, threadId: "partial-thread",
@@ -1160,7 +1164,7 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
     cwd: source, harness: "codex", includeNewer: false, proposalId: rescindTarget.proposalId, threadId: "partial-thread",
   })).status, "rescinded");
 
-  // Rescind, edit, then amend the rescinded proposal: it returns with its message and paths and retires the original.
+  // Rescind, edit, then amend the rescinded proposal: it returns with its message and current changed claims.
   await fs.writeFile(path.join(source, "two.txt"), "rescind two\nrevived two\n");
   const revive = async () => await controller.createProposal({
     amend: true, amendProposalId: rescindTarget.proposalId, cwd: source, description: "", harness: "codex",
@@ -1171,8 +1175,11 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
     await controller.getProposal({ cwd: source, harness: "codex", includeNewer: false, proposalId, threadId: "partial-thread" })
   )));
   assert.deepEqual([retired!.status, retired!.supersededByProposalId], ["superseded", revived.proposalId]);
-  assert.deepEqual([revivedState!.status, revivedState!.title, revived.paths], ["proposed", "rescind target", ["two.txt"]]);
-  assert.match(revivedState!.changes[0]!.diff, /^\+revived two$/mu);
+  assert.deepEqual(
+    [revivedState!.status, revivedState!.mode, revivedState!.title, revived.paths],
+    ["proposed", "commit", "rescind target", ["four.txt", "one.txt", "two.txt"]],
+  );
+  assert.match(revivedState!.changes.find(change => change.path === "two.txt")?.diff ?? "", /^\+revived two$/mu);
   await assert.rejects(revive(), (error) => error instanceof GitArcRejectionError
     && error.rejection.reason === "proposalRequiresCommittedTarget");
   await controller.rescindProposal({ cwd: source, harness: "codex", proposalId: revived.proposalId, threadId: "partial-thread" });
@@ -1201,10 +1208,6 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
   await assert.rejects(controller.rescindProposal({
     cwd: source, harness: "codex", proposalId: commitTarget.proposalId, threadId: "partial-thread",
   }), assertCommittedTarget);
-  // The amendment's live paths overlap the pending replacement, so that proposal must leave first.
-  await controller.rescindProposal({
-    cwd: source, harness: "codex", proposalId: continuedReplacement.proposalId, threadId: "partial-thread",
-  });
   const amendment = await controller.createProposal({
     amend: true,
     amendProposalId: commitTarget.proposalId,
@@ -1227,8 +1230,8 @@ controllerTest("replacement", "amend targets prior pending and committed proposa
     description: committedTarget.description,
     title: committedTarget.title,
   });
-  assert.deepEqual(proposed.changes.map(({ path: filePath }) => filePath), ["one.txt", "three.txt", "two.txt"]);
-  assert.deepEqual(proposed.freshChanges?.map(({ path: filePath }) => filePath), ["one.txt", "two.txt"]);
+  assert.deepEqual(proposed.changes.map(({ path: filePath }) => filePath), ["four.txt", "one.txt", "three.txt", "two.txt"]);
+  assert.deepEqual(proposed.freshChanges?.map(({ path: filePath }) => filePath), ["four.txt", "one.txt", "two.txt"]);
   assert.ok(proposed.unclaimedDirt);
   assert.deepEqual(proposed.unclaimedDirt.changes.map(change => change.path), [".gitignore"]);
   assert.match(proposed.changes.find(({ path: filePath }) => filePath === "one.txt")?.diff ?? "", /replace one/u);

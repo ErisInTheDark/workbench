@@ -355,6 +355,13 @@ export default class GitCheckpointStore {
     return { metadata: normalizeProposalMetadata(parsed), proposalCommit: resolved.commit, proposalRef, tree: resolved.identity.tree };
   }
 
+  async listProposals(harness: GitArcHarness, threadId: string): Promise<StoredProposal[]> {
+    const namespaces = await this.proposalNamespaces(harness, threadId);
+    const refs = await this.repository.listRefsWithValues(...namespaces);
+    const proposalIds = [...new Set(refs.map(({ ref }) => ref.slice(ref.lastIndexOf("/") + 1)))];
+    return await Promise.all(proposalIds.map(async proposalId => await this.readProposal(harness, threadId, proposalId)));
+  }
+
   async findCommittedProposalBySha(
     harness: GitArcHarness,
     threadId: string,
