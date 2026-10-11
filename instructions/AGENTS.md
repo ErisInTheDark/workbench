@@ -85,7 +85,7 @@ User corrections must prompt reconsideration of the underlying shape, not just r
 Before non-trivial plans, apply this **Reasoning Checklist** against source and user requests:
 - [ ] **Requested result:** What will the user be able to do or understand after this work? Give a concrete example of success. Check it against the original request and later corrections; resolve conflicting requirements before planning.
 - [ ] **Useful result:** Walk that example using the proposed solution. Can the user actually reach the intended result? For each new control or output, identify what the user can do with it. Remove steps or outputs that do not help.
-- [ ] **Existing behavior:** Find the code that currently owns the behavior being changed or copied. Identify what it does beyond its name or appearance. State what the proposal preserves, changes, or removes; do not assume similar-looking features behave alike.
+- [ ] **Existing behavior:** Find the code that currently owns the behavior being changed or copied. Identify what it does beyond its name or appearance. State what the proposal preserves, changes, or removes; do not assume similar-looking features behave alike. Comments and current shape are evidence of past intent, not requirements; preserve only what the user or project requires.
 - [ ] **Executable path:** Trace the proposed action from its trigger to its visible result. At each step, identify the responsible code, required values, and state read or written. Check that values exist when needed, APIs accept them, and the responsible code can perform the operation across async, process, and reload boundaries.
 - [ ] **Failure cases:** Choose a plausible implementation that would look correct but fail the request. Find an example that exposes it. For interactions, check repeated actions, already-selected choices, close/reopen, and leaving before async completion; determine what persists, cancels, and appears. For timed or grouped work, check first, isolated, burst, sustained, and final events, independent groups, and cleanup. For diagnostics, check what is actually measured, what failures escape measurement, and whether the output could mislead.
 - [ ] **Competing explanations and approaches:** For a reported problem, identify plausible causes and what evidence distinguishes them; do not plan a fix merely because the first explanation sounds right. Compare materially different solutions, including changes to existing architecture where its design contributes to the problem. Prefer the approach that addresses the cause and leaves coherent ownership with fewer unnecessary states and layers. Reject symptom patches, speculative redesigns, and extra complexity that does not improve the result; judge the whole resulting system, not patch size.
@@ -151,6 +151,8 @@ Use the following **Reasoning Checklist**:
 - [ ] **Think wider:** Have you traced further up? Have you traced around? Have you asked what shapes the code *could* have, which would be the most coherent, and which would leave the project better?
 - [ ] **Avoid caution, laziness, and tiny-patching:** Are you using caution, diff size, or imagined effort as excuses to preserve bad shapes?
 - [ ] **Are you treating existing code as sacred?** Code is never sacred. Project requirements are. Behavior *may* be
+<!-- Failure: some models narrate code in comments; later agents read those comments as requirements and design around bugs to keep them true. Comments drift from code silently, so code shape and project docs should carry intent first. -->
+- [ ] **Comments are last resort:** Before writing or keeping a comment: fix the smell that needs it; else move durable rules to invariants or docs; else keep it only if it explains a non-obvious why. Delete tautological or narrating comments
 - [ ] **Refactor framing:** Have you tried reframing your inspection, a plan, a fix, or an improvement around refactoring related code? Do you *need* to know exact reasons why something isn't working in order to fix it, or could replacing the code with *better* code fix the problem?
 - [ ] **Proactively fight nearby smells:** One by one analyse your plan or existing code for issues such as:
   - unclear ownership
@@ -164,7 +166,7 @@ Use the following **Reasoning Checklist**:
 - [ ] **Boil the ocean:** You're an agent. You can do a frankly INSANE amount of work incredibly quickly. There is no need for tiny slices, "safe" changes, or experiments
 - [ ] **Push back!** Be critical of user suggestions. Be a useful collaborator, not a yes-man. Proactively challenge things the user may not have thought through fully, when you have inspected enough to refute them
 - [ ] **Project-local preference:** Favor local code, conventions, and existing ownership before adding dependencies or wrappers. Add dependencies only when they provide significant value with little risk
-- [ ] **Dedupe by default:** Prefer refactoring to extract logic, components, etc rather than duplicating them
+- [ ] **Dedupe by default:** Reuse existing displays, logic and components before creating lookalikes; extract instead of duplicating
 - [ ] **Avoid scattered migration code and systems:** Prefer optional-property fallbacks, resilient state handling, and just-in-time conversion. Centralize migration logic when necessary, and keep it high quality and tested if possible
 - [ ] **Complexity is a primary tax:** Weigh every new state, abstraction, protocol, guard, and compatibility path against the project's actual invariants and the user's requested behavior. Keep it only when the benefit is worth the tax. If nearby or owning refactors can offset new complexity being added, prefer that
 - [ ] **Lifecycle has one owner:** Timeouts, retries, cancellation, readiness, polling, animation-frame, scheduler, and failure state need one owner, one reason, and one failure path. Identify the correct owner and list the state variables that represent lifecycle truth. Avoid:
@@ -186,7 +188,7 @@ On needed refactor, but TRULY out of scope for current task, state in brief as p
 - Apply **Shared Workspace** before editing: make sure your file view is still current enough to patch.
 - Use apply_patch for manual file edits.
 - Default to ASCII when editing or creating files unless the file already uses another character set or the content requires it.
-- Add code comments only when they clarify non-obvious intent or save future readers from tedious reconstruction.
+- Apply **Comments are last resort** before adding comments.
 - If unexpected facts change behavior, dependencies, lifecycle, ownership, public contracts, file ownership, or validation scope, stop and re-plan instead of silently changing direction.
 
 ## Command Hygiene
