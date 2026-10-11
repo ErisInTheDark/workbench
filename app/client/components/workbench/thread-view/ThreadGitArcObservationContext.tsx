@@ -7,7 +7,9 @@
  */
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
+
+import { reuseEntries, reuseEqual } from "../../../workbench/structural-sharing";
 
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadGitArcClaimObservation } from "../../../workbench/thread/ThreadGitArcClaimObserver";
@@ -56,12 +58,17 @@ export function ThreadGitArcObservationProvider({
   proposals: Readonly<Record<string, ThreadGitArcProposalObservation>>;
   refreshClaimChanges?: () => void;
 }) {
-  const summaries = useMemo(() => new Map((lifecycleProposals ?? []).flatMap(({ proposalId, summary }) => (
-    summary ? [[proposalId, summary] as const] : []
-  ))), [lifecycleProposals]);
+  // Every summary push brings a fresh lifecycle; only a changed summary or acceptance may wake the cards reading them.
+  const shared = useRef<{ summaries: Readonly<Record<string, WorkbenchGitArcProposalSummary>>; acceptance: ThreadGitArcAcceptance | null }>(
+    { summaries: {}, acceptance: null });
+  const summaryRecord = reuseEntries(shared.current.summaries, Object.fromEntries((lifecycleProposals ?? [])
+    .flatMap(({ proposalId, summary }) => summary ? [[proposalId, summary] as const] : [])));
+  const stableAcceptance = reuseEqual(shared.current.acceptance, acceptance);
+  shared.current = { summaries: summaryRecord, acceptance: stableAcceptance };
+  const summaries = useMemo(() => new Map(Object.entries(summaryRecord)), [summaryRecord]);
   const source = useMemo(
-    () => ({ acceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries }),
-    [acceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries],
+    () => ({ acceptance: stableAcceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries }),
+    [stableAcceptance, claimChanges, observeClaimChanges, observeProposal, proposals, refreshClaimChanges, summaries],
   );
   return (
     <ThreadGitArcObservationContext.Provider value={source}>
