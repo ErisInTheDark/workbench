@@ -24,6 +24,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       },
       outputDirectoryPath: context.outputDirectoryPath,
       readAppliedReactDevelopmentMode: context.readAppliedReactDevelopmentMode,
+      sourceRootPath: context.repositoryRootPath,
       state: build.get("state"),
       presentation: build.get("presentation"),
       sources: build.get("sources"),

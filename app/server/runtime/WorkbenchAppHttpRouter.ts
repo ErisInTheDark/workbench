@@ -105,6 +105,7 @@ export default class WorkbenchAppHttpRouter {
     network?: WorkbenchNetworkController;
     outputDirectoryPath: string;
     readAppliedReactDevelopmentMode?: () => boolean;
+    sourceRootPath?: string;
     state: WorkbenchBrowserStateRegistry;
     presentation?: WorkbenchPresentationController;
     sources?: WorkbenchDaemonSources;
@@ -138,6 +139,7 @@ export default class WorkbenchAppHttpRouter {
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
       ? new WorkbenchAppSettingsController({
           readAppliedReactDevelopmentMode: options.readAppliedReactDevelopmentMode,
+          sourceRootPath: options.sourceRootPath,
           readRequestedReactDevelopmentMode: () => (
             options.state.readGlobalPreference("reactDevelopmentMode")
           ),

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, progressive-window and initial-end controls, entry motion, worked-run state, and layout preservation.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, scroll settling, progressive-window and end controls, entry motion, worked-run state, and layout preservation.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
@@ -18,7 +18,9 @@ export interface ThreadScrollViewportContextValue {
   readonly workedRunState: ThreadWorkedRunController | null;
   readonly progressiveWindowing: boolean;
   readonly getViewport: () => HTMLDivElement | null;
-  readonly stabilizeInitialEnd: () => void;
+  /** False while the reader's touch or momentum scroll is in flight. */
+  readonly isScrollSettled: () => boolean;
+  readonly onScrollSettled: (listener: () => void) => () => void;
   readonly observeContent: (
     element: HTMLElement,
     listener: (state: ThreadContentVisibility) => void,
@@ -35,7 +37,8 @@ const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue =
   workedRunState: null,
   progressiveWindowing: false,
   getViewport: () => null,
-  stabilizeInitialEnd: () => {},
+  isScrollSettled: () => true,
+  onScrollSettled: () => () => {},
   observeContent: () => () => {},
   preserveOffscreenLayout: () => () => {},
   setEndTarget: () => {},

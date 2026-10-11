@@ -242,7 +242,10 @@ function ThreadCheckpointCommitController({
     loadedModeRef.current = proposal.mode;
     if (proposal.status !== "proposed" || intent?.mode === null) setCommitMode(proposal.mode);
     if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
-    setState({ proposal, status: "loaded" });
+    // Observation pushes fresh objects; an unchanged proposal must not re-render the whole card.
+    setState(current => current.status === "loaded" && areDeeplyEqual(current.proposal, proposal)
+      ? current
+      : { proposal, status: "loaded" });
   }, [includeNewer, intent?.mode]);
 
   const loadProposal = useCallback(async (signal?: AbortSignal) => {

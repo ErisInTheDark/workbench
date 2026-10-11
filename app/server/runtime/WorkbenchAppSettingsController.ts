@@ -12,6 +12,7 @@ export default class WorkbenchAppSettingsController {
   constructor(private readonly options: {
     readAppliedReactDevelopmentMode(): boolean;
     readRequestedReactDevelopmentMode(): boolean | null;
+    sourceRootPath?: string;
     writeRequestedReactDevelopmentMode(value: boolean): Promise<void>;
   }) {}
 
@@ -19,6 +20,7 @@ export default class WorkbenchAppSettingsController {
     return {
       appliedReactDevelopmentMode: this.options.readAppliedReactDevelopmentMode(),
       requestedReactDevelopmentMode: this.options.readRequestedReactDevelopmentMode() === true,
+      ...(this.options.sourceRootPath ? { sourceRootPath: this.options.sourceRootPath } : {}),
     };
   }
 

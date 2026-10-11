@@ -14,6 +14,7 @@ function fixture({ deferReveal = false } = {}) {
   let hiddenCount = 12;
   let nearTop = true;
   let scrollTop = 300;
+  let settled = true;
   const reveals: number[] = [];
   const writes: number[] = [];
   const controller = new ThreadProgressiveWindowController({
@@ -24,6 +25,7 @@ function fixture({ deferReveal = false } = {}) {
       identity,
       nearTop,
       scrollTop,
+      settled,
       viewport,
     }),
     reveal: count => {
@@ -42,8 +44,32 @@ function fixture({ deferReveal = false } = {}) {
     commitReveal() { hiddenCount -= reveals.at(-1) ?? 0; },
     moveAnchorBy(value: number) { anchorTop += value; },
     setNearTop(value: boolean) { nearTop = value; },
+    setSettled(value: boolean) { settled = value; },
   };
 }
+
+test("defers prepends while the reader is still touch or momentum scrolling", () => {
+  const f = fixture();
+  f.setSettled(false);
+  f.controller.reconcile();
+  assert.deepEqual(f.reveals, []);
+  assert.deepEqual(f.writes, []);
+
+  f.setSettled(true);
+  f.controller.reconcile();
+  assert.deepEqual(f.reveals, [4]);
+});
+
+test("a reveal committed after settling still restores its anchor if scrolling resumed", () => {
+  const f = fixture({ deferReveal: true });
+  f.controller.reconcile();
+  f.setSettled(false);
+  f.commitReveal();
+  f.moveAnchorBy(320);
+  f.controller.reconcile();
+  assert.deepEqual(f.writes, [620]);
+  assert.deepEqual(f.reveals, [4]);
+});
 
 test("reveals one bounded batch and restores the prior reading anchor before continuing", () => {
   const f = fixture();

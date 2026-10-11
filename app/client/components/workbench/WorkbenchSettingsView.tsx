@@ -214,7 +214,9 @@ export default function WorkbenchSettingsView({
               : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
           </FormSection>
           <FormSection id="settings-voice" title="Voice"><VoiceSettings /></FormSection>
-          <FormSection id="settings-runtime" title="Runtime"><WorkbenchReactDevelopmentModeSetting /></FormSection>
+          <FormSection id="settings-runtime" title="Runtime">
+            <WorkbenchReactDevelopmentModeSetting projectRootPaths={logicalProject?.iconProject.locations.map(location => location.rootPath) ?? []} />
+          </FormSection>
         </> : null}
         {page === "projects" ? <>
           <FormSection id="settings-files" title="Files">

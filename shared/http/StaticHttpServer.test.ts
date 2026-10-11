@@ -1,11 +1,12 @@
 /*
- * No production exports. Node tests protect static serving, SPA fallback, path confinement, request seams, free-port binding, and disposal.
+ * No production exports. Node tests protect static serving, compression, revalidation, SPA fallback, path confinement, request seams, free-port binding, and disposal.
  */
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import test from "node:test";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import StaticHttpServer from "./StaticHttpServer.ts";
@@ -107,6 +108,59 @@ test("runs the first-party request seam before static method handling", async (c
   const response = await fetch(`${url}/readyz`, { method: "POST" });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ready: true });
+});
+
+function bytesRequest(url: string, requestPath: string, headers: Record<string, string>, method = "GET") {
+  const origin = new URL(url);
+  return new Promise<{ body: Buffer; headers: http.IncomingHttpHeaders; statusCode: number | undefined }>((resolve, reject) => {
+    // No keep-alive agent, so server disposal does not wait on idle sockets.
+    const request = http.request({ agent: false, headers, hostname: origin.hostname, method, path: requestPath, port: Number(origin.port) }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({ body: Buffer.concat(chunks), headers: response.headers, statusCode: response.statusCode }));
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+test("compresses large text assets per accepted encoding and revalidates unchanged files", async (context) => {
+  const rootDirectoryPath = await fixture();
+  const bundle = `export const words = ${JSON.stringify(Array.from({ length: 400 }, (_, index) => `word-${index}`))};\n`;
+  await writeFile(path.join(rootDirectoryPath, "assets", "bundle.js"), bundle, "utf8");
+  const server = new StaticHttpServer({ cacheSeconds: 0, hostname: "127.0.0.1", rootDirectoryPath });
+  context.after(async () => await server.close());
+  const { url } = await server.start();
+
+  const decoders = { br: brotliDecompressSync, gzip: gunzipSync } as const;
+  for (const encoding of ["br", "gzip"] as const) {
+    const response = await bytesRequest(url, "/assets/bundle.js", { "Accept-Encoding": encoding });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers["content-encoding"], encoding);
+    assert.ok(response.body.length < Buffer.byteLength(bundle));
+    assert.equal(decoders[encoding](response.body).toString("utf8"), bundle);
+    assert.equal(response.headers["cache-control"], "no-cache");
+
+    const revalidated = await bytesRequest(url, "/assets/bundle.js", {
+      "Accept-Encoding": encoding,
+      "If-None-Match": String(response.headers.etag),
+    });
+    assert.equal(revalidated.statusCode, 304);
+    assert.equal(revalidated.body.length, 0);
+  }
+
+  const identity = await bytesRequest(url, "/assets/bundle.js", { "Accept-Encoding": "identity" });
+  assert.equal(identity.headers["content-encoding"], undefined);
+  assert.equal(identity.body.toString("utf8"), bundle);
+
+  const head = await bytesRequest(url, "/assets/bundle.js", { "Accept-Encoding": "gzip" }, "HEAD");
+  const get = await bytesRequest(url, "/assets/bundle.js", { "Accept-Encoding": "gzip" });
+  assert.equal(head.headers["content-length"], get.headers["content-length"]);
+
+  await writeFile(path.join(rootDirectoryPath, "assets", "bundle.js"), `${bundle}// changed\n`, "utf8");
+  const changed = await bytesRequest(url, "/assets/bundle.js", { "If-None-Match": String(identity.headers.etag) });
+  assert.equal(changed.statusCode, 200);
+  assert.match(changed.body.toString("utf8"), /changed/u);
 });
 
 test("disposal releases the listener", async () => {

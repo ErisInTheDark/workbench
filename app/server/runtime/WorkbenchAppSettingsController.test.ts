@@ -11,6 +11,7 @@ test("persisting requested mode does not claim the running process changed", asy
   const controller = new WorkbenchAppSettingsController({
     readAppliedReactDevelopmentMode: () => false,
     readRequestedReactDevelopmentMode: () => requested,
+    sourceRootPath: "/repo/workbench",
     writeRequestedReactDevelopmentMode: async (value) => {
       updates.push(value);
       requested = value;
@@ -20,10 +21,12 @@ test("persisting requested mode does not claim the running process changed", asy
   assert.deepEqual(controller.read(), {
     appliedReactDevelopmentMode: false,
     requestedReactDevelopmentMode: false,
+    sourceRootPath: "/repo/workbench",
   });
   assert.deepEqual(await controller.update({ reactDevelopmentMode: true }), {
     appliedReactDevelopmentMode: false,
     requestedReactDevelopmentMode: true,
+    sourceRootPath: "/repo/workbench",
   });
   assert.deepEqual(updates, [true]);
 });
@@ -33,6 +36,7 @@ test("failed persistence propagates without advertising unapplied settings", asy
   const controller = new WorkbenchAppSettingsController({
     readAppliedReactDevelopmentMode: () => false,
     readRequestedReactDevelopmentMode: () => false,
+    sourceRootPath: "/repo/workbench",
     writeRequestedReactDevelopmentMode: async () => {
       throw failure;
     },

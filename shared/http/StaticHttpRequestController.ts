@@ -1,12 +1,14 @@
 /*
  * Exports:
- * - StaticHttpRequestContext/StaticHttpRequestHandler: narrow first-party request seam before static resolution. Keywords: HTTP, request, route.
- * - StaticHttpRequestControllerOptions/default StaticHttpRequestController: own safe static resolution, SPA fallback, MIME, and cache behavior. Keywords: HTTP, static, controller.
+ * - StaticHttpRequestContext/StaticHttpRequestHandler: narrow first-party request seam before static resolution.
+ * - StaticHttpRequestControllerOptions/default StaticHttpRequestController: own safe static resolution, SPA fallback, MIME, revalidation, compression, and cache behavior.
  */
 import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 
 export interface StaticHttpRequestContext {
   request: IncomingMessage;
@@ -66,11 +68,60 @@ function acceptsHtml(request: IncomingMessage) {
   return accept === undefined || accept.includes("*/*") || accept.includes("text/html");
 }
 
+const COMPRESSIBLE_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".map", ".svg", ".txt", ".webmanifest"]);
+const MIN_COMPRESSIBLE_BYTES = 1024;
+// Encoded bodies are kept per file version; the bound only needs to cover the live frontend assets.
+const ENCODED_CACHE_LIMIT = 32;
+const brotliCompressAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+type ContentEncoding = "br" | "gzip";
+type FileStat = Awaited<ReturnType<typeof stat>>;
+
 function cacheControlFor(filePath: string, cacheSeconds: number) {
-  if (cacheSeconds === 0) return "no-store";
+  // Zero means always revalidate: clients keep the bytes and receive 304 until the file changes.
+  if (cacheSeconds === 0) return "no-cache";
   return path.extname(filePath).toLowerCase() === ".html"
     ? "no-cache"
     : `public, max-age=${cacheSeconds}`;
+}
+
+function preferredEncoding(header: string | string[] | undefined): ContentEncoding | null {
+  const accepted = new Map<string, number>();
+  for (const part of (Array.isArray(header) ? header.join(",") : header ?? "").split(",")) {
+    const [rawName, ...parameters] = part.trim().toLowerCase().split(";");
+    if (!rawName) continue;
+    const quality = parameters.map(value => value.trim()).find(value => value.startsWith("q="));
+    accepted.set(rawName, quality ? Number(quality.slice(2)) || 0 : 1);
+  }
+  const allows = (name: ContentEncoding) => (accepted.get(name) ?? accepted.get("*") ?? 0) > 0;
+  if (allows("br")) return "br";
+  if (allows("gzip")) return "gzip";
+  return null;
+}
+
+function entityTagFor(file: FileStat, encoding: ContentEncoding | null) {
+  const version = `${Number(file.size).toString(36)}-${Math.trunc(Number(file.mtimeMs)).toString(36)}`;
+  return `W/"${encoding ? `${version}-${encoding}` : version}"`;
+}
+
+function matchesEntityTag(request: IncomingMessage, entityTag: string) {
+  const header = request.headers["if-none-match"];
+  if (!header) return false;
+  const weak = (value: string) => value.trim().replace(/^W\//u, "");
+  return header.split(",").some(candidate => candidate.trim() === "*" || weak(candidate) === weak(entityTag));
+}
+
+function encode(contents: Buffer, encoding: ContentEncoding) {
+  return encoding === "br"
+    ? brotliCompressAsync(contents, {
+      params: {
+        // Fast enough to run on first request after a rebuild while still beating gzip.
+        [zlibConstants.BROTLI_PARAM_QUALITY]: 5,
+        [zlibConstants.BROTLI_PARAM_SIZE_HINT]: contents.length,
+      },
+    })
+    : gzipAsync(contents, { level: 6 });
 }
 
 function sendText(response: ServerResponse, statusCode: number, message: string, extraHeaders: Record<string, string> = {}) {
@@ -87,6 +138,7 @@ export default class StaticHttpRequestController {
   private readonly cacheSeconds: number;
   private readonly rootDirectoryPath: string;
   private readonly spaFallbackPath: string | null;
+  private readonly encodedBodies = new Map<string, Promise<Buffer>>();
   private realRootDirectoryPath: string | null = null;
 
   constructor(options: StaticHttpRequestControllerOptions) {
@@ -107,6 +159,7 @@ export default class StaticHttpRequestController {
 
   close() {
     this.realRootDirectoryPath = null;
+    this.encodedBodies.clear();
   }
 
   async handleRequest(request: IncomingMessage, response: ServerResponse) {
@@ -157,12 +210,31 @@ export default class StaticHttpRequestController {
       return;
     }
     filePath = file.filePath;
-
-    response.writeHead(200, {
+    const fileStat = file.stat;
+    const compressible = COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+      && Number(fileStat.size) >= MIN_COMPRESSIBLE_BYTES;
+    const encoding = compressible ? preferredEncoding(request.headers["accept-encoding"]) : null;
+    const entityTag = entityTagFor(fileStat, encoding);
+    const headers: Record<string, string> = {
       "Cache-Control": cacheControlFor(filePath, this.cacheSeconds),
-      "Content-Length": String(file.stat.size),
       "Content-Type": MIME_TYPES.get(path.extname(filePath).toLowerCase()) ?? "application/octet-stream",
-    });
+      ETag: entityTag,
+      ...(compressible ? { Vary: "Accept-Encoding" } : {}),
+    };
+    if (matchesEntityTag(request, entityTag)) {
+      response.writeHead(304, headers);
+      response.end();
+      return;
+    }
+
+    if (encoding) {
+      const body = await this.encodedBody(filePath, fileStat, encoding);
+      response.writeHead(200, { ...headers, "Content-Encoding": encoding, "Content-Length": String(body.length) });
+      response.end(request.method === "HEAD" ? undefined : body);
+      return;
+    }
+
+    response.writeHead(200, { ...headers, "Content-Length": String(fileStat.size) });
     if (request.method === "HEAD") {
       response.end();
       return;
@@ -178,6 +250,24 @@ export default class StaticHttpRequestController {
       response.once("finish", resolve);
       stream.pipe(response);
     });
+  }
+
+  /** One encode per file version and encoding; concurrent requests share it and failures are not cached. */
+  private encodedBody(filePath: string, file: FileStat, encoding: ContentEncoding) {
+    const key = `${filePath}\0${entityTagFor(file, encoding)}`;
+    const cached = this.encodedBodies.get(key);
+    if (cached) return cached;
+    const body = readFile(filePath).then(contents => encode(contents, encoding));
+    this.encodedBodies.set(key, body);
+    body.catch(() => {
+      if (this.encodedBodies.get(key) === body) this.encodedBodies.delete(key);
+    });
+    while (this.encodedBodies.size > ENCODED_CACHE_LIMIT) {
+      const oldest = this.encodedBodies.keys().next().value;
+      if (oldest === undefined) break;
+      this.encodedBodies.delete(oldest);
+    }
+    return body;
   }
 
   private resolveRequestPath(requestUrl: string):

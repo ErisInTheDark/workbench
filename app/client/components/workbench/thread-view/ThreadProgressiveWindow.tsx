@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadProgressiveWindowChunk: one stable exact-height transcript chunk.
- * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends while preserving the reading anchor.
+ * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends, after reader scrolling settles, while preserving the reading anchor.
  */
 "use client";
 
@@ -70,6 +70,7 @@ export default function ThreadProgressiveWindow({
       nearTop: sentinelRect.bottom > viewportRect.top - TOP_MARGIN_PX
         && sentinelRect.top < viewportRect.bottom,
       scrollTop: scrollTarget.scrollTop,
+      settled: viewport.isScrollSettled(),
       viewport: scrollTarget,
     };
   }, [identityToken, viewport]);
@@ -89,10 +90,10 @@ export default function ThreadProgressiveWindow({
     writeScrollTop: scrollTop => bindingsRef.current.writeScrollTop(scrollTop),
   });
 
+  // Window geometry only changes with its own reveal or chunk list; unrelated commits must not force layout here.
   useLayoutEffect(() => {
     controllerRef.current?.reconcile();
-    viewport.stabilizeInitialEnd();
-  });
+  }, [boundedStart, chunks.length, identityToken]);
   useEffect(() => {
     const scrollTarget = viewport.getViewport();
     const sentinel = sentinelRef.current;
@@ -103,7 +104,11 @@ export default function ThreadProgressiveWindow({
       rootMargin: `${TOP_MARGIN_PX}px 0px 0px`,
     });
     observer.observe(sentinel);
-    return () => observer.disconnect();
+    const stopSettled = viewport.onScrollSettled(reconcile);
+    return () => {
+      observer.disconnect();
+      stopSettled();
+    };
   }, [viewport]);
   const visibleChunks = chunks.slice(boundedStart);
   return (

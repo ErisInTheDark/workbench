@@ -260,16 +260,16 @@ export default class WorkbenchFrontendCompiler {
   }
 
   private esbuildOptions(): esbuild.BuildOptions {
+    const reactDevelopmentMode = this.readReactDevelopmentMode();
     return {
       absWorkingDir: this.repositoryRootPath,
       assetNames: "assets/[name]-[hash]",
       bundle: true,
       define: {
         // Keep this separate from the process.env object so esbuild folds React's runtime branch.
-        "process.env.NODE_ENV": JSON.stringify(this.readReactDevelopmentMode() ? "development" : "production"),
+        "process.env.NODE_ENV": JSON.stringify(reactDevelopmentMode ? "development" : "production"),
         "process.env": JSON.stringify({
           WORKBENCH_CODEX_APP_SERVER_URL: this.environment.WORKBENCH_CODEX_APP_SERVER_URL,
-          WORKBENCH_DISABLE_REACT_SCAN: this.environment.WORKBENCH_DISABLE_REACT_SCAN,
         }),
       },
       entryPoints: {
@@ -287,6 +287,8 @@ export default class WorkbenchFrontendCompiler {
       },
       logLevel: "silent",
       metafile: true,
+      // Development mode keeps readable component names for React tooling; production ships the small bundle.
+      minify: !reactDevelopmentMode,
       outdir: path.join(this.outputDirectoryPath, "assets"),
       platform: "browser",
       plugins: [this.esbuildLifecyclePlugin()],

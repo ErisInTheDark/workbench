@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, measured-window stability, and off-screen layout preservation.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, reader scroll settling, measured-window stability, and off-screen layout preservation.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -9,6 +9,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type ForwardedRef,
@@ -27,6 +28,7 @@ import {
   type ThreadScrollProximity,
 } from "./thread-scroll-snap";
 import ThreadInitialEndPlacementController from "./ThreadInitialEndPlacementController";
+import ThreadScrollSettleController from "./ThreadScrollSettleController";
 import {
   ThreadScrollViewportContext,
   useThreadScrollViewportContext,
@@ -92,21 +94,30 @@ function ActiveThreadScrollViewport ({
   const pointerScrollMovedRef = useRef(false);
   const previousScrollTopRef = useRef(0);
   const touchClientYRef = useRef<number | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
+  const settleRef = useRef<ThreadScrollSettleController | null>(null);
+  const settle = settleRef.current ??= new ThreadScrollSettleController({
+    schedule: (callback, delayMs) => {
+      const timer = window.setTimeout(callback, delayMs);
+      return () => window.clearTimeout(timer);
+    },
+  });
   useEffect(() => () => {
     visibility.current?.dispose();
     visibility.current = null;
   }, []);
+  useEffect(() => () => settle.dispose(), [settle]);
 
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
     const metrics = readScrollMetrics(viewport);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
     wasAtEndRef.current = isThreadScrollAtEnd(metrics);
     const proximity = resolveThreadScrollProximity(metrics);
-    viewport.dataset.threadScrollProximity = proximity;
+    if (viewport.dataset.threadScrollProximity !== proximity) viewport.dataset.threadScrollProximity = proximity;
     if (reattached) bottomListeners.current.forEach(listener => listener());
     return proximity;
   }, []);
@@ -138,7 +149,8 @@ function ActiveThreadScrollViewport ({
     workedRunState: null,
     progressiveWindowing: true,
     getViewport: () => viewportRef.current,
-    stabilizeInitialEnd: placeInitialViewportAtEnd,
+    isScrollSettled: () => settle.settled,
+    onScrollSettled: listener => settle.subscribe(listener),
     observeContent: (element, listener, range = "viewport", preserveReadingPosition = false) => {
       const root = viewportRef.current;
       if (!root) return () => { };
@@ -172,7 +184,18 @@ function ActiveThreadScrollViewport ({
       endTargetRef.current = target;
       placeInitialViewportAtEnd();
     },
-  }), [placeInitialViewportAtEnd, syncScrollProximity]);
+  }), [placeInitialViewportAtEnd, settle, syncScrollProximity]);
+
+  // The one owner of initial bottom placement: any content or viewport resize re-pins before paint until reader intent.
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => placeInitialViewportAtEnd());
+    observer.observe(content);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [placeInitialViewportAtEnd]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -200,7 +223,9 @@ function ActiveThreadScrollViewport ({
       pointerScrollMovedRef.current = false;
       previousScrollTopRef.current = scrollTop;
       syncScrollProximity(viewport);
+      settle.scrolled();
     };
+    const handleScrollEnd = () => settle.scrollEnded();
     const handleWheel = (event: WheelEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       const direction = event.deltaY > 0 ? "down" : event.deltaY < 0 ? "up" : null;
@@ -243,6 +268,7 @@ function ActiveThreadScrollViewport ({
     const handleTouchStart = (event: TouchEvent) => {
       if (event.target instanceof Element && event.target.closest("[data-thread-scroll-target]") !== viewport) return;
       touchClientYRef.current = event.touches.length === 1 ? event.touches[0].clientY : null;
+      settle.touchStarted();
       onTouchActivityChange?.(touchClientYRef.current !== null);
     };
     const handleTouchMove = (event: TouchEvent) => {
@@ -266,8 +292,9 @@ function ActiveThreadScrollViewport ({
       }
       touchClientYRef.current = currentClientY;
     };
-    const handleTouchEnd = () => {
+    const handleTouchEnd = (event: TouchEvent) => {
       touchClientYRef.current = null;
+      if (event.touches.length === 0) settle.touchEnded();
       onTouchActivityChange?.(false);
     };
 
@@ -275,6 +302,7 @@ function ActiveThreadScrollViewport ({
     viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
     viewport.addEventListener("pointermove", handlePointerMove, { passive: true });
     viewport.addEventListener("scroll", handleScroll, { passive: true });
+    viewport.addEventListener("scrollend", handleScrollEnd, { passive: true });
     viewport.addEventListener("touchcancel", handleTouchEnd, { passive: true });
     viewport.addEventListener("touchend", handleTouchEnd, { passive: true });
     viewport.addEventListener("touchmove", handleTouchMove, { passive: true });
@@ -290,6 +318,7 @@ function ActiveThreadScrollViewport ({
       viewport.removeEventListener("pointerdown", handlePointerDown);
       viewport.removeEventListener("pointermove", handlePointerMove);
       viewport.removeEventListener("scroll", handleScroll);
+      viewport.removeEventListener("scrollend", handleScrollEnd);
       viewport.removeEventListener("touchcancel", handleTouchEnd);
       viewport.removeEventListener("touchend", handleTouchEnd);
       viewport.removeEventListener("touchmove", handleTouchMove);
@@ -298,7 +327,7 @@ function ActiveThreadScrollViewport ({
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
       viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
     };
-  }, [onScrollIntent, onTouchActivityChange, syncScrollProximity]);
+  }, [onScrollIntent, onTouchActivityChange, settle, syncScrollProximity]);
 
   return (
     <div
@@ -316,7 +345,7 @@ function ActiveThreadScrollViewport ({
       data-thread-scroll-target="true"
     >
       <ThreadScrollViewportContext.Provider value={contextValue}>
-        <div className={joinClasses("min-h-full shrink-0", contentClassName)}>
+        <div ref={contentRef} className={joinClasses("min-h-full shrink-0", contentClassName)}>
           {children}
         </div>
       </ThreadScrollViewportContext.Provider>
