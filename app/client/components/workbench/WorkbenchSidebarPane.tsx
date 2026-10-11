@@ -51,7 +51,7 @@ export default function WorkbenchSidebarPane({
   /** The folder's explorer tree, rendered only while a folder is selected. */
   explorerSection: ReactNode;
   harness: ThreadSidebarProps["harness"];
-  navigateToRoute: (route: WorkbenchRoute) => void;
+  navigateToRoute: (route: WorkbenchRoute, options?: { keepMobileSidebar?: boolean }) => void;
   newProjectRoute: WorkbenchRoute;
   onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
   onBeginPointerDrag: ThreadSidebarProps["onBeginPointerDrag"];
@@ -206,7 +206,7 @@ export default function WorkbenchSidebarPane({
               navigateToRoute({
                 ...route,
                 folderAddress: navigator?.folderAddressFor(location, route) ?? null,
-              });
+              }, { keepMobileSidebar: true });
             }}
             selected={browseLocation}
           >

@@ -14,6 +14,7 @@ import type { WorkbenchClientController } from "../../components/workbench/workb
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 import { useWorkbenchProjectNavigation } from "./use-workbench-project-navigation";
+import { isMobileSidebarRequested, keepsMobileMainPane, mobileSidebarHref } from "../state/mobile-pane-url-state";
 
 const emptySubscribe = (_listener: () => void) => () => {};
 
@@ -45,8 +46,17 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
   ]);
 
   const navigateToRoute = useCallback((nextRoute: WorkbenchRoute,
-    options: { replace?: boolean; selection?: "inherit" | "exact" } = {}) => {
-    const nextHref = href(nextRoute, options.selection);
+    options: {
+      replace?: boolean; selection?: "inherit" | "exact";
+      /** A sidebar-only change (project or folder selection) keeps an open mobile sidebar open over the same main pane. */
+      keepMobileSidebar?: boolean;
+    } = {}) => {
+    const routeHref = href(nextRoute, options.selection);
+    // Canonical replacements keep the mobile sidebar open too, so a reload there returns to the sidebar.
+    const keepSidebar = (options.replace || (options.keepMobileSidebar && keepsMobileMainPane(route, nextRoute)))
+      && isMobileSidebarRequested(window.location.search);
+    const nextHref = routeHref !== undefined && keepSidebar
+      ? mobileSidebarHref(new URL(routeHref, window.location.origin)) : routeHref;
     if (nextHref === undefined || nextHref === locationSnapshot) {
       return;
     }
@@ -56,7 +66,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     } else {
       window.history.pushState({ workbench: true }, "", nextHref);
     }
-  }, [href, locationSnapshot]);
+  }, [href, locationSnapshot, route]);
 
   useEffect(() => {
     // Prefer the catalogue once available, including when an old junction URL

@@ -1,14 +1,13 @@
 /*
  * Exports:
+ * - MobilePaneDestination: where a finished swipe goes, the sidebar over the current route or a remembered editor route.
  * - default MobilePaneSwipeController: recognise guarded mobile pane swipes and remember the last editor route.
  */
 
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import {
-  getMobileExplorerRoute,
-  getPreferredMobilePane,
-  type MobilePane,
-} from "../state/mobile-pane-url-state";
+import { getPreferredMobilePane, type MobilePane } from "../state/mobile-pane-url-state";
+
+export type MobilePaneDestination = WorkbenchRoute | "sidebar";
 
 interface SwipePoint {
   touchId: number;
@@ -19,7 +18,6 @@ interface SwipePoint {
 }
 
 interface SwipeStart extends SwipePoint {
-  browseProjectId: string;
   eligibleTarget: boolean;
   pane: MobilePane;
   route: WorkbenchRoute;
@@ -83,7 +81,7 @@ export default class MobilePaneSwipeController {
       : Math.max(-active.viewportWidth, Math.min(0, delta));
   }
 
-  finish(point: SwipePoint): WorkbenchRoute | null {
+  finish(point: SwipePoint): MobilePaneDestination | null {
     this.move(point);
     const active = this.active;
     this.cancel();
@@ -92,9 +90,7 @@ export default class MobilePaneSwipeController {
     const dy = Math.abs(point.y - active.y);
     if (Math.abs(dx) < active.viewportWidth * COMPLETE_FRACTION
       || Math.abs(dx) < dy * HORIZONTAL_DOMINANCE) return null;
-    if (active.pane === "editor" && dx > 0) {
-      return getMobileExplorerRoute(active.route, active.browseProjectId);
-    }
+    if (active.pane === "editor" && dx > 0) return "sidebar";
     if (active.pane === "explorer" && dx < 0) return this.lastEditorRoute;
     return null;
   }

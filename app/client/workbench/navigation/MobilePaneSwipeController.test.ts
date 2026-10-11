@@ -13,7 +13,6 @@ const sidebar = createProjectRoute("project");
 function start(controller: MobilePaneSwipeController, pane: "editor" | "explorer", x = 200,
   eligibleTarget = true) {
   return controller.start({
-    browseProjectId: "project",
     eligibleTarget,
     pane,
     route: pane === "editor" ? thread : sidebar,
@@ -40,7 +39,7 @@ test("right from editor opens sidebar and left returns to the remembered editor"
   controller.observeRoute(thread);
   assert.equal(start(controller, "editor"), true);
   move(controller, 330);
-  assert.equal(finish(controller, 330)?.view, "project");
+  assert.equal(finish(controller, 330), "sidebar");
   controller.observeRoute(sidebar);
   start(controller, "explorer");
   move(controller, 70);
@@ -82,7 +81,7 @@ test("movement after a near-stationary dwell is cancelled, but an early swipe ma
   start(controller, "editor");
   move(controller, 212, 301, 100);
   move(controller, 330, 300, 500);
-  assert.equal(finish(controller, 330, 300, 520)?.view, "project");
+  assert.equal(finish(controller, 330, 300, 520), "sidebar");
 });
 
 test("vertical-first, multi-touch, opposite-direction and route changes cancel a swipe", () => {
@@ -115,7 +114,7 @@ test("finger-follow preview reverses before release and only final travel decide
   assert.equal(finish(controller, 240), null);
   start(controller, "editor");
   move(controller, 210);
-  assert.equal(finish(controller, 330)?.view, "project");
+  assert.equal(finish(controller, 330), "sidebar");
 });
 
 test("preview is clamped to the pane span without changing the final release rule", () => {
@@ -135,5 +134,5 @@ test("the final travel rule remains reachable at the edge of the allowed start z
   assert.equal(finish(controller, 339), null);
   assert.equal(start(controller, "editor", 240), true);
   move(controller, 250);
-  assert.equal(finish(controller, 340)?.view, "project");
+  assert.equal(finish(controller, 340), "sidebar");
 });

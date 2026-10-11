@@ -1,13 +1,13 @@
 /*
  * Exports:
- * - default MobilePaneTrack: present finger-follow navigation between the mobile explorer and editor panes.
+ * - default MobilePaneTrack: present finger-follow navigation between the mobile explorer and editor panes, and a slide-then-navigate action for pane buttons; the sidebar opens over the current route so its main pane stays mounted.
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type Touch as ReactTouch, type TouchEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode, type Touch as ReactTouch, type TouchEvent } from "react";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import MobilePaneSwipeController from "../../workbench/navigation/MobilePaneSwipeController";
-import { getPreferredMobilePane, type MobilePane } from "../../workbench/state/mobile-pane-url-state";
+import MobilePaneSwipeController, { type MobilePaneDestination } from "../../workbench/navigation/MobilePaneSwipeController";
+import { mobileSidebarHref, type MobilePane } from "../../workbench/state/mobile-pane-url-state";
 
 const BLOCKED_TARGETS = "input,textarea,select,button,a,label,summary,[contenteditable],[role='button'],[role='link'],[role='textbox'],[role='combobox'],[role='slider'],[role='spinbutton'],[role='switch']";
 
@@ -46,20 +46,21 @@ function clampPosition(positionPx: number, width: number) {
   return Math.min(0, Math.max(-width, positionPx));
 }
 
-export default function MobilePaneTrack({ browseProjectId, children, isMobile, navigateToRoute, pane, route }: {
-  browseProjectId: string;
+export default function MobilePaneTrack({ children, isMobile, navigateToRoute, pane, route, slideRef }: {
   children: ReactNode;
   isMobile: boolean;
   navigateToRoute: (destination: WorkbenchRoute) => void;
   pane: MobilePane;
   route: WorkbenchRoute;
+  /** Filled with the slide-then-navigate action while mobile, for controls outside the swipe gesture. */
+  slideRef?: MutableRefObject<((destination: MobilePaneDestination) => void) | null>;
 }) {
   const [controller] = useState(() => new MobilePaneSwipeController());
   const [motion, setMotion] = useState<Motion | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const dragOriginX = useRef<number | null>(null);
   const gestureStarted = useRef(false);
-  const pendingNavigation = useRef<WorkbenchRoute | null>(null);
+  const pendingNavigation = useRef<MobilePaneDestination | null>(null);
   const pendingNavigationFrame = useRef<number | null>(null);
   const previousRoute = useRef(route);
 
@@ -75,7 +76,8 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
     if (!destination) return;
     cancelPendingNavigation();
     const previousHref = window.location.href;
-    navigateToRoute(destination);
+    if (destination === "sidebar") window.history.pushState({ workbench: true }, "", mobileSidebarHref(window.location));
+    else navigateToRoute(destination);
     if (window.location.href === previousHref) setMotion(null);
   };
 
@@ -85,11 +87,10 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
       cancelPendingNavigation();
       dragOriginX.current = null;
       gestureStarted.current = false;
-      const destinationPane = getPreferredMobilePane(true, route);
-      setMotion(current => current?.targetPane === destinationPane ? current : null);
+      setMotion(current => current?.targetPane === pane ? current : null);
       previousRoute.current = route;
     }
-  }, [controller, route]);
+  }, [controller, pane, route]);
   useEffect(() => {
     if (!motion?.targetPane || motion.targetPane !== pane) return;
     const target = pane === "explorer" ? 0 : -window.innerWidth;
@@ -147,7 +148,6 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
     const touch = event.touches[0]!;
     gestureStarted.current = controller.start({
       ...touchPoint(touch, event.timeStamp),
-      browseProjectId,
       eligibleTarget: canStartSwipe(event.target, event.currentTarget),
       pane,
       route,
@@ -177,6 +177,10 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
       setMotion(null);
       return;
     }
+    slideTo(destination);
+  };
+  /** Slide to the other pane first and navigate once it lands, so the navigation's render never stalls the slide. */
+  const slideTo = (destination: MobilePaneDestination) => {
     const targetPane: MobilePane = pane === "editor" ? "explorer" : "editor";
     setMotion({
       dragging: false,
@@ -190,7 +194,7 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
       commitPendingNavigation();
       return;
     }
-    // Let the released transform paint once before fallback navigation.
+    // A slide that never starts (no layout change to animate) still navigates after two frames.
     pendingNavigationFrame.current = window.requestAnimationFrame(() => {
       pendingNavigationFrame.current = window.requestAnimationFrame(() => {
         pendingNavigationFrame.current = null;
@@ -198,6 +202,8 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
       });
     });
   };
+
+  if (slideRef) slideRef.current = isMobile ? slideTo : null;
 
   const transform = motion
     ? `translateX(${motion.positionPx}px)`
@@ -217,12 +223,17 @@ export default function MobilePaneTrack({ browseProjectId, children, isMobile, n
       onTouchEnd={onTouchEnd}
       onTouchCancel={() => { if (gestureStarted.current) stop(); }}
       onTransitionStart={(event) => {
-        if (event.target === event.currentTarget && event.propertyName === "transform"
-          && motion?.targetPane) commitPendingNavigation();
+        if (event.target !== event.currentTarget || event.propertyName !== "transform" || !pendingNavigation.current) return;
+        if (pendingNavigationFrame.current !== null) window.cancelAnimationFrame(pendingNavigationFrame.current);
+        pendingNavigationFrame.current = null;
       }}
       onTransitionEnd={(event) => {
-        if (event.target === event.currentTarget && event.propertyName === "transform"
-          && motion?.targetPane === pane) setMotion(null);
+        if (event.target !== event.currentTarget || event.propertyName !== "transform") return;
+        if (pendingNavigation.current) commitPendingNavigation();
+        else if (motion?.targetPane === pane) setMotion(null);
+      }}
+      onTransitionCancel={(event) => {
+        if (event.target === event.currentTarget && event.propertyName === "transform") commitPendingNavigation();
       }}
     >
       {children}

@@ -6,15 +6,16 @@ import test from "node:test";
 
 import {
   createHomeRoute,
-  createHomeThreadRoute,
   createGitRoute,
   createLogicalExistingThreadRoute,
   createProjectRoute,
   createStatsRoute,
-  createThreadRoute,
+  withProjectSelection,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
-import { getMobileExplorerRoute, getPreferredMobilePane } from "./mobile-pane-url-state.ts";
+import {
+  getPreferredMobilePane, isMobileSidebarRequested, keepsMobileMainPane, mobileSidebarHref,
+} from "./mobile-pane-url-state.ts";
 
 test("mobile stats routes select main content while navigation roots select the explorer", () => {
   assert.equal(getPreferredMobilePane(true, createStatsRoute()), "editor");
@@ -31,15 +32,23 @@ test("mobile working trees open content rather than leaving the sidebar visible"
   assert.equal(getPreferredMobilePane(true, createGitRoute("project")), "editor");
 });
 
-test("mobile back keeps the selected project when leaving a thread", () => {
-  const selected = "112f7e1e-81b6-4c30-bdc0-f83475981001";
+test("only navigations that keep the main pane keep the sidebar open over it", () => {
   const target = { kind: "provider" as const, threadId: ThreadReferenceSchema.parse("thread") };
-  const thread = createLogicalExistingThreadRoute(selected, target);
-  assert.equal(getMobileExplorerRoute(thread, "another-folder").logical?.projectId, selected);
-  assert.equal(getMobileExplorerRoute(createLogicalExistingThreadRoute(null, target),
-    "another-folder").view, "home");
-  assert.equal(getMobileExplorerRoute(createThreadRoute("project", "thread"),
-    "another-folder").projectId, "project");
-  assert.equal(getMobileExplorerRoute(createHomeThreadRoute("project", "thread"),
-    "another-folder").view, "home");
+  const thread = createLogicalExistingThreadRoute(null, target);
+  assert.equal(keepsMobileMainPane(thread, withProjectSelection(thread, ["another-project"])), true);
+  assert.equal(keepsMobileMainPane(thread, createLogicalExistingThreadRoute(null,
+    { kind: "provider", threadId: ThreadReferenceSchema.parse("other") })), false);
+  assert.equal(keepsMobileMainPane(thread, createHomeRoute()), false);
+});
+
+test("a sidebar request shows the sidebar over a thread that a reload keeps", () => {
+  const thread = createLogicalExistingThreadRoute(null, { kind: "provider", threadId: ThreadReferenceSchema.parse("thread") });
+  const href = mobileSidebarHref({ pathname: "/a/@/thread", search: "?q=1", hash: "#end" });
+  const url = new URL(href, "http://workbench.local");
+  assert.equal(url.pathname, "/a/@/thread");
+  assert.equal(url.searchParams.get("q"), "1");
+  assert.equal(url.hash, "#end");
+  assert.equal(getPreferredMobilePane(true, thread, isMobileSidebarRequested(url.search)), "explorer");
+  assert.equal(getPreferredMobilePane(true, thread, isMobileSidebarRequested("?q=1")), "editor");
+  assert.equal(getPreferredMobilePane(false, thread, true), "editor");
 });

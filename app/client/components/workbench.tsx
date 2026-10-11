@@ -95,11 +95,13 @@ import {
     type ComposerDraftTarget,
 } from "../workbench/state/draft-persistence";
 import {
-    getMobileExplorerRoute,
     getPreferredMobilePane,
+    isMobileSidebarRequested,
     MOBILE_MEDIA_QUERY,
-    type MobilePane,
+    mobileSidebarHref,
 } from "../workbench/state/mobile-pane-url-state";
+import type { MobilePaneDestination } from "../workbench/navigation/MobilePaneSwipeController";
+import { useSearchParams } from "../workbench/navigation/browser-navigation";
 import {
     createDefaultProjectWorkbenchSettings,
     MAX_EDITOR_FONT_SIZE,
@@ -484,7 +486,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   ) ?? defaultProviderKey);
   const [isMobile, setIsMobile] = useState(false);
   const [mobileShellHeaderVisibility] = useState(() => new MobileShellHeaderVisibilityController());
-  const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
+  const mobileSidebarRequested = isMobileSidebarRequested(useSearchParams().toString());
+  const mobilePane = getPreferredMobilePane(isMobile, route, mobileSidebarRequested);
+  const mobilePaneSlideRef = useRef<((destination: MobilePaneDestination) => void) | null>(null);
   const [settingsPageTitle, setSettingsPageTitle] = useState("General");
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
   const [settingsSection, setSettingsSection] = useState<string | null>(null);
@@ -656,7 +660,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
     const applyMatch = () => {
       setIsMobile(mediaQuery.matches);
-      setMobilePane(getPreferredMobilePane(mediaQuery.matches, route));
     };
 
     applyMatch();
@@ -990,7 +993,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     event.preventDefault();
     const order = (displayedLogicalProjects ?? explorer.projects).map(project => project.id);
     navigateToRoute(createToggledProjectSelectionRoute(route, selectionProjectIds, projectId, order),
-      { selection: "exact" });
+      { selection: "exact", keepMobileSidebar: true });
   }, [displayedLogicalProjects, explorer.projects, navigateToRoute, route, selectionProjectIds]);
 
   const onInvalidFileLocation = useCallback(() => {
@@ -2222,11 +2225,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             </IconButton>
           ) : null}
           <MobilePaneTrack
-            browseProjectId={explorer.currentProjectId}
             isMobile={isMobile}
             navigateToRoute={navigateToRoute}
             pane={mobilePane}
             route={route}
+            slideRef={mobilePaneSlideRef}
           >
             <WorkbenchSidebarPane
               activeDragPayload={activeWorkbenchDrag?.payload ?? null}
@@ -2422,7 +2425,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       hidden={!isMobile || mobilePane !== "editor"}
                       className="md:hidden"
                       onClick={() => {
-                        navigateToRoute(getMobileExplorerRoute(route, explorer.currentProjectId));
+                        if (mobilePaneSlideRef.current) mobilePaneSlideRef.current("sidebar");
+                        else window.history.pushState({ workbench: true }, "", mobileSidebarHref(window.location));
                       }}
                     >
                       <BackArrowIcon size={20} />
