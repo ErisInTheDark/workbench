@@ -206,14 +206,20 @@ function mergeClaims(sources: readonly StatsMergeSource<Section<"claims">>[], co
 function mergeFeedback(sources: readonly StatsMergeSource<Section<"feedback">>[]): Section<"feedback"> {
   const counts = new Map<string, number>();
   for (const { category, count } of sources.flatMap(({ data }) => data.feedback.counts)) counts.set(category, (counts.get(category) ?? 0) + count);
+  const ownership = new Map(sources.flatMap(({ data }) => data.feedback.ownership ?? [])
+    .map((owner) => [`${owner.daemonId}\0${owner.id}`, owner]));
   const frame = frameSource(sources).data;
   return {
     ...frame,
     feedback: {
       counts: [...counts.entries()].map(([category, count]) => ({ category: category as Section<"feedback">["feedback"]["counts"][number]["category"], count })),
-      items: sources.flatMap(({ daemonId, data }) => data.feedback.items.map((item) => ({ ...item, daemonId: item.daemonId ?? daemonId })))
+      items: sources.flatMap(({ daemonId, data }) => data.feedback.items.map((item) => {
+        const sourceDaemonId = item.daemonId ?? daemonId;
+        return { ...item, daemonId: sourceDaemonId, owned: item.owned || ownership.has(`${sourceDaemonId}\0${item.id}`) };
+      }))
         .sort((left, right) => right.importance - left.importance || right.createdAt - left.createdAt)
         .slice(0, WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT),
+      ownership: [...ownership.values()],
       total: sum(sources, ({ data }) => data.feedback.total),
       workbenchProjectId: frame.feedback.workbenchProjectId ?? sources.find(({ data }) => data.feedback.workbenchProjectId)?.data.feedback.workbenchProjectId ?? null,
     },

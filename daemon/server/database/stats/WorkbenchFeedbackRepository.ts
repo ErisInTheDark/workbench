@@ -94,7 +94,10 @@ export default class WorkbenchFeedbackRepository {
     const items = ordered(rows, "importance").slice(0, WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT);
     const details = this.#details(items);
     return {
-      counts, items: items.map((row) => details.get(row.id)!), total: rows.length,
+      counts,
+      items: items.map((row) => details.get(row.id)!),
+      ownership: this.#ownership({ projectIds, startedAt, endedAt }),
+      total: rows.length,
       workbenchProjectId: workbenchProjectId ? new WorkbenchProjectRepository(this.database).resolveStoredReference(workbenchProjectId) : null,
     };
   }
@@ -120,8 +123,8 @@ export default class WorkbenchFeedbackRepository {
     `).get(id) as StoredScoreRow | undefined;
     const item = row ? this.#details([scoreRow(row)]).get(id) : undefined;
     return item
-      ? { counts: [{ category: item.category, count: 1 }], items: [item], total: 1, workbenchProjectId: null }
-      : { counts: [], items: [], total: 0, workbenchProjectId: null };
+      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], total: 1, workbenchProjectId: null }
+      : { counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null };
   }
 
   /** Importance depends on the maintained trust registry, so it is computed on read rather than stored. */
@@ -174,6 +177,7 @@ export default class WorkbenchFeedbackRepository {
         id: row.id,
         importance: score.importance,
         model: row.model,
+        owned: false,
         projectId: row.project_id,
         reasoningEffort: row.reasoning_effort,
         report: row.report,
@@ -182,5 +186,24 @@ export default class WorkbenchFeedbackRepository {
         title: row.title,
       }];
     }));
+  }
+
+  /** Attachments live with their owning threads and identify remote reports by source daemon plus id. */
+  #ownership(filter: Pick<FeedbackFilter, "endedAt" | "projectIds" | "startedAt">): WorkbenchStatsFeedback["ownership"] {
+    const projects = new WorkbenchProjectRepository(this.database);
+    const scope = filter.projectIds === null ? null : [...new Set(filter.projectIds.map((id) => projects.resolveStoredReference(id)))];
+    return this.database.prepare(`
+      SELECT DISTINCT addressed.source_daemon_id AS daemonId, addressed.feedback_id AS id
+      FROM workbench_thread_addressed_feedback addressed
+      JOIN workbench_threads thread ON thread.id = addressed.thread_id
+      WHERE addressed.created_at >= @startedAt
+        AND (@endedAt IS NULL OR addressed.created_at < @endedAt)
+        AND (@projects IS NULL OR thread.project_id IN (SELECT value FROM json_each(@projects)))
+      ORDER BY addressed.source_daemon_id, addressed.feedback_id
+    `).all({
+      endedAt: filter.endedAt,
+      projects: scope === null ? null : JSON.stringify(scope),
+      startedAt: filter.startedAt,
+    }) as WorkbenchStatsFeedback["ownership"];
   }
 }

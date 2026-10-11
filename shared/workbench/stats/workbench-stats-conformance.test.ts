@@ -58,3 +58,21 @@ test("a drifted stats section still parses as a workspace observation", () => {
     assert.ok(observation.kind === "stats" && observation.data?.generatedAt === 7);
   } finally { console.error = original; }
 });
+
+test("older feedback responses default ownership without dropping reports", () => {
+  const repaired = WorkbenchStatsObservedResponseSchema.parse({
+    ...EMPTY_WORKBENCH_STATS_SECTIONS.feedback,
+    feedback: {
+      counts: [{ category: "bug", count: 1 }],
+      items: [{
+        category: "bug", channel: "wb", createdAt: 1, harness: null, id: 1, importance: 0.5, model: null,
+        projectId: "workbench", reasoningEffort: null, report: "Old response", scored: true, threadId: null, title: "Old",
+      }],
+      total: 1,
+      workbenchProjectId: null,
+    },
+  });
+  assert.ok(repaired.section === "feedback");
+  assert.equal(repaired.feedback.items[0]?.owned, false);
+  assert.deepEqual(repaired.feedback.ownership, []);
+});

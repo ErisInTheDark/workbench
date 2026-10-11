@@ -2,7 +2,8 @@
  * Exports:
  * - FEEDBACK_CATEGORY_PRESENTATION: label and hue for each feedback category.
  * - feedbackImportanceTone: text colour class for an importance between 0 and 1.
- * - selectFeedbackItems: the reports a viewer sees for a category filter and sort.
+ * - FEEDBACK_REFERENCE_TONE_CLASS_NAME: shared feedback-reference pill tone.
+ * - FeedbackOwnershipFilter/selectFeedbackItems: the reports a viewer sees for ownership, category, and sort filters.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
  * - feedbackReference: the composer reference a new thread receives when addressing one report.
@@ -13,6 +14,9 @@ import type {
   WorkbenchFeedbackSort,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+
+export const FEEDBACK_REFERENCE_TONE_CLASS_NAME = "bg-hue-340/14 text-hue-340";
+export type FeedbackOwnershipFilter = "unowned" | "all";
 
 /** Hue utilities are listed whole so Tailwind can see them. */
 export const FEEDBACK_CATEGORY_PRESENTATION: Readonly<Record<WorkbenchFeedbackCategory, {
@@ -65,8 +69,10 @@ export function feedbackReference(item: WorkbenchFeedbackItem, describe: {
 export function selectFeedbackItems(
   items: readonly WorkbenchFeedbackItem[],
   categories: ReadonlySet<WorkbenchFeedbackCategory>,
+  ownership: FeedbackOwnershipFilter,
   sort: WorkbenchFeedbackSort,
 ) {
-  const visible = categories.size ? items.filter(({ category }) => categories.has(category)) : [...items];
+  const owned = ownership === "all" ? items : items.filter((item) => !item.owned);
+  const visible = categories.size ? owned.filter(({ category }) => categories.has(category)) : [...owned];
   return sort === "newest" ? visible.sort((left, right) => right.createdAt - left.createdAt || right.id - left.id) : visible;
 }

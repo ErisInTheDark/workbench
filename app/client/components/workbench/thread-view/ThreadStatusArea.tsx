@@ -26,6 +26,7 @@ import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessio
 import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
+import { FEEDBACK_REFERENCE_TONE_CLASS_NAME } from "../stats/workspaces/stats-feedback-presentation";
 
 const amberClassName = "text-amber-600 dark:text-amber-300";
 
@@ -74,7 +75,8 @@ export default function ThreadStatusArea({
   const accepted = claim?.proposals.filter(({ status }) => status === "committed").length ?? 0;
   const claimed = claim?.claimedPaths.length ?? 0;
   const stashed = claim?.stashedPaths?.length ?? 0;
-  const feedback = threadLifecycle?.kind === "completed" ? addressedFeedback : [];
+  const feedback = addressedFeedback;
+  const highlightFeedback = threadLifecycle?.kind === "completed";
 
   const arcSegments: ThreadStatusPanel["segments"][number][] = [
     ...(overlapCount || plannedOverlapCount ? [{
@@ -157,7 +159,13 @@ export default function ThreadStatusArea({
           className: todos.count || feedback.length ? threadStatusSegmentClassName : "",
           content: <><ClipboardListIcon size={14} />{todos.count ? count(todos.count) : null}</>,
         },
-        ...(feedback.length ? [{ key: "feedback", content: <><MegaphoneIcon size={14} />{count(feedback.length)}</> }] : []),
+        ...(feedback.length ? [{
+          key: "feedback",
+          className: highlightFeedback
+            ? `${threadStatusSegmentClassName} rounded-full ${FEEDBACK_REFERENCE_TONE_CLASS_NAME}`
+            : threadStatusSegmentClassName,
+          content: <><MegaphoneIcon size={14} />{count(feedback.length)}</>,
+        }] : []),
       ],
     }] : []),
   ];

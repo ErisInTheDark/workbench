@@ -6,8 +6,8 @@
  * - WorkbenchFeedbackTitleSchema: bounded single-line report title.
  * - WorkbenchFeedbackReportSchema: bounded agent report text.
  * - WORKBENCH_FEEDBACK_SORTS/WorkbenchFeedbackSort: importance-first or newest-first ordering.
- * - WorkbenchFeedbackItemSchema/WorkbenchFeedbackItem: one report with its author's model, effort, and computed importance.
- * - WorkbenchStatsFeedbackSchema/WorkbenchStatsFeedback/EMPTY_WORKBENCH_STATS_FEEDBACK/WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT: the stats view's feedback section; wb reports belong to the Workbench project.
+ * - WorkbenchFeedbackItemSchema/WorkbenchFeedbackItem: one report with its author, computed importance, and merged thread ownership.
+ * - WorkbenchStatsFeedbackSchema/WorkbenchStatsFeedback/EMPTY_WORKBENCH_STATS_FEEDBACK/WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT: the stats view's feedback section and cross-daemon ownership evidence; wb reports belong to the Workbench project.
  * - WorkbenchFeedbackRecord: trusted, cwd-resolved feedback write.
  * - WorkbenchFeedbackReadRequest/WorkbenchFeedbackReadResponse/WORKBENCH_FEEDBACK_PAGE_SIZE: paged agent read.
  */
@@ -46,6 +46,8 @@ export const WorkbenchFeedbackItemSchema = z.object({
   /** 0 to 1; how much the author's model and effort make this report worth reading. */
   importance: unit,
   model: z.string().max(200).nullable(),
+  /** True once any connected daemon has a thread addressing this report. */
+  owned: z.boolean().default(false),
   projectId: z.string().min(1),
   reasoningEffort: z.string().max(50).nullable(),
   report: z.string().max(4_000),
@@ -63,12 +65,16 @@ export const WorkbenchStatsFeedbackSchema = z.object({
   counts: z.array(z.object({ category: WorkbenchFeedbackCategorySchema, count }).strict()).max(WORKBENCH_FEEDBACK_CATEGORIES.length),
   /** Most important first; viewers filter and reorder locally. */
   items: z.array(WorkbenchFeedbackItemSchema).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT),
+  /** Thread attachments this daemon stores; the app merges these compound identities into each item's `owned` flag. */
+  ownership: z.array(z.object({ daemonId: z.string().min(1), id: count }).strict()).default([]),
   total: count,
   /** The project wb reports belong to, so viewers can name reports filed elsewhere. */
   workbenchProjectId: z.string().min(1).nullable().default(null),
 }).strict();
 export type WorkbenchStatsFeedback = z.infer<typeof WorkbenchStatsFeedbackSchema>;
-export const EMPTY_WORKBENCH_STATS_FEEDBACK: WorkbenchStatsFeedback = { counts: [], items: [], total: 0, workbenchProjectId: null };
+export const EMPTY_WORKBENCH_STATS_FEEDBACK: WorkbenchStatsFeedback = {
+  counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null,
+};
 
 export interface WorkbenchFeedbackRecord {
   category: WorkbenchFeedbackCategory;

@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, filterable by category tags, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
+ * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, defaulting to unowned reports and filterable by ownership and category, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
  */
 import { useContext, useEffect, useMemo, useState } from "react";
 import {
@@ -26,6 +26,7 @@ import {
   feedbackReference,
   countFeedbackCategories,
   selectFeedbackItems,
+  type FeedbackOwnershipFilter,
 } from "./stats-feedback-presentation";
 
 export default function WorkbenchStatsFeedback() {
@@ -34,6 +35,7 @@ export default function WorkbenchStatsFeedback() {
   const workspace = useContext(WorkbenchWorkspaceContext);
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
+  const [ownership, setOwnership] = useState<FeedbackOwnershipFilter>("unowned");
   // Report ids are only unique per daemon, so selection keys carry the daemon.
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -75,7 +77,15 @@ export default function WorkbenchStatsFeedback() {
       setBusy(false);
     }
   };
-  const visible = useMemo(() => selectFeedbackItems(items, categories, sort), [categories, items, sort]);
+  const ownershipItems = useMemo(
+    () => ownership === "all" ? items : items.filter((item) => !item.owned),
+    [items, ownership],
+  );
+  const categoryCounts = useMemo(() => countFeedbackCategories(ownershipItems), [ownershipItems]);
+  const visible = useMemo(
+    () => selectFeedbackItems(items, categories, ownership, sort),
+    [categories, items, ownership, sort],
+  );
   const modelName = useStats.modelNames(items.flatMap(({ harness }) => harness ? [harness] : []));
   const newest = items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
   const toggle = (category: WorkbenchFeedbackCategory) => setCategories((current) => {
@@ -83,6 +93,11 @@ export default function WorkbenchStatsFeedback() {
     if (!next.delete(category)) next.add(category);
     return next;
   });
+  const changeOwnership = (next: FeedbackOwnershipFilter) => {
+    setOwnership(next);
+    setCategories(new Set());
+    setSelectedKeys(new Set());
+  };
   const address = () => {
     if (!addressProjectId || (!attached && selected.some((item) => !item.daemonId))) return;
     onAddress(addressProjectId, selected.map((item) => feedbackReference(item, {
@@ -115,7 +130,7 @@ export default function WorkbenchStatsFeedback() {
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div aria-label="Feedback categories" className="flex flex-wrap gap-1" role="group">
               {WORKBENCH_FEEDBACK_CATEGORIES.map((category) => {
-                const count = feedback.counts.find((row) => row.category === category)?.count ?? 0;
+                const count = categoryCounts.find((row) => row.category === category)?.count ?? 0;
                 const on = categories.has(category);
                 const { label, tagClassName } = FEEDBACK_CATEGORY_PRESENTATION[category];
                 return (
@@ -140,7 +155,16 @@ export default function WorkbenchStatsFeedback() {
                 );
               })}
             </div>
-            <div className="ml-auto">
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <RadioRow
+                ariaLabel="Feedback display"
+                onChange={changeOwnership}
+                options={[
+                  { label: "Unowned", title: "Reports not attached to a thread", value: "unowned" },
+                  { label: "All", title: "All reports, including ones attached to a thread", value: "all" },
+                ]}
+                value={ownership}
+              />
               <RadioRow
                 ariaLabel="Feedback order"
                 onChange={setSort}
@@ -152,38 +176,42 @@ export default function WorkbenchStatsFeedback() {
               />
             </div>
           </div>
-          <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
-            {visible.map((item) => {
-              const key = keyOf(item);
-              const daemonId = item.daemonId ?? attached;
-              const report = (
-                <WorkbenchStatsFeedbackReport
-                  item={item}
-                  modelName={modelName(item.harness, item.model)}
-                  onToggle={() => toggleSelected(key)}
-                  selected={selectedKeys.has(key)}
-                />
-              );
-              if (!daemonId) return <div className="contents" key={key}>{report}</div>;
-              return (
-                <Draggable
-                  dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
-                  key={key}
-                  label={item.title}
-                  payload={{
-                    reference: feedbackReference(item, {
-                      daemonId,
-                      modelName: modelName(item.harness, item.model),
-                      projectName: projectName(item.projectId, item.daemonId),
-                    }),
-                    type: "feedback",
-                  }}
-                >
-                  {report}
-                </Draggable>
-              );
-            })}
-          </ol>
+          {visible.length ? (
+            <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
+              {visible.map((item) => {
+                const key = keyOf(item);
+                const daemonId = item.daemonId ?? attached;
+                const report = (
+                  <WorkbenchStatsFeedbackReport
+                    item={item}
+                    modelName={modelName(item.harness, item.model)}
+                    onToggle={() => toggleSelected(key)}
+                    selected={selectedKeys.has(key)}
+                  />
+                );
+                if (!daemonId) return <div className="contents" key={key}>{report}</div>;
+                return (
+                  <Draggable
+                    dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
+                    key={key}
+                    label={item.title}
+                    payload={{
+                      reference: feedbackReference(item, {
+                        daemonId,
+                        modelName: modelName(item.harness, item.model),
+                        projectName: projectName(item.projectId, item.daemonId),
+                      }),
+                      type: "feedback",
+                    }}
+                  >
+                    {report}
+                  </Draggable>
+                );
+              })}
+            </ol>
+          ) : (
+            <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No feedback matches these filters.</p>
+          )}
           {feedback.total > items.length ? (
             <p className="m-0 text-[0.72rem] text-fg/muted">
               Showing the {items.length} most important of {feedback.total} reports. Narrow the period to see the rest.

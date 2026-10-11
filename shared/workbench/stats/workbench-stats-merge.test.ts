@@ -81,11 +81,36 @@ test("tools price every tool from the attached catalogue and keep each period's 
 test("feedback merges reports by importance and names the daemon each id belongs to", () => {
   const item = (id: number, importance: number) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id, importance,
-    model: null, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null,
+    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null,
     title: "Stats action fails",
   });
-  const feedback = (items: ReturnType<typeof item>[]) => ({ ...EMPTY.feedback, feedback: { counts: [{ category: "bug" as const, count: items.length }], items, total: items.length, workbenchProjectId: null } });
+  const feedback = (items: ReturnType<typeof item>[], ownership: Array<{ daemonId: string; id: number }> = []) => ({
+    ...EMPTY.feedback,
+    feedback: {
+      counts: [{ category: "bug" as const, count: items.length }],
+      items,
+      ownership,
+      total: items.length,
+      workbenchProjectId: null,
+    },
+  });
   const merged = merge<"feedback">([source("here", feedback([item(1, 0.2)]), true), source("there", feedback([item(1, 0.9)]))]).feedback;
   assert.deepEqual(merged.items.map(({ daemonId, id }) => [daemonId, id]), [["there", 1], ["here", 1]]);
   assert.deepEqual([merged.total, merged.counts], [2, [{ category: "bug", count: 2 }]]);
+});
+
+test("feedback ownership follows source daemon and id across machines", () => {
+  const item = (title: string) => ({
+    category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id: 7, importance: 0.5,
+    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null, title,
+  });
+  const feedback = (row: ReturnType<typeof item>, ownership: Array<{ daemonId: string; id: number }> = []) => ({
+    ...EMPTY.feedback,
+    feedback: { counts: [{ category: "bug" as const, count: 1 }], items: [row], ownership, total: 1, workbenchProjectId: null },
+  });
+  const merged = merge<"feedback">([
+    source("here", feedback(item("Here"))),
+    source("there", feedback(item("There"), [{ daemonId: "here", id: 7 }])),
+  ]).feedback;
+  assert.deepEqual(merged.items.map(({ daemonId, owned }) => [daemonId, owned]), [["here", true], ["there", false]]);
 });

@@ -10,10 +10,11 @@ import WorkbenchPill from "../WorkbenchPill";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { BugIcon, MegaphoneIcon } from "../workbench-icons";
 import ThreadTodoPill from "./ThreadTodoPill";
+import { FEEDBACK_REFERENCE_TONE_CLASS_NAME } from "../stats/workspaces/stats-feedback-presentation";
 
 /** Hue utilities are listed whole so Tailwind can see them. */
 const TONES: Record<Exclude<ComposerReference["kind"], "todo">, string> = {
-  feedback: "bg-hue-340/14 text-hue-340",
+  feedback: FEEDBACK_REFERENCE_TONE_CLASS_NAME,
   updateIssue: "bg-hue-55/16 text-hue-55",
 };
 

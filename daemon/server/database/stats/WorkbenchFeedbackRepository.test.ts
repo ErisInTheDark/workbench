@@ -64,9 +64,11 @@ test("one report reads by id exactly as the stats summary lists it, whatever its
     const { id } = repository.record(report({ channel: "project" }), now - 400 * day);
     repository.record(report({ channel: "project", category: "bug" }), now - day);
     const listed = repository.summary(null, 0, now + day).items.find((item) => item.id === id);
-    assert.deepEqual(repository.report(id), { counts: [{ category: "waste", count: 1 }], items: [listed], total: 1, workbenchProjectId: null });
+    assert.deepEqual(repository.report(id), {
+      counts: [{ category: "waste", count: 1 }], items: [listed], ownership: [], total: 1, workbenchProjectId: null,
+    });
     repository.delete([id]);
-    assert.deepEqual(repository.report(id), { counts: [], items: [], total: 0, workbenchProjectId: null });
+    assert.deepEqual(repository.report(id), { counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null });
   } finally {
     database.close();
   }
@@ -156,6 +158,36 @@ test("feedback outlives its thread and rejects empty reports", () => {
     assert.equal(row?.threadId, null);
     assert.equal(row?.report, "diff printed lockfile churn");
     assert.throws(() => repository.record(report({ report: "" }), now), /CHECK/u);
+  } finally {
+    database.close();
+  }
+});
+
+test("stats summaries expose scoped compound ownership from addressed threads", () => {
+  const { database, repository } = setup();
+  try {
+    const first = repository.record(report(), now).id;
+    const old = repository.record(report(), now - 30 * day).id;
+    const insert = database.prepare(`
+      INSERT INTO workbench_thread_addressed_feedback
+        (thread_id, source_daemon_id, feedback_id, position, category, title, author, thread_label, report, created_at)
+      VALUES ('thread', ?, ?, ?, 'bug', 'title', 'author', 'source', 'report', ?)
+    `);
+    insert.run("daemon-a", first, 0, now);
+    insert.run("daemon-b", first, 1, now);
+    insert.run("daemon-a", old, 2, now - 30 * day);
+
+    assert.deepEqual(repository.summary([testProjectIds.project], now - 7 * day, now + 1).ownership, [
+      { daemonId: "daemon-a", id: first },
+      { daemonId: "daemon-b", id: first },
+    ]);
+    assert.deepEqual(repository.summary([testProjectIds.other], now - 7 * day, now + 1).ownership, []);
+
+    database.prepare("DELETE FROM workbench_thread_addressed_feedback WHERE thread_id = 'thread'").run();
+    assert.deepEqual(repository.summary(null, 0, now + 1).ownership, []);
+    insert.run("daemon-a", first, 0, now);
+    database.prepare("DELETE FROM workbench_threads WHERE id = 'thread'").run();
+    assert.deepEqual(repository.summary(null, 0, now + 1).ownership, []);
   } finally {
     database.close();
   }

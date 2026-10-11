@@ -4,11 +4,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkbenchFeedbackItem } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
-import { feedbackAddressProjectId, feedbackReference } from "./stats-feedback-presentation.ts";
+import { feedbackAddressProjectId, feedbackReference, selectFeedbackItems } from "./stats-feedback-presentation.ts";
 
 const item = (overrides: Partial<WorkbenchFeedbackItem>): WorkbenchFeedbackItem => ({
   category: "bug", channel: "project", createdAt: 1, daemonId: null, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
-  projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread",
+  owned: false, projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread",
   title: "Stats action fails", ...overrides,
 });
 
@@ -27,4 +27,20 @@ test("a report's reference names its storing machine, author and filing project,
   assert.equal(feedbackReference(item({ threadId: null, reasoningEffort: null }), {
     daemonId: "daemon-a", modelName: null, projectName: "game",
   }).thread, "removed thread from game");
+});
+
+test("feedback selection composes ownership, category, and newest-first ordering", () => {
+  const items = [
+    item({ category: "bug", createdAt: 2, id: 2, owned: true }),
+    item({ category: "waste", createdAt: 3, id: 3 }),
+    item({ category: "bug", createdAt: 1, id: 1 }),
+  ];
+  assert.deepEqual(
+    selectFeedbackItems(items, new Set(), "unowned", "newest").map(({ id }) => id),
+    [3, 1],
+  );
+  assert.deepEqual(
+    selectFeedbackItems(items, new Set(["bug"]), "all", "newest").map(({ id }) => id),
+    [2, 1],
+  );
 });
