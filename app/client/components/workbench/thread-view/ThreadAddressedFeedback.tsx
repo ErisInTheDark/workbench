@@ -6,9 +6,9 @@
 
 import { useContext, useState } from "react";
 
-import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import PrimaryButton from "../../ui/PrimaryButton";
+import deleteFeedbackReports from "../stats/workspaces/delete-feedback-reports";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import { BinIcon } from "../workbench-icons";
 import ComposerReferencePills from "./ComposerReferencePills";
@@ -27,11 +27,7 @@ export default function ThreadAddressedFeedback ({ feedback, onDeleted }: {
     setBusy(true);
     setError("");
     try {
-      await Promise.all([...Map.groupBy(feedback, ({ daemonId }) => daemonId)].map(([daemonId, reports]) => {
-        const daemon = DaemonIdSchema.safeParse(daemonId).data;
-        if (!daemon) throw new Error("Feedback from an unknown machine cannot be deleted.");
-        return workspace.daemon({ kind: "installation", daemonId: daemon }).stats.deleteFeedback(reports.map(({ id }) => id));
-      }));
+      await deleteFeedbackReports(workspace, feedback);
       await onDeleted();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Unable to delete the addressed feedback.");

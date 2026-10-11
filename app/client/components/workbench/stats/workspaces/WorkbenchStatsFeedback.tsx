@@ -12,12 +12,12 @@ import {
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import RadioRow from "../../../ui/RadioRow";
-import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchWorkspaceContext from "../../WorkbenchWorkspaceContext";
 import useStats from "../use-stats";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import WorkbenchStatsFeedbackReport, { WorkbenchFeedbackReportSkeleton } from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
+import deleteFeedbackReports from "./delete-feedback-reports";
 import Draggable from "../../drag/Draggable";
 import { WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID } from "../../../../workbench/layout/workbench-drag";
 import {
@@ -67,12 +67,7 @@ export default function WorkbenchStatsFeedback() {
     setBusy(true);
     setActionError("");
     try {
-      const byDaemon = Map.groupBy(selected, ({ daemonId }) => daemonId ?? scope.attachedDaemonId);
-      await Promise.all([...byDaemon].map(([daemonId, reports]) => {
-        const daemon = DaemonIdSchema.safeParse(daemonId).data;
-        if (!daemon) throw new Error("Feedback from an unknown machine cannot be deleted.");
-        return workspace.daemon({ kind: "installation", daemonId: daemon }).stats.deleteFeedback(reports.map(({ id }) => id));
-      }));
+      await deleteFeedbackReports(workspace, selected.map(({ daemonId, id }) => ({ daemonId: daemonId ?? attached, id })));
       setSelectedKeys(new Set());
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Unable to delete the selected feedback.");
