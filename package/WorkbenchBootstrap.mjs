@@ -9,7 +9,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
-import WorkbenchBootstrapPrompt from "./WorkbenchBootstrapPrompt.mjs";
+import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
 
 export default class WorkbenchBootstrap {
@@ -17,7 +17,7 @@ export default class WorkbenchBootstrap {
     home = os.homedir(),
     packageRoot = path.dirname(fileURLToPath(import.meta.url)),
     environment = process.env,
-    prompt = new WorkbenchBootstrapPrompt(),
+    prompt = new WorkbenchInstallPrompt(),
     commands = new WorkbenchBootstrapCommand(),
     write = text => process.stdout.write(text),
   } = {}) {

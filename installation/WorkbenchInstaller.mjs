@@ -4,7 +4,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
+import WorkbenchInstallPrompt from "../package/WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
 
 export default class WorkbenchInstaller {

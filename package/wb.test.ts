@@ -23,7 +23,12 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
   await fs.mkdir(path.join(root, "installation"), { recursive: true });
   await fs.mkdir(workingDirectory);
   await fs.copyFile(packageAdapterPath, adapterPath);
-  for (const name of ["WorkbenchBootstrap.mjs", "WorkbenchBootstrapPrompt.mjs", "WorkbenchBootstrapCommand.mjs"]) {
+  for (const name of [
+    "WorkbenchBootstrap.mjs",
+    "WorkbenchInstallPrompt.mjs",
+    "installer-cube.mjs",
+    "WorkbenchBootstrapCommand.mjs",
+  ]) {
     await fs.copyFile(path.join(import.meta.dirname, name), path.join(root, "package", name));
   }
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "workbench-root", type: "module" }));
