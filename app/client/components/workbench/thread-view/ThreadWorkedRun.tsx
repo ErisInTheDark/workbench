@@ -41,14 +41,18 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
     const viewport = viewportContext.getViewport();
     if (!node || !viewport) return;
     if (state === "collapsed") {
-      const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
-      if (next !== state) {
+      const expand = () => {
+        // Layout above the reader changes only once touch and momentum settle; iOS halts a fling on scroll restoration.
+        if (!viewportContext.isScrollSettled()) return;
+        const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
+        if (next === state) return;
         if (node.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().top) {
           restoreLayout.current = viewportContext.preserveOffscreenLayout();
         }
         setState(next);
-      }
-      return;
+      };
+      expand();
+      return viewportContext.onScrollSettled(expand);
     }
     if (count < 3 || state === "awaitingAttachment") return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -57,6 +61,7 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       if (retired) return;
       if (timer !== null) clearTimeout(timer);
       timer = null;
+      if (!viewportContext.isScrollSettled()) return;
       const bounds = node.getBoundingClientRect();
       const view = viewport.getBoundingClientRect();
       if (!viewport.clientHeight || !bounds.height) return;
@@ -75,19 +80,20 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
         timer = setTimeout(measure, Math.min(readyAt - now, 2_147_483_647));
       }
     };
+    // Edge crossings and size changes cover every geometry change; per-scroll reads only forced layout.
     const intersection = new IntersectionObserver(measure, { root: viewport, threshold: [0, 1] });
     const resize = new ResizeObserver(measure);
     intersection.observe(node);
     resize.observe(node);
     resize.observe(viewport);
-    viewport.addEventListener("scroll", measure, { passive: true });
+    const stopSettled = viewportContext.onScrollSettled(measure);
     measure();
     return () => {
       retired = true;
       if (timer !== null) clearTimeout(timer);
       intersection.disconnect();
       resize.disconnect();
-      viewport.removeEventListener("scroll", measure);
+      stopSettled();
     };
   }, [count, initialInactive, newestActivityAt, state, viewportContext]);
   return (

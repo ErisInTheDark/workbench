@@ -17,6 +17,7 @@ function fixture() {
   let renderedTurnIds = ["turn-2"];
   let requestStatus: HistoryPagingView["requestStatus"];
   let nearTop = true;
+  let settled = true;
   let identity = {};
   const viewport = {};
   let loads = 0;
@@ -24,7 +25,7 @@ function fixture() {
   const writes: number[] = [];
   const controller = new ThreadHistoryPagingController({
     readView: () => ({
-      identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop, scrollTop,
+      identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop, settled, scrollTop,
       anchor: { turnId: "turn-2", top: contentTop - scrollTop },
       anchorTop: () => contentTop - scrollTop,
     }),
@@ -77,6 +78,7 @@ function fixture() {
       controller.reconcile();
     },
     setNearTop(value: boolean) { nearTop = value; controller.reconcile(); },
+    setSettled(value: boolean) { settled = value; controller.reconcile(); },
     setSourceReady(value: boolean) { sourceReady = value; controller.reconcile(); },
     setScrollTop(value: number) { scrollTop = value; },
     move(value: number, historyIntent = false) { controller.interrupt({ historyIntent }); scrollTop = value; },
@@ -112,6 +114,18 @@ test("automatic paging waits for a dwell and cancels when the reader leaves", ()
   assert.equal(f.loads, 1);
   f.controller.reconcile();
   f.advance(2_000);
+  assert.equal(f.loads, 1);
+});
+
+test("touch or momentum scrolling holds the dwell until the reader settles", () => {
+  const f = fixture();
+  f.setSettled(false);
+  f.advance(2_000);
+  assert.equal(f.loads, 0);
+  f.setSettled(true);
+  f.advance(499);
+  assert.equal(f.loads, 0);
+  f.advance(1);
   assert.equal(f.loads, 1);
 });
 

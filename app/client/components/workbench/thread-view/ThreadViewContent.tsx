@@ -668,6 +668,7 @@ export default memo(function ThreadViewContent ({
           renderedTurnIds: renderedHistoryTurnIds,
           nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
             && sentinelRect.bottom > viewportRect.top - 160 && sentinelRect.top < viewportRect.bottom),
+          settled: threadScrollViewport.isScrollSettled(),
           scrollTop: viewport.scrollTop,
           get anchor() {
             const marker = [...root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)]
@@ -748,6 +749,7 @@ export default memo(function ThreadViewContent ({
       threshold: 0.1,
     });
     observer.observe(sentinel);
+    const stopSettled = threadScrollViewport.onScrollSettled(reconcile);
     scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
     scrollTarget.addEventListener("wheel", handleWheel, { passive: true });
     scrollTarget.addEventListener("touchmove", handleTouchMove, { passive: true });
@@ -755,13 +757,14 @@ export default memo(function ThreadViewContent ({
     scrollTarget.addEventListener("pointerdown", handlePointerDown);
     return () => {
       observer.disconnect();
+      stopSettled();
       scrollTarget.removeEventListener("scroll", handleScroll);
       scrollTarget.removeEventListener("wheel", handleWheel);
       scrollTarget.removeEventListener("touchmove", handleTouchMove);
       scrollTarget.removeEventListener("keydown", handleKeyDown);
       scrollTarget.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [historySentinel, scrollViewportRef]);
+  }, [historySentinel, scrollViewportRef, threadScrollViewport]);
 
   useEffect(() => () => {
     codeBlockCopyResetTimersRef.current.forEach((timeoutId) => {

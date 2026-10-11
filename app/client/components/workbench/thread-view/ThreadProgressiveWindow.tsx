@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadProgressiveWindowChunk: one stable exact-height transcript chunk.
- * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends, after reader scrolling settles, while preserving the reading anchor.
+ * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends, after reader scrolling settles, while preserving the reading anchor and restoring revealed extent across remounts.
  */
 "use client";
 
@@ -39,11 +39,17 @@ export default function ThreadProgressiveWindow({
   const rootRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [visibleStart, setVisibleStart] = useState(() => (
-    viewport.progressiveWindowing ? Math.max(0, chunks.length - INITIAL_CHUNK_COUNT) : 0
+    viewport.progressiveWindowing
+      ? viewport.progressiveWindowStarts?.get(identity) ?? Math.max(0, chunks.length - INITIAL_CHUNK_COUNT)
+      : 0
   ));
   const visibleStartRef = useRef(visibleStart);
   const boundedStart = Math.min(visibleStart, Math.max(0, chunks.length - INITIAL_CHUNK_COUNT));
   visibleStartRef.current = boundedStart;
+  // A windowed slice that unmounts and remounts must come back at its measured height, not one chunk.
+  useEffect(() => {
+    viewport.progressiveWindowStarts?.set(identity, boundedStart);
+  }, [boundedStart, identity, viewport.progressiveWindowStarts]);
 
   const readView = useCallback(() => {
     const root = rootRef.current;

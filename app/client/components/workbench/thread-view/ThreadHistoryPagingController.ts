@@ -2,7 +2,7 @@
  * Exports:
  * - HistoryPagingView: current renderer and viewport measurements.
  * - HistoryPagingOptions: viewport, request, and scheduling boundary.
- * - default ThreadHistoryPagingController: own automatic paging and prepend restoration.
+ * - default ThreadHistoryPagingController: own automatic paging, started only once reader scrolling settles, and prepend restoration.
  */
 export interface HistoryPagingView {
   readonly identity: object;
@@ -12,6 +12,8 @@ export interface HistoryPagingView {
   readonly sourceReady: boolean;
   readonly renderedTurnIds: readonly string[];
   readonly nearTop: boolean;
+  /** False during reader touch or momentum; a page prepended mid-fling forces scroll restoration that halts it on iOS. */
+  readonly settled: boolean;
   readonly scrollTop: number;
   readonly anchor: { readonly turnId: string; readonly top: number } | null;
   readonly anchorTop: (turnId: string) => number | null;
@@ -142,7 +144,7 @@ export default class ThreadHistoryPagingController {
   }
 
   #eligible(view: HistoryPagingView) {
-    return view.nearTop && view.sourceReady && Boolean(view.boundaryKey) && !view.requestStatus
+    return view.nearTop && view.settled && view.sourceReady && Boolean(view.boundaryKey) && !view.requestStatus
       && !this.#pending && !this.#historyIntentRequired && view.boundaryKey !== this.#triggeredBoundary;
   }
 

@@ -99,6 +99,7 @@ function ActiveThreadScrollViewport ({
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
+  const progressiveWindowStartsRef = useRef(new Map<string, number>());
   const settleRef = useRef<ThreadScrollSettleController | null>(null);
   const settle = settleRef.current ??= new ThreadScrollSettleController({
     schedule: (callback, delayMs) => {
@@ -148,6 +149,7 @@ function ActiveThreadScrollViewport ({
     entryMotion: null,
     workedRunState: null,
     progressiveWindowing: true,
+    progressiveWindowStarts: progressiveWindowStartsRef.current,
     getViewport: () => viewportRef.current,
     isScrollSettled: () => settle.settled,
     onScrollSettled: listener => settle.subscribe(listener),
