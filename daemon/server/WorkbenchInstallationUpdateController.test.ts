@@ -89,6 +89,34 @@ test("divergent clean checkout rebases and preserves its local commit on upstrea
   assert.equal(await fs.readFile(path.join(f.local, "local.txt"), "utf8"), "local\n");
 });
 
+test("divergent pull re-parents Workbench checkpoint refs onto the replayed commit", async t => {
+  const f = await fixture(t);
+  const local = await f.commit(f.local, "local.txt", "local\n", "local work");
+  const checkpointRef = "refs/worktree/agents/claude/thread/checkpoints/1";
+  const tree = await f.git(f.local, "rev-parse", "HEAD^{tree}");
+  const checkpoint = await f.git(f.local, "commit-tree", tree, "-p", local, "-m", "checkpoint");
+  await f.git(f.local, "update-ref", checkpointRef, checkpoint);
+  await f.incoming("remote.txt", "remote\n");
+  assert.equal((await f.controller.check()).state, "available");
+  const result = await f.controller.pull();
+  assert.notEqual(result.toSha, local);
+  assert.equal(await f.git(f.local, "rev-parse", `${checkpointRef}^`), result.toSha);
+});
+
+test("divergent pull leaves unrelated staged and unstaged work exactly in place", async t => {
+  const f = await fixture(t);
+  await f.commit(f.local, "local.txt", "local\n", "local work");
+  await f.incoming("remote.txt", "remote\n");
+  await fs.writeFile(path.join(f.local, "auxiliary.txt"), "staged\n");
+  await f.git(f.local, "add", "auxiliary.txt");
+  await fs.writeFile(path.join(f.local, "content.txt"), "unstaged\n");
+  assert.equal((await f.controller.check()).state, "available");
+  await f.controller.pull();
+  assert.equal(await f.git(f.local, "status", "--porcelain"), "M  auxiliary.txt\n M content.txt");
+  assert.equal(await fs.readFile(path.join(f.local, "auxiliary.txt"), "utf8"), "staged\n");
+  assert.equal(await fs.readFile(path.join(f.local, "content.txt"), "utf8"), "unstaged\n");
+});
+
 test("dirty incoming overlap refuses pull without changing HEAD or local content", async t => {
   const f = await fixture(t);
   const head = await f.git(f.local, "rev-parse", "HEAD");
@@ -113,15 +141,17 @@ test("committed final-tree conflict is predicted before mutation", async t => {
   assert.equal(await f.git(f.local, "rev-parse", "HEAD"), head);
 });
 
-test("replay-only conflict aborts and restores HEAD and unrelated dirty work", async t => {
+test("replay-only conflict is predicted without touching HEAD or unrelated dirty work", async t => {
   const f = await fixture(t);
   await f.commit(f.local, "content.txt", "intermediate\n");
   const head = await f.commit(f.local, "content.txt", "original\n");
   await f.incoming("content.txt", "upstream\n");
   await fs.writeFile(path.join(f.local, "untracked.txt"), "keep me\n");
   await fs.writeFile(path.join(f.local, "auxiliary.txt"), "autostashed dirty\n");
-  assert.equal((await f.controller.check()).state, "available");
-  await assert.rejects(f.controller.pull(), /conflicted/u);
+  const prediction = await f.controller.check();
+  assert.equal(prediction.state, "conflict");
+  assert.deepEqual(prediction.conflicts, ["content.txt"]);
+  await assert.rejects(f.controller.pull(), /not available/u);
   assert.equal(await f.git(f.local, "rev-parse", "HEAD"), head);
   assert.equal(await fs.readFile(path.join(f.local, "untracked.txt"), "utf8"), "keep me\n");
   assert.equal(await fs.readFile(path.join(f.local, "auxiliary.txt"), "utf8"), "autostashed dirty\n");

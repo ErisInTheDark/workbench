@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchInstallationUpdateController: own running-checkout prediction, leased pulls, repair failure and background checks.
+ * - default WorkbenchInstallationUpdateController: own running-checkout fetches, upstream prediction and leased pulls through
+ *   WorkbenchGitIntegration, repair failure and background checks.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -13,6 +14,7 @@ import {
   type InstallationRepairJournal, type InstallationUpdate, type InstallationPullResult,
 } from "workbench-shared/workbench/installation-update";
 import type { ProjectId } from "workbench-shared/workbench/identity";
+import WorkbenchGitIntegration from "./lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
@@ -34,22 +36,6 @@ function message(error: unknown) {
     .replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 512);
 }
 
-function dirtyPaths(status: string) {
-  const entries = status.split("\0");
-  const paths: string[] = [];
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index];
-    if (!entry) continue;
-    paths.push(entry.slice(3));
-    // Porcelain -z writes destination first and source as a second NUL record.
-    if (/[RC]/u.test(entry.slice(0, 2))) {
-      const source = entries[++index];
-      if (source) paths.push(source);
-    }
-  }
-  return paths;
-}
-
 export default class WorkbenchInstallationUpdateController {
   private value: InstallationUpdate = {
     state: "unavailable", reason: "not checked", upstream: null, behind: 0, ahead: 0,
@@ -58,6 +44,7 @@ export default class WorkbenchInstallationUpdateController {
   private readonly listeners = new Set<() => void>();
   private readonly journalPath: string;
   private readonly git: (args: string[]) => Promise<GitResult>;
+  private readonly integration: WorkbenchGitIntegration;
   private stopSchedule: (() => void) | null = null;
   private stopWatch: (() => void) | null = null;
   private closed = false;
@@ -67,6 +54,7 @@ export default class WorkbenchInstallationUpdateController {
 
   constructor(private readonly options: Options) {
     this.journalPath = path.join(options.dataRoot ?? resolveWorkbenchDataRoot(), ...INSTALLATION_REPAIR_JOURNAL_SEGMENTS);
+    this.integration = new WorkbenchGitIntegration(new WorkbenchGitRepository(options.repoRoot));
     this.git = options.git ?? (args => new Promise((resolve, reject) => {
       execFile("git", args, {
         cwd: options.repoRoot, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
@@ -198,59 +186,32 @@ export default class WorkbenchInstallationUpdateController {
     return result.stdout;
   }
 
+  /** Predict the upstream integration in memory and publish it; returns the plan a pull applies. */
   private async recompute() {
     const upstream = (await this.required(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])).trim().slice(0, 256);
-    const [ahead, behind] = (await this.required(["rev-list", "--left-right", "--count", "HEAD...@{u}"]))
-      .trim().split(/\s+/u).map(Number);
-    if (!Number.isInteger(ahead) || !Number.isInteger(behind)) throw new Error("Invalid upstream commit counts.");
-    const incoming = (await this.required(["diff", "--name-only", "-z", "HEAD...@{u}"])).split("\0").filter(Boolean);
-    const dirty = dirtyPaths(await this.required(["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
-    const overlaps = (left: string, right: string) => left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
-    const conflicts = new Set(dirty.filter(local => incoming.some(remote => overlaps(local, remote))));
-    if (ahead && behind) {
-      const merge = await this.git(["merge-tree", "--write-tree", "-z", "HEAD", "@{u}"]);
-      if (merge.code) {
-        // With -z, conflicted file records precede an empty record and informational messages.
-        const records = merge.stdout.split("\0");
-        for (const record of records.slice(1)) {
-          if (!record) break;
-          const tab = record.indexOf("\t");
-          if (tab >= 0) conflicts.add(record.slice(tab + 1));
-        }
-        if (!conflicts.size) throw new Error("Could not predict the upstream merge.");
-      }
-    }
-    const state = this.fetchFailure ? "unavailable" : !behind ? "current" : conflicts.size ? "conflict" : "available";
+    const incoming = (await this.required(["rev-parse", "@{u}"])).trim();
+    const plan = await this.integration.prepare(incoming);
+    const conflicts = plan.kind === "blocked" ? plan.conflicts : [];
+    const state = this.fetchFailure ? "unavailable"
+      : plan.kind === "current" ? "current" : plan.kind === "blocked" ? "conflict" : "available";
     this.publish({
-      state, reason: this.fetchFailure, upstream, ahead, behind,
-      conflicts: [...conflicts].slice(0, INSTALLATION_UPDATE_MAX_CONFLICTS),
-      lockfileChanged: incoming.includes("pnpm-lock.yaml"), checkedAt: Date.now(),
+      state, reason: this.fetchFailure ?? (plan.kind === "blocked" ? plan.reason : null), upstream,
+      ahead: plan.ahead, behind: plan.behind,
+      conflicts: conflicts.slice(0, INSTALLATION_UPDATE_MAX_CONFLICTS),
+      lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml"), checkedAt: Date.now(),
       projectId: await this.options.projectId(), failure: (await this.readJournal())?.failure ?? null,
     });
-    return this.value;
+    return plan;
   }
 
   async pull(): Promise<InstallationPullResult> {
     return this.options.transitions.run(this.options.repoRoot, async () => {
-      const prediction = await this.recompute();
-      if (prediction.state !== "available") throw new Error("Installation update is not available for a clean pull.");
-      const fromSha = (await this.required(["rev-parse", "HEAD"])).trim();
-      await new WorkbenchGitRepository(this.options.repoRoot).clearOrphanedIndexLock();
-      const result = await this.git(prediction.ahead
-        ? ["rebase", "--autostash", "@{u}"] : ["merge", "--ff-only", "@{u}"]);
-      if (result.code) {
-        if (prediction.ahead) {
-          await this.required(["rebase", "--abort"]);
-          if ((await this.required(["rev-parse", "HEAD"])).trim() !== fromSha) {
-            throw new Error("Installation rebase abort did not restore the original HEAD.");
-          }
-        }
-        await this.recompute();
-        throw new Error("Installation pull conflicted; original HEAD was preserved.");
-      }
-      const toSha = (await this.required(["rev-parse", "HEAD"])).trim();
+      const plan = await this.recompute();
+      if (this.value.state !== "available") throw new Error("Installation update is not available for a clean pull.");
+      const { fromSha, toSha, warnings } = await this.integration.apply(plan);
+      for (const warning of warnings) this.options.warn(`Installation pull: ${message(warning)}`);
       await this.recompute();
-      return { fromSha, toSha, lockfileChanged: prediction.lockfileChanged };
+      return { fromSha, toSha, lockfileChanged: plan.incomingPaths.includes("pnpm-lock.yaml") };
     });
   }
 

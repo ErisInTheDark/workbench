@@ -11,7 +11,8 @@
  * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
  * that fit the command line, with at most four Git processes in flight. Git children never take optional index locks;
- * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree) first clear provably orphaned locks.
+ * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, checkoutTreeTransition) first clear
+ * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
  */
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1181,6 +1182,15 @@ export default class WorkbenchGitRepository {
     await this.runWithInput([
       "reset", "--mixed", "--quiet", "--pathspec-from-file=-", "--pathspec-file-nul", commit,
     ], pathspecInput(paths));
+  }
+
+  /**
+   * Move the real index and worktree from one commit's tree to another's, touching only paths that differ.
+   * Git refuses before writing when a differing path is dirty or an untracked file would be overwritten.
+   */
+  async checkoutTreeTransition(from: string, to: string) {
+    await this.clearOrphanedIndexLock();
+    await this.run(["read-tree", "-m", "-u", this.normalizeCommit(from), this.normalizeCommit(to)]);
   }
 
   async writeIndexTree() {

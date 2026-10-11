@@ -34,7 +34,7 @@ function conflictPrompt(update: InstallationUpdate) {
   const source = update.upstream ?? "upstream";
   return update.conflicts.length
     ? `Pulling Workbench updates from \`${source}\` would conflict with local changes in:\n\n${update.conflicts.map(file => `- \`${file}\``).join("\n")}\n\nHelp me resolve this so the update can be pulled, preserving my local work.`
-    : `Rebasing my local Workbench commits onto \`${source}\` would conflict. Help me resolve this so the update can be pulled, preserving my local work.`;
+    : `Pulling Workbench updates from \`${source}\` is blocked: ${update.reason ?? "rebasing my local Workbench commits would conflict."}\n\nHelp me resolve this so the update can be pulled, preserving my local work.`;
 }
 
 function failurePrompt(update: InstallationUpdate, failure: NonNullable<InstallationUpdate["failure"]>) {
