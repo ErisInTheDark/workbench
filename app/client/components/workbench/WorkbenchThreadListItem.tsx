@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status (optionally led by a label), optional action slot, navigation and context menu.
+ * - WorkbenchPendingThreadListItem: render a placed row's title and activity with a loading status until its summary lands.
  * - ThreadTooltipContent: render thread title (optionally after an agent name), status, and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
  * Status derivation is shared through thread-entry-presentation.
  */
@@ -39,9 +40,44 @@ import Tooltip from "../ui/Tooltip";
 import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { formatLongTimestamp } from "./thread-view/thread-view-formatters";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
+import LoaderIcon from "./LoaderIcon";
 import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
 import ThreadAgentName from "./thread-view/ThreadAgentName";
 import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions";
+
+/**
+ * A placed row whose thread summary has not landed: its title and activity show at once, a spinner holds the status
+ * slot, and badges, actions and tooltip details wait for the summary.
+ */
+export function WorkbenchPendingThreadListItem({ activityAt, href, onActivate, project, title }: {
+  activityAt: number;
+  href?: string;
+  onActivate?: () => void;
+  project?: WorkbenchProjectOption | WorkbenchLogicalProject;
+  title: string;
+}) {
+  return (
+    <li className="group/thread-row relative isolate m-0 min-h-11 list-none md:min-h-0" aria-busy="true">
+      <a
+        data-workbench-sidebar-thread-link="true"
+        href={href}
+        tabIndex={-1}
+        aria-label={`${project ? `${"matchKey" in project ? project.label : project.id}, ` : ""}${title}, loading`}
+        className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none"
+        onClick={onActivate ? (event: MouseEvent<HTMLAnchorElement>) => {
+          if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          event.preventDefault();
+          onActivate();
+        } : undefined}
+      />
+      <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-8">
+        <LoaderIcon className="mr-1.5 text-fg/muted" size={16} />
+        <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-fg/muted`}>{title}</span>
+        <span className="ml-2 text-[0.72rem] text-fg/muted"><WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} /></span>
+      </div>
+    </li>
+  );
+}
 
 type ThreadAction = ThreadRowAction;
 type ThreadStatusIcon = ComponentType<IconProps>;

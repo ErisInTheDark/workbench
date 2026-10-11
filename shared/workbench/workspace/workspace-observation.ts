@@ -10,7 +10,10 @@
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
  * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
- * - WorkspaceThreadRowsSchema/WorkspaceThreadRows: source-qualified selected thread rows.
+ * - WorkspaceThreadRowsSchema/WorkspaceThreadRows: selected sidebar membership (members, placement keys, saved folders) per listed location.
+ * - WorkspaceThreadMemberSchema/WorkspaceThreadMember: one listed thread or draft with its location and row basics.
+ * - WorkspaceThreadPlacementSchema/WorkspaceThreadPlacement/WorkspaceThreadPlacementItem: the combined sidebar sections as placement keys.
+ * - WorkspaceThreadFoldersSchema/WorkspaceThreadFolders: saved pinned and per-project folders context menus offer.
  * - WorkspaceThreadOwnerSchema/WorkspaceThreadOwner: resolved ownership or a scoped unresolved result.
  * - WorkspaceObservationSchema/WorkspaceObservation: independently revisioned app query results.
  * - WorkspaceObserveSchema/WorkspaceObserve: replace one named observation's arguments.
@@ -19,16 +22,16 @@
  * - WorkspaceThreadSummarySchema/WorkspaceThreadSummariesSchema: located thread summaries a `threadSummaries` batch returns, keyed by thread id.
  * - WORKSPACE_OBSERVE_METHOD/WORKSPACE_RELEASE_METHOD/WORKSPACE_UPDATED_METHOD: shared observation protocol.
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
- * - WorkspaceThreadRow/workspaceThreadRowKey: one app thread row and its delta identity.
- * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived rows with per-project totals.
+ * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived members with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
  * Queries include a thread's live `threadVis` sessions and one stored `visSnapshot`.
  */
 import { z } from "zod";
 import {
   DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema,
-  ThreadReferenceSchema,
+  ThreadReferenceSchema, WorkbenchThreadIdSchema,
 } from "../identity";
+import { ThreadDisplayFolderSchema } from "../thread/thread-display-layout";
 import {
   WorkbenchProjectStateUpdateSchema, WorkbenchProjectsPayloadSchema, WorkbenchProjectOptionSchema,
   WorkbenchProjectSnapshotSchema, WorkbenchProjectTreeNodeSchema, WorkbenchProjectTreeNodeFieldsSchema,
@@ -330,14 +333,48 @@ export const WorkspaceProjectGroupsSchema = z.object({
 }).strict();
 export type WorkspaceProjectGroups = z.infer<typeof WorkspaceProjectGroupsSchema>;
 
-const WorkspaceThreadRowSchema = z.object({
+/**
+ * One listed sidebar thread or draft: where it lives plus the basics a row shows before its summary lands.
+ * Thread detail rides `threadSummaries`; draft detail is the presentation draft.
+ */
+export const WorkspaceThreadMemberSchema = z.object({
+  /** Delta identity, unique across every listed location. */
+  key: z.string().min(1),
+  /** Placement key (logical-project-qualified display key); null for rows outside a logical project. */
+  homeKey: z.string().min(1).nullable(),
   logicalProjectId: LogicalProjectIdSchema.nullable(),
   location: ProjectLocationReferenceSchema,
   hostname: z.string(),
   rootPath: z.string(),
-  entry: WorkbenchThreadSidebarRowSchema,
   observedOnly: z.boolean().optional(),
+  title: z.string(),
+  activityAt: z.number(),
+  ref: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("thread"), identity: z.object({ harness: ProviderKeySchema, threadId: WorkbenchThreadIdSchema }).strict() }).strict(),
+    z.object({ kind: z.literal("draft"), draftId: z.string().min(1) }).strict(),
+  ]),
 }).strict();
+export type WorkspaceThreadMember = z.infer<typeof WorkspaceThreadMemberSchema>;
+const placementItem = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("thread"), key: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("folder"), projectId: z.string().min(1), folder: ThreadDisplayFolderSchema, keys: z.array(z.string().min(1)) }).strict(),
+]);
+/** The combined sidebar list for every listed logical project, as placement keys; browsers filter it to their selection. */
+export const WorkspaceThreadPlacementSchema = z.object({
+  main: z.array(z.string().min(1)),
+  archived: z.array(z.string().min(1)),
+  pinned: z.array(placementItem),
+  snoozed: z.array(placementItem),
+  settled: z.array(placementItem),
+}).strict();
+export type WorkspaceThreadPlacement = z.infer<typeof WorkspaceThreadPlacementSchema>;
+export type WorkspaceThreadPlacementItem = z.infer<typeof placementItem>;
+/** Saved folders context menus offer: the pinned list's and each listed logical project's. Orders stay server-side. */
+export const WorkspaceThreadFoldersSchema = z.object({
+  pinned: z.array(ThreadDisplayFolderSchema),
+  projects: z.record(z.string().min(1), z.array(ThreadDisplayFolderSchema)),
+}).strict();
+export type WorkspaceThreadFolders = z.infer<typeof WorkspaceThreadFoldersSchema>;
 const WorkspaceThreadRowProjectSchema = z.object({
   location: ProjectLocationReferenceSchema,
   phase: WorkspaceSourcePhaseSchema,
@@ -345,19 +382,17 @@ const WorkspaceThreadRowProjectSchema = z.object({
   archivedCount: z.number().int().nonnegative().optional(),
 }).strict();
 export const WorkspaceThreadRowsSchema = z.object({
-  rows: z.array(WorkspaceThreadRowSchema),
+  members: z.array(WorkspaceThreadMemberSchema),
+  placement: WorkspaceThreadPlacementSchema,
+  folders: WorkspaceThreadFoldersSchema,
   projects: z.array(WorkspaceThreadRowProjectSchema),
 }).strict();
 export type WorkspaceThreadRows = z.infer<typeof WorkspaceThreadRowsSchema>;
-export type WorkspaceThreadRow = WorkspaceThreadRows["rows"][number];
 export const WorkspaceArchivedThreadsSchema = z.object({
-  rows: z.array(WorkspaceThreadRowSchema),
+  members: z.array(WorkspaceThreadMemberSchema),
   projects: z.array(WorkspaceThreadRowProjectSchema.omit({ archivedCount: true }).extend({ total: z.number().int().nonnegative() }).strict()),
 }).strict();
 export type WorkspaceArchivedThreads = z.infer<typeof WorkspaceArchivedThreadsSchema>;
-/** Stable identity of an app thread row across delta hops. */
-export const workspaceThreadRowKey = (row: Pick<WorkspaceThreadRow, "logicalProjectId" | "location" | "entry">) =>
-  `${row.logicalProjectId ?? "observed"}/${row.location.daemonId}/${row.location.projectId}/${sidebarRowKey(row.entry)}`;
 
 /** One thread's summary with where it lives; null while its owner or summary is unknown. */
 export const WorkspaceThreadSummarySchema = z.object({
@@ -499,15 +534,11 @@ const projectTreeShape = observationShape.object({
 });
 const byProject = <Item extends { projectId: string }>(item: z.ZodType, shape?: ObservationShape) =>
   observationShape.keyed((value: Item) => value.projectId, item, shape);
-// A row's entry decomposes too, so an activity tick ships its changed fields instead of the whole entry.
-const threadRowShape: ObservationShape = {
-  schema: WorkspaceThreadRowSchema,
-  fields: { entry: observationShape.object({ validate: WorkbenchThreadSidebarRowSchema, fields: entryFields }) },
-};
-const rowsShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.object({
+// Members are small and keyed, so a title or activity tick ships one member; placement and folders diff by field.
+const membersShape = (schema: z.ZodObject, project: z.ZodType) => observationShape.object({
   schema,
   fields: {
-    rows: observationShape.keyed(workspaceThreadRowKey, WorkspaceThreadRowSchema, threadRowShape),
+    members: observationShape.keyed((member: { key: string }) => member.key, WorkspaceThreadMemberSchema),
     projects: observationShape.keyed((item: { location: { daemonId: string; projectId: string } }) =>
       `${item.location.daemonId}/${item.location.projectId}`, project),
   },
@@ -591,9 +622,9 @@ const threadSummaryShape: ObservationShape = {
 function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): ObservationShape {
   const schema = memberSchema(WorkspaceObservationSchema, kind);
   switch (kind) {
-    case "projectThreads": return { schema, fields: { data: rowsShape(WorkspaceThreadRowsSchema, WorkspaceThreadRowProjectSchema) } };
+    case "projectThreads": return { schema, fields: { data: membersShape(WorkspaceThreadRowsSchema, WorkspaceThreadRowProjectSchema) } };
     case "archivedThreads": return { schema, fields: {
-      data: rowsShape(WorkspaceArchivedThreadsSchema, WorkspaceArchivedThreadsSchema.shape.projects.element),
+      data: membersShape(WorkspaceArchivedThreadsSchema, WorkspaceArchivedThreadsSchema.shape.projects.element),
     } };
     case "projects": return { schema, fields: { data: observationShape.object({
       schema: WorkspaceProjectsSchema,

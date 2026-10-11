@@ -1,12 +1,12 @@
 /*
- * No exports. Protect workspace observation shapes from resending whole thread rows when one entry field changes.
+ * No exports. Protect workspace observation shapes from resending whole members or thread rows when one field changes.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyObservationDelta, diffObservationValue } from "./observation-patch";
 import {
   DaemonWorkspaceObservationSchema, DaemonWorkspaceQuerySchema, WorkspaceObservationSchema, WorkspaceQuerySchema,
-  daemonObservationShape, workspaceObservationShape, workspaceThreadRowKey, type WorkspaceObservation,
+  daemonObservationShape, workspaceObservationShape, type WorkspaceObservation,
 } from "./workspace-observation";
 
 const threadId = "00000001-0000-4000-8000-000000000000";
@@ -20,46 +20,42 @@ const entry = (activityAt: number, extra: object = {}) => ({
   metadata: { archived: false, pinned: false, snoozed: false },
   lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
 });
-const value = (activityAt: number, arc?: ReturnType<typeof gitArc>) => WorkspaceObservationSchema.parse({
-  kind: "projectThreads", subscriptionId, generation: 1, revision: 1,
-  phase: "current", failure: null,
+const location = { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" };
+const member = (activityAt: number) => ({
+  key: `observed/${location.daemonId}/${location.projectId}/codex:${threadId}`, homeKey: null, logicalProjectId: null,
+  location, hostname: "host", rootPath: "C:/project", title: "thread", activityAt,
+  ref: { kind: "thread", identity: { harness: "codex", threadId } },
+});
+const membership = (activityAt: number) => WorkspaceObservationSchema.parse({
+  kind: "projectThreads", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
   data: {
-    rows: [{
-      logicalProjectId: null, location: { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" }, hostname: "host", rootPath: "C:/project",
-      entry: entry(activityAt, arc ? { gitArc: arc } : {}),
-    }],
-    projects: [],
+    members: [member(activityAt), { ...member(1), key: "other", ref: { kind: "draft", draftId: "draft" } }],
+    placement: { main: [], archived: [], pinned: [], snoozed: [], settled: [] },
+    folders: { pinned: [], projects: {} }, projects: [],
   },
 }) as Extract<WorkspaceObservation, { kind: "projectThreads" }>;
+const summaries = (arc?: ReturnType<typeof gitArc>) => WorkspaceObservationSchema.parse({
+  kind: "threadSummaries", subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+  data: { [threadId]: { location, logicalProjectId: null, summary: { facts: {}, row: entry(1, arc ? { gitArc: arc } : {}) } } },
+}) as Extract<WorkspaceObservation, { kind: "threadSummaries" }>;
 
-test("an entry field change on an app thread row patches only that field and still validates the entry", () => {
+test("a member's activity tick ships that member's changed field, not the membership", () => {
   const shape = workspaceObservationShape("projectThreads");
-  const delta = diffObservationValue(value(10_000), value(20_000), shape)!;
-  const update = delta.objects?.data?.collections?.rows?.update?.[0]?.delta;
-  assert.deepEqual(update, { objects: { entry: { set: { activityAt: 20_000 } } } });
-  assert.deepEqual(applyObservationDelta(value(10_000), delta, shape), value(20_000));
-  const key = workspaceThreadRowKey(value(10_000).data.rows[0]!);
-  assert.throws(() => applyObservationDelta(value(10_000), {
-    objects: { data: { collections: { rows: { update: [{ key, delta: { objects: { entry: { set: { activityAt: "soon" } } } } }] } } } },
-  }, shape), /invalid/u);
+  const delta = diffObservationValue(membership(10_000), membership(20_000), shape)!;
+  const updates = delta.objects?.data?.collections?.members?.update ?? [];
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0]?.delta, { set: { activityAt: 20_000 } });
+  assert.deepEqual(applyObservationDelta(membership(10_000), delta, shape), membership(20_000));
 });
 
-test("a git arc change ships only the changed claims and proposals, and still validates the entry", () => {
-  const shape = workspaceObservationShape("projectThreads");
-  const before = value(1, gitArc(["a.ts", "b.ts"], [{ proposalId: "p", status: "proposed" }]));
-  const after = value(1, gitArc(["a.ts", "c.ts"], [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "proposed" }]));
+test("a git arc change on a summarised thread ships only the changed claims and proposals, and still validates the row", () => {
+  const shape = workspaceObservationShape("threadSummaries");
+  const before = summaries(gitArc(["a.ts", "b.ts"], [{ proposalId: "p", status: "proposed" }]));
+  const after = summaries(gitArc(["a.ts", "c.ts"], [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "proposed" }]));
   const delta = diffObservationValue(before, after, shape)!;
-  assert.deepEqual(delta.objects?.data?.collections?.rows?.update?.[0]?.delta, { objects: { entry: { objects: { gitArc: { collections: {
-    claimedPaths: { remove: ["b.ts"], add: [{ key: "c.ts", item: "c.ts" }] },
-    proposals: { add: [{ key: "/q", item: { proposalId: "q", status: "proposed" } }] },
-  } } } } } });
+  const shipped = JSON.stringify(delta);
+  assert.ok(!shipped.includes("\"title\"") && !shipped.includes("\"a.ts\""), "unchanged row fields and claims stay home");
   assert.deepEqual(applyObservationDelta(before, delta, shape), after);
-  const key = workspaceThreadRowKey(before.data.rows[0]!);
-  assert.throws(() => applyObservationDelta(before, {
-    objects: { data: { collections: { rows: { update: [{ key, delta: { objects: { entry: { objects: { gitArc: {
-      collections: { proposals: { update: [{ key: "/p", delta: { set: { status: "bogus" } } }] } },
-    } } } } } }] } } } },
-  }, shape), /invalid/u, "loose proposal items are still validated through the whole entry");
 });
 
 test("a resolved questionnaire ships its one history row, not the whole history", () => {
@@ -107,8 +103,8 @@ test("sidebar row protocol v2 is explicit while legacy rows conform compacting t
   assert.deepEqual(DaemonWorkspaceQuerySchema.parse({
     kind: "projectThreads", projectIds: ["project"], sidebarRowVersion: 2,
   }), { kind: "projectThreads", projectIds: ["project"], sidebarRowVersion: 2 });
-  const entry = value(10_000).data.rows[0]?.entry;
-  assert.equal(entry?.entryKind === "thread" ? entry.compacting ?? false : null, false);
+  const row = summaries().data[threadId]?.summary.row;
+  assert.equal(row?.entryKind === "thread" ? row.compacting ?? false : null, false);
 });
 
 test("project tree updates ship changed counts and touched nodes, not the whole tree", () => {

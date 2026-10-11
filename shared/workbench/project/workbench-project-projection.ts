@@ -5,6 +5,9 @@
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
  * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
+ * - projectPresentationDraftRow: one unsent presentation draft as a sidebar row.
+ * - WorkbenchProjectedThreadRow/projectWorkspaceThreadMember/materializeWorkspaceThreadRow: rows as sidebar members and back.
+ * - projectWorkbenchThreadMembership: members, combined home placement keys and saved folders for listed projects.
  */
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
@@ -25,8 +28,13 @@ import { getWorkbenchThreadFolderKey } from "workbench-shared/workbench/thread/t
 import { DraftIdSchema, FolderIdSchema } from "workbench-shared/workbench/identity";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
-  getWorkbenchHomeThreadKey, type WorkbenchHomeThreadDisplayOrder,
+  getWorkbenchHomeThreadKey, projectWorkbenchHomeThreadList,
+  type WorkbenchHomeThreadDisplayItem, type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
+import { sidebarRowKey, type WorkbenchThreadSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
+import type {
+  WorkspaceThreadMember, WorkspaceThreadPlacementItem, WorkspaceThreadRows,
+} from "workbench-shared/workbench/workspace/workspace-observation";
 
 /** Each reference kind once, in first-seen order. */
 function draftReferenceKinds(references: readonly { kind: DraftReferenceKind }[]) {
@@ -177,37 +185,113 @@ export function projectLogicalThreadRows(
         ...(location.observedOnly ? { observedOnly: true } : {}),
       })),
   ));
-  const drafts: WorkbenchLogicalThreadRow[] = presentation.drafts
-    .filter(draft => draft.phase === "unsent")
-    .map(draft => {
-      const location = projects.find(project => project.id === draft.logicalProjectId)?.locations.find(item =>
-        item.target.daemonId === draft.target.daemonId && item.target.projectId === draft.target.projectId);
-      const settings = draft.selection.settings;
-      const legacy = WorkbenchThreadDraftSchema.parse({
-        attachments: draft.attachments.map(item => ({
-          id: item.id,
-          url: `/api/workbench-presentation/drafts/${encodeURIComponent(draft.id)}/attachments/${encodeURIComponent(item.id)}`,
-        })),
-        clientUpdatedAt: draft.updatedAt, composerSettings: settings, createdAt: draft.updatedAt,
-        draftId: draft.id, profileId: draft.selection.kind === "profile" ? draft.selection.profileId : null,
-        projectId: draft.target.projectId, prompt: draft.prompt, updatedAt: draft.updatedAt,
-        ...(draft.references?.length ? { referenceKinds: draftReferenceKinds(draft.references) } : {}),
-      });
-      return {
-        logicalProjectId: draft.logicalProjectId, location: draft.target,
-        hostname: location?.hostname ?? draft.target.daemonId,
-        rootPath: location?.rootPath ?? draft.target.projectId,
-        entry: {
-          activityAt: draft.updatedAt, title: createDraftTitle(draft.prompt),
-          draft: legacy, entryKind: "draft", metadata: {
-            archived: false, pinned: draft.pinned, snoozed: draft.snoozed,
-          },
-        },
-      };
-    });
+  const drafts = presentation.drafts.filter(draft => draft.phase === "unsent")
+    .map(draft => projectPresentationDraftRow(draft, projects));
   return [...materialized, ...drafts].sort((left, right) => compareThreadSidebarEntries(left.entry, right.entry)
     || left.location.daemonId.localeCompare(right.location.daemonId)
     || left.location.projectId.localeCompare(right.location.projectId));
+}
+
+/** One unsent presentation draft as a sidebar row in its logical project. */
+export function projectPresentationDraftRow(
+  draft: PresentationSnapshot["drafts"][number],
+  projects: readonly Pick<WorkbenchLogicalProject, "id" | "locations">[],
+): WorkbenchLogicalThreadRow {
+  const location = projects.find(project => project.id === draft.logicalProjectId)?.locations.find(item =>
+    item.target.daemonId === draft.target.daemonId && item.target.projectId === draft.target.projectId);
+  const legacy = WorkbenchThreadDraftSchema.parse({
+    attachments: draft.attachments.map(item => ({
+      id: item.id,
+      url: `/api/workbench-presentation/drafts/${encodeURIComponent(draft.id)}/attachments/${encodeURIComponent(item.id)}`,
+    })),
+    clientUpdatedAt: draft.updatedAt, composerSettings: draft.selection.settings, createdAt: draft.updatedAt,
+    draftId: draft.id, profileId: draft.selection.kind === "profile" ? draft.selection.profileId : null,
+    projectId: draft.target.projectId, prompt: draft.prompt, updatedAt: draft.updatedAt,
+    ...(draft.references?.length ? { referenceKinds: draftReferenceKinds(draft.references) } : {}),
+  });
+  return {
+    logicalProjectId: draft.logicalProjectId, location: draft.target,
+    hostname: location?.hostname ?? draft.target.daemonId,
+    rootPath: location?.rootPath ?? draft.target.projectId,
+    entry: {
+      activityAt: draft.updatedAt, title: createDraftTitle(draft.prompt),
+      draft: legacy, entryKind: "draft", metadata: {
+        archived: false, pinned: draft.pinned, snoozed: draft.snoozed,
+      },
+    },
+  };
+}
+
+/** A projected row, including observed-only rows outside any logical project. */
+export type WorkbenchProjectedThreadRow = Omit<WorkbenchLogicalThreadRow, "logicalProjectId"> & {
+  logicalProjectId: LogicalProjectId | null;
+};
+
+/** A row's listing: location plus the basics shown before its summary lands. */
+export function projectWorkspaceThreadMember(row: WorkbenchProjectedThreadRow): WorkspaceThreadMember {
+  const { entry } = row;
+  return {
+    key: `${row.logicalProjectId ?? "observed"}/${row.location.daemonId}/${row.location.projectId}/${sidebarRowKey(entry)}`,
+    homeKey: row.logicalProjectId ? getWorkbenchHomeThreadKey(row.logicalProjectId, entry) : null,
+    logicalProjectId: row.logicalProjectId, location: row.location, hostname: row.hostname, rootPath: row.rootPath,
+    ...(row.observedOnly ? { observedOnly: true } : {}),
+    title: entry.title, activityAt: entry.activityAt,
+    ref: entry.entryKind === "draft" ? { kind: "draft", draftId: entry.draft.draftId }
+      : { kind: "thread", identity: { harness: entry.identity.harness, threadId: entry.identity.threadId } },
+  };
+}
+
+/**
+ * The sidebar for every listed logical project: members, the combined home list as placement keys, and the saved
+ * folders context menus offer. Runs the same projections the browser used to run over full rows; orders stay here.
+ */
+export function projectWorkbenchThreadMembership(
+  rows: readonly WorkbenchProjectedThreadRow[],
+  presentation: PresentationSnapshot,
+): Pick<WorkspaceThreadRows, "members" | "placement" | "folders"> {
+  const logical = rows.filter((row): row is WorkbenchLogicalThreadRow => row.logicalProjectId !== null);
+  const byProject = new Map<LogicalProjectId, WorkbenchLogicalThreadRow[]>();
+  for (const row of logical) {
+    const projectRows = byProject.get(row.logicalProjectId);
+    if (projectRows) projectRows.push(row);
+    else byProject.set(row.logicalProjectId, [row]);
+  }
+  const projectOrders = new Map([...byProject].map(([projectId, projectRows]) =>
+    [projectId, projectLogicalThreadDisplayOrder(projectId, projectRows, presentation)] as const));
+  const list = projectWorkbenchHomeThreadList({
+    projects: [...byProject].map(([projectId, projectRows]) => ({
+      projectId, entries: projectRows.map(row => row.entry), displayOrder: projectOrders.get(projectId),
+    })),
+  }, projectLogicalHomeDisplayOrder(logical, presentation));
+  const item = (value: WorkbenchHomeThreadDisplayItem): WorkspaceThreadPlacementItem => value.itemKind === "folder"
+    ? { kind: "folder", projectId: value.projectId, folder: value.folder, keys: value.threadKeys }
+    : { kind: "thread", key: value.entry.threadKey };
+  return {
+    members: rows.map(projectWorkspaceThreadMember),
+    placement: {
+      main: list.mainEntries.map(entry => entry.threadKey),
+      archived: list.archivedEntries.map(entry => entry.threadKey),
+      pinned: list.pinnedItems.map(item),
+      snoozed: list.snoozedItems.map(item),
+      settled: list.settledItems.map(item),
+    },
+    folders: {
+      pinned: projectLogicalPinnedDisplayOrder(logical, presentation).folders ?? [],
+      projects: Object.fromEntries([...projectOrders].map(([projectId, order]) => [projectId, order.folders ?? []])),
+    },
+  };
+}
+
+/** A member as a sidebar row once its detail is known: the thread's summary row, or the draft's presentation row. */
+export function materializeWorkspaceThreadRow(
+  member: WorkspaceThreadMember,
+  entry: WorkbenchThreadSidebarRow,
+): WorkbenchProjectedThreadRow {
+  return {
+    logicalProjectId: member.logicalProjectId, location: member.location,
+    hostname: member.hostname, rootPath: member.rootPath, entry,
+    ...(member.observedOnly ? { observedOnly: true } : {}),
+  };
 }
 
 export type LogicalProjectSummary = WorkbenchLogicalProjectSummary;

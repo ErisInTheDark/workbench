@@ -1,8 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchSearchDialog: full-screen accessible search dialog and keyboard-driven result list.
- * - getSearchThreadLocations: select distinct source locations for thread search hits.
- * - findSearchThreadEntry: resolve a search hit against source-qualified thread rows.
+ * - findSearchThreadEntry: resolve a thread hit to its summary row when the summary lives at the hit's source.
  */
 "use client";
 
@@ -12,9 +11,8 @@ import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, Workbench
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
 import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -22,25 +20,12 @@ import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import WorkbenchSearchResultItem from "./WorkbenchSearchResultItem";
 
-export function getSearchThreadLocations(results: readonly WorkbenchSearchHit[]): ProjectLocationReference[] {
-  const seen = new Set<string>();
-  return results.flatMap(result => {
-    if (result.kind !== "thread" || !result.source) return [];
-    const key = `${result.source.daemonId}/${result.source.projectId}`;
-    if (seen.has(key)) return [];
-    seen.add(key);
-    return [result.source];
-  });
-}
-
-export function findSearchThreadEntry(rows: WorkspaceThreadRows["rows"], result: WorkbenchSearchHit) {
+/** A thread hit's row, from its summary, only when the summary lives at the hit's own source. */
+export function findSearchThreadEntry(readSummary: (threadId: string) => WorkspaceThreadSummary | null, result: WorkbenchSearchHit) {
   if (result.kind !== "thread" || !result.source) return undefined;
-  for (const row of rows) {
-    if (row.location.daemonId !== result.source.daemonId || row.location.projectId !== result.projectId) continue;
-    if (row.entry.entryKind === "draft") continue;
-    if (row.entry.identity.harness === result.harnessId && row.entry.identity.threadId === result.threadId) return row.entry;
-  }
-  return undefined;
+  const located = readSummary(result.threadId);
+  if (!located || located.location.daemonId !== result.source.daemonId || located.location.projectId !== result.projectId) return undefined;
+  return located.summary.row.identity.harness === result.harnessId ? located.summary.row : undefined;
 }
 
 export default function WorkbenchSearchDialog({ controller, projects, logicalProjects, logicalSummaries, projectSummaries }: {
@@ -55,28 +40,18 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
   const projectHref = useWorkbenchProjectNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
-  const [threadRows, setThreadRows] = useState<{ key: string; rows: WorkspaceThreadRows["rows"] }>({ key: "", rows: [] });
-  const locations = getSearchThreadLocations(snapshot.results);
-  const locationsKey = locations.map(location => `${location.daemonId}/${location.projectId}`).join("\n");
+  const summaries = client.mounted?.threadSummaries;
+  const [, setSummaryRevision] = useState(0);
+  const hitThreadIdsKey = snapshot.isOpen
+    ? [...new Set(snapshot.results.flatMap(result => result.kind === "thread" ? [result.threadId] : []))].join("\n") : "";
 
+  // Thread hits lease their summaries through the shared batch while the dialog shows them.
   useEffect(() => {
-    const workspace = client.mounted?.workspace;
-    if (!snapshot.isOpen || !workspace || !locations.length) {
-      setThreadRows({ key: "", rows: [] });
-      return;
-    }
-    const observation = workspace.observe({
-      kind: "projectThreads",
-      projects: locations.map(location => ({ kind: "location", location })),
-    });
-    const publish = () => {
-      const value = observation.getSnapshot().value;
-      setThreadRows({ key: locationsKey, rows: value?.kind === "projectThreads" ? value.data.rows : [] });
-    };
-    const stop = observation.subscribe(publish);
-    publish();
-    return () => { stop(); observation.release(); };
-  }, [client.mounted?.workspace, locationsKey, snapshot.isOpen]);
+    if (!summaries || !hitThreadIdsKey) return;
+    const changed = () => setSummaryRevision(revision => revision + 1);
+    const releases = hitThreadIdsKey.split("\n").map(threadId => summaries.subscribe(threadId, changed));
+    return () => { for (const release of releases) release(); };
+  }, [hitThreadIdsKey, summaries]);
 
   useEffect(() => {
     if (!snapshot.isOpen) return;
@@ -160,7 +135,7 @@ export default function WorkbenchSearchDialog({ controller, projects, logicalPro
             const logicalProject = result.logicalProjectId
               ? logicalProjects?.find(item => item.id === result.logicalProjectId) : undefined;
             const summary = projectSummaries.projects.find(({ projectId }) => projectId === project?.id) ?? null;
-            const thread = findSearchThreadEntry(threadRows.key === locationsKey ? threadRows.rows : [], result);
+            const thread = findSearchThreadEntry(threadId => summaries?.get(threadId) ?? null, result);
             return (
               <div
                 className="shrink-0"

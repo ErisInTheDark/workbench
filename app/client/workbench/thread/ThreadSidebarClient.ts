@@ -8,6 +8,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkbenchProjectedThreadRow } from "workbench-shared/workbench/project/workbench-project-projection";
 import type {
   WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot,
   WorkbenchProjectThreadSummaries, WorkbenchThreadDraft,
@@ -62,17 +63,18 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     return () => { this.listeners.delete(listener); };
   };
 
-  acceptFacts(selected: ProjectLocationReference | null, rows: WorkspaceThreadRows | null,
-    summaries: WorkbenchProjectThreadSummaries = { projects: [] }) {
+  /** Rows are the listed rows whose detail is known; `projects` carries each listed location's load state. */
+  acceptFacts(selected: ProjectLocationReference | null, rows: readonly WorkbenchProjectedThreadRow[],
+    projects: WorkspaceThreadRows["projects"], summaries: WorkbenchProjectThreadSummaries = { projects: [] }) {
     const sources = new Map<string, WorkbenchThreadSidebarSnapshot>();
     const entriesBySource = new Map<string, WorkbenchThreadSidebarSnapshot["entries"]>();
-    for (const row of rows?.rows ?? []) {
+    for (const row of rows) {
       const key = this.sourceKey(row.location);
       const entries = entriesBySource.get(key) ?? [];
       entries.push(row.entry);
       entriesBySource.set(key, entries);
     }
-    for (const source of rows?.projects ?? []) {
+    for (const source of projects) {
       const key = this.sourceKey(source.location);
       const previous = this.sourceSidebars.get(key);
       const candidate: WorkbenchThreadSidebarSnapshot = {

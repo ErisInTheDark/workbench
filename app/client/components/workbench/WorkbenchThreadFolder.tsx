@@ -28,6 +28,7 @@ import {
   getWorkbenchThreadStatusClassName,
   type WorkbenchThreadStatusTone,
 } from "./workbench-thread-status-colors";
+import LoaderIcon from "./LoaderIcon";
 import { CompletedThreadIcon, DraftThreadIcon, FolderClosedIcon, FolderOpenIcon, NeedsAttentionThreadIcon, PinIcon, ProposedCommitThreadIcon, SnoozedThreadIcon, StoppedThreadIcon, WorkingThreadIcon, type IconProps } from "./workbench-icons";
 import Tooltip from "../ui/Tooltip";
 import Draggable from "./drag/Draggable";
@@ -55,7 +56,9 @@ function folderStatusRank(entry: FolderEntry) {
 }
 
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
-  const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0]!;
+  const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0];
+  // Every member is still waiting for its summary.
+  if (!entry) return { dashed: false, Icon: LoaderIcon as FolderStatusIcon, label: "Loading", statusClassName: "text-fg/muted", strokeOpacity: 1 };
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-fg/muted", strokeOpacity: 0.24 };
   const wait = describeThreadWait(entry);
   const waiting = wait.waiting;
@@ -129,7 +132,7 @@ export default function WorkbenchThreadFolder({
   const [isDropTargetSelected, setIsDropTargetSelected] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const status = getFolderStatus(entries, attentionLabelsByThreadId);
-  const latestActivityAt = Math.max(...entries.map((entry) => entry.activityAt));
+  const latestActivityAt = entries.length ? Math.max(...entries.map((entry) => entry.activityAt)) : null;
   onOpenChangeRef.current = onOpenChange;
   const openFromHover = useCallback(() => onOpenChangeRef.current(true), []);
 
@@ -237,7 +240,7 @@ export default function WorkbenchThreadFolder({
       statusIcon={<StatusIcon className={status.statusClassName} size={14} />}
       statusLabel={<span className={`truncate ${status.statusClassName}`}>{status.label}</span>}
       metadata={priorityMarker}
-      timestamp={<WorkbenchRelativeTime timestampMs={latestActivityAt} tooltip={false} />}
+      timestamp={latestActivityAt === null ? null : <WorkbenchRelativeTime timestampMs={latestActivityAt} tooltip={false} />}
       title={(
         <span className="flex min-w-0 items-center gap-1.5">
           {open ? <FolderOpenIcon className="shrink-0" size={14} /> : <FolderClosedIcon className="shrink-0" size={14} />}

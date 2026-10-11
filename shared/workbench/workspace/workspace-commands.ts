@@ -281,7 +281,6 @@ export const WorkspaceLayoutRequestSchema = z.discriminatedUnion("action", [
       layoutEdit.drop.extend({ sourceKey: ThreadDisplayKeySchema, targetKey: ThreadDisplayKeySchema, section }),
       layoutEdit.rename,
     ]),
-    homeOrder: WorkbenchHomeThreadDisplayOrderSchema.optional(),
   }).strict(),
   z.object({ ...layoutRevision, action: z.literal("pinnedEdit"),
     intent: z.discriminatedUnion("kind", [layoutEdit.move, layoutEdit.drop, layoutEdit.rename]),

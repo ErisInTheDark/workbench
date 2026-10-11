@@ -6,7 +6,10 @@ import { test } from "node:test";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
-import { preferredLogicalLaunchLocation, projectLogicalGroups, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows } from "./workbench-project-projection";
+import {
+  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, projectLogicalGroups, projectLogicalProjects,
+  projectLogicalSummaries, projectLogicalThreadRows, projectWorkbenchThreadMembership,
+} from "./workbench-project-projection";
 import { groupWorkbenchThreadSidebarEntries, type WorkbenchProjectThreadSidebars, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
 const first = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
@@ -276,7 +279,7 @@ test("one logical project includes thread rows from both daemon folders", () => 
   ]);
 });
 
-test("merged project rows keep priority and lifecycle layers across daemon folders", () => {
+test("merged project rows keep priority and lifecycle layers across daemon folders, and membership places them the same way", () => {
   const snapshot: PresentationSnapshot = {
     revision: 1,
     daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
@@ -340,6 +343,21 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
   assert.deepEqual(grouped.settledEntries.map(title), ["settled"]);
   assert.equal(rows.find(row => row.entry.title === "working")?.location.daemonId, second);
   assert.equal(rows.find(row => row.entry.title === "claimed")?.location.daemonId, first);
+
+  // The app server ships the same sections as placement keys; members carry everything a row needs to come back.
+  const membership = projectWorkbenchThreadMembership(rows, snapshot);
+  const byKey = new Map(membership.members.map(member => [member.homeKey, member]));
+  const titles = (keys: readonly string[]) => keys.map(key => byKey.get(key)?.title);
+  const itemTitles = (items: typeof membership.placement.pinned) =>
+    titles(items.flatMap(item => item.kind === "thread" ? [item.key] : item.keys));
+  assert.deepEqual(titles(membership.placement.main), ["claimed", "draft", "attention", "working", "complete"]);
+  assert.deepEqual(itemTitles(membership.placement.pinned), ["pinned"]);
+  assert.deepEqual(itemTitles(membership.placement.snoozed), ["snoozed"]);
+  assert.deepEqual(itemTitles(membership.placement.settled), ["settled"]);
+  assert.deepEqual(byKey.get(membership.placement.main[1]!)?.ref, { kind: "draft", draftId: "00000000-0000-4000-8000-000000000001" });
+  for (const [index, member] of membership.members.entries()) {
+    assert.deepEqual(materializeWorkspaceThreadRow(member, rows[index]!.entry), rows[index]);
+  }
 });
 
 test("observed daemon facts show Home rows without becoming persisted launch targets", () => {

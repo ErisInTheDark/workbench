@@ -131,14 +131,11 @@ export default class WorkbenchPresentationClient {
   }
 
   async updateProjectLayout(logicalProjectId: LogicalProjectId,
-    _rows: readonly WorkbenchLogicalThreadRow[],
-    intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[2],
-    homeOrder?: WorkbenchHomeThreadDisplayOrder) {
-    await this.layout({ action: "projectEdit", logicalProjectId, intent, homeOrder });
+    intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[1]) {
+    await this.layout({ action: "projectEdit", logicalProjectId, intent });
   }
 
   async updatePinnedLayout(
-    _rows: readonly WorkbenchLogicalThreadRow[],
     intent:
       | { kind: "move"; sourceKey: string; destinationFolderId: string | null; beforeKey: string | null }
       | { kind: "drop"; sourceKey: string; targetKey: string; destinationFolderId: string | null;

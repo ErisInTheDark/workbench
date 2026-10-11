@@ -144,9 +144,9 @@ export default class ProviderThreadJourney {
   }
 
   async readRetainedQuestions() {
-    const state = await this.runtime.projectThreads(this.projectId, this.signal);
-    return state.rows.flatMap(({ entry }) =>
-      entry.entryKind !== "draft" && entry.identity.threadId === this.threadId && entry.pendingQuestionnaire ? [{
+    const located = await this.runtime.threadSummary(this.threadId, this.signal);
+    return (located ? [located.summary.row] : []).flatMap(entry =>
+      entry.entryKind === "thread" && entry.pendingQuestionnaire ? [{
         ...entry.pendingQuestionnaire,
         ...entry.identity,
         itemId: entry.pendingQuestionnaire.itemId ?? null,

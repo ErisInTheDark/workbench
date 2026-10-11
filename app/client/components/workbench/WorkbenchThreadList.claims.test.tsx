@@ -12,6 +12,7 @@ import type {
 } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { getWorkbenchHomeThreadKey } from "workbench-shared/workbench/thread/home-thread-display-order";
+import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import {
   WorkbenchThreadSidebarEntrySchema,
@@ -325,11 +326,17 @@ test("logical thread eyebrows use each thread's daemon-qualified location", () =
     })),
     defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
   };
+  // The app server places logical rows; the list renders that placement.
+  const membership = projectWorkbenchThreadMembership(rows, presentation);
+  const explorer = {
+    threadPlacement: membership.placement,
+    threadMembers: Object.fromEntries(membership.members.flatMap(member => member.homeKey ? [[member.homeKey, member]] : [])),
+  } as ExplorerSnapshot;
   const html = renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
       children: () => createElement(WorkbenchClientProvider, {
-        client: { controls: null, explorer: {} as ExplorerSnapshot, mounted: null },
+        client: { controls: null, explorer, mounted: null },
         children: createElement(
           WorkbenchContextMenuContext.Provider,
           { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },

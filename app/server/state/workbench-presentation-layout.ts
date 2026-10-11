@@ -143,7 +143,7 @@ export function createPresentationLayoutMutation(
 
 export function editPresentationProjectOrder(
   snapshot: PresentationSnapshot, logicalProjectId: LogicalProjectId, rows: readonly WorkbenchLogicalThreadRow[],
-  intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[2],
+  intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[1],
 ) {
   const scoped = rows.filter(row => row.logicalProjectId === logicalProjectId);
   const entries = scoped.map(row => row.entry);
@@ -159,7 +159,7 @@ export function editPresentationProjectOrder(
 
 export function editPresentationPinnedOrder(
   snapshot: PresentationSnapshot, rows: readonly WorkbenchLogicalThreadRow[],
-  intent: Parameters<WorkbenchControls["updatePresentationPinnedLayout"]>[1],
+  intent: Parameters<WorkbenchControls["updatePresentationPinnedLayout"]>[0],
 ) {
   const entries = rows.filter(row => getThreadSidebarGroup(row.entry) === "pinned").map(row => ({
     key: getProjectQualifiedThreadDisplayKey(row.logicalProjectId, getWorkbenchThreadDisplayKey(row.entry)),

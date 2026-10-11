@@ -25,11 +25,13 @@ import {
   type WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
 import { WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "workbench-shared/workbench/project/project-state";
-import {
-  workspaceThreadRowKey, type WorkspaceObservation, type WorkspaceProjectReference,
+import type {
+  WorkspaceObservation, WorkspaceProjectReference, WorkspaceThreadMember, WorkspaceThreadPlacement,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
-import { preferredLogicalLaunchLocation } from "workbench-shared/workbench/project/workbench-project-projection";
+import {
+  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, projectPresentationDraftRow, type WorkbenchProjectedThreadRow,
+} from "workbench-shared/workbench/project/workbench-project-projection";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import frontendJavaScriptGeneration from "workbench-shared/frontend-generation";
@@ -167,6 +169,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const factListeners = new Set<() => void>();
   const warn = (message: string, error?: unknown) => console.warn(message,
     error instanceof Error ? error.message.slice(0, 512) : error === undefined ? "" : "Workspace operation failed.");
+  const threadSummaries = new ThreadSummaryStore(workspace);
+  /** Summary leases for every listed thread member; a landing summary fills in its sidebar row. */
+  const memberLeases = new Map<string, () => void>();
   const projects = workspace.observe({ kind: "projects" }, factsChanged);
   const groups = workspace.observe({ kind: "projectGroups" }, factsChanged);
   const projectFacts = () => projects.getSnapshot().value?.data;
@@ -185,10 +190,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const locationForThread = (id: string) => {
     const value = owners.get(id)?.getSnapshot().value?.data;
     if (value) return value.phase === "current" ? value.location : null;
-    const matches = visibleRows()?.rows.filter(row =>
-      row.entry.entryKind !== "draft" && row.entry.identity.threadId === id) ?? [];
+    const matches = visibleRows()?.members.filter(member =>
+      member.ref.kind === "thread" && member.ref.identity.threadId === id) ?? [];
     const first = matches[0]?.location;
-    return first && matches.every(row => sameLocation(row.location, first)) ? first : null;
+    return first && matches.every(member => sameLocation(member.location, first)) ? first : null;
   };
   const threadProject = (location: ProjectLocationReference | null | undefined): WorkbenchThreadProject | undefined => {
     const current = folder(location);
@@ -417,6 +422,59 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       ?? rows?.getSnapshot().value?.data ?? null;
   }
 
+  /** Listed members: the main list's, then archived page members it does not already hold. */
+  function listedMembers() {
+    const main = visibleRows();
+    const held = new Set(main?.members.map(member => member.key));
+    const archivedMembers = (archived?.handle.getSnapshot().value?.data.members ?? []).filter(member => !held.has(member.key));
+    return { main, archivedMembers };
+  }
+
+  /** Members whose detail is known, as rows: thread summaries that have landed, and unsent presentation drafts. */
+  function materializeRows(members: readonly WorkspaceThreadMember[]): WorkbenchProjectedThreadRow[] {
+    const logical = projectFacts()?.projects ?? [];
+    return members.flatMap(member => {
+      if (member.ref.kind === "draft") {
+        const draft = presentation.draft(member.ref.draftId);
+        return draft?.phase === "unsent"
+          ? [materializeWorkspaceThreadRow(member, projectPresentationDraftRow(draft, logical).entry)] : [];
+      }
+      const located = threadSummaries.get(member.ref.identity.threadId);
+      return located ? [materializeWorkspaceThreadRow(member, located.summary.row)] : [];
+    });
+  }
+
+  let summaryRefreshQueued = false;
+  /** One batch delivers many summaries at once; re-project the sidebar once per task, not once per thread. */
+  function summaryLanded() {
+    if (summaryRefreshQueued) return;
+    summaryRefreshQueued = true;
+    queueMicrotask(() => {
+      summaryRefreshQueued = false;
+      factsChanged();
+    });
+  }
+
+  function syncMemberLeases(members: readonly WorkspaceThreadMember[]) {
+    const wanted = new Set<string>(members.flatMap(member => member.ref.kind === "thread" ? [member.ref.identity.threadId] : []));
+    for (const [threadId, release] of memberLeases) {
+      if (wanted.has(threadId)) continue;
+      release();
+      memberLeases.delete(threadId);
+    }
+    for (const threadId of wanted) {
+      if (!memberLeases.has(threadId)) memberLeases.set(threadId, threadSummaries.subscribe(threadId, summaryLanded));
+    }
+  }
+
+  /** The server placement with archived page members appended, newest first, after the archived keys it lists. */
+  function placementWithArchived(placement: WorkspaceThreadPlacement, archivedMembers: readonly WorkspaceThreadMember[]) {
+    const listed = new Set(placement.archived);
+    const extra = archivedMembers.filter(member => member.homeKey && !listed.has(member.homeKey))
+      .sort((left, right) => right.activityAt - left.activityAt).map(member => member.homeKey!);
+    return extra.length ? { ...placement, archived: [...placement.archived, ...extra] } : placement;
+  }
+
   function selectRowsForRoute(route: WorkbenchRoute) {
     if (groups.getSnapshot().phase === "failed") {
       selectRows(null);
@@ -497,11 +555,16 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         ?? (target.kind === "draft" ? presentation.draft(target.draftId)?.target ?? localDraftLocations.get(target.draftId) : null);
       if (location) warmOpenCode(location);
     }
-    const observedRows = visibleRows();
-    sidebar.acceptFacts(browseLocation, observedRows);
-    for (const row of observedRows?.rows ?? []) {
-      if (row.entry.entryKind === "thread" && row.entry.identity.harness === "opencode"
-        && !row.entry.lifecycle.settled) warmOpenCode(row.location);
+    const { main, archivedMembers } = listedMembers();
+    syncMemberLeases([...main?.members ?? [], ...archivedMembers]);
+    const observedRows = materializeRows(main?.members ?? []);
+    sidebar.acceptFacts(browseLocation, observedRows, main?.projects ?? []);
+    // Placement already knows which threads are settled, so warming need not wait for summaries.
+    const settledKeys = new Set([...main?.placement.archived ?? [],
+      ...main?.placement.settled.flatMap(item => item.kind === "thread" ? [item.key] : item.keys) ?? []]);
+    for (const member of main?.members ?? []) {
+      if (member.ref.kind === "thread" && member.ref.identity.harness === "opencode"
+        && member.homeKey && !settledKeys.has(member.homeKey)) warmOpenCode(member.location);
     }
     prepareMosaicRenderers(route.mosaicNode);
     routeIntents.factsChanged();
@@ -532,14 +595,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const threads = threadClient.getSnapshot();
       const facts = projectFacts();
       const fontSize = state?.records("globalPreference").find(item => item.preference.key === "editorFontSize");
-      const rowData = visibleRows();
-      const visibleLogicalRows = rowData?.rows.filter(
-        (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null) ?? [];
-      // Archived rows ride their own paged observation; a row present in both is the main list's.
-      const visibleKeys = new Set(visibleLogicalRows.map(workspaceThreadRowKey));
-      const archivedRows = (archived?.handle.getSnapshot().value?.data.rows ?? []).filter(
-        (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null && !visibleKeys.has(workspaceThreadRowKey(item)));
-      const logicalRows = archivedRows.length ? [...visibleLogicalRows, ...archivedRows] : visibleLogicalRows;
+      const { main: rowData, archivedMembers } = listedMembers();
+      // Archived members ride their own paged observation; a member present in both is the main list's.
+      const listed = [...rowData?.members ?? [], ...archivedMembers];
+      const logicalRows = materializeRows(listed).filter(
+        (item): item is WorkbenchLogicalThreadRow => item.logicalProjectId !== null);
+      const threadMembers = Object.fromEntries(listed.flatMap(member => member.homeKey ? [[member.homeKey, member]] : []));
       const archivedThreadCount = rowData?.projects.reduce((total, item) => total + (item.archivedCount ?? 0), 0) ?? 0;
       const snapshot: ExplorerSnapshot = {
         ...project, browseLocation, currentPath: activePath,
@@ -547,7 +608,9 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         workspaceProjectGroups: groups.getSnapshot().value?.data,
         workspaceProjectGroupsPhase: groups.getSnapshot().phase,
         logicalProjects: facts?.projects ?? [], logicalSummaries: facts?.summaries ?? {},
-        logicalThreads: logicalRows, archivedThreadCount,
+        logicalThreads: logicalRows, archivedThreadCount, threadMembers,
+        threadPlacement: rowData ? placementWithArchived(rowData.placement, archivedMembers) : undefined,
+        threadFolders: rowData?.folders,
         subagents: threads.subagents, threads: threads.threads,
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
         isThreadsLoading: !!rows && !rows.getSnapshot().value,
@@ -896,7 +959,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   }));
   lifetime.addUnsubscribe(presentation.subscribe(factsChanged));
   if (state) lifetime.addUnsubscribe(state.subscribe(factsChanged));
-  const threadSummaries = new ThreadSummaryStore(workspace);
   presentation.start();
   void network.start().catch(error => warn("Network settings could not start.", error));
   void runtime.open().catch(error => warn("Runtime observation could not start.", error));
@@ -953,6 +1015,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       archived?.handle.release();
       tree?.release();
       for (const owner of owners.values()) owner.release();
+      for (const release of memberLeases.values()) release();
+      memberLeases.clear();
       threadSummaries.dispose();
       for (const panel of panels) panel.dispose();
       navigation.dispose();

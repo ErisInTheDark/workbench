@@ -29,7 +29,7 @@ import WorkbenchSocketClient from "../../shared/workbench/WorkbenchSocketClient"
 import WorkbenchAppRpcClient from "../../app/client/workbench/app/WorkbenchAppRpcClient";
 import WorkbenchWorkspaceClient from "../../app/client/workbench/app/WorkbenchWorkspaceClient";
 import WorkbenchPresentationClient from "../../app/client/workbench/state/WorkbenchPresentationClient";
-import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, type DaemonId } from "../../shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId } from "../../shared/workbench/identity";
 import { workspaceCommandRoutes, type WorkspaceCommandMethod } from "../../shared/workbench/workspace/workspace-commands";
 import { isWorkbenchRpcFailure } from "../../shared/workbench/workbench-rpc";
 import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared/workbench/daemon/WorkbenchDaemonClient";
@@ -748,6 +748,14 @@ stream_max_retries = 0
     }] });
     this.observations.add(observation);
     return (await this.withSignal(this.workspace.waitFor(observation), signal)).data;
+  }
+
+  /** One thread's located summary through the app's batched `threadSummaries` path, once it has resolved. */
+  async threadSummary(threadId: string, signal = this.signal) {
+    const reference = ThreadReferenceSchema.parse(threadId);
+    const observation = this.workspace.observe({ kind: "threadSummaries", threadIds: [reference] });
+    this.observations.add(observation);
+    return (await this.withSignal(this.workspace.waitFor(observation), signal)).data[reference] ?? null;
   }
 
   async waitForProjects(rootPaths: readonly string[], signal = this.signal) {

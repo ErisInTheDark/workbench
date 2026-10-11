@@ -1,8 +1,10 @@
 /* No production exports. Protect independent local-folder rendering, draft-preserving registration and applied launch identity. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import type { ExplorerSnapshot, WorkbenchProjectOption } from "workbench-shared/types";
-import type { WorkspaceProjects, WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
+import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
@@ -17,6 +19,14 @@ const project: WorkbenchProjectOption = {
   roots: [{ id: "root", isPrimary: true, name: "bak", rootPath: "C:/git/app/bak", relativePath: "" }],
 };
 const location = { daemonId, projectId: project.id };
+const noLayout = {
+  revision: 0, daemons: [], projects: [], locations: [], defaults: [], drafts: [],
+  folders: [], members: [], divergences: [], sourceMappings: [],
+} as unknown as PresentationSnapshot;
+/** The app server's membership for these rows, as the browser receives it. */
+const membership = (rows: WorkbenchLogicalThreadRow[]) => ({ ...projectWorkbenchThreadMembership(rows, noLayout), projects: [] });
+const memberTitles = (snapshot: ExplorerSnapshot | undefined) =>
+  Object.values(snapshot?.threadMembers ?? {}).map(member => member.title);
 function facts(registered: boolean): WorkspaceProjects {
   return {
     projects: registered ? [{
@@ -187,11 +197,11 @@ test("project row observations hand off without blanking visible threads", async
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     },
-  } satisfies WorkspaceThreadRows["rows"][number];
+  } satisfies WorkbenchLogicalThreadRow;
   await socket.observation(firstQuery, { kind: "projectThreads", phase: "current", failure: null,
-    data: { rows: [firstRow], projects: [] } });
+    data: membership([firstRow]) });
   await Promise.resolve();
-  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
 
   const beforeAdd = socket.sent.length;
   assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
@@ -199,9 +209,9 @@ test("project row observations hand off without blanking visible threads", async
   const added = await socket.request("workspace/observe", beforeAdd, request =>
     request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 2);
   await socket.observation(added, { kind: "projectThreads", phase: "pending", failure: null,
-    data: { rows: [], projects: [] } });
+    data: membership([]) });
   await Promise.resolve();
-  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
   assert.equal(socket.sent.some(item => item.method === "workspace/release"
     && item.params.subscriptionId === firstQuery.params.subscriptionId), false);
 
@@ -209,7 +219,7 @@ test("project row observations hand off without blanking visible threads", async
   const superseded = await socket.request("workspace/release", beforeAdd,
     request => request.params.subscriptionId === added.params.subscriptionId);
   assert.equal(superseded.params.subscriptionId, added.params.subscriptionId);
-  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first"]);
+  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first"]);
 
   const beforeRetry = socket.sent.length;
   assert.equal((await client.controls.applyRoute(withProjectSelection(createLogicalProjectRoute(logicalId),
@@ -220,12 +230,12 @@ test("project row observations hand off without blanking visible threads", async
     ...firstRow, logicalProjectId: secondId, location: secondLocation, rootPath: "C:/git/app/other",
     entry: { ...firstRow.entry, title: "second",
       identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("second") } },
-  } satisfies WorkspaceThreadRows["rows"][number];
+  } satisfies WorkbenchLogicalThreadRow;
   await socket.observation(retry, { kind: "projectThreads", phase: "current", failure: null,
-    data: { rows: [firstRow, secondRow], projects: [] } });
+    data: membership([firstRow, secondRow]) });
   await socket.request("workspace/release", beforeRetry,
     request => request.params.subscriptionId === firstQuery.params.subscriptionId);
-  assert.deepEqual(snapshots.at(-1)?.logicalThreads?.map(row => row.entry.title), ["first", "second"]);
+  assert.deepEqual(memberTitles(snapshots.at(-1)), ["first", "second"]);
 
   const beforeFailure = socket.sent.length;
   assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
@@ -235,7 +245,7 @@ test("project row observations hand off without blanking visible threads", async
   await socket.request("workspace/release", beforeFailure,
     request => request.params.subscriptionId === retry.params.subscriptionId);
   await Promise.resolve();
-  assert.deepEqual(snapshots.at(-1)?.logicalThreads, []);
+  assert.deepEqual(memberTitles(snapshots.at(-1)), []);
   assert.match(snapshots.at(-1)?.threadsError ?? "", /project rows unavailable/);
   assert.ok(warnings.some(message => message.includes("Workspace query failed")));
 });
@@ -364,17 +374,17 @@ test("observed unsettled opencode threads warm their source but settled and code
       metadata: { archived: false, pinned: false, snoozed: false },
       lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false },
     },
-  } satisfies WorkspaceThreadRows["rows"][number];
+  } satisfies WorkbenchLogicalThreadRow;
   await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
-    data: { rows: [base, { ...base, entry: { ...base.entry,
+    data: membership([base, { ...base, entry: { ...base.entry,
       identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("settled") },
-      lifecycle: { kind: "completed", reason: "providerInactive", settled: true } } }], projects: [] } });
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: true } } }]) });
   await Promise.resolve();
   assert.equal(socket.sent.some(request => request.method === "workspace/command"
     && request.params.method === "models/list" && request.params.params?.provider === "opencode"), false);
   await socket.observation(rows, { kind: "projectThreads", phase: "current", failure: null,
-    data: { rows: [{ ...base, entry: { ...base.entry,
-      identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("unsettled") } } }], projects: [] } }, 2);
+    data: membership([{ ...base, entry: { ...base.entry,
+      identity: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("unsettled") } } }]) }, 2);
   const warming = await socket.request("workspace/command", 0, request => request.params.method === "models/list"
     && request.params.params?.provider === "opencode");
   assert.deepEqual(warming.params.scope, { kind: "installation", daemonId });

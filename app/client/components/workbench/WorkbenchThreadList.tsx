@@ -10,12 +10,13 @@ import type { PresentationSnapshot } from "workbench-shared/state/workbench-pres
 import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import { useWorkbenchClientController } from "./workbench-client-context";
 
-import { ProjectIdSchema, type FolderId, type ProjectThreadDisplayKey } from "workbench-shared/workbench/identity";
-import { createHomeThreadRoute, createLogicalExistingThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import {
-  projectLogicalHomeDisplayOrder,
-  projectLogicalThreadDisplayOrder,
-} from "workbench-shared/workbench/project/workbench-project-projection";
+  DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
+} from "workbench-shared/workbench/identity";
+import { createHomeThreadRoute, createLogicalExistingThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import type {
+  WorkspaceThreadMember, WorkspaceThreadPlacement, WorkspaceThreadPlacementItem,
+} from "workbench-shared/workbench/workspace/workspace-observation";
 import {
   getWorkbenchHomeFolderKey,
   getWorkbenchHomeThreadKey,
@@ -59,7 +60,7 @@ import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-
 import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
 import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
-import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
+import WorkbenchThreadListItem, { WorkbenchPendingThreadListItem } from "./WorkbenchThreadListItem";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
@@ -74,17 +75,90 @@ function targetForEntry (entry: WorkbenchThreadSidebarEntry): import("workbench-
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
-function itemThreadCount (item: WorkbenchHomeThreadDisplayItem) {
+/** A placed thread whose summary has not landed yet. */
+interface PendingHomeEntry {
+  pending: WorkspaceThreadMember;
+  projectId: string;
+  threadKey: ProjectThreadDisplayKey;
+}
+type ListHomeEntry = WorkbenchHomeThreadEntry | PendingHomeEntry;
+type ListDisplayItem =
+  | { entry: ListHomeEntry; itemKind: "thread"; threadKeys: [ProjectThreadDisplayKey] }
+  | {
+    entries: ListHomeEntry[];
+    folder: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>["folder"];
+    itemKind: "folder";
+    projectId: string;
+    threadKeys: ProjectThreadDisplayKey[];
+  };
+interface ThreadListShape {
+  archivedEntries: ListHomeEntry[];
+  mainEntries: ListHomeEntry[];
+  pinnedItems: ListDisplayItem[];
+  settledItems: ListDisplayItem[];
+  snoozedItems: ListDisplayItem[];
+}
+
+function isPendingEntry (entry: ListHomeEntry): entry is PendingHomeEntry {
+  return "pending" in entry;
+}
+
+function targetForListEntry (entry: ListHomeEntry) {
+  if (!isPendingEntry(entry)) return targetForEntry(entry.entry);
+  const { ref } = entry.pending;
+  return ref.kind === "draft"
+    ? { draftId: DraftIdSchema.parse(ref.draftId), kind: "draft" as const }
+    : { harness: ref.identity.harness, kind: "provider" as const, threadId: ref.identity.threadId };
+}
+
+/** The app server's placement for the selected projects; rows whose summary has not landed stay in place as pending. */
+function listFromPlacement (
+  placement: WorkspaceThreadPlacement,
+  members: Readonly<Record<string, WorkspaceThreadMember>>,
+  rows: readonly WorkbenchLogicalThreadRow[],
+  selectedProjectIds: readonly string[],
+): ThreadListShape {
+  const selected = new Set(selectedProjectIds);
+  const loaded = new Map(rows.map(row => [getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) as string, row]));
+  const entryFor = (key: string): ListHomeEntry[] => {
+    const member = members[key];
+    if (!member?.logicalProjectId || !selected.has(member.logicalProjectId)) return [];
+    const threadKey = ProjectThreadDisplayKeySchema.parse(key);
+    const row = loaded.get(key);
+    return [row && row.entry.entryKind !== "subagent"
+      ? { entry: row.entry, projectId: row.logicalProjectId, threadKey }
+      : { pending: member, projectId: member.logicalProjectId, threadKey }];
+  };
+  const items = (placed: readonly WorkspaceThreadPlacementItem[]): ListDisplayItem[] => placed.flatMap((item): ListDisplayItem[] => {
+    if (item.kind === "thread") {
+      return entryFor(item.key).map(entry => ({ entry, itemKind: "thread", threadKeys: [entry.threadKey] }));
+    }
+    if (!selected.has(item.projectId)) return [];
+    const entries = item.keys.flatMap(entryFor);
+    return entries.length ? [{
+      entries, folder: item.folder, itemKind: "folder", projectId: item.projectId, threadKeys: entries.map(entry => entry.threadKey),
+    }] : [];
+  });
+  return {
+    archivedEntries: placement.archived.flatMap(entryFor),
+    mainEntries: placement.main.flatMap(entryFor),
+    pinnedItems: items(placement.pinned),
+    settledItems: items(placement.settled),
+    snoozedItems: items(placement.snoozed),
+  };
+}
+
+function itemThreadCount (item: ListDisplayItem) {
   return item.threadKeys.length;
 }
 
-function itemKey (item: WorkbenchHomeThreadDisplayItem) {
+function itemKey (item: ListDisplayItem) {
   return item.itemKind === "folder"
     ? getWorkbenchHomeFolderKey(item.projectId, item.folder.folderId)
     : item.entry.threadKey;
 }
 
-function listEntries (list: ReturnType<typeof projectWorkbenchHomeThreadList>) {
+function listEntries (list: ThreadListShape) {
   return [
     ...list.archivedEntries,
     ...list.mainEntries,
@@ -95,8 +169,8 @@ function listEntries (list: ReturnType<typeof projectWorkbenchHomeThreadList>) {
 }
 
 function mergeDisplayItems (
-  items: WorkbenchHomeThreadDisplayItem[],
-  currentEntries: readonly WorkbenchHomeThreadEntry[],
+  items: ListDisplayItem[],
+  currentEntries: readonly ListHomeEntry[],
 ) {
   const placementEntries = items.flatMap(item => item.itemKind === "folder" ? item.entries : [item.entry]);
   const mergedByKey = new Map(mergeContextMenuPlacementEntries(
@@ -104,8 +178,8 @@ function mergeDisplayItems (
     currentEntries,
     entry => entry.threadKey,
   ).map(entry => [entry.threadKey, entry]));
-  const current = (entry: WorkbenchHomeThreadEntry) => mergedByKey.get(entry.threadKey) ?? entry;
-  return items.map(item => item.itemKind === "folder"
+  const current = (entry: ListHomeEntry) => mergedByKey.get(entry.threadKey) ?? entry;
+  return items.map((item): ListDisplayItem => item.itemKind === "folder"
     ? { ...item, entries: item.entries.map(current) }
     : { ...item, entry: current(item.entry) });
 }
@@ -206,36 +280,22 @@ export default function WorkbenchThreadList ({
   const projectsById = useMemo(() => new Map<string, WorkbenchProjectOption | WorkbenchLogicalProject>(
     (logicalProjects ?? projects).map(project => [project.id, project] as const),
   ), [logicalProjects, projects]);
-  const currentList = useMemo(() => {
+  const threadPlacement = client.explorer.threadPlacement;
+  const threadMembers = client.explorer.threadMembers;
+  const currentList = useMemo((): ThreadListShape => {
     const rows = logicalThreads ?? [];
-    const rowsByProject = new Map<string, WorkbenchLogicalThreadRow[]>();
+    // Logical lists are placed by the app server; until membership arrives there is nothing to place.
     if (logicalProjects && presentation) {
-      for (const row of rows) {
-        const projectRows = rowsByProject.get(row.logicalProjectId);
-        if (projectRows) projectRows.push(row);
-        else rowsByProject.set(row.logicalProjectId, [row]);
-      }
+      return threadPlacement && threadMembers
+        ? listFromPlacement(threadPlacement, threadMembers, rows, selectedProjectIds)
+        : { archivedEntries: [], mainEntries: [], pinnedItems: [], settledItems: [], snoozedItems: [] };
     }
-    return projectWorkbenchHomeThreadList(
-      logicalProjects && presentation ? {
-        projects: logicalProjects.filter(project => selectedProjectIds.includes(project.id)).map(project => {
-          const projectRows = rowsByProject.get(project.id) ?? [];
-          return {
-            projectId: project.id,
-            entries: projectRows.map(row => row.entry),
-            displayOrder: projectLogicalThreadDisplayOrder(project.id, projectRows, presentation),
-          };
-        }),
-      } : {
-        projects: entries && displayOrder && projectId
-          ? [{ projectId, entries, displayOrder }]
-          : actions.projectThreadSidebars.projects.filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
-      },
-      logicalProjects && presentation
-        ? projectLogicalHomeDisplayOrder(rows, presentation)
-        : actions.homeDisplayOrder,
-    );
-  }, [actions.homeDisplayOrder, actions.projectThreadSidebars, displayOrder, entries, logicalProjects, logicalThreads, presentation, projectId, selectedProjectIds]);
+    return projectWorkbenchHomeThreadList({
+      projects: entries && displayOrder && projectId
+        ? [{ projectId, entries, displayOrder }]
+        : actions.projectThreadSidebars.projects.filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
+    }, actions.homeDisplayOrder);
+  }, [actions.homeDisplayOrder, actions.projectThreadSidebars, displayOrder, entries, logicalProjects, logicalThreads, presentation, projectId, selectedProjectIds, threadMembers, threadPlacement]);
   const qualifiedFor = useMemo(() => createWorkbenchThreadRowLookup(
     logicalThreads ?? [], { logical: Boolean(logicalProjects), attachedDaemonId },
   ), [attachedDaemonId, logicalProjects, logicalThreads]);
@@ -270,11 +330,11 @@ export default function WorkbenchThreadList ({
   };
   const updateProjectLayout = async (
     logicalProjectId: WorkbenchLogicalProject["id"],
-    intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[2],
+    intent: Parameters<WorkbenchControls["updatePresentationProjectLayout"]>[1],
   ) => {
-    if (!controls || !logicalThreads) return false;
+    if (!controls) return false;
     try {
-      await controls.updatePresentationProjectLayout(logicalProjectId, logicalThreads, intent);
+      await controls.updatePresentationProjectLayout(logicalProjectId, intent);
       setLayoutError("");
       return true;
     } catch (error) {
@@ -304,7 +364,7 @@ export default function WorkbenchThreadList ({
   };
   const archivedPlacementKeys = new Set(placementList.archivedEntries.map(entry => entry.threadKey));
   const settledLimit = preferences.settledThreadItemLimit;
-  const historyItems: WorkbenchHomeThreadDisplayItem[] = [
+  const historyItems: ListDisplayItem[] = [
     ...list.settledItems,
     ...list.archivedEntries.map(entry => ({ entry, itemKind: "thread" as const, threadKeys: [entry.threadKey] as [ProjectThreadDisplayKey] })),
   ];
@@ -329,7 +389,7 @@ export default function WorkbenchThreadList ({
   }, [archivedDemand, controls]);
   const nextSettledThreadCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledThreadCount);
   const isDragActive = Boolean(activeDragPayload);
-  const visibleRows = (items: WorkbenchHomeThreadDisplayItem[]) => items.flatMap(item => item.itemKind === "folder"
+  const visibleRows = (items: ListDisplayItem[]) => items.flatMap(item => item.itemKind === "folder"
     ? preferences.threadFolderIds.includes(itemKey(item)) ? item.entries : []
     : [item.entry]);
   const navigableEntries = [
@@ -339,7 +399,7 @@ export default function WorkbenchThreadList ({
     ...(preferences.settledThreadsOpen ? visibleRows(displayedHistoryItems) : []),
   ];
   const hasSelectedEntry = navigableEntries.some((homeEntry) =>
-    isWorkbenchThreadTargetSelected(targetForEntry(homeEntry.entry), currentTarget));
+    isWorkbenchThreadTargetSelected(targetForListEntry(homeEntry), currentTarget));
   const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
     let next = index;
     if (event.key === "ArrowDown") next = Math.min(navigableEntries.length - 1, index + 1);
@@ -352,12 +412,35 @@ export default function WorkbenchThreadList ({
     if (nextEntry) rowRefs.current.get(nextEntry.threadKey)?.focus();
   };
 
+  const renderPendingEntry = (pendingEntry: PendingHomeEntry) => {
+    const { pending, projectId: entryProjectId, threadKey } = pendingEntry;
+    const project = projectsById.get(entryProjectId) ?? null;
+    if (!project && showProjectEyebrow) return null;
+    const target = targetForListEntry(pendingEntry);
+    const logicalProject = logicalProjects?.find(item => item.id === pending.logicalProjectId);
+    const sourceProjectId = pending.location.projectId;
+    return (
+      <WorkbenchPendingThreadListItem
+        activityAt={pending.activityAt}
+        href={getThreadHref ? getThreadHref(target, sourceProjectId) : projectHref(target.kind === "provider"
+          ? createLogicalExistingThreadRoute(null, target)
+          : createLogicalThreadRoute(null, LogicalProjectIdSchema.parse(entryProjectId), pending.location, target))}
+        key={threadKey}
+        onActivate={() => onOpenThread(target, sourceProjectId)}
+        project={showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined}
+        title={pending.title}
+      />
+    );
+  };
+
   const renderEntry = (
-    homeEntry: WorkbenchHomeThreadEntry,
+    listEntry: ListHomeEntry,
     reorderSection?: WorkbenchThreadDisplaySection,
     placementFolder: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>["folder"] | null = null,
     placementSection?: WorkbenchThreadDragSection | "archived",
   ) => {
+    if (isPendingEntry(listEntry)) return renderPendingEntry(listEntry);
+    const homeEntry = listEntry;
     const { entry, projectId: entryProjectId, threadKey } = homeEntry;
     const project = projectsById.get(entryProjectId) ?? null;
     if (!project && showProjectEyebrow) return null;
@@ -563,9 +646,11 @@ export default function WorkbenchThreadList ({
     </DropTarget>
   ) : null;
 
-  const renderFolderTooltip = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => (
+  const renderFolderTooltip = (item: Extract<ListDisplayItem, { itemKind: "folder" }>) => (
     <ul className="m-0 flex w-[min(28rem,calc(100vw-2rem))] max-w-full list-none flex-col gap-0.5 p-0">
-      {item.entries.map((homeEntry) => {
+      {item.entries.map((listEntry) => {
+        if (isPendingEntry(listEntry)) return renderPendingEntry(listEntry);
+        const homeEntry = listEntry;
         const project = projectsById.get(homeEntry.projectId);
         if (!project) return null;
         const qualified = qualifiedFor(homeEntry);
@@ -596,7 +681,7 @@ export default function WorkbenchThreadList ({
     </ul>
   );
 
-  const renderFolderCreateThread = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => {
+  const renderFolderCreateThread = (item: Extract<ListDisplayItem, { itemKind: "folder" }>) => {
     const target = { folderId: item.folder.folderId, kind: "new" as const };
     const logicalProject = logicalProjects?.find(project => project.id === item.projectId);
     if (client.mounted?.presentationClient && !logicalProject) return null;
@@ -630,7 +715,7 @@ export default function WorkbenchThreadList ({
     );
   };
 
-  const renderFolderEntries = (item: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>) => {
+  const renderFolderEntries = (item: Extract<ListDisplayItem, { itemKind: "folder" }>) => {
     const folderKey = getWorkbenchHomeFolderKey(item.projectId, item.folder.folderId);
     return (
       <DropTargetBoundary className="min-w-0 px-1">
@@ -645,7 +730,7 @@ export default function WorkbenchThreadList ({
     );
   };
 
-  const renderSection = (items: WorkbenchHomeThreadDisplayItem[], section: WorkbenchThreadDisplaySection) => (
+  const renderSection = (items: ListDisplayItem[], section: WorkbenchThreadDisplaySection) => (
     <ul className="m-0 flex flex-col gap-0.5 p-0">
       {items.flatMap((item) => {
         const key = itemKey(item);
@@ -667,7 +752,7 @@ export default function WorkbenchThreadList ({
               attentionLabelsByThreadId={attentionLabelsByThreadId}
               canPrependThread={(payload) => canMoveWorkbenchThreadRowToSection(payload, section, item.projectId)
                 && !item.folder.threadKeys.includes(payload.projectSourceKey)}
-              entries={item.entries.map(({ entry }) => entry)}
+              entries={item.entries.flatMap(entry => isPendingEntry(entry) ? [] : [entry.entry])}
               folder={item.folder}
               homeFolderKey={key}
               isDragActive={isDragActive}

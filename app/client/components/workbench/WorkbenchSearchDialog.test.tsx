@@ -4,14 +4,12 @@ import test from "node:test";
 
 import { DaemonIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchSearchHit } from "../../workbench/search/WorkbenchSearchController";
-import type { WorkspaceThreadRows } from "workbench-shared/workbench/workspace/workspace-observation";
-import { findSearchThreadEntry, getSearchThreadLocations } from "./WorkbenchSearchDialog";
+import type { WorkspaceThreadSummary } from "workbench-shared/workbench/workspace/workspace-observation";
+import { findSearchThreadEntry } from "./WorkbenchSearchDialog";
 
 const projectId = ProjectIdSchema.parse("shared-project");
-const otherProjectId = ProjectIdSchema.parse("other-project");
 const first = { daemonId: DaemonIdSchema.parse(crypto.randomUUID()), projectId };
 const second = { daemonId: DaemonIdSchema.parse(crypto.randomUUID()), projectId };
-const other = { daemonId: DaemonIdSchema.parse(crypto.randomUUID()), projectId: otherProjectId };
 
 function hit(source: typeof first, threadId: string): WorkbenchSearchHit {
   return {
@@ -20,26 +18,22 @@ function hit(source: typeof first, threadId: string): WorkbenchSearchHit {
   };
 }
 
-function row(source: typeof first, threadId: string, title: string): WorkspaceThreadRows["rows"][number] {
+function summary(source: typeof first, threadId: string, title: string): WorkspaceThreadSummary {
   return {
-    entry: {
+    location: source, logicalProjectId: null,
+    summary: { facts: {}, row: {
       activityAt: 1, entryKind: "thread",
       identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(threadId) },
       lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
       metadata: { archived: false, pinned: false, snoozed: false }, title,
-    },
-    hostname: "local", location: source, logicalProjectId: null, rootPath: "/project",
+    } },
   };
 }
 
-test("search demands every hit source and resolves thread rows by daemon and project, not selected project", () => {
-  const hits = [hit(first, "same-thread"), hit(second, "same-thread"), hit(other, "other-thread"), hit(second, "same-thread")];
-  assert.deepEqual(getSearchThreadLocations(hits), [first, second, other]);
-
-  const rows = [row(first, "same-thread", "first source"), row(second, "same-thread", "second source"),
-    row(other, "other-thread", "outside selected project")];
-  assert.equal(findSearchThreadEntry(rows, hits[0]!)?.title, "first source");
-  assert.equal(findSearchThreadEntry(rows, hits[1]!)?.title, "second source");
-  assert.equal(findSearchThreadEntry(rows, hits[2]!)?.title, "outside selected project");
-  assert.equal(findSearchThreadEntry(rows, hit(first, "missing")), undefined);
+test("a thread hit resolves from its summary only where the summary lives at the hit's source", () => {
+  const summaries = new Map([["thread", summary(first, "thread", "first source")]]);
+  const read = (threadId: string) => summaries.get(threadId) ?? null;
+  assert.equal(findSearchThreadEntry(read, hit(first, "thread"))?.title, "first source");
+  assert.equal(findSearchThreadEntry(read, hit(second, "thread")), undefined, "another daemon's hit never borrows this row");
+  assert.equal(findSearchThreadEntry(read, hit(first, "missing")), undefined);
 });

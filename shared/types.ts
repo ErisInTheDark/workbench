@@ -1156,7 +1156,13 @@ export interface ExplorerSnapshot {
   projects: WorkbenchProjectOption[];
   logicalProjects?: WorkbenchLogicalProject[];
   logicalSummaries?: Record<string, WorkbenchLogicalProjectSummary>;
+  /** Listed rows whose detail is known: thread summaries that have landed, and presentation drafts. */
   logicalThreads?: WorkbenchLogicalThreadRow[];
+  /** Every listed logical member by placement key, including those whose summary is still loading. */
+  threadMembers?: Record<string, import("./workbench/workspace/workspace-observation").WorkspaceThreadMember>;
+  /** The app server's combined sidebar placement; archived page members are appended to `archived`. */
+  threadPlacement?: import("./workbench/workspace/workspace-observation").WorkspaceThreadPlacement;
+  threadFolders?: import("./workbench/workspace/workspace-observation").WorkspaceThreadFolders;
   /** Archived threads in the selected projects, whether or not their rows are loaded. */
   archivedThreadCount?: number;
   root: string;
@@ -1289,7 +1295,6 @@ export interface WorkbenchControls {
   ) => Promise<void>;
   updatePresentationProjectLayout: (
     logicalProjectId: LogicalProjectId,
-    rows: readonly WorkbenchLogicalThreadRow[],
     intent:
       | { kind: "move"; section: import("./workbench/thread/thread-display-order.ts").WorkbenchThreadDisplaySection;
         sourceKey: ThreadDisplayKey; destinationFolderId: string | null; beforeKey: string | null }
@@ -1297,10 +1302,8 @@ export interface WorkbenchControls {
         sourceKey: ThreadDisplayKey; targetKey: ThreadDisplayKey; destinationFolderId: string | null;
         folderId?: string }
       | { kind: "rename"; folderId: string; title: string },
-    homeOrder?: import("./workbench/thread/home-thread-display-order.ts").WorkbenchHomeThreadDisplayOrder,
   ) => Promise<void>;
   updatePresentationPinnedLayout: (
-    rows: readonly WorkbenchLogicalThreadRow[],
     intent:
       | { kind: "move"; sourceKey: string; destinationFolderId: string | null; beforeKey: string | null }
       | { kind: "drop"; sourceKey: string; targetKey: string; destinationFolderId: string | null;

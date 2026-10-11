@@ -16,7 +16,9 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-state";
-import { projectLogicalThreadRows } from "workbench-shared/workbench/project/workbench-project-projection";
+import {
+  projectLogicalThreadRows, projectWorkbenchThreadMembership, projectWorkspaceThreadMember, type WorkbenchProjectedThreadRow,
+} from "workbench-shared/workbench/project/workbench-project-projection";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
@@ -69,6 +71,8 @@ interface Interest {
   thread: { key: string; observation: Observation } | null;
   /** `threadSummaries`: one retargeted batch per daemon, each carrying every requested thread. */
   summaryBatches: Map<DaemonId, Observation>;
+  /** `projectThreads`: the full rows behind the published membership; layout edits resolve against them. */
+  threadRows: readonly WorkbenchProjectedThreadRow[];
 }
 interface TranscriptSubscription {
   source: WorkbenchDaemonSource | null;
@@ -125,8 +129,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (snapshot.revision !== request.expectedRevision) throw new Error("Layout changed in another browser.");
     const byIdentity = new Map<string, WorkbenchLogicalThreadRow>();
     for (const interest of this.interests.values()) {
-      if (interest.value.kind !== "projectThreads") continue;
-      for (const row of interest.value.data.rows) {
+      for (const row of interest.threadRows) {
         if (!row.logicalProjectId) continue;
         const identity = row.entry.entryKind === "draft" ? `draft:${row.entry.draft.draftId}`
           : `${row.location.daemonId}/${row.location.projectId}/${row.entry.identity.threadId}`;
@@ -199,7 +202,6 @@ export default class WorkbenchWorkspaceRequestController {
         const order = editPresentationProjectOrder(snapshot, request.logicalProjectId, rows, request.intent);
         if (!order) throw new Error("Project layout position is no longer available.");
         layouts.push(createPresentationLayoutMutation(snapshot, rows, { scope: "project", logicalProjectId: request.logicalProjectId, order }));
-        if (request.homeOrder) layouts.push(createPresentationLayoutMutation(snapshot, rows, { scope: "home", logicalProjectId: null, order: request.homeOrder }));
         break;
       }
       case "pinnedEdit": {
@@ -438,7 +440,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (existing) this.retire(existing);
     const interest: Interest = {
       request, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
-      summaryBatches: new Map(),
+      summaryBatches: new Map(), threadRows: [],
       value: { ...this.initial(request), subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 },
     };
     this.interests.set(request.subscriptionId, interest);
@@ -606,8 +608,11 @@ export default class WorkbenchWorkspaceRequestController {
       case "presentation": return { phase: "current", failure: null, kind: "presentation", data: this.options.presentation.read() };
       case "projects": return { ...base, kind: "projects", data: this.options.workspace.getSnapshot() };
       case "projectGroups": return { ...base, kind: "projectGroups", data: this.options.workspace.getProjectGroups().data };
-      case "projectThreads": return { ...base, kind: "projectThreads", data: { rows: [], projects: [] } };
-      case "archivedThreads": return { ...base, kind: "archivedThreads", data: { rows: [], projects: [] } };
+      case "projectThreads": return { ...base, kind: "projectThreads", data: {
+        members: [], projects: [], folders: { pinned: [], projects: {} },
+        placement: { main: [], archived: [], pinned: [], snoozed: [], settled: [] },
+      } };
+      case "archivedThreads": return { ...base, kind: "archivedThreads", data: { members: [], projects: [] } };
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null, runtime: {} };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
@@ -905,7 +910,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (query.kind !== "archivedThreads") return;
     const { workspace, targets } = this.rowTargets(query.projects);
     this.observeTargets(interest, targets, projectIds => ({ kind: "archivedThreads", projectIds, limit: query.limit }));
-    const rows: WorkspaceArchivedThreads["rows"] = [];
+    const rows: WorkbenchProjectedThreadRow[] = [];
     const projects: WorkspaceArchivedThreads["projects"] = [];
     for (const [daemonId, ids] of targets) {
       const fact = interest.sources.get(daemonId)?.observation.getSnapshot();
@@ -928,7 +933,7 @@ export default class WorkbenchWorkspaceRequestController {
     const failure = projects.find(project => project.failure)?.failure ?? null;
     this.update(interest, { kind: "archivedThreads",
       phase: projects.every(project => project.phase === "current") ? "current" : rows.length ? "stale" : failure ? "failed" : "pending",
-      failure, data: { rows, projects } });
+      failure, data: { members: rows.map(projectWorkspaceThreadMember), projects } });
   }
 
   /**
@@ -1010,7 +1015,8 @@ export default class WorkbenchWorkspaceRequestController {
           failure: row?.failure ?? fact?.failure ?? null, ...(sidebar?.archivedCount ? { archivedCount: sidebar.archivedCount } : {}) });
       }
     }
-    const rows: WorkspaceThreadRows["rows"] = projectLogicalThreadRows(workspace.projects, sidebars, this.options.presentation.read())
+    const presentation = this.options.presentation.read();
+    const rows: WorkbenchProjectedThreadRow[] = projectLogicalThreadRows(workspace.projects, sidebars, presentation)
       .filter(row => targets.get(row.location.daemonId)?.has(row.location.projectId));
     for (const project of workspace.observedProjects) for (const location of project.locations) {
       if (!targets.get(location.location.daemonId)?.has(location.location.projectId)) continue;
@@ -1022,13 +1028,14 @@ export default class WorkbenchWorkspaceRequestController {
         });
       }
     }
+    interest.threadRows = rows;
     const discoveryPending = !projects.length && (workspace.catalogues.length === 0
       || workspace.catalogues.some(source => source.phase === "pending" || source.phase === "stale"));
     const failure = projects.find(project => project.failure)?.failure ?? null;
     this.update(interest, { kind: "projectThreads",
       phase: !discoveryPending && projects.every(project => project.phase === "current") ? "current"
         : rows.length ? "stale" : failure ? "failed" : "pending",
-      failure, data: { rows, projects } });
+      failure, data: { ...projectWorkbenchThreadMembership(rows, presentation), projects } });
   }
 
   private update(interest: Interest, payload: Payload) {
