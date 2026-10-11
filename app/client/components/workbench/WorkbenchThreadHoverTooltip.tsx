@@ -9,7 +9,7 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { describeThreadEntry } from "./thread-entry-presentation";
 import { useThread } from "./use-thread";
-import { ThreadTooltipContent } from "./WorkbenchThreadListItem";
+import ThreadTooltipContent from "./WorkbenchThreadTooltipContent";
 import Tooltip from "../ui/Tooltip";
 
 interface ThreadIdentity { harness: WorkbenchHarness; projectId: ProjectId; threadId: WorkbenchThreadId }

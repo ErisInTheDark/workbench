@@ -57,6 +57,8 @@ export interface WorkbenchThreadClientOptions {
   /** Turns a saved composer attachment URL back into the image the daemon reads. */
   resolveAttachmentUrl?: (url: string) => Promise<string>;
   resolveThreadIdentity?: (request: WorkbenchThreadIdentityResolveRequest) => Promise<WorkbenchThreadIdentityResolution | null>;
+  /** A project's root on this daemon, the cwd of threads whose transcript has not loaded. */
+  projectRootPathFor?: (projectId: string) => string | null;
 }
 
 interface WorkbenchThreadClient {
@@ -422,6 +424,7 @@ function WorkbenchThreadClient(
           readRateLimits: harness => account.getRateLimits(harness),
           watchRateLimits: harness => account.watchRateLimits(harness),
           subscribeRateLimits: listener => subscribe(listener),
+          projectRootPath: () => options.projectRootPathFor?.(projectId) ?? null,
           readGitArcProposal: async input => await daemon.git.arc.proposal.read(input),
           compareGitArcClaims: async ({ cwd, harness, threadId }) => {
             const comparison = await daemon.git.arc.compare({ cwd, harness, refs: [], roots: [], threadId });

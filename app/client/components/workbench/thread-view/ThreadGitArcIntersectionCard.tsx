@@ -15,8 +15,11 @@ import Disclosure from "../../ui/Disclosure";
 import { GitArcUnclaimIcon, GitArcWaitIcon } from "./GitArcIcon";
 import WorkbenchThreadReferenceList from "../WorkbenchThreadReferenceList";
 import { useThreadClaimIntersections } from "../use-workbench-client";
+import { getThreadMarkdownEmphasisColors } from "./thread-markdown-emphasis-colors";
 
 type IntersectionMode = "plan" | "wait" | "stashed";
+
+const activeNotice = getThreadMarkdownEmphasisColors("yellow")!;
 
 function formatThreadCount(count: number, state: "active" | "snoozed") {
   return `${count} ${state} ${count === 1 ? "thread" : "threads"}`;
@@ -31,8 +34,11 @@ export default function ThreadGitArcIntersectionCard({
   ownerProjectId,
   presentation = "full",
 }: {
-  /** Flush drops the card frame for hosts that draw their own, such as a status panel section. */
-  chrome?: "card" | "flush";
+  /**
+   * Flush drops the card frame for hosts that draw their own, such as a status panel section. Notice is flush too,
+   * but marks active overlap like a yellow thread notice, for edge-to-edge tooltip sections.
+   */
+  chrome?: "card" | "flush" | "notice";
   intersections: WorkbenchThreadClaimIntersections;
   logicalProjectId: LogicalProjectId | null;
   mode?: IntersectionMode;
@@ -62,17 +68,22 @@ export default function ThreadGitArcIntersectionCard({
   // Overlapping live claims is the one state that needs the user before work collides.
   const overlapsActive = !waiting && activeThreadCount > 0;
 
+  const notice = chrome === "notice" && overlapsActive;
   return (
     <section
-      className={chrome === "flush"
-        ? `w-full ${overlapsActive ? "bg-amber-500/6" : ""}`
-        : `my-2 w-full overflow-hidden rounded-[0.9rem] border ${overlapsActive
+      className={chrome === "card"
+        ? `my-2 w-full overflow-hidden rounded-[0.9rem] border ${overlapsActive
           ? "border-amber-500/35 bg-amber-500/6"
-          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2"}`}
+          : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2"}`
+        : notice
+          // Rows inset past the bar, so their hover chrome never meets it.
+          ? `relative w-full [&_[data-thread-reference-list]]:px-3 ${activeNotice.background}`
+          : `w-full ${chrome === "flush" && overlapsActive ? "bg-amber-500/6" : ""}`}
       data-thread-git-arc-intersection-card={mode}
       data-thread-git-arc-intersection-tone={overlapsActive ? "active" : undefined}
       data-thread-plan-conflict-card={mode === "plan" ? "true" : undefined}
     >
+      {notice ? <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-[0.22rem] bg-current opacity-60 ${activeNotice.text}`} /> : null}
       <h2 className={`m-0 flex min-w-0 items-center gap-2 px-3 pt-2 text-[0.82em] leading-[1.45]${visibleThreadCount ? "" : " pb-2"}${overlapsActive ? " text-amber-600 dark:text-amber-300" : ""}`}>
         {waiting ? <GitArcWaitIcon className="shrink-0" size={16} /> : <GitArcUnclaimIcon className="shrink-0" size={16} />}
         <span className={`min-w-0 flex-1 truncate font-medium ${overlapsActive ? "" : "text-text"}`}>
@@ -80,8 +91,8 @@ export default function ThreadGitArcIntersectionCard({
             ? "Waiting for Git arc claims"
             : stashed
               ? activeThreadCount ? "Stashed claims overlap active threads" : "No active work intersects stashed claims."
-              // A flush host already announces the overlap, so its heading names the list instead.
-              : activeThreadCount ? chrome === "flush" ? "Active threads claiming planned files" : "Planned changes overlap active threads"
+              // Flush and notice hosts announce the overlap themselves, so their heading names the list instead.
+              : activeThreadCount ? chrome !== "card" ? "Active threads claiming planned files" : "Planned changes overlap active threads"
                 : "No active work intersects this plan."}
         </span>
       </h2>
@@ -100,7 +111,7 @@ export default function ThreadGitArcIntersectionCard({
 }
 
 export function ObservedThreadGitArcIntersectionCard({ harness, mode = "plan", threadId, ...card }: {
-  chrome?: "card" | "flush";
+  chrome?: "card" | "flush" | "notice";
   harness: WorkbenchHarnessId;
   mode?: IntersectionMode;
   onOpenThread: (target: WorkbenchThreadTarget) => void;

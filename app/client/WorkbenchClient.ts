@@ -225,6 +225,10 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       workspace, ...(location ? { location } : {}),
       observeProviderEvents: location !== null,
       resolveThreadIdentity: async request => (await daemon.threads.resolveIdentity(request)).data,
+      ...(location ? {
+        projectRootPathFor: (projectId: string) =>
+          threadProject({ daemonId: location.daemonId, projectId: ProjectIdSchema.parse(projectId) })?.rootPath || null,
+      } : {}),
       updateThreadStateWithAcceptance: request => mutateThread(request),
       onStatusMessage: message => warn(message),
       ...(state ? { resolveAttachmentUrl: (url: string) => state.resolveDraftAttachmentUrl(url) } : {}),

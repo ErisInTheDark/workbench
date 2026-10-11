@@ -2,19 +2,18 @@
  * Exports:
  * - default WorkbenchThreadListItem: render a thread row or disclosure body with shared status (optionally led by a label), optional action slot, navigation and context menu.
  * - WorkbenchPendingThreadListItem: render a placed row's title and activity with a loading status until its summary lands.
- * - ThreadTooltipContent: render thread title (optionally after an agent name), status, and active claim paths grouped per coloured, titled subagent, without exposing stashed paths.
  * Status derivation is shared through thread-entry-presentation.
  */
 "use client";
 
 import type { ComponentType, DragEventHandler, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent, ReactNode, Ref } from "react";
 
-import type { WorkbenchHarness, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
+import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "./ContextMenuCapability";
-import ClaimedPathsPanel from "./ClaimedPathsPanel";
+import ThreadTooltipContent from "./WorkbenchThreadTooltipContent";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
 import { describeThreadEntry, isPinnedDraftSummaryEntry, type ThreadListEntry } from "./thread-entry-presentation";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
@@ -33,15 +32,13 @@ import { useWorkbenchComposerDraftPresence } from "./WorkbenchComposerDraftPrese
 import WorkbenchThreadEntryBadge from "./WorkbenchThreadEntryBadge";
 import { useThread } from "./use-thread";
 import WorkbenchDraftTitleIcons from "./WorkbenchDraftTitleIcons";
-import { useWorkbenchSubagentClaims, type WorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
+import { useWorkbenchSubagentClaims } from "./use-workbench-subagent-claims";
 import { useWorkbenchContextMenu, type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import Tooltip from "../ui/Tooltip";
 import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { formatLongTimestamp } from "./thread-view/thread-view-formatters";
 import WorkbenchThreadListFullRowContent from "./WorkbenchThreadListFullRowContent";
 import LoaderIcon from "./LoaderIcon";
-import WorkbenchThreadTitleHistory from "./WorkbenchThreadTitleHistory";
-import ThreadAgentName from "./thread-view/ThreadAgentName";
 import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions";
 
 /**
@@ -94,67 +91,6 @@ function targetForEntry(entry: ThreadListEntry): WorkbenchThreadTarget {
   return entry.entryKind === "draft"
     ? { draftId: isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId, kind: "draft" }
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
-}
-
-export function ThreadTooltipContent({
-  activityAt,
-  agentName,
-  claimedPaths,
-  extraDetails,
-  Icon,
-  projectId,
-  snoozed,
-  status,
-  statusClassName,
-  stashed,
-  subagentClaims = [],
-  title,
-  identity,
-}: {
-  activityAt: number;
-  /** Shown before the title, e.g. a coloured subagent name. */
-  agentName?: ReactNode;
-  claimedPaths: readonly string[];
-  extraDetails?: ReactNode;
-  Icon: ThreadStatusIcon;
-  projectId: ProjectId;
-  snoozed: boolean;
-  status: string;
-  statusClassName: string;
-  stashed: boolean;
-  /** Direct children's active claims, listed per subagent below the thread's own. */
-  subagentClaims?: readonly WorkbenchSubagentClaims[];
-  title: string;
-  identity?: { harness: WorkbenchHarness; threadId: WorkbenchThreadId };
-}) {
-  const ownClaims = stashed ? [] : claimedPaths;
-  return (
-    <div data-thread-project-file-link-boundary="true" className="flex max-h-full min-w-0 max-w-[min(28rem,calc(100vw-2rem))] flex-col gap-2">
-      <p className="m-0 truncate text-[0.9rem] font-medium leading-[1.45] text-text">
-        {agentName ? <>{agentName}{" "}</> : null}
-        {title}
-      </p>
-      {identity ? <WorkbenchThreadTitleHistory key={`${projectId}:${identity.harness}:${identity.threadId}`} projectId={projectId} harness={identity.harness} threadId={identity.threadId} /> : null}
-      <div className="flex min-w-0 items-center gap-1.5 text-[0.76rem] text-fg/muted">
-        <Icon className={`shrink-0 ${statusClassName}`} size={14} />
-        <span className={`min-w-0 truncate ${statusClassName}`}>{status}</span>
-        <span className="ml-auto" />
-        {snoozed ? <span className="inline-flex size-4 shrink-0 items-center justify-center" aria-label="Snoozed"><SnoozedThreadIcon size={16} /></span> : null}
-        <WorkbenchRelativeTime className="shrink-0" timestampMs={activityAt} />
-      </div>
-      {extraDetails}
-      {ownClaims.length ? <ClaimedPathsPanel label={subagentClaims.length ? "Main agent" : undefined} paths={ownClaims} projectId={projectId} /> : null}
-      {subagentClaims.map((child) => (
-        <ClaimedPathsPanel
-          key={child.threadId}
-          label={<ThreadAgentName subagent={child} thread={null} />}
-          paths={child.claimedPaths}
-          projectId={projectId}
-          title={child.title}
-        />
-      ))}
-    </div>
-  );
 }
 
 export default function WorkbenchThreadListItem({

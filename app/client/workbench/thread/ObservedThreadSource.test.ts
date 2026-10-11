@@ -28,7 +28,9 @@ function fixture(
   runtime: Record<string, object> = {},
   lifecycle: object = { kind: "needsAttention", reason: "noActiveTurn", settled: false },
   snoozed = false,
+  { gitArc = null, interest = "view" }: { gitArc?: object | null; interest?: "summary" | "view" } = {},
 ) {
+  const proposalReads: Array<{ cwd: string; proposalId: string }> = [];
   const stops: object[] = [];
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const submits: Array<{ clientMessageId: string }> = [];
@@ -38,7 +40,7 @@ function fixture(
   const entry = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId },
     metadata: { archived: false, pinned: false, snoozed },
-    lifecycle,
+    lifecycle, gitArc,
   };
   const ports = {
     projectId: "project",
@@ -71,11 +73,16 @@ function fixture(
     reportError: () => {},
     resolveAttachmentUrl: async (url: string) => url.startsWith("/api/workbench-client-state/attachment?")
       ? "data:image/png;base64,c2F2ZWQ=" : url,
+    projectRootPath: () => "C:/project-root",
+    readGitArcProposal: async (input: { cwd: string; proposalId: string }) => {
+      proposalReads.push({ cwd: input.cwd, proposalId: input.proposalId });
+      return await new Promise(() => {});
+    },
   } as unknown as ObservedThreadSourcePorts;
   const source = createObservedThreadSource(ports, next => { published = { ...published, ...next }; });
-  const release = source.acquire("view");
+  const release = source.acquire(interest);
   return {
-    source, release, selections, submits, stops,
+    source, release, selections, submits, stops, proposalReads,
     publish: (value: WorkbenchTranscriptProjection) => onState({ status: "ready", threadId, projection: value }),
     resolveSubmit: (result: Parameters<typeof resolveSubmit>[0]) => resolveSubmit(result),
     get published() { return published; },
@@ -95,6 +102,20 @@ test("the thread head shows the goal and active skills its observation runtime c
   assert.equal(bare.published.summary?.head?.goal, null, "a daemon without goals shows none");
   assert.deepEqual(bare.published.summary?.head?.skills, []);
   bare.release();
+});
+
+test("a summary-only lease knows the thread's project cwd and serves demanded proposals without a transcript", () => {
+  const gitArc = {
+    checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "work", phase: "active",
+    proposals: [{ proposalId: "proposal", status: "proposed" }], updatedAt: "2026-10-11",
+  };
+  const f = fixture({}, undefined, false, { gitArc, interest: "summary" });
+  assert.equal(f.published.summary?.head?.cwd, "C:/project-root");
+  assert.deepEqual(f.proposalReads, [], "nothing is read until a card demands it");
+  f.source.actions.observeGitArcProposal("proposal");
+  assert.deepEqual(f.proposalReads, [{ cwd: "C:/project-root", proposalId: "proposal" }]);
+  assert.equal(f.published.summary?.gitArcProposals.proposal?.status, "loading");
+  f.release();
 });
 
 test("only a working thread has a live turn, whatever status the provider left on its turns", () => {

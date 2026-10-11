@@ -894,10 +894,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createThreadRoute(route.projectId, target)
         : createPinnedThreadRoute(route.projectId, ownerProjectId, target), { replace: true });
   }, [explorer.subagents, navigateToRoute, route]);
-  const projectFileLinkRoots = useMemo(
-    () => createProjectFileLinkRoots(explorer.projects, browseProjectId, explorer.roots),
-    [browseProjectId, explorer.projects, explorer.roots],
-  );
   const isProjectIdentityLoading = Boolean(route.projectId) && route.projectId !== explorer.currentProjectId;
   const isProjectTreeLoading = isProjectIdentityLoading || (explorer.isProjectLoading && explorer.tree.length === 0);
   const currentProjectDisplayName = currentProject
@@ -1827,9 +1823,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     if (entry.entryKind === "draft") return null;
     const threadId = entry.identity.threadId;
     const rootThreadId = entry.entryKind === "subagent" ? entry.parentThreadId : threadId;
-    const cwd = entry.entryKind === "subagent"
-      ? entry.cwd
-      : threadSummariesById.get(threadId)?.cwd ?? null;
     const ownerProjectId = projectThreadSidebars.projects.find(({ entries }) => entries.some((candidate) => (
       candidate.entryKind !== "draft" && candidate.identity.harness === entry.identity.harness && candidate.identity.threadId === threadId
     )))?.projectId ?? projectThreadSummaries.projects.find(({ pinnedThreads, unsettledThreads }) => (
@@ -1838,31 +1831,23 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ))?.projectId ?? activeProjectId;
     return (
       <WorkbenchThreadTooltipDetails
-        cwd={cwd}
         harness={entry.identity.harness}
         materialized={materializedThreadRootIds.has(rootThreadId)}
         onQuestionnaireError={setSelectionError}
         onOpenThread={openThreadFromExplorer}
-        projectFilePaths={explorer.projectFilePaths}
         projectId={ownerProjectId}
-        projectRootPath={explorer.rootPath}
         spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
         parentThreadId={entry.entryKind === "subagent" ? entry.parentThreadId : undefined}
-        workspaceRoots={projectFileLinkRoots}
       />
     );
   }, [
     activeProjectId,
-    explorer.projectFilePaths,
-    explorer.rootPath,
     materializedThreadRootIds,
     openThreadFromExplorer,
-    projectFileLinkRoots,
     projectThreadSidebars.projects,
     projectThreadSummaries.projects,
     resolvedSettings.composerSpellCheck,
-    threadSummariesById,
   ]);
   const sidebarLifecycleSignal = useMemo(() => {
     const entries = projectThreadSidebars.projects.flatMap(({ entries: projectEntries }) => projectEntries);

@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - ThreadGitArcObservationProvider: provide one active thread controller's proposal and claim-change observations, summaries, demand actions and running acceptance.
+ * - ThreadStoreGitArcObservationProvider: provide one leased thread store's observations, so every host of a thread reads the same owner.
  * - useThreadGitArcProposalObservation: read and demand one proposal's (or read variant's) source-local observation state, its observed summary and its acceptance role.
  * - useThreadGitArcClaimChanges: demand the active claim's change state while enabled, with a re-read action.
  */
@@ -10,6 +11,7 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from "r
 
 import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadGitArcClaimObservation } from "../../../workbench/thread/ThreadGitArcClaimObserver";
+import type { ThreadStoreActions, ThreadSummarySlice } from "../../../workbench/thread/ThreadStore";
 import {
   getThreadGitArcProposalObservationKey,
   type ThreadGitArcProposalObservation,
@@ -65,6 +67,29 @@ export function ThreadGitArcObservationProvider({
     <ThreadGitArcObservationContext.Provider value={source}>
       {children}
     </ThreadGitArcObservationContext.Provider>
+  );
+}
+
+/** One thread store's proposal and claim observations, for any host that leases the thread (views and tooltips alike). */
+export function ThreadStoreGitArcObservationProvider({ children, thread }: {
+  children: ReactNode;
+  /** A `useThread` result: its summary slice and actions. */
+  thread: Pick<ThreadSummarySlice, "entry" | "gitArcClaimChanges" | "gitArcProposals"> & {
+    actions: Pick<ThreadStoreActions, "observeGitArcClaimChanges" | "observeGitArcProposal" | "refreshGitArcClaimChanges">;
+  };
+}) {
+  return (
+    <ThreadGitArcObservationProvider
+      acceptance={thread.entry?.gitArc?.acceptance ?? null}
+      claimChanges={thread.gitArcClaimChanges}
+      lifecycleProposals={thread.entry?.gitArc?.proposals ?? null}
+      observeClaimChanges={thread.actions.observeGitArcClaimChanges}
+      observeProposal={thread.actions.observeGitArcProposal}
+      proposals={thread.gitArcProposals}
+      refreshClaimChanges={thread.actions.refreshGitArcClaimChanges}
+    >
+      {children}
+    </ThreadGitArcObservationProvider>
   );
 }
 

@@ -58,7 +58,7 @@ import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
 import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
-import { ThreadGitArcObservationProvider } from "./ThreadGitArcObservationContext";
+import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadAgentTabs from "./ThreadAgentTabs";
 import ThreadComposer from "./ThreadComposer";
 import type DraftSessionController from "./DraftSessionController";
@@ -346,7 +346,6 @@ export default memo(function ThreadViewContent ({
   }), [activeThreadId, daemon]);
   const { pending: activePendingUserInputRequest } = useThread.questionnaire(active.store);
   const { entries: activeApprovalEntries } = useThread.approvals(active.store);
-  const observeGitArcProposal = active.actions.observeGitArcProposal;
   const transcriptSource = activeTurns.transcript;
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = active.rateLimits;
@@ -1075,15 +1074,7 @@ export default memo(function ThreadViewContent ({
       disambiguationKey={projectFileIndexId}
       disambiguationPaths={projectFilePaths}
     >
-      <ThreadGitArcObservationProvider
-        acceptance={active.entry?.gitArc?.acceptance ?? null}
-        claimChanges={active.gitArcClaimChanges}
-        lifecycleProposals={active.entry?.gitArc?.proposals ?? null}
-        observeClaimChanges={active.actions.observeGitArcClaimChanges}
-        observeProposal={observeGitArcProposal}
-        proposals={active.gitArcProposals}
-        refreshClaimChanges={active.actions.refreshGitArcClaimChanges}
-      >
+      <ThreadStoreGitArcObservationProvider thread={active}>
       <ThreadGitArcPresentationContext.Provider value={{
         gitArcPlan: activeGitArcSelection?.gitArcPlan ?? null,
         harness: activeThread?.harness ?? thread.harness,
@@ -1278,7 +1269,7 @@ export default memo(function ThreadViewContent ({
         />
       </>
       </ThreadGitArcPresentationContext.Provider>
-      </ThreadGitArcObservationProvider>
+      </ThreadStoreGitArcObservationProvider>
     </ProjectFilePathDisplayProvider>
     </ThreadScrollViewportContext.Provider>
     </WorkbenchThreadDisplaySettingsContext.Provider>

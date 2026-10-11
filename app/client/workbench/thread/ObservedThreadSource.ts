@@ -46,6 +46,8 @@ export interface ObservedThreadSourcePorts {
   /** Demand the provider's account limits while a view shows them (idempotent). */
   watchRateLimits: (harness: WorkbenchHarness) => void;
   subscribeRateLimits: (listener: () => void) => () => void;
+  /** The owning project's root, the thread's cwd for Git arc reads while no transcript has loaded. */
+  projectRootPath?: () => string | null;
   readGitArcProposal?: (input: {
     cwd: string; harness: WorkbenchHarness; includeNewer: boolean; includeUnclaimed: boolean; proposalId: string; rootId?: string; threadId: string;
   }) => Promise<GitCheckpointProposal>;
@@ -238,8 +240,10 @@ export default function createObservedThreadSource(
     }
     const runtime = state.observation?.runtime ?? {};
     const current = projection();
-    const head = entry ? headOf(entry, runtime[threadId], current?.thread.cwd ?? "") : null;
-    gitArc.sync(entry, views && head?.cwd ? head.cwd : null);
+    // Without a transcript the owning project's root stands in: Git arc endpoints resolve the project from cwd.
+    const head = entry ? headOf(entry, runtime[threadId], current?.thread.cwd || ports.projectRootPath?.() || "") : null;
+    // Proposal reads are demand-driven, so summary leases (such as tooltips) read only the cards they show.
+    gitArc.sync(entry, head?.cwd || null);
     gitArcClaims.sync(entry, views && head?.cwd ? head.cwd : null);
     const subagents: WorkbenchSubagentSummary[] = ports.observations.getSubagents(observationKey);
     const relatedHeads = Object.fromEntries((state.observation?.entries ?? []).flatMap(candidate =>

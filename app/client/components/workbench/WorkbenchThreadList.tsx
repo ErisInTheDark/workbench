@@ -62,7 +62,6 @@ import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarg
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListItem, { WorkbenchPendingThreadListItem } from "./WorkbenchThreadListItem";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
-import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
 const SETTLED_THREAD_PAGE_SIZE = 50;
@@ -571,11 +570,7 @@ export default function WorkbenchThreadList ({
           showActions={!readOnly}
           showPinPriorityIcon
           tabIndex={isWorkbenchThreadTargetSelected(target, currentTarget) || (!hasSelectedEntry && index === 0) ? 0 : -1}
-          tooltipDetails={<>
-            {renderThreadTooltipDetails?.(entry)}
-            {entry.entryKind === "thread" && entry.waitingOnThreads?.length
-              ? <WorkbenchThreadReferenceList label="Waiting for" references={entry.waitingOnThreads} /> : null}
-          </>}
+          tooltipDetails={renderThreadTooltipDetails?.(entry)}
         />
       );
     };
