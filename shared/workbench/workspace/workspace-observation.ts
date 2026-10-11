@@ -43,7 +43,7 @@ import {
   WorkbenchProjectThreadSummaryEntrySchema, ThreadRuntimeRecordSchema, ThreadRuntimeSchema,
 } from "../thread/thread-state";
 import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity";
-import { ThreadSummariesSchema, ThreadSummarySchema } from "../thread/thread-summary";
+import { LocatedThreadSummariesSchema, LocatedThreadSummarySchema, ThreadSummarySchema } from "../thread/thread-summary";
 import { PresentationSnapshotSchema } from "../../state/workbench-presentation-state";
 import type { WorkbenchClientStateResponse } from "../../state/workbench-client-state";
 import { conformWorkbenchClientStateResponse } from "../../state/workbench-client-state-conformance";
@@ -195,7 +195,8 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("archivedThreads"), projects: z.array(archivedProject) }).strict(),
   z.object({ ...envelope, kind: z.literal("threadVis"), data: VisThreadSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("visSnapshot"), data: VisSnapshotSchema.nullable() }).strict(),
-  z.object({ ...envelope, kind: z.literal("threadSummaries"), summaries: ThreadSummariesSchema }).strict(),
+  /** Every requested thread this daemon holds, with its project; null for threads it does not hold. */
+  z.object({ ...envelope, kind: z.literal("threadSummaries"), summaries: LocatedThreadSummariesSchema }).strict(),
 ]);
 export type DaemonWorkspaceObservation = z.infer<typeof DaemonWorkspaceObservationSchema>;
 
@@ -576,7 +577,9 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
     // A retarget adds and removes whole threads; one thread's change ships only its changed fields.
-    case "threadSummaries": return { schema, fields: { summaries: observationShape.record(ThreadSummarySchema.nullable(), threadSummaryShape) } };
+    case "threadSummaries": return { schema, fields: { summaries: observationShape.record(LocatedThreadSummarySchema.nullable(), {
+      fields: { summary: observationShape.object(threadSummaryShape) },
+    }) } };
     default: return { schema };
   }
 }

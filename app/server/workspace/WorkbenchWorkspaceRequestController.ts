@@ -1,19 +1,19 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches fanned out per owning daemon) and publication fences.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole) and publication fences.
  */
 import {
   WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, workspaceObservationShape,
   type WorkspaceArchivedThreads, type WorkspaceObservationDelta, type WorkspaceObserve, type WorkspaceObservation,
-  type WorkspaceRetarget, type WorkspaceThreadRows, type WorkspaceThreadSummary,
+  type WorkspaceRetarget, type WorkspaceThreadRows, type WorkspaceThreadSummaries,
 } from "workbench-shared/workbench/workspace/workspace-observation";
-import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import {
   projectSidebarRow, projectSidebarRowSnapshot, type WorkbenchThreadSidebarRowSnapshot,
 } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import type { DaemonId, LogicalProjectId, ProjectId } from "workbench-shared/workbench/identity";
+import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-state";
 import { projectLogicalThreadRows } from "workbench-shared/workbench/project/workbench-project-projection";
@@ -67,8 +67,7 @@ interface Interest {
   sources: Map<DaemonId, { projectIds: ProjectId[] | null; observation: Observation }>;
   owner: ReturnType<WorkbenchWorkspaceThreads["observe"]> | null;
   thread: { key: string; observation: Observation } | null;
-  /** `threadSummaries`: each requested thread's owner, and one retargeted daemon batch per owning daemon. */
-  summaryOwners: Map<string, ReturnType<WorkbenchWorkspaceThreads["observe"]>>;
+  /** `threadSummaries`: one retargeted batch per daemon, each carrying every requested thread. */
   summaryBatches: Map<DaemonId, Observation>;
 }
 interface TranscriptSubscription {
@@ -439,7 +438,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (existing) this.retire(existing);
     const interest: Interest = {
       request, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
-      summaryOwners: new Map(), summaryBatches: new Map(),
+      summaryBatches: new Map(),
       value: { ...this.initial(request), subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 },
     };
     this.interests.set(request.subscriptionId, interest);
@@ -933,66 +932,61 @@ export default class WorkbenchWorkspaceRequestController {
   }
 
   /**
-   * Each requested thread resolves to its owner; threads owned by one daemon share one batch that is retargeted as the
-   * set moves. A thread appears once its owner and daemon summary are known, as null when either says it is gone.
+   * Every daemon answers the whole set in one retargeted batch, saying which threads it holds and where, so no thread
+   * needs its own owner lookup. A thread appears once one daemon claims it, or as null once every daemon has answered
+   * without claiming it; a daemon that cannot answer leaves unclaimed threads pending.
    */
   private projectThreadSummaries(interest: Interest) {
     const query = interest.request.query;
     if (query.kind !== "threadSummaries") return;
     const requested = [...new Set(query.threadIds)];
-    const owners = interest.summaryOwners;
-    for (const [threadId, owner] of owners) {
-      if (requested.includes(ThreadReferenceSchema.parse(threadId))) continue;
-      owner.release();
-      owners.delete(threadId);
-    }
-    for (const threadId of requested) {
-      if (!owners.has(threadId)) owners.set(threadId, this.options.threads.observe(threadId, () => this.refresh(interest)));
-    }
-    const located = new Map<string, { canonical: string; location: ProjectLocationReference; logicalProjectId: LogicalProjectId | null }>();
-    const byDaemon = new Map<DaemonId, Set<string>>();
-    const resolved = new Map<string, WorkspaceThreadSummary | null>();
-    for (const threadId of requested) {
-      const owner = owners.get(threadId)!.getSnapshot();
-      if (owner.phase === "pending") continue;
-      if (owner.phase !== "current") { resolved.set(threadId, null); continue; }
-      located.set(threadId, { canonical: owner.identity.threadId, location: owner.location, logicalProjectId: owner.logicalProjectId });
-      const ids = byDaemon.get(owner.location.daemonId) ?? new Set();
-      ids.add(owner.identity.threadId);
-      byDaemon.set(owner.location.daemonId, ids);
-    }
+    const batchQuery = { kind: "threadSummaries" as const, threadIds: [...requested].sort() };
+    const sources = this.options.sources.all();
     for (const [daemonId, batch] of interest.summaryBatches) {
-      if (byDaemon.has(daemonId) && this.options.sources.get(daemonId)) continue;
+      if (sources.some(source => source.id === daemonId)) continue;
       batch.release();
       interest.summaryBatches.delete(daemonId);
     }
-    for (const [daemonId, ids] of byDaemon) {
-      const source = this.options.sources.get(daemonId);
-      if (!source) continue;
-      const batchQuery = { kind: "threadSummaries" as const, threadIds: [...ids].sort().map(id => ThreadReferenceSchema.parse(id)) };
-      const existing = interest.summaryBatches.get(daemonId);
+    for (const source of sources) {
+      const existing = interest.summaryBatches.get(source.id);
       try {
         if (existing) existing.retarget(batchQuery);
-        else interest.summaryBatches.set(daemonId, source.observe(batchQuery, () => this.refresh(interest)));
+        else interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refresh(interest)));
       } catch {
-        // Another caller shares that exact batch; a private one can be retargeted later.
+        // Another caller shares this batch's previous ids; take a batch of our own for the new ones.
         existing?.release();
-        interest.summaryBatches.set(daemonId, source.observe(batchQuery, () => this.refresh(interest)));
+        interest.summaryBatches.set(source.id, source.observe(batchQuery, () => this.refresh(interest)));
       }
     }
     let failure: string | null = null;
-    for (const [threadId, place] of located) {
-      const fact = interest.summaryBatches.get(place.location.daemonId)?.getSnapshot();
-      failure ??= fact?.failure ?? null;
-      const summaries = fact?.value?.kind === "threadSummaries" ? fact.value.summaries : null;
-      if (!summaries || !(place.canonical in summaries)) continue;
-      const summary = summaries[place.canonical];
-      resolved.set(threadId, summary ? { location: place.location, logicalProjectId: place.logicalProjectId, summary } : null);
+    const answers = sources.map(source => {
+      const fact = interest.summaryBatches.get(source.id)!.getSnapshot();
+      failure ??= fact.failure;
+      const summaries = fact.value?.kind === "threadSummaries" ? fact.value.summaries : {};
+      return { daemonId: source.id, summaries, settled: fact.phase === "current" && !fact.failure };
+    });
+    let presentation: PresentationSnapshot | undefined;
+    const logicalProjectId = (daemonId: DaemonId, projectId: ProjectId) => (presentation ??= this.options.presentation.read())
+      .locations.find(item => item.target.daemonId === daemonId && item.target.projectId === projectId)?.logicalProjectId ?? null;
+    const data: WorkspaceThreadSummaries = {};
+    for (const threadId of requested) {
+      const claims = answers.flatMap(answer => {
+        const located = answer.summaries[threadId];
+        return located ? [{ daemonId: answer.daemonId, located }] : [];
+      });
+      if (claims.length > 1) {
+        failure ??= "A requested thread has conflicting daemon owners.";
+        data[threadId] = null;
+      } else if (claims[0]) {
+        const { daemonId, located: { projectId, summary } } = claims[0];
+        data[threadId] = { location: { daemonId, projectId }, logicalProjectId: logicalProjectId(daemonId, projectId), summary };
+      } else if (answers.length && answers.every(answer => answer.settled && threadId in answer.summaries)) {
+        data[threadId] = null;
+      }
     }
-    const data = Object.fromEntries(requested.flatMap(threadId => resolved.has(threadId) ? [[threadId, resolved.get(threadId)!]] : []));
     this.update(interest, {
       kind: "threadSummaries", data, failure,
-      phase: resolved.size === requested.length ? "current" : failure ? "stale" : "pending",
+      phase: Object.keys(data).length === requested.length ? "current" : failure ? "stale" : "pending",
     });
   }
 
@@ -1064,7 +1058,6 @@ export default class WorkbenchWorkspaceRequestController {
     interest.owner?.release();
     interest.thread?.observation.release();
     for (const source of interest.sources.values()) source.observation.release();
-    for (const owner of interest.summaryOwners.values()) owner.release();
     for (const batch of interest.summaryBatches.values()) batch.release();
     this.pendingRefresh.delete(interest);
   }

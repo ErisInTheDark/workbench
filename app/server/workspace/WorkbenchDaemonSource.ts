@@ -246,9 +246,10 @@ export default class WorkbenchDaemonSource {
        * A daemon without retargeting gets a fresh subscription for the new arguments instead.
        */
       retarget: (next: DaemonWorkspaceQuery) => {
-        if (retained.listeners.size !== 1 || !retained.listeners.has(owner)) throw new Error("Only a sole observer can retarget a daemon observation.");
         const target = DaemonWorkspaceQuerySchema.parse(next);
+        // Observers sharing a batch keep it when they ask for what it already holds.
         if (areDeeplyEqual(target, retained.query)) return;
+        if (retained.listeners.size !== 1 || !retained.listeners.has(owner)) throw new Error("Only a sole observer can retarget a daemon observation.");
         retained.query = target;
         if (!this.available) return;
         const generation = this.socket.getSnapshot().generation;

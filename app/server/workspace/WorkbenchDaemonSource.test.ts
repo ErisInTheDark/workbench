@@ -227,7 +227,7 @@ test("daemon deltas apply onto the exact first value, may arrive before it, and 
   assert.match(f.warnings.join("\n"), /projectThreads observation resync/u);
 });
 
-test("a summary batch retargets in place, and a daemon without retargeting gets a fresh subscription", async context => {
+test("a summary batch retargets in place, sharers asking for its current ids keep it, and a daemon without retargeting gets a fresh subscription", async context => {
   const f = fixture();
   context.after(() => f.source.dispose());
   const [first, second] = ["00000001", "00000002"].map(prefix => ThreadReferenceSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
@@ -239,6 +239,12 @@ test("a summary batch retargets in place, and a daemon without retargeting gets 
     kind: "threadSummaries", subscriptionId: opened.params.subscriptionId,
     generation: opened.params.generation, revision: 1, phase: "current", failure: null, summaries: {},
   } });
+  const sharedOffset = socket.sent.length;
+  const twin = f.source.observe({ kind: "threadSummaries", threadIds: [first] }, () => {});
+  assert.doesNotThrow(() => twin.retarget({ kind: "threadSummaries", threadIds: [first] }));
+  assert.throws(() => twin.retarget({ kind: "threadSummaries", threadIds: [first, second] }), /sole observer/u);
+  twin.release();
+  assert.equal(socket.sent.length, sharedOffset, "sharing and same-id retargets send nothing upstream");
   const offset = socket.sent.length;
   handle.retarget({ kind: "threadSummaries", threadIds: [first, second] });
   const retarget = await socket.request("workspace/retarget", offset);

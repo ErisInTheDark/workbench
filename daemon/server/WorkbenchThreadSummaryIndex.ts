@@ -1,12 +1,12 @@
 /*
  * Exports:
  * - WorkbenchThreadSummaryIndexPorts: thread ownership, project snapshots and live-fact seeds the index reads.
- * - default WorkbenchThreadSummaryIndex: own every read thread's canonical summary (lean row plus live facts), announcing each thread whose summary changed.
+ * - default WorkbenchThreadSummaryIndex: own every read thread's canonical summary (lean row plus live facts) located in its owner project, announcing each thread whose summary changed.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
-import { createThreadSummary, type ThreadSummary, type ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
+import { createThreadSummary, type LocatedThreadSummary, type ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
 
 type ThreadEntry = Exclude<WorkbenchThreadSidebarSnapshot["entries"][number], { entryKind: "draft" }>;
 
@@ -26,8 +26,8 @@ export default class WorkbenchThreadSummaryIndex {
   private readonly owners = new Map<string, ProjectId>();
   private readonly entries = new Map<string, ThreadEntry>();
   private readonly facts = new Map<string, ThreadSummaryFacts>();
-  /** One summary object per thread until it changes, so unchanged summaries diff as identical. */
-  private readonly summaries = new Map<string, ThreadSummary>();
+  /** One located summary object per thread until it changes, so unchanged summaries diff as identical. */
+  private readonly summaries = new Map<string, LocatedThreadSummary>();
   private readonly listeners = new Set<(threadId: string) => void>();
   private readonly stop: () => void;
   private readonly seeded: Promise<void>;
@@ -50,19 +50,20 @@ export default class WorkbenchThreadSummaryIndex {
     return () => { this.listeners.delete(listener); };
   }
 
-  /** The thread's summary when it has been read; null otherwise. */
-  peek(threadId: string): ThreadSummary | null {
+  /** The thread's summary and owner project when it has been read; null otherwise. */
+  peek(threadId: string): LocatedThreadSummary | null {
     const cached = this.summaries.get(threadId);
     if (cached) return cached;
     const entry = this.entries.get(threadId);
-    if (!entry) return null;
-    const summary = createThreadSummary(entry, this.facts.get(threadId) ?? {});
-    this.summaries.set(threadId, summary);
-    return summary;
+    const projectId = this.owners.get(threadId);
+    if (!entry || !projectId) return null;
+    const located = { projectId, summary: createThreadSummary(entry, this.facts.get(threadId) ?? {}) };
+    this.summaries.set(threadId, located);
+    return located;
   }
 
   /** Reads the thread's owner project once; null for a thread this daemon does not hold. */
-  async read(threadId: string): Promise<ThreadSummary | null> {
+  async read(threadId: string): Promise<LocatedThreadSummary | null> {
     await this.seeded;
     const known = this.peek(threadId);
     if (known || this.disposed) return known;

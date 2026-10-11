@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceThreads: resolve demanded thread ownership from independently arriving daemon facts, keeping released lookups briefly for back-to-back commands.
+ * - default WorkbenchWorkspaceThreads: resolve demanded thread ownership from independently arriving daemon facts, re-resolving only the lookups a change touches and keeping released lookups briefly for back-to-back commands.
  */
 import { ThreadReferenceSchema, type DaemonId } from "workbench-shared/workbench/identity";
 import type { WorkspaceThreadOwner } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
@@ -34,7 +35,9 @@ export default class WorkbenchWorkspaceThreads {
   private readonly interests = new Map<string, Interest>();
   private readonly unsubscribe: Array<() => void> = [];
   private refreshing = false;
-  private refreshRequested = false;
+  /** Lookups awaiting re-resolution; `dirtyAll` covers every lookup. */
+  private readonly dirty = new Set<string>();
+  private dirtyAll = false;
 
   constructor(private readonly options: {
     sources: WorkbenchDaemonSources;
@@ -55,6 +58,7 @@ export default class WorkbenchWorkspaceThreads {
   observe(threadId: string, listener: () => void) {
     ThreadReferenceSchema.parse(threadId);
     let interest = this.interests.get(threadId);
+    const created = !interest;
     if (!interest) {
       interest = { sources: new Map(), listeners: new Map(), value: { phase: "pending", failure: null }, cancelRetire: null };
       this.interests.set(threadId, interest);
@@ -64,7 +68,8 @@ export default class WorkbenchWorkspaceThreads {
     const token = {};
     interest.listeners.set(token, listener);
     const retained = interest;
-    this.refresh();
+    // A held lookup is already current; only a new one needs resolving.
+    if (created) this.refresh(threadId);
     return {
       getSnapshot: () => retained.value,
       release: () => {
@@ -128,36 +133,54 @@ export default class WorkbenchWorkspaceThreads {
     this.refresh();
   }
 
-  private refresh() {
+  /**
+   * Re-resolves one lookup, or every lookup when `threadId` is omitted (daemon set, presentation or resume changes).
+   * Each pass reads presentation at most once, and only when a daemon actually claims a thread.
+   */
+  private refresh(threadId?: string) {
     if (this.options.canProject?.() === false) return;
-    if (this.refreshing) { this.refreshRequested = true; return; }
+    if (threadId === undefined) this.dirtyAll = true;
+    else this.dirty.add(threadId);
+    if (this.refreshing) return;
     this.refreshing = true;
     try {
-      do {
-        this.refreshRequested = false;
-        for (const [threadId, interest] of this.interests) {
-          for (const source of this.options.sources.all()) {
-            if (interest.sources.has(source.id)) continue;
-            interest.sources.set(source.id, source.observe({
-              kind: "threadIdentity", threadId: ThreadReferenceSchema.parse(threadId),
-            }, () => this.refresh()));
-          }
-          const next = this.resolve(threadId, interest);
-          if (areDeeplyEqual(next, interest.value)) continue;
-          interest.value = next;
-          for (const listener of [...interest.listeners.values()]) {
-            try { listener(); }
-            catch (error) {
-              this.options.warn(`Thread owner subscriber failed: ${error instanceof Error ? error.message.slice(0, 512) : "Unexpected failure."}`);
-            }
-          }
+      while (this.dirtyAll || this.dirty.size) {
+        const threadIds = this.dirtyAll ? [...this.interests.keys()] : [...this.dirty];
+        this.dirtyAll = false;
+        this.dirty.clear();
+        let presentation: PresentationSnapshot | undefined;
+        const readPresentation = () => presentation ??= this.options.presentation.read();
+        for (const id of threadIds) {
+          const interest = this.interests.get(id);
+          if (interest) this.project(id, interest, readPresentation);
         }
-      } while (this.refreshRequested);
-    } finally { this.refreshing = false; }
+      }
+    } finally {
+      this.refreshing = false;
+      this.dirtyAll = false;
+      this.dirty.clear();
+    }
   }
 
-  private resolve(threadId: string, interest: Interest): WorkspaceThreadOwner {
-    const presentation = this.options.presentation.read();
+  private project(threadId: string, interest: Interest, readPresentation: () => PresentationSnapshot) {
+    for (const source of this.options.sources.all()) {
+      if (interest.sources.has(source.id)) continue;
+      interest.sources.set(source.id, source.observe({
+        kind: "threadIdentity", threadId: ThreadReferenceSchema.parse(threadId),
+      }, () => this.refresh(threadId)));
+    }
+    const next = this.resolve(threadId, interest, readPresentation);
+    if (areDeeplyEqual(next, interest.value)) return;
+    interest.value = next;
+    for (const listener of [...interest.listeners.values()]) {
+      try { listener(); }
+      catch (error) {
+        this.options.warn(`Thread owner subscriber failed: ${error instanceof Error ? error.message.slice(0, 512) : "Unexpected failure."}`);
+      }
+    }
+  }
+
+  private resolve(threadId: string, interest: Interest, readPresentation: () => PresentationSnapshot): WorkspaceThreadOwner {
     const matches: Array<Extract<WorkspaceThreadOwner, { phase: "current" }>> = [];
     let pending = !interest.sources.size;
     let failure: string | null = null;
@@ -174,13 +197,14 @@ export default class WorkbenchWorkspaceThreads {
       const location = { daemonId, projectId: identity.projectId };
       matches.push({
         phase: "current", identity, location,
-        logicalProjectId: presentation.locations.find(item =>
+        logicalProjectId: readPresentation().locations.find(item =>
           item.target.daemonId === daemonId && item.target.projectId === identity.projectId)?.logicalProjectId ?? null,
       });
     }
     if (matches.length > 1) return { phase: "conflict", failure: "Thread UUID has conflicting daemon owners." };
     const match = matches[0];
     if (match) {
+      const presentation = readPresentation();
       const conflictingSaved = presentation.members.some(member =>
         member.kind === "thread" && member.thread?.threadId === threadId
         && (member.thread.location.daemonId !== match.location.daemonId

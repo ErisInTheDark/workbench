@@ -357,9 +357,7 @@ test("stats fan out to every daemon, merge once all answer, combine refinement, 
   assert.deepEqual([here.released, there.released], [1, 1]);
 });
 
-test("a thread summary batch locates each thread, shares one daemon batch, and retargets it as threads move", async context => {
-  const daemonId = DaemonIdSchema.parse(randomUUID());
-  const projectId = ProjectIdSchema.parse("project");
+test("a thread summary batch asks every daemon once, locates each thread from its answers, and retargets as threads move", async context => {
   const [firstId, secondId, unknownId] = ["00000001", "00000002", "00000003"].map(prefix =>
     WorkbenchThreadIdSchema.parse(`${prefix}-0000-4000-8000-000000000000`));
   const summary = (threadId: string, title: string) => ({ facts: {}, row: {
@@ -368,44 +366,95 @@ test("a thread summary batch locates each thread, shares one daemon batch, and r
     metadata: { archived: false as const, pinned: false, snoozed: false },
     lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
   } });
-  const calls: string[] = [];
-  let batch: string[] = [];
-  let notify = () => {};
-  const source = {
-    id: daemonId,
-    observe: (query: { kind: string; threadIds: string[] }, listener: () => void) => {
-      calls.push(`observe ${query.threadIds.length}`);
-      batch = query.threadIds;
-      notify = listener;
-      return {
-        getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "threadSummaries",
-          summaries: Object.fromEntries(batch.map(id => [id, summary(id, id === firstId ? "first" : "second")])) } }),
-        retarget: (next: { threadIds: string[] }) => { calls.push(`retarget ${next.threadIds.length}`); batch = next.threadIds; },
-        release: () => { calls.push("release"); },
-      };
-    },
-    socket: { onNotification: () => () => {} },
-  };
-  const owner = (threadId: string) => ({ phase: "current" as const, identity: { threadId: WorkbenchThreadIdSchema.parse(threadId), projectId, harness: "codex" as const },
-    location: { daemonId, projectId }, logicalProjectId: null });
-  const f = await fixture(context, { get: id => id === daemonId ? source : undefined }, {
-    observe: (id: string) => ({ getSnapshot: () => id === unknownId ? { phase: "unavailable" as const, failure: "unknown" } : owner(id), release: () => {} }),
+  type Snapshot = { phase: "pending" | "current" | "failed"; failure: string | null; value: object | null };
+  function daemon(projectId: string, owned: Record<string, string>) {
+    const state = {
+      id: DaemonIdSchema.parse(randomUUID()), projectId: ProjectIdSchema.parse(projectId), calls: [] as string[], batch: [] as string[],
+      notify: () => {}, snapshot: { phase: "pending", failure: null, value: null } as Snapshot,
+      answer() {
+        state.snapshot = { phase: "current", failure: null, value: { kind: "threadSummaries", summaries: Object.fromEntries(state.batch.map(id =>
+          [id, owned[id] ? { projectId: state.projectId, summary: summary(id, owned[id]) } : null])) } };
+        state.notify();
+      },
+    };
+    return Object.assign(state, {
+      observe: (query: { threadIds: string[] }, listener: () => void) => {
+        state.calls.push(`observe ${query.threadIds.join(",")}`);
+        state.batch = query.threadIds;
+        state.notify = listener;
+        return {
+          getSnapshot: () => state.snapshot,
+          retarget: (next: { threadIds: string[] }) => { state.calls.push(`retarget ${next.threadIds.join(",")}`); state.batch = next.threadIds; },
+          release: () => { state.calls.push("release"); },
+        };
+      },
+    });
+  }
+  const here = daemon("here-project", { [firstId]: "first" });
+  const there = daemon("there-project", { [secondId]: "second" });
+  let ownerLookups = 0;
+  const f = await fixture(context, { get: id => [here, there].find(item => item.id === id), all: () => [here, there] }, {
+    observe: () => { ownerLookups += 1; throw new Error("summaries must not resolve owners per thread"); },
   });
   const threadIds = (...ids: string[]) => ids.map(id => ThreadReferenceSchema.parse(id));
-  const opened = f.owner.observe({ subscriptionId: randomUUID(), generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, unknownId) } });
-  assert.ok(opened.kind === "threadSummaries" && opened.phase === "current");
-  assert.equal(opened.data[firstId]?.summary.row.title, "first");
-  assert.deepEqual(opened.data[firstId]?.location, { daemonId, projectId });
-  assert.equal(opened.data[unknownId], null, "an unowned thread reads as gone, not pending");
+  const subscriptionId = randomUUID();
+  const opened = f.owner.observe({ subscriptionId, generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(unknownId, firstId, secondId) } });
+  assert.equal(ownerLookups, 0);
+  const sorted = [firstId, secondId, unknownId].join(",");
+  for (const source of [here, there]) assert.deepEqual(source.calls, [`observe ${sorted}`], "one batch per daemon carries the whole set");
+  assert.ok(opened.kind === "threadSummaries" && opened.phase === "pending");
 
-  f.owner.retarget({ subscriptionId: opened.subscriptionId, generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, secondId) } });
-  assert.deepEqual(calls, ["observe 1", "retarget 2"], "one daemon batch follows the browser's set");
-  notify();
-  const grown = await f.wait(value => value.kind === "threadSummaries" && Boolean(value.data[secondId]));
-  assert.ok(grown.kind === "threadSummaries" && !(unknownId in grown.data));
-  assert.equal(f.deltas.at(-1)?.delta.objects?.data !== undefined, true, "the browser receives the change as a delta");
-  assert.throws(() => f.owner.retarget({ subscriptionId: opened.subscriptionId, generation: 1,
+  here.answer();
+  const partial = await f.wait(value => value.kind === "threadSummaries" && Boolean(value.data[firstId]));
+  assert.ok(partial.kind === "threadSummaries" && partial.phase === "pending");
+  assert.deepEqual(partial.data[firstId]?.location, { daemonId: here.id, projectId: here.projectId });
+  assert.ok(!(unknownId in partial.data), "a thread stays pending while another daemon may still own it");
+
+  there.answer();
+  const settled = await f.wait(value => value.kind === "threadSummaries" && value.phase === "current");
+  assert.ok(settled.kind === "threadSummaries");
+  assert.equal(settled.data[secondId]?.summary.row.title, "second");
+  assert.deepEqual(settled.data[secondId]?.location, { daemonId: there.id, projectId: there.projectId });
+  assert.equal(settled.data[unknownId], null, "every daemon disowning a thread reads as gone");
+
+  // A daemon that cannot answer (say, an older version) never makes a thread read as gone.
+  there.snapshot = { phase: "failed", failure: "Workspace observation request is invalid.", value: null };
+  there.notify();
+  const degraded = await f.wait(value => value.kind === "threadSummaries" && value.phase === "stale");
+  assert.ok(degraded.kind === "threadSummaries" && degraded.failure?.includes("request is invalid"));
+  assert.ok(degraded.data[firstId] && !(unknownId in degraded.data) && !(secondId in degraded.data));
+
+  f.owner.retarget({ subscriptionId, generation: 1, query: { kind: "threadSummaries", threadIds: threadIds(firstId, secondId) } });
+  for (const source of [here, there]) assert.equal(source.calls.at(-1), `retarget ${firstId},${secondId}`);
+  assert.equal(f.deltas.at(-1)?.delta.objects?.data !== undefined, true, "the browser receives changes as deltas");
+  assert.throws(() => f.owner.retarget({ subscriptionId, generation: 1,
     query: { kind: "threadOwner", threadId: ThreadReferenceSchema.parse(firstId) } }), /Only thread summary batches/u);
+  f.owner.release({ subscriptionId, generation: 1 });
+  for (const source of [here, there]) assert.equal(source.calls.at(-1), "release");
+});
+
+test("two daemons both claiming a thread read as a conflict, not either owner", async context => {
+  const threadId = WorkbenchThreadIdSchema.parse("00000004-0000-4000-8000-000000000000");
+  const row = { facts: {}, row: {
+    entryKind: "thread" as const, title: "twin", activityAt: 10_000,
+    identity: { harness: "codex" as const, threadId },
+    metadata: { archived: false as const, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+  } };
+  const sources = ["a", "b"].map(projectId => ({
+    id: DaemonIdSchema.parse(randomUUID()),
+    observe: () => ({
+      getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "threadSummaries",
+        summaries: { [threadId]: { projectId: ProjectIdSchema.parse(projectId), summary: row } } } }),
+      retarget: () => {}, release: () => {},
+    }),
+  }));
+  const f = await fixture(context, { get: id => sources.find(item => item.id === id), all: () => sources });
+  const opened = f.owner.observe({ subscriptionId: randomUUID(), generation: 1,
+    query: { kind: "threadSummaries", threadIds: [ThreadReferenceSchema.parse(threadId)] } });
+  assert.ok(opened.kind === "threadSummaries" && opened.phase === "current");
+  assert.equal(opened.data[threadId], null);
+  assert.match(opened.failure ?? "", /conflicting daemon owners/u);
 });
 
 test("closing a caller stops invalidations and fences its pending state read", async context => {

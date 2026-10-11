@@ -147,7 +147,7 @@ test("lean rows leave out archived threads and their subagents but count them", 
 test("a thread summary batch reads unknown threads, retargets as deltas, and follows summary changes", async context => {
   const [first, second] = [thread(0), thread(1)];
   if (first.entryKind !== "thread" || second.entryKind !== "thread") throw new Error("Expected thread fixtures.");
-  const summaries = new Map([first, second].map(entry => [entry.identity.threadId as string, createThreadSummary(entry, {})]));
+  const summaries = new Map([first, second].map(entry => [entry.identity.threadId as string, { projectId: a, summary: createThreadSummary(entry, {}) }]));
   const known = new Set<string>();
   let announce: (threadId: string) => void = () => {};
   const f = fixture(context, { summaries: {
@@ -176,11 +176,12 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
   assert.ok(shrunk.kind === "threadSummaries");
   assert.deepEqual(Object.keys(shrunk.summaries), [secondId]);
 
-  summaries.set(secondId, createThreadSummary(second, { requiredTodoCount: 4 }));
+  summaries.set(secondId, { projectId: a, summary: createThreadSummary(second, { requiredTodoCount: 4 }) });
   announce(secondId);
   const counted = f.updates.at(-1)!.value;
   assert.ok(counted.kind === "threadSummaries");
-  assert.deepEqual(counted.summaries[secondId]?.facts, { requiredTodoCount: 4 });
+  assert.equal(counted.summaries[secondId]?.projectId, a);
+  assert.deepEqual(counted.summaries[secondId]?.summary.facts, { requiredTodoCount: 4 });
 
   const rows = f.observe({ kind: "projectThreads", projectIds: [a] });
   assert.throws(() => f.owner.retarget("connection", {

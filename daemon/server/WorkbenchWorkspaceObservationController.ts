@@ -7,7 +7,7 @@ import {
   DaemonWorkspaceObserveSchema, DaemonWorkspaceRetargetSchema, WorkspaceReleaseSchema, daemonObservationShape,
   type DaemonWorkspaceObserve, type DaemonWorkspaceObservation, type DaemonWorkspaceRetarget,
 } from "workbench-shared/workbench/workspace/workspace-observation";
-import type { ThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
+import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import type WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
@@ -376,7 +376,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       return;
     }
     const previous = observation.value.summaries;
-    const summaries: Record<string, ThreadSummary | null> = {};
+    const summaries: Record<string, LocatedThreadSummary | null> = {};
     const missing: string[] = [];
     for (const threadId of new Set(query.threadIds)) {
       const peeked = index.peek(threadId);
@@ -396,7 +396,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   }
 
   /** A read or change lands only while its thread is still in the batch. */
-  private acceptSummary(observation: Observation<Client>, threadId: string, summary: ThreadSummary | null) {
+  private acceptSummary(observation: Observation<Client>, threadId: string, summary: LocatedThreadSummary | null) {
     const query = observation.request.query;
     if (!this.active(observation) || query.kind !== "threadSummaries" || observation.value.kind !== "threadSummaries"
       || !query.threadIds.includes(ThreadReferenceSchema.parse(threadId))) return;

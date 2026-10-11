@@ -42,12 +42,13 @@ function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
   };
 }
 
-test("a read summary carries its seeded required todo count and stays the same object until it changes", async () => {
+test("a read summary carries its owner project and seeded required todo count, and stays the same object until it changes", async () => {
   const h = harness(new Map([["a", 3]]));
-  const summary = await h.index.read("a");
-  assert.equal(summary?.row.title, "first");
-  assert.deepEqual(summary?.facts, { requiredTodoCount: 3 });
-  assert.equal(h.index.peek("a"), summary);
+  const located = await h.index.read("a");
+  assert.equal(located?.projectId, PROJECT);
+  assert.equal(located?.summary.row.title, "first");
+  assert.deepEqual(located?.summary.facts, { requiredTodoCount: 3 });
+  assert.equal(h.index.peek("a"), located);
   assert.equal(await h.index.read("missing"), null);
 });
 
@@ -58,7 +59,7 @@ test("project changes re-project only threads whose row changed, and a thread th
   assert.deepEqual(h.changed, [], "an unchanged row and an unread thread announce nothing");
   h.setEntries([entry("a", "renamed")]);
   assert.deepEqual(h.changed, ["a"]);
-  assert.equal(h.index.peek("a")?.row.title, "renamed");
+  assert.equal(h.index.peek("a")?.summary.row.title, "renamed");
   h.setEntries([]);
   assert.deepEqual(h.changed, ["a", "a"]);
   assert.equal(h.index.peek("a"), null);
@@ -68,11 +69,11 @@ test("pushed facts announce read threads and wait for unread ones", async () => 
   const h = harness();
   h.index.setRequiredTodoCount("a", 2);
   assert.deepEqual(h.changed, []);
-  assert.deepEqual((await h.index.read("a"))?.facts, { requiredTodoCount: 2 });
+  assert.deepEqual((await h.index.read("a"))?.summary.facts, { requiredTodoCount: 2 });
   h.index.setCompacting("a", true);
   h.index.setCompacting("a", true);
   assert.deepEqual(h.changed, ["a"], "repeating a fact changes nothing");
-  assert.deepEqual(h.index.peek("a")?.facts, { compacting: true, requiredTodoCount: 2 });
+  assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true, requiredTodoCount: 2 });
   h.index.setRequiredTodoCount("a", 0);
-  assert.deepEqual(h.index.peek("a")?.facts, { compacting: true }, "zero counts read as absent");
+  assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true }, "zero counts read as absent");
 });
