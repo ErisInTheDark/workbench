@@ -16,15 +16,18 @@ Commands are CLI-only (`wb vis --help`); run them through your shell.
 
 | value | builds with | use for |
 |---|---|---|
-| `.` (default) | caller project's `.wb.json` | mockups using the project's real components/CSS |
+| `.` (default) | caller project's `.wb.json` | product UI mockups (required when the project has a vis build) |
 | relative folder | that folder's `.wb.json` | another project's components |
 | `kit` | Workbench kit | presenting info, choices, comparisons; no project setup |
+
+**Hard rule: mock product UI in project context, built from its real components.** Use `kit` only to present info or choices, or when the project has no vis build. Show proposed UI inside the real surface around it, mark what is new, and caption each frame with the user story it serves.
 
 Project context without needed `.wb.json` command fails with a clear error: configure it (below) or use `kit`.
 
 ## Build it
 
 - Prefer `.tsx` default export. Kit context: import from `"workbench/kit"` plus React and relative files only. Project context: import project files as its build allows.
+- Real components: find where the live app renders them; pass fake data. Provide required contexts with fake values; if a context is private, reuse that component's markup and class names. Fake `useSyncExternalStore` stores must return stable snapshots.
 - Style with Tailwind classes; both contexts compile them. Theme tokens: `text-text`, `text-fg/muted`, `bg-fg/5`, `border-fg/10`; support light and dark.
 - Frame height follows page content: no viewport-height sizing (`h-screen`, `min-h-screen`, `100vh`). Leave page background transparent.
 - `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS. No network: inline everything; images/fonts only as `data:`.
@@ -50,6 +53,7 @@ Custom controls: `window.wb.send(jsonValue)` (≤16 KB JSON). Prefer kit `Choice
 
 - `wb vis screenshot <path>`: full-page image of current render, sent to you; user sees it only inside that call's row. `wb vis snapshot <path>`: accessibility tree.
 - Both run in the session's headless Browse session (`vis-…`, 960px wide), opened with the vis, stopped when it ends. Clicks there send no answers.
+- Blank render means a runtime error: wrap frames in an error boundary that prints it.
 - Fix layout, content or styling gaps, then check again.
 
 ## Iterate and end
