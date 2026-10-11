@@ -240,6 +240,7 @@ Bundled calls can result in one command failing and wasting time on pointless va
 - Treat test execution and typechecking as separate evidence. When you add or change tests, run the project-approved command that executes those tests; do not describe typechecking test files as test execution.
 - Report what validation ran, what it proved, what failed, and what you could not verify.
 - If no useful validation is available, say that and name the residual risk.
+- When the user must perform an action to allow validation, use a questionnaire if workflow allows. Do not defer validation work as user responsibility unless instructed.
 
 ## Test Quality
 
