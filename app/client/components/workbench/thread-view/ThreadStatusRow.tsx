@@ -82,7 +82,6 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
 
   const visiblePanels = panels.filter(({ segments }) => segments.length);
   if (!live && !leading && !visiblePanels.length && !inline) return null;
-  // A panel whose control disappeared closes with it.
   const activePanel = panel === LIVE ? (live ? LIVE : null) : visiblePanels.some(({ id }) => id === panel) ? panel : null;
   const open = activePanel !== null;
   const toggle = (next: string) => setPanel(current => current === next ? null : next);

@@ -177,7 +177,6 @@ export default function ThreadTodoPanel ({
 
   return (
     <div className="space-y-1 px-2 py-2">
-      {/* Emptying the goal clears it. */}
       <div className={`${rowClassName} focus-within:bg-fg/5`}>
         <span aria-hidden="true" className={`${markerClassName} ${goal ? "text-text" : ""}`}>
           {goal ? <FlagFilledIcon size={14} /> : <FlagIcon size={14} />}
@@ -237,7 +236,6 @@ export default function ThreadTodoPanel ({
         <li
           className={`${rowClassName} focus-within:bg-fg/5`}
           key={`new-${blank.key}`}
-          // Leaving the row commits it.
           onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) commitBlank(false); }}
         >
           <span aria-hidden="true" className={`${markerClassName} opacity-60`}><span className={serialClassName}>#{nextNumber}</span></span>

@@ -68,7 +68,6 @@ export default function ThreadStatusArea({
   const { intersections, logicalProjectId, ownerProjectId } = useThreadClaimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
   const plannedOverlapCount = intersections.hasScope ? intersections.plannedEntries.length : 0;
-  // With nothing live, overlapping live claims also take the title slot; they always lead the arc pill.
   const overlapInSlot = !live && overlapCount > 0;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
@@ -80,7 +79,6 @@ export default function ThreadStatusArea({
   const arcSegments: ThreadStatusPanel["segments"][number][] = [
     ...(overlapCount || plannedOverlapCount ? [{
       key: "overlap",
-      // Only overlapping active work stands out; planned-only overlap reads like any other count.
       ...(overlapCount ? { className: `${threadStatusSegmentClassName} ${amberClassName}` } : {}),
       content: <><GitArcUnclaimIcon size={14} />{count(overlapCount || plannedOverlapCount)}</>,
     }] : []),

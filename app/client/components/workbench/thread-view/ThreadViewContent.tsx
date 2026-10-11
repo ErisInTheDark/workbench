@@ -813,8 +813,6 @@ export default memo(function ThreadViewContent ({
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
     }
-    // Pass 1: legacy feeds (and drafts) still send through the document flow.
-    // A draft launches its thread through the app's saved-draft flow.
     const draftDocument = active.draftDocument;
     if (draftDocument) {
       await onSendMessage(composerProfileController.resolveThread(activeProfileSlot, draftDocument), input, {

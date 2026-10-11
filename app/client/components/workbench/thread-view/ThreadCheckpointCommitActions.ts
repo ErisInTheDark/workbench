@@ -119,7 +119,6 @@ export default class ThreadCheckpointCommitActions {
     try {
       result = await commitMany(entries as GitArcProposalCommitEntry[]);
     } catch (error) {
-      // Nothing was accepted; the first proposal reports why.
       actions[0]!.settle({ error });
       return false;
     }

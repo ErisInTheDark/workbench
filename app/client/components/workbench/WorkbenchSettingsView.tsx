@@ -134,7 +134,6 @@ export default function WorkbenchSettingsView({
   }, [initialSection]);
   const [chosenDaemonId, setChosenDaemonId] = useState<DaemonId | null>(null);
   const [chosenFolderKey, setChosenFolderKey] = useState("");
-  // A daemon project's settings start on that daemon.
   const projectDaemonId = logicalProject?.iconProject.locations.find(location => location.project?.kind === "daemon")?.daemonId;
   const daemonId = daemons.some(item => item.id === chosenDaemonId) ? chosenDaemonId
     : daemons.find(item => item.id === projectDaemonId)?.id
@@ -143,7 +142,6 @@ export default function WorkbenchSettingsView({
   const daemonFolders = folders.filter(folder => folder.target.daemonId === daemonId && folder.project);
   const folder = daemonFolders.find(item => `${item.target.daemonId}/${item.target.projectId}` === chosenFolderKey)
     ?? daemonFolders[0] ?? null;
-  // Environment belongs to one folder, whichever daemon hosts it.
   const [environmentFolderKey, setEnvironmentFolderKey] = useState("");
   const environmentFolders = folders.filter(item => item.project);
   const environmentFolder = environmentFolders.find(item => folderKey(item) === environmentFolderKey)

@@ -44,7 +44,6 @@ import ThreadPlanSummary from "./ThreadPlanSummary";
 import ThreadPreviewFrame from "./ThreadPreviewFrame";
 import ThreadVisFrame from "./ThreadVisFrame";
 
-// reusable classes only
 const BLOCK_SPACING_CLASS = "mb-[0.9em] last:mb-0";
 const CODE_BLOCK_HEADER_BUTTON_CLASS = [
   "data-[thread-codeblock-copy-state=copied]:text-success",

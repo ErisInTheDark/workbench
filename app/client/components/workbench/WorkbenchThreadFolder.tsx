@@ -57,7 +57,6 @@ function folderStatusRank(entry: FolderEntry) {
 
 function getFolderStatus(entries: readonly FolderEntry[], attentionLabelsByThreadId: Record<string, string | undefined>) {
   const entry = [...entries].sort((left, right) => folderStatusRank(left) - folderStatusRank(right))[0];
-  // Every member is still waiting for its summary.
   if (!entry) return { dashed: false, Icon: LoaderIcon as FolderStatusIcon, label: "Loading", statusClassName: "text-fg/muted", strokeOpacity: 1 };
   if (entry.entryKind === "draft") return { dashed: true, Icon: DraftThreadIcon as FolderStatusIcon, label: "Draft", statusClassName: "text-fg/muted", strokeOpacity: 0.24 };
   const wait = describeThreadWait(entry);

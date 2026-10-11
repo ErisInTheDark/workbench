@@ -47,7 +47,6 @@ function PeriodDetail({ bucketStarts, index, row, threads, unit }: {
     return named && identity ? [{
       detail: <span className="tabular-nums">{compactNumber(threadCalls)}</span>,
       identity: { harness: identity.harness, threadId: identity.threadId },
-      // Another machine's thread opens by id through its logical project.
       logicalProjectId: LogicalProjectIdSchema.safeParse(remoteLogicalProject(named.projectId, named.daemonId)).data ?? null,
       projectId: identity.projectId, title: named.title || "Untitled thread",
     }] : [];

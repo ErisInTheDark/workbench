@@ -34,7 +34,6 @@ function formatProposalCounts(committed: number, proposed: number) {
 /** Group disclosures (stack layers, accepted commits) share one row line, summary and recessed well. */
 const groupDisclosureProps = {
   className: "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
-  // Open groups inset their proposals in a recessed well; the first card needs no line under the summary.
   contentClassName: "mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0",
   summaryClassName: "px-3 py-2 text-[0.76em] leading-[1.45]",
 };
@@ -168,10 +167,8 @@ export default function ThreadGitArcProposalList({
     }
   };
 
-  // A lone pending proposal names itself, so the header reads as that commit.
   const lone = proposals.length === 1 && proposedIds.length === 1 ? proposals[0]!.summary ?? null : null;
   const summary = (
-    // Totals stay beside the title they describe; narrow rows wrap the action onto its own line.
     <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
       <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
         <GitArcProposalIcon className="shrink-0" size={14} />
@@ -183,8 +180,8 @@ export default function ThreadGitArcProposalList({
       {showCommitAll || committing ? (
         <span className="ml-auto inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
           <PrimaryButton
-            className="!px-3 !py-1.5 !text-[0.76rem]"
             data-thread-git-arc-commit-all="true"
+            shape="compact"
             disabled={committing || !commitAllReady}
             onClick={() => void commitInOrder(proposedIds)}
             pendingHalo={committing}

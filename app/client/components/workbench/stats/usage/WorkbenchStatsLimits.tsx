@@ -48,7 +48,6 @@ export default function WorkbenchStatsLimits() {
     <section aria-labelledby="stats-limits-heading" className="space-y-2">
       <h2 className="m-0 text-[0.74rem] font-semibold text-fg/muted" id="stats-limits-heading">Plan limits left</h2>
       {!data ? (
-        // Two cards of title, two windows and their meters: the usual shape of a reading.
         <div className="flex flex-wrap gap-x-8 gap-y-5">
           {[0, 1].map((index) => (
             <div className="min-w-0 flex-[1_1_15rem] space-y-2.5 sm:max-w-[24rem]" key={index}>

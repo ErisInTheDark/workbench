@@ -2674,7 +2674,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               >
                 <div
                   aria-hidden="true"
-                  // Wide views scroll content under the whole header, so their backdrop spans it too.
                   className={`
                     pointer-events-none absolute inset-0 -z-10 md:backdrop-blur-none
                     bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]

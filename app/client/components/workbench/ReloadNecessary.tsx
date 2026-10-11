@@ -142,13 +142,14 @@ export default function ReloadNecessary ({
               ) : null}
             </div>
             {reloadableScopes.length || reloadAllRunning ? <PrimaryButton
-              className="!px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]"
+              className="[&>span:first-of-type]:!inset-[3px]"
               disabled={allBusy || interrupted}
               holdToConfirmMs={getReloadAllHoldMs(reloadableScopes)}
               onClick={() => void reloadAll()}
               onPointerEnter={() => setHoveredScope("all")}
               onPointerLeave={() => setHoveredScope(null)}
               pendingHalo={allBusy}
+              shape="compact"
               tone={reloadableScopes.some(({ destructive }) => destructive) ? "danger" : "default"}
             >
               Reload all
@@ -165,7 +166,7 @@ export default function ReloadNecessary ({
                   <p className="m-0 min-w-0 truncate text-[0.8rem] font-medium text-text" title={scope.description}>{scope.scope}</p>
                   <PrimaryButton
                     className={`
-                      !shrink-0 !px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]
+                      !shrink-0 [&>span:first-of-type]:!inset-[3px]
                       ${affectedScopes.has(scope.scope)
                         ? `[&>span:first-of-type]:!ring-2 ${scope.destructive
                           ? "[&>span:first-of-type]:!ring-danger"
@@ -178,6 +179,7 @@ export default function ReloadNecessary ({
                     onPointerEnter={() => setHoveredScope(scope.scope)}
                     onPointerLeave={() => setHoveredScope(null)}
                     pendingHalo={busy}
+                    shape="compact"
                     tone={scope.destructive ? "danger" : "default"}
                   >
                     {restartRequired ? "Restart" : "Reload"}
@@ -202,8 +204,9 @@ export default function ReloadNecessary ({
               This tab is out of date
             </p>
             <PrimaryButton
-              className="!shrink-0 !px-3 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]"
+              className="!shrink-0 [&>span:first-of-type]:!inset-[3px]"
               onClick={() => window.location.reload()}
+              shape="compact"
             >
               Refresh
             </PrimaryButton>

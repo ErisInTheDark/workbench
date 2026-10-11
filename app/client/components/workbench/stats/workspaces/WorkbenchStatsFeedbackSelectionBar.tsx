@@ -12,9 +12,6 @@ import Tooltip from "../../../ui/Tooltip";
 import { BinIcon, BotIcon } from "../../workbench-icons";
 
 const DELETE_HOLD_MS = 1_000;
-// Matches the action buttons on Git arc cards.
-const buttonClassName = "!px-3 !py-1.5 !text-[0.76rem]";
-
 export default function WorkbenchStatsFeedbackSelectionBar({ addressBlocked, busy, error, onAddress, onDelete, selection }: {
   /** Why the selection cannot be addressed, or null when it can. */
   addressBlocked: string | null;
@@ -27,7 +24,7 @@ export default function WorkbenchStatsFeedbackSelectionBar({ addressBlocked, bus
 }) {
   const address = (
     <span className="inline-flex">
-      <PrimaryButton className={buttonClassName} disabled={busy || addressBlocked !== null} onClick={onAddress}>
+      <PrimaryButton shape="compact" disabled={busy || addressBlocked !== null} onClick={onAddress}>
         <BotIcon className="mr-1.5" size={14} />Address
       </PrimaryButton>
     </span>
@@ -39,7 +36,7 @@ export default function WorkbenchStatsFeedbackSelectionBar({ addressBlocked, bus
           <span className="mr-1 text-[0.82rem] font-semibold text-text">{selection?.total} selected</span>
           {selection?.counts.map(({ category, count }) => <WorkbenchStatsFeedbackTag category={category} count={count} key={category} />)}
         </div>
-        <PrimaryButton className={buttonClassName} disabled={busy} holdToConfirmMs={DELETE_HOLD_MS} onClick={onDelete} tone="danger">
+        <PrimaryButton shape="compact" disabled={busy} holdToConfirmMs={DELETE_HOLD_MS} onClick={onDelete} tone="danger">
           <BinIcon className="mr-1.5" size={14} />Delete
         </PrimaryButton>
         {addressBlocked ? <Tooltip content={addressBlocked} placement="top">{address}</Tooltip> : address}

@@ -27,7 +27,6 @@ export default function ThreadAddressedFeedback ({ feedback, onDeleted }: {
     setBusy(true);
     setError("");
     try {
-      // Each report is deleted by the machine storing it.
       await Promise.all([...Map.groupBy(feedback, ({ daemonId }) => daemonId)].map(([daemonId, reports]) => {
         const daemon = DaemonIdSchema.safeParse(daemonId).data;
         if (!daemon) throw new Error("Feedback from an unknown machine cannot be deleted.");
@@ -45,7 +44,8 @@ export default function ThreadAddressedFeedback ({ feedback, onDeleted }: {
       <div className="flex min-w-0 items-center justify-between gap-3">
         <ComposerReferencePills className="min-w-0" references={feedback} />
         <PrimaryButton
-          className="!shrink-0 !px-3 !py-1.5 !text-[0.76rem]"
+          className="!shrink-0"
+          shape="compact"
           disabled={busy || !workspace}
           holdToConfirmMs={500}
           onClick={() => void remove()}

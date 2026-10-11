@@ -90,7 +90,6 @@ export default function WorkbenchStatsActivity() {
           />
         </div>
       ) : (
-        // The chart's own geometry: the stream, the date row, and the readout.
         <div aria-hidden="true" className="space-y-3">
           <Skeleton className="h-48 rounded-none" style={{ clipPath: SKELETON_STREAM }} />
           <div className="flex h-[1.02rem] items-center justify-between"><Skeleton className="h-2.5 w-12" /><Skeleton className="h-2.5 w-12" /></div>

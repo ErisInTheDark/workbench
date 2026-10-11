@@ -441,7 +441,6 @@ export default class WorkbenchStatsStore {
         if (isLocal(daemonId)) return projectId;
         const logicalId = this.#logicalProject(projectId, daemonId);
         if (!logicalId) return null;
-        // The first of this machine's folders of the same project.
         for (const [key, owner] of inputs.scope.logical) {
           if (owner === logicalId && key.startsWith(`${attachedDaemonId}/`)) return key.slice(`${attachedDaemonId}/`.length);
         }

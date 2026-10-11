@@ -67,7 +67,6 @@ export default function WorkbenchStatsFeedback() {
     setBusy(true);
     setActionError("");
     try {
-      // Each daemon deletes its own reports.
       const byDaemon = Map.groupBy(selected, ({ daemonId }) => daemonId ?? scope.attachedDaemonId);
       await Promise.all([...byDaemon].map(([daemonId, reports]) => {
         const daemon = DaemonIdSchema.safeParse(daemonId).data;
@@ -110,7 +109,6 @@ export default function WorkbenchStatsFeedback() {
         ) : null}
       </div>
       {!feedback ? (
-        // Category tags, then a few report cards.
         <div aria-hidden="true" className="space-y-3">
           <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <Skeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
           {[0, 1, 2].map((index) => <WorkbenchFeedbackReportSkeleton index={index} key={index} />)}

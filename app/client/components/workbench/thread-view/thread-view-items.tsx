@@ -3461,12 +3461,7 @@ function ThreadTurnDetailsComponent ({
         </div>
       ) : (
         <div className="space-y-2">
-          {/* <p className="m-0 text-[0.67em] uppercase tracking-[0.18em] text-fg/muted">
-            {humanizeThreadLabel(turn.status)}
-          </p> */}
-          {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : (
-            <></> // <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No captured items.</p>
-          )}
+          {workedBlocks.length ? renderBlocks(workedBlocks, primaryUserBlock) : null}
         </div>
       )}
     </section>

@@ -16,7 +16,7 @@ import {
 
 import WorkbenchSpinningBorder from "../workbench/WorkbenchSpinningBorder";
 
-type PrimaryButtonShape = "pill" | "circle";
+type PrimaryButtonShape = "pill" | "circle" | "compact";
 type PrimaryButtonTone = "attention" | "danger" | "default";
 type HoldSource = "keyboard" | "pointer";
 
@@ -45,6 +45,7 @@ const baseClassName = `
 
 const shapeClassNames: Record<PrimaryButtonShape, string> = {
   circle: "size-10 shrink-0 rounded-full",
+  compact: "rounded-full px-3 py-1.5 text-[0.76rem]",
   pill: "rounded-full px-4 py-2 text-[0.84rem]",
 };
 

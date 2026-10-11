@@ -201,7 +201,6 @@ export default function ThreadMessageBoardTopic({
           <ThreadMessageBoardHistory markdownProps={markdownProps} projectId={projectId} subagent={subagent} subagents={subagents} />
         ) : null}
         summary={(
-          // The disclosure summary mutes its text; topic titles keep full contrast.
           <div className="relative text-text">
             {thread ? (
               <WorkbenchThreadListItem
@@ -224,7 +223,6 @@ export default function ThreadMessageBoardTopic({
           </div>
         )}
       />
-      {/* Like the row frame it replaces: shown on hover or keyboard focus, and kept while the topic is open. */}
       <span
         aria-hidden="true"
         className={`pointer-events-none absolute inset-0 rounded-[0.8rem] border transition-opacity duration-75 ease-out ${borderClassName} ${isOpen ? "opacity-100" : "opacity-0 group-hover/topic:opacity-100 group-has-[:focus-visible]/topic:opacity-100"}`}

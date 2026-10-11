@@ -183,7 +183,6 @@ export default function PressDragMenu ({
       below = next.below;
       setPlacement(next);
     }
-    // Start at the end nearest the trigger.
     if (!groups || unplaced) element.scrollTop = below ? 0 : element.scrollHeight;
     if (activeIndex >= 0) element.querySelectorAll<HTMLElement>("[data-menu-row]")[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [open, items, placement?.style.visibility]);

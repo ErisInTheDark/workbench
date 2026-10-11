@@ -65,7 +65,6 @@ export default function WorkbenchThreadTooltipDetails({
 }) {
   const questionnaire = useWorkbenchQuestionnaire(projectId, parentThreadId
     ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId }, onQuestionnaireError);
-  // Everything about where the thread lives comes from the thread itself, never from whichever project is browsed.
   const threadContext = useWorkbenchClientController().mounted?.threadContextFor(threadId) ?? null;
   const cwd = questionnaire.thread.head?.cwd || null;
   const projectRootPath = threadContext?.project.rootPath;
@@ -88,11 +87,8 @@ export default function WorkbenchThreadTooltipDetails({
   const gitArc = entry?.gitArc ?? null;
   // Lean sidebar and pinned rows carry a narrower arc; acceptance and layers come from the leased store's lifecycle.
   const stack = questionnaire.thread.entry?.gitArc ?? null;
-  // Pending work only; accepted history stays in the thread's own status panel.
   const pendingProposals = useMemo(() => gitArc?.proposals.filter(({ status }) => status === "proposed") ?? [], [gitArc]);
-  // The same commit coordination the status panel owns: commit all, layers, and per-card readiness.
   const [commitActions] = useState(() => new ThreadCheckpointCommitActions());
-  // Only proposal cards link files, so only they load the thread's file index.
   const projectFilePaths = useWorkbenchThreadFileIndex(threadId, pendingProposals.length > 0).snapshot.paths;
   const questionnaireLoading = !pendingRequest && Boolean(entry && (
     ("pendingQuestionnaire" in entry && entry.pendingQuestionnaire)
@@ -169,9 +165,7 @@ export default function WorkbenchThreadTooltipDetails({
         </section>
       ) : null}
       {shown.filter(overlapsActive).map(entry => intersectionSection(entry, true))}
-      {/* Without a cwd nothing can be read or committed, so the section waits for the thread's head. */}
       {pendingProposals.length && cwd ? (
-        // Edge to edge like the status panel's own list, whose rows carry their padding.
         <ThreadTooltipSection aria-label="Commit proposals" bleed className="!pt-0" data-thread-tooltip-proposal="commit">
           <ThreadGitArcProposalList
             acceptance={stack?.acceptance ?? null}

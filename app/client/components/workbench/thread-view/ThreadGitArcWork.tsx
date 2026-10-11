@@ -50,8 +50,6 @@ export interface ThreadGitArcWorkProps {
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }
 
-const actionButtonClassName = "!px-3 !py-1.5 !text-[0.76rem]";
-
 export default function ThreadGitArcWork ({
   claim,
   commitActions,
@@ -187,7 +185,7 @@ export default function ThreadGitArcWork ({
                     {sectionPhase === "stashed" ? (
                       <>
                         <PrimaryButton
-                          className={actionButtonClassName}
+                          shape="compact"
                           disabled={activeAction !== null}
                           holdToConfirmMs={2000}
                           onClick={() => void runAction("discardStash")}
@@ -197,7 +195,7 @@ export default function ThreadGitArcWork ({
                           <BinIcon className="mr-1.5" size={14} />
                           {activeAction === "discardStash" ? "Discarding…" : "Discard"}
                         </PrimaryButton>
-                        <PrimaryButton className={actionButtonClassName} disabled={activeAction !== null} onClick={() => void runAction("unstash")} pendingHalo={activeAction === "unstash"}>
+                        <PrimaryButton shape="compact" disabled={activeAction !== null} onClick={() => void runAction("unstash")} pendingHalo={activeAction === "unstash"}>
                           <GitArcIcon action="unstash" className="mr-1.5" size={14} />
                           {activeAction === "unstash" ? "Restoring…" : "Restore"}
                         </PrimaryButton>
@@ -207,7 +205,7 @@ export default function ThreadGitArcWork ({
                       showCombinedAction ? (
                         <PrimaryButton
                           key="restore-and-unclaim"
-                          className={actionButtonClassName}
+                          shape="compact"
                           disabled={activeAction !== null}
                           holdToConfirmMs={2000}
                           onClick={() => void runAction("restoreAndUnclaim")}
@@ -221,7 +219,7 @@ export default function ThreadGitArcWork ({
                         <>
                           <PrimaryButton
                             key="restore"
-                            className={actionButtonClassName}
+                            shape="compact"
                             disabled={activeAction !== null}
                             holdToConfirmMs={2000}
                             onClick={() => void runAction("restore")}
@@ -233,7 +231,7 @@ export default function ThreadGitArcWork ({
                           </PrimaryButton>
                           <PrimaryButton
                             key="unclaim"
-                            className={actionButtonClassName}
+                            shape="compact"
                             disabled={activeAction !== null}
                             onClick={() => void runAction("unclaim")}
                             pendingHalo={activeAction === "unclaim"}
@@ -244,13 +242,13 @@ export default function ThreadGitArcWork ({
                         </>
                       )
                     ) : sectionPhase === "active" && changeState === "clean" ? (
-                      <PrimaryButton className={actionButtonClassName} disabled={activeAction !== null} onClick={() => void runAction("unclaim")} pendingHalo={activeAction === "unclaim"}>
+                      <PrimaryButton shape="compact" disabled={activeAction !== null} onClick={() => void runAction("unclaim")} pendingHalo={activeAction === "unclaim"}>
                         <GitArcUnclaimIcon className="mr-1.5" size={14} />
                         {activeAction === "unclaim" ? "Unclaiming…" : "Unclaim"}
                       </PrimaryButton>
                     ) : sectionPhase === "active" && changeState === "loading" ? <span className="text-[0.74em] text-fg/muted">Checking claimed files…</span> : null}
                     {sectionPhase === "active" ? (
-                      <PrimaryButton className={actionButtonClassName} disabled={activeAction !== null || stashWouldReplace} title={stashWouldReplace ? "Restore or discard the existing stash first." : undefined} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
+                      <PrimaryButton shape="compact" disabled={activeAction !== null || stashWouldReplace} title={stashWouldReplace ? "Restore or discard the existing stash first." : undefined} onClick={() => void runAction("stash")} pendingHalo={activeAction === "stash"}>
                         <GitArcIcon action="stash" className="mr-1.5" size={14} />
                         {activeAction === "stash" ? "Stashing…" : "Stash"}
                       </PrimaryButton>

@@ -140,7 +140,6 @@ export default function StreamChart({
           className="absolute inset-0 size-full overflow-visible"
           preserveAspectRatio="none"
           ref={svg}
-          // A pick keeps its own bands vivid and fades the rest of the range.
           style={picked ? { maskImage: `linear-gradient(to right, rgb(0 0 0 / 0.35) ${pickLeft}%, #000 ${pickLeft}%, #000 ${pickRight}%, rgb(0 0 0 / 0.35) ${pickRight}%)` } : undefined}
           viewBox={`0 0 100 ${HEIGHT}`}
         >

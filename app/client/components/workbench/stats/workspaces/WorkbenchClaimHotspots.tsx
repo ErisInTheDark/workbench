@@ -28,7 +28,6 @@ function ClaimantList({ hotspot, isLocal, path, project }: {
   // Claimants arrive largest first; only threads Workbench owns can open, the rest are only counted.
   const references = hotspot.threads.flatMap(({ daemonId, harness, threadId, title, tokens }) => {
     const thread = statsThreadIdentity({ harness, projectId: hotspot.projectId, threadId });
-    // Another machine's thread opens by id through its logical project.
     const logicalProjectId = isLocal(daemonId) ? null : LogicalProjectIdSchema.safeParse(hotspot.logicalProjectId).data ?? null;
     return thread ? [{
       detail: <span className="tabular-nums" title="Lifetime tokens">{tokens ? compactNumber(tokens) : "-"}</span>,
@@ -89,7 +88,6 @@ export default function WorkbenchClaimHotspots() {
             // Only this machine's files open in the editor; another machine's show as plain paths.
             const project = isLocal(hotspot.daemonId) ? projects.find(({ id }) => id === hotspot.projectId) : undefined;
             const rootKnown = project?.roots.some(({ id }) => id === hotspot.rootId);
-            // Only multi-root workspaces need the root to disambiguate a path.
             const qualify = (rootId: string, path: string) => project?.kind === "workspace" ? `${rootId}:${path}` : path;
             return (
               <li

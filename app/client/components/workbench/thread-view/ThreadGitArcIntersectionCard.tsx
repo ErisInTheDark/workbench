@@ -76,7 +76,6 @@ export default function ThreadGitArcIntersectionCard({
           ? "border-amber-500/35 bg-amber-500/6"
           : "border-[color-mix(in_srgb,var(--text)_12%,transparent)] bg-fg/2"}`
         : notice
-          // Rows inset past the bar, so their hover chrome never meets it.
           ? `relative w-full [&_[data-thread-reference-list]]:px-3 ${activeNotice.background}`
           : `w-full ${chrome === "flush" && overlapsActive ? "bg-amber-500/6" : ""}`}
       data-thread-git-arc-intersection-card={mode}
@@ -91,7 +90,6 @@ export default function ThreadGitArcIntersectionCard({
             ? "Waiting for Git arc claims"
             : stashed
               ? activeThreadCount ? "Stashed claims overlap active threads" : "No active work intersects stashed claims."
-              // Flush and notice hosts announce the overlap themselves, so their heading names the list instead.
               : activeThreadCount ? chrome !== "card" ? "Active threads claiming planned files" : "Planned changes overlap active threads"
                 : "No active work intersects this plan."}
         </span>
