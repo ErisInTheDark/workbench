@@ -62,6 +62,7 @@ interface ProjectFilePathDisambiguationInterner {
 const DISAMBIGUATION_INDEX_CONTENT_CACHE_LIMIT = 4;
 const disambiguationIndexCache = new WeakMap<readonly string[], ProjectFilePathDisambiguationIndex>();
 const directoryDisambiguationPathsCache = new WeakMap<readonly string[], string[]>();
+const comparableDirectoryPathsCache = new WeakMap<readonly string[], ReadonlySet<string>>();
 const disambiguationIndexKeyCache: ProjectFilePathDisambiguationKeyCacheEntry[] = [];
 const disambiguationIndexContentCache: ProjectFilePathDisambiguationContentCacheEntry[] = [];
 
@@ -199,11 +200,17 @@ function getDirectoryDisambiguationPaths(disambiguationPaths: readonly string[])
   return directoryPaths;
 }
 
+// Path lists render one row per claimed file, so per-call scans over every directory multiply into frame-long renders.
+function getComparableDirectoryPaths(projectFilePaths: readonly string[]) {
+  const cached = comparableDirectoryPathsCache.get(projectFilePaths);
+  if (cached) return cached;
+  const comparable = new Set(getDirectoryDisambiguationPaths(projectFilePaths).map(normalizeComparableProjectFilePath));
+  comparableDirectoryPathsCache.set(projectFilePaths, comparable);
+  return comparable;
+}
+
 export function isProjectDirectoryPath(path: string, projectFilePaths: readonly string[]) {
-  const comparablePath = normalizeComparableProjectFilePath(path);
-  return getDirectoryDisambiguationPaths(projectFilePaths).some((directoryPath) => (
-    normalizeComparableProjectFilePath(directoryPath) === comparablePath
-  ));
+  return getComparableDirectoryPaths(projectFilePaths).has(normalizeComparableProjectFilePath(path));
 }
 
 function formatDirectoryDisplayLabel(label: string) {

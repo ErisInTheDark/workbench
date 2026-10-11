@@ -127,11 +127,9 @@ import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
-import {
-    advanceMobileShellHeaderVisibility,
-    type MobileShellHeaderEvent,
-    type MobileShellHeaderVisibility,
-} from "./workbench/mobile-shell-header-visibility";
+import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
+import MobileShellHeaderVisibilityController from "./workbench/MobileShellHeaderVisibilityController";
+import WorkbenchMobileShellHeader from "./workbench/WorkbenchMobileShellHeader";
 import { resolveSelectedProjectIds } from "./workbench/project-sidebar-groups";
 import ProjectSidebar from "./workbench/ProjectSidebar";
 import ReloadNecessary from "./workbench/ReloadNecessary";
@@ -573,7 +571,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ))?.preference.value as WorkbenchHarness | undefined
   ) ?? defaultProviderKey);
   const [isMobile, setIsMobile] = useState(false);
-  const [isMobileShellHeaderVisible, setIsMobileShellHeaderVisible] = useState(true);
+  const [mobileShellHeaderVisibility] = useState(() => new MobileShellHeaderVisibilityController());
   const [mobilePane, setMobilePane] = useState<MobilePane>("explorer");
   const [settingsPageTitle, setSettingsPageTitle] = useState("General");
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
@@ -625,14 +623,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
   const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
-  const mobileShellHeaderVisibilityRef = useRef<MobileShellHeaderVisibility>({
-    visible: true,
-    direction: null,
-    travelPx: 0,
-    lastScroll: null,
-    gestureSinceLastScroll: false,
-    touchPhase: "none",
-  });
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
@@ -2161,10 +2151,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   const applyMobileShellHeaderEvent = useCallback((event: MobileShellHeaderEvent) => {
     if (!isMobile || !shouldShowShellHeader) return;
-    const next = advanceMobileShellHeaderVisibility(mobileShellHeaderVisibilityRef.current, event);
-    mobileShellHeaderVisibilityRef.current = next;
-    setIsMobileShellHeaderVisible((current) => current === next.visible ? current : next.visible);
-  }, [isMobile, shouldShowShellHeader]);
+    mobileShellHeaderVisibility.apply(event);
+  }, [isMobile, mobileShellHeaderVisibility, shouldShowShellHeader]);
 
   const handleThreadScrollIntent = useCallback((direction: "up" | "down", travelPx: number) => {
     applyMobileShellHeaderEvent({
@@ -2181,19 +2169,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     const scrollTarget = isDirectThreadSurface
       ? directThreadScrollViewportRef.current
       : mainPaneRef.current;
-    mobileShellHeaderVisibilityRef.current = {
-      visible: true,
-      direction: null,
-      travelPx: 0,
-      lastScroll: scrollTarget ? {
-        scrollTop: scrollTarget.scrollTop,
-        scrollHeight: scrollTarget.scrollHeight,
-        clientHeight: scrollTarget.clientHeight,
-      } : null,
-      gestureSinceLastScroll: false,
-      touchPhase: "none",
-    };
-    setIsMobileShellHeaderVisible(true);
+    mobileShellHeaderVisibility.reset(scrollTarget ? {
+      scrollTop: scrollTarget.scrollTop,
+      scrollHeight: scrollTarget.scrollHeight,
+      clientHeight: scrollTarget.clientHeight,
+    } : null);
     if (!isMobile || !shouldShowShellHeader) return;
     if (!scrollTarget) return;
 
@@ -2278,7 +2258,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       scrollTarget.removeEventListener("wheel", handleWheel);
       scrollTarget.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeFilePath, applyMobileShellHeaderEvent, isDirectThreadSurface, isMobile,
+  }, [activeFilePath, applyMobileShellHeaderEvent, isDirectThreadSurface, isMobile, mobileShellHeaderVisibility,
     selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
 
   useEffect(() => {
@@ -2699,16 +2679,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 onTouchActivityChange={handleThreadTouchActivity}
                 resetKey={`${threadSurfaceKey}:${selectedThreadIdForView || activeThreadId}`}
               >
-              <header
+              <WorkbenchMobileShellHeader
                 className={`
               sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "pl-5 pr-5" : "-mx-5 pl-5 pr-5"} md:-mx-6 md:pr-6 ${isEffectiveDesktopSidebarCollapsed ? "md:pl-20" : "md:pl-11"}
               md:translate-y-0 md:opacity-100
-              ${isMobileShellHeaderVisible
-                    ? "-translate-y-1 opacity-100"
-                    : "pointer-events-none -translate-y-[calc(100%+0.75rem)] opacity-0"
-                  }
             `}
                 hidden={!shouldShowShellHeader}
+                visibility={mobileShellHeaderVisibility}
               >
                 <div
                   aria-hidden="true"
@@ -2778,7 +2755,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       <WorkbenchZoomButton
                         ref={zoomButtonRef}
                         label="Editor text size"
-                        disabled={!shouldShowShellHeader || (isMobile && !isMobileShellHeaderVisible)}
+                        disabled={!shouldShowShellHeader}
                         min={MIN_EDITOR_FONT_SIZE}
                         max={MAX_EDITOR_FONT_SIZE}
                         value={resolvedSettings.editorFontSize}
@@ -2813,7 +2790,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     </div>
                   </div>
                 </div>
-              </header>
+              </WorkbenchMobileShellHeader>
 
               <section
                 className={`
