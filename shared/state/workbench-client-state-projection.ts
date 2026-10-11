@@ -53,6 +53,7 @@ export function workbenchClientStateRecordIdentity(
     case "fileDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, path: record.path, projectId: record.projectId };
     case "composerDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, threadId: record.threadId };
     case "questionnaireDraft": return { daemonRegistrationId: record.daemonRegistrationId, kind: record.kind, projectId: record.projectId, requestKey: record.requestKey, threadId: record.threadId };
+    case "lastProjectSelection": return { kind: record.kind };
     case "lastLaunchTarget": return { kind: record.kind };
   }
 }
@@ -171,6 +172,23 @@ export function projectWorkbenchClientStateRows(
       kind: "lastLaunchTarget",
       projectId: row.project_id,
     }, identity);
+  }
+  for (const row of rows.lastProjectSelections) {
+    const identity = { kind: "lastProjectSelection" as const };
+    if (row.deleted) {
+      remove(row.revision, identity);
+      continue;
+    }
+    const selectedProjectIds = row.mode === "unfiltered" ? null
+      : [...rows.lastProjectSelectionProjects]
+        .sort((left, right) => left.position - right.position)
+        .flatMap(project => {
+          const parsed = LogicalProjectIdSchema.safeParse(project.logical_project_id);
+          if (parsed.success) return [parsed.data];
+          reportClientSchemaError("Rejected last project selection identity", parsed.error);
+          return [];
+        });
+    add(row.revision, 0, { kind: "lastProjectSelection", selectedProjectIds }, identity);
   }
 
   for (const row of rows.fileDrafts) {

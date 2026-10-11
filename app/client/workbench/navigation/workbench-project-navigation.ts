@@ -190,10 +190,14 @@ export default class WorkbenchProjectNavigation {
       : [...this.folders];
   }
 
-  readRoute(location: string, launchProjectId?: string): WorkbenchRoute {
+  readRoute(location: string, launchSelection?: string | readonly string[] | null): WorkbenchRoute {
     const url = new URL(location, "http://workbench.local");
     return this.resolveRoute(url.pathname === "/launch"
-      ? launchProjectId ? createProjectRoute(launchProjectId) : createHomeRoute()
+      ? typeof launchSelection === "string"
+        ? createProjectRoute(launchSelection)
+        : launchSelection === undefined
+          ? createHomeRoute()
+          : createProjectSelectionRoute(launchSelection)
       : parseWorkbenchRouteFromLocation(location));
   }
 

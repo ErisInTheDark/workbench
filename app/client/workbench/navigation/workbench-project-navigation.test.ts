@@ -69,6 +69,27 @@ test("multi-project addresses keep selection independent of a draft owner", () =
   assert.equal(restored.logical?.threadOwnerProjectId, first);
 });
 
+test("launch restores ordered project selection including explicit empty and unfiltered states", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+
+  const selected = navigation.readRoute("/launch", [second, first]);
+  assert.deepEqual(selected.selectedProjectIds, [second, first]);
+  assert.equal(selected.view, "project");
+
+  const empty = navigation.readRoute("/launch", []);
+  assert.deepEqual(empty.selectedProjectIds, []);
+  assert.equal(empty.view, "project");
+
+  const unfiltered = navigation.readRoute("/launch", null);
+  assert.equal(unfiltered.selectedProjectIds, null);
+  assert.equal(unfiltered.view, "home");
+});
+
 test("thread links inherit selection while an explicit project toggle changes it", () => {
   const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
   const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");

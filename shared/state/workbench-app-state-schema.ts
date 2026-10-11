@@ -99,6 +99,55 @@ const lastLaunchTargetHistory = initialHistory(defineTable("last_launch_target",
   ],
 })));
 
+const lastProjectSelections = defineTable("last_project_selections", {
+  id: enumText("singleton").primaryKey(),
+  mode: enumText("explicit", "unfiltered"),
+  ...revisionColumns(),
+}, table => ({
+  constraints: [
+    check(sql`
+      (${table.deleted} = ${literal(1)} AND ${table.mode} IS NULL)
+      OR (${table.deleted} = ${literal(0)} AND ${table.mode} IS NOT NULL)
+    `),
+    unique([table.id, table.mode, table.deleted]),
+  ],
+}));
+const lastProjectSelectionsHistory = defineTableHistory({
+  current: lastProjectSelections,
+  versions: [tableVersion({
+    migration: createTable(lastProjectSelections),
+    schemaVersion: appStateReleases.lastProjectSelection.version,
+    table: lastProjectSelections,
+  })],
+});
+
+const lastProjectSelectionProjects = defineTable("last_project_selection_projects", {
+  owner_id: enumText("singleton").notNull().default("singleton"),
+  owner_mode: enumText("explicit").notNull().default("explicit"),
+  owner_deleted: booleanInteger().notNull().default(0),
+  position: integer().notNull().nonNegative(),
+  logical_project_id: text().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.owner_id, table.position]),
+    unique([table.owner_id, table.logical_project_id]),
+    foreignKey([table.owner_id, table.owner_mode, table.owner_deleted], {
+      columns: ["id", "mode", "deleted"],
+      onDelete: "CASCADE",
+      table: "last_project_selections",
+    }),
+    check(sql`${table.owner_deleted} = ${literal(0)}`),
+  ],
+}));
+const lastProjectSelectionProjectsHistory = defineTableHistory({
+  current: lastProjectSelectionProjects,
+  versions: [tableVersion({
+    migration: createTable(lastProjectSelectionProjects),
+    schemaVersion: appStateReleases.lastProjectSelection.version,
+    table: lastProjectSelectionProjects,
+  })],
+});
+
 const globalPreferencesV1 = defineTable("global_preferences", {
   key: enumText(
     "composerSpellCheck",
@@ -1084,6 +1133,8 @@ const histories = [
   daemonRegistrationsHistory,
   projectAliasesHistory,
   lastLaunchTargetHistory,
+  lastProjectSelectionsHistory,
+  lastProjectSelectionProjectsHistory,
   globalPreferencesHistory,
   projectPreferencesHistory,
   logicalProjectPreferencesHistory,
@@ -1111,6 +1162,8 @@ export const appStateClientTables = Object.freeze({
   fileDrafts: fileDraftsHistory.current,
   globalPreferences: globalPreferencesHistory.current,
   lastLaunchTarget: lastLaunchTargetHistory.current,
+  lastProjectSelectionProjects: lastProjectSelectionProjectsHistory.current,
+  lastProjectSelections: lastProjectSelectionsHistory.current,
   projectExpandedDirectories: projectExpandedDirectoriesHistory.current,
   projectPreferences: projectPreferencesHistory.current,
   logicalProjectPreferences: logicalProjectPreferencesHistory.current,

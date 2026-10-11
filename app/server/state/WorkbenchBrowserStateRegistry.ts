@@ -29,7 +29,8 @@ export interface WorkbenchBrowserStateRegistryOptions {
 
 function isPortableSeedMutation(mutation: WorkbenchClientStateMutation) {
   const kind = mutation.action === "put" ? mutation.record.kind : mutation.identity.kind;
-  if (kind === "composerDraft" || kind === "fileDraft" || kind === "questionnaireDraft") return false;
+  if (kind === "composerDraft" || kind === "fileDraft" || kind === "lastProjectSelection"
+    || kind === "questionnaireDraft") return false;
   if (kind !== "globalPreference") return true;
   const key = mutation.action === "put" && mutation.record.kind === "globalPreference"
     ? mutation.record.preference.key

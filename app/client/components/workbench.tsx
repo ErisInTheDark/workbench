@@ -136,6 +136,7 @@ import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope"
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
+import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import ThreadScrollViewport from "./workbench/thread-view/ThreadScrollViewport";
@@ -385,7 +386,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [composerProfileControllers] = useState(() => new Map<string, WorkbenchComposerProfileController>());
   const initialRoute = new WorkbenchProjectNavigation([], clientStateController.getProjectAliases())
     .readRoute(typeof window === "undefined" ? "/" : window.location.href,
-      clientState.records.find(record => record.kind === "lastLaunchTarget")?.projectId);
+      readWorkbenchLaunchSelection(clientState.records));
   const currentRouteRef = useRef<WorkbenchRoute>(initialRoute);
   const activeDraftSessionRef = useRef<DraftSessionController<WorkbenchComposerInputDraft> | null>(null);
   const workbenchMount = useWorkbenchClientMount({

@@ -57,6 +57,7 @@ function identityKey(identity: WorkbenchClientStateIdentity) {
     case "fileDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.path]);
     case "composerDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.threadId]);
     case "questionnaireDraft": return JSON.stringify([identity.kind, identity.daemonRegistrationId, identity.projectId, identity.threadId, identity.requestKey]);
+    case "lastProjectSelection": return "project-selection";
     case "lastLaunchTarget": return "launch";
   }
 }

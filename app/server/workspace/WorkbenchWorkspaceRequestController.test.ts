@@ -118,7 +118,8 @@ function state(revision: number): WorkbenchClientStateResponse {
   return { daemonRegistrationId: "registration", revision, kind: "snapshot", oldestAvailableRevision: 0,
     rows: {
       composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
+      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
+      lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
       projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
       questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [],

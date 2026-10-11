@@ -16,10 +16,12 @@
  * - WorkbenchClientStateIdentity: browser state addresses.
  * - WorkbenchClientStateMutation: put/delete intents.
  * - WorkbenchClientStateRecordSchema/WorkbenchClientStateIdentitySchema/WorkbenchClientStateMutationSchema: validate app-state writes.
+ * - readWorkbenchLaunchSelection: prefer ordered launch selection over the legacy singleton project.
  * - WorkbenchClientStateAttachmentIdentity: composer or questionnaire image owner.
  * - workbenchClientStateAttachmentUrl: browser-scoped image URL for one saved attachment.
  * - WorkbenchClientStateRows: schema-derived wire rows.
  * - WorkbenchClientStateResponse: versioned snapshots and deltas.
+ * - WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION: minimum server schema supporting ordered launch selection.
  * - WORKBENCH_BROWSER_STATE_HEADER: browser namespace header.
  * - isWorkbenchBrowserStateId: validate browser namespace.
  * - workbenchClientStateMutationPath: route for a record kind.
@@ -31,6 +33,7 @@
  * - modelGroupDisclosure records: browser-scoped model section visibility.
  */
 import { appStateClientTables } from "./workbench-app-state-schema.ts";
+import appStateReleases from "./workbench-app-state-releases.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
@@ -161,6 +164,7 @@ export type WorkbenchClientStateRecord =
   | (ProjectScoped & { kind: "fileDraft"; path: string; value: WorkbenchFileDraftValue })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string; value: WorkbenchComposerDraftValue })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string; value: WorkbenchQuestionnaireDraftValue })
+  | { kind: "lastProjectSelection"; selectedProjectIds: LogicalProjectId[] | null }
   | (DaemonScoped & { kind: "lastLaunchTarget"; projectId: string });
 
 export type WorkbenchClientStateIdentity =
@@ -175,7 +179,19 @@ export type WorkbenchClientStateIdentity =
   | (ProjectScoped & { kind: "fileDraft"; path: string })
   | (ProjectScoped & { kind: "composerDraft"; threadId: string })
   | (ProjectScoped & { kind: "questionnaireDraft"; requestKey: string; threadId: string })
+  | { kind: "lastProjectSelection" }
   | { kind: "lastLaunchTarget" };
+
+export const WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION =
+  appStateReleases.lastProjectSelection.version;
+
+export function readWorkbenchLaunchSelection(
+  records: readonly WorkbenchClientStateRecord[],
+): readonly LogicalProjectId[] | string | null | undefined {
+  const selection = records.find(record => record.kind === "lastProjectSelection");
+  if (selection) return selection.selectedProjectIds;
+  return records.find(record => record.kind === "lastLaunchTarget")?.projectId;
+}
 
 export type WorkbenchClientStateRows = {
   -readonly [Name in keyof typeof appStateClientTables]: SelectRow<(typeof appStateClientTables)[Name]>[];
@@ -268,6 +284,10 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
       selectedValues: z.record(address, z.array(z.string())),
       updatedAt: z.number(),
     }) }),
+  z.object({
+    kind: z.literal("lastProjectSelection"),
+    selectedProjectIds: z.array(LogicalProjectIdSchema).max(10_000).nullable(),
+  }),
   z.object({ kind: z.literal("lastLaunchTarget"), daemonRegistrationId: address,
     projectId: address }),
 ]);
@@ -301,6 +321,7 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("composerDraft"), ...projectAddress, threadId: address }),
   z.object({ kind: z.literal("questionnaireDraft"), ...projectAddress, threadId: address,
     requestKey: address }),
+  z.object({ kind: z.literal("lastProjectSelection") }),
   z.object({ kind: z.literal("lastLaunchTarget") }),
 ]);
 
@@ -346,6 +367,7 @@ const mutationPathByKind = {
   fileDraft: "/api/workbench-client-state/file-draft",
   globalPreference: "/api/workbench-client-state/global-preference",
   logicalProjectPreference: "/api/workbench-client-state/project-preference",
+  lastProjectSelection: "/api/workbench-client-state/launch-target",
   lastLaunchTarget: "/api/workbench-client-state/launch-target",
   projectPreference: "/api/workbench-client-state/project-preference",
   questionnaireDraft: "/api/workbench-client-state/questionnaire-draft",

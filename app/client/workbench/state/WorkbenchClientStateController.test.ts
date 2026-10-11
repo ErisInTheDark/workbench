@@ -13,7 +13,8 @@ function response(revision: number, rows: Partial<WorkbenchClientStateRows> = {}
     daemonRegistrationId: "registration", kind, oldestAvailableRevision: 0, revision, schemaVersion: 0,
     rows: {
       composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
+      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
+      lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
       projectExpandedDirectories: [], projectPreferences: [],
       projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
       questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [], ...rows,
@@ -97,6 +98,42 @@ test("same-identity saves stay ordered while newer optimistic text survives the 
   f.socket.reply(later, draftResponse(2, "second"));
   await second;
   assert.equal(f.state.records("composerDraft")[0]?.value.text, "second");
+});
+
+test("last project selection keeps the newest optimistic value through an older acknowledgement", async context => {
+  const f = await fixture(context);
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const selectionResponse = (revision: number, selectedProjectIds: readonly typeof first[]) => response(revision, {
+    lastProjectSelectionProjects: selectedProjectIds.map((logicalProjectId, position) => ({
+      logical_project_id: logicalProjectId,
+      owner_deleted: 0,
+      owner_id: "singleton",
+      owner_mode: "explicit",
+      position,
+    })),
+    lastProjectSelections: [{
+      deleted: 0,
+      id: "singleton",
+      mode: "explicit",
+      revision,
+    }],
+  });
+  const start = f.socket.sent.length;
+  const older = f.state.put({ kind: "lastProjectSelection", selectedProjectIds: [first] });
+  const newer = f.state.put({ kind: "lastProjectSelection", selectedProjectIds: [second, first] });
+  const olderRequest = await f.socket.request("app/state/mutate", start);
+  assert.deepEqual(f.state.records("lastProjectSelection")[0]?.selectedProjectIds, [second, first]);
+
+  const next = f.socket.sent.length;
+  f.socket.reply(olderRequest, selectionResponse(1, [first]));
+  await older;
+  assert.deepEqual(f.state.records("lastProjectSelection")[0]?.selectedProjectIds, [second, first]);
+
+  const newerRequest = await f.socket.request("app/state/mutate", next);
+  f.socket.reply(newerRequest, selectionResponse(2, [second, first]));
+  await newer;
+  assert.deepEqual(f.state.records("lastProjectSelection")[0]?.selectedProjectIds, [second, first]);
 });
 
 test("an old save acknowledgement cannot overwrite a newer push or resurrect its deletion", async context => {

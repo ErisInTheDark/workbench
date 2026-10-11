@@ -71,6 +71,45 @@ test("logical project preferences persist independently of physical project addr
   } finally { await restarted.close(); }
 });
 
+test("last project selection preserves order and replaces explicit, empty and unfiltered states", async context => {
+  const fixture = await controllerFixture(context);
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const selection = () => projectedRecords(fixture.controller.read())
+    .find(record => record.kind === "lastProjectSelection");
+  try {
+    await fixture.controller.mutate({
+      action: "put",
+      record: { kind: "lastProjectSelection", selectedProjectIds: [second, first] },
+    });
+    assert.deepEqual(selection()?.selectedProjectIds, [second, first]);
+
+    await fixture.controller.mutate({
+      action: "put",
+      record: { kind: "lastProjectSelection", selectedProjectIds: [] },
+    });
+    assert.deepEqual(selection()?.selectedProjectIds, []);
+
+    await fixture.controller.mutate({
+      action: "put",
+      record: { kind: "lastProjectSelection", selectedProjectIds: null },
+    });
+    assert.equal(selection()?.selectedProjectIds, null);
+
+    await fixture.controller.mutate({
+      action: "put",
+      record: { kind: "lastProjectSelection", selectedProjectIds: [first] },
+    });
+  } finally { await fixture.controller.close(); }
+
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(projectedRecords(restarted.read())
+      .find(record => record.kind === "lastProjectSelection")?.selectedProjectIds, [first]);
+  } finally { await restarted.close(); }
+});
+
 test("UUID conversion flattens saved aliases without resurrecting deleted drafts across restart", async context => {
   const fixture = await controllerFixture(context);
   const old = ProjectIdSchema.parse("remote://example.test/owner/repo");

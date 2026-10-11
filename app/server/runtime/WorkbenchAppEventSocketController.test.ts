@@ -96,7 +96,8 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
         return { daemonRegistrationId: "registration", revision: 1, oldestAvailableRevision: 0,
           kind: "delta", rows: {
             composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-            modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [], logicalProjectPreferences: [],
+            modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
+            lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
             projectExpandedDirectories: [], projectPreferences: [],
             projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
             questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [],

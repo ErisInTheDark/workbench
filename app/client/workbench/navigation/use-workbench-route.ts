@@ -15,6 +15,11 @@ import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } fr
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 import { useWorkbenchProjectNavigation } from "./use-workbench-project-navigation";
 import { isMobileSidebarRequested, keepsMobileMainPane, mobileSidebarHref } from "../state/mobile-pane-url-state";
+import {
+  readWorkbenchLaunchSelection,
+  WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION,
+} from "workbench-shared/state/workbench-client-state";
+import { LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 
 const emptySubscribe = (_listener: () => void) => () => {};
 
@@ -35,14 +40,21 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     () => `${pathname || "/"}${search ? `?${search}` : ""}`,
     [pathname, search],
   );
-  const launchProjectId = stateSnapshot.records.find(record => record.kind === "lastLaunchTarget")?.projectId;
+  const launchSelection = readWorkbenchLaunchSelection(stateSnapshot.records);
+  const launchSelectionKey = typeof launchSelection === "string"
+    ? `legacy\0${launchSelection}`
+    : launchSelection === null
+      ? "unfiltered"
+      : launchSelection === undefined
+        ? "absent"
+        : `explicit\0${launchSelection.join("\0")}`;
   const resolved = (client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation([], state.getProjectAliases()))
-    .readRoute(locationSnapshot, launchProjectId);
+    .readRoute(locationSnapshot, launchSelection);
   const route = useMemo(() => resolved, [
     locationSnapshot, resolved.projectId, resolved.threadOwnerProjectId,
     resolved.selectedProjectIds?.join("\0") ?? null,
     resolved.logical?.projectId, resolved.logical?.threadOwnerProjectId,
-    resolved.view, resolved.error, pathname === "/launch" ? launchProjectId : undefined,
+    resolved.view, resolved.error, pathname === "/launch" ? launchSelectionKey : undefined,
   ]);
 
   const navigateToRoute = useCallback((nextRoute: WorkbenchRoute,
@@ -83,6 +95,43 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
     }
   }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route]);
+
+  const selectedProjectIdsKey = route.selectedProjectIds === null
+    ? "unfiltered"
+    : `explicit\0${route.selectedProjectIds.join("\0")}`;
+  const storedSelection = stateSnapshot.records.find(record => record.kind === "lastProjectSelection");
+  const storedSelectionKey = storedSelection?.selectedProjectIds === null
+    ? "unfiltered"
+    : storedSelection
+      ? `explicit\0${storedSelection.selectedProjectIds.join("\0")}`
+      : "absent";
+  useEffect(() => {
+    if (stateSnapshot.schemaVersion < WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION
+      || route.view === "invalid"
+      || selectedProjectIdsKey === storedSelectionKey
+      || (route.selectedProjectIds?.length && !route.logical)) return;
+    let selectedProjectIds: LogicalProjectId[] | null = null;
+    if (route.selectedProjectIds !== null) {
+      selectedProjectIds = [];
+      for (const projectId of route.selectedProjectIds) {
+        const parsed = LogicalProjectIdSchema.safeParse(projectId);
+        if (!parsed.success) return;
+        selectedProjectIds.push(parsed.data);
+      }
+    }
+    void state.put({ kind: "lastProjectSelection", selectedProjectIds }).catch((error) => {
+      const message = error instanceof Error ? error.message : "Unknown app-state mutation failure.";
+      console.warn("Workbench last project selection could not be saved.", message.slice(0, 500));
+    });
+  }, [
+    route.logical,
+    route.selectedProjectIds,
+    route.view,
+    selectedProjectIdsKey,
+    state,
+    stateSnapshot.schemaVersion,
+    storedSelectionKey,
+  ]);
 
   return {
     navigateToRoute,

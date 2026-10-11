@@ -74,6 +74,30 @@ test("logical project preference seeds a later browser without becoming a per-br
     && record.preference.value === "winter"));
 });
 
+test("last project selection survives browser reopening without seeding another browser", async context => {
+  const { directory, registry, shared } = await fixture(context);
+  await registry.readBrowser(BROWSER_A);
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const record = { kind: "lastProjectSelection" as const, selectedProjectIds: [second, first] };
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record });
+
+  assert.deepEqual(records(await registry.readBrowser(BROWSER_A))
+    .find(item => item.kind === "lastProjectSelection"), record);
+  assert.equal(records(await registry.readBrowser(BROWSER_B))
+    .some(item => item.kind === "lastProjectSelection"), false);
+
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, {
+    browserStateDirectoryPath: path.join(directory, "browser-state"),
+  });
+  reopened.start();
+  try {
+    assert.deepEqual(records(await reopened.readBrowser(BROWSER_A))
+      .find(item => item.kind === "lastProjectSelection"), record);
+  } finally { await reopened.close(); }
+});
+
 test("model group disclosures persist independently across browser reopening", async context => {
   const { directory, registry, shared } = await fixture(context);
   await registry.readBrowser(BROWSER_A);

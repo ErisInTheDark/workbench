@@ -30,6 +30,7 @@ const appStateReleases = Object.freeze({
   threadGitArcProposalsOpen: release(20, "b5405e56eb9635cb6aa8cece6459f7e7454efe9bd28e1cbf7a0f3ee8c7932029"),
   threadVisOpen: release(21, "39024869c7066015e21ed070dde900315d729521375b037966bea896658b3d55"),
   composerDraftReferences: release(22, "5695acd99487d62b9d743d13e9a645ba6062c9fcc1203080d6c945366c880118"),
+  lastProjectSelection: release(23, "d0f9f271f879577296f03a090e290754fb07ccc59d1c6be69defc6ebc891d1f7"),
 });
 
 export default appStateReleases;

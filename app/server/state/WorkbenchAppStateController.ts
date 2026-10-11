@@ -337,6 +337,9 @@ export default class WorkbenchAppStateController {
       rows.filter((row) => row.revision > sinceRevision)
     );
     const composerDrafts = changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts)));
+    const lastProjectSelections = changed(
+      this.#repository.query(selectRows(appStateClientTables.lastProjectSelections)),
+    );
     const questionnaireDrafts = changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts)));
     // Children carry no revision; a put rewrites them and bumps their draft, so only changed drafts' children ride along.
     type QuestionnaireOwner = { daemon_registration_id: string; project_id: string; thread_id: string; request_key: string };
@@ -381,6 +384,10 @@ export default class WorkbenchAppStateController {
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
       modelGroupDisclosures: changed(this.#repository.query(selectRows(appStateClientTables.modelGroupDisclosures))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
+      lastProjectSelectionProjects: lastProjectSelections.length
+        ? this.#repository.query(selectRows(appStateClientTables.lastProjectSelectionProjects))
+        : [],
+      lastProjectSelections,
       logicalProjectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences))),
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
@@ -477,6 +484,24 @@ export default class WorkbenchAppStateController {
           daemon_registration_id: record.daemonRegistrationId, deleted: 0, id: "singleton",
           project_id: record.projectId, revision,
         }, { conflictColumns: ["id"], updateColumns: ["daemon_registration_id", "project_id", "deleted", "revision"] })];
+      case "lastProjectSelection":
+        return [
+          deleteRows(appStateTables.lastProjectSelectionProjects, { owner_id: "singleton" }),
+          upsertRow(appStateTables.lastProjectSelections, {
+            deleted: 0,
+            id: "singleton",
+            mode: record.selectedProjectIds === null ? "unfiltered" : "explicit",
+            revision,
+          }, { conflictColumns: ["id"], updateColumns: ["mode", "deleted", "revision"] }),
+          ...(record.selectedProjectIds ?? []).map((logicalProjectId, position) =>
+            insertRow(appStateTables.lastProjectSelectionProjects, {
+              logical_project_id: logicalProjectId,
+              owner_deleted: 0,
+              owner_id: "singleton",
+              owner_mode: "explicit",
+              position,
+            })),
+        ];
       case "fileDraft":
         return [upsertRow(appStateTables.fileDrafts, {
           baseline_content: record.value.baselineContent,
@@ -550,6 +575,13 @@ export default class WorkbenchAppStateController {
         }, { key: identity.key, logical_project_id: identity.logicalProjectId })];
       case "lastLaunchTarget":
         return [updateRows(appStateTables.lastLaunchTarget, { deleted: 1, project_id: "", revision }, { id: "singleton" })];
+      case "lastProjectSelection":
+        return [
+          deleteRows(appStateTables.lastProjectSelectionProjects, { owner_id: "singleton" }),
+          updateRows(appStateTables.lastProjectSelections, {
+            deleted: 1, mode: null, revision,
+          }, { id: "singleton" }),
+        ];
       case "projectPreference":
         return [updateRows(appStateTables.projectPreferences, {
           boolean_value: null, deleted: 1, enabled: null, integer_value: null, revision, text_value: null,
