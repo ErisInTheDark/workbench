@@ -2722,14 +2722,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ) : (
                       <>
                         <p id="file-path" ref={filePathLabelRef} hidden={showStatsView} className="truncate text-base font-semibold leading-tight">
-                          {isThreadShellTitleLoading ? (
+                          {isThreadShellTitleLoading ? (selectionError ? "Thread unavailable" : (
                             <span className="block h-4 w-48 max-w-[60vw] rounded-full workbench-skeleton" aria-hidden="true" />
-                          ) : routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
+                          )) : routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
                         </p>
                         {showStatsView ? (
                           <WorkbenchStatsTabs href={(tab) => projectHref(statsTabRoute(tab))} onSelect={openStatsTabFromLink} tab={statsTab} />
                         ) : null}
-                        <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
+                        {/* A thread view only reaches this file-shell branch while its thread is loading or failed; editor copy would mislead. */}
+                        <p id="status-line" ref={statusLineRef} hidden={showThreadView || showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                           {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
                         </p>
                       </>
