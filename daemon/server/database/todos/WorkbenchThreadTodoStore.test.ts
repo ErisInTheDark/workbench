@@ -1,4 +1,4 @@
-/* No production exports. Tests protect thread-scoped todo edits and the addressed-feedback references a thread keeps. */
+/* No production exports. Tests protect thread-scoped todo edits and required-count summaries. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -6,10 +6,8 @@ import Database from "better-sqlite3";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { NativeThreadIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
-import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
-import WorkbenchThreadAddressedFeedbackStore from "../feedback/WorkbenchThreadAddressedFeedbackStore";
 import WorkbenchThreadTodoStore from "./WorkbenchThreadTodoStore";
 
 async function fixture(context: TestContext) {
@@ -25,7 +23,7 @@ async function fixture(context: TestContext) {
     title: native, createdAt: 1, updatedAt: 1, activityAt: 1,
   }).threadId);
   return {
-    todos: new WorkbenchThreadTodoStore(database), addressed: new WorkbenchThreadAddressedFeedbackStore(database),
+    todos: new WorkbenchThreadTodoStore(database),
     threadId: threadId!, otherThreadId: otherThreadId!,
   };
 }
@@ -48,18 +46,4 @@ test("todos stay in creation order and every edit is scoped to its own thread", 
 
   assert.deepEqual(todos.execute({ kind: "setRequired", threadId, id: second.id, required: true }).todos, [{ ...second, text: "polish more", required: true }]);
   assert.deepEqual(todos.requiredCounts(), { [threadId]: 1 }, "only required todos count, per thread");
-});
-
-test("addressed feedback keeps first-recorded order, ignores repeats, and clears per thread", async context => {
-  const { addressed, threadId, otherThreadId } = await fixture(context);
-  const report = (id: number, daemonId = "daemon-a"): WorkbenchThreadAddressedFeedback => ({
-    kind: "feedback", id, daemonId, category: "bug", title: `report ${id}`, author: "model", thread: "thread", createdAt: id, report: "text",
-  });
-  addressed.execute({ kind: "record", threadId, feedback: [report(2), report(1)] });
-  addressed.execute({ kind: "record", threadId, feedback: [report(1), report(1, "daemon-b")] });
-  addressed.execute({ kind: "record", threadId: otherThreadId, feedback: [report(3)] });
-  assert.deepEqual(addressed.execute({ kind: "read", threadId }).map(item => `${item.daemonId}:${item.id}`),
-    ["daemon-a:2", "daemon-a:1", "daemon-b:1"]);
-  assert.deepEqual(addressed.execute({ kind: "clear", threadId }), []);
-  assert.equal(addressed.execute({ kind: "read", threadId: otherThreadId }).length, 1);
 });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendered regression checks protect claim and draft status, settlement, priority ordering, and compatible sidebar drag targets.
+ * - No production exports; rendered regression checks protect claim, draft and feedback status, settlement, priority ordering, and compatible sidebar drag targets.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -385,6 +385,39 @@ function renderThreadItem(
   ));
 }
 
+function renderThreadItemWithFacts(entry: WorkbenchThreadSidebarEntry, facts: { addressedFeedbackCount?: number }) {
+  const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  const summary = entry.entryKind === "draft" ? null : {
+    projectId,
+    summary: { facts, row: entry },
+  };
+  return renderToStaticMarkup(createElement(
+    WorkbenchClientProvider,
+    {
+      client: {
+        controls: null,
+        explorer: {} as ExplorerSnapshot,
+        mounted: {
+          threadSidebar: null,
+          threadSummaries: {
+            get: () => summary,
+            subscribe: () => () => undefined,
+          },
+        } as never,
+      },
+      children: createElement(
+        WorkbenchContextMenuContext.Provider,
+        { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
+        createElement(WorkbenchThreadListItem, {
+          entry,
+          href: "/agent/thread/thread-one",
+          projectId,
+        }),
+      ),
+    },
+  ));
+}
+
 async function renderThreadItemWithComposerDraft(
   entry: ThreadEntry,
   value: { attachments: Array<{ id: string; url: string }>; text: string; updatedAt: number },
@@ -552,6 +585,38 @@ test("thread rows count stacked proposals and order every work indicator", async
     },
   });
   assert.match(compactHtml, /data-role="thread-git-proposal"[\s\S]*?<span>3<\/span>/u);
+});
+
+test("only completed parent thread rows show addressed feedback counts", () => {
+  const completed = createThreadEntry({ threadId: "completed-feedback", title: "Completed feedback" });
+  const working = {
+    ...completed,
+    identity: { ...completed.identity, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("working-feedback") },
+    lifecycle: {
+      agent: { agentStatus: "working" as const, turnId: fixtureIdentityValues.WorkbenchTurnId["turn-one"] },
+      kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const,
+    },
+  };
+  const { metadata: _metadata, ...common } = completed;
+  const subagent: WorkbenchThreadSidebarEntry = {
+    ...common,
+    entryKind: "subagent",
+    createdAt: 1,
+    cwd: "C:/workspace",
+    directSubagentIndex: 0,
+    name: "child",
+    parentThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent"),
+    pinned: false,
+    profileId: "profile",
+    profileName: "profile",
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
+    updatedAt: 1,
+  };
+
+  assert.match(renderThreadItemWithFacts(completed, { addressedFeedbackCount: 3 }),
+    /data-role="thread-feedback"[\s\S]*?<span>3<\/span>/u);
+  assert.doesNotMatch(renderThreadItemWithFacts(working, { addressedFeedbackCount: 3 }), /data-role="thread-feedback"/u);
+  assert.doesNotMatch(renderThreadItemWithFacts(subagent, { addressedFeedbackCount: 3 }), /data-role="thread-feedback"/u);
 });
 
 test("thread rows expose waiting as a neutral working-icon status", () => {

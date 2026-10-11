@@ -2,7 +2,6 @@
  * Exports:
  * - FEEDBACK_CATEGORY_PRESENTATION: label and hue for each feedback category.
  * - feedbackImportanceTone: text colour class for an importance between 0 and 1.
- * - FEEDBACK_REFERENCE_TONE_CLASS_NAME: shared feedback-reference pill tone.
  * - FeedbackOwnershipFilter/selectFeedbackItems: the reports a viewer sees for ownership, category, and sort filters.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
@@ -15,7 +14,6 @@ import type {
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 
-export const FEEDBACK_REFERENCE_TONE_CLASS_NAME = "bg-hue-340/14 text-hue-340";
 export type FeedbackOwnershipFilter = "unowned" | "all";
 
 /** Hue utilities are listed whole so Tailwind can see them. */

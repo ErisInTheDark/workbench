@@ -358,6 +358,15 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.result;
   }
 
+  async readThreadAddressedFeedbackCounts() {
+    await this.start();
+    const response = await this.#request({ type: "threadAddressedFeedbackCounts" });
+    if (response.type !== "threadAddressedFeedbackCounts") {
+      throw new WorkbenchDatabaseFailure(`Unexpected addressed feedback count response: ${response.type}`);
+    }
+    return new Map(Object.entries(response.counts));
+  }
+
   async executeProjectStore(command: ProjectStoreCommand) {
     await this.start();
     const response = await this.#request({ type: "projectStore", command });

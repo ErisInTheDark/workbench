@@ -20,7 +20,10 @@ function entry(threadId: string, title: string) {
   };
 }
 
-function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
+function harness(
+  todoCounts: ReadonlyMap<string, number> = new Map(),
+  addressedFeedbackCounts: ReadonlyMap<string, number> | Promise<ReadonlyMap<string, number>> = new Map(),
+) {
   let snapshot = { entries: [entry("a", "first")], error: null, freshness: "fresh", projectId: PROJECT, revision: 1 } as unknown as WorkbenchThreadSidebarSnapshot;
   let notify: (projectId: ProjectId) => void = () => {};
   const changed: string[] = [];
@@ -30,6 +33,7 @@ function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
     readProject: async () => snapshot,
     subscribeProjects: listener => { notify = listener; return () => {}; },
     readRequiredTodoCounts: async () => todoCounts,
+    readAddressedFeedbackCounts: async () => await addressedFeedbackCounts,
     warn: message => { throw new Error(message); },
   });
   index.subscribe(threadId => changed.push(threadId));
@@ -43,11 +47,11 @@ function harness(todoCounts: ReadonlyMap<string, number> = new Map()) {
 }
 
 test("a read summary carries its owner project and seeded required todo count, and stays the same object until it changes", async () => {
-  const h = harness(new Map([["a", 3]]));
+  const h = harness(new Map([["a", 3]]), new Map([["a", 2]]));
   const located = await h.index.read("a");
   assert.equal(located?.projectId, PROJECT);
   assert.equal(located?.summary.row.title, "first");
-  assert.deepEqual(located?.summary.facts, { requiredTodoCount: 3 });
+  assert.deepEqual(located?.summary.facts, { addressedFeedbackCount: 2, requiredTodoCount: 3 });
   assert.equal(h.index.peek("a"), located);
   assert.equal(await h.index.read("missing"), null);
 });
@@ -76,4 +80,18 @@ test("pushed facts announce read threads and wait for unread ones", async () => 
   assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true, requiredTodoCount: 2 });
   h.index.setRequiredTodoCount("a", 0);
   assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true }, "zero counts read as absent");
+  h.index.setAddressedFeedbackCount("a", 2);
+  h.index.setAddressedFeedbackCount("a", 2);
+  assert.deepEqual(h.index.peek("a")?.summary.facts, { addressedFeedbackCount: 2, compacting: true });
+  h.index.setAddressedFeedbackCount("a", 0);
+  assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true });
+});
+
+test("a feedback change during startup wins over the older count seed", async () => {
+  const pending = Promise.withResolvers<ReadonlyMap<string, number>>();
+  const h = harness(new Map(), pending.promise);
+  const read = h.index.read("a");
+  h.index.setAddressedFeedbackCount("a", 0);
+  pending.resolve(new Map([["a", 3]]));
+  assert.deepEqual((await read)?.summary.facts, {});
 });

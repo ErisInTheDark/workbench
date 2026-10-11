@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadAddressedFeedbackCommand: atomic reads and edits of the feedback one thread was launched to address.
- * - default WorkbenchThreadAddressedFeedbackStore: own each thread's addressed feedback references in SQLite.
+ * - default WorkbenchThreadAddressedFeedbackStore: own and count each thread's addressed feedback references in SQLite.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
@@ -25,6 +25,13 @@ interface AddressedRow {
 
 export default class WorkbenchThreadAddressedFeedbackStore {
   constructor(private readonly database: Database.Database) {}
+
+  /** How many feedback reports each thread addresses; threads without any are absent. */
+  counts(): Record<string, number> {
+    const rows = this.database.prepare("SELECT thread_id, COUNT(*) AS count FROM workbench_thread_addressed_feedback GROUP BY thread_id")
+      .all() as Array<{ thread_id: string; count: number }>;
+    return Object.fromEntries(rows.map(({ thread_id: threadId, count }) => [threadId, count]));
+  }
 
   execute(command: ThreadAddressedFeedbackCommand): WorkbenchThreadAddressedFeedback[] {
     return this.database.transaction(() => {

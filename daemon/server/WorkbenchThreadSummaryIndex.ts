@@ -18,6 +18,8 @@ export interface WorkbenchThreadSummaryIndexPorts {
   subscribeProjects(listener: (projectId: ProjectId) => void): () => void;
   /** Every thread's required todo count, read once; later counts arrive through `setRequiredTodoCount`. */
   readRequiredTodoCounts(): Promise<ReadonlyMap<string, number>>;
+  /** Every thread's addressed feedback count, read once; later counts arrive through `setAddressedFeedbackCount`. */
+  readAddressedFeedbackCounts(): Promise<ReadonlyMap<string, number>>;
   warn(message: string): void;
 }
 
@@ -35,7 +37,7 @@ export default class WorkbenchThreadSummaryIndex {
 
   constructor(private readonly ports: WorkbenchThreadSummaryIndexPorts) {
     this.stop = ports.subscribeProjects(projectId => this.projectChanged(projectId));
-    this.seeded = ports.readRequiredTodoCounts().then(counts => {
+    const todoCounts = ports.readRequiredTodoCounts().then(counts => {
       for (const [threadId, requiredTodoCount] of counts) {
         // A todo change during the seed read is newer than the seed.
         if (this.facts.get(threadId)?.requiredTodoCount === undefined) this.setFact(threadId, { requiredTodoCount });
@@ -43,6 +45,15 @@ export default class WorkbenchThreadSummaryIndex {
     }, error => {
       ports.warn(`Thread todo counts could not be read: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
     });
+    const addressedFeedbackCounts = ports.readAddressedFeedbackCounts().then(counts => {
+      for (const [threadId, addressedFeedbackCount] of counts) {
+        // A feedback change during the seed read is newer than the seed.
+        if (this.facts.get(threadId)?.addressedFeedbackCount === undefined) this.setFact(threadId, { addressedFeedbackCount });
+      }
+    }, error => {
+      ports.warn(`Thread addressed feedback counts could not be read: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+    });
+    this.seeded = Promise.all([todoCounts, addressedFeedbackCounts]).then(() => undefined);
   }
 
   subscribe(listener: (threadId: string) => void) {
@@ -83,6 +94,10 @@ export default class WorkbenchThreadSummaryIndex {
 
   setRequiredTodoCount(threadId: string, requiredTodoCount: number) {
     this.setFact(threadId, { requiredTodoCount });
+  }
+
+  setAddressedFeedbackCount(threadId: string, addressedFeedbackCount: number) {
+    this.setFact(threadId, { addressedFeedbackCount });
   }
 
   dispose() {

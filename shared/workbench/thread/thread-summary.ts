@@ -17,6 +17,8 @@ import {
 } from "./thread-sidebar-row";
 
 export const ThreadSummaryFactsSchema = z.object({
+  /** Feedback reports this thread was launched to address. */
+  addressedFeedbackCount: z.number().int().nonnegative().optional(),
   /** Context compaction is running now. */
   compacting: z.boolean().optional(),
   /** Required follow-up todos the thread still holds; they keep it from settling. */
@@ -45,6 +47,7 @@ type ThreadSource = Exclude<WorkbenchThreadSidebarEntry | WorkbenchThreadSidebar
 export function createThreadSummary(entry: ThreadSource, facts: ThreadSummaryFacts): ThreadSummary {
   return {
     facts: {
+      ...(facts.addressedFeedbackCount ? { addressedFeedbackCount: facts.addressedFeedbackCount } : {}),
       ...(facts.compacting ? { compacting: true } : {}),
       ...(facts.requiredTodoCount ? { requiredTodoCount: facts.requiredTodoCount } : {}),
     },

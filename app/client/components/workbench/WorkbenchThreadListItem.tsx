@@ -187,6 +187,9 @@ export default function WorkbenchThreadListItem({
     ? 0
     : entry.gitArc?.proposals.filter(({ status: proposalStatus }) => proposalStatus === "proposed").length ?? 0;
   const stashedClaimCount = stashedPaths.length;
+  const feedbackCount = entry.entryKind === "thread" && lifecycle?.kind === "completed"
+    ? facts?.addressedFeedbackCount ?? 0
+    : 0;
   const hasDraftImages = entry.entryKind === "draft"
     && (isPinnedDraftSummaryEntry(entry) ? entry.hasAttachments : entry.draft.attachments.length > 0);
   const draftReferenceKinds = entry.entryKind !== "draft" ? []
@@ -207,6 +210,7 @@ export default function WorkbenchThreadListItem({
   const gitWorkLabels = [
     hasComposerDraft ? "unsent draft" : "",
     requiredTodoCount ? `${requiredTodoCount} required ${requiredTodoCount === 1 ? "todo" : "todos"}` : "",
+    feedbackCount ? `${feedbackCount} addressed feedback ${feedbackCount === 1 ? "report" : "reports"}` : "",
     proposalCount ?`${proposalCount} ${proposalCount === 1 ? "proposal" : "proposals"}` : "",
     activeClaimCount ? `${activeClaimCount} claimed ${activeClaimCount === 1 ? "file" : "files"}` : "",
     stashedClaimCount ? `${stashedClaimCount} stashed ${stashedClaimCount === 1 ? "file" : "files"}` : "",
@@ -320,7 +324,7 @@ export default function WorkbenchThreadListItem({
           <Icon className={`mr-1.5 ${statusClassName}`} size={16} />
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate${selected ? " font-semibold text-text" : ""}`}>{titleContent}</span>
           <span className={`col-start-3 row-start-1 ml-2 inline-flex items-center gap-1.5 text-[0.72rem] text-fg/muted${actionReplacesPriority && !isDragActive ? " group-hover/thread-row:invisible group-has-[:focus-visible]/thread-row:invisible" : ""}`}>
-            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
+            <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             {PriorityIcon ? <span data-role="thread-priority-icon" data-thread-priority={priority} className="inline-flex size-4 shrink-0 items-center justify-center"><PriorityIcon size={16} /></span> : null}
             {trailing ?? rowTime}
           </span>
@@ -351,7 +355,7 @@ export default function WorkbenchThreadListItem({
           ) : undefined}
           metadata={(
             <span className="grid items-center">
-              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
+              <WorkbenchThreadEntryBadge claimedCount={activeClaimCount} feedbackCount={feedbackCount} hasComposerDraft={hasComposerDraft} proposalCount={proposalCount} stashedCount={stashedClaimCount} requiredTodoCount={requiredTodoCount} />
             </span>
           )}
           statusIcon={<Icon className={statusClassName} size={16} />}

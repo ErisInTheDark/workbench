@@ -14,13 +14,13 @@ const row = {
   metadata: { archived: false, pinned: false, snoozed: false },
 } as const;
 
-test("facts from a newer daemon parse in an older browser by dropping what it does not know", () => {
-  const parsed = ThreadSummarySchema.parse({ row, facts: { requiredTodoCount: 2, goalSet: true } });
-  assert.deepEqual(parsed.facts, { requiredTodoCount: 2 });
+test("known summary facts parse while unknown newer facts are dropped", () => {
+  const parsed = ThreadSummarySchema.parse({ row, facts: { addressedFeedbackCount: 3, requiredTodoCount: 2, goalSet: true } });
+  assert.deepEqual(parsed.facts, { addressedFeedbackCount: 3, requiredTodoCount: 2 });
 });
 
 test("idle facts read as absent, so a thread with nothing live has the same summary as before", () => {
-  const idle = createThreadSummary(row as never, { compacting: false, requiredTodoCount: 0 });
+  const idle = createThreadSummary(row as never, { addressedFeedbackCount: 0, compacting: false, requiredTodoCount: 0 });
   assert.deepEqual(idle.facts, {});
   assert.equal("compacting" in createThreadSummary({ ...row, compacting: true } as never, {}).row, false,
     "a legacy row flag never leaks into the summary row");

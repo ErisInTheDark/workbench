@@ -26,7 +26,7 @@ import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessio
 import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
-import { FEEDBACK_REFERENCE_TONE_CLASS_NAME } from "../stats/workspaces/stats-feedback-presentation";
+import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "../feedback-presentation";
 
 const amberClassName = "text-amber-600 dark:text-amber-300";
 
@@ -162,7 +162,7 @@ export default function ThreadStatusArea({
         ...(feedback.length ? [{
           key: "feedback",
           className: highlightFeedback
-            ? `${threadStatusSegmentClassName} rounded-full ${FEEDBACK_REFERENCE_TONE_CLASS_NAME}`
+            ? `${threadStatusSegmentClassName} ${FEEDBACK_TEXT_TONE_CLASS_NAME}`
             : threadStatusSegmentClassName,
           content: <><MegaphoneIcon size={14} />{count(feedback.length)}</>,
         }] : []),

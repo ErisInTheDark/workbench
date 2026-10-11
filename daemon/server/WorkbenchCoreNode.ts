@@ -346,6 +346,7 @@ function createWorkbenchCoreFeature(
     store: command => database.executeThreadAddressedFeedback(command),
     resolve: resolveCanonicalThread,
     changed: (threadId, addressedFeedback) => {
+      threadSummaries?.setAddressedFeedbackCount(threadId, addressedFeedback.length);
       for (const listener of runtimeListeners) listener(threadId, { addressedFeedback });
     },
   });
@@ -554,6 +555,7 @@ function createWorkbenchCoreFeature(
     readProject: projectId => threadStateController.readProject(projectId),
     subscribeProjects: listener => threadStateController.subscribeProjects(listener),
     readRequiredTodoCounts: () => database.readThreadRequiredTodoCounts(),
+    readAddressedFeedbackCounts: () => database.readThreadAddressedFeedbackCounts(),
     warn: logThreadStateWarning,
   });
   const summaries = threadSummaries;

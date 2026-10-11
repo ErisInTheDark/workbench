@@ -115,6 +115,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "threadTodos"; command: ThreadTodoCommand }
   | { type: "threadRequiredTodoCounts" }
   | { type: "threadAddressedFeedback"; command: ThreadAddressedFeedbackCommand }
+  | { type: "threadAddressedFeedbackCounts" }
   | { type: "projectStore"; command: ProjectStoreCommand }
   | { type: "readLegacyDiffArtifact"; input: LegacyDiffArtifactReference }
   | { type: "recordApprovalOutcome"; entry: WorkbenchApprovalOutcomeEntry }
@@ -210,6 +211,7 @@ export type WorkbenchDatabaseRequest = WorkbenchDatabaseRequestPayload & { id: n
 
 const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "getInventory", "query", "readLegacyDiffArtifact", "readApprovalOutcomes",
+  "threadAddressedFeedbackCounts",
   "readRetainedProjectCatalog", "readProjectAliases", "resolveProjectIdentity", "readThreadLaunch",
   "resolveThreadIdentity", "resolveNativeThreadIdentity", "listThreadIdentities", "resolveTurnIdentity",
   "resolveTranscriptItemIdentity", "readThreadStateNavigationSummary", "readThreadStateProject",
@@ -258,6 +260,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadTodos"; result: ThreadTodoResult }
   | { id: number; type: "threadRequiredTodoCounts"; counts: Record<string, number> }
   | { id: number; type: "threadAddressedFeedback"; result: WorkbenchThreadAddressedFeedback[] }
+  | { id: number; type: "threadAddressedFeedbackCounts"; counts: Record<string, number> }
   | { id: number; type: "projectStore"; result: ProjectStoreResult }
   | { id: number; type: "legacyDiffArtifact"; diff: string | null }
   | { id: number; type: "approvalOutcomes"; entries: WorkbenchApprovalOutcomeEntry[] }
