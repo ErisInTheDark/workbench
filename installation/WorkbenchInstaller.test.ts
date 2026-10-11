@@ -70,6 +70,19 @@ test("first launch can skip wake and shortcut independently", async () => {
   assert.ok(f.output.join("").includes("wb shortcut"));
 });
 
+test("cancelling a later questionnaire step performs no optional actions", async () => {
+  const f = fixture([], true);
+  let question = 0;
+  f.setup.prompt.choose = async (label) => {
+    f.prompts.push(label);
+    if (question++ === 0) return "Enable wake service";
+    throw new DOMException("Setup cancelled.", "AbortError");
+  };
+  await assert.rejects(f.setup.welcome(), { name: "AbortError" });
+  assert.equal(f.prompts.length, 2);
+  assert.deepEqual(f.calls, []);
+});
+
 test("connect setup does not ask about or launch the app", async () => {
   const f = fixture();
   await f.setup.connect();

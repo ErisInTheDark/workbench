@@ -27,11 +27,13 @@ export default class WorkbenchInstallPrompt {
     home = os.homedir(),
     schedule = scheduleFrames,
     now = () => performance.now(),
+    signals = process,
   } = {}) {
     this.input = input;
     this.output = output;
     this.schedule = schedule;
     this.now = now;
+    this.signals = signals;
     this.paths = platform === "win32" ? path.win32 : path.posix;
     this.windows = platform === "win32";
     this.cwd = cwd;
@@ -202,6 +204,7 @@ export default class WorkbenchInstallPrompt {
         this.input.removeListener("keypress", onKey);
         this.input.removeListener("end", onEnd);
         this.input.removeListener("error", onError);
+        this.signals.removeListener("SIGINT", onEnd);
         process.removeListener("exit", restoreScreen);
         try {
           this.input.setRawMode(Boolean(wasRaw));
@@ -229,12 +232,11 @@ export default class WorkbenchInstallPrompt {
           finish(error);
         }
       };
-      this.input.on("keypress", onKey);
       this.input.once("end", onEnd);
       this.input.once("error", onError);
+      this.signals.once("SIGINT", onEnd);
       try {
         this.input.setRawMode(true);
-        this.input.resume();
         screenActive = true;
         process.once("exit", restoreScreen);
         const cubeRows = this.cubeRows(label, promptLines);
@@ -248,6 +250,17 @@ export default class WorkbenchInstallPrompt {
             catch (error) { finish(error); }
           });
         }
+        let bufferedInterrupt = false;
+        for (let chunk = this.input.read(); chunk !== null; chunk = this.input.read()) {
+          const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+          bufferedInterrupt ||= text.includes("\u0003") || text.includes("\u0004");
+        }
+        if (bufferedInterrupt) {
+          onEnd();
+          return;
+        }
+        this.input.on("keypress", onKey);
+        this.input.resume();
       } catch (error) {
         finish(error);
       }

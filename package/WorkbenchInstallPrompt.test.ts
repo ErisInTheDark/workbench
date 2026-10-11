@@ -2,6 +2,7 @@
  * No production exports. Tests installation path editing and terminal ownership.
  */
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
@@ -147,6 +148,38 @@ test("explicit workbench destination remains editable without a duplicate suffix
   assert.ok(!io.frames.some((frame) => frame.includes("\u001b[2m/wb")));
 });
 
+test("buffered input from a settled prompt cannot accept the next prompt", async () => {
+  const io = terminal();
+  const prompt = new WorkbenchInstallPrompt({ ...io, platform: "linux", cwd: "/projects" });
+  const consent = prompt.choose("Install?", ["Let's go!", "Cancel"]);
+  io.input.write("\r");
+  assert.equal(await consent, "Let's go!");
+
+  io.input.write("\r");
+  let locationSettled = false;
+  const location = prompt.location("Install location", "/projects/workbench").then(value => {
+    locationSettled = true;
+    return value;
+  });
+  await new Promise(setImmediate);
+  assert.equal(locationSettled, false);
+
+  io.input.emit("keypress", "", { name: "return" });
+  assert.equal(await location, "/projects/workbench");
+});
+
+test("a buffered interrupt between prompts cancels the next prompt", async () => {
+  const io = terminal();
+  const prompt = new WorkbenchInstallPrompt(io);
+  const consent = prompt.choose("Install?", ["Let's go!", "Cancel"]);
+  io.input.write("\r");
+  await consent;
+
+  io.input.write("\u0003");
+  await assert.rejects(prompt.location("Install location", "/projects/workbench"), { name: "AbortError" });
+  assert.equal(io.input.listenerCount("keypress"), 0);
+});
+
 test("choices are visible together and navigation accepts the highlighted choice", async () => {
   const io = terminal();
   const prompt = new WorkbenchInstallPrompt(io);
@@ -172,6 +205,19 @@ test("cancellation restores terminal state and never accepts installation", asyn
   assert.equal(io.input.isRaw, false);
   assert.equal(io.input.listenerCount("keypress"), 0);
   assert.ok(io.frames.join("").includes("\u001b[?1049l"));
+});
+
+test("a process interrupt cancels before a later key can accept the highlighted action", async () => {
+  const io = terminal();
+  const signals = new EventEmitter();
+  const result = new WorkbenchInstallPrompt({ ...io, signals }).choose(
+    "Enable remote access?",
+    ["Enable wake service", "Skip"],
+  );
+  signals.emit("SIGINT");
+  io.input.emit("keypress", "", { name: "return" });
+  await assert.rejects(result, { name: "AbortError" });
+  assert.equal(io.input.listenerCount("keypress"), 0);
 });
 
 test("a prompt rendering failure restores the terminal", async () => {

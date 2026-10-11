@@ -63,15 +63,16 @@ export default class WorkbenchInstaller {
   }
 
   async welcome() {
+    let wake = "Skip";
     if (await this.detectTailscale()) {
-      const choice = await this.prompt.choose(
+      wake = await this.prompt.choose(
         "Workbench has an APP and a DAEMON background service. Running the app will automatically launch the daemon. If you're on a shared network with Tailscale, your app can connect to other daemons when their apps are not running. This requires a thin wake service to run on the device, allowing other apps to find it.\n\nDo you want to connect to this daemon from the workbench app on other devices?",
         ["Enable wake service", "Skip"],
       );
-      if (choice === "Enable wake service") await this.connect();
     }
     const shortcut = await this.prompt.choose("Add a desktop shortcut?", ["Add shortcut", "Skip"]);
     if (shortcut === "Add shortcut") await this.dispatch(["shortcut"]);
+    if (wake === "Enable wake service") await this.connect();
     this.write([
       "Workbench CLI:",
       "  wb - launch",
