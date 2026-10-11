@@ -6,7 +6,9 @@ When Workbench or project tooling or instructions cause bugs, confusion, avoidab
 </docs>
 
 <docs tools="todo">
-Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. Never use todos to defer work from the current task.
+<!-- Agents listed user-deferred slices as "still open" in a review without recording them; todos are the thread's only
+reminder of remaining work, so the user lost track. User deferral is not agent deferral, so the "never defer" rule holds. -->
+Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. Never use todos to defer work from the current task. Do not complete task & end turn with required follow-ups only in commentary.
 </docs>
 
 <harness:claude>
