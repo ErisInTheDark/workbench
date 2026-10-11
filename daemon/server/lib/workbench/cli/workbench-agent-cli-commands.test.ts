@@ -1084,8 +1084,8 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   ], { cwd: "C:/workspace" });
   assert.equal(browse.kind, "request");
   assert.deepEqual(browse.request.body, {
+    commands: ["open http://localhost:3000 --headless", "snapshot --compact"],
     cwd: "C:/workspace",
-    script: "open http://localhost:3000 --headless\nsnapshot --compact",
     session: "research",
     threadId: "thread-1",
     vars: { url: "http://localhost:3000" },

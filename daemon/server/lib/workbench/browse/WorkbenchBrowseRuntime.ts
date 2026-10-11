@@ -5,7 +5,9 @@
  * - WorkbenchBrowseProjectResolver: injected daemon project-catalog resolution port.
  * - WorkbenchBrowseProjectIdResolver: injected project-ID catalog resolution port.
  * - WorkbenchBrowseRuntimeProfileStore: injectable persistent-profile resolver contract.
- * - default WorkbenchBrowseRuntime: own warm Browse imports, per-session FIFO, daemon bootstrap, deadlines, and retirement.
+ * - WorkbenchBrowseCallerWaiter: separate caller-visible deadlines from underlying daemon completion.
+ * - prepareWorkbenchBrowseDaemonProcess: lower and detach a Browse child in lifecycle order.
+ * - default WorkbenchBrowseRuntime: own warm Browse imports, per-session FIFO, daemon bootstrap, observation, and retirement.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
@@ -13,7 +15,7 @@ import path from "node:path";
 
 import { appRoot, normalizeRelativePath, type ResolvedProject } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
-import { killProcessTreeAsync, logError } from "../../../process-helpers";
+import { killProcessTreeAsync, logError, lowerAgentProcessPriority } from "../../../process-helpers";
 import {
   type AgentEndpointProjectResolution,
 } from "../project/agent-endpoint-project";
@@ -61,6 +63,10 @@ export interface WorkbenchBrowseRuntimeProfileStore {
 }
 
 type WorkbenchBrowseProcessRetirer = (pid: number) => Promise<void>;
+export type WorkbenchBrowseCallerWaiter = <TValue>(
+  completion: Promise<TValue>,
+  options: { deadline: number; message: string; signal?: AbortSignal },
+) => Promise<TValue>;
 
 class BrowseRetirementError extends Error {
   constructor(cause: unknown) {
@@ -85,10 +91,10 @@ function remainingTimeout(deadline: number, session: string) {
   return Math.max(1, remaining);
 }
 
-async function waitForSessionTurn(previous: Promise<void>, deadline: number, session: string, signal?: AbortSignal) {
-  const timeoutMs = remainingTimeout(deadline, session);
+const waitForCaller: WorkbenchBrowseCallerWaiter = async (completion, { deadline, message, signal }) => {
+  const timeoutMs = Math.max(1, deadline - Date.now());
   if (signal?.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     let settled = false;
     const finish = (operation: () => void) => {
       if (settled) return;
@@ -99,11 +105,24 @@ async function waitForSessionTurn(previous: Promise<void>, deadline: number, ses
     };
     const abort = () => finish(() => reject(signal?.reason ?? new Error("Browse request cancelled.")));
     const timer = setTimeout(() => finish(() => reject(
-      new WorkbenchBrowseDaemonTimeoutError(`Browse session ${session} timed out while waiting for its previous command.`),
+      new WorkbenchBrowseDaemonTimeoutError(message),
     )), timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });
-    void previous.then(() => finish(resolve));
+    void completion.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
   });
+};
+
+function isObservationRequest(request: BrowseRuntimeRequest) {
+  return request.kind === "status"
+    || (request.kind === "command" && request.command === "screenshot");
+}
+
+export function prepareWorkbenchBrowseDaemonProcess(
+  child: Pick<ReturnType<typeof spawn>, "pid" | "unref">,
+  lowerPriority: typeof lowerAgentProcessPriority = lowerAgentProcessPriority,
+) {
+  lowerPriority(child);
+  child.unref();
 }
 
 export default class WorkbenchBrowseRuntime {
@@ -113,6 +132,7 @@ export default class WorkbenchBrowseRuntime {
   private readonly resolveProjectById: WorkbenchBrowseProjectIdResolver;
   private readonly resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
   private readonly sessionTails = new Map<string, Promise<void>>();
+  private readonly waitForCaller: WorkbenchBrowseCallerWaiter;
 
   constructor({
     client = new WorkbenchBrowseDaemonClient(),
@@ -120,18 +140,21 @@ export default class WorkbenchBrowseRuntime {
     retireProcess = killProcessTreeAsync,
     resolveProjectById,
     resolveProjectFromCwd,
+    waitForCaller: callerWaiter = waitForCaller,
   }: {
     client?: WorkbenchBrowseDaemonTransport;
     profileStore?: WorkbenchBrowseRuntimeProfileStore;
     retireProcess?: WorkbenchBrowseProcessRetirer;
     resolveProjectById: WorkbenchBrowseProjectIdResolver;
     resolveProjectFromCwd: WorkbenchBrowseProjectResolver;
+    waitForCaller?: WorkbenchBrowseCallerWaiter;
   }) {
     this.client = client;
     this.profileStore = profileStore;
     this.retireProcess = retireProcess;
     this.resolveProjectById = resolveProjectById;
     this.resolveProjectFromCwd = resolveProjectFromCwd;
+    this.waitForCaller = callerWaiter;
   }
 
   async initialize() {
@@ -173,19 +196,17 @@ export default class WorkbenchBrowseRuntime {
     const startedAt = Date.now();
     const deadline = startedAt + command.runtimeRequest.timeoutMs;
     try {
-      const execute = async () => {
-        try {
-          return await this.execute(command.runtimeRequest, execution, deadline, signal);
-        } catch (error) {
-          if (command.runtimeRequest.session && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) {
-            await this.retireSession(command.runtimeRequest.session);
-          }
-          throw error;
-        }
-      };
-      const result = command.runtimeRequest.session
+      const execute = async () => await this.execute(command.runtimeRequest, execution, deadline);
+      const forceStop = command.runtimeRequest.kind === "stop" && command.runtimeRequest.force;
+      const result = forceStop
+        ? await execute()
+        : command.runtimeRequest.session && !isObservationRequest(command.runtimeRequest)
         ? await this.enqueueSession(command.runtimeRequest.session, execute, deadline, signal)
-        : await execute();
+        : await this.waitForCaller(execute(), {
+          deadline,
+          message: `Browse session ${command.runtimeRequest.session ?? "request"} timed out.`,
+          ...(signal ? { signal } : {}),
+        });
       return {
         durationMs: Date.now() - startedAt,
         exitCode: 0,
@@ -208,43 +229,31 @@ export default class WorkbenchBrowseRuntime {
 
   async status(session: string, timeoutMs = 5_000, signal?: AbortSignal) {
     const deadline = Date.now() + timeoutMs;
-    let enteredSession = false;
-    return await this.enqueueSession(session, async () => {
-      enteredSession = true;
-      try {
-        return await this.readStatus(session, remainingTimeout(deadline, session), signal);
-      } catch (error) {
-        if (enteredSession && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
-        throw error;
-      }
-    }, deadline, signal);
+    return await this.waitForCaller(this.readStatus(session, timeoutMs), {
+      deadline,
+      message: `Browse session ${session} status timed out.`,
+      ...(signal ? { signal } : {}),
+    });
   }
 
   async inspectStatus(session: string, timeoutMs = 5_000, signal?: AbortSignal) {
-    const deadline = Date.now() + timeoutMs;
-    return await this.enqueueSession(session, async () => (
-      await this.readStatus(session, remainingTimeout(deadline, session), signal)
-    ), deadline, signal);
+    return await this.status(session, timeoutMs, signal);
   }
 
   async stop(session: string, { force = false, signal, timeoutMs = 5_000 }: { force?: boolean; signal?: AbortSignal; timeoutMs?: number } = {}) {
     const deadline = Date.now() + timeoutMs;
-    let enteredSession = false;
-    return await this.enqueueSession(session, async () => {
-      enteredSession = true;
-      try {
-        return await this.stopNow(session, { deadline, force, signal });
-      } catch (error) {
-        if (enteredSession && !(error instanceof BrowseRetirementError) && (error instanceof WorkbenchBrowseDaemonTimeoutError || signal?.aborted)) await this.retireSession(session);
-        throw error;
-      }
-    }, deadline, signal);
+    if (force) {
+      const pid = await this.client.readPid(session);
+      await this.retireSession(session, pid);
+      return { stopped: Boolean(pid) };
+    }
+    return await this.enqueueSession(session, async () => await this.stopNow(session, { deadline, force: false }), deadline, signal);
   }
 
-  private async execute(request: BrowseRuntimeRequest, execution: WorkbenchBrowseExecutionContext, deadline: number, signal?: AbortSignal) {
+  private async execute(request: BrowseRuntimeRequest, execution: WorkbenchBrowseExecutionContext, deadline: number) {
     switch (request.kind) {
       case "doctor": {
-        const status = request.session ? await this.readStatus(request.session, remainingTimeout(deadline, request.session), signal) : null;
+        const status = request.session ? await this.readStatus(request.session, remainingTimeout(deadline, request.session)) : null;
         return {
           checks: [
             { message: "Workbench warm Browse runtime imported", name: "runtime", status: "ok" },
@@ -257,33 +266,38 @@ export default class WorkbenchBrowseRuntime {
         };
       }
       case "status":
-        return await this.readStatus(request.session, remainingTimeout(deadline, request.session), signal) ?? {
+        return await this.readStatus(request.session, remainingTimeout(deadline, request.session)) ?? {
           browserConnected: false,
           initialized: false,
           session: request.session,
         };
       case "stop":
-        return await this.stopNow(request.session, { deadline, force: request.force, signal });
+        if (request.force) {
+          const pid = await this.client.readPid(request.session);
+          await this.retireSession(request.session, pid);
+          return { stopped: Boolean(pid) };
+        }
+        return await this.stopNow(request.session, { deadline, force: request.force });
       case "open": {
-        await this.ensureDaemon(request, execution, deadline, signal);
+        await this.ensureDaemon(request, execution, deadline);
         const timeoutMs = remainingTimeout(deadline, request.session);
         return await this.client.request(request.session, {
           timeoutMs,
           type: "open",
           url: request.params.url,
           waitUntil: request.params.waitUntil,
-        }, timeoutMs, signal);
+        }, timeoutMs);
       }
       case "command": {
         // A busy page can delay the daemon's status response; give it the command's own deadline so a slow but live session is not retired.
-        const status = await this.readStatus(request.session, remainingTimeout(deadline, request.session), signal);
+        const status = await this.readStatus(request.session, remainingTimeout(deadline, request.session));
         if (!status) throw new Error(`Browse session ${request.session} is not running. Open it before sending browser commands.`);
         const timeoutMs = remainingTimeout(deadline, request.session);
         return await this.client.request(request.session, {
           command: request.command,
           params: request.params,
           type: "command",
-        }, timeoutMs, signal);
+        }, timeoutMs);
       }
     }
   }
@@ -314,7 +328,7 @@ export default class WorkbenchBrowseRuntime {
       stdio: "ignore",
       windowsHide: request.mode === "headless",
     });
-    child.unref();
+    prepareWorkbenchBrowseDaemonProcess(child);
     // The command's own deadline owns how long a cold daemon may take; a fixed cap killed valid slow starts.
     while (Date.now() < deadline) {
       if (signal?.aborted) throw signal.reason;
@@ -377,11 +391,23 @@ export default class WorkbenchBrowseRuntime {
     const ownCompletion = new Promise<void>((resolve) => { release = resolve; });
     const current = previous.then(async () => await ownCompletion);
     this.sessionTails.set(session, current);
+    let entered = false;
     try {
-      await waitForSessionTurn(previous, deadline, session, signal);
-      return await task();
+      await this.waitForCaller(previous, {
+        deadline,
+        message: `Browse session ${session} timed out while waiting for its previous command.`,
+        ...(signal ? { signal } : {}),
+      });
+      entered = true;
+      const completion = task();
+      void completion.then(release, release);
+      return await this.waitForCaller(completion, {
+        deadline,
+        message: `Browse session ${session} timed out.`,
+        ...(signal ? { signal } : {}),
+      });
     } finally {
-      release();
+      if (!entered) release();
       void current.then(() => {
         if (this.sessionTails.get(session) === current) this.sessionTails.delete(session);
       });

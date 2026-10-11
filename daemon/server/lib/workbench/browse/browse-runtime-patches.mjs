@@ -1,14 +1,14 @@
 /*
  * Runtime helpers:
  * - installHiddenChildProcessDefaults: keep helper windows hidden without suppressing deliberate headed browser windows.
- * - patchBrowseRuntime: install Workbench download, persistent-profile, and graceful browser-close behavior on Browse/Stagehand.
- * Keywords: browse, runtime, windows, downloads, profile, shutdown.
+ * - patchBrowseRuntime: install Workbench driver, download, profile, and graceful-close behaviour.
  */
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { patchBrowseDriverCommandSchema, patchBrowseDriverExtensions } from "./browse-driver-extensions.mjs";
 
 export function installHiddenChildProcessDefaults(argv = process.argv) {
   const originals = {
@@ -57,7 +57,10 @@ export async function patchBrowseRuntime() {
   const browseRoot = path.dirname(browseRequire.resolve("browse/package.json"));
   const stagehandRoot = path.dirname(browseRequire.resolve("@browserbasehq/stagehand/package.json"));
   const sessionManagerModule = await import(pathToFileURL(path.join(browseRoot, "dist", "lib", "driver", "session-manager.js")).href);
+  const commandTypesModule = await import(pathToFileURL(path.join(browseRoot, "dist", "lib", "driver", "commands", "types.js")).href);
   const contextModule = await import(pathToFileURL(path.join(stagehandRoot, "dist", "esm", "lib", "v3", "understudy", "context.js")).href);
+  patchBrowseDriverCommandSchema(commandTypesModule);
+  patchBrowseDriverExtensions(sessionManagerModule);
   patchLaunchOptions(sessionManagerModule);
   patchPersistentProfileShutdown(contextModule);
   return { browseRequire, browseRoot };

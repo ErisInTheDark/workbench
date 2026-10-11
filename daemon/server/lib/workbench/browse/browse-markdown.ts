@@ -5,6 +5,7 @@
  * - compileWorkbenchBrowseMarkdown: compile BrowseMD text into a typed Browse action sequence.
  * - tokenizeWorkbenchBrowseMarkdownLine: split a BrowseMD command line with shell-ish quotes.
  */
+import { findWorkbenchBrowseCommandSpec } from "./browse-command-specs";
 import type {
   WorkbenchBrowseAgentAction,
   WorkbenchBrowseAgentSequenceRequest,
@@ -51,9 +52,12 @@ const BROWSE_MARKDOWN_VALUE_FLAGS = new Set([
   "delay",
   "duration",
   "filter",
+  "interval",
   "max-depth",
+  "repeat",
   "scale",
   "session",
+  "speed",
   "steps",
   "type",
   "wait",
@@ -68,6 +72,9 @@ const BROWSE_MARKDOWN_MOUSE_BUTTONS = new Set(["left", "middle", "right"]);
 const BROWSE_MARKDOWN_SCREENSHOT_ANIMATIONS = new Set(["allow", "disabled"]);
 const BROWSE_MARKDOWN_SCREENSHOT_TYPES = new Set(["jpeg", "png"]);
 const BROWSE_MARKDOWN_JAVASCRIPT_LANGUAGES = new Set(["js", "javascript"]);
+const BROWSE_MARKDOWN_INIT_JAVASCRIPT_LANGUAGES = new Set(["init-js", "init-javascript"]);
+const BROWSE_MARKDOWN_DEVICE_PRESETS = new Set(["clear", "iphone-14", "pixel-7"]);
+const BROWSE_MARKDOWN_NETWORK_PRESETS = new Set(["clear", "fast-3g", "offline", "slow-3g"]);
 
 export function compileWorkbenchBrowseMarkdown(
   script: string,
@@ -146,22 +153,24 @@ function shouldIgnoreLine(trimmedLine: string) {
 }
 
 function compileFence(fence: ParsedFence, options: WorkbenchBrowseMarkdownCompileOptions): WorkbenchBrowseAgentAction {
-  if (!BROWSE_MARKDOWN_JAVASCRIPT_LANGUAGES.has(fence.language)) {
+  const isEval = BROWSE_MARKDOWN_JAVASCRIPT_LANGUAGES.has(fence.language);
+  const isInit = BROWSE_MARKDOWN_INIT_JAVASCRIPT_LANGUAGES.has(fence.language);
+  if (!isEval && !isInit) {
     throw new WorkbenchBrowseMarkdownParseError(
       fence.language
-        ? `Unsupported fenced code language "${fence.language}". Use js or javascript for Browse eval blocks.`
-        : "Fenced code blocks must specify js or javascript for Browse eval blocks.",
+        ? `Unsupported fenced code language "${fence.language}". Use js, javascript, init-js, or init-javascript.`
+        : "Fenced code blocks must specify js, javascript, init-js, or init-javascript.",
       fence.lineNumber,
     );
   }
 
   const expression = createJavaScriptFenceExpression(fence.lines.join("\n").trim());
   if (!expression) {
-    throw new WorkbenchBrowseMarkdownParseError("JavaScript eval block cannot be empty.", fence.lineNumber);
+    throw new WorkbenchBrowseMarkdownParseError("JavaScript block cannot be empty.", fence.lineNumber);
   }
   return {
     ...createBrowserActionBase(options, []),
-    action: "eval",
+    action: isInit ? "initScript" : "eval",
     expression,
   };
 }
@@ -191,6 +200,11 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
   const [rawCommand = "", rawSecond = ""] = tokens;
   const command = rawCommand.toLowerCase();
   const second = rawSecond.toLowerCase();
+  const spec = findWorkbenchBrowseCommandSpec(tokens);
+  if (!spec) {
+    throw new WorkbenchBrowseMarkdownParseError(`Unsupported BrowseMD command "${rawCommand}".`, context.lineNumber);
+  }
+  validateCommandFlags(tokens, spec.flags, spec.key, context.lineNumber);
   const args = getCommandArguments(tokens.slice(1));
 
   switch (command) {
@@ -225,12 +239,8 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
         ...createSessionActionBase(context.options, tokens),
         action: "doctor",
       };
-    case "eval":
-      return {
-        ...createBrowserActionBase(context.options, tokens),
-        action: "eval",
-        expression: requireRest(args, 0, "eval requires a JavaScript expression.", context.lineNumber),
-      };
+    case "emulate":
+      return compileEmulateCommand(commandContext, second, getCommandArguments(tokens.slice(2)));
     case "fill":
       return {
         ...createBrowserActionBase(context.options, tokens),
@@ -252,11 +262,11 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
       };
     case "is":
       return compileIsCommand(commandContext, args);
-    case "js":
+    case "help":
       return {
-        ...createBrowserActionBase(context.options, tokens),
-        action: "eval",
-        expression: requireRest(args, 0, "js requires a JavaScript expression.", context.lineNumber),
+        ...createActionBase(context.options),
+        action: "help",
+        topic: args.length ? args.join(" ") : null,
       };
     case "key":
     case "press":
@@ -299,6 +309,7 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     case "snapshot":
       return {
         ...createBrowserActionBase(context.options, tokens),
+        ...(args[0] && args[0].toLowerCase() !== "compact" ? createTargetField(args[0]) : {}),
         action: "snapshot",
         compact: hasFlag(tokens, ["compact"]) || args[0]?.toLowerCase() === "compact",
         filter: readStringFlag(tokens, ["filter"]),
@@ -314,6 +325,21 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
         ...createSessionActionBase(context.options, tokens),
         action: "stop",
         force: hasFlag(tokens, ["force"]),
+      };
+    case "throttle":
+      return compileThrottleCommand(commandContext, second, getCommandArguments(tokens.slice(2)));
+    case "touch":
+      return compileTouchCommand(commandContext, second, getCommandArguments(tokens.slice(2)));
+    case "trace":
+      return {
+        ...createBrowserActionBase(context.options, tokens),
+        action: "trace",
+        operation: requireChoice(
+          requireArgument(args, 0, "trace requires start or stop.", context.lineNumber),
+          new Set(["start", "stop"]),
+          "trace operation",
+          context.lineNumber,
+        ) as "start" | "stop",
       };
     case "type":
       return {
@@ -336,6 +362,59 @@ function compileCommandLine(context: LineContext): WorkbenchBrowseAgentAction {
     default:
       throw new WorkbenchBrowseMarkdownParseError(`Unsupported BrowseMD command "${rawCommand}".`, context.lineNumber);
   }
+}
+
+function compileEmulateCommand(context: LineContext, subcommand: string, args: string[]): WorkbenchBrowseAgentAction {
+  if (subcommand !== "device") {
+    throw new WorkbenchBrowseMarkdownParseError("emulate only supports `emulate device <preset|clear>`.", context.lineNumber);
+  }
+  return {
+    ...createBrowserActionBase(context.options, context.tokens),
+    action: "emulateDevice",
+    preset: requireChoice(
+      requireArgument(args, 0, "emulate device requires a preset or clear.", context.lineNumber),
+      BROWSE_MARKDOWN_DEVICE_PRESETS,
+      "device preset",
+      context.lineNumber,
+    ) as "clear" | "iphone-14" | "pixel-7",
+  };
+}
+
+function compileThrottleCommand(context: LineContext, subcommand: string, args: string[]): WorkbenchBrowseAgentAction {
+  const value = requireArgument(args, 0, `throttle ${subcommand} requires a value or clear.`, context.lineNumber);
+  if (subcommand === "cpu") {
+    return {
+      ...createBrowserActionBase(context.options, context.tokens),
+      action: "throttleCpu",
+      rate: value === "clear" ? null : readRequiredPositiveNumber(value, "CPU throttle rate must be a positive number or clear.", context.lineNumber),
+    };
+  }
+  if (subcommand === "network") {
+    return {
+      ...createBrowserActionBase(context.options, context.tokens),
+      action: "throttleNetwork",
+      preset: requireChoice(value, BROWSE_MARKDOWN_NETWORK_PRESETS, "network preset", context.lineNumber) as "clear" | "fast-3g" | "offline" | "slow-3g",
+    };
+  }
+  throw new WorkbenchBrowseMarkdownParseError("throttle supports cpu or network.", context.lineNumber);
+}
+
+function compileTouchCommand(context: LineContext, subcommand: string, args: string[]): WorkbenchBrowseAgentAction {
+  if (subcommand !== "scroll") {
+    throw new WorkbenchBrowseMarkdownParseError("touch only supports scroll.", context.lineNumber);
+  }
+  return {
+    ...createBrowserActionBase(context.options, context.tokens),
+    action: "touchScroll",
+    deltaX: readRequiredNumber(args[2], "touch scroll requires a deltaX value.", context.lineNumber),
+    deltaY: readRequiredNumber(args[3], "touch scroll requires a deltaY value.", context.lineNumber),
+    fling: hasFlag(context.tokens, ["fling"]),
+    intervalMs: readPositiveIntegerFlag(context.tokens, ["interval"], "interval", context.lineNumber),
+    repeat: readPositiveIntegerFlag(context.tokens, ["repeat"], "repeat", context.lineNumber),
+    speed: readPositiveIntegerFlag(context.tokens, ["speed"], "speed", context.lineNumber),
+    x: readRequiredNumber(args[0], "touch scroll requires an x coordinate.", context.lineNumber),
+    y: readRequiredNumber(args[1], "touch scroll requires a y coordinate.", context.lineNumber),
+  };
 }
 
 function compileForgetCommand(context: LineContext): WorkbenchBrowseAgentAction {
@@ -419,6 +498,9 @@ function compileMouseCommand(context: LineContext, subcommand: string, args: str
         action: "mouseScroll",
         deltaX: readRequiredNumber(args[2], "mouse scroll requires a deltaX value.", context.lineNumber),
         deltaY: readRequiredNumber(args[3], "mouse scroll requires a deltaY value.", context.lineNumber),
+        intervalMs: readPositiveIntegerFlag(context.tokens, ["interval"], "interval", context.lineNumber),
+        park: hasFlag(context.tokens, ["park"]),
+        repeat: readPositiveIntegerFlag(context.tokens, ["repeat"], "repeat", context.lineNumber),
         returnXPath: hasFlag(context.tokens, ["return-xpath"]),
         x: readRequiredNumber(args[0], "mouse scroll requires an x coordinate.", context.lineNumber),
         y: readRequiredNumber(args[1], "mouse scroll requires a y coordinate.", context.lineNumber),
@@ -591,6 +673,21 @@ function readFlagName(token: string) {
   return (withoutPrefix.split("=", 1)[0] ?? "").trim().toLowerCase() || null;
 }
 
+function validateCommandFlags(
+  tokens: readonly string[],
+  allowedFlags: readonly string[],
+  command: string,
+  lineNumber: number,
+) {
+  const allowed = new Set(allowedFlags);
+  for (const token of tokens.slice(command.split(" ").length)) {
+    const flag = readFlagName(token);
+    if (flag && !allowed.has(flag)) {
+      throw new WorkbenchBrowseMarkdownParseError(`${command} does not support --${flag}.`, lineNumber);
+    }
+  }
+}
+
 function hasFlag(tokens: readonly string[], names: readonly string[]) {
   return tokens.some((token) => {
     const flag = readFlagName(token);
@@ -674,6 +771,14 @@ function readRequiredPositiveInteger(value: string | undefined, error: string, l
     throw new WorkbenchBrowseMarkdownParseError(error, lineNumber);
   }
   return Math.trunc(numericValue);
+}
+
+function readRequiredPositiveNumber(value: string | undefined, error: string, lineNumber: number) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    throw new WorkbenchBrowseMarkdownParseError(error, lineNumber);
+  }
+  return numericValue;
 }
 
 function readRequiredNumber(value: string | undefined, error: string, lineNumber: number) {

@@ -426,7 +426,7 @@ test("dispatches Browse commands directly without an internal fetch and preserve
     });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "direct Browse owner\n");
-    assert.match(receivedBody, /"script":"status"/u);
+    assert.match(receivedBody, /"commands":\["status"\]/u);
   } finally {
     await server.close();
   }

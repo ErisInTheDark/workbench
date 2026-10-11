@@ -31,6 +31,7 @@ import {
   type WorkbenchBrowseAgentCommand,
 } from "./actions/browse-action-registry";
 import { compileWorkbenchBrowseMarkdown, tokenizeWorkbenchBrowseMarkdownLine } from "./browse-markdown";
+import { renderWorkbenchBrowseHelp } from "./browse-command-specs";
 import WorkbenchBrowseDownloadMonitor from "./WorkbenchBrowseDownloadMonitor";
 import WorkbenchBrowseRawCli from "./WorkbenchBrowseRawCli";
 import WorkbenchBrowseRuntime, {
@@ -60,6 +61,7 @@ const MAX_BROWSE_ARGS = 128;
 const MAX_BROWSE_ARG_LENGTH = 16_384;
 const MAX_BROWSE_STDIN_LENGTH = 2 * 1024 * 1024;
 const MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH = 2 * 1024 * 1024;
+const MAX_BROWSE_MARKDOWN_COMMANDS = 50;
 const MAX_BROWSE_MARKDOWN_VARIABLES = 64;
 const MAX_BROWSE_MARKDOWN_VARIABLE_VALUE_LENGTH = 16_384;
 const MAX_BROWSE_AGENT_SEQUENCE_ACTIONS = 50;
@@ -194,10 +196,17 @@ function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): Workben
 
   const script = typeof value.script === "string" ? value.script : null;
   const scriptPath = typeof value.scriptPath === "string" ? normalizeString(value.scriptPath) : null;
-  if ((script ? 1 : 0) + (scriptPath ? 1 : 0) !== 1) {
+  const commands = Array.isArray(value.commands)
+    && value.commands.length > 0
+    && value.commands.length <= MAX_BROWSE_MARKDOWN_COMMANDS
+    && value.commands.every((command) => typeof command === "string" && command.length <= MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH)
+      ? value.commands as string[]
+      : null;
+  if ((script ? 1 : 0) + (scriptPath ? 1 : 0) + (commands ? 1 : 0) !== 1) {
     return null;
   }
-  if (script !== null && script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
+  if ((script !== null && script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH)
+    || (commands && commands.reduce((length, command) => length + command.length, 0) > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH)) {
     return null;
   }
   const vars = normalizeBrowseMarkdownVariables(value.vars);
@@ -218,9 +227,8 @@ function normalizeBrowseMarkdownRequest(value: Record<string, unknown>): Workben
     vars,
   };
 
-  return script !== null
-    ? { ...base, script }
-    : { ...base, scriptPath: scriptPath ?? "" };
+  if (commands) return { ...base, commands };
+  return script !== null ? { ...base, script } : { ...base, scriptPath: scriptPath ?? "" };
 }
 
 function normalizeBrowseMarkdownFileName(value: string) {
@@ -254,6 +262,7 @@ interface BrowseMarkdownCommandResult extends WorkbenchBrowseCommandResponse {
 }
 
 interface BrowseMarkdownStatement {
+  commandIndex?: number;
   kind: "command" | "javascript";
   lineNumber: number;
   text: string;
@@ -271,11 +280,18 @@ async function readBrowseMarkdownSource(
   request: WorkbenchBrowseAgentScriptRequest,
   projectExecution: WorkbenchBrowseProjectExecution,
 ) {
+  if ("commands" in request) {
+    return {
+      baseDirectoryPath: projectExecution.cwd,
+      commandScripts: request.commands,
+      workspaceRootPaths: projectExecution.workspaceRootPaths,
+    };
+  }
   if (!("scriptPath" in request)) {
     return {
       baseDirectoryPath: projectExecution.cwd,
+      commandScripts: [request.script],
       workspaceRootPaths: projectExecution.workspaceRootPaths,
-      script: request.script,
     };
   }
 
@@ -292,8 +308,8 @@ async function readBrowseMarkdownSource(
   }
   return {
     baseDirectoryPath: path.dirname(scriptFilePath),
+    commandScripts: [script],
     workspaceRootPaths: projectExecution.workspaceRootPaths,
-    script,
   };
 }
 
@@ -373,7 +389,7 @@ async function expandBrowseMarkdownIncludes(
   return outputLines.join("\n");
 }
 
-function readBrowseMarkdownStatements(script: string) {
+function readBrowseMarkdownStatements(script: string, commandIndex?: number) {
   const statements: BrowseMarkdownStatement[] = [];
   const lines = script.replace(/\r\n?/gu, "\n").split("\n");
   let fenceStartLine: number | null = null;
@@ -383,14 +399,19 @@ function readBrowseMarkdownStatements(script: string) {
     if (fenceStartLine !== null) {
       fenceLines.push(line);
       if (/^```+\s*$/u.test(line.trim())) {
-        statements.push({ kind: "javascript", lineNumber: fenceStartLine, text: fenceLines.join("\n") });
+        statements.push({
+          ...(commandIndex === undefined ? {} : { commandIndex }),
+          kind: "javascript",
+          lineNumber: fenceStartLine,
+          text: fenceLines.join("\n"),
+        });
         fenceStartLine = null;
         fenceLines = [];
       }
       continue;
     }
 
-    if (/^```+\s*(?:js|javascript)\s*$/iu.test(line.trim())) {
+    if (/^```+\s*(?:js|javascript|init-js|init-javascript)\s*$/iu.test(line.trim())) {
       fenceStartLine = lineNumber;
       fenceLines = [line];
       continue;
@@ -400,7 +421,12 @@ function readBrowseMarkdownStatements(script: string) {
     if (!trimmedLine || trimmedLine === "---" || trimmedLine.startsWith("# ") || trimmedLine.startsWith("## ") || trimmedLine.startsWith("### ") || trimmedLine.startsWith("// ")) {
       continue;
     }
-    statements.push({ kind: "command", lineNumber, text: line });
+    statements.push({
+      ...(commandIndex === undefined ? {} : { commandIndex }),
+      kind: "command",
+      lineNumber,
+      text: line,
+    });
   }
 
   if (fenceStartLine !== null) {
@@ -668,12 +694,11 @@ async function runBrowseMarkdownPipeline(
   return finalResult;
 }
 
-function isBrowseMarkdownHelpStatement(statement: BrowseMarkdownStatement) {
-  if (statement.kind === "javascript") {
-    return false;
-  }
-  const tokens = tokenizeWorkbenchBrowseMarkdownLine(statement.text, statement.lineNumber);
-  return tokens.some((token) => token === "--help" || token === "-h");
+function getBrowseMarkdownStatementLabel(statement: BrowseMarkdownStatement) {
+  const line = `line ${statement.lineNumber}`;
+  return statement.commandIndex === undefined
+    ? `BrowseMD ${line}`
+    : `BrowseMD command ${statement.commandIndex + 1}, ${line}`;
 }
 
 async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionContext, scriptRequest: WorkbenchBrowseAgentScriptRequest): Promise<WorkbenchBrowseCommandResponse> {
@@ -685,11 +710,14 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
     projectId: null,
   });
   const source = await readBrowseMarkdownSource(scriptRequest, projectExecution);
-  const script = await expandBrowseMarkdownIncludes(projectExecution, source.script, source.baseDirectoryPath);
-  if (script.length > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
+  const scripts = await Promise.all(source.commandScripts.map(async (commandScript) =>
+    await expandBrowseMarkdownIncludes(projectExecution, commandScript, source.baseDirectoryPath)));
+  if (scripts.reduce((length, script) => length + script.length, 0) > MAX_BROWSE_MARKDOWN_SCRIPT_LENGTH) {
     throw new Error("BrowseMD script is too large after includes.");
   }
-  const statements = readBrowseMarkdownStatements(script);
+  const indexedCommands = "commands" in scriptRequest;
+  const statements = scripts.flatMap((script, commandIndex) =>
+    readBrowseMarkdownStatements(script, indexedCommands ? commandIndex : undefined));
   if (!statements.length) {
     throw new Error("BrowseMD script did not contain any commands.");
   }
@@ -714,24 +742,31 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
     variables: new Map(Object.entries(scriptRequest.vars ?? {})),
     workspaceRootPaths: source.workspaceRootPaths,
   };
-  const helpStatements = statements.filter(isBrowseMarkdownHelpStatement);
-  if (helpStatements.length) {
-    throw new Error(getUnsupportedBrowseHelpError());
-  }
-
   let stdout = "";
   let stderr = "";
   for (const [index, statement] of statements.entries()) {
-    const assignmentShapeError = statement.kind === "command" ? getBrowseMarkdownAssignmentShapeError(statement.text) : null;
-    if (assignmentShapeError) {
-      throw new Error(`BrowseMD line ${statement.lineNumber}: ${assignmentShapeError}`);
+    const label = getBrowseMarkdownStatementLabel(statement);
+    let assignment: ReturnType<typeof parseBrowseMarkdownAssignment> = null;
+    let result: BrowseMarkdownCommandResult;
+    try {
+      const assignmentShapeError = statement.kind === "command" ? getBrowseMarkdownAssignmentShapeError(statement.text) : null;
+      if (assignmentShapeError) throw new Error(assignmentShapeError);
+      assignment = statement.kind === "command" ? parseBrowseMarkdownAssignment(statement.text) : null;
+      result = statement.kind === "javascript"
+        ? await runBrowseMarkdownBrowseCommand(context, statement.text, index, statement.lineNumber)
+        : assignment
+          ? await runBrowseMarkdownPipeline(context, assignment.command, index, statement.lineNumber)
+          : await runBrowseMarkdownPipeline(context, statement.text, index, statement.lineNumber);
+    } catch (error) {
+      return {
+        durationMs: Date.now() - startedAt,
+        error: `${label}: ${error instanceof Error ? error.message : String(error)}`,
+        exitCode: 1,
+        ok: false,
+        stderr,
+        stdout,
+      };
     }
-    const assignment = statement.kind === "command" ? parseBrowseMarkdownAssignment(statement.text) : null;
-    const result = statement.kind === "javascript"
-      ? await runBrowseMarkdownBrowseCommand(context, statement.text, index, statement.lineNumber)
-      : assignment
-        ? await runBrowseMarkdownPipeline(context, assignment.command, index, statement.lineNumber)
-        : await runBrowseMarkdownPipeline(context, statement.text, index, statement.lineNumber);
     execution.signal.throwIfAborted();
     stderr += result.stderr;
     if (result.browseResultAction) {
@@ -748,7 +783,7 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
     if (!result.ok) {
       return {
         durationMs: Date.now() - startedAt,
-        error: result.error ?? `BrowseMD line ${statement.lineNumber} failed.`,
+        error: `${label}: ${result.error ?? "command failed."}`,
         exitCode: result.exitCode ?? 1,
         ok: false,
         stderr,
@@ -757,7 +792,14 @@ async function runBrowseMarkdownRequest(execution: WorkbenchBrowseExecutionConte
     }
     if (assignment) {
       if (!BROWSE_MARKDOWN_VARIABLE_PATTERN.test(assignment.name)) {
-        throw new Error(`Invalid BrowseMD variable name: ${assignment.name}`);
+        return {
+          durationMs: Date.now() - startedAt,
+          error: `${label}: Invalid BrowseMD variable name: ${assignment.name}`,
+          exitCode: 1,
+          ok: false,
+          stderr,
+          stdout,
+        };
       }
       setBrowseMarkdownVariable(context.variables, assignment.name, result.stdout);
     } else if (!result.outputRedirected) {
@@ -1072,6 +1114,16 @@ async function runBrowseAgentCommand(
   } = {},
 ): Promise<WorkbenchBrowseAgentResponse> {
   const startedAt = Date.now();
+  if (payload.action === "help") {
+    return {
+      action: "help",
+      durationMs: Date.now() - startedAt,
+      exitCode: 0,
+      ok: true,
+      stderr: "",
+      stdout: renderWorkbenchBrowseHelp(payload.topic ?? undefined),
+    };
+  }
   if (payload.action === "sessions") {
     const listResponse = await execution.sessions.listSessions({
       cwd: payload.cwd ?? null,
@@ -1290,13 +1342,13 @@ export default class WorkbenchBrowseRequestHandler {
         return null;
       }
     })();
-    if (isRecord(requestBody) && ("script" in requestBody || "scriptPath" in requestBody)) {
+    if (isRecord(requestBody) && ("commands" in requestBody || "script" in requestBody || "scriptPath" in requestBody)) {
       const scriptRequest = normalizeBrowseMarkdownRequest(requestBody);
       if (!scriptRequest) {
         return browseCommandResponse({
           durationMs: Date.now() - startedAt,
           exitCode: null,
-          error: "A valid BrowseMD request requires exactly one of script or scriptPath, plus cwd and threadId.",
+          error: "A valid BrowseMD request requires exactly one of commands, script, or scriptPath, plus cwd and threadId.",
           ok: false,
           stderr: "",
           stdout: "",

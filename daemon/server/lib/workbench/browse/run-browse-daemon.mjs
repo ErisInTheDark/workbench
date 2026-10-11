@@ -1,7 +1,6 @@
 /*
  * Runtime entrypoint:
  * - Load Workbench Browse patches and run one long-lived Browse session daemon without Oclif.
- * Keywords: browse, daemon, session, runtime.
  */
 import { pathToFileURL } from "node:url";
 import path from "node:path";

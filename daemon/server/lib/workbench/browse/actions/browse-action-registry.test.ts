@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover typed Browse action registry normalization. Keywords: browse, action, registry, test, timeout.
+ * - No production exports; Node tests cover typed Browse action registry normalization.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -73,4 +73,95 @@ test("rejects unsupported remote and malformed session requests", () => {
     error: "Typed Browse status requires a named session.",
     ok: false,
   });
+});
+
+test("preserves scoped snapshots and batched pointer input", () => {
+  const snapshot = normalizeWorkbenchBrowseAgentRequest({
+    action: "snapshot",
+    compact: true,
+    ref: "0-12",
+    session: "research",
+    threadId: "thread-1",
+  });
+  assert.equal(snapshot.ok, true);
+  if (!snapshot.ok || !("runtimeRequest" in snapshot.command)) return;
+  assert.deepEqual(snapshot.command.runtimeRequest.kind === "command" ? snapshot.command.runtimeRequest.params : null, {
+    compact: true,
+    filter: undefined,
+    maxDepth: undefined,
+    target: "@0-12",
+  });
+
+  const scroll = normalizeWorkbenchBrowseAgentRequest({
+    action: "mouseScroll",
+    deltaX: 0,
+    deltaY: -300,
+    intervalMs: 16,
+    park: true,
+    repeat: 4,
+    session: "research",
+    threadId: "thread-1",
+    x: 195,
+    y: 500,
+  });
+  assert.equal(scroll.ok, true);
+  if (!scroll.ok || !("runtimeRequest" in scroll.command)) return;
+  assert.deepEqual(scroll.command.runtimeRequest.kind === "command" ? scroll.command.runtimeRequest.params : null, {
+    deltaX: 0,
+    deltaY: -300,
+    intervalMs: 16,
+    park: true,
+    repeat: 4,
+    returnXPath: false,
+    x: 195,
+    y: 500,
+  });
+});
+
+test("normalizes performance and touch controls into driver-owned commands", () => {
+  const cases = [
+    {
+      action: {
+        action: "touchScroll" as const,
+        deltaX: 0,
+        deltaY: -600,
+        fling: true,
+        intervalMs: 20,
+        repeat: 2,
+        session: "research",
+        speed: 1200,
+        threadId: "thread-1",
+        x: 200,
+        y: 500,
+      },
+      command: "workbench.touchScroll",
+    },
+    {
+      action: { action: "emulateDevice" as const, preset: "pixel-7" as const, session: "research", threadId: "thread-1" },
+      command: "workbench.emulateDevice",
+    },
+    {
+      action: { action: "throttleCpu" as const, rate: 4, session: "research", threadId: "thread-1" },
+      command: "workbench.throttleCpu",
+    },
+    {
+      action: { action: "throttleNetwork" as const, preset: "slow-3g" as const, session: "research", threadId: "thread-1" },
+      command: "workbench.throttleNetwork",
+    },
+    {
+      action: { action: "initScript" as const, expression: "globalThis.ready = true", session: "research", threadId: "thread-1" },
+      command: "workbench.initScript",
+    },
+    {
+      action: { action: "trace" as const, operation: "start" as const, session: "research", threadId: "thread-1" },
+      command: "workbench.trace",
+    },
+  ];
+
+  for (const example of cases) {
+    const normalized = normalizeWorkbenchBrowseAgentRequest(example.action);
+    assert.equal(normalized.ok, true);
+    if (!normalized.ok || !("runtimeRequest" in normalized.command) || normalized.command.runtimeRequest.kind !== "command") continue;
+    assert.equal(normalized.command.runtimeRequest.command, example.command);
+  }
 });

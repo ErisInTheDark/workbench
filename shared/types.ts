@@ -36,6 +36,12 @@
  * - WorkbenchBrowseAgentClickRequest: Browse click request.
  * - WorkbenchBrowseAgentFillRequest: Browse fill request.
  * - WorkbenchBrowseAgentEvalRequest: Browse evaluation request.
+ * - WorkbenchBrowseAgentInitScriptRequest: Browse pre-navigation script request.
+ * - WorkbenchBrowseAgentHelpRequest: Browse command-help request.
+ * - WorkbenchBrowseAgentEmulateDeviceRequest: Browse device-emulation request.
+ * - WorkbenchBrowseAgentThrottleCpuRequest: Browse CPU-throttling request.
+ * - WorkbenchBrowseAgentThrottleNetworkRequest: Browse network-throttling request.
+ * - WorkbenchBrowseAgentTraceRequest: Browse trace-lifecycle request.
  * - WorkbenchBrowseAgentGetRequest: Browse property-read request.
  * - WorkbenchBrowseAgentHighlightRequest: Browse highlight request.
  * - WorkbenchBrowseAgentIsRequest: Browse predicate request.
@@ -45,6 +51,7 @@
  * - WorkbenchBrowseAgentMouseHoverRequest: Browse mouse-hover request.
  * - WorkbenchBrowseAgentMouseDragRequest: Browse mouse-drag request.
  * - WorkbenchBrowseAgentMouseScrollRequest: Browse mouse-scroll request.
+ * - WorkbenchBrowseAgentTouchScrollRequest: Browse touch-scroll request.
  * - WorkbenchBrowseAgentCursorRequest: Browse cursor request.
  * - WorkbenchBrowseAgentSelectRequest: Browse select request.
  * - WorkbenchBrowseAgentSessionsRequest: Browse sessions request.
@@ -64,6 +71,7 @@
  * - WorkbenchBrowseAgentScriptBaseRequest: common Browse script fields.
  * - WorkbenchBrowseAgentScriptInlineRequest: inline Browse script request.
  * - WorkbenchBrowseAgentScriptFileRequest: file Browse script request.
+ * - WorkbenchBrowseAgentScriptCommandsRequest: indexed Browse command-array request.
  * - WorkbenchBrowseAgentResponse: Browse agent response contract.
  * - WorkbenchBrowseAgentSequenceResponse: Browse sequence response.
  * - WorkbenchBrowseAgentSequenceProgressEvent: Browse sequence progress union.
@@ -329,12 +337,15 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentCleanupRequest
   | WorkbenchBrowseAgentCursorRequest
   | WorkbenchBrowseAgentDoctorRequest
+  | WorkbenchBrowseAgentEmulateDeviceRequest
   | WorkbenchBrowseAgentEvalRequest
   | WorkbenchBrowseAgentFillRequest
   | WorkbenchBrowseAgentForgetRequest
   | WorkbenchBrowseAgentForwardRequest
   | WorkbenchBrowseAgentGetRequest
+  | WorkbenchBrowseAgentHelpRequest
   | WorkbenchBrowseAgentHighlightRequest
+  | WorkbenchBrowseAgentInitScriptRequest
   | WorkbenchBrowseAgentIsRequest
   | WorkbenchBrowseAgentKeyRequest
   | WorkbenchBrowseAgentMouseClickRequest
@@ -350,6 +361,10 @@ export type WorkbenchBrowseAgentAction =
   | WorkbenchBrowseAgentSnapshotRequest
   | WorkbenchBrowseAgentStatusRequest
   | WorkbenchBrowseAgentStopRequest
+  | WorkbenchBrowseAgentThrottleCpuRequest
+  | WorkbenchBrowseAgentThrottleNetworkRequest
+  | WorkbenchBrowseAgentTouchScrollRequest
+  | WorkbenchBrowseAgentTraceRequest
   | WorkbenchBrowseAgentTypeRequest
   | WorkbenchBrowseAgentViewportRequest
   | WorkbenchBrowseAgentWaitRequest;
@@ -369,11 +384,14 @@ export type WorkbenchBrowseAgentActionName =
   | "doctor"
   | "cursor"
   | "eval"
+  | "emulateDevice"
   | "fill"
   | "forget"
   | "forward"
   | "get"
+  | "help"
   | "highlight"
+  | "initScript"
   | "is"
   | "key"
   | "mouseClick"
@@ -389,6 +407,10 @@ export type WorkbenchBrowseAgentActionName =
   | "snapshot"
   | "status"
   | "stop"
+  | "throttleCpu"
+  | "throttleNetwork"
+  | "touchScroll"
+  | "trace"
   | "type"
   | "viewport"
   | "wait";
@@ -423,6 +445,8 @@ export interface WorkbenchBrowseAgentSnapshotRequest extends WorkbenchBrowseAgen
   compact?: boolean | null;
   filter?: string | null;
   maxDepth?: number | null;
+  ref?: string | null;
+  selector?: string | null;
 }
 
 export interface WorkbenchBrowseAgentClickRequest extends WorkbenchBrowseAgentBrowserRequest {
@@ -442,6 +466,36 @@ export interface WorkbenchBrowseAgentFillRequest extends WorkbenchBrowseAgentBro
 export interface WorkbenchBrowseAgentEvalRequest extends WorkbenchBrowseAgentBrowserRequest {
   action: "eval";
   expression: string;
+}
+
+export interface WorkbenchBrowseAgentInitScriptRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "initScript";
+  expression: string;
+}
+
+export interface WorkbenchBrowseAgentHelpRequest extends WorkbenchBrowseAgentBaseRequest {
+  action: "help";
+  topic?: string | null;
+}
+
+export interface WorkbenchBrowseAgentEmulateDeviceRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "emulateDevice";
+  preset: "clear" | "iphone-14" | "pixel-7";
+}
+
+export interface WorkbenchBrowseAgentThrottleCpuRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "throttleCpu";
+  rate: number | null;
+}
+
+export interface WorkbenchBrowseAgentThrottleNetworkRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "throttleNetwork";
+  preset: "clear" | "fast-3g" | "offline" | "slow-3g";
+}
+
+export interface WorkbenchBrowseAgentTraceRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "trace";
+  operation: "start" | "stop";
 }
 
 export interface WorkbenchBrowseAgentGetRequest extends WorkbenchBrowseAgentBrowserRequest {
@@ -509,7 +563,22 @@ export interface WorkbenchBrowseAgentMouseScrollRequest extends WorkbenchBrowseA
   action: "mouseScroll";
   deltaX: number;
   deltaY: number;
+  intervalMs?: number | null;
+  park?: boolean | null;
+  repeat?: number | null;
   returnXPath?: boolean | null;
+  x: number;
+  y: number;
+}
+
+export interface WorkbenchBrowseAgentTouchScrollRequest extends WorkbenchBrowseAgentBrowserRequest {
+  action: "touchScroll";
+  deltaX: number;
+  deltaY: number;
+  fling?: boolean | null;
+  intervalMs?: number | null;
+  repeat?: number | null;
+  speed?: number | null;
   x: number;
   y: number;
 }
@@ -595,6 +664,7 @@ export interface WorkbenchBrowseAgentSequenceRequest {
 }
 
 export type WorkbenchBrowseAgentScriptRequest =
+  | WorkbenchBrowseAgentScriptCommandsRequest
   | WorkbenchBrowseAgentScriptFileRequest
   | WorkbenchBrowseAgentScriptInlineRequest;
 
@@ -613,13 +683,21 @@ export interface WorkbenchBrowseAgentScriptBaseRequest {
 }
 
 export interface WorkbenchBrowseAgentScriptInlineRequest extends WorkbenchBrowseAgentScriptBaseRequest {
+  commands?: never;
   script: string;
   scriptPath?: never;
 }
 
 export interface WorkbenchBrowseAgentScriptFileRequest extends WorkbenchBrowseAgentScriptBaseRequest {
+  commands?: never;
   script?: never;
   scriptPath: string;
+}
+
+export interface WorkbenchBrowseAgentScriptCommandsRequest extends WorkbenchBrowseAgentScriptBaseRequest {
+  commands: string[];
+  script?: never;
+  scriptPath?: never;
 }
 
 export interface WorkbenchBrowseAgentResponse extends WorkbenchBrowseCommandResponse {

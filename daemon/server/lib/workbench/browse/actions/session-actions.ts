@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - BrowseActionBuild/BrowseActionBuilder/BrowseRuntimeRequest: typed action-registry contracts for direct Browse runtime dispatch. Keywords: browse, action, registry, runtime, protocol.
- * - BROWSE_ACTION_* constants and normalization helpers: shared validation primitives for Browse action groups. Keywords: browse, validation, session, selector.
- * - sessionActionBuilders: build doctor, status, open, refs, cursor, stop, and viewport runtime actions. Keywords: browse, session, lifecycle, viewport.
+ * - BrowseActionBuild/BrowseActionBuilder/BrowseRuntimeRequest: typed action-registry contracts for direct Browse runtime dispatch.
+ * - BROWSE_ACTION_* constants and normalization helpers: shared validation primitives for Browse action groups.
+ * - sessionActionBuilders: build doctor, status, open, refs, cursor, stop, and viewport runtime actions.
  */
 import type {
   WorkbenchBrowseAgentAction,

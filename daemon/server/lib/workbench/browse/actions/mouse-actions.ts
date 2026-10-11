@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - mouseActionBuilders: validate and build direct coordinate mouse Browse actions. Keywords: browse, registry, mouse, coordinates.
+ * - mouseActionBuilders: validate and build coordinate mouse and touch Browse actions.
  */
 import {
   buildBrowserAction,
@@ -76,12 +76,54 @@ export const mouseActionBuilders: readonly BrowseActionBuilder[] = [
     const failure = values.find((value) => !value.ok);
     if (failure && !failure.ok) return { error: failure.error };
     const [x, y, deltaX, deltaY] = values.map((value) => value.ok ? value.value : 0);
+    const intervalMs = normalizePositiveActionInteger(action.intervalMs) ?? 0;
+    const repeat = normalizePositiveActionInteger(action.repeat) ?? 1;
     return buildBrowserAction("mouseScroll", action, "mouse.scroll", {
       deltaX,
       deltaY,
+      intervalMs,
+      park: action.park === true,
+      repeat,
       returnXPath: action.returnXPath === true,
       x,
       y,
-    }, ["mouse", "scroll", String(x), String(y), String(deltaX), String(deltaY), ...(action.returnXPath ? ["--return-xpath"] : [])]);
+    }, [
+      "mouse", "scroll", String(x), String(y), String(deltaX), String(deltaY),
+      "--repeat", String(repeat),
+      "--interval", String(intervalMs),
+      ...(action.park ? ["--park"] : []),
+      ...(action.returnXPath ? ["--return-xpath"] : []),
+    ]);
+  },
+  (action) => {
+    if (action.action !== "touchScroll") return null;
+    const values = [
+      normalizeFiniteActionNumber(action.x, "Browse touchScroll requires a finite x coordinate."),
+      normalizeFiniteActionNumber(action.y, "Browse touchScroll requires a finite y coordinate."),
+      normalizeFiniteActionNumber(action.deltaX, "Browse touchScroll requires a finite deltaX value."),
+      normalizeFiniteActionNumber(action.deltaY, "Browse touchScroll requires a finite deltaY value."),
+    ];
+    const failure = values.find((value) => !value.ok);
+    if (failure && !failure.ok) return { error: failure.error };
+    const [x, y, deltaX, deltaY] = values.map((value) => value.ok ? value.value : 0);
+    const intervalMs = normalizePositiveActionInteger(action.intervalMs) ?? 0;
+    const repeat = normalizePositiveActionInteger(action.repeat) ?? 1;
+    const speed = normalizePositiveActionInteger(action.speed) ?? 800;
+    return buildBrowserAction("touchScroll", action, "workbench.touchScroll", {
+      deltaX,
+      deltaY,
+      fling: action.fling === true,
+      intervalMs,
+      repeat,
+      speed,
+      x,
+      y,
+    }, [
+      "touch", "scroll", String(x), String(y), String(deltaX), String(deltaY),
+      "--speed", String(speed),
+      "--repeat", String(repeat),
+      "--interval", String(intervalMs),
+      ...(action.fling ? ["--fling"] : []),
+    ]);
   },
 ];

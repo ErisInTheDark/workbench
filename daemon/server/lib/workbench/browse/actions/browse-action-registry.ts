@@ -1,12 +1,13 @@
 /*
  * Exports:
- * - WorkbenchBrowseAgentCleanupCommand/WorkbenchBrowseAgentForgetCommand/WorkbenchBrowseAgentRequestNormalization: normalized typed Browse action contracts. Keywords: browse, action, registry, cleanup, forget.
- * - normalizeWorkbenchBrowseAgentRequest: validate a typed Browse request through grouped action builders and emit direct runtime metadata. Keywords: browse, registry, validation, runtime.
+ * - WorkbenchBrowseAgentCleanupCommand/WorkbenchBrowseAgentForgetCommand/WorkbenchBrowseAgentRequestNormalization: normalized typed Browse action contracts.
+ * - normalizeWorkbenchBrowseAgentRequest: validate typed Browse requests through grouped action builders.
  */
 import type { WorkbenchBrowseAgentAction, WorkbenchBrowseAgentCleanupRequest } from "workbench-shared/types";
 import { elementInputActionBuilders } from "./element-input-actions";
 import { mouseActionBuilders } from "./mouse-actions";
 import { navigationActionBuilders } from "./navigation-actions";
+import { performanceActionBuilders } from "./performance-actions";
 import { runtimeActionBuilders } from "./runtime-actions";
 import {
   BROWSE_ACTION_SESSION_PATTERN,
@@ -21,6 +22,7 @@ const ACTION_BUILDERS = [
   ...navigationActionBuilders,
   ...elementInputActionBuilders,
   ...mouseActionBuilders,
+  ...performanceActionBuilders,
   ...runtimeActionBuilders,
 ];
 

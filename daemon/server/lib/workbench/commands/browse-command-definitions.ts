@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_BROWSE_COMMANDS: typed BrowseMD and session command definitions shared by CLI and MCP. Keywords: workbench, browse, commands, sessions.
+ * - WORKBENCH_BROWSE_COMMANDS: typed BrowseMD and session command definitions shared by CLI and MCP.
  */
 import { z } from "zod";
 
@@ -66,7 +66,7 @@ const run = defineWorkbenchAgentCommand({
   buildRequest(input, { callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/browse", {
       cwd,
-      ...(input.commands?.length ? { script: input.commands.join("\n") } : { scriptPath: input.scriptPath as string }),
+      ...(input.commands?.length ? { commands: input.commands } : { scriptPath: input.scriptPath as string }),
       ...(input.session ? { session: input.session } : {}),
       ...(input.summary ? { summary: input.summary } : {}),
       ...(input.variables && Object.keys(input.variables).length ? { vars: input.variables } : {}),

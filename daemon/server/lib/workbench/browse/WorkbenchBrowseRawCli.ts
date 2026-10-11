@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { appRoot } from "../../project";
 import type { WorkbenchBrowseCommandRequest, WorkbenchBrowseCommandResponse } from "workbench-shared/types";
-import { killProcessTree } from "../../../process-helpers";
+import { killProcessTree, lowerAgentProcessPriority } from "../../../process-helpers";
 import type WorkbenchBrowseProfileStore from "./WorkbenchBrowseProfileStore";
 import type WorkbenchBrowseRuntime from "./WorkbenchBrowseRuntime";
 
@@ -42,6 +42,7 @@ export default class WorkbenchBrowseRawCli {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      lowerAgentProcessPriority(child);
       let stdout = "";
       let stderr = "";
       let aborted = signal?.aborted ?? false;

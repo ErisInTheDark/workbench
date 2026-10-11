@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - elementInputActionBuilders: validate and build direct element, text-input, evaluation, snapshot, and selection Browse actions. Keywords: browse, registry, element, input, snapshot.
+ * - elementInputActionBuilders: validate and build element, text-input, evaluation, snapshot, and selection Browse actions.
  */
 import type { WorkbenchBrowseAgentAction } from "workbench-shared/types";
 import {
@@ -44,6 +44,13 @@ export const elementInputActionBuilders: readonly BrowseActionBuilder[] = [
     const expression = normalizeRequiredActionString(action.expression, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse eval requires a JavaScript expression.");
     return expression.ok
       ? buildBrowserAction("eval", action, "eval", { expression: expression.value }, ["eval", expression.value])
+      : { error: expression.error };
+  },
+  (action) => {
+    if (action.action !== "initScript") return null;
+    const expression = normalizeRequiredActionString(action.expression, BROWSE_ACTION_TEXT_MAX_LENGTH, "Browse initScript requires JavaScript.");
+    return expression.ok
+      ? buildBrowserAction("initScript", action, "workbench.initScript", { expression: expression.value }, ["init-script"])
       : { error: expression.error };
   },
   (action) => {
@@ -96,11 +103,13 @@ export const elementInputActionBuilders: readonly BrowseActionBuilder[] = [
     if (action.action !== "snapshot") return null;
     const filter = normalizeActionString(action.filter, BROWSE_ACTION_SELECTOR_MAX_LENGTH);
     const maxDepth = normalizePositiveActionInteger(action.maxDepth);
+    const target = normalizeActionSelector(action);
     return buildBrowserAction("snapshot", action, "snapshot", {
       compact: action.compact === true,
       filter: filter ?? undefined,
       maxDepth: maxDepth ?? undefined,
-    }, ["snapshot", ...(action.compact ? ["--compact"] : []), ...(filter ? ["--filter", filter] : []), ...(maxDepth ? ["--max-depth", String(maxDepth)] : [])], {
+      target: target ?? undefined,
+    }, ["snapshot", ...(target ? [target] : []), ...(action.compact ? ["--compact"] : []), ...(filter ? ["--filter", filter] : []), ...(maxDepth ? ["--max-depth", String(maxDepth)] : [])], {
       timeoutMs: BROWSE_ACTION_NORMAL_TIMEOUT_MS,
     });
   },

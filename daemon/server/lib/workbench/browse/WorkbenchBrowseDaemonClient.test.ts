@@ -1,5 +1,5 @@
 /*
- * No production exports. Node tests protect project-local Browse daemon runtime paths and session cleanup. Keywords: browse, daemon, temp, reload.
+ * No production exports. Node tests protect project-local Browse daemon runtime paths and session cleanup.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";

@@ -1,38 +1,33 @@
 /*
  * Exports:
- * - No production exports; Node tests cover catalog-aware Browse project resolution, session queue isolation, observation, and recovery.
+ * - No production exports; Node tests cover Browse project resolution, queue leases, observation, and retirement.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { captureTestOutput } from "../../../../../test/capture-test-output.mts";
 
-import WorkbenchBrowseRuntime, { type WorkbenchBrowseDaemonTransport } from "./WorkbenchBrowseRuntime.ts";
-import type { WorkbenchBrowseAgentCommand } from "./actions/session-actions.ts";
-import type { BrowseJsonValue } from "./actions/session-actions.ts";
+import { captureTestOutput } from "../../../../../test/capture-test-output.mts";
+import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import type { BrowseJsonValue, WorkbenchBrowseAgentCommand } from "./actions/session-actions.ts";
 import {
   WorkbenchBrowseDaemonTimeoutError,
   type WorkbenchBrowseDaemonRequestWithoutId,
 } from "./WorkbenchBrowseDaemonClient.ts";
-import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import WorkbenchBrowseRuntime, {
+  prepareWorkbenchBrowseDaemonProcess,
+  type WorkbenchBrowseCallerWaiter,
+  type WorkbenchBrowseDaemonTransport,
+  type WorkbenchBrowseExecutionContext,
+} from "./WorkbenchBrowseRuntime.ts";
 
-function createRuntime(options: Partial<ConstructorParameters<typeof WorkbenchBrowseRuntime>[0]> = {}) {
-  return new WorkbenchBrowseRuntime({
-    resolveProjectById: async () => { throw new Error("Unexpected project resolution in runtime fixture"); },
-    resolveProjectFromCwd: async () => { throw new Error("Unexpected cwd resolution in runtime fixture"); },
-    ...options,
-  });
-}
-
-function createResolvedProject(id: string) {
-  const rootPath = `C:/projects/${id}`;
-  return {
-    id: fixtureIdentitySchemas.ProjectIdSchema.parse(id),
-    kind: "git" as const,
-    root: rootPath,
-    rootPath,
-    roots: [{ id, name: id, root: rootPath, rootPath }],
+test("lowers the Browse daemon before detaching its future Chromium tree", () => {
+  const events: string[] = [];
+  const child = {
+    pid: 42,
+    unref: () => { events.push("unref"); },
   };
-}
+  prepareWorkbenchBrowseDaemonProcess(child as never, () => { events.push("priority"); });
+  assert.deepEqual(events, ["priority", "unref"]);
+});
 
 function deferred<TValue>() {
   let reject!: (error: Error) => void;
@@ -44,365 +39,281 @@ function deferred<TValue>() {
   return { promise, reject, resolve };
 }
 
+class ControlledCallerWait {
+  timeoutNextCompletion = false;
+
+  readonly wait: WorkbenchBrowseCallerWaiter = async (completion, { message, signal }) => {
+    if (signal?.aborted) throw signal.reason;
+    if (this.timeoutNextCompletion && !message.includes("previous command")) {
+      this.timeoutNextCompletion = false;
+      throw new WorkbenchBrowseDaemonTimeoutError(message);
+    }
+    return await completion;
+  };
+}
+
 class FakeBrowseTransport implements WorkbenchBrowseDaemonTransport {
+  readonly calls: Array<{ command?: string; session: string; type: string }> = [];
   readonly cleaned: string[] = [];
-  readonly calls: string[] = [];
-  readonly firstResearch = deferred<BrowseJsonValue>();
-  private researchRequests = 0;
+  readonly blockedMutation = deferred<BrowseJsonValue>();
+  blockNextMutation = false;
+  failNextMutation = false;
 
   async cleanupRuntimeFiles(session: string) { this.cleaned.push(session); }
   getRuntimeDirectoryPath() { return "C:\\workbench-test\\browse-driver"; }
   async initialize() {}
   async listRuntimeSessionNames() { return []; }
   async readPid() { return 123; }
-
-  async request(
-    session: string,
-    _request: WorkbenchBrowseDaemonRequestWithoutId,
-    _timeoutMs: number,
-    _signal?: AbortSignal,
-  ) {
-    this.calls.push(session);
-    if (session === "research" && this.researchRequests++ === 0) return await this.firstResearch.promise;
-    return { initialized: true, session };
+  async request(session: string, request: WorkbenchBrowseDaemonRequestWithoutId) {
+    this.calls.push({
+      ...("command" in request ? { command: request.command } : {}),
+      session,
+      type: request.type,
+    });
+    if (request.type === "command" && this.blockNextMutation && request.command !== "screenshot") {
+      this.blockNextMutation = false;
+      return await this.blockedMutation.promise;
+    }
+    if (request.type === "command" && this.failNextMutation && request.command !== "screenshot") {
+      this.failNextMutation = false;
+      throw new Error("mutation failed");
+    }
+    return request.type === "status"
+      ? { initialized: true, session }
+      : { command: "command" in request ? request.command : request.type, session };
   }
 }
 
-test("executes with a supplied project context without resolving the project again", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({
-    client,
-    retireProcess: async () => undefined,
-    resolveProjectFromCwd: async () => { throw new Error("unexpected project resolution"); },
-  });
-  const command: WorkbenchBrowseAgentCommand = {
-    action: "status",
-    args: ["status", "--session", "other"],
-    commandRequest: {
-      args: ["status", "--session", "other"],
-      cwd: "C:/projects/workbench",
-      projectId: null,
-      threadId: "thread-1",
+const execution: WorkbenchBrowseExecutionContext = {
+  cwd: "C:/projects/workbench",
+  owningRootPath: "C:/projects/workbench",
+  projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("workbench"),
+  projectRootPath: "C:/projects/workbench",
+  workspaceRoots: [{ id: "workbench", name: "workbench", rootPath: "C:/projects/workbench" }],
+  workspaceRootPaths: ["C:/projects/workbench"],
+};
+
+function command(session: string, browserCommand = "click"): WorkbenchBrowseAgentCommand {
+  return {
+    action: browserCommand === "screenshot" ? "screenshot" : "click",
+    args: [],
+    commandRequest: { args: [], cwd: execution.cwd, projectId: null, threadId: "thread", timeoutMs: 5_000 },
+    rememberSession: false,
+    runtimeRequest: {
+      command: browserCommand,
+      kind: "command",
+      mode: null,
+      params: {},
+      persistent: false,
+      session,
       timeoutMs: 5_000,
     },
-    rememberSession: true,
-    runtimeRequest: { kind: "status", session: "other", timeoutMs: 5_000 },
-    session: "other",
+    session,
   };
-  const result = await runtime.run(command, {
-    cwd: "C:/projects/workbench",
-    owningRootPath: "C:/projects/workbench",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("workbench"),
-    projectRootPath: "C:/projects/workbench",
-    workspaceRoots: [{ id: "workbench", name: "workbench", rootPath: "C:/projects/workbench" }],
-    workspaceRootPaths: ["C:/projects/workbench"],
+}
+
+function openCommand(session: string): WorkbenchBrowseAgentCommand {
+  return {
+    action: "open",
+    args: [],
+    commandRequest: { args: [], cwd: execution.cwd, projectId: null, threadId: "thread", timeoutMs: 5_000 },
+    rememberSession: true,
+    runtimeRequest: {
+      kind: "open",
+      mode: "headless",
+      params: { timeoutMs: 5_000, url: "about:blank", waitUntil: "load" },
+      persistent: false,
+      session,
+      timeoutMs: 5_000,
+    },
+    session,
+  };
+}
+
+function createRuntime(options: Partial<ConstructorParameters<typeof WorkbenchBrowseRuntime>[0]> = {}) {
+  return new WorkbenchBrowseRuntime({
+    resolveProjectById: async () => { throw new Error("Unexpected project resolution"); },
+    resolveProjectFromCwd: async () => { throw new Error("Unexpected cwd resolution"); },
+    ...options,
   });
+}
 
-  assert.equal(result.ok, true);
-  assert.deepEqual(client.calls, ["other"]);
-});
-
-test("resolves project-ID execution contexts through the injected catalog port", async () => {
+test("resolves project-ID execution contexts through the injected catalogue", async () => {
   const requestedIds: Array<string | null | undefined> = [];
   const runtime = createRuntime({
     resolveProjectById: async (projectId) => {
       requestedIds.push(projectId);
-      return createResolvedProject(projectId ?? "alpha");
+      const id = fixtureIdentitySchemas.ProjectIdSchema.parse(projectId ?? "alpha");
+      const root = `C:/projects/${id}`;
+      return { id, kind: "git", root, rootPath: root, roots: [{ id, name: id, root, rootPath: root }] };
     },
   });
 
-  const context = await runtime.resolveExecutionContext({ cwd: null, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") });
+  const context = await runtime.resolveExecutionContext({
+    cwd: null,
+    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta"),
+  });
 
   assert.deepEqual(requestedIds, ["beta"]);
   assert.equal(context.projectId, "beta");
   assert.equal(context.cwd.replace(/\\/gu, "/"), "C:/projects/beta");
 });
 
-test("serializes one session while allowing unrelated sessions to proceed", async () => {
+test("caller timeout preserves the underlying mutation and its exclusive queue lease", async () => {
   const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  const second = runtime.status("research");
-  const unrelated = runtime.status("other");
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  const caller = new ControlledCallerWait();
+  const runtime = createRuntime({ client, waitForCaller: caller.wait });
+  client.blockNextMutation = true;
+  caller.timeoutNextCompletion = true;
 
-  assert.deepEqual(client.calls, ["research", "other"]);
-  assert.deepEqual(await unrelated, { initialized: true, session: "other" });
-  client.firstResearch.resolve({ initialized: true, session: "research" });
-  assert.deepEqual(await first, { initialized: true, session: "research" });
-  assert.deepEqual(await second, { initialized: true, session: "research" });
-  assert.deepEqual(client.calls, ["research", "other", "research"]);
+  const first = await runtime.run(command("research"), execution);
+  assert.equal(first.ok, false);
+  assert.equal(first.timedOut, true);
+
+  const second = runtime.run(command("research"), execution);
+  const unrelated = runtime.run(command("other"), execution);
+  assert.equal((await unrelated).ok, true);
+  assert.deepEqual(client.calls.filter((call) => call.type === "command"), [
+    { command: "click", session: "research", type: "command" },
+    { command: "click", session: "other", type: "command" },
+  ]);
+
+  client.blockedMutation.resolve({ clicked: true });
+  assert.equal((await second).ok, true);
+  assert.deepEqual(client.calls.filter((call) => call.type === "command"), [
+    { command: "click", session: "research", type: "command" },
+    { command: "click", session: "other", type: "command" },
+    { command: "click", session: "research", type: "command" },
+  ]);
+  assert.deepEqual(client.cleaned, []);
 });
 
-test("retires only the session whose runtime-owned status deadline expires", async () => {
+test("failed and cancelled queued mutations release their queue positions", async () => {
   const client = new FakeBrowseTransport();
-  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
-  const retiredPids: number[] = [];
+  const runtime = createRuntime({ client });
+  client.failNextMutation = true;
+  const failed = runtime.run(command("research"), execution);
+  const afterFailure = runtime.run(command("research"), execution);
+  assert.equal((await failed).ok, false);
+  assert.equal((await afterFailure).ok, true);
+
+  client.blockNextMutation = true;
+  const active = runtime.run(command("research"), execution);
+  await new Promise(setImmediate);
+  const abort = new AbortController();
+  const cancelled = runtime.run(command("research"), execution, abort.signal);
+  const afterCancellation = runtime.run(command("research"), execution);
+  abort.abort(new Error("cancel queued mutation"));
+  assert.match((await cancelled).error ?? "", /cancel queued mutation/u);
+  client.blockedMutation.resolve({ clicked: true });
+  assert.equal((await active).ok, true);
+  assert.equal((await afterCancellation).ok, true);
+  assert.equal(client.calls.filter((call) => call.command === "click").length, 4);
+});
+
+test("status and screenshot observe a session while its mutation is still running", async () => {
+  const client = new FakeBrowseTransport();
+  const caller = new ControlledCallerWait();
+  const runtime = createRuntime({ client, waitForCaller: caller.wait });
+  client.blockNextMutation = true;
+  caller.timeoutNextCompletion = true;
+  await runtime.run(command("research"), execution);
+
+  assert.deepEqual(await runtime.status("research"), { initialized: true, session: "research" });
+  const screenshot = await runtime.run(command("research", "screenshot"), execution);
+  assert.equal(screenshot.ok, true);
+  assert.ok(client.calls.some((call) => call.command === "screenshot"));
+  client.blockedMutation.resolve({ clicked: true });
+});
+
+test("force stop retires immediately without waiting for a stuck mutation", async () => {
+  const client = new FakeBrowseTransport();
+  const caller = new ControlledCallerWait();
+  const retired: number[] = [];
   const runtime = createRuntime({
     client,
-    retireProcess: async (pid) => { retiredPids.push(pid); },
+    retireProcess: async (pid) => { retired.push(pid); },
+    waitForCaller: caller.wait,
   });
+  client.blockNextMutation = true;
+  caller.timeoutNextCompletion = true;
+  await runtime.run(command("research"), execution);
 
-  await assert.rejects(runtime.status("research"), /simulated deadline/u);
-  assert.deepEqual(retiredPids, [123]);
+  assert.deepEqual(await runtime.stop("research", { force: true }), { stopped: true });
+  assert.deepEqual(retired, [123]);
   assert.deepEqual(client.cleaned, ["research"]);
-  assert.deepEqual(await runtime.status("other"), { initialized: true, session: "other" });
+  client.blockedMutation.resolve({ clicked: true });
 });
 
-test("observational status timeout does not retire its session", async () => {
+test("ordinary observation timeout never retires the session", async () => {
   const client = new FakeBrowseTransport();
-  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated observation deadline"));
-  const retiredPids: number[] = [];
-  const runtime = createRuntime({
-    client,
-    retireProcess: async (pid) => { retiredPids.push(pid); },
-  });
+  const caller = new ControlledCallerWait();
+  const runtime = createRuntime({ client, waitForCaller: caller.wait });
+  caller.timeoutNextCompletion = true;
 
-  await assert.rejects(runtime.inspectStatus("research"), /observation deadline/u);
-
-  assert.deepEqual(retiredPids, []);
+  await assert.rejects(runtime.status("research"), WorkbenchBrowseDaemonTimeoutError);
   assert.deepEqual(client.cleaned, []);
 });
 
-test("queued observational timeout does not retire the active session owner", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await Promise.resolve();
-
-  await assert.rejects(runtime.inspectStatus("research", 5), /waiting for its previous command/u);
-  assert.deepEqual(client.cleaned, []);
-  assert.deepEqual(client.calls, ["research"]);
-
-  client.firstResearch.resolve({ initialized: true, session: "research" });
-  await first;
-});
-
-test("aborting an observational waiter releases its queue position", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await Promise.resolve();
-  const abortController = new AbortController();
-  const cancelled = runtime.inspectStatus("research", 5_000, abortController.signal);
-  const third = runtime.inspectStatus("research");
-  abortController.abort(new Error("cancel observation"));
-
-  await assert.rejects(cancelled, /cancel observation/u);
-  client.firstResearch.resolve({ initialized: true, session: "research" });
-  await first;
-  assert.deepEqual(await third, { initialized: true, session: "research" });
-  assert.deepEqual(client.cleaned, []);
-});
-
-test("releases a failed session queue so its next request is not stranded", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await Promise.resolve();
-  const second = runtime.status("research");
-  client.firstResearch.reject(new Error("simulated timeout"));
-
-  await assert.rejects(first, /simulated timeout/u);
-  assert.deepEqual(await second, { initialized: true, session: "research" });
-  assert.deepEqual(client.calls, ["research", "research"]);
-});
-
-test("aborting a queued waiter does not retire or bypass the active session owner", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await Promise.resolve();
-
-  const abortController = new AbortController();
-  const cancelled = runtime.status("research", 5_000, abortController.signal);
-  const third = runtime.status("research");
-  abortController.abort(new Error("cancel queued waiter"));
-
-  await assert.rejects(cancelled, /cancel queued waiter/u);
-  assert.deepEqual(client.cleaned, []);
-  assert.deepEqual(client.calls, ["research"]);
-
-  client.firstResearch.resolve({ initialized: true, session: "research" });
-  assert.deepEqual(await first, { initialized: true, session: "research" });
-  assert.deepEqual(await third, { initialized: true, session: "research" });
-  assert.deepEqual(client.calls, ["research", "research"]);
-});
-
-test("a queued waiter observes its deadline without retiring the active owner", async () => {
-  const client = new FakeBrowseTransport();
-  const runtime = createRuntime({ client, retireProcess: async () => undefined });
-  const first = runtime.status("research");
-  await Promise.resolve();
-
-  await assert.rejects(runtime.status("research", 5), /waiting for its previous command/u);
-  assert.deepEqual(client.cleaned, []);
-  assert.deepEqual(client.calls, ["research"]);
-
-  client.firstResearch.resolve({ initialized: true, session: "research" });
-  await first;
-});
-
-test("run keeps its session lease through retirement while other sessions proceed", async () => {
-  const client = new FakeBrowseTransport();
-  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
-  const retirementStarted = deferred<void>();
-  const releaseRetirement = deferred<void>();
-  const runtime = createRuntime({
-    client,
-    retireProcess: async () => {
-      retirementStarted.resolve();
-      await releaseRetirement.promise;
-    },
-  });
-  const first = runtime.run({
-    action: "status",
-    args: [],
-    commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
-    rememberSession: true,
-    runtimeRequest: { kind: "status", session: "research", timeoutMs: 5_000 },
-    session: "research",
-  }, {
-    cwd: "/work",
-    owningRootPath: "/work",
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"),
-    projectRootPath: "/work",
-    workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }],
-    workspaceRootPaths: ["/work"],
-  });
-  await retirementStarted.promise;
-  const second = runtime.status("research");
-  try {
-    await runtime.status("other");
-    assert.deepEqual(client.calls, ["research", "other"]);
-    assert.deepEqual(client.cleaned, []);
-  } finally {
-    releaseRetirement.resolve();
-    await Promise.all([first, second]);
-  }
-  assert.deepEqual(client.cleaned, ["research"]);
-});
-
-test("failed retirement retains runtime records and propagates failure", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+test("force stop preserves runtime records when retirement fails", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, (text) => text.startsWith("[browse-retirement] "));
   context.after(() => assert.equal(diagnostics.length, 1));
   const client = new FakeBrowseTransport();
-  client.firstResearch.reject(new WorkbenchBrowseDaemonTimeoutError("simulated deadline"));
   const runtime = createRuntime({
     client,
     retireProcess: async () => { throw new Error("retirement denied"); },
   });
-  await assert.rejects(runtime.status("research"), /retirement denied/u);
+
+  await assert.rejects(runtime.stop("research", { force: true }), /retirement denied/u);
   assert.deepEqual(client.cleaned, []);
 });
 
-test("force stop does not discard unreadable PID records", async () => {
+test("force stop preserves unreadable PID records", async () => {
   const client = new FakeBrowseTransport();
   client.readPid = async () => { throw new Error("pid read denied"); };
   const runtime = createRuntime({
     client,
-    retireProcess: async () => { throw new Error("must not signal without a pid"); },
+    retireProcess: async () => { throw new Error("must not retire without a pid"); },
   });
   await assert.rejects(runtime.stop("research", { force: true }), /pid read denied/u);
   assert.deepEqual(client.cleaned, []);
 });
 
-test("a cooperative stop response still requires process retirement before record cleanup", async () => {
-  const client = new FakeBrowseTransport();
+test("cooperative stop retires the process before cleaning runtime records", async () => {
   const events: string[] = [];
+  const client = new FakeBrowseTransport();
   client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
   const runtime = createRuntime({
     client,
-    retireProcess: async () => { events.push("retired"); },
+    retireProcess: async () => { events.push("retire"); },
   });
-  await runtime.stop("other");
-  assert.deepEqual(events, ["retired", "cleanup"]);
+  await runtime.stop("research");
+  assert.deepEqual(events, ["retire", "cleanup"]);
 });
 
-test("force stop propagates retirement failure without silently retrying it", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
+test("stale process retirement completes before replacement preparation", async (context) => {
+  const diagnostics = captureTestOutput(context, process.stderr, (text) => text.startsWith("[browse-retirement] "));
   context.after(() => assert.equal(diagnostics.length, 1));
-  const client = new FakeBrowseTransport();
-  let attempts = 0;
-  const runtime = createRuntime({
-    client,
-    retireProcess: async () => { attempts += 1; throw new Error("retirement denied"); },
-  });
-  await assert.rejects(runtime.stop("other", { force: true }), /retirement denied/u);
-  assert.equal(attempts, 1);
-  assert.deepEqual(client.cleaned, []);
-});
-
-test("an unresponsive recorded process retires before replacement preparation and retains records on failure", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
-  context.after(() => assert.equal(diagnostics.length, 1));
-  for (const fails of [false, true]) {
-    const client = new FakeBrowseTransport();
+  for (const retirementFails of [false, true]) {
     const events: string[] = [];
+    const client = new FakeBrowseTransport();
     client.request = async () => { throw Object.assign(new Error("offline"), { code: "ECONNREFUSED" }); };
     client.cleanupRuntimeFiles = async () => { events.push("cleanup"); };
     const runtime = createRuntime({
       client,
-      retireProcess: async () => {
-        events.push("retire");
-        if (fails) throw new Error("retirement denied");
-      },
       profileStore: {
         resolveProfilePath: async () => {
           events.push("prepare");
           throw new Error("fixture stops before process creation");
         },
       },
-    });
-    const result = await runtime.run({
-      action: "open",
-      args: [],
-      commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
-      rememberSession: true,
-      runtimeRequest: {
-        kind: "open", session: "research", timeoutMs: 5_000, mode: "headless", persistent: false,
-        params: { url: "about:blank", waitUntil: "load", timeoutMs: 5_000 },
-      },
-      session: "research",
-    }, {
-      cwd: "/work", owningRootPath: "/work", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"), projectRootPath: "/work",
-      workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
-    });
-    assert.equal(result.ok, false);
-    assert.deepEqual(events, fails ? ["retire"] : ["retire", "cleanup", "prepare"]);
-  }
-});
-
-test("cancellation during failed retirement cannot trigger another retirement attempt", async (context) => {
-  const diagnostics = captureTestOutput(context, process.stderr, text => text.startsWith("[browse-retirement] "));
-  context.after(() => assert.equal(diagnostics.length, 2));
-  for (const route of ["stop", "run"] as const) {
-    const client = new FakeBrowseTransport();
-    const abort = new AbortController();
-    let attempts = 0;
-    const runtime = createRuntime({
-      client,
       retireProcess: async () => {
-        attempts += 1;
-        abort.abort();
-        throw new Error("retirement denied");
+        events.push("retire");
+        if (retirementFails) throw new Error("retirement denied");
       },
     });
-    if (route === "stop") {
-      await assert.rejects(runtime.stop("other", { force: true, signal: abort.signal }), /retirement denied/u);
-    } else {
-      const result = await runtime.run({
-        action: "stop", args: [], rememberSession: false, session: "other",
-        commandRequest: { args: [], cwd: "/work", projectId: null, threadId: "thread", timeoutMs: 5_000 },
-        runtimeRequest: { kind: "stop", session: "other", timeoutMs: 5_000, force: true },
-      }, {
-        cwd: "/work", owningRootPath: "/work", projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("work"), projectRootPath: "/work",
-        workspaceRoots: [{ id: "work", name: "work", rootPath: "/work" }], workspaceRootPaths: ["/work"],
-      }, abort.signal);
-      assert.equal(result.ok, false);
-    }
-    assert.equal(attempts, 1);
-    assert.deepEqual(client.cleaned, []);
+    const result = await runtime.run(openCommand("research"), execution);
+    assert.equal(result.ok, false);
+    assert.deepEqual(events, retirementFails ? ["retire"] : ["retire", "cleanup", "prepare"]);
   }
 });

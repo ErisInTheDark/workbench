@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchBrowseDaemonRequest/WorkbenchBrowseDaemonRequestWithoutId/WorkbenchBrowseDaemonResponse: narrow Browse daemon protocol contracts. Keywords: browse, daemon, protocol, socket.
- * - WorkbenchBrowseDaemonTimeoutError: identify runtime-owned deadline failures that require session retirement. Keywords: browse, timeout, session, failure.
- * - default WorkbenchBrowseDaemonClient: import Browse protocol validation once and execute abortable named-pipe requests. Keywords: browse, daemon, client, cancellation.
+ * - WorkbenchBrowseDaemonRequest/WorkbenchBrowseDaemonRequestWithoutId/WorkbenchBrowseDaemonResponse: narrow Browse daemon protocol contracts.
+ * - WorkbenchBrowseDaemonTimeoutError: identify caller-visible Browse deadline failures.
+ * - default WorkbenchBrowseDaemonClient: import Browse protocol validation and execute abortable named-pipe requests.
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -124,7 +124,7 @@ export default class WorkbenchBrowseDaemonClient {
     await Promise.allSettled(paths.map((filePath) => fs.unlink(filePath)));
   }
 
-  async request(session: string, request: WorkbenchBrowseDaemonRequestWithoutId, timeoutMs: number, signal?: AbortSignal) {
+  async request(session: string, request: WorkbenchBrowseDaemonRequestWithoutId, _timeoutMs: number, signal?: AbortSignal) {
     await this.initialize();
     if (signal?.aborted) throw signal.reason;
     const requestWithId = {
@@ -138,14 +138,12 @@ export default class WorkbenchBrowseDaemonClient {
       const finish = (operation: () => void) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
         signal?.removeEventListener("abort", abort);
         socket.destroy();
         operation();
       };
       const fail = (error: Error) => finish(() => reject(error));
       const abort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("Browse request cancelled."));
-      const timer = setTimeout(() => fail(new WorkbenchBrowseDaemonTimeoutError(`Browse session ${session} timed out after ${timeoutMs}ms.`)), timeoutMs);
       signal?.addEventListener("abort", abort, { once: true });
       socket.once("connect", () => socket.write(`${JSON.stringify(requestWithId)}\n`));
       socket.on("data", (chunk: Buffer) => {
