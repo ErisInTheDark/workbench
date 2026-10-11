@@ -20,7 +20,7 @@ import { BotIcon } from "./workbench-icons";
 const PULL_HOLD_MS = 1_000;
 const NO_SUBSCRIPTION = () => () => undefined;
 const PULL_ACTIONS = new Set<WorkbenchReloadOperation["action"]>(["pull", "pullAndReload"]);
-const BUTTON = "!shrink-0 !px-2.5 !py-1.5 !text-[0.76rem] [&>span:first-of-type]:!inset-[3px]";
+const BUTTON = "!shrink-0 [&>span:first-of-type]:!inset-[3px]";
 
 export function hasVisibleInstallationUpdate(update: InstallationUpdate | null, operation: WorkbenchReloadOperation) {
   return Boolean(
@@ -138,16 +138,16 @@ export default function WorkbenchUpdateAvailable({ appRuntime, daemonRuntime, on
       <div className="flex items-center justify-between gap-1.5">
         <p className="m-0 min-w-0 truncate pl-1 font-semibold text-text">Update available</p>
         {pullRunning ? (
-          <PrimaryButton className={BUTTON} disabled pendingHalo>
+          <PrimaryButton className={BUTTON} shape="compact" disabled pendingHalo>
             {interrupted ? "Reconnecting" : OPERATION_LABELS[operation.phase] ?? "Updating"}
           </PrimaryButton>
         ) : update?.failure ? (
-          <PrimaryButton className={BUTTON} disabled={!update.projectId} onClick={() => update.failure && resolveFailedUpdate(update.failure)} tone="attention">
+          <PrimaryButton className={BUTTON} shape="compact" disabled={!update.projectId} onClick={() => update.failure && resolveFailedUpdate(update.failure)} tone="attention">
             <BotIcon className="mr-1" size={14} />
             Resolve issues
           </PrimaryButton>
         ) : update?.state === "conflict" ? (
-          <PrimaryButton className={BUTTON} disabled={!update.projectId} onClick={() => askAgent(conflictPrompt(update))} tone="attention">
+          <PrimaryButton className={BUTTON} shape="compact" disabled={!update.projectId} onClick={() => askAgent(conflictPrompt(update))} tone="attention">
             <BotIcon className="mr-1" size={14} />
             Resolve conflicts
           </PrimaryButton>
@@ -169,6 +169,7 @@ export default function WorkbenchUpdateAvailable({ appRuntime, daemonRuntime, on
             onPointerCancel={endHold}
             onPointerDown={(event: PointerEvent<HTMLButtonElement>) => beginHold(event.shiftKey)}
             onPointerUp={endHold}
+            shape="compact"
             tone={pullOnly ? "default" : "danger"}
           >
             {pullOnly ? "Pull changes" : "Pull & reload"}

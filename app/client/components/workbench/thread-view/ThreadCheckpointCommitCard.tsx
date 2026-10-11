@@ -430,7 +430,7 @@ export default function ThreadCheckpointCommitCard({
                   />
                 ) : null}
                 {presentation === "full" && proposal?.status === "committed" && (canCommit || committing) ? (
-                  <PrimaryButton className="!px-3 !py-1.5 !text-[0.78rem]" data-thread-checkpoint-commit-action="true" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
+                  <PrimaryButton data-thread-checkpoint-commit-action="true" shape="compact" disabled={!canCommit} onClick={onCommit} pendingHalo={committing}>
                     {committing ? "Amending..." : "Amend"}
                   </PrimaryButton>
                 ) : proposal?.status === "committed" || (!proposal && committedSha) ? (
@@ -464,11 +464,9 @@ export default function ThreadCheckpointCommitCard({
                   interactive ? <span className="h-7 w-16 rounded-full workbench-skeleton" aria-hidden="true" /> : null
                 ) : interactive ? (
                   <PrimaryButton
-                    className={`
-                      !px-3 ${compact ? "!py-1" : "!py-1.5"}
-                      !text-[0.78rem]
-                    `}
+                    className={compact ? "!py-1" : ""}
                     data-thread-checkpoint-commit-action="true"
+                    shape="compact"
                     // Commit-all may still reach a waiting card once lower layers land, so only the button waits.
                     disabled={!canCommit || queued || Boolean(waitingForLayer && !committing)}
                     onClick={onCommit}
