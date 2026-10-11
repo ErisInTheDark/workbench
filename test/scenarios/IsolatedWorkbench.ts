@@ -636,7 +636,7 @@ stream_max_retries = 0
       "CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_URL", "WORKBENCH_CODEX_APP_SERVER_PORT",
       // Native acknowledgement, runtime ownership and foreground stdin belong to
       // the parent supervisor. startService supplies the fixture's own session.
-      "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_SERVICE_SESSION",
+      "WORKBENCH_DAEMON_ACK_REQUIRED", "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_SERVICE_SESSION",
       "WORKBENCH_FOREGROUND_PIPE"]) delete env[key];
     for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) delete env[key];
     env.WORKBENCH_APP_HOST = "127.0.0.1";

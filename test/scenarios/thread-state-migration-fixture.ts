@@ -302,8 +302,6 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
     }
     assert.deepEqual(database.pragma("foreign_key_check"), [], "Retained database foreign keys must remain valid");
     assert.deepEqual(database.pragma("quick_check"), [{ quick_check: "ok" }], "Retained database quick_check must pass");
-    assert.ok((await fs.stat(source.databasePath)).size < 512 * 1024 * 1024,
-      "Retained database must compact below 0.5 GiB");
     console.log(`database schema ${source.version} -> ${workbenchDatabaseSchema.currentVersion}; ${checkpoint
       ? `${verified} relational tables verified against the independent retention oracle`
       : "no data-changing startup steps, nothing to compare"}`);

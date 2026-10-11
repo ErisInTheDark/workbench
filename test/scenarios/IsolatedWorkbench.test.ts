@@ -60,6 +60,7 @@ const hostProgram = `
 
 test("isolated host and app do not inherit the caller's supervisor ownership", async context => {
   const inherited = {
+    WORKBENCH_DAEMON_ACK_REQUIRED: "1",
     WORKBENCH_SERVICE_ACK_REQUIRED: "1",
     WORKBENCH_SERVICE_RUNTIME: WorkbenchTemporaryDirectory.resolve("parent-host-runtime"),
     WORKBENCH_SERVICE_SESSION: "parent-supervision-session",
@@ -74,7 +75,7 @@ test("isolated host and app do not inherit the caller's supervisor ownership", a
     });
   }
   const rejectBorrowedOwner = `
-    for (const key of ["WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_FOREGROUND_PIPE"]) {
+    for (const key of ["WORKBENCH_DAEMON_ACK_REQUIRED", "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_FOREGROUND_PIPE"]) {
       if (process.env[key]) throw new Error("Borrowed parent supervision: " + key);
     }
   `;

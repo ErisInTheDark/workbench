@@ -116,9 +116,11 @@ test("forward database migration preserves data and the real app can use it", {
     await fs.writeFile(path.join(localPath, "local.txt"), "single folder without a remote\n");
 
     await runtime.start();
-    const emptyCatalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
-    assert.ok(!emptyCatalog.data.some(entry => path.resolve(entry.rootPath) === runtime.project),
-      "The migrated daemon must not adopt the old environment root");
+    const initialCatalog = await runtime.request<WorkbenchProjectsPayload>("project/catalog/read");
+    assert.ok(initialCatalog.data.some(entry => path.resolve(entry.rootPath) === runtime.project),
+      "The migrated daemon must retain its pinned Workbench checkout");
+    assert.ok(!initialCatalog.data.some(entry => [clonePath, localPath].includes(path.resolve(entry.rootPath))),
+      "The migrated daemon must not discover unconfigured sibling projects");
     const savedRoots = ProjectDiscoverySettingsResultSchema.parse(
       await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] }));
     assert.deepEqual(savedRoots, { accepted: true, paths: [path.dirname(runtime.project)] });
