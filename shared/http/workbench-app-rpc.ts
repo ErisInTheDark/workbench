@@ -41,9 +41,9 @@ export const WorkbenchAppOperationAdmissionSchema = z.object({ admitted: z.liter
 const browserStateId = z.uuid().nullable();
 const id = z.number().int().positive();
 export type WorkbenchPresentationIntent = Extract<PresentationMutation,
-  { kind: "putDraft" | "deleteDraft" | "setDraftPriority" | "deleteAttachment" }>;
+  { kind: "putDraft" | "deleteDraft" | "setDraftPriority" | "setLocationsHidden" | "deleteAttachment" }>;
 export const WorkbenchPresentationIntentSchema = PresentationMutationSchema.refine(
-  value => ["putDraft", "deleteDraft", "setDraftPriority", "deleteAttachment"].includes(value.kind),
+  value => ["putDraft", "deleteDraft", "setDraftPriority", "setLocationsHidden", "deleteAttachment"].includes(value.kind),
   "This presentation operation belongs to the app workspace.",
 ).transform(value => value as WorkbenchPresentationIntent);
 

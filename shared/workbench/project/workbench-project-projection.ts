@@ -1,6 +1,8 @@
 /*
  * Exports:
- * - projectLogicalProjects: build display identities from app-owned projects and daemon-qualified catalogs.
+ * - projectLogicalProjects: build display identities from app-owned projects and daemon-qualified catalogs; this app's
+ *   hidden folders move to `hiddenLocations`, so every downstream projection sees only visible folders.
+ * - isDaemonOwnedProject: whether a logical project's folders are each daemon's own and can't be hidden.
  * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
  * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
@@ -390,6 +392,11 @@ export function projectLogicalGroups(
   return { orderedProjectIds, unsettledProjectIds, unarchivedProjectIds };
 }
 
+/** Workbench Library and daemon projects hold each daemon's own Workbench folder; apps never hide them. */
+export function isDaemonOwnedProject(matchKey: string) {
+  return matchKey === "workbench-library" || matchKey.startsWith("daemon://");
+}
+
 export function projectLogicalProjects(
   presentation: PresentationSnapshot,
   catalogs: ReadonlyMap<DaemonId, readonly WorkbenchProjectOption[]>,
@@ -449,10 +456,24 @@ export function projectLogicalProjects(
       pathSuffixCounts.set(key, (pathSuffixCounts.get(key) ?? 0) + 1);
     }
   }
+  const hiddenKeys = new Set((presentation.hiddenLocations ?? []).map(item =>
+    `${item.logicalProjectId}/${item.target.daemonId}/${item.target.projectId}`));
+  const hiddenByProject = new Map<string, NonNullable<WorkbenchLogicalProject["hiddenLocations"]>>();
+  const hide = (logicalProjectId: string, location: NonNullable<WorkbenchLogicalProject["hiddenLocations"]>[number]) => {
+    if (!hiddenKeys.has(`${logicalProjectId}/${location.daemonId}/${location.projectId}`)) return false;
+    const entries = hiddenByProject.get(logicalProjectId) ?? [];
+    entries.push(location);
+    hiddenByProject.set(logicalProjectId, entries);
+    return true;
+  };
   const locations = new Map(presentation.projects.map(project => [project.id, [] as WorkbenchLogicalProject["locations"]]));
   for (const location of presentation.locations) {
     const owner = locations.get(location.logicalProjectId);
     if (!owner) continue;
+    if (hide(location.logicalProjectId, {
+      daemonId: location.target.daemonId, projectId: location.target.projectId,
+      hostname: hostnames.get(location.target.daemonId) ?? location.target.daemonId, rootPath: location.rootPath,
+    })) continue;
     const project = catalogs.get(location.target.daemonId)?.find(candidate => candidate.id === location.target.projectId) ?? null;
     const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
     owner.push({
@@ -509,6 +530,10 @@ export function projectLogicalProjects(
     }
     const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
     const displayPath = daemonProject ? null : preferred?.displayPath ?? null;
+    const observed = (observedByKey.get(project.matchKey) ?? []).filter(location => !hide(project.id, {
+      daemonId: location.daemonId, projectId: location.projectId, hostname: location.hostname, rootPath: location.rootPath,
+    }));
+    const hidden = hiddenByProject.get(project.id);
     return {
       id: project.id,
       matchKey: project.matchKey,
@@ -517,8 +542,8 @@ export function projectLogicalProjects(
       displayName: remote?.parts.at(-1) ?? preferred?.name ?? project.label,
       displayPath,
       locations: projectLocations,
-      ...(observedByKey.get(project.matchKey)?.length
-        ? { observedLocations: observedByKey.get(project.matchKey) } : {}),
+      ...(observed.length ? { observedLocations: observed } : {}),
+      ...(hidden?.length ? { hiddenLocations: hidden } : {}),
     };
   });
 }

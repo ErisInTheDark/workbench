@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchProjectListItem: canonical compact project row with status counts or relative time.
+ * - default WorkbenchProjectListItem: canonical compact project row with status counts or relative time and an optional context menu.
  */
 "use client";
 
-import type { MouseEvent } from "react";
+import { useContext, type MouseEvent } from "react";
 import { createLogicalProjectRoute, createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { DisplaySidebarProject, LogicalSidebarProject, ProjectSidebarProject } from "./project-sidebar-groups";
@@ -13,6 +13,9 @@ import WorkbenchRelativeTime from "./WorkbenchRelativeTime";
 import { getWorkbenchThreadStatusClassName } from "./workbench-thread-status-colors";
 import Tooltip from "../ui/Tooltip";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
+import ContextMenuCapability from "./ContextMenuCapability";
+import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
+import { MoreVerticalIcon } from "./workbench-icons";
 
 function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
   const { project, summary } = entry;
@@ -59,6 +62,7 @@ function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
 
 export default function WorkbenchProjectListItem({
   active = false,
+  contextMenu = null,
   entry,
   href,
   id,
@@ -69,6 +73,8 @@ export default function WorkbenchProjectListItem({
   tabIndex,
 }: {
   active?: boolean;
+  /** Right-click / long-press menu; coarse pointers also get a trailing more button. */
+  contextMenu?: WorkbenchContextMenuDefinition | null;
   entry: DisplaySidebarProject;
   href?: string;
   id?: string;
@@ -79,6 +85,8 @@ export default function WorkbenchProjectListItem({
   tabIndex?: number;
 }) {
   const projectHref = useWorkbenchProjectNavigation();
+  // Rows without a menu (search results, mockups) may render outside the menu provider.
+  const menus = useContext(WorkbenchContextMenuContext);
   const { activityAt, project, summary } = entry;
   const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
   const hasStatuses = WorkbenchThreadStatusCounts.hasCounts(counts);
@@ -95,7 +103,20 @@ export default function WorkbenchProjectListItem({
       </span>
     </div>
   );
-  return (
+  const contextMenuButton = contextMenu ? (
+    <button
+      type="button"
+      aria-label={`More actions for ${logical ? project.label : project.name || project.id}`}
+      className="pointer-events-auto absolute right-0 top-1/2 z-30 hidden size-11 -translate-y-1/2 items-center justify-center rounded-lg text-fg/muted transition coarse-touch:inline-flex hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
+      onClick={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        menus?.openContextMenu({ menu: contextMenu, x: rect.right, y: rect.bottom });
+      }}
+    >
+      <MoreVerticalIcon size={20} />
+    </button>
+  ) : null;
+  const row = (
     <Tooltip content={<ProjectTooltipContent entry={entry} />} enabled={showTooltip} interactive>
       <div
         className="group/project-row relative isolate m-0 min-h-11 rounded-[0.8rem] md:min-h-0"
@@ -131,7 +152,9 @@ export default function WorkbenchProjectListItem({
             tabIndex={tabIndex}
           />
         {content}
+        {contextMenuButton}
       </div>
     </Tooltip>
   );
+  return contextMenu ? <ContextMenuCapability menu={contextMenu}>{row}</ContextMenuCapability> : row;
 }

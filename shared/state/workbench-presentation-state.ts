@@ -2,8 +2,8 @@
  * Exports:
  * - PresentationDraftReferenceSchema/PresentationDraftReference: a composer reference a new-thread draft keeps.
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
- * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents.
- * - PresentationSnapshotSchema/PresentationSnapshot: combined app state, never a daemon execution response.
+ * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders.
+ * - PresentationSnapshotSchema/PresentationSnapshot: combined app state incl. hidden folders, never a daemon execution response.
  * - WorkbenchPresentationRevisionEventSchema: compact app presentation change notice.
  * - WorkbenchPresentationImportStatusSchema/WorkbenchPresentationImportStatus: bounded server import progress.
  */
@@ -100,6 +100,10 @@ export const PresentationSnapshotSchema = z.object({
     daemonId: DaemonIdSchema, sourceKind: z.enum(["draft", "folder", "member"]),
     sourceId: z.string().min(1), targetId: uuid, sourceRevision: revision.nullable(),
   }).strict()),
+  /** Folders this app hides from a logical project's sidebar, threads, counts and folder picker. */
+  hiddenLocations: z.array(z.object({
+    logicalProjectId: LogicalProjectIdSchema, target: ProjectLocationReferenceSchema,
+  }).strict()).optional(),
 }).strict();
 export type PresentationSnapshot = z.infer<typeof PresentationSnapshotSchema>;
 export const PresentationMutationSchema = z.discriminatedUnion("kind", [
@@ -117,6 +121,10 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("setDraftPriority"), draftId: uuid, expectedRevision: revision,
     pinned: z.boolean(), snoozed: z.boolean(),
+  }).strict(),
+  z.object({
+    kind: z.literal("setLocationsHidden"), logicalProjectId: LogicalProjectIdSchema,
+    targets: z.array(ProjectLocationReferenceSchema).min(1).max(200), hidden: z.boolean(),
   }).strict(),
   z.object({
     kind: z.literal("deleteAttachment"), draftId: uuid,

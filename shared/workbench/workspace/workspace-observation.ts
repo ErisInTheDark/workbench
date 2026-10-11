@@ -293,6 +293,9 @@ const logicalProject = z.object({
     rootPath: z.string(),
     project: WorkbenchProjectOptionSchema,
   }).strict()).optional(),
+  hiddenLocations: z.array(z.object({
+    daemonId: DaemonIdSchema, projectId: ProjectIdSchema, hostname: z.string(), rootPath: z.string(),
+  }).strict()).optional(),
 }).strict();
 const summary = z.object({
   counts: WorkbenchProjectThreadSummaryCountsSchema,

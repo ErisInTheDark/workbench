@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect one display identity, qualified locations, and remote-label collisions.
+ * No production exports. Protect one display identity, qualified locations, remote-label collisions and hidden folders.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -115,6 +115,47 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
   const groups = projectLogicalGroups(projects, Object.fromEntries(summaries), new Map(), snapshot);
   assert.deepEqual(groups.unsettledProjectIds, [remoteId]);
   assert.deepEqual(groups.unarchivedProjectIds, [remoteId]);
+});
+
+test("hidden registered and observed folders leave every projection and only remain listed as hidden", () => {
+  const observedId = ProjectIdSchema.parse("observed");
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "example.test/team/repo" }],
+    locations: [
+      { target: { daemonId: first, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo" },
+      { target: { daemonId: second, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "/home/repo" },
+    ],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+    hiddenLocations: [
+      { logicalProjectId: remoteId, target: { daemonId: second, projectId: concrete } },
+      { logicalProjectId: remoteId, target: { daemonId: second, projectId: observedId } },
+    ],
+  };
+  const observations = new Map([[second, { hostname: "laptop", data: [{
+    identityKey: ProjectIdentityKeySchema.parse("remote://example.test/team/repo"),
+    rootIdentityKeys: [ProjectIdentityKeySchema.parse("remote://example.test/team/repo")],
+    project: { ...catalog("/home/clone"), id: observedId },
+  }] }]]);
+  const [project] = projectLogicalProjects(snapshot, new Map(), observations);
+  assert.deepEqual(project?.locations.map(location => location.target.daemonId), [first]);
+  assert.equal(project?.observedLocations, undefined);
+  assert.deepEqual(project?.hiddenLocations?.map(location => [location.daemonId, location.projectId]),
+    [[second, concrete], [second, observedId]]);
+  // With one visible daemon left, the path no longer needs its host prefix.
+  assert.equal(project?.displayPath, "repo");
+  const working = (threadId: string) => ({ projects: [{
+    projectId: concrete, revision: 1, lastThreadUpdateAt: 1,
+    counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, working: 1 },
+    pinnedThreads: [], unsettledThreads: [{ activityAt: 1, status: "working" as const, title: threadId,
+      identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse(threadId) } }],
+  }] });
+  const summary = projectLogicalSummaries([project!], new Map([[first, working("desktop")], [second, working("laptop")]]), snapshot)
+    .get(remoteId);
+  assert.equal(summary?.counts.working, 1);
+  assert.deepEqual(summary?.unsettledThreads.map(item => item.location.daemonId), [first]);
 });
 
 test("a local project's name stays separate from its shortest daemon folder address", () => {

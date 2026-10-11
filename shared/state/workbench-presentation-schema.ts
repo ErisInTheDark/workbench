@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - presentationTables/PresentationRows: typed app-wide project, draft and layout storage.
+ * - presentationTables/PresentationRows: typed app-wide project, draft, layout and hidden-folder storage.
  * - presentationSchema: protected relational history for the shared presentation database.
  */
 import {
@@ -257,6 +257,17 @@ const importAttachments = initial(defineTable("presentation_import_attachments",
   content_hash: text().notNull(),
   source_revision: integer().notNull().nonNegative(),
 }, table => ({ constraints: [primaryKey([table.daemon_id, table.source_id, table.attachment_id])] })));
+// Folders this app hides from a logical project; keyed by target so unregistered observed folders can be hidden too.
+const hiddenLocationTable = defineTable("presentation_hidden_locations", {
+  logical_project_id: text().notNull().references("presentation_projects", "id"),
+  daemon_id: text().notNull(),
+  project_id: text().notNull(),
+}, table => ({ constraints: [primaryKey([table.logical_project_id, table.daemon_id, table.project_id])] }));
+const hiddenLocations = defineTableHistory({
+  current: hiddenLocationTable,
+  versions: [tableVersion({ schemaVersion: releases.hiddenLocations.version, table: hiddenLocationTable,
+    migration: createTable(hiddenLocationTable) })],
+});
 const divergences = initial(defineTable("presentation_source_divergences", {
   daemon_id: text().notNull().references("presentation_daemons", "id"),
   source_kind: enumText("draft", "layout").notNull(),
@@ -272,12 +283,13 @@ export const presentationTables = Object.freeze({
   references: references.current, feedbackReferences: feedbackReferences.current,
   folders: folders.current, members: members.current,
   receipts: receipts.current, mappings: mappings.current, importAttachments: importAttachments.current,
-  divergences: divergences.current,
+  divergences: divergences.current, hiddenLocations: hiddenLocations.current,
 });
 export type PresentationRows = { [Name in keyof typeof presentationTables]: SelectRow<(typeof presentationTables)[Name]> };
 export const presentationSchema = defineWorkbenchDatabaseSchema({
   subsystems: [defineSubsystemHistory([
     metadata, daemons, projects, locations, defaults, drafts, attachments, attachmentChunks,
     references, feedbackReferences, folders, members, receipts, mappings, importAttachments, divergences,
+    hiddenLocations,
   ])],
 });

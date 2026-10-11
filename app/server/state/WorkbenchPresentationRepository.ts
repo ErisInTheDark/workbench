@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
- * - default WorkbenchPresentationRepository: own relational project, draft, layout and import transactions.
+ * - default WorkbenchPresentationRepository: own relational project, draft, layout, hidden-folder and import transactions.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -21,6 +21,7 @@ import { presentationSchema, type PresentationRows } from "workbench-shared/stat
 import type { PresentationImportSource } from "workbench-shared/state/workbench-presentation-import";
 import releases from "workbench-shared/state/workbench-presentation-releases";
 import type { DaemonId } from "workbench-shared/workbench/identity";
+import { isDaemonOwnedProject } from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 
@@ -136,6 +137,8 @@ export default class WorkbenchPresentationRepository {
       .all() as PresentationRows["divergences"][];
     const sourceMappings = db.prepare("SELECT * FROM presentation_source_mappings ORDER BY daemon_id, source_kind, source_id")
       .all() as PresentationRows["mappings"][];
+    const hiddenLocations = db.prepare("SELECT * FROM presentation_hidden_locations ORDER BY logical_project_id, daemon_id, project_id")
+      .all() as PresentationRows["hiddenLocations"][];
     return PresentationSnapshotSchema.parse({
       revision: metadata.revision,
       daemons: daemons.map(row => ({ id: row.id, hostname: row.hostname })),
@@ -179,6 +182,10 @@ export default class WorkbenchPresentationRepository {
         daemonId: row.daemon_id, sourceKind: row.source_kind,
         sourceId: row.source_id, targetId: row.target_id, sourceRevision: row.source_revision,
       })),
+      hiddenLocations: hiddenLocations.map(row => ({
+        logicalProjectId: row.logical_project_id,
+        target: { daemonId: row.daemon_id, projectId: row.project_id },
+      })),
     });
   }
 
@@ -208,6 +215,7 @@ export default class WorkbenchPresentationRepository {
       case "putDraft": this.putDraft(mutation); break;
       case "deleteDraft": this.deleteDraft(mutation); break;
       case "setDraftPriority": this.setDraftPriority(mutation); break;
+      case "setLocationsHidden": this.setLocationsHidden(mutation); break;
       case "deleteAttachment": this.deleteAttachment(mutation); break;
       case "reserveLaunch": this.reserveLaunch(mutation); break;
       case "completeLaunch": this.completeLaunch(mutation); break;
@@ -471,6 +479,44 @@ export default class WorkbenchPresentationRepository {
     this.requireDatabase().prepare(`
       UPDATE presentation_drafts SET pinned = ?, snoozed = ?, revision = ? WHERE id = ?
     `).run(input.pinned ? 1 : 0, input.snoozed ? 1 : 0, this.nextRevision(), input.draftId);
+  }
+
+  /**
+   * Hide or show folders of one logical project for this app. Targets registered to another project are rejected;
+   * unregistered (observed) targets are accepted. At least one registered folder must stay visible, so the project
+   * keeps a sidebar row to undo from.
+   */
+  private setLocationsHidden(input: Extract<PresentationMutation, { kind: "setLocationsHidden" }>) {
+    const db = this.requireDatabase();
+    const project = db.prepare("SELECT match_key FROM presentation_projects WHERE id = ?")
+      .get(input.logicalProjectId) as { match_key: string } | undefined;
+    if (!project) throw new Error("Project no longer exists.");
+    if (input.hidden && isDaemonOwnedProject(project.match_key)) {
+      throw new Error("Each daemon's own Workbench folder always stays visible.");
+    }
+    const owner = db.prepare("SELECT logical_project_id FROM presentation_locations WHERE daemon_id = ? AND project_id = ?");
+    for (const target of input.targets) {
+      const row = owner.get(target.daemonId, target.projectId) as { logical_project_id: string } | undefined;
+      if (row && row.logical_project_id !== input.logicalProjectId) throw new Error("Folder belongs to another project.");
+    }
+    const exists = db.prepare(`
+      SELECT 1 FROM presentation_hidden_locations WHERE logical_project_id = ? AND daemon_id = ? AND project_id = ?
+    `);
+    const changes = input.targets.filter(target =>
+      Boolean(exists.get(input.logicalProjectId, target.daemonId, target.projectId)) !== input.hidden);
+    if (!changes.length) return;
+    const write = input.hidden
+      ? db.prepare("INSERT INTO presentation_hidden_locations(logical_project_id, daemon_id, project_id) VALUES (?, ?, ?)")
+      : db.prepare("DELETE FROM presentation_hidden_locations WHERE logical_project_id = ? AND daemon_id = ? AND project_id = ?");
+    for (const target of changes) write.run(input.logicalProjectId, target.daemonId, target.projectId);
+    const visible = db.prepare(`
+      SELECT count(*) FROM presentation_locations l WHERE l.logical_project_id = ? AND NOT EXISTS (
+        SELECT 1 FROM presentation_hidden_locations h
+        WHERE h.logical_project_id = l.logical_project_id AND h.daemon_id = l.daemon_id AND h.project_id = l.project_id
+      )
+    `).pluck().get(input.logicalProjectId) as number;
+    if (input.hidden && !visible) throw new Error("A project must keep at least one visible folder.");
+    this.nextRevision();
   }
 
   private deleteDraft(input: Extract<PresentationMutation, { kind: "deleteDraft" }>) {

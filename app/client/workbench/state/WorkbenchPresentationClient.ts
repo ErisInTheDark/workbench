@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchPresentationClient: own app presentation reads, mutations, attachment transfer, and freshness.
+ * - default WorkbenchPresentationClient: own app presentation reads, mutations (incl. hidden project folders), attachment
+ *   transfer, and freshness.
  */
 import type {
   PresentationDraftInput, PresentationSnapshot,
@@ -109,6 +110,12 @@ export default class WorkbenchPresentationClient {
     await this.mutate({
       kind: "setDraftPriority", draftId: draft.id, expectedRevision: draft.revision, ...priority,
     });
+  }
+
+  /** Hide or show folders of one logical project in this app's sidebar, threads, counts and folder picker. */
+  async setLocationsHidden(logicalProjectId: LogicalProjectId,
+    targets: Extract<WorkbenchPresentationIntent, { kind: "setLocationsHidden" }>["targets"], hidden: boolean) {
+    await this.mutate({ kind: "setLocationsHidden", logicalProjectId, targets, hidden });
   }
 
   async saveProjectLayout(logicalProjectId: LogicalProjectId,

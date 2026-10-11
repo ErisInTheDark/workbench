@@ -94,7 +94,8 @@ test("another client's deletion grants no reopen token and conflicting edits rem
   const write = client.putDraft(draft);
   const failed = assert.rejects(write, /another browser/);
   const mutation = await socket.request("app/presentation/mutate");
-  assert.equal(mutation.params.mutation.expectedRevision, null);
+  assert.equal(mutation.params.mutation.kind, "putDraft");
+  assert.equal((mutation.params.mutation as { expectedRevision: number | null }).expectedRevision, null);
   socket.fail(mutation, "Draft changed in another browser.");
   await failed;
   assert.equal(client.snapshot().phase, "failed");

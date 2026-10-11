@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ProjectFolderOption: one selectable daemon folder (location facts plus owning project identity).
- * - ProjectFolderAddress: folder url-address derivation and resolution over a folder universe.
+ * - ProjectFolderAddress: per-daemon shortest folder suffixes, url-address derivation and resolution over a folder universe.
  * - projectFolderOptions: build the folder universe from logical and plain project facts.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "../../types.ts";
@@ -99,33 +99,34 @@ export function projectFolderOptions(
 }
 
 export namespace ProjectFolderAddress {
-  /** Derive every folder's url address at once: shortest daemon-unique path suffix, daemon id prefix only on cross-daemon collisions. */
-  export function forAll(folders: readonly ProjectFolderOption[]): FolderAddressEntry[] {
+  /** Each folder's shortest path suffix unique among the given folders on its daemon; worktrees marked `+name`. Input order. */
+  export function suffixes(folders: readonly { target: ProjectLocationReference; rootPath: string }[]): string[][] {
     const suffixCounts = new Map<string, number>();
-    const partsByKey = new Map<string, string[]>();
-    for (const folder of folders) {
-      const parts = folderPathParts(folder.rootPath);
-      partsByKey.set(folderKey(folder.target), parts);
-      for (let count = 1; count <= parts.length; count += 1) {
-        const key = `${folder.target.daemonId.toLowerCase()}:${parts.slice(-count).join("/").toLowerCase()}`;
+    const parts = folders.map(folder => folderPathParts(folder.rootPath));
+    folders.forEach((folder, index) => {
+      for (let count = 1; count <= parts[index]!.length; count += 1) {
+        const key = `${folder.target.daemonId.toLowerCase()}:${parts[index]!.slice(-count).join("/").toLowerCase()}`;
         suffixCounts.set(key, (suffixCounts.get(key) ?? 0) + 1);
       }
-    }
-    const bare = new Map<string, string[]>();
-    for (const folder of folders) {
-      const parts = partsByKey.get(folderKey(folder.target)) ?? folderPathParts(folder.rootPath);
-      const suffix = parts.map((_, index) => parts.slice(-(index + 1)))
+    });
+    return folders.map((folder, index) => {
+      const own = parts[index]!;
+      return own.map((_, count) => own.slice(-(count + 1)))
         .find(candidate => suffixCounts.get(`${folder.target.daemonId.toLowerCase()}:${candidate.join("/").toLowerCase()}`) === 1)
-        ?? parts;
-      bare.set(folderKey(folder.target), suffix);
-    }
+        ?? own;
+    });
+  }
+
+  /** Derive every folder's url address at once: shortest daemon-unique path suffix, daemon id prefix only on cross-daemon collisions. */
+  export function forAll(folders: readonly ProjectFolderOption[]): FolderAddressEntry[] {
+    const bare = suffixes(folders);
     const bareCounts = new Map<string, number>();
-    for (const suffix of bare.values()) {
+    for (const suffix of bare) {
       const key = suffix.join("/").toLowerCase();
       bareCounts.set(key, (bareCounts.get(key) ?? 0) + 1);
     }
-    return folders.map(folder => {
-      const suffix = bare.get(folderKey(folder.target)) ?? folderPathParts(folder.rootPath);
+    return folders.map((folder, index) => {
+      const suffix = bare[index]!;
       return {
         folder,
         address: (bareCounts.get(suffix.join("/").toLowerCase()) ?? 0) > 1

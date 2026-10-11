@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchContextMenuSurfaceProps: active menu placement and dismissal inputs.
  * - selectWorkbenchContextMenuControl: dispatch an enabled grouped control with its dismissal policy.
- * - default WorkbenchContextMenuSurface: render action rows, separators, and accessible grouped icon controls.
+ * - default WorkbenchContextMenuSurface: render action rows, separators, accessible grouped icon controls and checklist trees.
  */
 "use client";
 
@@ -12,6 +12,7 @@ import { getWorkbenchThreadStatusControlClassName } from "./workbench-thread-sta
 import type { WorkbenchContextMenuControl, WorkbenchContextMenuControlGroup, WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchMenuSurface from "./WorkbenchMenuSurface";
 import WorkbenchMenuAction from "./WorkbenchMenuAction";
+import { WorkbenchCheckboxMarker } from "./WorkbenchCheckbox";
 
 const CONTEXT_MENU_VIEWPORT_PADDING = 8;
 
@@ -142,6 +143,54 @@ export default function WorkbenchContextMenuSurface({
       {menu.items.map((item) => {
         if (item.kind === "separator") {
           return <div key={item.id} role="separator" className="mx-2 my-1 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" />;
+        }
+
+        if (item.kind === "checklist-tree") {
+          return (
+            <div key={item.id} className="py-1" role="group" aria-label={item.label}>
+              <div className="px-3 pb-1 pt-1 text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-fg/muted">{item.label}</div>
+              <div className="scrollbar-hover-reveal max-h-60 overflow-y-auto overscroll-contain">
+                {item.groups.map((group) => {
+                  const enabled = group.items.filter((entry) => !entry.disabled);
+                  const checkedCount = group.items.filter((entry) => entry.checked).length;
+                  const groupChecked = checkedCount === group.items.length;
+                  const mixed = checkedCount > 0 && !groupChecked;
+                  // Ticking a group shows every folder; unticking hides only what may be hidden.
+                  const targets = (groupChecked ? enabled.filter((entry) => entry.checked) : group.items.filter((entry) => !entry.checked))
+                    .map((entry) => entry.id);
+                  return (
+                    <div key={group.id}>
+                      <WorkbenchMenuAction
+                        role="menuitemcheckbox"
+                        aria-checked={mixed ? "mixed" : groupChecked}
+                        disabled={!targets.length}
+                        className="!py-1.5"
+                        onClick={() => item.onToggle(targets, !groupChecked)}
+                      >
+                        <WorkbenchCheckboxMarker checked={groupChecked} indeterminate={mixed} disabled={!targets.length} />
+                        <span className="min-w-0 flex-1 truncate font-medium text-text">{group.label}</span>
+                      </WorkbenchMenuAction>
+                      {group.items.map((entry) => (
+                        <WorkbenchMenuAction
+                          key={entry.id}
+                          role="menuitemcheckbox"
+                          aria-checked={entry.checked}
+                          disabled={entry.disabled}
+                          title={entry.title ?? entry.label}
+                          className="!py-1.5 pl-9"
+                          onClick={() => { if (!entry.disabled) item.onToggle([entry.id], !entry.checked); }}
+                        >
+                          <WorkbenchCheckboxMarker checked={entry.checked} disabled={entry.disabled} />
+                          <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                          {entry.note ? <span className="shrink-0 text-[0.7rem] text-fg/muted">{entry.note}</span> : null}
+                        </WorkbenchMenuAction>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
         }
 
         if (item.kind === "control-group") {

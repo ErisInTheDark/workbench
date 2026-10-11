@@ -1,12 +1,17 @@
 /*
  * Exports:
- * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, daemon failure, and the new project action.
+ * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, daemon failure, the new
+ *   project action and each logical project's "Folders" visibility menu.
  */
 "use client";
 
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchProjectOption } from "workbench-shared/types";
+import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
+import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
+import { isDaemonOwnedProject } from "workbench-shared/workbench/project/workbench-project-projection";
+import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import {
   groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
 } from "./project-sidebar-groups";
@@ -22,6 +27,54 @@ import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosu
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchThreadStatusCountsButton from "./WorkbenchThreadStatusCountsButton";
 import { useWorkbenchClientController } from "./workbench-client-context";
+
+type FolderTarget = { daemonId: DaemonId; projectId: ProjectId };
+
+/**
+ * A logical project's "Folders" menu: every visible, observed and hidden folder grouped by host. Matching the presentation
+ * repository's guards, the last visible registered folder and a daemon-owned project's visible folders are locked (with
+ * the reason on hover). Daemon projects get a disabled note.
+ */
+function projectFolderMenu(
+  project: WorkbenchLogicalProject,
+  onToggle: (targets: FolderTarget[], hidden: boolean) => void,
+): WorkbenchContextMenuDefinition {
+  const id = `project-folders:${project.id}`;
+  const label = `${project.label} actions`;
+  if (project.matchKey.startsWith("daemon://")) {
+    return { id, label, items: [{ id: "folders", label: "Daemon projects have no other folders", disabled: true, onSelect: () => {} }] };
+  }
+  const visibleLock = isDaemonOwnedProject(project.matchKey) ? "Each daemon's own Workbench folder always stays visible."
+    : project.locations.length <= 1 ? "A project must keep at least one visible folder." : null;
+  const folders = [
+    ...project.locations.map(location => ({ ...location.target, hostname: location.hostname, rootPath: location.rootPath,
+      checked: true, lock: visibleLock })),
+    ...(project.observedLocations ?? []).map(location => ({ ...location, checked: true,
+      lock: isDaemonOwnedProject(project.matchKey) ? visibleLock : null })),
+    ...(project.hiddenLocations ?? []).map(location => ({ ...location, checked: false, lock: null })),
+  ];
+  const targets = new Map(folders.map(folder => [`${folder.daemonId}/${folder.projectId}`,
+    { daemonId: folder.daemonId, projectId: folder.projectId }]));
+  const labels = new Map(ProjectFolderAddress.suffixes(folders.map(folder =>
+    ({ target: { daemonId: folder.daemonId, projectId: folder.projectId }, rootPath: folder.rootPath })))
+    .map((suffix, index) => [folders[index]!, suffix.join("/")]));
+  const hosts = [...new Set(folders.map(folder => folder.hostname))].sort((left, right) => left.localeCompare(right));
+  return {
+    id, label,
+    items: [{
+      id: "folders", kind: "checklist-tree", label: "Folders",
+      groups: hosts.map(hostname => ({
+        id: hostname, label: hostname,
+        items: folders.filter(folder => folder.hostname === hostname)
+          .sort((left, right) => left.rootPath.localeCompare(right.rootPath))
+          .map(folder => ({ id: `${folder.daemonId}/${folder.projectId}`, label: labels.get(folder) ?? folder.rootPath,
+            title: folder.lock ? `${folder.rootPath}\n${folder.lock}` : folder.rootPath,
+            checked: folder.checked, disabled: folder.lock !== null })),
+      })),
+      onToggle: (ids, checked) => onToggle(ids.flatMap(id => targets.get(id) ?? []), !checked),
+    }],
+  };
+}
 
 export default function ProjectSidebar ({
   activeProjectId,
@@ -57,7 +110,17 @@ export default function ProjectSidebar ({
   projects: readonly WorkbenchProjectOption[];
 }) {
   const { preferences } = useWorkbenchSidebarPreferences();
-  const workspace = useWorkbenchClientController().explorer.workspaceProjects;
+  const client = useWorkbenchClientController();
+  const workspace = client.explorer.workspaceProjects;
+  const presentation = client.mounted?.presentationClient ?? null;
+  const [folderError, setFolderError] = useState<string | null>(null);
+  const folderMenus = useMemo(() => new Map<string, WorkbenchContextMenuDefinition>((logicalProjects ?? []).map(project =>
+    [project.id, projectFolderMenu(project, (targets, hidden) => {
+      setFolderError(null);
+      void presentation?.setLocationsHidden(project.id, targets, hidden).catch((error: unknown) => {
+        setFolderError(error instanceof Error ? error.message : "Unable to change this project's folders.");
+      });
+    })] as const)), [logicalProjects, presentation]);
   const summaries = useWorkbenchProjectThreadSummaries();
   const displayedProjects = logicalProjects ?? projects;
   const entriesByProjectId = useMemo(() => new Map<string, DisplaySidebarProject>(displayedProjects.map(project => {
@@ -147,6 +210,7 @@ export default function ProjectSidebar ({
           {visibleProjects.map((entry) => (
             <WorkbenchProjectListItem
               active={entry.project.id === activeProjectId}
+              contextMenu={folderMenus.get(entry.project.id) ?? null}
               entry={entry}
               key={entry.project.id}
               onProjectLinkClick={onProjectLinkClick}
@@ -172,6 +236,7 @@ export default function ProjectSidebar ({
               /> : null}
             </div>
           ) : null}
+          {folderError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{folderError}</p> : null}
           {logicalError ? <p role="alert" className="m-0 px-2 text-[0.8rem] leading-5 text-danger">{logicalError}</p> : null}
           {!displayedProjects.length ? <WorkbenchDaemonStartupFailure className="px-2" /> : null}
           {!displayedProjects.length && !logicalError ? <p className="m-0 px-2 text-[0.8rem] leading-5 text-fg/muted">

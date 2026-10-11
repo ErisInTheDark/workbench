@@ -751,6 +751,8 @@ export interface WorkbenchLogicalProject {
     rootPath: string;
     project: WorkbenchProjectOption;
   }>;
+  /** Folders this app hides; absent from `locations` and `observedLocations`. */
+  hiddenLocations?: Array<{ daemonId: DaemonId; projectId: ProjectId; hostname: string; rootPath: string }>;
 }
 
 export interface WorkbenchLogicalProjectSummary {

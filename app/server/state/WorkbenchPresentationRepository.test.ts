@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect cross-daemon grouping, app-owned draft revisions and retained imports.
+ * No production exports. Protect cross-daemon grouping, app-owned draft revisions, hidden folders and retained imports.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -38,6 +38,40 @@ function catalog(rootPath: string, identityKey = remote) {
     },
   }] };
 }
+
+test("hidden folders persist per project, repeat idempotently and never hide the last registered folder", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/repo") });
+    const logicalProjectId = repository.read().projects[0]!.id;
+    const laptop = { daemonId: second, projectId };
+    const desktop = { daemonId: first, projectId };
+    const hidden = repository.mutate({ kind: "setLocationsHidden", logicalProjectId, targets: [laptop], hidden: true });
+    assert.deepEqual(hidden.hiddenLocations, [{ logicalProjectId, target: laptop }]);
+    assert.equal(repository.mutate({ kind: "setLocationsHidden", logicalProjectId, targets: [laptop], hidden: true }).revision,
+      hidden.revision);
+    assert.throws(() => repository.mutate({ kind: "setLocationsHidden", logicalProjectId, targets: [desktop], hidden: true }),
+      /at least one visible folder/u);
+    await repository.close();
+    await repository.start();
+    assert.deepEqual(repository.read().hiddenLocations, [{ logicalProjectId, target: laptop }]);
+    assert.deepEqual(repository.mutate({ kind: "setLocationsHidden", logicalProjectId, targets: [laptop], hidden: false })
+      .hiddenLocations, []);
+
+    const library = ProjectIdentityKeySchema.parse("workbench-library");
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/.workbench", library) });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/.workbench", library) });
+    const libraryProjectId = repository.read().projects.find(project => project.matchKey === library)!.id;
+    assert.throws(() => repository.mutate({ kind: "setLocationsHidden", logicalProjectId: libraryProjectId,
+      targets: [laptop], hidden: true }), /always stays visible/u);
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
 
 test("one remote groups locations but drafts retain a concrete daemon target across reopen", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");

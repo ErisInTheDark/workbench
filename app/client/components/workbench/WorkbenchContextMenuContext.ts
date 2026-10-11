@@ -4,6 +4,7 @@
  * - WorkbenchContextMenuControl: grouped icon control.
  * - WorkbenchContextMenuControlGroup: grouped commands, checkboxes, or radio controls.
  * - WorkbenchContextMenuSeparator: menu section divider.
+ * - WorkbenchContextMenuChecklistTree/WorkbenchContextMenuChecklistItem: scrollable grouped checkbox tree.
  * - WorkbenchContextMenuItem: supported menu rows.
  * - WorkbenchContextMenuDefinition/WorkbenchContextMenuRequest: document context-menu content and placement contracts.
  * - WorkbenchContextMenuController: controller exposed to context-menu capabilities.
@@ -51,7 +52,27 @@ export interface WorkbenchContextMenuSeparator {
   kind: "separator";
 }
 
-export type WorkbenchContextMenuItem = WorkbenchContextMenuAction | WorkbenchContextMenuControlGroup | WorkbenchContextMenuSeparator;
+/** One checkbox leaf; `note` is muted trailing text, `title` hover text (defaults to `label`). */
+export interface WorkbenchContextMenuChecklistItem {
+  checked: boolean;
+  disabled?: boolean;
+  id: string;
+  label: string;
+  note?: string;
+  title?: string;
+}
+
+/** Scrollable two-level checklist; group rows show and toggle their enabled items. The menu stays open. */
+export interface WorkbenchContextMenuChecklistTree {
+  groups: Array<{ id: string; items: WorkbenchContextMenuChecklistItem[]; label: string }>;
+  id: string;
+  kind: "checklist-tree";
+  label: string;
+  onToggle: (itemIds: string[], checked: boolean) => void;
+}
+
+export type WorkbenchContextMenuItem = WorkbenchContextMenuAction | WorkbenchContextMenuControlGroup
+  | WorkbenchContextMenuSeparator | WorkbenchContextMenuChecklistTree;
 
 export interface WorkbenchContextMenuDefinition {
   id: string;
