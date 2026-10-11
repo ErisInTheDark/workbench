@@ -68,7 +68,7 @@ export default function ThreadStatusArea({
   const { intersections, logicalProjectId, ownerProjectId } = useThreadClaimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
   const plannedOverlapCount = intersections.hasScope ? intersections.plannedEntries.length : 0;
-  // With nothing live, overlapping live claims take the title slot; otherwise they lead the arc pill.
+  // With nothing live, overlapping live claims also take the title slot; they always lead the arc pill.
   const overlapInSlot = !live && overlapCount > 0;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
@@ -78,7 +78,7 @@ export default function ThreadStatusArea({
   const feedback = threadLifecycle?.kind === "completed" ? addressedFeedback : [];
 
   const arcSegments: ThreadStatusPanel["segments"][number][] = [
-    ...(!overlapInSlot && (overlapCount || plannedOverlapCount) ? [{
+    ...(overlapCount || plannedOverlapCount ? [{
       key: "overlap",
       // Only overlapping active work stands out; planned-only overlap reads like any other count.
       ...(overlapCount ? { className: `${threadStatusSegmentClassName} ${amberClassName}` } : {}),
@@ -88,7 +88,7 @@ export default function ThreadStatusArea({
     ...(claimed ? [{ key: "claims", content: <><GitArcClaimIcon size={14} />{count(claimed)}</> }] : []),
     ...(stashed ? [{ key: "stash", content: <><GitArcIcon action="stash" size={14} />{count(stashed)}</> }] : []),
   ];
-  if (!arcSegments.length && !overlapInSlot && accepted) {
+  if (!arcSegments.length && accepted) {
     arcSegments.push({ key: "accepted", content: <><CheckCheckIcon size={14} />{count(accepted)}</> });
   }
   const showIntersections = intersections.hasScope && Boolean(overlapCount || plannedOverlapCount);
