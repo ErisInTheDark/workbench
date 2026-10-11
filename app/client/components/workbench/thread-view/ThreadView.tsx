@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useEffect, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useState, type ComponentProps } from "react";
 import type { ThreadPayload } from "workbench-shared/types";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { useThread } from "../use-thread";
@@ -31,6 +31,12 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   const active = useThread(props.projectId, selectedId && selectedId !== rootId
     ? thread.status === "ready" ? { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(rootId), threadId: ThreadReferenceSchema.parse(selectedId), harness: child?.harness } : null
     : target, selectedId !== rootId ? "view" : interest);
+  const onSelectedThreadChange = props.onSelectedThreadChange;
+  // A stable handler keeps the memoized content from re-rendering on every summary push this gate reads.
+  const selectThread = useCallback((id: string) => {
+    setSelectedId(id);
+    onSelectedThreadChange?.(id);
+  }, [onSelectedThreadChange]);
   const error = thread.error ?? active.error ?? (!thread.head ? routeError : "");
   if (error) {
     return (
@@ -44,8 +50,5 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
     );
   }
   if (!props.projectId || !target || target.kind === "new" || thread.status !== "ready" || !thread.head || active.status !== "ready" || !active.head) return <ThreadLoadingSkeleton />;
-  return <ThreadViewContent {...props} rootTarget={target} selectedThreadId={selectedId} onSelectedThreadChange={id => {
-    setSelectedId(id);
-    props.onSelectedThreadChange?.(id);
-  }} />;
+  return <ThreadViewContent {...props} rootTarget={target} selectedThreadId={selectedId} onSelectedThreadChange={selectThread} />;
 }
