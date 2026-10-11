@@ -1,14 +1,13 @@
 /*
  * Exports:
  * - ThreadProgressiveWindowChunk: one stable exact-height transcript chunk.
- * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends while preserving the reading anchor and restoring revealed extent across remounts.
+ * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends as the reader nears them, restoring revealed extent across remounts.
  */
 "use client";
 
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -35,7 +34,6 @@ export default function ThreadProgressiveWindow({
 }) {
   const viewport = useThreadScrollViewportContext();
   const identityToken = useMemo(() => ({}), [identity]);
-  const rootRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [visibleStart, setVisibleStart] = useState(() => (
     viewport.progressiveWindowing
@@ -51,52 +49,35 @@ export default function ThreadProgressiveWindow({
   }, [boundedStart, identity, viewport.progressiveWindowStarts]);
 
   const readView = useCallback(() => {
-    const root = rootRef.current;
     const scrollTarget = viewport.getViewport();
     const sentinel = sentinelRef.current;
-    const anchor = root?.querySelector<HTMLElement>("[data-thread-progressive-window-chunk]");
-    if (!root || !scrollTarget || !sentinel || !anchor) return null;
+    if (!scrollTarget || !sentinel) return null;
     const viewportRect = scrollTarget.getBoundingClientRect();
     const sentinelRect = sentinel.getBoundingClientRect();
-    const anchorId = anchor.dataset.threadProgressiveWindowChunk;
-    if (!anchorId) return null;
     return {
-      anchor: {
-        id: anchorId,
-        top: anchor.getBoundingClientRect().top - viewportRect.top,
-      },
-      anchorTop: (id: string) => {
-        const target = [...root.querySelectorAll<HTMLElement>("[data-thread-progressive-window-chunk]")]
-          .find(element => element.dataset.threadProgressiveWindowChunk === id);
-        return target ? target.getBoundingClientRect().top - scrollTarget.getBoundingClientRect().top : null;
-      },
       hiddenCount: visibleStartRef.current,
       identity: identityToken,
       // One screen ahead, so chunks usually land in the reserve before the reader reaches them.
       nearTop: sentinelRect.bottom > viewportRect.top - scrollTarget.clientHeight
         && sentinelRect.top < viewportRect.bottom,
-      scrollTop: scrollTarget.scrollTop,
       viewport: scrollTarget,
     };
   }, [identityToken, viewport]);
   const reveal = useCallback((count: number) => {
     setVisibleStart(current => Math.max(0, current - count));
   }, []);
-  const writeScrollTop = useCallback((scrollTop: number) => {
-    const scrollTarget = viewport.getViewport();
-    if (scrollTarget) viewport.shiftScrollTop(scrollTop - scrollTarget.scrollTop);
-  }, [viewport]);
-  const bindingsRef = useRef<ProgressiveWindowOptions>({ readView, reveal, writeScrollTop });
-  bindingsRef.current = { readView, reveal, writeScrollTop };
+  const bindingsRef = useRef<ProgressiveWindowOptions>({ readView, reveal });
+  bindingsRef.current = { readView, reveal };
   const controllerRef = useRef<ThreadProgressiveWindowController | null>(null);
   controllerRef.current ??= new ThreadProgressiveWindowController({
     readView: () => bindingsRef.current.readView(),
     reveal: count => bindingsRef.current.reveal(count),
-    writeScrollTop: scrollTop => bindingsRef.current.writeScrollTop(scrollTop),
   });
 
   // Window geometry only changes with its own reveal or chunk list; unrelated commits must not force layout here.
-  useLayoutEffect(() => {
+  // After paint, so the viewport has anchored the last reveal and each batch is its own frame: a layout-effect
+  // reveal would chain every batch into one synchronous cascade.
+  useEffect(() => {
     controllerRef.current?.reconcile();
   }, [boundedStart, chunks.length, identityToken]);
   useEffect(() => {
@@ -114,7 +95,6 @@ export default function ThreadProgressiveWindow({
   const visibleChunks = chunks.slice(boundedStart);
   return (
     <div
-      ref={rootRef}
       className="space-y-2"
       data-thread-progressive-window={identity}
       data-thread-progressive-hidden={boundedStart > 0 ? "true" : undefined}

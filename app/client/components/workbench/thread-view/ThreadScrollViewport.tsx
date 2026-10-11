@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, gesture-safe scroll correction, measured-window stability, and off-screen layout preservation.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change, and gesture-safe correction.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -18,7 +18,6 @@ import {
 
 import {
   didThreadScrollReattach,
-  getPreservedThreadScrollTop,
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
@@ -28,6 +27,7 @@ import {
   type ThreadScrollProximity,
 } from "./thread-scroll-snap";
 import ThreadInitialEndPlacementController from "./ThreadInitialEndPlacementController";
+import ThreadReadingAnchorController, { pickThreadReadingAnchor } from "./ThreadReadingAnchorController";
 import ThreadScrollSettleController from "./ThreadScrollSettleController";
 import {
   ThreadScrollViewportContext,
@@ -152,6 +152,17 @@ function ActiveThreadScrollViewport ({
         ? THREAD_SCROLL_TOUCH_RESERVE_PX : 0;
     },
   });
+  const anchorRef = useRef<ThreadReadingAnchorController<Element> | null>(null);
+  const anchor = anchorRef.current ??= new ThreadReadingAnchorController<Element>({
+    pick: () => viewportRef.current && contentRef.current
+      ? pickThreadReadingAnchor(viewportRef.current, contentRef.current) : null,
+    offset: (element) => {
+      const content = contentRef.current;
+      return content && element.isConnected && content.contains(element)
+        ? element.getBoundingClientRect().top - content.getBoundingClientRect().top : null;
+    },
+    shift: delta => settle.shift(delta),
+  });
   useEffect(() => () => {
     visibility.current?.dispose();
     visibility.current = null;
@@ -186,57 +197,52 @@ function ActiveThreadScrollViewport ({
     progressiveWindowing: true,
     progressiveWindowStarts: progressiveWindowStartsRef.current,
     getViewport: () => viewportRef.current,
-    shiftScrollTop: delta => settle.shift(delta),
-    observeContent: (element, listener, range = "viewport", preserveReadingPosition = false) => {
+    reconcileLayout: () => anchor.reconcile(),
+    observeContent: (element, listener, range = "viewport") => {
       const root = viewportRef.current;
-      const content = contentRef.current;
-      if (!root || !content) return () => { };
+      if (!root) return () => { };
       visibility.current ??= new ThreadViewportVisibilityController({
         root,
-        content,
-        shiftScrollTop: delta => settle.shift(delta),
         intersection: (callback, observedRange, rootMarginPx) => new IntersectionObserver(callback, {
           root,
           rootMargin: observedRange === "viewport" ? "0px" : `${rootMarginPx}px 0px`,
         }),
         resize: callback => new ResizeObserver(callback),
       });
-      return visibility.current.observe(element, listener, range, preserveReadingPosition);
+      return visibility.current.observe(element, listener, range);
     },
     onBottomReattached: (listener) => {
       bottomListeners.current.add(listener);
       return () => { bottomListeners.current.delete(listener); };
     },
-    preserveOffscreenLayout: () => {
-      const viewport = viewportRef.current;
-      if (!viewport) return () => { };
-      const previousMetrics = readScrollMetrics(viewport);
-      return () => {
-        if (viewportRef.current !== viewport) return;
-        const preservedScrollTop = getPreservedThreadScrollTop(previousMetrics, readScrollMetrics(viewport));
-        if (preservedScrollTop !== null) settle.shift(preservedScrollTop - viewport.scrollTop);
-        syncScrollProximity(viewport);
-      };
-    },
     setEndTarget: (target) => {
       endTargetRef.current = target;
       placeInitialViewportAtEnd();
     },
-  }), [placeInitialViewportAtEnd, settle, syncScrollProximity]);
+  }), [anchor, placeInitialViewportAtEnd]);
 
-  // The one owner of initial bottom placement: any content or viewport resize re-pins before paint until reader intent.
+  // Every layout change is reconciled before it paints: size changes through the resize observer (later ticks of
+  // settling content included), and mounts that move the anchor without changing total height through mutations.
+  // Initial bottom placement re-pins after the anchor until reader intent.
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     const content = contentRef.current;
     if (!viewport || !content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    anchor.record();
+    const resize = new ResizeObserver(() => {
+      anchor.reconcile();
       placeInitialViewportAtEnd();
       settle.reconcileReserve();
     });
-    observer.observe(content);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, [placeInitialViewportAtEnd, settle]);
+    resize.observe(content);
+    resize.observe(viewport);
+    const mutations = new MutationObserver(() => anchor.reconcile());
+    mutations.observe(content, { childList: true, subtree: true });
+    return () => {
+      resize.disconnect();
+      mutations.disconnect();
+    };
+  }, [anchor, placeInitialViewportAtEnd, settle]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -265,6 +271,7 @@ function ActiveThreadScrollViewport ({
       previousScrollTopRef.current = scrollTop;
       syncScrollProximity(viewport);
       settle.scrolled();
+      anchor.record();
     };
     const handleScrollEnd = () => settle.scrollEnded();
     const handleWheel = (event: WheelEvent) => {
@@ -368,7 +375,7 @@ function ActiveThreadScrollViewport ({
       viewport.ownerDocument.removeEventListener("pointercancel", handlePointerEnd);
       viewport.ownerDocument.removeEventListener("pointerup", handlePointerEnd);
     };
-  }, [onScrollIntent, onTouchActivityChange, settle, syncScrollProximity]);
+  }, [anchor, onScrollIntent, onTouchActivityChange, settle, syncScrollProximity]);
 
   return (
     <div

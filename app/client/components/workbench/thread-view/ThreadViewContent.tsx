@@ -91,18 +91,8 @@ const EMPTY_PROJECT_FILE_CANDIDATES: readonly ProjectTreeFileCandidate[] = [];
 const THREAD_VIEW_BACKGROUND_REBUILD_SLICE_MS = 20;
 const threadViewBackgroundRebuildQueue = new CooperativeRebuildQueue();
 
-const THREAD_HISTORY_TURN_MARKER_SELECTOR = "[data-thread-history-turn-id]";
-
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
-}
-
-function findHistoryTurnMarker (root: HTMLElement | null, turnId: string) {
-  if (!root) return null;
-  for (const marker of root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)) {
-    if (marker.dataset.threadHistoryTurnId === turnId) return marker;
-  }
-  return null;
 }
 
 type CodeBlockCopyState = "copied" | "failed" | "idle";
@@ -654,8 +644,7 @@ export default memo(function ThreadViewContent ({
     historyPagingBindingsRef.current = {
       readView: () => {
         const viewport = scrollViewportRef.current;
-        const root = threadViewRef.current;
-        if (!viewport || !root || !activeThread) return null;
+        if (!viewport || !activeThread) return null;
         const viewportRect = viewport.getBoundingClientRect();
         const sentinelRect = historySentinel?.getBoundingClientRect();
         return {
@@ -667,24 +656,7 @@ export default memo(function ThreadViewContent ({
           renderedTurnIds: renderedHistoryTurnIds,
           nearTop: Boolean(sentinelRect && viewport.clientHeight > 0
             && sentinelRect.bottom > viewportRect.top - viewport.clientHeight && sentinelRect.top < viewportRect.bottom),
-          scrollTop: viewport.scrollTop,
-          get anchor() {
-            const marker = [...root.querySelectorAll<HTMLElement>(THREAD_HISTORY_TURN_MARKER_SELECTOR)]
-              .find((candidate) => renderedHistoryTurnIds.includes(candidate.dataset.threadHistoryTurnId ?? ""));
-            return marker ? {
-              turnId: marker.dataset.threadHistoryTurnId!,
-              top: marker.getBoundingClientRect().top - viewportRect.top,
-            } : null;
-          },
-          anchorTop: (turnId) => {
-            const marker = findHistoryTurnMarker(root, turnId);
-            return marker ? marker.getBoundingClientRect().top - viewport.getBoundingClientRect().top : null;
-          },
         };
-      },
-      writeScrollTop: (scrollTop) => {
-        const viewport = scrollViewportRef.current;
-        if (viewport) threadScrollViewport.shiftScrollTop(scrollTop - viewport.scrollTop);
       },
       load: () => { void loadPreviousTurn(); },
       schedule: (callback, delayMs) => {
@@ -694,10 +666,10 @@ export default memo(function ThreadViewContent ({
     };
     historyPagingRef.current ??= new ThreadHistoryPagingController({
       readView: () => historyPagingBindingsRef.current?.readView() ?? null,
-      writeScrollTop: (scrollTop) => historyPagingBindingsRef.current?.writeScrollTop(scrollTop),
       load: () => historyPagingBindingsRef.current?.load(),
       schedule: historyPagingBindingsRef.current.schedule,
     });
+    threadScrollViewport.reconcileLayout();
     historyPagingRef.current.reconcile();
   });
 
@@ -728,7 +700,7 @@ export default memo(function ThreadViewContent ({
 
     const reconcile = () => historyPagingRef.current?.reconcile();
     const interrupt = (historyIntent = false) => historyPagingRef.current?.interrupt({ historyIntent });
-    const handleScroll = () => historyPagingRef.current?.viewportScrolled();
+    const handleScroll = () => historyPagingRef.current?.reconcile();
     const handleWheel = (event: WheelEvent) => interrupt(event.deltaY < 0);
     const handleTouchMove = () => interrupt();
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect initial placement, wheel/pointer/touch direction, proximity, and layout preservation.
+ * No production exports. Tests protect initial placement, wheel/pointer/touch direction, proximity, and bottom reattachment.
  */
 
 import assert from "node:assert/strict";
@@ -8,7 +8,6 @@ import test from "node:test";
 
 import {
   getInitialThreadScrollTop,
-  getPreservedThreadScrollTop,
   isThreadScrollAtEnd,
   resolveThreadScrollDirection,
   resolveThreadScrollProximity,
@@ -58,23 +57,6 @@ test("thread end detection uses the normal top-origin boundary", () => {
   assert.equal(isThreadScrollAtEnd({ ...metrics, scrollTop: 1_198.9 }), false);
 });
 
-test("offscreen layout changes preserve the reader position", () => {
-  assert.equal(getPreservedThreadScrollTop(
-    { clientHeight: 600, scrollHeight: 1_800, scrollTop: 500 },
-    { clientHeight: 600, scrollHeight: 2_200, scrollTop: 500 },
-  ), 900);
-  assert.equal(getPreservedThreadScrollTop(
-    { clientHeight: 600, scrollHeight: 1_800, scrollTop: 500 },
-    { clientHeight: 600, scrollHeight: 900, scrollTop: 500 },
-  ), 0);
-});
-
-test("snapped layout changes stay owned by native re-snapping", () => {
-  assert.equal(getPreservedThreadScrollTop(
-    { clientHeight: 600, scrollHeight: 1_800, scrollTop: 1_200 },
-    { clientHeight: 600, scrollHeight: 2_200, scrollTop: 1_200 },
-  ), null);
-});
 test("bottom reattachment requires reaching the end after leaving it", () => {
   const end = { scrollTop: 900, scrollHeight: 1000, clientHeight: 100 };
   assert.equal(didThreadScrollReattach(false, end), true);

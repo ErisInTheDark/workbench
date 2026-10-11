@@ -2,7 +2,7 @@
  * Exports:
  * - HistoryPagingView: current renderer and viewport measurements.
  * - HistoryPagingOptions: viewport, request, and scheduling boundary.
- * - default ThreadHistoryPagingController: own automatic paging and prepend restoration.
+ * - default ThreadHistoryPagingController: own automatic paging, one page in flight until it renders.
  */
 export interface HistoryPagingView {
   readonly identity: object;
@@ -12,21 +12,16 @@ export interface HistoryPagingView {
   readonly sourceReady: boolean;
   readonly renderedTurnIds: readonly string[];
   readonly nearTop: boolean;
-  readonly scrollTop: number;
-  readonly anchor: { readonly turnId: string; readonly top: number } | null;
-  readonly anchorTop: (turnId: string) => number | null;
 }
 
 export interface HistoryPagingOptions {
   readonly readView: () => HistoryPagingView | null;
-  readonly writeScrollTop: (scrollTop: number) => void;
   readonly load: () => void;
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
 }
 
 interface PendingPrepend {
   readonly transaction: number;
-  anchor: HistoryPagingView["anchor"];
   receivedTurnIds: readonly string[] | null;
 }
 
@@ -58,11 +53,7 @@ export default class ThreadHistoryPagingController {
     this.#cancelScheduled();
     this.#triggeredBoundary = view.boundaryKey;
     const transaction = ++this.#transaction;
-    this.#pending = {
-      transaction,
-      anchor: view.anchor,
-      receivedTurnIds: null,
-    };
+    this.#pending = { transaction, receivedTurnIds: null };
     return transaction;
   }
 
@@ -80,18 +71,6 @@ export default class ThreadHistoryPagingController {
     this.reconcile();
   }
 
-  viewportScrolled() {
-    const view = this.#read();
-    const anchor = this.#pending?.anchor;
-    if (view && anchor) {
-      const top = view.anchorTop(anchor.turnId);
-      if (top !== null && this.#pending) {
-        this.#pending.anchor = { turnId: anchor.turnId, top };
-      }
-    }
-    this.reconcile();
-  }
-
   suppressUntilHistoryIntent() {
     this.#historyIntentRequired = true;
     this.#cancelScheduled();
@@ -103,10 +82,6 @@ export default class ThreadHistoryPagingController {
     const pending = this.#pending;
     if (pending) {
       this.#cancelScheduled();
-      const top = pending.anchor ? view.anchorTop(pending.anchor.turnId) : null;
-      if (pending.anchor && top !== null && Math.abs(top - pending.anchor.top) > 0.5) {
-        this.#options.writeScrollTop(view.scrollTop + top - pending.anchor.top);
-      }
       const renderedTurnIds = view.renderedTurnIds;
       if (!pending.receivedTurnIds || !view.sourceReady
         || !pending.receivedTurnIds.every((id) => renderedTurnIds.includes(id))) return;

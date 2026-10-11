@@ -3,7 +3,7 @@
  * - default ThreadWorkedRun: own SQL work-run visibility, age eligibility, reveal intent, and remount survival.
  */
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FoldWorkedRunIcon, UnfoldWorkedRunIcon } from "../workbench-icons";
 import { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadDurationText from "./ThreadDurationText";
@@ -21,7 +21,6 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
   identity: string;
 }) {
   const element = useRef<HTMLDivElement>(null);
-  const restoreLayout = useRef<(() => void) | null>(null);
   const viewportContext = useThreadScrollViewportContext();
   const [state, setState] = useState<WorkedRunState>(() => viewportContext.workedRunState?.read(identity) ?? "expanded");
   useEffect(() => {
@@ -32,10 +31,6 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       count, newestActivityAt, initialInactive, above: false, now: Date.now(),
     }, "bottomReattached"));
   }), [count, initialInactive, newestActivityAt, viewportContext]);
-  useLayoutEffect(() => {
-    restoreLayout.current?.();
-    restoreLayout.current = null;
-  }, [state]);
   useEffect(() => {
     const node = element.current;
     const viewport = viewportContext.getViewport();
@@ -43,9 +38,6 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
     if (state === "collapsed") {
       const next = reconcileWorkedRun(state, { count, newestActivityAt, initialInactive, above: false, now: Date.now() }, "geometry");
       if (next === state) return;
-      if (node.getBoundingClientRect().bottom <= viewport.getBoundingClientRect().top) {
-        restoreLayout.current = viewportContext.preserveOffscreenLayout();
-      }
       setState(next);
       return;
     }
@@ -64,7 +56,6 @@ export default function ThreadWorkedRun({ children, count, durationMs, initialIn
       const gate = { count, newestActivityAt, initialInactive, above, now };
       const next = reconcileWorkedRun(state, gate, "geometry");
       if (next !== state) {
-        if (next === "collapsed") restoreLayout.current = viewportContext.preserveOffscreenLayout();
         setState(next);
         return;
       }

@@ -50,8 +50,8 @@ export default function ThreadMeasuredContent({ children, onHidden, visibilityRa
         onHiddenRef.current?.();
       }
       setState(next);
-    }, visibilityRange, windowed);
-  }, [viewport, visibilityRange, windowed]);
+    }, visibilityRange);
+  }, [viewport, visibilityRange]);
   // Pinning propagates to every windowed ancestor so a descendant that holds state keeps its whole slice mounted.
   const pin = useCallback(() => {
     setPinCount(count => count + 1);

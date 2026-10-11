@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests protect paced paging, prepend anchoring, and post-retention suppression.
+ * - No production exports; Node tests protect paced paging, one page in flight until rendered, and post-retention suppression.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,9 +9,6 @@ import ThreadHistoryPagingController, { type HistoryPagingView } from "./ThreadH
 function fixture() {
   let now = 0;
   const scheduled = new Set<{ at: number; callback: () => void }>();
-  let contentTop = 0;
-  let scrollTop = 0;
-  let scrollHeight = 2_000;
   let boundaryKey: string | null = "page-2";
   let sourceReady = true;
   let renderedTurnIds = ["turn-2"];
@@ -21,17 +18,8 @@ function fixture() {
   const viewport = {};
   let loads = 0;
   let transaction: number | null = null;
-  const writes: number[] = [];
   const controller = new ThreadHistoryPagingController({
-    readView: () => ({
-      identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop, scrollTop,
-      anchor: { turnId: "turn-2", top: contentTop - scrollTop },
-      anchorTop: () => contentTop - scrollTop,
-    }),
-    writeScrollTop: (value) => {
-      writes.push(value);
-      scrollTop = value;
-    },
+    readView: () => ({ identity, viewport, boundaryKey, sourceReady, renderedTurnIds, requestStatus, nearTop }),
     load: () => {
       transaction = controller.begin();
       if (transaction !== null) {
@@ -46,9 +34,8 @@ function fixture() {
     },
   });
   return {
-    controller, writes,
+    controller,
     get loads() { return loads; },
-    get scrollTop() { return scrollTop; },
     advance(ms: number) {
       now += ms;
       for (const task of [...scheduled]) {
@@ -64,26 +51,14 @@ function fixture() {
       sourceReady = false;
       controller.reconcile();
     },
-    render(shift = 600) {
-      contentTop += shift;
-      scrollHeight += shift;
+    render() {
       sourceReady = true;
       renderedTurnIds = ["turn-1", "turn-2"];
       controller.reconcile();
     },
-    shiftLayout(shift: number) {
-      contentTop += shift;
-      scrollHeight += shift;
-      controller.reconcile();
-    },
     setNearTop(value: boolean) { nearTop = value; controller.reconcile(); },
     setSourceReady(value: boolean) { sourceReady = value; controller.reconcile(); },
-    setScrollTop(value: number) { scrollTop = value; },
-    move(value: number, historyIntent = false) { controller.interrupt({ historyIntent }); scrollTop = value; },
-    scroll(value: number) {
-      scrollTop = value;
-      controller.viewportScrolled();
-    },
+    move(historyIntent = false) { controller.interrupt({ historyIntent }); },
     replace() { identity = {}; controller.reconcile(); },
     fail() {
       assert.notEqual(transaction, null);
@@ -121,53 +96,24 @@ test("retention suppression blocks exposed-sentinel reload until upward history 
   f.controller.suppressUntilHistoryIntent();
   f.advance(5_000);
   assert.equal(f.loads, 0);
-  f.move(0, true);
+  f.move(true);
   f.advance(499);
   assert.equal(f.loads, 0);
   f.advance(1);
   assert.equal(f.loads, 1);
 });
 
-test("sql receipt does not consume the anchor or admit another page before rendering", () => {
+test("sql receipt does not admit another page before the received page renders", () => {
   const f = fixture();
   f.start();
   f.receive();
   f.advance(2_000);
   assert.equal(f.loads, 1);
-  assert.deepEqual(f.writes, []);
   f.setSourceReady(true);
   f.advance(2_000);
   assert.equal(f.loads, 1, "ready with the old turn set is not the new rendered page");
   f.render();
-  assert.equal(f.scrollTop, 600);
   assert.equal(f.loads, 1);
-  f.advance(499);
-  assert.equal(f.loads, 1);
-  f.advance(1);
-  assert.equal(f.loads, 2);
-});
-
-test("normal layout preserves a nonzero reader offset across prepended history", () => {
-  const f = fixture();
-  f.setScrollTop(300);
-  f.start();
-  f.receive();
-  f.render(400);
-  assert.equal(f.scrollTop, 700);
-});
-
-test("continuous autoscroll rebases the anchor across multi-phase prepends", () => {
-  const f = fixture();
-  f.setScrollTop(300);
-  f.start();
-  f.shiftLayout(100);
-  assert.equal(f.scrollTop, 400);
-  f.controller.viewportScrolled();
-  f.scroll(250);
-  f.receive();
-  f.render(400);
-  assert.equal(f.scrollTop, 650);
-  assert.deepEqual(f.writes, [400, 650]);
   f.advance(499);
   assert.equal(f.loads, 1);
   f.advance(1);
@@ -184,7 +130,7 @@ test("failures stay manual and explicit retry does not wait for an automatic dwe
   assert.equal(f.loads, 2);
 });
 
-test("replacement and disposal cancel old scheduled work and anchors", () => {
+test("replacement and disposal cancel old scheduled work", () => {
   const f = fixture();
   f.controller.reconcile();
   f.advance(250);
@@ -194,11 +140,4 @@ test("replacement and disposal cancel old scheduled work and anchors", () => {
   f.controller.dispose();
   f.advance(5_000);
   assert.equal(f.loads, 0);
-
-  const g = fixture();
-  g.start();
-  g.receive();
-  g.replace();
-  g.render();
-  assert.deepEqual(g.writes, []);
 });

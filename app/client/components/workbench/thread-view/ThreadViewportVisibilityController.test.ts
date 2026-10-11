@@ -13,8 +13,6 @@ test("viewport visibility owns exact, approaching, and nearby observation ranges
   const nearbyTarget = { getBoundingClientRect: () => ({ height: 120 }) } as HTMLElement;
   const owner = new ThreadViewportVisibilityController({
     root,
-    content: root,
-    shiftScrollTop: () => {},
     intersection: (_callback, range, margin) => {
       const record = { disconnected: false, margin, range };
       observers.push(record);
@@ -67,8 +65,6 @@ test("offscreen placeholders retain measured height until visible content is mea
   });
   const owner = new ThreadViewportVisibilityController({
     root,
-    content: root,
-    shiftScrollTop: () => {},
     intersection: (callback, range) => { intersections[range] = callback; return observer(); },
     resize: callback => { resize = callback; return observer(); },
   });
@@ -90,41 +86,6 @@ test("offscreen placeholders retain measured height until visible content is mea
   assert.equal(disconnected, 4);
 });
 
-test("height corrections above the viewport preserve the visible reading position once", () => {
-  let resize: (entries: readonly { target: Element }[]) => void = () => {};
-  let targetRect = { bottom: 80, height: 120, top: -40 };
-  const root = {
-    getBoundingClientRect: () => ({ bottom: 740, height: 640, top: 100 }),
-    scrollTop: 1_000,
-  } as HTMLElement;
-  const content = { getBoundingClientRect: () => ({ top: 100 - root.scrollTop }) } as HTMLElement;
-  const target = { getBoundingClientRect: () => targetRect } as HTMLElement;
-  const states: Array<{ visible: boolean; height: number }> = [];
-  const observer = { observe: () => {}, unobserve: () => {}, disconnect: () => {} };
-  const owner = new ThreadViewportVisibilityController({
-    root,
-    content,
-    shiftScrollTop: delta => { root.scrollTop += delta; },
-    intersection: () => observer,
-    resize: callback => { resize = callback; return observer; },
-  });
-  owner.observe(target, state => states.push(state), "approaching", true);
-
-  targetRect = { bottom: 140, height: 180, top: -40 };
-  resize([{ target }]);
-  assert.equal(root.scrollTop, 1_060);
-  assert.deepEqual(states.at(-1), { visible: true, height: 180 });
-
-  resize([{ target }]);
-  assert.equal(root.scrollTop, 1_060);
-
-  targetRect = { bottom: 370, height: 220, top: 150 };
-  resize([{ target }]);
-  assert.equal(root.scrollTop, 1_060);
-  assert.deepEqual(states.at(-1), { visible: true, height: 220 });
-  owner.dispose();
-});
-
 test("unmeasured content is not hidden using a fabricated height", () => {
   const intersections: Partial<Record<"approaching" | "nearby" | "viewport", (entries: readonly { target: Element; isIntersecting: boolean; boundingClientRect: { height: number } }[]) => void>> = {};
   const target = { getBoundingClientRect: () => ({ height: 0 }) } as HTMLElement;
@@ -133,8 +94,6 @@ test("unmeasured content is not hidden using a fabricated height", () => {
   const root = { getBoundingClientRect: () => ({ height: 640 }) } as HTMLElement;
   const owner = new ThreadViewportVisibilityController({
     root,
-    content: root,
-    shiftScrollTop: () => {},
     intersection: (callback, range) => { intersections[range] = callback; return observer; },
     resize: () => observer,
   });
@@ -159,8 +118,6 @@ test("large-jump refresh activates approaching placeholders before intersection 
   const observer = { observe: () => {}, unobserve: () => {}, disconnect: () => {} };
   const owner = new ThreadViewportVisibilityController({
     root,
-    content: root,
-    shiftScrollTop: () => {},
     intersection: (callback, range) => { intersections[range] = callback; return observer; },
     resize: () => observer,
   });

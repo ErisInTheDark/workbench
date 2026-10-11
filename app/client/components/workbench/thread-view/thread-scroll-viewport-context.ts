@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, scroll correction, progressive-window and end controls, entry motion, worked-run state, and layout preservation.
+ * - ThreadScrollViewportContextValue/ThreadScrollViewportContext: nearest viewport, content visibility, progressive-window and end controls, entry motion, and worked-run state.
  * - useThreadScrollViewportContext: read the nearest viewport boundary without host prop drilling.
  * - ThreadEntryMotion: apply one admitted entry's motion state to caller-owned markup.
  */
@@ -20,15 +20,13 @@ export interface ThreadScrollViewportContextValue {
   /** Revealed start per progressive window identity, so a windowed remount restores its measured height. */
   readonly progressiveWindowStarts: Map<string, number> | null;
   readonly getViewport: () => HTMLDivElement | null;
-  /** Keep the reader's visual position after layout above them changed by `delta` px. The one scroll-correction path. */
-  readonly shiftScrollTop: (delta: number) => void;
+  /** Put the reader back after a commit changed layout, now; call before reading geometry in a layout effect. */
+  readonly reconcileLayout: () => void;
   readonly observeContent: (
     element: HTMLElement,
     listener: (state: ThreadContentVisibility) => void,
     range?: ThreadContentVisibilityRange,
-    preserveReadingPosition?: boolean,
   ) => () => void;
-  readonly preserveOffscreenLayout: () => () => void;
   readonly setEndTarget: (target: HTMLElement | null) => void;
   readonly onBottomReattached: (listener: () => void) => () => void;
 }
@@ -39,9 +37,8 @@ const DEFAULT_THREAD_SCROLL_VIEWPORT_CONTEXT: ThreadScrollViewportContextValue =
   progressiveWindowing: false,
   progressiveWindowStarts: null,
   getViewport: () => null,
-  shiftScrollTop: () => {},
+  reconcileLayout: () => {},
   observeContent: () => () => {},
-  preserveOffscreenLayout: () => () => {},
   setEndTarget: () => {},
   onBottomReattached: () => () => {},
 };
