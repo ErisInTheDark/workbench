@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebarActionsProvider: own shared thread-sidebar subscriptions, mutations, menus, folder focus, relative time, and expose the colocated context hook.
+ * - default WorkbenchThreadSidebarActionsProvider: own thread-sidebar mutations, menus (built from owners at call time), folder focus and action errors, and expose the colocated context hook.
  */
 "use client";
 
@@ -18,17 +18,14 @@ import {
   isWorkbenchThreadStatusProviderOwned,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
-  type WorkbenchProjectThreadSummaries,
   type WorkbenchThreadPriority,
   type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import type {
-  WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars, WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
+  WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry,
 } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import { getThreadStopIntent } from "./thread-row-actions";
-import { useProjects } from "./use-projects";
-import { useThreads } from "./use-threads";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -66,15 +63,11 @@ function boundedFolderMutationError(error: unknown) {
 
 interface WorkbenchThreadSidebarActionsValue {
   autoFocusFolderId: string | null;
-  displayOrder: WorkbenchThreadDisplayOrder;
-  entries: WorkbenchThreadSidebarEntry[];
+  /** The last failed action; sidebar load errors live with the sidebar. */
   error: string;
   getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition;
   getThreadContextMenuFor: (entry: ThreadListEntry,
     folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
-  isLoading: boolean;
-  homeDisplayOrder: WorkbenchThreadDisplayOrder;
-  homeDisplayOrderSupported: boolean;
   onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: ProjectId) => void;
   onActionFor: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction) => void;
   onAutoFocusFolderComplete: () => void;
@@ -87,9 +80,6 @@ interface WorkbenchThreadSidebarActionsValue {
   onPinnedMove: (sourceKey: string, destinationFolderId: string | null, beforeKey: string | null) => void;
   onRenamePinnedFolder: (folderId: string, title: string) => Promise<string>;
   onRenameFolder: (folderId: string, title: string, ownerProjectId?: ProjectId) => Promise<string>;
-  pinnedDisplayOrder: WorkbenchThreadDisplayOrder;
-  projectThreadSidebars: WorkbenchProjectThreadSidebars;
-  projectThreadSummaries: WorkbenchProjectThreadSummaries;
 }
 
 const WorkbenchThreadSidebarActionsContext = createContext<WorkbenchThreadSidebarActionsValue | null>(null);
@@ -117,33 +107,24 @@ function WorkbenchThreadSidebarActionsProvider({
 }) {
   const client = useWorkbenchClientController();
   const controls = client.controls;
-  const logicalThreads = useThreads.rows();
-  // The app server projects saved folders from every listed row, including rows whose summary is still loading.
-  const threadFolders = useThreads.folders();
-  const logicalProjectOrders = useMemo(() => new Map(Object.entries(threadFolders?.projects ?? {})
-    .map(([projectId, folders]) => [projectId, { folders }] as const)), [threadFolders]);
-  const logicalPinnedOrder = useMemo(() => threadFolders ? { folders: threadFolders.pinned } : null, [threadFolders]);
-  const { threads } = useThreads();
-  const threadSummariesById = useMemo(() => new Map(threads.map(thread => [thread.id, thread])), [threads]);
+  // Rows, folders, sidebars and runtime threads matter only when an action runs or a menu is built, so they are read
+  // from their owners then; subscribing would re-render every list consumer on every thread's activity.
+  const sidebarStore = client.mounted?.threadSidebar ?? null;
+  const runtime = client.mounted?.threadRuntime ?? null;
+  const readRows = useCallback(() => sidebarStore?.getListing?.().rows ?? [], [sidebarStore]);
   const qualifiedForEntry = useCallback((entry: ThreadListEntry) => {
     const id = entry.entryKind === "draft"
       ? isPinnedDraftSummaryEntry(entry) ? entry.draftId : entry.draft.draftId
       : entry.identity.threadId;
-    const matches = logicalThreads?.filter(row => row.entry.entryKind === "draft"
+    const matches = readRows().filter(row => row.entry.entryKind === "draft"
       ? entry.entryKind === "draft" && row.entry.draft.draftId === id
-      : entry.entryKind !== "draft" && row.entry.identity.threadId === id) ?? [];
+      : entry.entryKind !== "draft" && row.entry.identity.threadId === id);
     if (matches.length > 1) {
       console.error("Thread UUID has conflicting visible rows.");
       return null;
     }
     return matches[0] ?? null;
-  }, [logicalThreads]);
-  const currentSidebar = useThreads.sidebar(projectId);
-  const projectThreadSummaries = useProjects.threads();
-  const projectThreadSidebars = useThreads.sidebars();
-  const { order: homeThreadDisplayOrder, supported: homeDisplayOrderSupported } = useThreads.homeOrder();
-  const pinnedThreadLayout = useThreads.pinnedLayout();
-  const entries = currentSidebar?.entries ?? [];
+  }, [readRows]);
   const [autoFocusFolderId, setAutoFocusFolderId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
 
@@ -210,11 +191,13 @@ function WorkbenchThreadSidebarActionsProvider({
     folderScope?: "pinned" | "project", source?: ProjectLocationReference,
     logicalProjectId?: string): WorkbenchContextMenuDefinition => {
     const thread = !source && entry.entryKind === "thread" && ownerProjectId === projectId
-      ? threadSummariesById.get(entry.identity.threadId) ?? null : null;
+      ? runtime?.getSnapshot().threads.find(candidate => candidate.id === entry.identity.threadId) ?? null : null;
+    const threadFolders = sidebarStore?.getListing?.().folders;
+    const pinnedThreadLayout = sidebarStore?.getPinnedThreadLayout?.() ?? null;
     const target = targetForEntry(entry);
     const draftId = target.kind === "draft" ? target.draftId : null;
     const identifier = target.kind === "draft" ? target.draftId : target.threadId;
-    const qualifiedRow = source && logicalProjectId ? logicalThreads?.find(row =>
+    const qualifiedRow = source && logicalProjectId ? readRows().find(row =>
       row.logicalProjectId === logicalProjectId
       && row.location.daemonId === source.daemonId && row.location.projectId === source.projectId
       && (target.kind === "draft" ? row.entry.entryKind === "draft"
@@ -256,11 +239,12 @@ function WorkbenchThreadSidebarActionsProvider({
     const displayKey = useProjectFolder ? localDisplayKey : getProjectQualifiedThreadDisplayKey(
       qualifiedRow?.logicalProjectId ?? ownerProjectId, localDisplayKey,
     );
-    const ownerSidebar = projectThreadSidebars.projects.find((candidate) => candidate.projectId === ownerProjectId) ?? null;
+    const ownerSidebar = sidebarStore?.getProjectSnapshot(ownerProjectId) ?? null;
+    // The app server projects saved folders from every listed row, including rows whose summary is still loading.
     const appOrder = source && qualifiedRow && threadFolders
-      ? useProjectFolder
-        ? logicalProjectOrders.get(LogicalProjectIdSchema.parse(qualifiedRow.logicalProjectId)) ?? null
-        : logicalPinnedOrder
+      ? { folders: useProjectFolder
+        ? threadFolders.projects[LogicalProjectIdSchema.parse(qualifiedRow.logicalProjectId)] ?? []
+        : threadFolders.pinned }
       : null;
     const folderIn = (order: WorkbenchThreadDisplayOrder | null | undefined) =>
       order?.folders?.find(item => item.threadKeys.includes(displayKey)) ?? null;
@@ -268,7 +252,7 @@ function WorkbenchThreadSidebarActionsProvider({
       ? folderIn(appOrder)
       : useProjectFolder
         ? folderIn(ownerSidebar?.displayOrder)
-        : folderIn(pinnedThreadLayout.displayOrder);
+        : folderIn(pinnedThreadLayout?.displayOrder);
     if (entry.entryKind !== "subagent" && (group === "pinned" || group === "snoozed" || group === "settled") && !folder) {
       items.push({
         icon: <FolderInputIcon size={16} />,
@@ -442,24 +426,18 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
     return { id: `thread:${identifier}`, items, label: `Thread actions for ${entry.title}`, placementScope: "thread-list" };
-  }, [controls, logicalPinnedOrder, logicalProjectOrders, logicalThreads, mutateEntry, onOpenQualifiedThread, onOpenThread,
-    onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, threadFolders,
-    projectThreadSidebars.projects, threadSummariesById, layoutKey, layoutProject, runDragMutation]);
+  }, [controls, mutateEntry, onOpenQualifiedThread, onOpenThread, onPresentationDraftDeleted, projectId, readRows,
+    runtime, sidebarStore, layoutKey, layoutProject, runDragMutation]);
 
   const value = useMemo<WorkbenchThreadSidebarActionsValue>(() => ({
     autoFocusFolderId,
-    displayOrder: currentSidebar?.displayOrder ?? {},
-    entries,
-    error: actionError || currentSidebar?.error || "",
+    error: actionError,
     getThreadContextMenu,
     getThreadContextMenuFor: (entry, folderScope) => {
       const row = qualifiedForEntry(entry);
       return row ? getThreadContextMenu(entry, row.location.projectId, folderScope,
         row.location, row.logicalProjectId) : null;
     },
-    homeDisplayOrder: homeThreadDisplayOrder.displayOrder,
-    homeDisplayOrderSupported,
-    isLoading: !currentSidebar && !projectThreadSidebars.projects.length,
     onAction: (entry, action, ownerProjectId) => {
       if (entry.entryKind === "draft") {
         if (action === "discard" && !isPinnedDraftSummaryEntry(entry)) void controls?.deleteThreadDraft(entry.draft.draftId);
@@ -574,10 +552,8 @@ function WorkbenchThreadSidebarActionsProvider({
       await controls.updatePresentationProjectLayout(layoutProject(ownerProjectId), { kind: "rename", folderId, title });
       return title.trim();
     },
-    pinnedDisplayOrder: pinnedThreadLayout.displayOrder,
-    projectThreadSidebars,
-    projectThreadSummaries,
-  }), [actionError, autoFocusFolderId, controls, currentSidebar, entries, getThreadContextMenu, homeDisplayOrderSupported, homeThreadDisplayOrder.displayOrder, mutateEntry, onPresentationDraftDeleted, pinnedThreadLayout.displayOrder, projectId, projectThreadSidebars, projectThreadSummaries, qualifiedForEntry, runDragMutation, layoutKey, layoutProject, logicalThreads]);
+  }), [actionError, autoFocusFolderId, controls, getThreadContextMenu, mutateEntry, onPresentationDraftDeleted, projectId,
+    qualifiedForEntry, runDragMutation, layoutKey, layoutProject]);
 
   return (
     <WorkbenchComposerDraftPresenceProvider>

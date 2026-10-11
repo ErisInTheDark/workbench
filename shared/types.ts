@@ -143,6 +143,7 @@
  * - ProjectSnapshot: project snapshot contract.
  * - ExplorerSnapshot: explorer snapshot contract.
  * - WorkbenchThreadListing: the combined thread list's placement, members, rows, folders and load status.
+ * - WorkbenchThreadListingSlot/WorkbenchThreadListingStructure: the combined list's placement and member identities, unchanged by activity.
  * - WorkbenchThreadSidebarStore: read-only live sidebar store contract.
  * - WorkbenchThreadRuntimeSnapshot/WorkbenchThreadRuntimeStore: provider-facing thread state and subscription boundary.
  * - WorkbenchRouteLoadResult: route-load result.
@@ -1262,9 +1263,19 @@ export interface WorkbenchThreadListing {
   status: { listed: boolean; loading: boolean; error: string };
 }
 
+/** A listed member's identity, without the title and activity that change while it works. */
+export type WorkbenchThreadListingSlot = Omit<import("./workbench/workspace/workspace-observation").WorkspaceThreadMember, "title" | "activityAt">;
+
+/** What the combined list is made of: placement plus member identities, unchanged by thread activity. */
+export interface WorkbenchThreadListingStructure {
+  placement?: import("./workbench/workspace/workspace-observation").WorkspaceThreadPlacement;
+  slots: Readonly<Record<string, WorkbenchThreadListingSlot>>;
+}
+
 export interface WorkbenchThreadSidebarStore {
   getDraft?: (projectId: ProjectId, draftId: DraftId) => WorkbenchThreadDraft | null;
   getListing?: () => WorkbenchThreadListing;
+  getListingStructure?: () => WorkbenchThreadListingStructure;
   subscribeListing?: (listener: () => void) => () => void;
   getHomeThreadDisplayOrder?: () => WorkbenchHomeThreadDisplayOrderSnapshot;
   getLocationSnapshot?: (location: ProjectLocationReference) => WorkbenchThreadSidebarRowSnapshot | null;

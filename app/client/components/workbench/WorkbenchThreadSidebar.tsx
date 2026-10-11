@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchThreadSidebar: feed the combined thread list for the selected projects, reading its rows and attention labels itself, with bounded project errors and creation guards.
+ * - default WorkbenchThreadSidebar: feed the combined thread list for the selected projects (the listing for logical lists, project sidebars for folder lists) with bounded project errors and creation guards.
  */
 "use client";
 
-import { memo, useMemo, type PointerEvent, type ReactNode } from "react";
+import { memo, useMemo, type ComponentProps, type PointerEvent, type ReactNode } from "react";
 
 import type { WorkbenchControls, WorkbenchHarness, WorkbenchLogicalThreadRow, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
@@ -20,8 +20,6 @@ import { SidebarLoadingSkeleton } from "./workbench-explorer";
 import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";
-import { useProjects } from "./use-projects";
-import { threadAttentionLabels } from "./thread-attention";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 import { resolveSidebarCreateProject } from "./workbench-sidebar-create-project";
 
@@ -37,6 +35,20 @@ function findRow(
         ? candidate.entry.entryKind !== "draft"
           && candidate.entry.identity.threadId === (target.kind === "subagent" ? target.parentThreadId : target.threadId)
         : false));
+}
+
+/** Folder-sidebar lists (no app presentation) are built from the project sidebars, so only they subscribe to them. */
+function FolderSidebarThreadList({ sidebarProjectId, ...props }: ComponentProps<typeof WorkbenchThreadList> & {
+  sidebarProjectId: ProjectId | "";
+}) {
+  const current = useThreads.sidebar(sidebarProjectId);
+  const sidebars = useThreads.sidebars();
+  const { order, supported } = useThreads.homeOrder();
+  const folderSidebars = useMemo(() => ({
+    sidebars, homeDisplayOrder: order.displayOrder, homeDisplayOrderSupported: supported,
+    ...(current && sidebarProjectId ? { current: { entries: current.entries, displayOrder: current.displayOrder ?? {} } } : {}),
+  }), [current, order.displayOrder, sidebarProjectId, sidebars, supported]);
+  return <WorkbenchThreadList {...props} folderSidebars={folderSidebars} />;
 }
 
 interface WorkbenchThreadSidebarProps {
@@ -101,18 +113,15 @@ export default memo(function WorkbenchThreadSidebar({
     createProjectId, logicalProject, logicalProjects, projects, selectedProjectIds: selection,
   });
 
-  const errors = [...new Set(actions.projectThreadSidebars.projects
-    .filter(sidebar => selection.includes(sidebar.projectId))
-    .map(({ error }) => error).filter(Boolean))];
+  const errorText = useThreads.sidebarErrors(selection);
+  const errors = errorText ? errorText.split("\n") : [];
   const listing = useThreads.status();
-  const logicalThreads = useThreads.rows();
-  const sidebars = useThreads.sidebars();
-  const summaries = useProjects.threads();
-  const attentionLabelsByThreadId = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
-  const loading = logicalProjects && presentation
+  const sidebarLoading = useThreads.sidebarLoading(projectId);
+  const logicalList = Boolean(logicalProjects && presentation);
+  const loading = logicalList
     // Logical lists render workspace rows; folder sidebars only describe the browse folder.
     ? !listing.listed && listing.loading && !listing.error
-    : actions.isLoading && !logicalProject && !selectedLocation && projects.length;
+    : sidebarLoading && !logicalProject && !selectedLocation && projects.length;
   if (loading) {
     return <SidebarLoadingSkeleton ariaLabel="Loading threads" rows={5} />;
   }
@@ -122,48 +131,47 @@ export default memo(function WorkbenchThreadSidebar({
     </p>;
   }
 
-  return (
-    <>
-      <nav aria-label="Threads">
-        <WorkbenchThreadList
-          actions={actions}
-          activeDragPayload={activeDragPayload}
-          allowMainPanelDrop={showMosaicView}
-          attentionLabelsByThreadId={attentionLabelsByThreadId}
-          attachedDaemonId={attachedDaemonId}
-          canCreateThread={logicalProject
+  const listProps: ComponentProps<typeof WorkbenchThreadList> = {
+          actions,
+          activeDragPayload,
+          allowMainPanelDrop: showMosaicView,
+          attachedDaemonId,
+          canCreateThread: logicalProject
             ? Boolean(client.mounted && (selectedLocation || logicalProject.locations.some(location => location.project)))
-            : undefined}
-          controls={controls}
-          createProject={createProject}
-          currentTarget={currentTarget}
-          displayOrder={logicalProject ? undefined : actions.displayOrder}
-          entries={logicalProject ? undefined : actions.entries}
+            : undefined,
+          controls,
+          createProject,
+          currentTarget,
           // Logical lists without one selected project use the list's owner-qualified row hrefs.
-          getThreadHref={logicalProject ? (target) => {
-            const row = findRow(logicalProject, logicalThreads, target);
+          getThreadHref: logicalProject ? (target) => {
+            const row = findRow(logicalProject, client.mounted?.threadSidebar.getListing?.().rows ?? [], target);
             if (!row && target.kind !== "new") return undefined;
             return projectHref(target.kind === "provider" || target.kind === "subagent"
               ? createLogicalExistingThreadRoute(logicalProject.id, target)
               : createLogicalThreadRoute(logicalProject.id, logicalProject.id,
                 row?.location ?? selectedLocation ?? null, target));
-          } : logicalProjects ? undefined : (target) => projectHref(createThreadRoute(projectId, target))}
-          logicalProjects={logicalProjects ?? (logicalProject ? [logicalProject] : undefined)}
-          logicalThreads={logicalThreads}
-          onAttachFeedback={onAttachFeedback}
-          onCreateThread={onCreateThread}
-          onCreateThreadPointerDragStart={showMosaicView ? (event) => {
+          } : logicalProjects ? undefined : (target) => projectHref(createThreadRoute(projectId, target)),
+          logicalProjects: logicalProjects ?? (logicalProject ? [logicalProject] : undefined),
+          onAttachFeedback,
+          onCreateThread,
+          onCreateThreadPointerDragStart: showMosaicView ? (event) => {
             onBeginPointerDrag(event, { harness, type: "new-thread" });
-          } : undefined}
-          onOpenQualifiedThread={onOpenQualifiedThread}
-          onOpenThread={onOpenThread}
-          presentation={presentation}
-          projectId={ownerProjectId}
-          projects={projects}
-          renderThreadTooltipDetails={renderThreadTooltipDetails}
-          selectedOwnerProjectId={selectedOwnerProjectId ?? ownerProjectId}
-          selectedProjectIds={selection}
-        />
+          } : undefined,
+          onOpenQualifiedThread,
+          onOpenThread,
+          presentation,
+          projectId: ownerProjectId,
+          projects,
+          renderThreadTooltipDetails,
+          selectedOwnerProjectId: selectedOwnerProjectId ?? ownerProjectId,
+          selectedProjectIds: selection,
+  };
+
+  return (
+    <>
+      <nav aria-label="Threads">
+        {logicalList ? <WorkbenchThreadList {...listProps} />
+          : <FolderSidebarThreadList {...listProps} sidebarProjectId={logicalProject ? "" : projectId} />}
       </nav>
       {errors.map(error => (
         <p className="m-0 pr-2 text-[0.84rem] leading-6 text-danger" key={error}>{error}</p>

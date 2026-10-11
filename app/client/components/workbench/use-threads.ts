@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - useThreads: read and act on the route-owned thread collection; members read the current thread and documents alone, the sidebars and one sidebar draft, home and pinned ordering, and the combined thread listing (placement, members, rows, folders, archived count, load status).
+ * - useThreads: read and act on the route-owned thread collection; members read the current thread and documents alone, the sidebars and one sidebar draft, home and pinned ordering, and the combined thread listing (activity-free structure, one row by key or physical key, rows for keys, sidebar errors and loading, archived count, load status).
  */
 "use client";
 
@@ -8,8 +8,11 @@ import { useCallback, useContext, useMemo, useRef, useSyncExternalStore } from "
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 
 import type {
-  WorkbenchControls, WorkbenchHarness, WorkbenchThreadListing, WorkbenchThreadRuntimeSnapshot,
+  WorkbenchControls, WorkbenchHarness, WorkbenchLogicalThreadRow, WorkbenchThreadListing, WorkbenchThreadListingStructure,
+  WorkbenchThreadRuntimeSnapshot,
 } from "workbench-shared/types";
+import { threadRowLookup } from "./thread-row-lookup";
+import type { WorkspaceThreadMember } from "workbench-shared/workbench/workspace/workspace-observation";
 import type {
   WorkbenchHomeThreadDisplayOrderSnapshot, WorkbenchPinnedThreadLayoutSnapshot, WorkbenchThreadDraft, WorkbenchThreadStateRequest,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -163,10 +166,74 @@ useThreads.pinnedLayout = function useThreadsPinnedLayout(explicitClient?: Workb
   );
 };
 
-useThreads.placement = function useThreadsPlacement() { return useListing(listing => listing.placement); };
-useThreads.members = function useThreadsMembers() { return useListing(listing => listing.members); };
-useThreads.member = function useThreadsMember(key: string) { return useListing(listing => listing.members[key] ?? null); };
-useThreads.rows = function useThreadsRows() { return useListing(listing => listing.rows); };
-useThreads.folders = function useThreadsFolders() { return useListing(listing => listing.folders); };
+const EMPTY_STRUCTURE: WorkbenchThreadListingStructure = { slots: {} };
+
+/** The combined list's placement and member identities; thread activity leaves it unchanged. */
+useThreads.structure = function useThreadsStructure() {
+  const store = useSidebarStore();
+  const read = () => store?.getListingStructure?.() ?? EMPTY_STRUCTURE;
+  return useSyncExternalStore(store?.subscribeListing ?? EMPTY_SUBSCRIBE, read, read);
+};
+
+function rowFor(rows: readonly WorkbenchLogicalThreadRow[], key: string) {
+  return threadRowLookup(rows).logical.get(key) ?? null;
+}
+
+/** One listed row by placement key: its member (title, activity) and its loaded row, null while its summary is pending. */
+useThreads.row = function useThreadsRow(key: string) {
+  const store = useSidebarStore();
+  const kept = useRef<{ member: WorkspaceThreadMember | null; row: WorkbenchLogicalThreadRow | null } | null>(null);
+  const read = useCallback(() => {
+    const listing = store?.getListing?.() ?? EMPTY_LISTING;
+    const member = listing.members[key] ?? null;
+    const row = rowFor(listing.rows, key);
+    if (kept.current?.member !== member || kept.current.row !== row) kept.current = { member, row };
+    return kept.current;
+  }, [key, store]);
+  return useSyncExternalStore(store?.subscribeListing ?? EMPTY_SUBSCRIBE, read, read);
+};
+
+/** A listed row by `daemonId:physical display key`, for folder-sidebar rows that are also listed; first listing wins. */
+useThreads.physicalRow = function useThreadsPhysicalRow(physicalKey: string) {
+  const store = useSidebarStore();
+  const read = useCallback(() => physicalKey
+    ? threadRowLookup(store?.getListing?.().rows ?? []).physical.get(physicalKey) ?? null : null, [physicalKey, store]);
+  return useSyncExternalStore(store?.subscribeListing ?? EMPTY_SUBSCRIBE, read, read);
+};
+
+/** The loaded rows for some placement keys, in key order; changes only when one of those rows does. */
+useThreads.rowsFor = function useThreadsRowsFor(keys: readonly string[]) {
+  const store = useSidebarStore();
+  const keyText = keys.join("\n");
+  const kept = useRef<readonly WorkbenchLogicalThreadRow[]>([]);
+  const read = useCallback(() => {
+    const rows = store?.getListing?.().rows ?? [];
+    const next = keyText ? keyText.split("\n").flatMap(key => rowFor(rows, key) ?? []) : [];
+    if (next.length !== kept.current.length || next.some((row, index) => row !== kept.current[index])) kept.current = next;
+    return kept.current;
+  }, [keyText, store]);
+  return useSyncExternalStore(store?.subscribeListing ?? EMPTY_SUBSCRIBE, read, read);
+};
+
+/** The distinct load errors of the given projects' sidebars, as one stable string. */
+useThreads.sidebarErrors = function useThreadsSidebarErrors(projectIds: readonly string[]) {
+  const store = useSidebarStore();
+  const ids = projectIds.join("\n");
+  const read = useCallback(() => {
+    const selected = new Set(ids.split("\n"));
+    return [...new Set((store?.getProjectThreadSidebars?.().projects ?? [])
+      .filter(sidebar => selected.has(sidebar.projectId)).map(({ error }) => error).filter(Boolean))].join("\n");
+  }, [ids, store]);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, read, read);
+};
+
+/** Whether no sidebar has loaded yet for a folder-sidebar list. */
+useThreads.sidebarLoading = function useThreadsSidebarLoading(projectId: ProjectId | "") {
+  const store = useSidebarStore();
+  const read = useCallback(() => !(projectId && store?.getProjectSnapshot(projectId))
+    && !(store?.getProjectThreadSidebars?.().projects.length), [projectId, store]);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, read, read);
+};
+
 useThreads.archivedCount = function useThreadsArchivedCount() { return useListing(listing => listing.archivedCount); };
 useThreads.status = function useThreadsStatus() { return useListing(listing => listing.status); };

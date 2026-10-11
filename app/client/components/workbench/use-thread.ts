@@ -4,7 +4,7 @@
  *   `turns/questionnaire/approvals` read further slices of a leased store; `summary` leases one thread's batched summary
  *   for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous titles with
  *   rename/dismiss intent; `presentedText` subscribes to one exact streaming text field; `fileIndex` reads the owning
- *   folder's file suggestions; `models` reads the owner's account model cache; `subagent` reads a thread's subagent
+ *   folder's file suggestions; `models` reads the owner's account model cache; `attention` reads its questionnaire label; `subagent` reads a thread's subagent
  *   relationship; `claimIntersections/collisions/arc` select
  *   narrow Git arc facts from the owner's source sidebar.
  */
@@ -30,6 +30,7 @@ import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 import { useProject } from "./use-projects";
 import { useThreads } from "./use-threads";
+import { threadAttentionLabel } from "./thread-attention";
 
 type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarRow, { entryKind: "draft" }>;
 type ThreadSidebarThreadEntry = Extract<WorkbenchThreadSidebarRow, { entryKind: "thread" }>;
@@ -196,6 +197,17 @@ useThread.models = function useThreadModels(threadId: string) {
     store?.getModelCatalogues ?? (() => EMPTY_MODEL_CATALOGUES),
     () => EMPTY_MODEL_CATALOGUES,
   );
+};
+
+const NO_LABEL = () => "";
+
+/** One thread's questionnaire attention label from the sidebars and pinned summaries; "" when it waits on nothing. */
+useThread.attention = function useThreadAttention(threadId: string | null) {
+  const store = useContext(WorkbenchClientContext)?.mounted?.threadSidebar ?? null;
+  const read = useCallback(() => threadId && store ? threadAttentionLabel(
+    store.getProjectThreadSidebars?.() ?? { projects: [] }, store.getProjectThreadSummaries?.() ?? { projects: [] }, threadId,
+  ) : "", [store, threadId]);
+  return useSyncExternalStore(store?.subscribe ?? EMPTY_SUBSCRIBE, store ? read : NO_LABEL, store ? read : NO_LABEL);
 };
 
 const NO_SUBAGENT_KEY = () => "";

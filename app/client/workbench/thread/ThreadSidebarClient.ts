@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - ThreadSidebarClientOptions: app-owned draft mutation ports and view publication.
- * - default ThreadSidebarClient: source-qualified sidebar facts, the combined thread listing, selected-folder view and app draft actions.
+ * - default ThreadSidebarClient: source-qualified sidebar facts, the combined thread listing and its activity-free structure, selected-folder view and app draft actions.
  */
-import type { WorkbenchLogicalThreadRow, WorkbenchThreadListing, WorkbenchThreadSidebarStore } from "workbench-shared/types";
+import type {
+  WorkbenchLogicalThreadRow, WorkbenchThreadListing, WorkbenchThreadListingStructure, WorkbenchThreadSidebarStore,
+} from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { reuseEntries, reuseEqual, reuseKeyed } from "../structural-sharing";
 import type { DraftId, ProjectId } from "workbench-shared/workbench/identity";
@@ -42,6 +44,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
   private summaries: WorkbenchProjectThreadSummaries = { projects: [] };
   private readonly listeners = new Set<() => void>();
   private listing: WorkbenchThreadListing = EMPTY_LISTING;
+  private structure: WorkbenchThreadListingStructure = { slots: {} };
   private readonly listingListeners = new Set<() => void>();
   private disposed = false;
   private readonly home: WorkbenchHomeThreadDisplayOrderSnapshot = {
@@ -75,6 +78,7 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
     return () => { this.listeners.delete(listener); };
   };
   getListing = () => this.listing;
+  getListingStructure = () => this.structure;
   subscribeListing = (listener: () => void) => {
     this.listingListeners.add(listener);
     return () => { this.listingListeners.delete(listener); };
@@ -95,6 +99,11 @@ export default class ThreadSidebarClient implements WorkbenchThreadSidebarStore 
       members, rows, status, archivedCount: next.archivedCount,
       ...(placement ? { placement } : {}), ...(folders ? { folders } : {}),
     };
+    const slots = reuseEntries(this.structure.slots, Object.fromEntries(Object.entries(members)
+      .map(([key, { title: _title, activityAt: _activityAt, ...slot }]) => [key, slot])));
+    if (slots !== this.structure.slots || placement !== this.structure.placement) {
+      this.structure = { slots, ...(placement ? { placement } : {}) };
+    }
     for (const listener of this.listingListeners) listener();
   }
 

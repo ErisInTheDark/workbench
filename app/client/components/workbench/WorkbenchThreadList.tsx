@@ -1,29 +1,30 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: render the selected projects as one combined thread list with pinned, main, snoozed, and settled sections.
- * - createWorkbenchThreadRowLookup: resolve project/source-qualified sidebar rows without per-entry scans.
+ * - default WorkbenchThreadList: render the selected projects as one combined thread list with pinned, main, snoozed, and settled sections, from the listing's structure (rows read their own facts) or folder sidebars.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import type { WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
+import type {
+  WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption, WorkbenchThreadListingSlot,
+} from "workbench-shared/types";
+import type { WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";
 
 import {
-  DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
+  ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
 } from "workbench-shared/workbench/identity";
-import { createHomeThreadRoute, createLogicalExistingThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
 import type {
-  WorkspaceThreadMember, WorkspaceThreadPlacement, WorkspaceThreadPlacementItem,
+  WorkspaceThreadPlacement, WorkspaceThreadPlacementItem,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import {
   getWorkbenchHomeFolderKey,
   getWorkbenchHomeThreadKey,
   projectWorkbenchHomeThreadList,
   type WorkbenchHomeThreadDisplayItem,
-  type WorkbenchHomeThreadEntry,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
@@ -37,10 +38,7 @@ import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "w
 import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
-  WORKBENCH_MAIN_PANEL_DROP_TARGET_ID,
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
-  WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
-  WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
   type WorkbenchDragPayload,
   type WorkbenchThreadDragSection,
   type WorkbenchThreadRowDragPayload,
@@ -50,7 +48,6 @@ import {
   mergeContextMenuPlacementEntries,
   useContextMenuPlacementSnapshot,
 } from "./context-menu-placement";
-import Draggable from "./drag/Draggable";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
 import Disclosure from "../ui/Disclosure";
@@ -58,10 +55,10 @@ import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
 import { CheckIcon, SnoozedThreadIcon, SparkleIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
-import WorkbenchThreadDragTargets from "./WorkbenchThreadDragTargets";
-import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
-import WorkbenchThreadListItem, { WorkbenchPendingThreadListItem } from "./WorkbenchThreadListItem";
+import WorkbenchThreadListRow, { targetForRowEntry, type ThreadListRowContext, type ThreadListRowEntry } from "./WorkbenchThreadListRow";
+import { threadAttentionLabels } from "./thread-attention";
+import { useProjects } from "./use-projects";
 import WorkbenchThreadPriorityDropZone from "./WorkbenchThreadPriorityDropZone";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
 
@@ -69,19 +66,7 @@ const SETTLED_THREAD_PAGE_SIZE = 50;
 const THREAD_ORDER_DROP_RANGE = { x: 24, y: 100_000 } as const;
 type ThreadActions = ReturnType<typeof WorkbenchThreadSidebarActionsProvider.useActions>;
 
-function targetForEntry (entry: WorkbenchThreadSidebarEntry): import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadTarget {
-  return entry.entryKind === "draft"
-    ? { draftId: entry.draft.draftId, kind: "draft" }
-    : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
-}
-
-/** A placed thread whose summary has not landed yet. */
-interface PendingHomeEntry {
-  pending: WorkspaceThreadMember;
-  projectId: string;
-  threadKey: ProjectThreadDisplayKey;
-}
-type ListHomeEntry = WorkbenchHomeThreadEntry | PendingHomeEntry;
+type ListHomeEntry = ThreadListRowEntry;
 type ListDisplayItem =
   | { entry: ListHomeEntry; itemKind: "thread"; threadKeys: [ProjectThreadDisplayKey] }
   | {
@@ -99,35 +84,17 @@ interface ThreadListShape {
   snoozedItems: ListDisplayItem[];
 }
 
-function isPendingEntry (entry: ListHomeEntry): entry is PendingHomeEntry {
-  return "pending" in entry;
-}
-
-function targetForListEntry (entry: ListHomeEntry) {
-  if (!isPendingEntry(entry)) return targetForEntry(entry.entry);
-  const { ref } = entry.pending;
-  return ref.kind === "draft"
-    ? { draftId: DraftIdSchema.parse(ref.draftId), kind: "draft" as const }
-    : { harness: ref.identity.harness, kind: "provider" as const, threadId: ref.identity.threadId };
-}
-
-/** The app server's placement for the selected projects; rows whose summary has not landed stay in place as pending. */
+/** The app server's placement for the selected projects, as slots; each row reads its own facts, pending or loaded. */
 function listFromPlacement (
   placement: WorkspaceThreadPlacement,
-  members: Readonly<Record<string, WorkspaceThreadMember>>,
-  rows: readonly WorkbenchLogicalThreadRow[],
+  slots: Readonly<Record<string, WorkbenchThreadListingSlot>>,
   selectedProjectIds: readonly string[],
 ): ThreadListShape {
   const selected = new Set(selectedProjectIds);
-  const loaded = new Map(rows.map(row => [getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) as string, row]));
   const entryFor = (key: string): ListHomeEntry[] => {
-    const member = members[key];
-    if (!member?.logicalProjectId || !selected.has(member.logicalProjectId)) return [];
-    const threadKey = ProjectThreadDisplayKeySchema.parse(key);
-    const row = loaded.get(key);
-    return [row && row.entry.entryKind !== "subagent"
-      ? { entry: row.entry, projectId: row.logicalProjectId, threadKey }
-      : { pending: member, projectId: member.logicalProjectId, threadKey }];
+    const slot = slots[key];
+    if (!slot?.logicalProjectId || !selected.has(slot.logicalProjectId)) return [];
+    return [{ slot, projectId: slot.logicalProjectId, threadKey: ProjectThreadDisplayKeySchema.parse(key) }];
   };
   const items = (placed: readonly WorkspaceThreadPlacementItem[]): ListDisplayItem[] => placed.flatMap((item): ListDisplayItem[] => {
     if (item.kind === "thread") {
@@ -146,6 +113,24 @@ function listFromPlacement (
     settledItems: items(placement.settled),
     snoozedItems: items(placement.snoozed),
   };
+}
+
+/** A folder's header summarises its rows, so it reads those rows and their attention itself. */
+function ListedThreadFolder ({ listEntries, ...props }: Omit<ComponentProps<typeof WorkbenchThreadFolder>, "entries" | "attentionLabelsByThreadId"> & {
+  listEntries: readonly ListHomeEntry[];
+}) {
+  const listed = useThreads.rowsFor(listEntries.flatMap(entry => "slot" in entry ? [entry.threadKey] : []));
+  const sidebars = useThreads.sidebars();
+  const summaries = useProjects.threads();
+  const attentionLabelsByThreadId = useMemo(() => threadAttentionLabels(sidebars, summaries), [sidebars, summaries]);
+  const entries = useMemo(() => {
+    const byKey = new Map(listed.map(row => [getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry) as string, row.entry]));
+    return listEntries.flatMap(entry => {
+      const row = "entry" in entry ? entry.entry : byKey.get(entry.threadKey);
+      return row && row.entryKind !== "subagent" ? [row] : [];
+    });
+  }, [listEntries, listed]);
+  return <WorkbenchThreadFolder {...props} attentionLabelsByThreadId={attentionLabelsByThreadId} entries={entries} />;
 }
 
 function itemThreadCount (item: ListDisplayItem) {
@@ -184,41 +169,20 @@ function mergeDisplayItems (
     : { ...item, entry: current(item.entry) });
 }
 
-export function createWorkbenchThreadRowLookup(
-  rows: readonly WorkbenchLogicalThreadRow[],
-  { logical, attachedDaemonId }: { logical: boolean; attachedDaemonId: string | null | undefined },
-) {
-  const byLogicalKey = new Map<string, WorkbenchLogicalThreadRow>();
-  const byPhysicalKey = new Map<string, WorkbenchLogicalThreadRow>();
-  for (const row of rows) {
-    const logicalKey = getWorkbenchHomeThreadKey(row.logicalProjectId, row.entry);
-    const physicalKey = `${row.location.daemonId}:${getWorkbenchHomeThreadKey(row.location.projectId, row.entry)}`;
-    if (!byLogicalKey.has(logicalKey)) byLogicalKey.set(logicalKey, row);
-    if (!byPhysicalKey.has(physicalKey)) byPhysicalKey.set(physicalKey, row);
-  }
-  return (homeEntry: WorkbenchHomeThreadEntry) => logical
-    ? byLogicalKey.get(homeEntry.threadKey) ?? null
-    : attachedDaemonId
-      ? byPhysicalKey.get(`${attachedDaemonId}:${homeEntry.threadKey}`) ?? null
-      : null;
-}
 
 export default function WorkbenchThreadList ({
   actions,
   activeDragPayload = null,
   allowMainPanelDrop = false,
-  attentionLabelsByThreadId = {},
-  attachedDaemonId,
+  attachedDaemonId = null,
   canCreateThread,
   controls,
   createProject = null,
   createThreadLabel = "Create new thread",
   currentTarget,
-  displayOrder,
-  entries,
+  folderSidebars,
   getThreadHref,
   logicalProjects,
-  logicalThreads,
   onAttachFeedback,
   onCreateThread,
   onCreateThreadPointerDragStart,
@@ -234,19 +198,22 @@ export default function WorkbenchThreadList ({
   actions: ThreadActions;
   activeDragPayload?: WorkbenchDragPayload | null;
   allowMainPanelDrop?: boolean;
-  attentionLabelsByThreadId?: Record<string, string | undefined>;
   attachedDaemonId?: string | null;
   canCreateThread?: boolean;
   controls?: WorkbenchControls | null;
   createProject?: WorkbenchProjectOption | WorkbenchLogicalProject | null;
   createThreadLabel?: string;
   currentTarget: WorkbenchThreadTarget | null;
-  /** Single-project feed. When supplied it stands in for one project inside the combined list. */
-  displayOrder?: WorkbenchThreadDisplayOrder;
-  entries?: WorkbenchThreadSidebarEntry[];
+  /** Folder-sidebar lists (no app presentation) are built from these sidebars; logical lists read the listing. */
+  folderSidebars?: {
+    sidebars: WorkbenchProjectThreadSidebars;
+    homeDisplayOrder: WorkbenchThreadDisplayOrder;
+    homeDisplayOrderSupported: boolean;
+    /** Single-project feed. When supplied it stands in for one project inside the combined list. */
+    current?: { entries: WorkbenchThreadSidebarEntry[]; displayOrder: WorkbenchThreadDisplayOrder };
+  };
   getThreadHref?: (target: WorkbenchThreadTarget, ownerProjectId?: string) => string | undefined;
   logicalProjects?: readonly WorkbenchLogicalProject[];
-  logicalThreads?: readonly WorkbenchLogicalThreadRow[];
   onAttachFeedback?: (
     ownerProjectId: string,
     target: WorkbenchThreadTarget,
@@ -275,32 +242,29 @@ export default function WorkbenchThreadList ({
     setSettledThreadItemLimit,
   } = useWorkbenchSidebarPreferences();
   const homeDisplayOrderSupported = Boolean(logicalProjects && presentation && controls)
-    || actions.homeDisplayOrderSupported;
+    || Boolean(folderSidebars?.homeDisplayOrderSupported);
   const showProjectEyebrow = selectedProjectIds.length > 1;
   const projectsById = useMemo(() => new Map<string, WorkbenchProjectOption | WorkbenchLogicalProject>(
     (logicalProjects ?? projects).map(project => [project.id, project] as const),
   ), [logicalProjects, projects]);
-  const threadPlacement = useThreads.placement();
-  const threadMembers = useThreads.members();
+  // The list reads only its structure; each row reads its own facts, so one thread's activity re-renders one row.
+  const structure = useThreads.structure();
   const listedArchivedCount = useThreads.archivedCount();
   const currentList = useMemo((): ThreadListShape => {
-    const rows = logicalThreads ?? [];
     // Logical lists are placed by the app server; until membership arrives there is nothing to place.
     if (logicalProjects && presentation) {
-      return threadPlacement && threadMembers
-        ? listFromPlacement(threadPlacement, threadMembers, rows, selectedProjectIds)
+      return structure.placement
+        ? listFromPlacement(structure.placement, structure.slots, selectedProjectIds)
         : { archivedEntries: [], mainEntries: [], pinnedItems: [], settledItems: [], snoozedItems: [] };
     }
     return projectWorkbenchHomeThreadList({
-      projects: entries && displayOrder && projectId
-        ? [{ projectId, entries, displayOrder }]
-        : actions.projectThreadSidebars.projects.filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
-    }, actions.homeDisplayOrder);
-  }, [actions.homeDisplayOrder, actions.projectThreadSidebars, displayOrder, entries, logicalProjects, logicalThreads, presentation, projectId, selectedProjectIds, threadMembers, threadPlacement]);
-  const qualifiedFor = useMemo(() => createWorkbenchThreadRowLookup(
-    logicalThreads ?? [], { logical: Boolean(logicalProjects), attachedDaemonId },
-  ), [attachedDaemonId, logicalProjects, logicalThreads]);
-  const rowForPayload = (payload: WorkbenchThreadRowDragPayload) => logicalThreads?.find(row =>
+      projects: folderSidebars?.current && projectId
+        ? [{ projectId, entries: folderSidebars.current.entries, displayOrder: folderSidebars.current.displayOrder }]
+        : (folderSidebars?.sidebars.projects ?? []).filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
+    }, folderSidebars?.homeDisplayOrder ?? {});
+  }, [folderSidebars, logicalProjects, presentation, projectId, selectedProjectIds, structure]);
+  const readRows = () => client.mounted?.threadSidebar.getListing?.().rows ?? [];
+  const rowForPayload = (payload: WorkbenchThreadRowDragPayload) => readRows().find(row =>
     getWorkbenchThreadDisplayKey(row.entry) === payload.projectSourceKey
     && (row.logicalProjectId === payload.ownerProjectId
       || row.location.projectId === payload.ownerProjectId));
@@ -400,8 +364,9 @@ export default function WorkbenchThreadList ({
     ...(preferences.settledThreadsOpen ? visibleRows(displayedHistoryItems) : []),
   ];
   const hasSelectedEntry = navigableEntries.some((homeEntry) =>
-    isWorkbenchThreadTargetSelected(targetForListEntry(homeEntry), currentTarget));
-  const moveFocus = (event: ReactKeyboardEvent<HTMLAnchorElement>, index: number) => {
+    isWorkbenchThreadTargetSelected(targetForRowEntry(homeEntry), currentTarget));
+  const focusRow = (event: ReactKeyboardEvent<HTMLAnchorElement>, threadKey: string) => {
+    const index = navigableEntries.findIndex(entry => entry.threadKey === threadKey);
     let next = index;
     if (event.key === "ArrowDown") next = Math.min(navigableEntries.length - 1, index + 1);
     else if (event.key === "ArrowUp") next = Math.max(0, index - 1);
@@ -412,26 +377,12 @@ export default function WorkbenchThreadList ({
     const nextEntry = navigableEntries[next];
     if (nextEntry) rowRefs.current.get(nextEntry.threadKey)?.focus();
   };
-
-  const renderPendingEntry = (pendingEntry: PendingHomeEntry) => {
-    const { pending, projectId: entryProjectId, threadKey } = pendingEntry;
-    const project = projectsById.get(entryProjectId) ?? null;
-    if (!project && showProjectEyebrow) return null;
-    const target = targetForListEntry(pendingEntry);
-    const logicalProject = logicalProjects?.find(item => item.id === pending.logicalProjectId);
-    const sourceProjectId = pending.location.projectId;
-    return (
-      <WorkbenchPendingThreadListItem
-        activityAt={pending.activityAt}
-        href={getThreadHref ? getThreadHref(target, sourceProjectId) : projectHref(target.kind === "provider"
-          ? createLogicalExistingThreadRoute(null, target)
-          : createLogicalThreadRoute(null, LogicalProjectIdSchema.parse(entryProjectId), pending.location, target))}
-        key={threadKey}
-        onActivate={() => onOpenThread(target, sourceProjectId)}
-        project={showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined}
-        title={pending.title}
-      />
-    );
+  const rowContext: ThreadListRowContext = {
+    actions, activeDragPayload, allowMainPanelDrop, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
+    firstThreadKey: navigableEntries[0]?.threadKey ?? null, homeDisplayOrderSupported, isShiftPressed, logicalProjects,
+    onAttachFeedback, onOpenQualifiedThread, onOpenThread, projectHref, projectsById, readRowForPayload: rowForPayload,
+    registerRow: (threadKey, node) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); },
+    renderThreadTooltipDetails, selectedOwnerProjectId, setLayoutError, showProjectEyebrow, updateProjectLayout,
   };
 
   const renderEntry = (
@@ -439,171 +390,16 @@ export default function WorkbenchThreadList ({
     reorderSection?: WorkbenchThreadDisplaySection,
     placementFolder: Extract<WorkbenchHomeThreadDisplayItem, { itemKind: "folder" }>["folder"] | null = null,
     placementSection?: WorkbenchThreadDragSection | "archived",
-  ) => {
-    if (isPendingEntry(listEntry)) return renderPendingEntry(listEntry);
-    const homeEntry = listEntry;
-    const { entry, projectId: entryProjectId, threadKey } = homeEntry;
-    const project = projectsById.get(entryProjectId) ?? null;
-    if (!project && showProjectEyebrow) return null;
-    const target = targetForEntry(entry);
-    const qualified = qualifiedFor(homeEntry);
-    const logicalProject = qualified && logicalProjects?.find(item => item.id === qualified.logicalProjectId);
-    const sourceProjectId = qualified?.location.projectId ?? ProjectIdSchema.parse(entryProjectId);
-    const projectSourceKey = getWorkbenchThreadDisplayKey(entry);
-    const frozenSection = placementSection ?? reorderSection
-      ?? (entry.metadata.pinned ? "pinned" : "main");
-    const dragSection: WorkbenchThreadDragSection = frozenSection === "archived" ? "main" : frozenSection;
-    const archived = frozenSection === "archived";
-    const targetIdentity = entry.entryKind === "thread" ? entry.identity : null;
-    const targetReady = entry.entryKind === "thread"
-      && entry.lifecycle.kind === "completed"
-      && !(entry.gitArc?.claimedPaths.length);
-    const folderDropEnabled = Boolean(
-      isWorkbenchThreadRowDragPayload(activeDragPayload)
-      && targetIdentity
-      && reorderSection
-      && activeDragPayload.ownerProjectId === entryProjectId
-      && (reorderSection !== "settled" || activeDragPayload.section === "settled"),
-    );
-    const readOnly = Boolean(qualified?.observedOnly);
-    const rowActionDragTargets = archived || readOnly ? null : (
-      <WorkbenchThreadDragTargets
-        activePayload={activeDragPayload}
-        folderLabel={placementFolder ? `add to ${placementFolder.title}` : "create folder"}
-        onFolderDrop={folderDropEnabled && reorderSection
-          ? (payload) => {
-            if (logicalProjects && qualified) {
-              const source = rowForPayload(payload);
-              if (source?.logicalProjectId !== qualified.logicalProjectId) {
-                setLayoutError("A folder cannot combine different project identities.");
-                return;
-              }
-              void updateProjectLayout(qualified.logicalProjectId, {
-                kind: "drop", section: reorderSection, sourceKey: payload.projectSourceKey,
-                targetKey: projectSourceKey, destinationFolderId: placementFolder?.folderId ?? null,
-              });
-            } else if (!logicalProjects) {
-              actions.onProjectFolderDrop(
-                payload, sourceProjectId, projectSourceKey, reorderSection, placementFolder?.folderId ?? null,
-              );
-            }
-          }
-          : undefined}
-        onSnoozeUntilDrop={targetIdentity
-          ? (payload) => {
-            if (!logicalProjects) {
-              actions.onSnoozeUntil(payload, sourceProjectId, targetIdentity);
-              return;
-            }
-            const source = rowForPayload(payload);
-            if (!source || !qualified || payload.target.target.kind !== "provider") {
-              setLayoutError("Dependent snooze needs two existing threads.");
-              return;
-            }
-            void controls?.threadAction(payload.target.target.threadId, {
-              kind: "snoozeUntil", targetThreadId: targetIdentity.threadId,
-            }).catch(error => {
-              const message = error instanceof Error ? error.message.slice(0, 500) : "Dependent snooze failed.";
-              setLayoutError(message);
-              console.error("Dependent snooze failed", message);
-            });
-          }
-          : undefined}
-        targetIdentity={targetIdentity}
-        targetProjectId={ProjectIdSchema.parse(entryProjectId)}
-        targetReady={targetReady}
-        targetTitle={entry.title}
-      />
-    );
-    const feedbackDropTarget = readOnly || !onAttachFeedback ? null : (
-      <WorkbenchThreadComposerDropTarget
-        activePayload={activeDragPayload}
-        onDrop={({ reference }) => {
-          void onAttachFeedback(ProjectIdSchema.parse(entryProjectId), target, reference).catch(error => {
-            const message = error instanceof Error ? error.message.slice(0, 500) : "Unable to attach feedback.";
-            setLayoutError(message);
-            console.error("Unable to attach feedback", message);
-          });
-        }}
-        title={entry.title}
-      />
-    );
-    const dragTargets = rowActionDragTargets || feedbackDropTarget
-      ? <>{rowActionDragTargets}{feedbackDropTarget}</>
-      : null;
-    const renderRow = ({ draggable, onDragStart, onPointerDown }: {
-      draggable: false;
-      onDragStart: import("react").DragEventHandler<HTMLElement>;
-      onPointerDown: import("react").PointerEventHandler<HTMLElement>;
-    }) => {
-      const index = navigableEntries.indexOf(homeEntry);
-      return (
-        <WorkbenchThreadListItem
-          anchorRef={(node: HTMLAnchorElement | null) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); }}
-          attentionLabel={entry.entryKind === "draft" ? "" : attentionLabelsByThreadId[entry.identity.threadId]}
-          compact={false}
-          contextMenu={readOnly ? null : qualified
-            ? actions.getThreadContextMenuFor(entry, "project")
-            : logicalProjects ? null : actions.getThreadContextMenu(entry, sourceProjectId, "project")}
-          draggable={draggable && !readOnly}
-          dragTargets={dragTargets}
-          entry={entry}
-          href={getThreadHref ? getThreadHref(target, sourceProjectId) : projectHref(qualified
-            ? target.kind === "provider"
-              ? createLogicalExistingThreadRoute(null, target)
-              : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
-            : createHomeThreadRoute(entryProjectId, target))}
-          isDragActive={isDragActive}
-          isShiftPressed={isShiftPressed}
-          onKeyDown={(event) => moveFocus(event, index)}
-          onAction={(action) => readOnly ? undefined : qualified
-            ? actions.onActionFor(entry, action)
-            : actions.onAction(entry, action, sourceProjectId)}
-          onActivate={(activatedTarget) => qualified
-            ? onOpenQualifiedThread?.(qualified) : onOpenThread(activatedTarget, sourceProjectId)}
-          onDragStart={readOnly ? undefined : onDragStart}
-          onPointerDown={readOnly ? undefined : onPointerDown}
-          project={showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined}
-          projectId={sourceProjectId}
-          projectSource={qualified?.location}
-          role="tab"
-          selected={entryProjectId === selectedOwnerProjectId
-            && isWorkbenchThreadTargetSelected(target, currentTarget)}
-          showActions={!readOnly}
-          showPinPriorityIcon
-          tabIndex={isWorkbenchThreadTargetSelected(target, currentTarget) || (!hasSelectedEntry && index === 0) ? 0 : -1}
-          tooltipDetails={renderThreadTooltipDetails?.(entry)}
-        />
-      );
-    };
-    return (
-      <Draggable
-        disabled={archived || readOnly}
-        dropTargetIds={[
-          ...(homeDisplayOrderSupported ? [WORKBENCH_THREAD_ORDER_DROP_TARGET_ID] : []),
-          WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
-          WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
-          ...(allowMainPanelDrop ? [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID] : []),
-        ]}
-        key={threadKey}
-        label={entry.title}
-        payload={archived || readOnly
-          ? { target: { kind: "thread", target }, type: "panel-target" }
-          : {
-            ownerProjectId: ProjectIdSchema.parse(entryProjectId),
-            projectSourceKey,
-            section: dragSection,
-            sourceKey: threadKey,
-            target: { kind: "thread", target },
-            type: "home-thread-row",
-            waitingOnThreadIds: entry.entryKind === "thread"
-              ? entry.waitingOnThreads?.map(wait => wait.identity.threadId) ?? [] : [],
-          }}
-      >
-        {renderRow}
-      </Draggable>
-    );
-  };
+  ) => (
+    <WorkbenchThreadListRow
+      context={rowContext}
+      key={listEntry.threadKey}
+      listEntry={listEntry}
+      placementFolder={placementFolder}
+      placementSection={placementSection}
+      reorderSection={reorderSection}
+    />
+  );
 
   const renderDropMarker = (
     key: string,
@@ -645,36 +441,9 @@ export default function WorkbenchThreadList ({
 
   const renderFolderTooltip = (item: Extract<ListDisplayItem, { itemKind: "folder" }>) => (
     <ul className="m-0 flex w-[min(28rem,calc(100vw-2rem))] max-w-full list-none flex-col gap-0.5 p-0">
-      {item.entries.map((listEntry) => {
-        if (isPendingEntry(listEntry)) return renderPendingEntry(listEntry);
-        const homeEntry = listEntry;
-        const project = projectsById.get(homeEntry.projectId);
-        if (!project) return null;
-        const qualified = qualifiedFor(homeEntry);
-        const target = targetForEntry(homeEntry.entry);
-        return (
-          <WorkbenchThreadListItem
-            compact={false}
-            dimmedOverride={false}
-            entry={homeEntry.entry}
-            href={getThreadHref ? getThreadHref(target, homeEntry.projectId) : projectHref(qualified
-              ? target.kind === "provider"
-                ? createLogicalExistingThreadRoute(null, target)
-                : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
-              : createHomeThreadRoute(homeEntry.projectId, target))}
-            key={`tooltip:${homeEntry.threadKey}`}
-            onActivate={(activatedTarget) => qualified
-              ? onOpenQualifiedThread?.(qualified)
-              : onOpenThread(activatedTarget, homeEntry.projectId)}
-            project={showProjectEyebrow ? project : undefined}
-            projectId={qualified?.location.projectId ?? ProjectIdSchema.parse(homeEntry.projectId)}
-            projectSource={qualified?.location}
-            showPinPriorityIcon
-            showTooltip={false}
-            tabIndex={-1}
-          />
-        );
-      })}
+      {item.entries.map((listEntry) => (
+        <WorkbenchThreadListRow context={rowContext} key={`tooltip:${listEntry.threadKey}`} listEntry={listEntry} presentation="preview" />
+      ))}
     </ul>
   );
 
@@ -743,13 +512,12 @@ export default function WorkbenchThreadList ({
         return [
           renderDropMarker(key, beforeKey, section, null, null),
           <li className="m-0 list-none" key={key}>
-            <WorkbenchThreadFolder
+            <ListedThreadFolder
               activeDragPayload={activeDragPayload}
               autoFocusName={actions.autoFocusFolderId === item.folder.folderId}
-              attentionLabelsByThreadId={attentionLabelsByThreadId}
               canPrependThread={(payload) => canMoveWorkbenchThreadRowToSection(payload, section, item.projectId)
                 && !item.folder.threadKeys.includes(payload.projectSourceKey)}
-              entries={item.entries.flatMap(entry => isPendingEntry(entry) ? [] : [entry.entry])}
+              listEntries={item.entries}
               folder={item.folder}
               homeFolderKey={key}
               isDragActive={isDragActive}
@@ -777,7 +545,7 @@ export default function WorkbenchThreadList ({
             >
               {section === "settled" ? null : renderFolderCreateThread(item)}
               {renderFolderEntries(item)}
-            </WorkbenchThreadFolder>
+            </ListedThreadFolder>
           </li>,
         ];
       })}
@@ -789,7 +557,7 @@ export default function WorkbenchThreadList ({
     <WorkbenchThreadPriorityDropZone
       activePayload={activeDragPayload}
       onDrop={(payload) => {
-        if (!logicalProjects || !controls || !logicalThreads) {
+        if (!logicalProjects || !controls) {
           actions.onSetPriority(payload, priority);
           return;
         }

@@ -26,46 +26,12 @@ import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPres
 import WorkbenchClientProvider from "./WorkbenchClientProvider";
 import WorkbenchSidebarPreferencesProvider from "./WorkbenchSidebarPreferencesProvider";
 import WorkbenchThreadList from "./WorkbenchThreadList";
-import { createWorkbenchThreadRowLookup } from "./WorkbenchThreadList";
 import WorkbenchThreadListItem from "./WorkbenchThreadListItem";
 import ThreadTooltipContent from "./WorkbenchThreadTooltipContent";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
-
-test("qualified thread rows retain logical and physical source ownership", () => {
-  const shared = createThreadEntry({ threadId: "source", title: "same display key" });
-  const daemonA = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
-  const daemonB = fixtureIdentitySchemas.DaemonIdSchema.parse("00000000-0000-4000-8000-000000000002");
-  const logicalA = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
-  const logicalB = fixtureIdentitySchemas.LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
-  const physicalProjectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
-  const row = (logicalProjectId: string, daemonId: typeof daemonA): WorkbenchLogicalThreadRow => ({
-    entry: shared,
-    hostname: "test",
-    location: { daemonId, projectId: physicalProjectId },
-    logicalProjectId: fixtureIdentitySchemas.LogicalProjectIdSchema.parse(logicalProjectId),
-    rootPath: "C:/repo",
-  });
-  const first = row(logicalA, daemonA);
-  const second = row(logicalB, daemonB);
-  const duplicate = row(logicalA, daemonB);
-  const rows = [first, second, duplicate];
-  const homeEntry = (projectId: string) => ({
-    entry: shared,
-    projectId,
-    threadKey: getWorkbenchHomeThreadKey(projectId, shared),
-  });
-  const logical = createWorkbenchThreadRowLookup(rows, { logical: true, attachedDaemonId: null });
-  assert.equal(logical(homeEntry(logicalA)), first);
-  assert.equal(logical(homeEntry(logicalB)), second);
-
-  const physical = createWorkbenchThreadRowLookup(rows, { logical: false, attachedDaemonId: daemonB });
-  assert.equal(physical(homeEntry(physicalProjectId)), second);
-  assert.equal(createWorkbenchThreadRowLookup(rows, { logical: false, attachedDaemonId: daemonA })(
-    homeEntry(physicalProjectId)), first);
-});
 
 const fixtureIdentityValues = {
   ProjectId: {
@@ -131,20 +97,19 @@ function createThreadEntry({
   };
 }
 
-function createActions(
-  projectThreadSidebars: WorkbenchProjectThreadSidebars,
-  homeDisplayOrder: ComponentProps<typeof WorkbenchThreadList>["actions"]["homeDisplayOrder"] = {},
-): ComponentProps<typeof WorkbenchThreadList>["actions"] {
+type FolderSidebars = NonNullable<ComponentProps<typeof WorkbenchThreadList>["folderSidebars"]>;
+
+function folderSidebars(sidebars: WorkbenchProjectThreadSidebars, homeDisplayOrder: FolderSidebars["homeDisplayOrder"] = {},
+  current?: FolderSidebars["current"]): FolderSidebars {
+  return { sidebars, homeDisplayOrder, homeDisplayOrderSupported: true, ...(current ? { current } : {}) };
+}
+
+function createActions(): ComponentProps<typeof WorkbenchThreadList>["actions"] {
   return {
     autoFocusFolderId: null,
-    displayOrder: {},
-    entries: [],
     error: "",
     getThreadContextMenu: () => ({ id: "home-thread-menu", items: [], label: "Thread actions" }),
     getThreadContextMenuFor: () => null,
-    homeDisplayOrder,
-    homeDisplayOrderSupported: true,
-    isLoading: false,
     onAction: () => undefined,
     onActionFor: () => undefined,
     onAutoFocusFolderComplete: () => undefined,
@@ -157,16 +122,13 @@ function createActions(
     onRenamePinnedFolder: async (_folderId, title) => title,
     onSetPriority: () => undefined,
     onSnoozeUntil: () => undefined,
-    pinnedDisplayOrder: {},
-    projectThreadSidebars,
-    projectThreadSummaries: { projects: [] },
   };
 }
 
 function renderThreads(
   entries: ThreadEntry[],
   activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
-  displayOrder: ComponentProps<typeof WorkbenchThreadList>["displayOrder"] = {},
+  displayOrder: FolderSidebars["homeDisplayOrder"] = {},
   options: {
     attachedDaemonId?: string;
     logicalThreads?: readonly WorkbenchLogicalThreadRow[];
@@ -174,29 +136,34 @@ function renderThreads(
   } = {},
 ) {
   const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+  const threadSidebar = new ThreadSidebarClient({ onChange: () => {}, remove: async () => {}, move: async () => {} });
+  threadSidebar.acceptListing({
+    members: {}, rows: options.logicalThreads ?? [], archivedCount: 0, status: { listed: true, loading: false, error: "" },
+  });
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
       children: () => createElement(
         WorkbenchClientProvider,
         {
-          client: { controls: null, mounted: null },
+          client: { controls: null, mounted: options.logicalThreads ? { threadSidebar, threadOwnerFor: () => null } as never : null },
           children: createElement(
             WorkbenchContextMenuContext.Provider,
             { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
             createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
-              actions: createActions({ projects: [{ projectId, entries, displayOrder, error: null, freshness: "fresh", revision: 1 }] }),
+              actions: createActions(),
               activeDragPayload,
               attachedDaemonId: options.attachedDaemonId,
               canCreateThread: true,
               currentTarget: null,
-              displayOrder,
-              entries,
+              folderSidebars: folderSidebars(
+                { projects: [{ projectId, entries, displayOrder, error: null, freshness: "fresh", revision: 1 }] },
+                {}, { entries, displayOrder },
+              ),
               getThreadHref: () => "/agent/thread/thread-one",
               onCreateThread: () => undefined,
               onAttachFeedback: options.onAttachFeedback,
               onOpenThread: () => undefined,
-              logicalThreads: options.logicalThreads,
               projectId,
               projects: [],
               selectedOwnerProjectId: projectId,
@@ -248,12 +215,12 @@ function renderHomeThreads({
   selectedProjectIds = projects.map(project => project.id),
 }: {
   activeDragPayload?: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"];
-  displayOrder?: ComponentProps<typeof WorkbenchThreadList>["actions"]["homeDisplayOrder"];
+  displayOrder?: FolderSidebars["homeDisplayOrder"];
   projectThreadSidebars: WorkbenchProjectThreadSidebars;
   projects: WorkbenchProjectOption[];
   selectedProjectIds?: string[];
 }) {
-  const actions = createActions(projectThreadSidebars, displayOrder);
+  const actions = createActions();
   return renderToStaticMarkup(createElement(
     WorkbenchSidebarPreferencesProvider,
     {
@@ -265,8 +232,8 @@ function renderHomeThreads({
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
           actions,
           activeDragPayload,
-          attentionLabelsByThreadId: {},
           createProject: projects[0]!,
+          folderSidebars: folderSidebars(projectThreadSidebars, displayOrder),
           currentTarget: null,
           onCreateThread: () => undefined,
           onOpenThread: () => undefined,
@@ -345,10 +312,9 @@ test("logical thread eyebrows use each thread's daemon-qualified location", () =
           WorkbenchContextMenuContext.Provider,
           { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
           createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
-            actions: createActions({ projects: [] }),
+            actions: createActions(),
             currentTarget: null,
             logicalProjects: [project, emptyProject],
-            logicalThreads: rows,
             onCreateThread: () => undefined,
             onOpenQualifiedThread: () => undefined,
             onOpenThread: () => undefined,

@@ -112,3 +112,29 @@ test("an equal listing push keeps every identity and stays silent; a changed row
   assert.equal(second.status, first.status);
   await client.dispose();
 });
+
+test("thread activity leaves the listing structure untouched; a placement change replaces it", async () => {
+  const location = { daemonId: DaemonIdSchema.parse(crypto.randomUUID()), projectId: ProjectIdSchema.parse("project") };
+  const member = (activityAt: number, title: string) => ({
+    key: "k", homeKey: "home:k", logicalProjectId: null, location, hostname: "local", rootPath: "/p", title, activityAt,
+    ref: { kind: "thread" as const, identity: { harness: "codex" as const, threadId: WorkbenchThreadIdSchema.parse("t") } },
+  });
+  const placement = (main: string[]) => ({ main, archived: [], pinned: [], snoozed: [], settled: [] });
+  const client = new ThreadSidebarClient({
+    onChange: () => undefined,
+    remove: async () => { throw new Error("Unexpected mutation."); },
+    move: async () => { throw new Error("Unexpected mutation."); },
+  });
+  const listing = (activityAt: number, title: string, main: string[]): WorkbenchThreadListing => ({
+    members: { "home:k": member(activityAt, title) }, rows: [], archivedCount: 0, placement: placement(main),
+    status: { listed: true, loading: false, error: "" },
+  });
+  client.acceptListing(listing(1, "first", ["home:k"]));
+  const structure = client.getListingStructure();
+  client.acceptListing(listing(2, "renamed while working", ["home:k"]));
+  assert.notEqual(client.getListing().members["home:k"], undefined);
+  assert.equal(client.getListingStructure(), structure);
+  client.acceptListing(listing(2, "renamed while working", []));
+  assert.notEqual(client.getListingStructure(), structure);
+  await client.dispose();
+});
