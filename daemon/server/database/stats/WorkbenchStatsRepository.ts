@@ -6,7 +6,9 @@
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type { WorkbenchAccountIdentity } from "workbench-shared/workbench/provider/provider-account";
 import {
+  WORKBENCH_STATS_MAX_LIMIT_SAMPLES as MAX_RATE_LIMIT_SAMPLES,
   statsPeriodShape,
   statsRangeShape,
   type WorkbenchStatsReadRequest,
@@ -31,6 +33,8 @@ interface RateWindowObservation {
 }
 
 export interface WorkbenchRateLimitObservation {
+  /** Absent or null when the provider cannot say which account the limits belong to. */
+  account?: WorkbenchAccountIdentity | null;
   harness: string;
   observedAt: number;
   snapshots: Array<{
@@ -57,8 +61,6 @@ function sameWindow(left: RateWindowObservation | null, right: RateWindowObserva
     && left?.usedPercent === right?.usedPercent;
 }
 
-const MAX_RATE_LIMIT_SAMPLES = 2_000;
-
 export default class WorkbenchStatsRepository {
   constructor(private readonly database: Database.Database) {}
 
@@ -80,16 +82,21 @@ export default class WorkbenchStatsRepository {
     })();
   }
 
+  /** Samples belong to the account that read them, so each account keeps its own history. */
   recordRateLimits(observation: WorkbenchRateLimitObservation) {
     this.database.transaction(() => {
+      const accountId = observation.account ? this.admitRateLimitAccount(observation.harness, observation.account) : null;
       for (const snapshot of observation.snapshots) {
         const previousRows = this.database.prepare(`
           SELECT w.window_kind, w.used_basis_points, w.duration_minutes, w.resets_at
           FROM account_rate_limit_samples s
           LEFT JOIN account_rate_limit_windows w ON w.sample_id = s.id
-          WHERE s.harness_id = ? AND s.limit_id = ?
-            AND s.id = (SELECT id FROM account_rate_limit_samples WHERE harness_id = ? AND limit_id = ? ORDER BY observed_at DESC, id DESC LIMIT 1)
-        `).all(observation.harness, snapshot.limitId, observation.harness, snapshot.limitId) as Array<{
+          WHERE s.id = (
+            SELECT id FROM account_rate_limit_samples
+            WHERE harness_id = ? AND account_id IS ? AND limit_id = ?
+            ORDER BY observed_at DESC, id DESC LIMIT 1
+          )
+        `).all(observation.harness, accountId, snapshot.limitId) as Array<{
           duration_minutes: number | null; resets_at: number | null; used_basis_points: number | null;
           window_kind: "primary" | "secondary" | "tertiary" | null;
         }>;
@@ -107,9 +114,9 @@ export default class WorkbenchStatsRepository {
         if (previousRows.length && sameWindow(previous("primary"), primary)
           && sameWindow(previous("secondary"), secondary) && sameWindow(previous("tertiary"), tertiary)) continue;
         const result = this.database.prepare(`
-          INSERT INTO account_rate_limit_samples (harness_id, limit_id, limit_name, observed_at)
-          VALUES (?, ?, ?, ?)
-        `).run(observation.harness, snapshot.limitId, snapshot.limitName, observation.observedAt);
+          INSERT INTO account_rate_limit_samples (harness_id, account_id, limit_id, limit_name, observed_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(observation.harness, accountId, snapshot.limitId, snapshot.limitName, observation.observedAt);
         const insertWindow = this.database.prepare(`
           INSERT INTO account_rate_limit_windows (
             sample_id, window_kind, used_basis_points, duration_minutes, resets_at
@@ -120,6 +127,25 @@ export default class WorkbenchStatsRepository {
         }
       }
     })();
+  }
+
+  /**
+   * The account's row, with its latest label. Unattributed samples since the provider's last attributed one join it: they
+   * were reported by whoever was signed in, before this machine could ask who that was.
+   */
+  private admitRateLimitAccount(harness: string, account: WorkbenchAccountIdentity) {
+    const { id } = this.database.prepare(`
+      INSERT INTO account_rate_limit_accounts (harness_id, fingerprint, label) VALUES (?, ?, ?)
+      ON CONFLICT(harness_id, fingerprint) DO UPDATE SET label = excluded.label
+      RETURNING id
+    `).get(harness, account.fingerprint, account.label) as { id: number };
+    this.database.prepare(`
+      UPDATE OR IGNORE account_rate_limit_samples SET account_id = ?
+      WHERE harness_id = ? AND account_id IS NULL AND observed_at >= COALESCE((
+        SELECT MAX(observed_at) FROM account_rate_limit_samples WHERE harness_id = ? AND account_id IS NOT NULL
+      ), 0)
+    `).run(id, harness, harness);
+    return id;
   }
 
   claimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsReadRequest["range"] | "all", now = Date.now()): WorkbenchClaimedRoot[] {
@@ -181,36 +207,42 @@ export default class WorkbenchStatsRepository {
         SELECT prior.* FROM account_rate_limit_samples prior
         WHERE prior.observed_at < ? AND prior.observed_at = (
           SELECT MAX(candidate.observed_at) FROM account_rate_limit_samples candidate
-          WHERE candidate.harness_id = prior.harness_id AND candidate.limit_id = prior.limit_id
-            AND candidate.observed_at < ?
+          WHERE candidate.harness_id = prior.harness_id AND candidate.account_id IS prior.account_id
+            AND candidate.limit_id = prior.limit_id AND candidate.observed_at < ?
         )
       ), ranked AS (
         SELECT id,
-          COUNT(*) OVER (PARTITION BY harness_id, limit_id) sample_count,
+          COUNT(*) OVER (PARTITION BY harness_id, account_id, limit_id) sample_count,
           ROW_NUMBER() OVER (
-            PARTITION BY harness_id, limit_id,
+            PARTITION BY harness_id, account_id, limit_id,
               CASE WHEN observed_at < ? THEN -1 ELSE CAST((observed_at - ?) / ? AS INTEGER) END
             ORDER BY observed_at DESC, id DESC
           ) sample_rank
         FROM candidates
       )
-      SELECT s.*, w.window_kind, w.used_basis_points, w.duration_minutes, w.resets_at
+      SELECT s.*, a.fingerprint account_fingerprint, a.label account_label,
+        w.window_kind, w.used_basis_points, w.duration_minutes, w.resets_at
       FROM account_rate_limit_samples s
       JOIN ranked r ON r.id = s.id AND (r.sample_count <= ? OR r.sample_rank = 1)
+      LEFT JOIN account_rate_limit_accounts a ON a.id = s.account_id
       LEFT JOIN account_rate_limit_windows w ON w.sample_id = s.id
       ORDER BY s.observed_at, s.id
     `).all(
       limitsStartedAt, now, limitsStartedAt, limitsStartedAt,
       limitsStartedAt, limitsStartedAt, rateBucketMs, MAX_RATE_LIMIT_SAMPLES,
     ) as Array<{
+      account_fingerprint: string | null; account_id: number | null; account_label: string | null;
       duration_minutes: number | null; harness_id: WorkbenchHarness; id: number; limit_id: string;
       limit_name: string | null; observed_at: number; resets_at: number | null;
       used_basis_points: number | null; window_kind: "primary" | "secondary" | "tertiary" | null;
     }>;
     const rateSeries = new Map<string, WorkbenchStatsSectionData<"limits">["rateLimits"][number]>();
     for (const row of rateRows) {
-      const key = `${row.harness_id}\0${row.limit_id}`;
-      const series = rateSeries.get(key) ?? { harness: row.harness_id, limitId: row.limit_id, limitName: row.limit_name, samples: [] };
+      const key = `${row.harness_id}\0${row.account_id ?? ""}\0${row.limit_id}`;
+      const series = rateSeries.get(key) ?? {
+        account: row.account_fingerprint ? { key: row.account_fingerprint, label: row.account_label } : null,
+        harness: row.harness_id, limitId: row.limit_id, limitName: row.limit_name, samples: [],
+      };
       if (!series.limitName && row.limit_name) series.limitName = row.limit_name;
       let sample = series.samples.find(({ observedAt }) => observedAt === row.observed_at);
       if (!sample) {

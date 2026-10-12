@@ -1,9 +1,11 @@
 /*
  * Exports:
  * - WorkbenchStatsControllerOptions: database, harness, rename, tool catalogue, and warning ports.
- * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed per-section stats observations (rename-aware claims, tool prompt cost, import status), one-shot tool reads for the CLI, account-limit history, refresh, failures, and disposal.
+ * - default WorkbenchStatsController: own imports, capture, agent feedback, streamed per-section stats observations (rename-aware claims, tool prompt cost, import status), one-shot tool reads for the CLI, per-account limit history, refresh, failures, and disposal.
  */
-import type { WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
+import type {
+  WorkbenchAccountIdentity, WorkbenchAccountLimits, WorkbenchRateLimitSnapshot, WorkbenchRateLimitWindow,
+} from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type WorkbenchProviderDispatcher from "../WorkbenchProviderDispatcher";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -105,6 +107,10 @@ export default class WorkbenchStatsController {
   private readonly importer: WorkbenchStatsImportController;
   private readonly observations = new Set<WorkbenchStatsObservation>();
   private readonly stopImportInvalidation: () => void;
+  /** The account each provider's latest limits read reported. */
+  private readonly accounts = new Map<WorkbenchHarness, WorkbenchAccountIdentity | null>();
+  /** Providers whose account changed since their latest limits read. */
+  private readonly switchingAccounts = new Set<WorkbenchHarness>();
 
   constructor(private readonly options: WorkbenchStatsControllerOptions) {
     this.importer = new WorkbenchStatsImportController({
@@ -143,24 +149,40 @@ export default class WorkbenchStatsController {
     this.enqueue(snapshot.harness, "claim snapshot", () => this.options.database.recordStatsClaimSnapshot(snapshot), "claims");
   }
 
+  /**
+   * Limit notifications name no account, so they belong to the account the provider's latest limits read reported.
+   * After the provider says its account changed, they are dropped until a fresh read says who is signed in.
+   */
   observeProviderNotification(harness: WorkbenchHarness, observation: WorkbenchProviderObservation) {
-    if (observation.accountLimits) this.recordRateLimits({
-      harness, observedAt: Date.now(), snapshots: [rateSnapshot(observation.accountLimits)],
+    const installed = installedProviderKeys.find((key) => key === harness);
+    if (observation.accountChanged && installed) {
+      this.switchingAccounts.add(harness);
+      void this.refreshHarnessLimits(installed).catch((error: unknown) => {
+        this.reportFailure(harness, error instanceof Error ? error.message : "Rate-limit refresh failed.", "refresh");
+      });
+    }
+    if (observation.accountLimits && !this.switchingAccounts.has(harness)) this.recordRateLimits({
+      account: this.accounts.get(harness) ?? null, harness, observedAt: Date.now(), snapshots: [rateSnapshot(observation.accountLimits)],
     });
   }
 
   /** Providers without limit notifications (such as Claude) report limits only when read. */
   observeAccountLimits(harness: WorkbenchHarness, limits: WorkbenchAccountLimits) {
+    const account = limits.identity ?? null;
+    this.accounts.set(harness, account);
+    this.switchingAccounts.delete(harness);
     const snapshots = responseRateSnapshots(limits);
-    if (snapshots.length) this.recordRateLimits({ harness, observedAt: Date.now(), snapshots });
+    if (snapshots.length) this.recordRateLimits({ account, harness, observedAt: Date.now(), snapshots });
+  }
+
+  private async refreshHarnessLimits(harness: (typeof installedProviderKeys)[number]) {
+    const account = this.options.providers.get(harness).account;
+    if (account) this.observeAccountLimits(harness, await account.limits.read());
   }
 
   async refreshRateLimits() {
     const harnesses = installedProviderKeys;
-    const results = await Promise.allSettled(harnesses.map(async (harness) => {
-      const account = this.options.providers.get(harness).account;
-      if (account) this.observeAccountLimits(harness, await account.limits.read());
-    }));
+    const results = await Promise.allSettled(harnesses.map((harness) => this.refreshHarnessLimits(harness)));
     results.forEach((result, index) => {
       if (result.status === "fulfilled") return;
       const harness = harnesses[index] ?? null;

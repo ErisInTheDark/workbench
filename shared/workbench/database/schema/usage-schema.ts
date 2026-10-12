@@ -3,6 +3,7 @@
  * - threadTurnUsage: observed model context and cumulative turn counters.
  * - threadContextUsage: latest reported context measurement, independent of cumulative accounting.
  * - threadUsageModelAttributions: inferred model attribution.
+ * - accountRateLimitAccounts: provider accounts quota samples belong to, by fingerprint.
  * - accountRateLimitSamples: dated account quota samples.
  * - accountRateLimitWindows: quota windows belonging to samples.
  * - gitClaimSessions: claim lifetimes.
@@ -177,7 +178,41 @@ const accountRateLimitSamplesV1 = defineTable("account_rate_limit_samples", {
   constraints: [unique([table.harness_id, table.limit_id, table.observed_at])],
   indexes: [index("account_rate_limit_samples_range_idx", [table.observed_at, table.harness_id])],
 }));
-const accountRateLimitSamplesHistory = initialHistory(accountRateLimitSamplesV1);
+/** A provider account limits were read for, known only by a one-way fingerprint and an optional private label. */
+const accountRateLimitAccountsV1 = defineTable("account_rate_limit_accounts", {
+  id: integer().primaryKey({ autoincrement: true }),
+  harness_id: text().notNull(),
+  fingerprint: text().notNull(),
+  label: text(),
+}, (table) => ({
+  constraints: [unique([table.harness_id, table.fingerprint])],
+}));
+const accountRateLimitAccountsHistory = initialHistory(accountRateLimitAccountsV1, databaseReleases.rateLimitAccounts.version);
+export const accountRateLimitAccounts = accountRateLimitAccountsHistory.current;
+
+/** Samples from before accounts were tracked, or from providers that cannot name one, have no account. */
+const accountRateLimitSamplesV2 = defineTable("account_rate_limit_samples", {
+  id: integer().primaryKey({ autoincrement: true }),
+  harness_id: text().notNull(),
+  account_id: integer().references("account_rate_limit_accounts", "id"),
+  limit_id: text().notNull(),
+  limit_name: text(),
+  observed_at: integer().notNull().nonNegative(),
+}, (table) => ({
+  constraints: [unique([table.harness_id, table.account_id, table.limit_id, table.observed_at])],
+  indexes: [index("account_rate_limit_samples_range_idx", [table.observed_at, table.harness_id])],
+}));
+const accountRateLimitSamplesHistory = defineTableHistory({
+  current: accountRateLimitSamplesV2,
+  versions: [
+    tableVersion({ migration: createTable(accountRateLimitSamplesV1), schemaVersion: databaseReleases.usage.version, table: accountRateLimitSamplesV1 }),
+    tableVersion({
+      migration: rebuildTable({ from: accountRateLimitSamplesV1, to: accountRateLimitSamplesV2 }),
+      schemaVersion: databaseReleases.rateLimitAccounts.version,
+      table: accountRateLimitSamplesV2,
+    }),
+  ],
+});
 export const accountRateLimitSamples = accountRateLimitSamplesHistory.current;
 
 const accountRateLimitWindowsV1 = defineTable("account_rate_limit_windows", {
@@ -401,6 +436,7 @@ export const threadToolDailyAggregates = threadToolDailyAggregatesHistory.curren
 
 export const usageTables = Object.freeze({
   threadContextUsage,
+  accountRateLimitAccounts,
   accountRateLimitSamples,
   accountRateLimitWindows,
   gitClaimImports,
@@ -418,6 +454,7 @@ export const usageSchemaHistory = defineSubsystemHistory([
   threadContextUsageHistory,
   threadTurnUsageHistory,
   threadUsageModelAttributionsHistory,
+  accountRateLimitAccountsHistory,
   accountRateLimitSamplesHistory,
   accountRateLimitWindowsHistory,
   ownProjectReferences(gitClaimSessionsHistory),

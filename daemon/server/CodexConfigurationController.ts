@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexAccount: signed-in Codex account kind and ChatGPT plan.
+ * - CodexAccount: signed-in Codex account kind, ChatGPT plan and email.
  * - CodexConfigurationOperations: native request and local model-context ports.
  * - default CodexConfigurationController: translate native models, account and limits without owning another cache.
  */
@@ -8,11 +8,12 @@ import { z } from "zod";
 import type { ModelListResponse } from "workbench-shared/codex/generated/app-server/v2/ModelListResponse";
 import type { WorkbenchModelContextCapability, WorkbenchModelOption } from "workbench-shared/types";
 import { WorkbenchAccountLimitsSchema, type WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
+import providerAccountFingerprint from "./providers/provider-account-fingerprint";
 
 const AccountResponseSchema = z.object({
-  account: z.object({ type: z.string(), planType: z.string().nullish() }).passthrough().nullable(),
+  account: z.object({ type: z.string(), planType: z.string().nullish(), email: z.string().nullish() }).passthrough().nullable(),
 }).passthrough();
-export type CodexAccount = { type: string; planType?: string | null };
+export type CodexAccount = { type: string; planType?: string | null; email?: string | null };
 
 export interface CodexConfigurationOperations {
   request(method: string, params: object, options?: { background?: boolean }): Promise<unknown>;
@@ -72,10 +73,17 @@ export default class CodexConfigurationController {
     return response.account;
   }
 
+  /** Limits with the account that read them; an API key or a login without an email has no identity. */
   async accountLimits(): Promise<WorkbenchAccountLimits> {
+    const [limits, account] = await Promise.all([
+      this.operations.request("account/rateLimits/read", {}, { background: true }),
+      this.account(),
+    ]);
+    const email = account?.email?.trim();
     return {
-      ...WorkbenchAccountLimitsSchema.parse(await this.operations.request("account/rateLimits/read", {}, { background: true })),
+      ...WorkbenchAccountLimitsSchema.parse(limits),
       preferredLimitId: "codex",
+      identity: email ? { fingerprint: providerAccountFingerprint("codex", email.toLowerCase()), label: email } : null,
     };
   }
 }

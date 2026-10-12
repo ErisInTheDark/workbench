@@ -14,6 +14,7 @@ import OpenCodeCompanionToolsController, { type CompanionToolClient } from "./Op
 import OpenCodePatchStreamController from "./OpenCodePatchStreamController";
 import OpenCodeFileEvidenceController from "./OpenCodeFileEvidenceController";
 import OpenCodeSteerCutController from "./OpenCodeSteerCutController";
+import providerAccountFingerprint from "../../provider-account-fingerprint";
 import {
   openCodeWorkbenchRpc,
   OpenCodeGoQuotaSchema,
@@ -129,6 +130,7 @@ export async function readOpenCodeGoQuota(options: {
     status: value.status,
   });
   const quota = OpenCodeGoQuotaSchema.safeParse({
+    accountFingerprint: providerAccountFingerprint("opencode", token),
     observedAt,
     windows: {
       rolling: window(parsed.usage.rolling),

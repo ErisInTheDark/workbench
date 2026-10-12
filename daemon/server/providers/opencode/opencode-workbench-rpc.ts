@@ -44,6 +44,8 @@ const quotaWindow = z.object({
 });
 
 export const OpenCodeGoQuotaSchema = z.object({
+  /** One-way fingerprint of the credential that read the quota; older companions omit it. */
+  accountFingerprint: z.string().regex(/^[0-9a-f]{16,64}$/u).nullish(),
   observedAt: z.number().int().nonnegative(),
   windows: z.object({
     rolling: quotaWindow,

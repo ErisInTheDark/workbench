@@ -1,4 +1,4 @@
-/* No production exports. Tests protect native Claude model discovery, context window bounds, plan usage mapping, and query disposal. */
+/* No production exports. Tests protect native Claude model discovery, context window bounds, plan usage and account mapping, and query disposal. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ModelInfo, Query } from "@anthropic-ai/claude-agent-sdk";
@@ -164,6 +164,16 @@ test("sessions without plan limits report empty windows instead of failing", () 
   assert.equal(limits.rateLimits.rateLimitReachedType, null);
 });
 
+test("limits name their account by a fingerprint that separates logins and organizations without exposing the email", () => {
+  const usage = { subscription_type: null, rate_limits: null };
+  const personal = claudeAccountLimits(usage, { email: "Me@Example.com", organization: "personal" }).identity;
+  assert.equal(personal?.label, "Me@Example.com");
+  assert.doesNotMatch(personal?.fingerprint ?? "", /example/iu);
+  assert.equal(claudeAccountLimits(usage, { email: "me@example.com", organization: "personal" }).identity?.fingerprint, personal?.fingerprint);
+  assert.notEqual(claudeAccountLimits(usage, { email: "me@example.com", organization: "work" }).identity?.fingerprint, personal?.fingerprint);
+  assert.equal(claudeAccountLimits(usage, { apiKeySource: "user" }).identity, null);
+});
+
 test("concurrent account-limit reads share one control process", async () => {
   const pending = Promise.withResolvers<{ rate_limits: null; subscription_type: null }>();
   let created = 0;
@@ -171,6 +181,7 @@ test("concurrent account-limit reads share one control process", async () => {
     created++;
     return {
       usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => pending.promise,
+      accountInfo: async () => ({}),
       close: () => undefined,
     } as unknown as Query;
   }, () => "fake-claude");

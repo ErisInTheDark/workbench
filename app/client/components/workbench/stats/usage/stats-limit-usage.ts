@@ -6,7 +6,8 @@
  * - largestLimitWindow: the longest window in a limit's newest sample.
  * - currentLimitWindow: where one window stands now, ignoring stale readings from lagging sources.
  * - limitUsageByBucket: how much of one window was used within each bucket, inferred from its climbs and spread over time.
- * - providerWeeklyUsage: each provider's use of its longest window per bucket, scaled to a week of that allowance.
+ * - LimitAccountName/limitAccountNames: masked and full names for accounts, only where a provider shows several.
+ * - providerWeeklyUsage: each account's use of its longest window per bucket, scaled to a week of that allowance.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
@@ -140,19 +141,54 @@ export function limitUsageByBucket(samples: readonly Sample[], kind: WindowKind,
   return values;
 }
 
-/** A provider with several limits follows whichever has the longest window; windows without a duration cannot scale. */
+export interface LimitAccountName {
+  /** Masked: the shortest start that tells this provider's accounts apart. */
+  short: string;
+  full: string;
+}
+
+/** Limits without a known account come from separate machines, so each counts as its own account. */
+const accountKey = (limit: Limit, index: number) => `${limit.harness}\0${limit.account?.key ?? `#${index}`}`;
+
+/**
+ * Names, aligned with `limits`, only where a provider shows more than one account. Labels are private, so each shows
+ * just enough of its start to tell it from the others.
+ */
+export function limitAccountNames(limits: readonly Limit[]): (LimitAccountName | null)[] {
+  const keysByHarness = new Map<WorkbenchHarness, Set<string>>();
+  limits.forEach((limit, index) => {
+    keysByHarness.set(limit.harness, (keysByHarness.get(limit.harness) ?? new Set()).add(accountKey(limit, index)));
+  });
+  const full = (limit: Limit) => limit.account
+    ? limit.account.label ?? `account ${limit.account.key.slice(0, 4)}`
+    : "unknown account";
+  return limits.map((limit) => {
+    if ((keysByHarness.get(limit.harness)?.size ?? 0) < 2) return null;
+    const name = full(limit);
+    if (!limit.account?.label) return { short: name, full: name };
+    const others = [...new Set(limits.filter((other) => other.harness === limit.harness && other.account?.label
+      && other.account.key !== limit.account?.key).map((other) => other.account!.label!))];
+    let length = 1;
+    while (length < name.length && others.some((other) => other.startsWith(name.slice(0, length)))) length++;
+    return { short: `${name.slice(0, length)}***`, full: name };
+  });
+}
+
+/** Each account follows its limit with the longest window; windows without a duration cannot scale. */
 export function providerWeeklyUsage(limits: readonly Limit[], buckets: StatsLimitBuckets) {
-  const chosen = new Map<WorkbenchHarness, { limit: Limit; kind: WindowKind; durationMinutes: number }>();
-  for (const limit of limits) {
+  const names = limitAccountNames(limits);
+  const chosen = new Map<string, { harness: WorkbenchHarness; name: LimitAccountName | null; limit: Limit; kind: WindowKind; durationMinutes: number }>();
+  limits.forEach((limit, index) => {
     const window = largestLimitWindow(limit);
-    if (!window?.durationMinutes) continue;
-    const current = chosen.get(limit.harness);
+    if (!window?.durationMinutes) return;
+    const key = accountKey(limit, index);
+    const current = chosen.get(key);
     if (!current || window.durationMinutes > current.durationMinutes) {
-      chosen.set(limit.harness, { limit, kind: window.kind, durationMinutes: window.durationMinutes });
+      chosen.set(key, { harness: limit.harness, name: names[index] ?? null, limit, kind: window.kind, durationMinutes: window.durationMinutes });
     }
-  }
-  return [...chosen].sort(([left], [right]) => left.localeCompare(right)).map(([harness, { limit, kind, durationMinutes }]) => ({
-    harness,
+  });
+  return [...chosen].sort(([left], [right]) => left.localeCompare(right)).map(([key, { harness, name, limit, kind, durationMinutes }]) => ({
+    key, harness, name,
     values: limitUsageByBucket(limit.samples, kind, buckets).map((value) => value === null ? null : value * durationMinutes / WEEK_MINUTES),
   }));
 }

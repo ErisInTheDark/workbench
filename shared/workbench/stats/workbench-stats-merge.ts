@@ -4,8 +4,9 @@
  * - StatsMergeContext: maps a daemon's physical project onto its logical project and tells multi-root workspaces apart.
  * - mergeStatsSections: combine one section from every daemon into a single answer whose rows name their daemon.
  */
-import type {
-  WorkbenchStatsImportProgress, WorkbenchStatsResponse, WorkbenchStatsSection, WorkbenchStatsSectionData,
+import {
+  WORKBENCH_STATS_MAX_LIMIT_SAMPLES,
+  type WorkbenchStatsImportProgress, type WorkbenchStatsResponse, type WorkbenchStatsSection, type WorkbenchStatsSectionData,
 } from "./workbench-stats-contract.ts";
 import { WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT } from "./workbench-stats-feedback-contract.ts";
 
@@ -159,13 +160,35 @@ function mergeUsage(sources: readonly StatsMergeSource<Section<"usage">>[], cont
   };
 }
 
-/** One account seen from two machines reports the same limits; the freshest reading wins. */
+type RateSample = Section<"limits">["rateLimits"][number]["samples"][number];
+
+/** Keeps the newest sample in each of `limit` even slices of the span, so a union stays as long as one answer may be. */
+function thinSamples(samples: readonly RateSample[], limit: number) {
+  if (samples.length <= limit) return [...samples];
+  const first = samples[0]!.observedAt;
+  const span = samples.at(-1)!.observedAt - first + 1;
+  const kept = new Map<number, RateSample>();
+  for (const sample of samples) kept.set(Math.floor((sample.observedAt - first) / span * limit), sample);
+  return [...kept.values()];
+}
+
+/**
+ * The same account seen from several machines is one history, so its samples union. Different accounts stay apart, and
+ * limits without a known account stay with the machine that read them, since nothing says whose they are.
+ */
 function mergeLimits(sources: readonly StatsMergeSource<Section<"limits">>[]): Section<"limits"> {
   const series = new Map<string, Section<"limits">["rateLimits"][number]>();
-  for (const limit of sources.flatMap(({ data }) => data.rateLimits)) {
-    const key = `${limit.harness}\0${limit.limitId}`;
+  for (const { daemonId, data } of sources) for (const limit of data.rateLimits) {
+    const key = `${limit.harness}\0${limit.account?.key ?? `machine:${daemonId}`}\0${limit.limitId}`;
     const current = series.get(key);
-    if (!current || (limit.samples.at(-1)?.observedAt ?? 0) > (current.samples.at(-1)?.observedAt ?? 0)) series.set(key, limit);
+    if (!current) {
+      series.set(key, { ...limit, samples: [...limit.samples] });
+      continue;
+    }
+    const byTime = new Map([...current.samples, ...limit.samples].map((sample) => [sample.observedAt, sample]));
+    current.samples = thinSamples([...byTime.values()].sort((left, right) => left.observedAt - right.observedAt), WORKBENCH_STATS_MAX_LIMIT_SAMPLES);
+    current.limitName ??= limit.limitName;
+    if (current.account && limit.account?.label) current.account = { ...current.account, label: limit.account.label };
   }
   return { ...frameSource(sources).data, generatedAt: Math.max(...sources.map(({ data }) => data.generatedAt)), rateLimits: [...series.values()] };
 }

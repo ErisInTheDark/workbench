@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - claudeAccountLimits: map Claude plan usage windows into the shared account-limit contract.
+ * - claudeAccountLimits: map Claude plan usage windows and the signed-in account into the shared account-limit contract.
  * - default ClaudeConfigurationController: read Claude Code model choices, context window bounds and defaults, and plan usage through idle control queries.
  */
-import { query, type ModelInfo, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type AccountInfo, type ModelInfo, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import providerAccountFingerprint from "../provider-account-fingerprint";
 import type { WorkbenchModelContextCapability } from "workbench-shared/types";
 import type { WorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import type { WorkbenchAccountLimits, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
@@ -49,7 +50,18 @@ function usageWindow(value: ClaudeUsageWindow, windowDurationMins: number): Work
   };
 }
 
-export function claudeAccountLimits(usage: Pick<ClaudeUsage, "rate_limits" | "subscription_type">): WorkbenchAccountLimits {
+/** A login is its email within its organization; API keys and cloud backends report no account. */
+function claudeIdentity(account: AccountInfo | null) {
+  const email = account?.email?.trim();
+  if (!email) return null;
+  const identifying = `${email.toLowerCase()}\0${account?.organization ?? ""}`;
+  return { fingerprint: providerAccountFingerprint("claude", identifying), label: email };
+}
+
+export function claudeAccountLimits(
+  usage: Pick<ClaudeUsage, "rate_limits" | "subscription_type">,
+  account: AccountInfo | null = null,
+): WorkbenchAccountLimits {
   const limits = usage.rate_limits;
   const extra = limits?.extra_usage?.is_enabled
     ? usageWindow({ utilization: limits.extra_usage.utilization, resets_at: null }, 43_200) : null;
@@ -73,6 +85,7 @@ export function claudeAccountLimits(usage: Pick<ClaudeUsage, "rate_limits" | "su
       rateLimitReachedType: Object.entries(windows).find(([, window]) => window && window.usedPercent >= 100)?.[0] ?? null,
     },
     rateLimitsByLimitId: null,
+    identity: claudeIdentity(account),
   };
 }
 
@@ -200,9 +213,11 @@ export default class ClaudeConfigurationController {
 
   /** Concurrent reads share one control process. */
   accountLimits(): Promise<WorkbenchAccountLimits> {
-    this.limitsRead ??= this.withControlQuery("Claude account limits", sdkQuery =>
-      sdkQuery.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }))
-      .then(claudeAccountLimits)
+    this.limitsRead ??= this.withControlQuery("Claude account limits", sdkQuery => Promise.all([
+      sdkQuery.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }),
+      sdkQuery.accountInfo(),
+    ]))
+      .then(([usage, account]) => claudeAccountLimits(usage, account))
       .finally(() => { this.limitsRead = null; });
     return this.limitsRead;
   }

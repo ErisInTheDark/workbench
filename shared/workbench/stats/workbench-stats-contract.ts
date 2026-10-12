@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_STATS_IMPORT_UPDATED_METHOD: pushed import progress notification method.
+ * - WORKBENCH_STATS_MAX_LIMIT_SAMPLES: most samples one limit series may carry.
  * - WorkbenchStatsImportProgressSchema/WorkbenchStatsImportProgress: split usage and Git history import progress.
  * - EMPTY_WORKBENCH_STATS_IMPORT_PROGRESS: idle progress before any import ran.
  * - WorkbenchStatsHydrationResultSchema/WorkbenchStatsHydrationResult: one harness hydration result.
@@ -24,6 +25,7 @@ const boundedText = z.string().max(500);
 const count = z.number().int().nonnegative();
 const modelName = z.string().min(1).max(200);
 const MAX_GRAPH_BUCKETS = 90;
+export const WORKBENCH_STATS_MAX_LIMIT_SAMPLES = 2_000;
 
 export const WORKBENCH_STATS_IMPORT_UPDATED_METHOD = "workbench/stats/import/updated";
 
@@ -201,6 +203,8 @@ const UsageSectionSchema = section("usage", {
 /** Plan limits are account-wide and current, so they ignore scope and period and always span the whole range. */
 const LimitsSectionSchema = section("limits", {
   rateLimits: z.array(z.object({
+    /** The account the limits belong to: a one-way key and a private label; absent when the provider could not say. */
+    account: z.object({ key: z.string().min(1).max(64), label: z.string().max(320).nullable() }).strict().nullish(),
     harness,
     limitId: z.string().min(1),
     limitName: z.string().nullable(),
@@ -209,7 +213,7 @@ const LimitsSectionSchema = section("limits", {
       primary: RateWindowSchema.nullable(),
       secondary: RateWindowSchema.nullable(),
       tertiary: RateWindowSchema.nullable(),
-    }).strict()).max(2_000),
+    }).strict()).max(WORKBENCH_STATS_MAX_LIMIT_SAMPLES),
   }).strict()).max(100),
 });
 

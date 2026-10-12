@@ -1,5 +1,6 @@
 /*
- * No production exports. Tests protect cumulative token arithmetic/filtering, distinct claimants, pricing attribution, and nullable rate windows.
+ * No production exports. Tests protect cumulative token arithmetic/filtering, distinct claimants, pricing attribution, nullable rate
+ * windows, and per-account limit history.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -618,6 +619,36 @@ test("rate limits preserve a tertiary account window", () => {
     });
     const sample = repository.read({ projectIds: null, range: "7d", section: "limits" }, now).rateLimits[0]?.samples[0];
     assert.equal(sample?.tertiary?.usedPercent, 56);
+  } finally {
+    database.close();
+  }
+});
+
+test("each account keeps its own limit history, and readings before an account was known join the next account named", () => {
+  const database = createDatabase();
+  try {
+    const repository = new WorkbenchStatsRepository(database);
+    const now = Date.UTC(2026, 8, 4, 12);
+    const reading = (observedAt: number, usedPercent: number, account: { fingerprint: string; label: string | null } | null) => {
+      repository.recordRateLimits({
+        account, harness: "codex", observedAt,
+        snapshots: [{ limitId: "codex", limitName: null, primary: { durationMinutes: 10_080, resetsAt: now, usedPercent }, secondary: null }],
+      });
+    };
+    const personal = { fingerprint: "a".repeat(32), label: "me@example.com" };
+    const work = { fingerprint: "b".repeat(32), label: "work@example.com" };
+    reading(now - 5_000, 10, null);
+    reading(now - 4_000, 20, personal);
+    // The other account at the same moment and level still records: its history is separate.
+    reading(now - 4_000, 20, work);
+    reading(now - 3_000, 30, null);
+    reading(now - 2_000, 40, work);
+    const limits = repository.read({ projectIds: null, range: "7d", section: "limits" }, now).rateLimits;
+    const used = (key: string) => limits.find(({ account }) => account?.key === key)?.samples.map((sample) => sample.primary?.usedPercent);
+    assert.equal(limits.length, 2);
+    assert.deepEqual(used(personal.fingerprint), [10, 20]);
+    assert.deepEqual(used(work.fingerprint), [20, 30, 40]);
+    assert.equal(limits.find(({ account }) => account?.key === work.fingerprint)?.account?.label, "work@example.com");
   } finally {
     database.close();
   }

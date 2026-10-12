@@ -27,6 +27,7 @@ const DAY_MS = 86_400_000;
 const PROVIDER_TEXT: Partial<Record<WorkbenchHarness, string>> = {
   claude: "text-hue-40", codex: "text-hue-170", copilot: "text-hue-260", opencode: "text-hue-210",
 };
+const SPARE_TEXT = ["text-hue-320", "text-hue-100", "text-hue-290", "text-hue-130"] as const;
 
 type ActivityMeasure = StatsActivityMetric | "usage";
 const MEASURES: ReadonlyArray<{ label: string; title?: string; value: ActivityMeasure }> = [
@@ -67,8 +68,12 @@ export default function WorkbenchStatsActivity() {
     ? new Date(startedAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", weekday: "short" })
     : formatStatsBucket(startedAt, unit);
   const series = planUsage
-    ? providerWeeklyUsage(limits?.rateLimits ?? [], fine)
-      .map(({ harness, values }) => ({ key: harness, label: providerLabel(harness), textClassName: PROVIDER_TEXT[harness] ?? "text-hue-320", values }))
+    ? providerWeeklyUsage(limits?.rateLimits ?? [], fine).map(({ key, harness, name, values }, index, all) => {
+      // A provider's first account keeps its colour; further accounts take the spare hues.
+      const sameProviderBefore = all.slice(0, index).filter((other) => other.harness === harness).length;
+      const textClassName = (sameProviderBefore ? undefined : PROVIDER_TEXT[harness]) ?? SPARE_TEXT[index % SPARE_TEXT.length]!;
+      return { key, label: name ? `${providerLabel(harness)} · ${name.short}` : providerLabel(harness), textClassName, values };
+    })
     : shown.map((entry) => ({
       key: entry.key, label: entry.label, textClassName: entry.textClassName,
       values: metric === "cost"

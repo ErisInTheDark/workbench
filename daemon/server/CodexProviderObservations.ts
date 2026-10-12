@@ -148,6 +148,7 @@ export default class CodexProviderObservations {
     return {
       ...(notification.method === "account/rateLimits/updated"
         ? { accountLimits: WorkbenchRateLimitSnapshotSchema.parse(params?.rateLimits) } : {}),
+      ...(notification.method === "account/updated" ? { accountChanged: true as const } : {}),
       ...(identity ? { projectId: identity.projectId } : {}),
       lifecycle: mapProviderLifecycleNotification(notification, this.owners.threads),
       turnStarted: mapProviderTurnStartedNotification(notification, this.owners.threads),

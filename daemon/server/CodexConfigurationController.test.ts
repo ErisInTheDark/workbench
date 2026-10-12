@@ -58,8 +58,9 @@ test("local context failure preserves provider choices while provider failure pr
 
 test("account translation preserves quota units and accepts newly named plan types", async () => {
   const controller = new CodexConfigurationController({
-    request: async (_method, _params, scheduling?: { background?: boolean }) => {
+    request: async (method, _params, scheduling?: { background?: boolean }) => {
       assert.equal(scheduling?.background, true, "Quota refresh must retain background scheduling");
+      if (method === "account/read") return { account: { type: "chatgpt", planType: "plus", email: "Me@Example.com" } };
       return {
         rateLimits: {
           limitId: "primary", limitName: null,
@@ -75,4 +76,17 @@ test("account translation preserves quota units and accepts newly named plan typ
   assert.deepEqual(result.rateLimits.primary, { usedPercent: 37, windowDurationMins: 180, resetsAt: 12345 });
   assert.equal(result.rateLimits.planType, "future-plan");
   assert.equal(result.rateLimits.spendControlReached, null);
+  // The signed-in email names the account privately; its fingerprint never contains it.
+  assert.equal(result.identity?.label, "Me@Example.com");
+  assert.doesNotMatch(result.identity?.fingerprint ?? "", /example/iu);
+});
+
+test("an API-key Codex account reports limits without an identity", async () => {
+  const controller = new CodexConfigurationController({
+    request: async (method) => method === "account/read"
+      ? { account: { type: "apiKey" } }
+      : { rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null }, rateLimitsByLimitId: null },
+    warn: message => assert.fail(message),
+  });
+  assert.equal((await controller.accountLimits()).identity, null);
 });

@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchRateLimitWindowSchema/WorkbenchRateLimitWindow: quota usage and reset time.
  * - WorkbenchRateLimitSnapshotSchema/WorkbenchRateLimitSnapshot: account display facts.
- * - WorkbenchAccountLimitsSchema/WorkbenchAccountLimits: default and named quota snapshots.
+ * - WorkbenchAccountIdentitySchema/WorkbenchAccountIdentity: which signed-in account a limits read belongs to.
+ * - WorkbenchAccountLimitsSchema/WorkbenchAccountLimits: default and named quota snapshots, with their account.
  */
 import { z } from "zod";
 
@@ -29,9 +30,18 @@ export const WorkbenchRateLimitSnapshotSchema = z.object({
 });
 export type WorkbenchRateLimitSnapshot = z.infer<typeof WorkbenchRateLimitSnapshotSchema>;
 
+/** Which account the limits belong to: a one-way fingerprint that tells accounts apart, and an optional private display label. */
+export const WorkbenchAccountIdentitySchema = z.object({
+  fingerprint: z.string().regex(/^[0-9a-f]{16,64}$/u),
+  label: z.string().min(1).max(320).nullable(),
+});
+export type WorkbenchAccountIdentity = z.infer<typeof WorkbenchAccountIdentitySchema>;
+
 export const WorkbenchAccountLimitsSchema = z.object({
   preferredLimitId: z.string().nullable().default(null),
   rateLimits: WorkbenchRateLimitSnapshotSchema,
   rateLimitsByLimitId: z.record(z.string(), WorkbenchRateLimitSnapshotSchema).nullable(),
+  /** Absent or null when the provider cannot say which account is signed in. */
+  identity: WorkbenchAccountIdentitySchema.nullish(),
 });
 export type WorkbenchAccountLimits = z.infer<typeof WorkbenchAccountLimitsSchema>;

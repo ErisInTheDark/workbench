@@ -67,6 +67,8 @@ export type WorkbenchProviderLifecycleEvent =
 
 export type WorkbenchProviderObservation = {
   accountLimits?: WorkbenchRateLimitSnapshot;
+  /** The provider signed in or out, so limits it reports next may belong to another account. */
+  accountChanged?: true;
   projectId?: ProjectId;
   lifecycle: { event: WorkbenchProviderLifecycleEvent; threadId: WorkbenchThreadId } | null;
   /** Orders the sidebar thread only; activity time is owned by admitted transcript items. */

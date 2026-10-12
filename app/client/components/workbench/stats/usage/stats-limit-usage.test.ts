@@ -1,11 +1,12 @@
 /*
  * No production exports. Protect that limit use is inferred only from climbs within one window (stale and older-window
- * readings never count), spreads over the time it accrued, nests fine buckets inside days, and scales to a week of allowance.
+ * readings never count), spreads over the time it accrued, nests fine buckets inside days, scales to a week of allowance, and
+ * names accounts privately per provider.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { currentLimitWindow, limitResolution, limitUsageByBucket, providerWeeklyUsage } from "./stats-limit-usage";
+import { currentLimitWindow, limitAccountNames, limitResolution, limitUsageByBucket, providerWeeklyUsage } from "./stats-limit-usage";
 
 const hour = 3_600_000;
 const day = 24 * hour;
@@ -60,6 +61,25 @@ test("fine buckets stay as fine as the budget allows and nest inside days", () =
     assert.ok(count <= 720);
     assert.equal(day % bucketMs, 0);
   }
+});
+
+test("accounts are named only beside their provider's other accounts, masked to the shortest start that tells them apart", () => {
+  const account = (key: string, label: string | null) => ({
+    account: { key, label }, harness: "codex", limitId: "codex", limitName: null, samples: [sample(0.1 * hour, 1), sample(0.5 * hour, 4)],
+  });
+  const limits = [
+    account("a1b2c3", "chiri@example.com"), account("d4e5f6", "claude@example.com"), account("9f9f9f", null),
+    { ...account("solo", "solo@example.com"), harness: "claude" },
+  ];
+  assert.deepEqual(limitAccountNames(limits), [
+    { short: "ch***", full: "chiri@example.com" },
+    { short: "cl***", full: "claude@example.com" },
+    { short: "account 9f9f", full: "account 9f9f" },
+    null,
+  ]);
+  const usage = providerWeeklyUsage(limits, hours);
+  assert.equal(new Set(usage.map(({ key }) => key)).size, 4);
+  assert.deepEqual(usage.find(({ name }) => name?.full === "chiri@example.com")?.values.map((value) => value === null ? null : Math.round(value)), [3, 0, 0, 0, 0, 0]);
 });
 
 test("each provider follows its longest window, scaled to a week of that allowance", () => {

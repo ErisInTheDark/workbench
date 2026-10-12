@@ -1,9 +1,9 @@
-/* No production exports. Protect cross-machine stats merging: bucket alignment, logical project grouping, limit dedupe, root-agnostic claims, attached-daemon tool prices, and thread re-indexing. */
+/* No production exports. Protect cross-machine stats merging: bucket alignment, logical project grouping, per-account limit histories, root-agnostic claims, attached-daemon tool prices, and thread re-indexing. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { EMPTY_WORKBENCH_STATS_SECTIONS as EMPTY } from "./workbench-stats-conformance.ts";
-import type { WorkbenchStatsSectionData } from "./workbench-stats-contract.ts";
+import { WORKBENCH_STATS_MAX_LIMIT_SAMPLES, type WorkbenchStatsSectionData } from "./workbench-stats-contract.ts";
 import { mergeStatsSections, type StatsMergeContext, type StatsMergeSource } from "./workbench-stats-merge.ts";
 
 // "here" and "there" hold the same repository under different physical ids and root names.
@@ -36,13 +36,38 @@ test("usage sums aligned buckets, groups one repository's machines as one projec
   assert.deepEqual(merged.topThreads.map(({ daemonId, sharePercent, threadId }) => [threadId, daemonId, sharePercent]), [["b", "there", 75], ["a", "here", 25]]);
 });
 
-test("limits keep the freshest reading of each account limit", () => {
-  const limit = (observedAt: number) => ({ harness: "claude", limitId: "max", limitName: null, samples: [{ observedAt, primary: null, secondary: null, tertiary: null }] });
+const limit = (key: string | null, ...observedAt: number[]) => ({
+  account: key ? { key, label: null } : null, harness: "codex", limitId: "codex", limitName: null,
+  samples: observedAt.map((at) => ({ observedAt: at, primary: null, secondary: null, tertiary: null })),
+});
+const times = (merged: WorkbenchStatsSectionData<"limits">) => merged.rateLimits.map(({ account, samples }) => [account?.key ?? null, samples.map(({ observedAt }) => observedAt)]);
+
+test("one account seen from two machines is one history; different accounts never replace each other", () => {
   const merged = merge<"limits">([
-    source("here", { ...EMPTY.limits, rateLimits: [limit(5)] }, true),
-    source("there", { ...EMPTY.limits, rateLimits: [limit(9)] }),
+    source("here", { ...EMPTY.limits, rateLimits: [limit("personal", 1, 5), limit("work", 2)] }, true),
+    source("there", { ...EMPTY.limits, rateLimits: [limit("personal", 3, 5, 9)] }),
   ]);
-  assert.deepEqual(merged.rateLimits.map(({ samples }) => samples[0]!.observedAt), [9]);
+  assert.deepEqual(times(merged), [["personal", [1, 3, 5, 9]], ["work", [2]]]);
+});
+
+test("limits with no known account stay with the machine that read them", () => {
+  const merged = merge<"limits">([
+    source("here", { ...EMPTY.limits, rateLimits: [limit(null, 5)] }, true),
+    source("there", { ...EMPTY.limits, rateLimits: [limit(null, 9)] }),
+  ]);
+  assert.deepEqual(times(merged), [[null, [5]], [null, [9]]]);
+});
+
+test("a merged history thins evenly to the most one limit may carry, keeping its newest reading", () => {
+  const many = (offset: number) => Array.from({ length: WORKBENCH_STATS_MAX_LIMIT_SAMPLES }, (_, index) => index * 2 + offset);
+  const merged = merge<"limits">([
+    source("here", { ...EMPTY.limits, rateLimits: [limit("personal", ...many(0))] }, true),
+    source("there", { ...EMPTY.limits, rateLimits: [limit("personal", ...many(1))] }),
+  ]);
+  const samples = merged.rateLimits[0]!.samples;
+  assert.ok(samples.length <= WORKBENCH_STATS_MAX_LIMIT_SAMPLES);
+  assert.ok(samples.length > WORKBENCH_STATS_MAX_LIMIT_SAMPLES * 0.9);
+  assert.equal(samples.at(-1)!.observedAt, WORKBENCH_STATS_MAX_LIMIT_SAMPLES * 2 - 1);
 });
 
 test("claims on one repository merge by path across machines with different root ids, linking to the attached copy", () => {

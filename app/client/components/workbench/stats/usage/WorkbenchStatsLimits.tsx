@@ -1,16 +1,24 @@
+"use client";
+
 /*
  * Exports:
- * - default WorkbenchStatsLimits: a wrapping row of account-limit cards showing what is left per window against even rationing,
- *   with the longest window's use over time folded into a history sparkline.
+ * - default WorkbenchStatsLimits: a wrapping row of limit cards, one per account, showing what is left per window against even
+ *   rationing, with the longest window's use over time folded into a history sparkline.
  */
+import { useState } from "react";
 import { statsRangeShape, type WorkbenchStatsSectionData } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import { formatRateLimitIdentity, formatRateLimitWindowLabel } from "../../../../workbench/rate-limit-display";
 import useStats from "../use-stats";
+import IconButton from "../../../ui/IconButton";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import Sparkline from "../../../ui/Sparkline";
+import { EyeIcon, EyeOffIcon } from "../../workbench-icons";
 import { formatPercent } from "../stats-formatters";
 import StatsLoading from "../StatsLoading";
-import { LIMIT_WINDOW_KINDS, currentLimitWindow, largestLimitWindow, limitResolution, limitUsageByBucket } from "./stats-limit-usage";
+import {
+  LIMIT_WINDOW_KINDS, currentLimitWindow, largestLimitWindow, limitAccountNames, limitResolution, limitUsageByBucket,
+  type LimitAccountName, type StatsLimitBuckets,
+} from "./stats-limit-usage";
 import WorkbenchStatsLimitMeter from "./WorkbenchStatsLimitMeter";
 
 type Limit = WorkbenchStatsSectionData<"limits">["rateLimits"][number];
@@ -37,12 +45,66 @@ function observedAgo(observedAt: number, now: number) {
   return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
+/** One account's limit. Its name shows only beside the provider's other accounts, masked until revealed. */
+function LimitCard({ limit, name, now, resolution }: {
+  limit: Limit; name: LimitAccountName | null; now: number; resolution: StatsLimitBuckets;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  const windows = currentWindows(limit);
+  const latest = limit.samples.at(-1)!;
+  const largest = largestLimitWindow(limit);
+  const largestLabel = windows.find(({ kind }) => kind === largest?.kind)?.label;
+  const used = largest ? limitUsageByBucket(limit.samples, largest.kind, resolution) : [];
+  const peak = Math.max(0, ...used.map((value) => value ?? 0));
+  const masked = name !== null && name.short !== name.full;
+  return (
+    <div className="min-w-0 flex-[1_1_15rem] space-y-2 sm:max-w-[24rem]">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="m-0 flex min-w-0 items-center gap-1 text-[0.84rem] font-semibold text-text">
+          <span className="truncate">
+            {formatRateLimitIdentity(limit.harness, limit.limitId, limit.limitName)}
+            {name ? <span className="font-normal text-fg/muted"> · {revealed ? name.full : name.short}</span> : null}
+          </span>
+          {masked ? (
+            <IconButton
+              aria-pressed={revealed} display="hover-border" label={revealed ? "Hide account" : "Show account"}
+              onClick={() => setRevealed(!revealed)} size="compact"
+            >
+              {revealed ? <EyeOffIcon size={14} /> : <EyeIcon size={14} />}
+            </IconButton>
+          ) : null}
+        </h3>
+        <span className="shrink-0 text-[0.68rem] text-fg/muted">updated {observedAgo(latest.observedAt, now)}</span>
+      </div>
+      <ul className="m-0 space-y-2 p-0 [--hue-chroma:60%]">
+        {windows.map(({ kind, window, label }) => (
+          <li className="list-none" key={kind}>
+            <WorkbenchStatsLimitMeter label={label} now={now} window={window} />
+          </li>
+        ))}
+      </ul>
+      {used.filter((value) => value !== null).length > 1 ? (
+        <details className="text-[0.72rem] text-fg/muted">
+          <summary className="w-fit cursor-pointer rounded-md px-1 hover:bg-fg/6 hover:text-text">History</summary>
+          <div
+            className="relative mt-1 h-12 [--hue-chroma:50%]"
+            title={`${largestLabel} used per ${formatDuration(resolution.bucketMs)}, peak ${formatPercent(peak)}`}
+          >
+            <Sparkline className="text-hue-210" values={used} />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 /** Account-wide plan limits, so they ignore the scope and period every other panel follows. */
 export default function WorkbenchStatsLimits() {
   const { range } = useStats();
   const { data, loading, refining } = useStats.limits();
   const now = data?.generatedAt ?? 0;
   const limits = (data?.rateLimits ?? []).filter((limit) => currentWindows(limit).length);
+  const names = limitAccountNames(limits);
   const resolution = limitResolution(statsRangeShape(range, now).startedAt, now);
   // Machines answer one by one; until the last does, the cards shown are incomplete.
   const pending = Boolean(data) && (loading || refining);
@@ -68,42 +130,12 @@ export default function WorkbenchStatsLimits() {
         <p className={`m-0 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No limit readings yet. They appear after a provider reports its plan usage.</p>
       ) : (
         <div className={`flex flex-wrap gap-x-8 gap-y-5 ${statsRevealClassName} ${statsReloadingClassName(pending)}`}>
-          {limits.map((limit) => {
-            const windows = currentWindows(limit);
-            const latest = limit.samples.at(-1)!;
-            const largest = largestLimitWindow(limit);
-            const largestLabel = windows.find(({ kind }) => kind === largest?.kind)?.label;
-            const used = largest ? limitUsageByBucket(limit.samples, largest.kind, resolution) : [];
-            const peak = Math.max(0, ...used.map((value) => value ?? 0));
-            return (
-              <div className="min-w-0 flex-[1_1_15rem] space-y-2 sm:max-w-[24rem]" key={`${limit.harness}:${limit.limitId}`}>
-                <div className="flex items-baseline justify-between gap-2">
-                  <h3 className="m-0 truncate text-[0.84rem] font-semibold text-text">
-                    {formatRateLimitIdentity(limit.harness, limit.limitId, limit.limitName)}
-                  </h3>
-                  <span className="shrink-0 text-[0.68rem] text-fg/muted">updated {observedAgo(latest.observedAt, now)}</span>
-                </div>
-                <ul className="m-0 space-y-2 p-0 [--hue-chroma:60%]">
-                  {windows.map(({ kind, window, label }) => (
-                    <li className="list-none" key={kind}>
-                      <WorkbenchStatsLimitMeter label={label} now={now} window={window} />
-                    </li>
-                  ))}
-                </ul>
-                {used.filter((value) => value !== null).length > 1 ? (
-                  <details className="text-[0.72rem] text-fg/muted">
-                    <summary className="w-fit cursor-pointer rounded-md px-1 hover:bg-fg/6 hover:text-text">History</summary>
-                    <div
-                      className="relative mt-1 h-12 [--hue-chroma:50%]"
-                      title={`${largestLabel} used per ${formatDuration(resolution.bucketMs)}, peak ${formatPercent(peak)}`}
-                    >
-                      <Sparkline className="text-hue-210" values={used} />
-                    </div>
-                  </details>
-                ) : null}
-              </div>
-            );
-          })}
+          {limits.map((limit, index) => (
+            <LimitCard
+              key={`${limit.harness}:${limit.account?.key ?? `unknown-${index}`}:${limit.limitId}`}
+              limit={limit} name={names[index] ?? null} now={now} resolution={resolution}
+            />
+          ))}
         </div>
       )}
     </section>

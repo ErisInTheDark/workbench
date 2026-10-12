@@ -84,6 +84,7 @@ const databaseReleases = Object.freeze({
   boundedPayloadRetention: release(74, "0b8b95e9e54103f888595c009337c3b1dc200b7bd3ff6b6534761fa97f3bf20b"),
   threadVisContextsAndAnswers: release(75, "1a4ccfdd2928eb9f9987d83abd4414d258de835ff02130a40873e5ed0d328a08"),
   execRoots: release(76, "94edfd3cb0a08668eef7d37f76e8e1390cd8a3dd620ca513dd16b883266d1abb"),
+  rateLimitAccounts: release(77, "08addd0e891244523c75ca353b017cacb85d2f421e04ff46ceaeea6c21cff15d"),
 });
 
 export default databaseReleases;
