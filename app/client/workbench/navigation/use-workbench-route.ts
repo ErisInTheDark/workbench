@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - canCanonicalizeWorkbenchRoute: keep launch URLs intact until browser app state has loaded.
  * - useWorkbenchRoute: derive routes from browser history and expose guarded canonical navigation.
  * - useWorkbenchRouteIntent: apply one URL-derived route intent and its canonical replacement.
  */
@@ -22,6 +23,10 @@ import {
 import { LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/workbench/identity";
 
 const emptySubscribe = (_listener: () => void) => () => {};
+
+export function canCanonicalizeWorkbenchRoute(pathname: string, stateSchemaVersion: number) {
+  return pathname !== "/launch" || stateSchemaVersion > 0;
+}
 
 export function useWorkbenchRoute(client: WorkbenchClientController) {
   const state = useWorkbenchClientStateController();
@@ -84,6 +89,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     // Prefer the catalogue once available, including when an old junction URL
     // was opened directly. Never replace newer user navigation.
     if (!client.controls || `${window.location.pathname}${window.location.search}` !== locationSnapshot) return;
+    if (!canCanonicalizeWorkbenchRoute(pathname, stateSnapshot.schemaVersion)) return;
     if (pathname === "/launch") {
       navigateToRoute(route, { replace: true });
       return;
@@ -94,7 +100,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     if (pathname !== "/" && pathname !== "/@/" && canonicalPath !== pathname) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
     }
-  }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route]);
+  }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route, stateSnapshot.schemaVersion]);
 
   const selectedProjectIdsKey = route.selectedProjectIds === null
     ? "unfiltered"
