@@ -1090,6 +1090,7 @@ export default memo(function ThreadViewContent ({
 
         <div
           hidden={isDraftThreadView}
+          data-thread-transcript="true"
           className={isDraftThreadView
             ? undefined
             : "col-start-1 row-start-1 flex min-w-0 flex-col justify-end"}

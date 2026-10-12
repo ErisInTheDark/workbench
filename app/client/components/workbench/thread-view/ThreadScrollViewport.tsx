@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change, and gesture-safe correction.
+ * - default ThreadScrollViewport: own normal-flow end snapping, initial end placement, the reader's anchored position across every layout change, gesture-safe correction, and clipping content above unrevealed history.
  * - ThreadScrollViewportEnd: register the committed end of the nearest scroll viewport.
  */
 "use client";
@@ -82,6 +82,27 @@ function hasThreadContentAbove (content: HTMLElement) {
     || Boolean(content.querySelector("[data-thread-progressive-window]")?.hasAttribute("data-thread-progressive-hidden"));
 }
 
+// Only the top edge clips; the other edges sit far out so overflowing popovers and shadows stay visible.
+const THREAD_REVEAL_CLIP_OUTSET_PX = 100_000;
+
+/**
+ * Everything above the last window still hiding chunks is older than those chunks, so showing it would put
+ * disconnected content above a hole. Clip it until reveals connect it; the reader sees blank, never wrong order.
+ * Only the transcript is clipped: sticky chrome sharing the scroll content must stay visible.
+ */
+function clipAboveRevealFrontier (content: HTMLElement) {
+  const hidden = content.querySelectorAll("[data-thread-progressive-hidden]");
+  const frontier = hidden[hidden.length - 1];
+  const transcript = frontier?.closest<HTMLElement>("[data-thread-transcript]") ?? null;
+  for (const element of content.querySelectorAll<HTMLElement>("[data-thread-transcript]")) {
+    const top = element === transcript && frontier
+      ? frontier.getBoundingClientRect().top - element.getBoundingClientRect().top : 0;
+    const outset = THREAD_REVEAL_CLIP_OUTSET_PX;
+    const clip = top > 0 ? `inset(${top}px -${outset}px -${outset}px -${outset}px)` : "";
+    if (element.style.clipPath !== clip) element.style.clipPath = clip;
+  }
+}
+
 function isInteractiveScrollKeyTarget (target: EventTarget | null) {
   return target instanceof HTMLElement
     && Boolean(target.closest("a,button,input,select,textarea,[contenteditable='true']"));
@@ -108,6 +129,7 @@ function ActiveThreadScrollViewport ({
   const viewportRef = useRef<HTMLDivElement>(null);
   const wasAtEndRef = useRef(true);
   const bottomListeners = useRef(new Set<() => void>());
+  const readerMovedListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
   const progressiveWindowStartsRef = useRef(new Map<string, number>());
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
@@ -215,6 +237,10 @@ function ActiveThreadScrollViewport ({
       bottomListeners.current.add(listener);
       return () => { bottomListeners.current.delete(listener); };
     },
+    onReaderMoved: (listener) => {
+      readerMovedListeners.current.add(listener);
+      return () => { readerMovedListeners.current.delete(listener); };
+    },
     setEndTarget: (target) => {
       endTargetRef.current = target;
       placeInitialViewportAtEnd();
@@ -229,14 +255,21 @@ function ActiveThreadScrollViewport ({
     const content = contentRef.current;
     if (!viewport || !content || typeof ResizeObserver === "undefined") return;
     anchor.record();
+    clipAboveRevealFrontier(content);
     const resize = new ResizeObserver(() => {
       anchor.reconcile();
+      clipAboveRevealFrontier(content);
       placeInitialViewportAtEnd();
       settle.reconcileReserve();
+      readerMovedListeners.current.forEach(listener => listener());
     });
     resize.observe(content);
     resize.observe(viewport);
-    const mutations = new MutationObserver(() => anchor.reconcile());
+    const mutations = new MutationObserver(() => {
+      anchor.reconcile();
+      clipAboveRevealFrontier(content);
+      readerMovedListeners.current.forEach(listener => listener());
+    });
     mutations.observe(content, { childList: true, subtree: true });
     return () => {
       resize.disconnect();
@@ -272,6 +305,7 @@ function ActiveThreadScrollViewport ({
       syncScrollProximity(viewport);
       settle.scrolled();
       anchor.record();
+      readerMovedListeners.current.forEach(listener => listener());
     };
     const handleScrollEnd = () => settle.scrollEnded();
     const handleWheel = (event: WheelEvent) => {

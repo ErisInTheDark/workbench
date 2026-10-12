@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadProgressiveWindowChunk: one stable exact-height transcript chunk.
- * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends as the reader nears them, restoring revealed extent across remounts.
+ * - default ThreadProgressiveWindow: reveal older chunks in bounded prepends as the reader nears or passes them, restoring revealed extent across remounts.
  */
 "use client";
 
@@ -52,19 +52,18 @@ export default function ThreadProgressiveWindow({
     const scrollTarget = viewport.getViewport();
     const sentinel = sentinelRef.current;
     if (!scrollTarget || !sentinel) return null;
-    const viewportRect = scrollTarget.getBoundingClientRect();
-    const sentinelRect = sentinel.getBoundingClientRect();
     return {
       hiddenCount: visibleStartRef.current,
       identity: identityToken,
-      // One screen ahead, so chunks usually land in the reserve before the reader reaches them.
-      nearTop: sentinelRect.bottom > viewportRect.top - scrollTarget.clientHeight
-        && sentinelRect.top < viewportRect.bottom,
+      sentinelBottom: sentinel.getBoundingClientRect().bottom,
       viewport: scrollTarget,
+      viewportHeight: scrollTarget.clientHeight,
+      viewportTop: scrollTarget.getBoundingClientRect().top,
     };
   }, [identityToken, viewport]);
   const reveal = useCallback((count: number) => {
-    setVisibleStart(current => Math.max(0, current - count));
+    // From the bounded start: a chunk list that shrank must not swallow the reveal and leave it pending forever.
+    setVisibleStart(current => Math.max(0, Math.min(current, visibleStartRef.current) - count));
   }, []);
   const bindingsRef = useRef<ProgressiveWindowOptions>({ readView, reveal });
   bindingsRef.current = { readView, reveal };
@@ -80,18 +79,13 @@ export default function ThreadProgressiveWindow({
   useEffect(() => {
     controllerRef.current?.reconcile();
   }, [boundedStart, chunks.length, identityToken]);
+  // Reach is re-checked on every scroll and corrected layout change rather than on threshold crossings: a reveal's
+  // anchor correction or a jump can move the sentinel into reach without any crossing being observed.
+  const hasHidden = boundedStart > 0;
   useEffect(() => {
-    const scrollTarget = viewport.getViewport();
-    const sentinel = sentinelRef.current;
-    if (!scrollTarget || !sentinel) return;
-    const reconcile = () => controllerRef.current?.reconcile();
-    const observer = new IntersectionObserver(reconcile, {
-      root: scrollTarget,
-      rootMargin: "100% 0px 0px",
-    });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [viewport]);
+    if (!hasHidden) return;
+    return viewport.onReaderMoved(() => controllerRef.current?.reconcile());
+  }, [hasHidden, viewport]);
   const visibleChunks = chunks.slice(boundedStart);
   return (
     <div

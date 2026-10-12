@@ -1,15 +1,18 @@
 /*
  * Exports:
- * - ProgressiveWindowView: current progressive-window reach and hidden content count.
+ * - ProgressiveWindowView: current progressive-window geometry and hidden content count.
  * - ProgressiveWindowOptions: reading and revealing boundary.
- * - default ThreadProgressiveWindowController: own bounded prepends while the reader nears the window's top.
+ * - default ThreadProgressiveWindowController: own bounded prepends until a window the reader nears or passed is whole.
  */
 
 export interface ProgressiveWindowView {
   readonly hiddenCount: number;
   readonly identity: object;
-  readonly nearTop: boolean;
+  /** Bottom of the window's top sentinel, in the same client coordinates as `viewportTop`. */
+  readonly sentinelBottom: number;
   readonly viewport: object;
+  readonly viewportHeight: number;
+  readonly viewportTop: number;
 }
 
 export interface ProgressiveWindowOptions {
@@ -18,6 +21,9 @@ export interface ProgressiveWindowOptions {
 }
 
 const REVEAL_BATCH_SIZE = 4;
+/** Content above a hidden window is clipped, so a sentinel on screen means the reader is looking at blank. */
+const URGENT_REVEAL_BATCH_SIZE = 16;
+const REVEAL_LOOKAHEAD_SCREENS = 2;
 
 export default class ThreadProgressiveWindowController {
   readonly #options: ProgressiveWindowOptions;
@@ -30,6 +36,10 @@ export default class ThreadProgressiveWindowController {
     this.#options = options;
   }
 
+  /**
+   * A window the reader scrolled past keeps revealing: stopping once its sentinel leaves the bottom of the viewport
+   * would leave a permanent hole between it and the content above.
+   */
   reconcile() {
     const view = this.#read();
     if (!view) return;
@@ -37,9 +47,11 @@ export default class ThreadProgressiveWindowController {
       if (view.hiddenCount >= this.#pendingHiddenCount) return;
       this.#pendingHiddenCount = null;
     }
-    if (!view.nearTop || view.hiddenCount <= 0) return;
+    if (view.hiddenCount <= 0) return;
+    if (view.sentinelBottom <= view.viewportTop - REVEAL_LOOKAHEAD_SCREENS * view.viewportHeight) return;
+    const batch = view.sentinelBottom > view.viewportTop ? URGENT_REVEAL_BATCH_SIZE : REVEAL_BATCH_SIZE;
     this.#pendingHiddenCount = view.hiddenCount;
-    this.#options.reveal(Math.min(REVEAL_BATCH_SIZE, view.hiddenCount));
+    this.#options.reveal(Math.min(batch, view.hiddenCount));
   }
 
   #read() {
