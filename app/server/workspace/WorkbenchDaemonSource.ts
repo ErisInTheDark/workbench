@@ -29,6 +29,8 @@ import {
   conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed, workbenchTranscriptOperations,
   type WorkbenchTranscriptSubscribeParams, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import type WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
+import { splitWorkbenchTranscriptSnapshot } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 
 export type WorkbenchDaemonTranscriptEvent =
   | { kind: "transcriptSnapshot"; data: WorkbenchTranscriptUpdatedParams }
@@ -96,6 +98,7 @@ export default class WorkbenchDaemonSource {
   private readonly listeners = new Set<() => void>();
   private readonly endpointListeners = new Set<() => void>();
   private readonly unsubscribe: Array<() => void>;
+  private releaseTranscriptReservoir: (() => void) | null = null;
   private disposed = false;
 
   constructor(
@@ -105,6 +108,7 @@ export default class WorkbenchDaemonSource {
       createSocket?: (url: string) => WebSocket;
       /** Answers `wb socket spy` for this daemon; null withholds browser traffic (e.g. from peer daemons). */
       answerSpy?: (query: WebSocketTrafficQuery) => WebSocketTrafficResult | null;
+      transcriptReservoir?: WorkbenchTranscriptReservoir;
     },
   ) {
     this.socket = new WorkbenchSocketClient({
@@ -124,11 +128,16 @@ export default class WorkbenchDaemonSource {
         for (const interest of this.interests.values()) this.publishInterest(interest);
       }),
       this.socket.onConnectionOpen(() => {
+        this.registerTranscriptReservoir();
         for (const interest of this.interests.values()) this.openInterest(interest);
         for (const interest of this.transcripts.values()) {
           interest.failure = null;
           this.openTranscript(interest);
         }
+      }),
+      this.socket.onConnectionClose(() => {
+        this.releaseTranscriptReservoir?.();
+        this.releaseTranscriptReservoir = null;
       }),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === WORKSPACE_DELTA_METHOD) this.receiveDelta(notification.params);
@@ -298,7 +307,8 @@ export default class WorkbenchDaemonSource {
   observeTranscript(input: Omit<WorkbenchTranscriptSubscribeParams, "subscriptionId">,
     publish: (event: WorkbenchDaemonTranscriptEvent) => void) {
     if (this.disposed) throw new Error("Daemon source is closed.");
-    const request = { ...input, protocolVersion: input.protocolVersion === 2 ? 2 as const : 4 as const,
+    const request = { ...input, protocolVersion: input.protocolVersion === 2 ? 2 as const
+      : input.protocolVersion === 5 ? 5 as const : 4 as const,
       toolPatchPreviews: input.toolPatchPreviews === true,
       ...(input.turnIds ? { turnIds: [...new Set(input.turnIds)].sort() } : {}) };
     let interest = [...this.transcripts.values()].find(item => areDeeplyEqual(item.request, request));
@@ -358,6 +368,8 @@ export default class WorkbenchDaemonSource {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.releaseTranscriptReservoir?.();
+    this.releaseTranscriptReservoir = null;
     this.socket.dispose();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     for (const interest of this.interests.values()) {
@@ -373,6 +385,36 @@ export default class WorkbenchDaemonSource {
     this.leases.clear();
     this.listeners.clear();
     this.endpointListeners.clear();
+  }
+
+  private registerTranscriptReservoir() {
+    const reservoir = this.options.transcriptReservoir;
+    if (!reservoir) return;
+    this.releaseTranscriptReservoir?.();
+    const generation = this.socket.getSnapshot().generation;
+    this.releaseTranscriptReservoir = reservoir.registerSource({
+      daemonId: this.id,
+      generation,
+      prefetch: async (request, signal) => {
+        const result = await this.request(workbenchTranscriptOperations.prefetch.method, request, {}, { signal });
+        const conformed = workbenchTranscriptOperations.prefetch.conformResult(result);
+        if (!conformed.success) {
+          reportClientSchemaError("Rejected daemon transcript prefetch", new z.ZodError(
+            conformed.issues.map(issue => ({
+              code: "custom",
+              input: undefined,
+              message: issue.code,
+              path: [...issue.path],
+            })),
+          ));
+          throw new Error("The daemon returned invalid transcript prefetch data.");
+        }
+        if (conformed.repairedPaths.length) {
+          this.options.warn(`Daemon transcript prefetch required ${conformed.repairedPaths.length} schema repairs.`);
+        }
+        return conformed.data;
+      },
+    });
   }
 
   private readInterest(interest: Interest): WorkbenchDaemonObservationFact {
@@ -440,6 +482,21 @@ export default class WorkbenchDaemonSource {
       if (parsed.repairedPaths.length) this.options.warn(`Daemon transcript snapshot required ${parsed.repairedPaths.length} schema repairs.`);
       event = { kind: "transcriptSnapshot", data: parsed.data };
       baseline = true;
+      if (interest.request.protocolVersion === 5 && parsed.data.snapshot && this.options.transcriptReservoir) {
+        const partition = splitWorkbenchTranscriptSnapshot(parsed.data.snapshot);
+        this.options.transcriptReservoir.seed({
+          daemonId: this.id,
+          generation: this.socket.getSnapshot().generation,
+          replaceTurnIds: parsed.data.snapshot.loadedTurnIds,
+          result: {
+            catalog: partition.catalog,
+            envelopes: partition.envelopes,
+            hasMore: parsed.data.snapshot.hasPreviousTurns,
+            retainedBytes: partition.envelopes.reduce((sum, envelope) => sum + envelope.retainedBytes, 0),
+          },
+          threadId: interest.request.threadId,
+        });
+      }
     } else {
       const parsed = conformWorkbenchTranscriptStreamed(notification.params);
       if (!parsed.success) {

@@ -403,6 +403,15 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "readTranscriptItemRange") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptItemRange",
+      range: transcriptRepository.readItemRange(request.request),
+    });
+    return;
+  }
   if (request.type === "readGitArcProposalDiff" || request.type === "writeGitArcProposalDiff") {
     if (!gitArcProposalDiffRepository) throw new Error("Git arc proposal diff repository is not initialized");
     if (request.type === "readGitArcProposalDiff") {

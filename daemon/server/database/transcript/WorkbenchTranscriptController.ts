@@ -22,12 +22,88 @@ import WorkbenchTranscriptSubscriptionController, {
   type WorkbenchTranscriptSubscription,
 } from "./WorkbenchTranscriptSubscriptionController.ts";
 import type {
+  WorkbenchTranscriptItemCursor,
+  WorkbenchTranscriptPrefetchRequest,
+  WorkbenchTranscriptPrefetchResult,
+  WorkbenchTranscriptSnapshot,
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import {
+  packWorkbenchTranscriptEnvelopes,
+  splitWorkbenchTranscriptSnapshot,
+} from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import type {
   WorkbenchTranscriptCompactionCompletion,
   WorkbenchTranscriptObservation,
   WorkbenchTranscriptReadRequest,
   WorkbenchTranscriptRecordingContext,
   WorkbenchTranscriptSettlement,
 } from "./workbench-transcript-types.ts";
+
+const PREFETCH_DATABASE_RANGE_ITEMS = 256;
+
+interface WorkbenchTranscriptItemRange {
+  firstCursor?: WorkbenchTranscriptItemCursor;
+  hasMore: boolean;
+  snapshot: WorkbenchTranscriptSnapshot;
+}
+
+type WorkbenchTranscriptControllerDatabase = Pick<
+  WorkbenchDatabaseController,
+  "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
+> & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">> & {
+  readTranscriptItemRange?(request: {
+    before?: WorkbenchTranscriptItemCursor;
+    limit: number;
+    threadId: string;
+  }): Promise<WorkbenchTranscriptItemRange | null>;
+};
+
+function mergeUnique<Value, Key>(
+  left: readonly Value[],
+  right: readonly Value[],
+  key: (value: Value) => Key,
+) {
+  return [...new Map([...left, ...right].map(value => [key(value), value])).values()];
+}
+
+function mergePrefetchCatalog(
+  current: WorkbenchTranscriptSnapshot | null,
+  next: WorkbenchTranscriptSnapshot,
+) {
+  if (!current) return next;
+  return {
+    ...current,
+    expiredTurnPayloads: mergeUnique(
+      current.expiredTurnPayloads ?? [],
+      next.expiredTurnPayloads ?? [],
+      payload => payload.turnId,
+    ),
+    hasPreviousTurns: next.hasPreviousTurns,
+    rows: {
+      ...current.rows,
+      threadHeldSteers: mergeUnique(
+        current.rows.threadHeldSteers,
+        next.rows.threadHeldSteers,
+        steer => steer.id,
+      ),
+      threadHeldSteerParts: mergeUnique(
+        current.rows.threadHeldSteerParts,
+        next.rows.threadHeldSteerParts,
+        part => `${part.steer_id}:${part.part_index}`,
+      ),
+      transcriptAssetRefs: mergeUnique(
+        current.rows.transcriptAssetRefs,
+        next.rows.transcriptAssetRefs,
+        reference => reference.id,
+      ),
+      transcriptAssets: mergeUnique(
+        current.rows.transcriptAssets,
+        next.rows.transcriptAssets,
+        asset => asset.digest,
+      ),
+    },
+  };
+}
 
 function observationIdentity(observations: readonly WorkbenchTranscriptObservation[]) {
   const threadIds = new Set<WorkbenchThreadId>();
@@ -189,10 +265,7 @@ function observedTurnId(
 
 export default class WorkbenchTranscriptController {
   readonly #captureGaps: WorkbenchTranscriptCaptureGapController;
-  readonly #database: Pick<
-    WorkbenchDatabaseController,
-    "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
-  > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>;
+  readonly #database: WorkbenchTranscriptControllerDatabase;
   readonly #recorder: WorkbenchTranscriptRecorder;
   readonly #subscriptions: WorkbenchTranscriptSubscriptionController;
   readonly #live = new WorkbenchTranscriptLiveController();
@@ -207,10 +280,7 @@ export default class WorkbenchTranscriptController {
   #disposed = false;
 
   constructor(
-    database: Pick<
-      WorkbenchDatabaseController,
-      "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
-    > & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">>,
+    database: WorkbenchTranscriptControllerDatabase,
     captureGaps: WorkbenchTranscriptCaptureGapController,
   ) {
     this.#database = database;
@@ -337,6 +407,61 @@ export default class WorkbenchTranscriptController {
   async read(request: WorkbenchTranscriptReadRequest) {
     this.#assertActive();
     return this.#database.readTranscript(request);
+  }
+
+  async prefetch(request: WorkbenchTranscriptPrefetchRequest): Promise<WorkbenchTranscriptPrefetchResult> {
+    this.#assertActive();
+    if (!Number.isSafeInteger(request.maxBytes) || request.maxBytes <= 0) {
+      throw new Error("Transcript prefetch byte budget must be a positive integer.");
+    }
+    const readRange = this.#database.readTranscriptItemRange;
+    if (!readRange) throw new Error("Transcript item prefetch is unavailable.");
+
+    let before = request.before;
+    let catalog: WorkbenchTranscriptSnapshot | null = null;
+    const newestFirst = [];
+    let retainedBytes = 0;
+    let hasMore = false;
+    while (true) {
+      const range = await readRange({
+        ...(before ? { before } : {}),
+        limit: PREFETCH_DATABASE_RANGE_ITEMS,
+        threadId: request.threadId,
+      });
+      if (!range) return { catalog: null, envelopes: [], hasMore: false, retainedBytes: 0 };
+      const partition = splitWorkbenchTranscriptSnapshot(range.snapshot);
+      catalog = mergePrefetchCatalog(catalog, partition.catalog);
+      const remainingBytes = request.maxBytes - retainedBytes;
+      if (newestFirst.length > 0 && remainingBytes <= 0) {
+        hasMore = partition.envelopes.length > 0 || range.hasMore;
+        break;
+      }
+      const packed = packWorkbenchTranscriptEnvelopes(
+        [...partition.envelopes].reverse(),
+        Math.max(1, remainingBytes),
+      );
+      newestFirst.push(...packed.envelopes);
+      retainedBytes += packed.retainedBytes;
+      if (packed.hasMore) {
+        hasMore = true;
+        break;
+      }
+      if (!range.hasMore || !range.firstCursor) {
+        hasMore = false;
+        break;
+      }
+      if (retainedBytes >= request.maxBytes) {
+        hasMore = true;
+        break;
+      }
+      before = range.firstCursor;
+    }
+    return {
+      catalog,
+      envelopes: newestFirst.reverse(),
+      hasMore,
+      retainedBytes,
+    };
   }
 
   /** Observe every committed admission of new thread items, from any source. */

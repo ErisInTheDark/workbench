@@ -724,6 +724,7 @@ test("database requests share one evolving relational fixture", async (context) 
     await context.test("claim snapshots return bounded stats and renamed paths", () => checkClaimStats(controller));
     await context.test("typed transactions preserve rows and roll back failed writes", () => checkTransactions(controller));
     await context.test("terminal turns preserve missing timestamps and materialisation", () => checkTerminalTurn(controller));
+    await context.test("transcript item ranges cross the database worker boundary", () => checkTranscriptItemRange(controller));
     await context.test("search ranks non-archived relational narrative", () => checkWorkspaceSearch(controller));
   } finally {
     await controller.close();
@@ -1071,4 +1072,31 @@ async function checkTerminalTurn(controller: WorkbenchDatabaseController) {
       })),
       [{ state: "completed", started_at: null, ended_at: null }],
     );
+}
+
+async function checkTranscriptItemRange(controller: WorkbenchDatabaseController) {
+  await controller.settleTranscript([{
+    item: {
+      delivery: null,
+      id: "worker-message",
+      memoryCitation: null,
+      phase: "commentary",
+      questions: null,
+      text: "worker range",
+      type: "agentMessage",
+    },
+    kind: "item",
+    lifecycle: "completed",
+    observedAt: 2,
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+    turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+  }]);
+  const range = await controller.readTranscriptItemRange({
+    limit: 1,
+    threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+  });
+  assert.equal(range?.snapshot.rows.threadItemAssistantMessages[0]?.text, "worker range");
+  assert.equal(range?.firstCursor?.itemPosition, 0);
+  assert.equal(range?.firstCursor?.turnIndex, 0);
+  assert.equal(range?.hasMore, false);
 }

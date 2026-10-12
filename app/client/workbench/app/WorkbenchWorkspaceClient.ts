@@ -165,10 +165,12 @@ export default class WorkbenchWorkspaceClient {
           return await this.rpc.requestRaw({ method: "workspace/thread/mutate", params: mutation }) as Result;
         }
         if (method === workbenchTranscriptOperations.read.method || method === workbenchTranscriptOperations.subscribe.method
-          || method === workbenchTranscriptOperations.unsubscribe.method || method === workbenchTranscriptOperations.reportConformance.method) {
+          || method === workbenchTranscriptOperations.unsubscribe.method || method === workbenchTranscriptOperations.reportConformance.method
+          || method === "workbench/transcript/demand") {
           const kind = method === workbenchTranscriptOperations.read.method ? "read"
             : method === workbenchTranscriptOperations.subscribe.method ? "subscribe"
-              : method === workbenchTranscriptOperations.reportConformance.method ? "report" : "unsubscribe";
+              : method === workbenchTranscriptOperations.reportConformance.method ? "report"
+                : method === "workbench/transcript/demand" ? "demand" : "unsubscribe";
           const input = WorkspaceTranscriptRequestSchema.parse({ kind, params });
           return await this.rpc.requestRaw({ method: "workspace/transcript", params: input }) as Result;
         }

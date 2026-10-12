@@ -30,6 +30,7 @@ import ThreadObservationController, { getThreadObservationKey } from "./thread/T
 import ThreadTextPresentationController from "./thread/ThreadTextPresentationController";
 import { createThreadDocumentKeyForThread } from "./thread/thread-document-keys";
 import ThreadTranscriptProjectionController from "./transcript/ThreadTranscriptProjectionController";
+import { INITIAL_TRANSCRIPT_ITEM_CREDIT } from "../components/workbench/thread-view/thread-progressive-window-policy";
 import ThreadStore from "./thread/ThreadStore";
 import createDraftThreadSource from "./thread/DraftThreadSource";
 import createObservedThreadSource from "./thread/ObservedThreadSource";
@@ -404,6 +405,7 @@ function WorkbenchThreadClient(
           connect: () => workspace.connect(cancellation.signal),
           createTranscript: (onState, onText) => {
             const projection = new ThreadTranscriptProjectionController({
+              initialItemCredit: INITIAL_TRANSCRIPT_ITEM_CREDIT,
               onError: error => console.error("Workbench SQLite transcript projection lifecycle failed.", error),
               onStateChange: onState, onText, transcripts, turnLimit: 4,
             });

@@ -91,6 +91,7 @@ import type {
   WorkbenchTranscriptSnapshot,
   WorkbenchTranscriptSnapshotRows,
 } from "./workbench-transcript-types.ts";
+import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
 const SQLITE_ITEM_ID_BATCH_SIZE = 500;
 
@@ -170,6 +171,112 @@ export default class WorkbenchTranscriptRepository {
       }));
       if (roots.length !== itemIds.length) throw new Error("Stored transcript item selection crossed its thread boundary or disappeared.");
       return projectWorkbenchTranscriptItems(this.#readRows(threadId, roots));
+    })();
+  }
+
+  readItemRange(request: {
+    before?: WorkbenchTranscriptItemCursor;
+    limit: number;
+    threadId: string;
+  }) {
+    if (!Number.isSafeInteger(request.limit) || request.limit <= 0) {
+      throw new Error("Transcript item range limit must be a positive integer.");
+    }
+    return this.#database.transaction(() => {
+      let thread = this.#one(selectRows(coreTables.workbenchThreads, {
+        where: { id: request.threadId },
+      }));
+      if (!thread) {
+        const identity = this.#identity.resolve({ threadId: ThreadReferenceSchema.parse(request.threadId) });
+        if (identity) thread = this.#requiredThread(identity.threadId);
+      }
+      if (!thread) return null;
+
+      const before = request.before;
+      if (before) {
+        const storedCursor = this.#database.prepare(`
+          SELECT i.public_id AS itemId, i.item_position AS itemPosition, tr.turn_index AS turnIndex
+          FROM thread_items i
+          JOIN thread_turns tr ON tr.id = i.turn_id
+          JOIN thread_turn_materializations m ON m.thread_id = i.thread_id AND m.turn_id = i.turn_id
+          WHERE i.thread_id = @threadId AND i.public_id = @itemId
+        `).get({ threadId: thread.id, itemId: before.itemId }) as WorkbenchTranscriptItemCursor | undefined;
+        if (!storedCursor
+          || storedCursor.itemPosition !== before.itemPosition
+          || storedCursor.turnIndex !== before.turnIndex) {
+          throw new Error("Transcript item cursor no longer matches its stored position.");
+        }
+      }
+
+      const candidates = this.#database.prepare(`
+        SELECT i.*
+        FROM thread_items i
+        JOIN thread_turns tr ON tr.id = i.turn_id
+        JOIN thread_turn_materializations m ON m.thread_id = i.thread_id AND m.turn_id = i.turn_id
+        WHERE i.thread_id = @threadId
+          AND (@hasBefore = 0 OR (tr.turn_index, i.item_position, i.public_id)
+            < (@turnIndex, @itemPosition, @itemId))
+        ORDER BY tr.turn_index DESC, i.item_position DESC, i.public_id DESC
+        LIMIT @candidateLimit
+      `).all({
+        candidateLimit: request.limit + 1,
+        hasBefore: before ? 1 : 0,
+        itemId: before?.itemId ?? "",
+        itemPosition: before?.itemPosition ?? 0,
+        threadId: thread.id,
+        turnIndex: before?.turnIndex ?? 0,
+      }) as TranscriptItemRow[];
+      const hasMore = candidates.length > request.limit;
+      const threadItems = candidates.slice(0, request.limit).reverse();
+      this.#promoteLegacyToolOutputs(threadItems);
+
+      const turns = this.#all(selectRows(coreTables.threadTurns, {
+        where: { thread_id: thread.id },
+        orderBy: [{ column: "turn_index" }],
+      }));
+      const loadedTurnIds = turns
+        .filter(turn => threadItems.some(item => item.turn_id === turn.id))
+        .map(turn => turn.id);
+      const threadHeldSteers = this.#all(selectRows(heldSteerTables.threadHeldSteers, {
+        where: { thread_id: thread.id },
+        whereIn: { turn_id: loadedTurnIds },
+        orderBy: [{ column: "id" }],
+      }));
+      const rows = {
+        ...this.#readRows(thread.id, threadItems),
+        threadHeldSteers,
+        threadHeldSteerParts: this.#all(selectRows(heldSteerTables.threadHeldSteerParts, {
+          whereIn: { steer_id: threadHeldSteers.map(({ id }) => id) },
+        })),
+      };
+      const firstItem = threadItems[0];
+      const firstTurn = firstItem ? turns.find(turn => turn.id === firstItem.turn_id) : undefined;
+      return {
+        firstCursor: firstItem && firstTurn
+          ? {
+              itemId: firstItem.public_id,
+              itemPosition: firstItem.item_position,
+              turnIndex: firstTurn.turn_index,
+            }
+          : undefined,
+        hasMore,
+        snapshot: {
+          thread,
+          turns,
+          loadedTurnIds,
+          expiredItemPayloads: this.#rowsByItemIds(
+            threadPayloadRetentionTables.itemPayloadRetention,
+            threadItems.map(({ id }) => id),
+          ).map(({ expired_at, item_id }) => ({ expiredAt: expired_at, itemId: item_id })),
+          expiredTurnPayloads: this.#all(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
+            whereIn: { turn_id: loadedTurnIds },
+          })).map(({ expired_at, turn_id }) => ({ expiredAt: expired_at, turnId: turn_id })),
+          hasPreviousTurns: firstTurn !== undefined
+            && turns.some(turn => turn.turn_index < firstTurn.turn_index),
+          rows,
+          approvalOutcomes: this.#approvalOutcomes.read(thread.id, loadedTurnIds),
+        },
+      };
     })();
   }
 

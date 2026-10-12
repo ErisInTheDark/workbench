@@ -35,6 +35,14 @@ test("tool previews require explicit subscription support and validate only type
   const optedIn = decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, { ...params, toolPatchPreviews: true });
   assert.ok(optedIn?.success && "toolPatchPreviews" in optedIn.data.params && optedIn.data.params.toolPatchPreviews);
   assert.equal(decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, { ...params, toolPatchPreviews: "yes" })?.success, false);
+  const windowed = decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, {
+    ...params, initialItemCredit: 96, protocolVersion: 5,
+  });
+  assert.ok(windowed?.success && windowed.data.kind === "subscribe");
+  assert.equal(windowed.data.params.initialItemCredit, 96);
+  assert.equal(decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.subscribe.method, {
+    ...params, initialItemCredit: 0, protocolVersion: 5,
+  })?.success, false);
   const update = { kind: "toolPatch", threadId: "thread", turnId: "turn", itemId: "item",
     files: [{ path: "src/a.ts", kind: { type: "update", move_path: null }, additions: 1 }] };
   assert.equal(conformWorkbenchTranscriptStreamed({ subscriptionId: "sub", update }).success, true);
@@ -51,8 +59,34 @@ test("read and subscription decoding retain supported protocol versions and reje
     assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 0 })?.success, false);
     assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 3 })?.success, true);
     assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 4 })?.success, true);
-    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 5 })?.success, false);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 5 })?.success, true);
+    assert.equal(decodeWorkbenchTranscriptRequest(method, { ...input, protocolVersion: 6 })?.success, false);
   }
+});
+
+test("prefetch decoding requires a positive byte budget and a stable optional item cursor", () => {
+  const decoded = decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.prefetch.method, {
+    before: { itemId: " item ", itemPosition: 2, turnIndex: 3 },
+    maxBytes: 1024,
+    protocolVersion: 5,
+    threadId: " thread ",
+  });
+  assert.ok(decoded?.success);
+  assert.deepEqual(decoded.data.params, {
+    before: { itemId: "item", itemPosition: 2, turnIndex: 3 },
+    maxBytes: 1024,
+    protocolVersion: 5,
+    threadId: "thread",
+  });
+  assert.equal(decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.prefetch.method, {
+    maxBytes: 0,
+    threadId: "thread",
+  })?.success, false);
+  assert.equal(decodeWorkbenchTranscriptRequest(workbenchTranscriptOperations.prefetch.method, {
+    before: { itemId: "item", itemPosition: -1, turnIndex: 3 },
+    maxBytes: 1024,
+    threadId: "thread",
+  })?.success, false);
 });
 
 test("transcript requests resolve exact shared operation values and decode their params", () => {

@@ -7,7 +7,8 @@
  * - WorkbenchTranscriptRequest/decodeWorkbenchTranscriptRequest: decoded server dispatch union.
  * - workbenchTranscriptNotifications/conformWorkbenchTranscriptCapabilities/conformWorkbenchTranscriptUpdated: notification contracts.
  * - WorkbenchTranscriptStreamedParams/conformWorkbenchTranscriptStreamed: incremental presentation notifications.
- * - WorkbenchTranscriptReadRequest: canonical transcript window request.
+ * - WorkbenchTranscriptReadRequest/WorkbenchTranscriptPrefetchRequest: canonical window and byte-bounded item reads.
+ * - WorkbenchTranscriptItemCursor/WorkbenchTranscriptItemEnvelope/WorkbenchTranscriptPrefetchResult: app-reservoir wire payloads.
  * - WorkbenchTranscriptSubscribeParams/WorkbenchTranscriptUnsubscribeParams: subscription identity and optional capabilities.
  * - WorkbenchTranscriptUpdatedParams: snapshot publication payload.
  * - WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION/WorkbenchTranscriptCapabilities: supported wire protocol.
@@ -87,10 +88,37 @@ export type WorkbenchTranscriptSnapshotRows = {
 
 export interface WorkbenchTranscriptReadRequest {
   beforeTurnIndex?: number;
-  protocolVersion?: 1 | 2 | 3 | 4;
+  protocolVersion?: 1 | 2 | 3 | 4 | 5;
   threadId: string;
   turnIds?: string[];
   turnLimit: number;
+}
+
+export interface WorkbenchTranscriptItemCursor {
+  itemId: string;
+  itemPosition: number;
+  turnIndex: number;
+}
+
+export interface WorkbenchTranscriptItemEnvelope {
+  cursor: WorkbenchTranscriptItemCursor;
+  itemId: string;
+  retainedBytes: number;
+  snapshot: WorkbenchTranscriptSnapshot;
+}
+
+export interface WorkbenchTranscriptPrefetchRequest {
+  before?: WorkbenchTranscriptItemCursor;
+  maxBytes: number;
+  protocolVersion?: 5;
+  threadId: string;
+}
+
+export interface WorkbenchTranscriptPrefetchResult {
+  catalog: WorkbenchTranscriptSnapshot | null;
+  envelopes: WorkbenchTranscriptItemEnvelope[];
+  hasMore: boolean;
+  retainedBytes: number;
 }
 
 export interface WorkbenchTranscriptConformanceReport {
@@ -337,6 +365,7 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
     && value.protocolVersion !== 2
     && value.protocolVersion !== 3
     && value.protocolVersion !== 4
+    && value.protocolVersion !== 5
   ) {
     return { success: false, message: "Unsupported transcript protocol version." };
   }
@@ -365,8 +394,49 @@ function decodeReadParams(value: unknown): DecodeResult<WorkbenchTranscriptReadR
     || value.protocolVersion === 2
     || value.protocolVersion === 3
     || value.protocolVersion === 4
+    || value.protocolVersion === 5
   ) data.protocolVersion = value.protocolVersion;
   return { success: true, data };
+}
+
+function decodeItemCursor(value: unknown): DecodeResult<WorkbenchTranscriptItemCursor> {
+  if (!isRecord(value)
+    || typeof value.itemId !== "string" || !value.itemId.trim()
+    || !Number.isSafeInteger(value.itemPosition) || (value.itemPosition as number) < 0
+    || !Number.isSafeInteger(value.turnIndex) || (value.turnIndex as number) < 0) {
+    return { success: false, message: "Transcript item cursor is invalid." };
+  }
+  return {
+    success: true,
+    data: {
+      itemId: value.itemId.trim(),
+      itemPosition: value.itemPosition as number,
+      turnIndex: value.turnIndex as number,
+    },
+  };
+}
+
+function decodePrefetchParams(value: unknown): DecodeResult<WorkbenchTranscriptPrefetchRequest> {
+  if (!isRecord(value)) return { success: false, message: "Transcript prefetch params must be an object." };
+  const threadId = typeof value.threadId === "string" ? value.threadId.trim() : "";
+  if (!threadId || !Number.isSafeInteger(value.maxBytes) || (value.maxBytes as number) <= 0) {
+    return { success: false, message: "Transcript prefetch requires threadId and a positive byte budget." };
+  }
+  if (value.protocolVersion !== undefined && value.protocolVersion !== 5) {
+    return { success: false, message: "Transcript prefetch requires protocol version 5." };
+  }
+  const before = value.before === undefined ? null : decodeItemCursor(value.before);
+  if (before && "message" in before) return { success: false, message: before.message };
+  const beforeCursor = before && "data" in before ? before.data : undefined;
+  return {
+    success: true,
+    data: {
+      threadId,
+      maxBytes: value.maxBytes as number,
+      ...(beforeCursor ? { before: beforeCursor } : {}),
+      ...(value.protocolVersion === 5 ? { protocolVersion: 5 as const } : {}),
+    },
+  };
 }
 
 interface TranscriptSubscriptionParams {
@@ -375,6 +445,7 @@ interface TranscriptSubscriptionParams {
 
 export interface WorkbenchTranscriptSubscribeParams
   extends TranscriptSubscriptionParams, WorkbenchTranscriptReadRequest {
+  initialItemCredit?: number;
   toolPatchPreviews?: boolean;
 }
 
@@ -388,8 +459,15 @@ function decodeSubscribeParams(value: unknown): DecodeResult<WorkbenchTranscript
   if (isRecord(value) && value.toolPatchPreviews !== undefined && typeof value.toolPatchPreviews !== "boolean") {
     return { success: false, message: "Transcript tool preview capability must be boolean." };
   }
+  if (isRecord(value) && value.initialItemCredit !== undefined
+    && (!Number.isSafeInteger(value.initialItemCredit) || (value.initialItemCredit as number) <= 0
+      || (value.initialItemCredit as number) > 4_096 || read.data.protocolVersion !== 5)) {
+    return { success: false, message: "Transcript initial item credit requires protocol version 5 and a bounded positive integer." };
+  }
   return { success: true, data: {
     ...read.data, subscriptionId,
+    ...(isRecord(value) && typeof value.initialItemCredit === "number"
+      ? { initialItemCredit: value.initialItemCredit } : {}),
     ...(isRecord(value) && value.toolPatchPreviews === true ? { toolPatchPreviews: true } : {}),
   } };
 }
@@ -424,6 +502,61 @@ function conformSnapshotResult(value: unknown) {
     };
 }
 
+function conformPrefetchResult(value: unknown): DatabaseConformanceResult<WorkbenchTranscriptPrefetchResult> {
+  if (!isRecord(value) || !Array.isArray(value.envelopes)
+    || typeof value.hasMore !== "boolean"
+    || !Number.isSafeInteger(value.retainedBytes) || (value.retainedBytes as number) < 0) {
+    return { issues: [invalidValue([])], repairedPaths: [], success: false };
+  }
+  const repairedPaths: DatabaseConformancePath[] = [];
+  const issues: DatabaseConformanceIssue[] = [];
+  let catalog: WorkbenchTranscriptSnapshot | null = null;
+  if (value.catalog !== null) {
+    const conformed = conformWorkbenchTranscriptSnapshot(value.catalog);
+    repairedPaths.push(...conformed.repairedPaths.map(path => ["catalog", ...path]));
+    if ("issues" in conformed) issues.push(...conformed.issues.map(issue => ({ ...issue, path: ["catalog", ...issue.path] })));
+    else catalog = conformed.data;
+  }
+  const envelopes: WorkbenchTranscriptItemEnvelope[] = [];
+  for (const [index, candidate] of value.envelopes.entries()) {
+    if (!isRecord(candidate)
+      || typeof candidate.itemId !== "string" || !candidate.itemId.trim()
+      || !Number.isSafeInteger(candidate.retainedBytes) || (candidate.retainedBytes as number) <= 0) {
+      issues.push(invalidValue(["envelopes", index]));
+      continue;
+    }
+    const cursor = decodeItemCursor(candidate.cursor);
+    const snapshot = conformWorkbenchTranscriptSnapshot(candidate.snapshot);
+    repairedPaths.push(...snapshot.repairedPaths.map(path => ["envelopes", index, "snapshot", ...path]));
+    if (!cursor.success) issues.push(invalidValue(["envelopes", index, "cursor"]));
+    if ("issues" in snapshot) {
+      issues.push(...snapshot.issues.map(issue => ({ ...issue, path: ["envelopes", index, "snapshot", ...issue.path] })));
+    }
+    if (cursor.success && snapshot.success) {
+      envelopes.push({
+        cursor: cursor.data,
+        itemId: candidate.itemId.trim(),
+        retainedBytes: candidate.retainedBytes as number,
+        snapshot: snapshot.data,
+      });
+    }
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "catalog" && key !== "envelopes" && key !== "hasMore" && key !== "retainedBytes") repairedPaths.push([key]);
+  }
+  if (issues.length) return { issues, repairedPaths, success: false };
+  return {
+    data: {
+      catalog,
+      envelopes,
+      hasMore: value.hasMore,
+      retainedBytes: value.retainedBytes as number,
+    },
+    repairedPaths,
+    success: true,
+  };
+}
+
 function conformLiteralResult<Key extends string>(key: Key) {
   return (value: unknown): DatabaseConformanceResult<Record<Key, true>> => {
     if (!isRecord(value) || value[key] !== true) {
@@ -448,6 +581,18 @@ const readOperation: WorkbenchTranscriptOperation<
   decodeParams: decodeReadParams,
   conformResult: conformSnapshotResult,
 });
+
+const prefetchOperation = Object.freeze({
+  kind: "prefetch",
+  method: "workbench/transcript/prefetch",
+  decodeParams: decodePrefetchParams,
+  conformResult: conformPrefetchResult,
+}) satisfies WorkbenchTranscriptOperation<
+  "prefetch",
+  "workbench/transcript/prefetch",
+  WorkbenchTranscriptPrefetchRequest,
+  WorkbenchTranscriptPrefetchResult
+>;
 
 const subscribeOperation = Object.freeze({
   kind: "subscribe",
@@ -475,6 +620,7 @@ const unsubscribeOperation = Object.freeze({
 }) satisfies WorkbenchTranscriptOperation<"unsubscribe", "workbench/transcript/unsubscribe", WorkbenchTranscriptUnsubscribeParams, { unsubscribed: true }>;
 
 export const workbenchTranscriptOperations = Object.freeze({
+  prefetch: prefetchOperation,
   read: readOperation,
   reportConformance: reportConformanceOperation,
   subscribe: subscribeOperation,
@@ -482,6 +628,7 @@ export const workbenchTranscriptOperations = Object.freeze({
 });
 
 export type WorkbenchTranscriptRequest =
+  | { kind: "prefetch"; operation: typeof prefetchOperation; params: WorkbenchTranscriptPrefetchRequest }
   | { kind: "read"; operation: typeof readOperation; params: WorkbenchTranscriptReadRequest }
   | { kind: "reportConformance"; operation: typeof reportConformanceOperation; params: WorkbenchTranscriptConformanceReport }
   | { kind: "subscribe"; operation: typeof subscribeOperation; params: WorkbenchTranscriptSubscribeParams }
@@ -497,6 +644,12 @@ export function decodeWorkbenchTranscriptRequest(
 ): DecodeResult<WorkbenchTranscriptRequest> | null {
   const operation = operationsByMethod.get(method);
   if (!operation) return null;
+  if (operation.kind === "prefetch") {
+    const decoded = operation.decodeParams(params);
+    return "data" in decoded
+      ? { success: true, data: { kind: "prefetch", operation, params: decoded.data } }
+      : { success: false, message: decoded.message };
+  }
   if (operation.kind === "read") {
     const decoded = operation.decodeParams(params);
     return "data" in decoded
@@ -525,9 +678,14 @@ export interface WorkbenchTranscriptUpdatedParams {
   snapshot: WorkbenchTranscriptSnapshot | null;
   stream: "workbench:transcript";
   subscriptionId: string;
+  window?: {
+    firstCursor?: WorkbenchTranscriptItemCursor;
+    hasPreviousItems: boolean;
+    lastCursor?: WorkbenchTranscriptItemCursor;
+  };
 }
 
-export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 4;
+export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 5;
 
 export interface WorkbenchTranscriptCapabilities {
   protocolVersion: number;
@@ -682,7 +840,7 @@ export function conformWorkbenchTranscriptUpdated(
   }
   const repairedPaths: DatabaseConformancePath[] = [];
   for (const key of Object.keys(value)) {
-    if (key !== "snapshot" && key !== "stream" && key !== "subscriptionId") repairedPaths.push([key]);
+    if (key !== "snapshot" && key !== "stream" && key !== "subscriptionId" && key !== "window") repairedPaths.push([key]);
   }
   const snapshot = value.snapshot === null ? null : conformWorkbenchTranscriptSnapshot(value.snapshot);
   if (snapshot) repairedPaths.push(...snapshot.repairedPaths.map((path) => ["snapshot", ...path]));
@@ -692,6 +850,24 @@ export function conformWorkbenchTranscriptUpdated(
   if (value.stream !== "workbench:transcript") issues.push(invalidValue(["stream"]));
   if (typeof value.subscriptionId !== "string" || !value.subscriptionId.trim()) {
     issues.push(invalidValue(["subscriptionId"]));
+  }
+  let window: WorkbenchTranscriptUpdatedParams["window"];
+  if (value.window !== undefined) {
+    if (!isRecord(value.window) || typeof value.window.hasPreviousItems !== "boolean") {
+      issues.push(invalidValue(["window"]));
+    } else {
+      const first = value.window.firstCursor === undefined ? null : decodeItemCursor(value.window.firstCursor);
+      const last = value.window.lastCursor === undefined ? null : decodeItemCursor(value.window.lastCursor);
+      if (first && "message" in first) issues.push(invalidValue(["window", "firstCursor"]));
+      if (last && "message" in last) issues.push(invalidValue(["window", "lastCursor"]));
+      if ((!first || "data" in first) && (!last || "data" in last)) {
+        window = {
+          hasPreviousItems: value.window.hasPreviousItems,
+          ...(first && "data" in first ? { firstCursor: first.data } : {}),
+          ...(last && "data" in last ? { lastCursor: last.data } : {}),
+        };
+      }
+    }
   }
   if (issues.length) return { issues, repairedPaths, success: false };
   let conformedSnapshot: WorkbenchTranscriptSnapshot | null = null;
@@ -704,6 +880,7 @@ export function conformWorkbenchTranscriptUpdated(
       snapshot: conformedSnapshot,
       stream: "workbench:transcript",
       subscriptionId: (value.subscriptionId as string).trim(),
+      ...(window ? { window } : {}),
     },
     repairedPaths,
     success: true,

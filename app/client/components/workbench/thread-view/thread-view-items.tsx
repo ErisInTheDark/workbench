@@ -14,6 +14,7 @@ import {
   memo, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ComponentProps, type ReactNode,
 } from "react";
+import { THREAD_WINDOW_CHUNK_SIZE } from "./thread-progressive-window-policy";
 
 import type { ThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -223,7 +224,6 @@ function getActiveItemStartedAtMs(
 
 type ThreadCommandDisplay = ReturnType<typeof getThreadCommandDisplay>;
 
-const THREAD_WINDOW_CHUNK_SIZE = 6;
 const gitCheckpointPresentationByItem = new WeakMap<CommandItem, {
   artifactId: ReturnType<typeof parseGitCheckpointDiffArtifactId>;
   claimedBy: ThreadCommandDisplay["claimedBy"];

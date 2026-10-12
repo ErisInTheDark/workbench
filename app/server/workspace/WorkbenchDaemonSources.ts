@@ -8,6 +8,7 @@ import WorkbenchDaemonSource, { type WorkbenchDaemonSourceDescriptor } from "./W
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkspaceDaemonFact } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
+import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
 
 type Network = Pick<WorkbenchNetworkController, "daemonSources" | "canAccessPeer" | "subscribe">;
 interface Entry {
@@ -28,6 +29,7 @@ function socketEndpoint(origin: string, daemonId: DaemonId) {
 }
 
 export default class WorkbenchDaemonSources {
+  readonly transcriptReservoir: WorkbenchTranscriptReservoir;
   private readonly entries = new Map<DaemonId, Entry>();
   private readonly listeners = new Set<() => void>();
   private unsubscribe: (() => void) | null = null;
@@ -41,7 +43,10 @@ export default class WorkbenchDaemonSources {
     createSource?: (descriptor: WorkbenchDaemonSourceDescriptor) => WorkbenchDaemonSource;
     /** Browser traffic for `wb socket spy`; only the attached local daemon may read it. */
     traffic?: Pick<WebSocketTrafficBuffer, "query">;
-  }) {}
+    transcriptReservoir?: WorkbenchTranscriptReservoir;
+  }) {
+    this.transcriptReservoir = options.transcriptReservoir ?? new WorkbenchTranscriptReservoir();
+  }
 
   start() {
     if (this.unsubscribe) return;
@@ -65,6 +70,7 @@ export default class WorkbenchDaemonSources {
       entry.unsubscribe();
       entry.source.dispose();
     }
+    this.transcriptReservoir.dispose();
     this.entries.clear();
     this.listeners.clear();
     this.attachedId = null;
@@ -132,6 +138,7 @@ export default class WorkbenchDaemonSources {
           const source = this.options.createSource?.(next.descriptor)
             ?? new WorkbenchDaemonSource(next.descriptor, {
               warn: this.options.warn,
+              transcriptReservoir: this.transcriptReservoir,
               answerSpy: traffic ? query => id === this.attachedId ? traffic.query(query) : null : undefined,
             });
           this.entries.set(id, { source, descriptor: next.descriptor, peers: next.peers,

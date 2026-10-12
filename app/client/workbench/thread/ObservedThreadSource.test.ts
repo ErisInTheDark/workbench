@@ -33,9 +33,11 @@ function fixture(
   const proposalReads: Array<{ cwd: string; proposalId: string }> = [];
   const stops: object[] = [];
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
+  const historyDemands: number[] = [];
   const submits: Array<{ clientMessageId: string }> = [];
   let onState!: (state: ThreadTranscriptProjectionState) => void;
   let resolveSubmit!: (result: { kind: "started"; turn: { id: string } } | { kind: "steered"; turnId: string }) => void;
+  let resolveOlder!: (turnIds: readonly string[] | null) => void;
   let published: Partial<ThreadStoreState> = {};
   const entry = {
     activityAt: 1, title: "Thread", entryKind: "thread", identity: { harness: "codex", threadId },
@@ -62,7 +64,14 @@ function fixture(
       onState = state;
       // Like the real controller, availability publishes during construction.
       state({ status: "idle" });
-      return { controller: { select: (selection: (typeof selections)[number]) => { selections.push(selection); }, dispose: async () => {} }, stopAvailability: () => {} };
+      return { controller: {
+        select: (selection: (typeof selections)[number]) => { selections.push(selection); },
+        loadOlder: (credit: number) => {
+          historyDemands.push(credit);
+          return new Promise<readonly string[] | null>(resolve => { resolveOlder = resolve; });
+        },
+        dispose: async () => {},
+      }, stopAvailability: () => {} };
     },
     presentText: () => {},
     messageContext: () => ({}),
@@ -82,9 +91,10 @@ function fixture(
   const source = createObservedThreadSource(ports, next => { published = { ...published, ...next }; });
   const release = source.acquire(interest);
   return {
-    source, release, selections, submits, stops, proposalReads,
+    source, release, selections, submits, stops, proposalReads, historyDemands,
     publish: (value: WorkbenchTranscriptProjection) => onState({ status: "ready", threadId, projection: value }),
     resolveSubmit: (result: Parameters<typeof resolveSubmit>[0]) => resolveSubmit(result),
+    resolveOlder: (turnIds: readonly string[] | null) => resolveOlder(turnIds),
     get published() { return published; },
   };
 }
@@ -201,13 +211,15 @@ test("a failed submission drops its optimistic input and reports the failure", a
   f.release();
 });
 
-test("loading older turns widens the window and resolves with only the newly loaded turns", async () => {
+test("loading older history requests one routine item credit without replacing the subscription", async () => {
   const f = fixture();
   f.publish(projection([{ id: "turn-3" }, { id: "turn-4" }], true));
-  const firstLimit = f.selections.at(-1)!.turnLimit!;
+  const selections = f.selections.length;
   const loading = f.source.actions.loadOlder();
-  assert.ok(f.selections.at(-1)!.turnLimit! > firstLimit);
+  assert.deepEqual(f.historyDemands, [24]);
+  assert.equal(f.selections.length, selections);
   f.publish(projection([{ id: "turn-1" }, { id: "turn-2" }, { id: "turn-3" }, { id: "turn-4" }]));
+  f.resolveOlder(["turn-1", "turn-2"]);
   assert.deepEqual(await loading, ["turn-1", "turn-2"]);
   assert.equal(f.published.turns?.canLoadOlder, false);
   f.release();

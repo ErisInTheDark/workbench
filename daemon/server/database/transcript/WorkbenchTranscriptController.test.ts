@@ -418,6 +418,88 @@ test("the transcript controller records, reads, refreshes, and stops admitting w
   }
 });
 
+test("prefetch fills a byte budget across database ranges without splitting an oversize item", async () => {
+  const fixture = createThreadStateTestDatabase();
+  const repository = new WorkbenchTranscriptRepository(fixture.sqlite);
+  const threadId = fixtureIdentityValues.WorkbenchThreadId.thread;
+  const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-thread");
+  repository.settle([{
+    contentVersion: 1,
+    kind: "canonicalWindow",
+    materializedTurnIds: [turnId],
+    observations: [
+      ...observationsFor("thread"),
+      ...Array.from({ length: 3 }, (_, index): WorkbenchTranscriptAtomicObservation => ({
+        item: {
+          delivery: null,
+          id: `message-${index}`,
+          memoryCitation: null,
+          phase: "commentary",
+          questions: null,
+          text: `message ${index} ${"x".repeat(100)}`,
+          type: "agentMessage",
+        },
+        kind: "item",
+        lifecycle: "completed",
+        observedAt: index + 10,
+        threadId,
+        turnId,
+      })),
+    ],
+    threadId,
+  }]);
+  let rangeReads = 0;
+  const database = {
+    failure: null,
+    async readThreadContextUsage() {
+      throw new Error("Unexpected context usage read.");
+    },
+    async readTranscript(request: Parameters<typeof repository.read>[0]) {
+      return repository.read(request);
+    },
+    async readTranscriptItemRange(request: Parameters<typeof repository.readItemRange>[0]) {
+      rangeReads += 1;
+      return repository.readItemRange({ ...request, limit: 1 });
+    },
+    async settleTranscript() {
+      throw new Error("Unexpected transcript settlement.");
+    },
+    async start() {
+      return { schemaVersion: 1, tableNames: [] };
+    },
+  };
+  const controller = new WorkbenchTranscriptController(database, new WorkbenchTranscriptCaptureGapController({
+    database: {
+      async query() { throw new Error("Unexpected gap query."); },
+      async settleTranscript() { throw new Error("Unexpected gap recording."); },
+    },
+  }));
+  try {
+    const complete = await controller.prefetch({ threadId, maxBytes: 1_000_000, protocolVersion: 5 });
+    assert.deepEqual(complete.envelopes.map(envelope => {
+      const message = envelope.snapshot.rows.threadItemAssistantMessages[0];
+      assert.ok(message);
+      return message.text.slice(0, "message 0".length);
+    }), [
+      "message 0",
+      "message 1",
+      "message 2",
+    ]);
+    assert.equal(complete.hasMore, false);
+    assert.ok(rangeReads > 1, "controller must continue while the database reports older items");
+
+    rangeReads = 0;
+    const oversize = await controller.prefetch({ threadId, maxBytes: 1, protocolVersion: 5 });
+    assert.equal(oversize.envelopes.length, 1);
+    assert.ok(oversize.envelopes[0]!.retainedBytes > 1);
+    assert.equal(oversize.hasMore, true);
+    assert.equal(rangeReads, 1);
+  } finally {
+    controller.dispose();
+    fixture.sqlite.close();
+  }
+});
+
 test("durable item facts refresh subscriptions only at complete projection boundaries", async () => {
   let reads = 0;
   let published = deferred<void>();

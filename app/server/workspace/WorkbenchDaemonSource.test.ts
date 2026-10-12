@@ -6,6 +6,7 @@ import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThread
 import { daemonObservationShape, type DaemonWorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
 import WorkbenchDaemonSource, { type WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
+import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
 
 class Socket extends EventTarget {
   readyState: number = WebSocket.CONNECTING;
@@ -29,7 +30,7 @@ class Socket extends EventTarget {
   }
 }
 
-function fixture() {
+function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
   const created = Promise.withResolvers<Socket>();
   const warnings: string[] = [];
   const descriptor = {
@@ -38,6 +39,7 @@ function fixture() {
   };
   const source = new WorkbenchDaemonSource(descriptor, {
     warn: message => warnings.push(message),
+    ...(transcriptReservoir ? { transcriptReservoir } : {}),
     createSocket: () => {
       const socket = new Socket();
       created.resolve(socket);
@@ -46,6 +48,42 @@ function fixture() {
   });
   return { source, descriptor, created: created.promise, warnings };
 }
+
+test("socket generations register one validated reservoir prefetch edge and remove it on close", async context => {
+  const reservoir = new WorkbenchTranscriptReservoir();
+  const f = fixture(reservoir);
+  context.after(() => { f.source.dispose(); reservoir.dispose(); });
+  const release = f.source.retain();
+  const socket = await f.created;
+  const opening = f.source.socket.connect();
+  socket.open();
+  await opening;
+  const generation = f.source.socket.getSnapshot().generation;
+  const lease = reservoir.open({
+    consumerId: "browser",
+    daemonId: f.source.id,
+    generation,
+    threadId: "thread",
+  });
+  const demand = lease.demand(1);
+  const request = await socket.request("workbench/transcript/prefetch");
+  socket.notify({ id: request.id, result: {
+    catalog: null,
+    envelopes: [],
+    hasMore: false,
+    retainedBytes: 0,
+  } });
+  assert.deepEqual(await demand, {
+    catalog: null,
+    envelopes: [],
+    hasMore: false,
+    retainedBytes: 0,
+  });
+  socket.close();
+  assert.equal(reservoir.getDiagnostics().sources, 0);
+  lease.release();
+  release();
+});
 
 test("passive reload and update status leaves sleeping daemons cold while explicit work retains them", async context => {
   const f = fixture();

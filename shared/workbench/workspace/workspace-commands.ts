@@ -10,7 +10,7 @@
  * - WorkspaceDraftLaunchSchema: saved-draft launch intent.
  * - WorkspaceLayoutRequest/WorkspaceLayoutRequestSchema: app-owned layout edits.
  * - WorkspaceHomeLayoutIntent/WorkspaceHomeLayoutIntentSchema: home row or project-folder move intent.
- * - WorkspaceTranscriptRequestSchema: typed transcript read and stream operations.
+ * - WorkspaceTranscriptDemandSchema/WorkspaceTranscriptRequestSchema: typed transcript reads, subscriptions, and bounded item demand.
  * - WorkspaceSearchResponseSchema: source-qualified search results and partial failure.
  */
 import { z } from "zod";
@@ -288,7 +288,13 @@ export const WorkspaceLayoutRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type WorkspaceLayoutRequest = z.infer<typeof WorkspaceLayoutRequestSchema>;
 
+export const WorkspaceTranscriptDemandSchema = z.object({
+  itemCredit: z.number().int().min(1).max(4_096),
+  subscriptionId: z.string().trim().min(1),
+}).strict();
+
 export const WorkspaceTranscriptRequestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("demand"), params: WorkspaceTranscriptDemandSchema }).strict(),
   z.object({ kind: z.literal("report"),
     params: z.custom<WorkbenchTranscriptConformanceReport>(value => workbenchTranscriptOperations.reportConformance.decodeParams(value).success),
   }).strict(),

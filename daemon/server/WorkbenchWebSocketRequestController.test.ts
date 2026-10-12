@@ -495,10 +495,15 @@ test("sequences provider events and consumes browser receipts without harness ro
 test("transcript dispatch decodes the exact shared operation before calling the repository", async () => {
   const clock = new FakeClock();
   const reads: unknown[] = [];
+  const prefetches: unknown[] = [];
   const sent: unknown[] = [];
   const { controller } = createController({
     clock,
     transcript: {
+      prefetch: async (request) => {
+        prefetches.push(request);
+        return { catalog: null, envelopes: [], hasMore: false, retainedBytes: 0 };
+      },
       read: async (request) => {
         reads.push(request);
         return null;
@@ -516,6 +521,11 @@ test("transcript dispatch decodes the exact shared operation before calling the 
     params: { threadId: " thread ", turnLimit: 20, futureOption: true },
   }), false);
   assert.deepEqual(reads, [{ threadId: "thread", turnLimit: 20 }]);
+
+  await controller.handleMessage(client, "connection-1", frame("workbench/transcript/prefetch", 3, {
+    params: { threadId: " thread ", maxBytes: 4096, protocolVersion: 5 },
+  }), false);
+  assert.deepEqual(prefetches, [{ threadId: "thread", maxBytes: 4096, protocolVersion: 5 }]);
 
   await controller.handleMessage(client, "connection-1", frame("workbench/transcript/read", 2, {
     params: { threadId: "thread", turnLimit: "20" },

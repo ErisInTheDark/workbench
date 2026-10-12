@@ -4,6 +4,10 @@
  * - ProgressiveWindowOptions: reading and revealing boundary.
  * - default ThreadProgressiveWindowController: own bounded prepends until a window the reader nears or passed is whole.
  */
+import {
+  ROUTINE_THREAD_WINDOW_CHUNKS,
+  URGENT_THREAD_WINDOW_CHUNKS,
+} from "./thread-progressive-window-policy";
 
 export interface ProgressiveWindowView {
   readonly hiddenCount: number;
@@ -20,9 +24,6 @@ export interface ProgressiveWindowOptions {
   readonly reveal: (count: number) => void;
 }
 
-const REVEAL_BATCH_SIZE = 4;
-/** Content above a hidden window is clipped, so a sentinel on screen means the reader is looking at blank. */
-const URGENT_REVEAL_BATCH_SIZE = 16;
 const REVEAL_LOOKAHEAD_SCREENS = 2;
 
 export default class ThreadProgressiveWindowController {
@@ -49,7 +50,7 @@ export default class ThreadProgressiveWindowController {
     }
     if (view.hiddenCount <= 0) return;
     if (view.sentinelBottom <= view.viewportTop - REVEAL_LOOKAHEAD_SCREENS * view.viewportHeight) return;
-    const batch = view.sentinelBottom > view.viewportTop ? URGENT_REVEAL_BATCH_SIZE : REVEAL_BATCH_SIZE;
+    const batch = view.sentinelBottom > view.viewportTop ? URGENT_THREAD_WINDOW_CHUNKS : ROUTINE_THREAD_WINDOW_CHUNKS;
     this.#pendingHiddenCount = view.hiddenCount;
     this.#options.reveal(Math.min(batch, view.hiddenCount));
   }

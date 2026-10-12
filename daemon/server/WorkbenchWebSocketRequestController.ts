@@ -140,7 +140,7 @@ export interface WorkbenchWebSocketReloadDirtObserverState {
 interface WorkbenchWebSocketTranscriptSubscriptionState {
   client: BridgeClient;
   connectionId: string;
-  protocolVersion?: 1 | 2 | 3 | 4;
+  protocolVersion?: 1 | 2 | 3 | 4 | 5;
   toolPatchPreviews?: boolean;
   subscriptionId: string;
   threadId: string;
@@ -173,7 +173,8 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   stats?: Pick<WorkbenchStatsController, "subscribeImportProgress">;
   setTimeout?: (callback: () => void, delayMs: number) => Timer;
   threadState: Pick<WorkbenchThreadStateController, "handleRequest">;
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">;
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">
+    & Partial<Pick<DaemonTranscriptRegistration, "prefetch">>;
   writeLine?: (line: string) => void;
 }
 
@@ -823,6 +824,10 @@ export default class WorkbenchWebSocketRequestController {
       return {
         snapshot: transcriptSnapshotForProtocol(await this.transcript.read(request.params), request.params.protocolVersion),
       };
+    }
+    if (request.kind === "prefetch") {
+      if (!this.transcript.prefetch) throw new Error("Transcript prefetch is unavailable.");
+      return this.transcript.prefetch(request.params);
     }
     if (request.kind === "reportConformance") {
       this.writeLine(`[workbench-transcript-conformance] ${JSON.stringify(request.params)}`);

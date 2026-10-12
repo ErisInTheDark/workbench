@@ -9,6 +9,7 @@
  * getWorkbenchDatabaseReadClass/isWorkbenchDatabaseReadRequest: classify pure reads for the reader pool.
  * WorkbenchDatabaseInventory: installed schema inventory returned after readiness.
  * WorkbenchDatabaseMutationResult: aggregate result of one atomic mutation batch.
+ * WorkbenchTranscriptItemRange: one stable bounded relational item read.
  */
 import type { WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchDatabaseDiagnosticEvent } from "workbench-shared/database/workbench-database-diagnostic";
@@ -48,6 +49,7 @@ import type {
   WorkbenchTranscriptItemIdentityAdmission,
   WorkbenchTranscriptItemIdentityLookup,
 } from "./transcript/workbench-transcript-types.ts";
+import type { WorkbenchTranscriptItemCursor } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type {
   WorkbenchStoredThreadDraft,
   WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
@@ -97,6 +99,12 @@ import type {
 } from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 
 export type WorkbenchDatabaseControllerState = "starting" | "ready" | "suspended" | "failed" | "closed";
+
+export interface WorkbenchTranscriptItemRange {
+  firstCursor?: WorkbenchTranscriptItemCursor;
+  hasMore: boolean;
+  snapshot: WorkbenchTranscriptSnapshot;
+}
 
 export interface WorkbenchDatabaseInventory {
   tableNames: string[];
@@ -178,6 +186,10 @@ export type WorkbenchDatabaseRequestPayload =
       mode?: WorkbenchTranscriptSettlementMode;
     }
   | { type: "readTranscript"; request: WorkbenchTranscriptReadRequest }
+  | {
+      type: "readTranscriptItemRange";
+      request: { before?: WorkbenchTranscriptItemCursor; limit: number; threadId: string };
+    }
   | { type: "readTranscriptProviderCursor"; threadId: string; turnId: string }
   | { type: "readTranscriptCompactionExecution"; input: {
       harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
@@ -228,7 +240,7 @@ const STATS_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]
 const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
   "readTranscriptAsset", "readTranscript", "readTranscriptProviderCursor", "readTranscriptCompactionExecution",
   "readTranscriptContext", "readThreadContextUsage",
-  "readTranscriptMaterializedTurnIds",
+  "readTranscriptItemRange", "readTranscriptMaterializedTurnIds",
 ]);
 // Unbounded history scans never run ahead of the transcript reads live provider ingest awaits.
 const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>(["queryTranscript"]);
@@ -312,6 +324,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "subagentReservation"; record: WorkbenchSubagentReservation }
   | { id: number; type: "transcriptSettlement"; settlement: WorkbenchTranscriptSettlement }
   | { id: number; type: "transcriptSnapshot"; snapshot: WorkbenchTranscriptSnapshot | null }
+  | { id: number; type: "transcriptItemRange"; range: WorkbenchTranscriptItemRange | null }
   | { id: number; type: "transcriptContext"; snapshot: WorkbenchTranscriptContextSnapshot | null }
   | { id: number; type: "transcriptProviderCursor"; cursor: string | null | undefined }
   | { id: number; type: "transcriptCompactionExecution"; execution: {

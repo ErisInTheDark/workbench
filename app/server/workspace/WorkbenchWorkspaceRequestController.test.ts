@@ -16,6 +16,85 @@ import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import {
+  emptyTranscriptSnapshotRows,
+  type WorkbenchTranscriptPrefetchResult,
+  type WorkbenchTranscriptUpdatedParams,
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import { composeWorkbenchTranscriptWindow } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+
+function transcriptPrefetch(threadId: string, count: number): WorkbenchTranscriptPrefetchResult {
+  const turns = [{
+    created_at: 1,
+    duration_ms: null,
+    ended_at: 1,
+    harness_id: "codex",
+    id: `${threadId}-turn`,
+    identity_origin: "workbench" as const,
+    native_location: "C:/project",
+    native_thread_id: threadId,
+    native_turn_id: `${threadId}-turn`,
+    started_at: 1,
+    state: "completed" as const,
+    thread_id: threadId,
+    turn_index: 0,
+  }];
+  const thread = {
+    activity_at: 1,
+    archived: 0 as const,
+    created_at: 1,
+    id: threadId,
+    identity_origin: "workbench" as const,
+    next_turn_index: 1,
+    pinned: 0 as const,
+    project_id: "project",
+    project_root: "C:/project",
+    snoozed: 0 as const,
+    title: threadId,
+    transcript_content_version: 1,
+    updated_at: 1,
+  };
+  const catalog = {
+    hasPreviousTurns: false,
+    loadedTurnIds: [],
+    rows: emptyTranscriptSnapshotRows(),
+    thread,
+    turns,
+  };
+  const envelopes = Array.from({ length: count }, (_, index) => {
+    const rows = emptyTranscriptSnapshotRows();
+    rows.threadItems.push({
+      created_at: index,
+      id: index + 1,
+      item_position: index,
+      public_id: `item-${index}`,
+      thread_id: threadId,
+      turn_id: turns[0]!.id,
+      type: "assistantMessage",
+      updated_at: index,
+    });
+    rows.threadItemAssistantMessages.push({
+      item_id: index + 1,
+      item_type: "assistantMessage",
+      phase: "commentary",
+      state: "completed",
+      text: `message ${index}`,
+    });
+    const snapshot = { ...catalog, loadedTurnIds: [turns[0]!.id], rows };
+    const value = {
+      cursor: { itemId: `item-${index}`, itemPosition: index, turnIndex: 0 },
+      itemId: `item-${index}`,
+      snapshot,
+    };
+    return { ...value, retainedBytes: JSON.stringify(value).length * 2 };
+  });
+  return {
+    catalog,
+    envelopes,
+    hasMore: false,
+    retainedBytes: envelopes.reduce((sum, envelope) => sum + envelope.retainedBytes, 0),
+  };
+}
 
 test("working-tree reads route through the observed folder's daemon and reject missing or unobserved scope", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
@@ -148,6 +227,8 @@ async function fixture(
   const updates: WorkspaceObservation[] = [];
   const deltas: WorkspaceObservationDelta[] = [];
   const providerEvents: Array<{ method: string; harness: string; daemonId: string }> = [];
+  const transcriptEvents: Array<{ kind: string; data: WorkbenchTranscriptUpdatedParams | object }> = [];
+  const transcriptListeners = new Set<() => void>();
   const listeners = new Set<() => void>();
   let read: () => Promise<WorkbenchClientStateResponse> = async () => state(0);
   const requestSources = daemons
@@ -174,14 +255,17 @@ async function fixture(
     publishThreadEvent: (notification, harness, daemonId) => {
       providerEvents.push({ method: notification.method, harness, daemonId });
     },
-    publishTranscript: () => {},
+    publishTranscript: event => {
+      transcriptEvents.push(event);
+      for (const listener of [...transcriptListeners]) listener();
+    },
     warn: message => warnings.push(message),
   });
   context.after(async () => {
     owner.dispose(); threads.dispose(); workspace.dispose(); sources.dispose();
     presentation.close(); await repository.close(); await temporary.dispose();
   });
-  return { owner, workspace, updates, deltas, providerEvents, warnings, changes,
+  return { owner, workspace, updates, deltas, providerEvents, transcriptEvents, warnings, changes, sources: requestSources,
     read: (operation: typeof read) => { read = operation; },
     changed: () => { for (const changed of [...changes]) changed(); },
     wait: (predicate: (value: WorkspaceObservation) => boolean) => new Promise<WorkspaceObservation>(resolve => {
@@ -192,8 +276,92 @@ async function fixture(
       };
       listeners.add(changed); changed();
     }),
+    waitTranscript: (
+      predicate: (value: { kind: string; data: WorkbenchTranscriptUpdatedParams | object }) => boolean,
+    ) => new Promise<{ kind: string; data: WorkbenchTranscriptUpdatedParams | object }>(resolve => {
+      const changed = () => {
+        const value = transcriptEvents.find(predicate);
+        if (!value) return;
+        transcriptListeners.delete(changed);
+        resolve(value);
+      };
+      transcriptListeners.add(changed);
+      changed();
+    }),
   };
 }
+
+test("transcript demand publishes bounded cached item windows and releases its reservoir lease", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const projectId = ProjectIdSchema.parse("owner-project");
+  const requestedThreadId = ThreadReferenceSchema.parse("provider-thread");
+  const threadId = WorkbenchThreadIdSchema.parse(randomUUID());
+  const owner = {
+    phase: "current" as const,
+    identity: { harness: "codex" as const, projectId, threadId },
+    location: { daemonId, projectId },
+    logicalProjectId: null,
+  };
+  const prefetched = transcriptPrefetch(threadId, 5);
+  assert.ok(prefetched.catalog);
+  const fullSnapshot = composeWorkbenchTranscriptWindow(prefetched.catalog, prefetched.envelopes, {
+    hasPreviousItems: false,
+  });
+  let daemonReads = 0;
+  let upstreamReleased = false;
+  const source = {
+    id: daemonId,
+    socket: {
+      getSnapshot: () => ({ generation: 1 }),
+      onNotification: () => () => {},
+    },
+    observeTranscript: (
+      _query: object,
+      publish: (event: { kind: "transcriptSnapshot"; data: WorkbenchTranscriptUpdatedParams }) => void,
+    ) => {
+      publish({ kind: "transcriptSnapshot", data: {
+        snapshot: fullSnapshot,
+        stream: "workbench:transcript",
+        subscriptionId: "upstream",
+      } });
+      return { release: () => { upstreamReleased = true; } };
+    },
+  };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined }, {
+    observe: () => ({ getSnapshot: () => owner, release: () => {} }),
+  });
+  f.sources.transcriptReservoir.registerSource({
+    daemonId,
+    generation: 1,
+    prefetch: async () => {
+      daemonReads += 1;
+      return prefetched;
+    },
+  });
+
+  const subscriptionId = randomUUID();
+  await f.owner.transcript({
+    kind: "subscribe",
+    params: { subscriptionId, threadId: requestedThreadId, turnLimit: 4, protocolVersion: 5, initialItemCredit: 2 },
+  });
+  const initial = await f.waitTranscript(event => event.kind === "transcriptSnapshot"
+    && "subscriptionId" in event.data && event.data.subscriptionId === subscriptionId);
+  assert.equal(initial.kind, "transcriptSnapshot");
+  const initialData = initial.data as WorkbenchTranscriptUpdatedParams;
+  assert.deepEqual(initialData.snapshot?.rows.threadItems.map(item => item.item_position), [3, 4]);
+  assert.equal(initialData.window?.hasPreviousItems, true);
+
+  await f.owner.transcript({ kind: "demand", params: { subscriptionId, itemCredit: 2 } });
+  const older = await f.waitTranscript(event => event !== initial && event.kind === "transcriptSnapshot"
+    && "subscriptionId" in event.data && event.data.subscriptionId === subscriptionId);
+  const olderData = older.data as WorkbenchTranscriptUpdatedParams;
+  assert.deepEqual(olderData.snapshot?.rows.threadItems.map(item => item.item_position), [1, 2]);
+  assert.equal(daemonReads, 1);
+
+  await f.owner.transcript({ kind: "unsubscribe", params: { subscriptionId } });
+  assert.equal(upstreamReleased, true);
+  assert.equal(f.sources.transcriptReservoir.getDiagnostics().leases, 0);
+});
 
 test("provider-wide model changes reach browsers without thread demand", async context => {
   const f = await fixture(context);

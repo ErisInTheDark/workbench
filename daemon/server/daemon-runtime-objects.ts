@@ -185,6 +185,9 @@ export interface DaemonTranscriptRegistration {
   dispose(): void;
   readonly failure: Error | null;
   readonly pendingRecoveryThreadIds: Promise<readonly string[]>;
+  prefetch(
+    request: import("workbench-shared/workbench/database/transcript/workbench-transcript-contract").WorkbenchTranscriptPrefetchRequest,
+  ): Promise<import("workbench-shared/workbench/database/transcript/workbench-transcript-contract").WorkbenchTranscriptPrefetchResult>;
   readRecoveryGaps(threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId): Promise<import("./database/transcript/WorkbenchTranscriptCaptureGapController").WorkbenchTranscriptCaptureGapEntry[]>;
   read(request: { threadId: string; beforeTurnIndex?: number; turnIds?: string[]; turnLimit: number }): Promise<WorkbenchTranscriptSnapshot | null>;
   readContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;

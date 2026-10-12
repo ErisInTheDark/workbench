@@ -46,8 +46,13 @@ import { WorkbenchThreadStateMutationResultSchema, WorkbenchComposerProfileSlotS
 import { WorkspaceTranscriptRequestSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import {
   workbenchTranscriptOperations, conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed,
-  type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
+  type WorkbenchTranscriptItemCursor, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import {
+  composeWorkbenchTranscriptWindow,
+  splitWorkbenchTranscriptSnapshot,
+} from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import type { WorkbenchTranscriptReservoirLease } from "./WorkbenchTranscriptReservoir";
 import type WorkbenchAppReloadOrchestrator from "../runtime/WorkbenchAppReloadOrchestrator";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 import { mergeStatsSections } from "workbench-shared/workbench/stats/workbench-stats-merge";
@@ -79,6 +84,13 @@ interface TranscriptSubscription {
   projectId: ProjectId | null;
   threadId: string;
   read: { release(): void } | null;
+  lease: WorkbenchTranscriptReservoirLease | null;
+  leaseGeneration: number | null;
+  pendingDemand: Promise<void> | null;
+  requestedCredit: number;
+  hasPreviousItems: boolean;
+  firstCursor: WorkbenchTranscriptItemCursor | null;
+  lastCursor: WorkbenchTranscriptItemCursor | null;
   stop: Array<() => void>;
 }
 
@@ -289,6 +301,12 @@ export default class WorkbenchWorkspaceRequestController {
       this.releaseTranscript(request.params.subscriptionId);
       return { unsubscribed: true };
     }
+    if (request.kind === "demand") {
+      const subscription = this.transcripts.get(request.params.subscriptionId);
+      if (!subscription?.lease) throw new Error("Transcript item delivery is unavailable.");
+      await this.demandTranscript(request.params.subscriptionId, subscription, request.params.itemCredit);
+      return { demanded: true };
+    }
     if (request.kind === "read") return this.options.threads.withThread(request.params.threadId, (source, owner) =>
       source.request<Json>(workbenchTranscriptOperations.read.method, {
         ...request.params, threadId: owner.identity.threadId, protocolVersion: 4,
@@ -297,7 +315,18 @@ export default class WorkbenchWorkspaceRequestController {
     const { subscriptionId: id, ...query } = request.params;
     this.releaseTranscript(id);
     const subscription: TranscriptSubscription = {
-      source: null, projectId: null, threadId: query.threadId, read: null, stop: [],
+      source: null,
+      projectId: null,
+      threadId: query.threadId,
+      read: null,
+      lease: null,
+      leaseGeneration: null,
+      pendingDemand: null,
+      requestedCredit: query.initialItemCredit ?? 0,
+      hasPreviousItems: true,
+      firstCursor: null,
+      lastCursor: null,
+      stop: [],
     };
     this.transcripts.set(id, subscription);
     let changed = () => {};
@@ -310,6 +339,9 @@ export default class WorkbenchWorkspaceRequestController {
       if (owner.phase !== "current" || !source) {
         subscription.read?.release();
         subscription.read = null;
+        subscription.lease?.release();
+        subscription.lease = null;
+        subscription.leaseGeneration = null;
         subscription.source = null;
         this.options.publishTranscript({ kind: "transcriptState", data: {
           subscriptionId: id, phase: owner.phase === "pending" ? "pending" : "failed",
@@ -320,16 +352,89 @@ export default class WorkbenchWorkspaceRequestController {
       }
       if (subscription.read && subscription.source === source && subscription.projectId === owner.location.projectId) return;
       subscription.read?.release();
+      subscription.lease?.release();
+      subscription.lease = null;
+      subscription.leaseGeneration = null;
+      subscription.firstCursor = null;
+      subscription.lastCursor = null;
       subscription.source = source;
       subscription.projectId = owner.location.projectId;
       subscription.threadId = owner.identity.threadId;
+      if (query.protocolVersion === 5 && query.initialItemCredit !== undefined) {
+        const generation = source.socket.getSnapshot().generation;
+        subscription.lease = this.options.sources.transcriptReservoir.open({
+          consumerId: id,
+          daemonId: source.id,
+          generation,
+          threadId: owner.identity.threadId,
+        });
+        subscription.leaseGeneration = generation;
+      }
       this.observeProvider(source);
       try {
         subscription.read = source.observeTranscript({ ...query, threadId: owner.identity.threadId }, event => {
           if (this.transcripts.get(id) !== subscription || subscription.source !== source) return;
+          if (query.protocolVersion === 5 && query.initialItemCredit !== undefined
+            && subscription.leaseGeneration !== source.socket.getSnapshot().generation) {
+            subscription.lease?.release();
+            subscription.firstCursor = null;
+            subscription.lastCursor = null;
+            const generation = source.socket.getSnapshot().generation;
+            subscription.lease = this.options.sources.transcriptReservoir.open({
+              consumerId: id,
+              daemonId: source.id,
+              generation,
+              threadId: subscription.threadId,
+            });
+            subscription.leaseGeneration = generation;
+            subscription.requestedCredit = Math.max(subscription.requestedCredit, query.initialItemCredit);
+            void this.demandTranscript(id, subscription, subscription.requestedCredit).catch(error => {
+              if (this.transcripts.get(id) !== subscription) return;
+              const message = this.failure(error);
+              this.options.warn(`Transcript item delivery failed: ${message}`);
+            });
+          }
+          if (subscription.lease && event.kind === "transcriptSnapshot") {
+            if (!event.data.snapshot || !subscription.firstCursor) {
+              if (!event.data.snapshot) {
+                this.options.publishTranscript({ ...event, data: { ...event.data, subscriptionId: id } });
+              }
+              return;
+            }
+            const partition = splitWorkbenchTranscriptSnapshot(event.data.snapshot);
+            const envelopes = partition.envelopes.filter(envelope =>
+              !this.cursorBefore(envelope.cursor, subscription.firstCursor!));
+            const snapshot = composeWorkbenchTranscriptWindow(partition.catalog, envelopes, {
+              hasPreviousItems: subscription.hasPreviousItems,
+            });
+            this.options.publishTranscript({ kind: "transcriptSnapshot", data: {
+              ...event.data,
+              snapshot,
+              subscriptionId: id,
+              window: {
+                firstCursor: subscription.firstCursor,
+                hasPreviousItems: subscription.hasPreviousItems,
+                ...(subscription.lastCursor ? { lastCursor: subscription.lastCursor } : {}),
+              },
+            } });
+            return;
+          }
           this.options.publishTranscript({ ...event, data: { ...event.data, subscriptionId: id } } as WorkbenchDaemonTranscriptEvent);
         });
+        if (subscription.lease && subscription.requestedCredit > 0) {
+          void this.demandTranscript(id, subscription, subscription.requestedCredit).catch(error => {
+            if (this.transcripts.get(id) !== subscription) return;
+            const message = this.failure(error);
+            this.options.warn(`Transcript item delivery failed: ${message}`);
+            this.options.publishTranscript({ kind: "transcriptState", data: {
+              subscriptionId: id, phase: "failed", failure: message,
+            } });
+          });
+        }
       } catch (error) {
+        subscription.lease?.release();
+        subscription.lease = null;
+        subscription.leaseGeneration = null;
         subscription.read = null;
         subscription.source = null;
         const message = this.failure(error);
@@ -1087,7 +1192,62 @@ export default class WorkbenchWorkspaceRequestController {
     if (!subscription) return;
     this.transcripts.delete(id);
     subscription.read?.release();
+    subscription.lease?.release();
     for (const stop of subscription.stop) stop();
+  }
+
+  private async demandTranscript(id: string, subscription: TranscriptSubscription, credit: number) {
+    subscription.requestedCredit = Math.max(subscription.requestedCredit, credit);
+    if (subscription.pendingDemand) {
+      const pending = subscription.pendingDemand;
+      await pending;
+      if (subscription.requestedCredit > 0 && this.transcripts.get(id) === subscription && subscription.lease) {
+        await this.demandTranscript(id, subscription, subscription.requestedCredit);
+      }
+      return;
+    }
+    const work = (async () => {
+      while (subscription.requestedCredit > 0) {
+        const requested = subscription.requestedCredit;
+        subscription.requestedCredit = 0;
+        const result = await subscription.lease!.demand(requested);
+        if (this.transcripts.get(id) !== subscription || !subscription.lease) return;
+        if (!result.catalog) throw new Error("Transcript item delivery is missing its catalogue.");
+        subscription.hasPreviousItems = result.hasMore;
+        const first = result.envelopes[0]?.cursor;
+        const last = result.envelopes.at(-1)?.cursor;
+        if (first && (!subscription.firstCursor || this.cursorBefore(first, subscription.firstCursor))) {
+          subscription.firstCursor = first;
+        }
+        if (last && (!subscription.lastCursor || this.cursorBefore(subscription.lastCursor, last))) {
+          subscription.lastCursor = last;
+        }
+        this.options.publishTranscript({ kind: "transcriptSnapshot", data: {
+          snapshot: composeWorkbenchTranscriptWindow(result.catalog, result.envelopes, {
+            hasPreviousItems: result.hasMore,
+          }),
+          stream: "workbench:transcript",
+          subscriptionId: id,
+          window: {
+            ...(subscription.firstCursor ? { firstCursor: subscription.firstCursor } : {}),
+            hasPreviousItems: result.hasMore,
+            ...(subscription.lastCursor ? { lastCursor: subscription.lastCursor } : {}),
+          },
+        } });
+      }
+    })().finally(() => {
+      if (subscription.pendingDemand === work) subscription.pendingDemand = null;
+    });
+    subscription.pendingDemand = work;
+    return work;
+  }
+
+  private cursorBefore(left: WorkbenchTranscriptItemCursor, right: WorkbenchTranscriptItemCursor) {
+    return left.turnIndex < right.turnIndex
+      || left.turnIndex === right.turnIndex && (
+        left.itemPosition < right.itemPosition
+        || left.itemPosition === right.itemPosition && left.itemId < right.itemId
+      );
   }
 
   private observeProvider(source: WorkbenchDaemonSource) {

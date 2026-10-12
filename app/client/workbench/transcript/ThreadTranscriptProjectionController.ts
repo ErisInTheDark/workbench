@@ -7,8 +7,11 @@
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
 import type {
+  WorkbenchTranscriptItemCursor,
   WorkbenchTranscriptSnapshot,
+  WorkbenchTranscriptUpdatedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import { prependWorkbenchTranscriptWindow } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
@@ -122,7 +125,9 @@ interface ThreadTranscriptProjectionControllerOptions {
   onError?: (error: Error) => void;
   onStateChange?: (state: ThreadTranscriptProjectionState) => void;
   onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
-  transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">;
+  initialItemCredit?: number;
+  transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">
+    & Partial<Pick<WorkbenchTranscriptClient, "demand">>;
   turnLimit: number;
 }
 
@@ -132,6 +137,7 @@ export default class ThreadTranscriptProjectionController {
   readonly #onStateChange: NonNullable<ThreadTranscriptProjectionControllerOptions["onStateChange"]>;
   readonly #onText: NonNullable<ThreadTranscriptProjectionControllerOptions["onText"]>;
   readonly #transcripts: ThreadTranscriptProjectionControllerOptions["transcripts"];
+  readonly #initialItemCredit: number | null;
   readonly #turnLimit: number;
   #activeSubscriptionId: string | null = null;
   #available: boolean;
@@ -148,6 +154,9 @@ export default class ThreadTranscriptProjectionController {
   readonly #toolPatches = new Map<string, TranscriptToolPatchUpdate>();
   #incremental = false;
   #localInitials: ReturnType<typeof localInitials> = [];
+  #snapshot: WorkbenchTranscriptSnapshot | null = null;
+  #firstCursor: WorkbenchTranscriptItemCursor | null = null;
+  #pendingHistoryDemand: PromiseWithResolvers<readonly string[] | null> | null = null;
 
   constructor({
     available = false,
@@ -156,6 +165,7 @@ export default class ThreadTranscriptProjectionController {
     onText = () => undefined,
     transcripts,
     turnLimit,
+    initialItemCredit,
   }: ThreadTranscriptProjectionControllerOptions) {
     this.#onError = onError;
     this.#onStateChange = onStateChange;
@@ -163,6 +173,7 @@ export default class ThreadTranscriptProjectionController {
     this.#available = available;
     this.#transcripts = transcripts;
     this.#turnLimit = turnLimit;
+    this.#initialItemCredit = initialItemCredit ?? null;
   }
 
   dispose() {
@@ -171,6 +182,10 @@ export default class ThreadTranscriptProjectionController {
     this.#selection = null;
     this.#localInitials = [];
     this.#projection = null;
+    this.#snapshot = null;
+    this.#firstCursor = null;
+    this.#pendingHistoryDemand?.resolve(null);
+    this.#pendingHistoryDemand = null;
     this.#streamItems.clear();
     this.#patchPreview = null;
     this.#toolPatches.clear();
@@ -187,6 +202,21 @@ export default class ThreadTranscriptProjectionController {
     return this.#lifecycle;
   }
 
+  loadOlder(itemCredit: number) {
+    if (!this.#activeSubscriptionId || !this.#transcripts.demand || this.#pendingHistoryDemand) return Promise.resolve(null);
+    const pending = Promise.withResolvers<readonly string[] | null>();
+    this.#pendingHistoryDemand = pending;
+    void this.#transcripts.demand({
+      itemCredit,
+      subscriptionId: this.#activeSubscriptionId,
+    }).catch(error => {
+      if (this.#pendingHistoryDemand !== pending) return;
+      this.#pendingHistoryDemand = null;
+      pending.reject(error);
+    });
+    return pending.promise;
+  }
+
   setAvailable(available: boolean) {
     if (this.#disposed || this.#available === available) return;
     this.#available = available;
@@ -199,6 +229,8 @@ export default class ThreadTranscriptProjectionController {
     if (!available) {
       this.#generation += 1;
       this.#activeSubscriptionId = null;
+      this.#pendingHistoryDemand?.resolve(null);
+      this.#pendingHistoryDemand = null;
       if (!this.#publishProjection("loading")) this.#publishUnavailableOrIdle();
       return;
     }
@@ -232,6 +264,10 @@ export default class ThreadTranscriptProjectionController {
     this.#localInitials = nextLocalInitials;
     if (previousThreadId !== nextThreadId) {
       this.#projection = null;
+      this.#snapshot = null;
+      this.#firstCursor = null;
+      this.#pendingHistoryDemand?.resolve(null);
+      this.#pendingHistoryDemand = null;
       this.#streamItems.clear();
       this.#patchPreview = null;
       this.#toolPatches.clear();
@@ -453,7 +489,11 @@ export default class ThreadTranscriptProjectionController {
     this.#publishLoadingOrIdle();
   }
 
-  #receiveSnapshot(generation: number, snapshot: WorkbenchTranscriptSnapshot | null) {
+  #receiveSnapshot(
+    generation: number,
+    snapshot: WorkbenchTranscriptSnapshot | null,
+    window?: WorkbenchTranscriptUpdatedParams["window"],
+  ) {
     if (this.#disposed || !this.#available) return;
     // A superseded window can reveal the same thread while its replacement loads,
     // but cannot erase or overwrite content already accepted by this owner.
@@ -465,6 +505,8 @@ export default class ThreadTranscriptProjectionController {
       this.#patchPreview = null;
       this.#toolPatches.clear();
       this.#streamLayout = null;
+      this.#snapshot = null;
+      this.#firstCursor = null;
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
         ? { status: "absent", threadId }
@@ -472,7 +514,14 @@ export default class ThreadTranscriptProjectionController {
       return;
     }
     if (snapshot.thread.id !== this.#selection?.thread.id) return;
-    const result = projectWorkbenchTranscript(snapshot);
+    const prepend = Boolean(window?.firstCursor && this.#firstCursor
+      && this.#cursorBefore(window.firstCursor, this.#firstCursor));
+    const accepted = prepend && this.#snapshot
+      ? prependWorkbenchTranscriptWindow(this.#snapshot, snapshot, {
+        hasPreviousItems: window?.hasPreviousItems ?? snapshot.hasPreviousTurns,
+      })
+      : snapshot;
+    const result = projectWorkbenchTranscript(accepted);
     if ("issues" in result) {
       if (generation !== this.#generation) return;
       this.#failureMessage = "SQLite transcript data could not be projected.";
@@ -480,14 +529,21 @@ export default class ThreadTranscriptProjectionController {
         message: this.#failureMessage,
         projection: this.#visibleProjection(this.#projection?.value ?? null),
         status: "failed",
-        threadId: snapshot.thread.id,
+        threadId: accepted.thread.id,
       });
       this.#onError(new Error("SQLite transcript data could not be projected."));
       return;
     }
     this.#failureMessage = null;
+    this.#snapshot = accepted;
+    this.#firstCursor = window?.firstCursor ?? null;
     this.#projection = { value: result.data, generation };
     this.#publishProjection();
+    if (this.#pendingHistoryDemand) {
+      const pending = this.#pendingHistoryDemand;
+      this.#pendingHistoryDemand = null;
+      pending.resolve(snapshot.loadedTurnIds);
+    }
   }
 
   #receiveStream(generation: number, update: TranscriptStreamUpdate) {
@@ -604,6 +660,8 @@ export default class ThreadTranscriptProjectionController {
     const cause = error instanceof Error ? error : new Error(String(error));
     const threadId = this.#selection?.thread.id ?? "none";
     const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
+    this.#pendingHistoryDemand?.reject(cause);
+    this.#pendingHistoryDemand = null;
     if (generation === this.#generation && this.#selection) {
       this.#failureMessage = `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500);
       this.#onStateChange({
@@ -641,12 +699,13 @@ export default class ThreadTranscriptProjectionController {
         // Without durable turn ids the daemon owns the window: the latest `turnLimit` turns.
         const turnIds = durableTurnIds(selection.thread.turns);
         await this.#transcripts.subscribe({
+          ...(this.#initialItemCredit === null ? {} : { initialItemCredit: this.#initialItemCredit }),
           toolPatchPreviews: true,
           subscriptionId,
           threadId: selection.thread.id,
           ...(turnIds.length ? { turnIds } : {}),
           turnLimit: selection.turnLimit ?? this.#turnLimit,
-        }, (snapshot) => this.#receiveSnapshot(generation, snapshot),
+        }, (snapshot, window) => this.#receiveSnapshot(generation, snapshot, window),
         update => this.#receiveStream(generation, update),
         error => this.#failStream(error, generation),
         state => {
@@ -668,5 +727,13 @@ export default class ThreadTranscriptProjectionController {
         }
       })
       .catch((error) => this.#reportError(error, generation));
+  }
+
+  #cursorBefore(left: WorkbenchTranscriptItemCursor, right: WorkbenchTranscriptItemCursor) {
+    return left.turnIndex < right.turnIndex
+      || left.turnIndex === right.turnIndex && (
+        left.itemPosition < right.itemPosition
+        || left.itemPosition === right.itemPosition && left.itemId < right.itemId
+      );
   }
 }

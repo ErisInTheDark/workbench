@@ -14,6 +14,7 @@ import {
   type WorkbenchTranscriptSnapshot,
   type WorkbenchTranscriptSubscribeParams,
   type WorkbenchTranscriptUnsubscribeParams,
+  type WorkbenchTranscriptUpdatedParams,
   workbenchTranscriptNotifications,
   workbenchTranscriptOperations,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
@@ -57,7 +58,10 @@ export default class WorkbenchTranscriptClient {
   private readonly subscriptions = new Map<string, {
     failed: boolean;
     onFailure?: (error: Error) => void;
-    onSnapshot(snapshot: WorkbenchTranscriptSnapshot | null): void;
+    onSnapshot(
+      snapshot: WorkbenchTranscriptSnapshot | null,
+      window?: WorkbenchTranscriptUpdatedParams["window"],
+    ): void;
     onUpdate?: (update: TranscriptStreamUpdate) => void;
     onState?: (state: WorkspaceTranscriptState) => void;
   }>();
@@ -106,7 +110,10 @@ export default class WorkbenchTranscriptClient {
 
   async subscribe(
     params: WorkbenchTranscriptSubscribeParams,
-    listener: (snapshot: WorkbenchTranscriptSnapshot | null) => void,
+    listener: (
+      snapshot: WorkbenchTranscriptSnapshot | null,
+      window?: WorkbenchTranscriptUpdatedParams["window"],
+    ) => void,
     streamListener?: (update: TranscriptStreamUpdate) => void,
     streamFailure?: (error: Error) => void,
     stateListener?: (state: WorkspaceTranscriptState) => void,
@@ -117,7 +124,7 @@ export default class WorkbenchTranscriptClient {
     try {
       await this.request(workbenchTranscriptOperations.subscribe, {
         // The daemon's snapshot-only format remains used by non-streaming consumers.
-        ...params, protocolVersion: streamListener ? 4 : 2,
+        ...params, protocolVersion: params.initialItemCredit !== undefined ? 5 : streamListener ? 4 : 2,
       });
     } catch (error) {
       if (this.subscriptions.get(params.subscriptionId) === subscription) this.subscriptions.delete(params.subscriptionId);
@@ -128,6 +135,13 @@ export default class WorkbenchTranscriptClient {
   async unsubscribe(params: WorkbenchTranscriptUnsubscribeParams) {
     await this.request(workbenchTranscriptOperations.unsubscribe, params);
     this.subscriptions.delete(params.subscriptionId);
+  }
+
+  async demand(params: { itemCredit: number; subscriptionId: string }) {
+    const result = await this.transport.request("workbench/transcript/demand", params);
+    if (!result || typeof result !== "object" || !("demanded" in result) || result.demanded !== true) {
+      throw new Error("Incompatible workbench/transcript/demand response.");
+    }
   }
 
   private async request<Kind extends string, Method extends string, Params, Result>(
@@ -217,7 +231,7 @@ export default class WorkbenchTranscriptClient {
     const subscription = this.subscriptions.get(conformed.data.subscriptionId);
     if (subscription) {
       subscription.failed = false;
-      subscription.onSnapshot(conformed.data.snapshot);
+      subscription.onSnapshot(conformed.data.snapshot, conformed.data.window);
     }
   }
 

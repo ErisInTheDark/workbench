@@ -2822,6 +2822,58 @@ test("a Workbench compaction adopts its later native reference before the provid
   }
 });
 
+test("item ranges page within one turn by stable cursor without reading the whole turn", () => {
+  const { database, repository } = createRepository();
+  try {
+    repository.settle([canonicalWindow([
+      threadObservation(),
+      turnObservation("turn-0", 0),
+      ...Array.from({ length: 5 }, (_, index): WorkbenchTranscriptAtomicObservation => ({
+        kind: "item",
+        threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+        turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn-0"),
+        lifecycle: "completed",
+        observedAt: index + 10,
+        item: {
+          type: "agentMessage",
+          id: `message-${index}`,
+          text: `message ${index}`,
+          phase: "commentary",
+          memoryCitation: null,
+          delivery: null,
+          questions: null,
+        },
+      })),
+    ], ["turn-0"])]);
+
+    const latest = repository.readItemRange({ threadId: "thread", limit: 2 });
+    assert.deepEqual(
+      rootsWithReferences(latest.snapshot).map(({ reference }) => reference),
+      ["message-3", "message-4"],
+    );
+    assert.equal(latest.hasMore, true);
+
+    const older = repository.readItemRange({
+      threadId: "thread",
+      before: latest.firstCursor,
+      limit: 2,
+    });
+    assert.deepEqual(
+      rootsWithReferences(older.snapshot).map(({ reference }) => reference),
+      ["message-1", "message-2"],
+    );
+    assert.equal(older.hasMore, true);
+
+    assert.throws(() => repository.readItemRange({
+      threadId: "thread",
+      before: { itemId: "message-4", itemPosition: 0, turnIndex: 0 },
+      limit: 2,
+    }), /cursor no longer matches/u);
+  } finally {
+    database.close();
+  }
+});
+
 test("provider replay cannot restore expired result or turn payloads", () => {
   const { database, repository } = createRepository();
   const command: Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> = {

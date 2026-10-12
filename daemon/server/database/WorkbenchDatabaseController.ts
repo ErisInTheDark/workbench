@@ -73,6 +73,7 @@ import type {
     WorkbenchDatabaseRequestPayload,
     WorkbenchDatabaseResponse,
     WorkbenchDatabaseWorkerMessage,
+    WorkbenchTranscriptItemRange,
 } from "./workbench-database-protocol";
 import { getWorkbenchDatabaseReadClass } from "./workbench-database-protocol";
 import WorkbenchDatabaseReadPool, { type WorkbenchDatabaseReader } from "./WorkbenchDatabaseReadPool";
@@ -513,6 +514,17 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       throw new WorkbenchDatabaseFailure(`Unexpected transcript read response: ${response.type}`);
     }
     return response.snapshot;
+  }
+
+  async readTranscriptItemRange(
+    request: Extract<WorkbenchDatabaseRequestPayload, { type: "readTranscriptItemRange" }>["request"],
+  ): Promise<WorkbenchTranscriptItemRange | null> {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptItemRange", request });
+    if (response.type !== "transcriptItemRange") {
+      throw new WorkbenchDatabaseFailure(`Unexpected transcript item range response: ${response.type}`);
+    }
+    return response.range;
   }
 
   async readThreadContextUsage(threadId: string) {

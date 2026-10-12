@@ -26,6 +26,7 @@ import ThreadGitArcClaimObserver from "./ThreadGitArcClaimObserver";
 import ThreadGitArcProposalObserver from "./ThreadGitArcProposalObserver";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
+import { ROUTINE_TRANSCRIPT_ITEM_CREDIT } from "../../components/workbench/thread-view/thread-progressive-window-policy";
 
 type ObservedTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" | "draft" }>;
 type ThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
@@ -156,7 +157,6 @@ export default function createObservedThreadSource(
   let creatingTranscript = false;
   let transcriptState: ThreadTranscriptProjectionState = { status: "idle" };
   let turnLimit = TURN_WINDOW_STEP;
-  let olderLoad: { previous: ReadonlySet<string>; resolve: (turnIds: readonly string[] | null) => void } | null = null;
   const pending = new Map<string, PendingInput>();
   const gitArc = new ThreadGitArcProposalObserver({
     ...(ports.readGitArcProposal ? { read: ports.readGitArcProposal } : {}),
@@ -212,11 +212,6 @@ export default function createObservedThreadSource(
       select(entry);
       return;
     }
-    if (olderLoad && state.status === "ready") {
-      const loaded = state.projection.turns.map(({ id }) => id).filter(id => !olderLoad!.previous.has(id));
-      olderLoad.resolve(loaded.length ? loaded : null);
-      olderLoad = null;
-    }
     sync();
   };
 
@@ -266,8 +261,6 @@ export default function createObservedThreadSource(
     void transcript?.controller.dispose();
     transcript = null;
     transcriptState = { status: "idle" };
-    olderLoad?.resolve(null);
-    olderLoad = null;
   };
 
   const requireEntry = () => {
@@ -380,13 +373,8 @@ export default function createObservedThreadSource(
       changeSettings: () => {},
       loadOlder() {
         const current = projection();
-        const { entry } = readEntry();
-        if (!transcript || !entry || !current?.hasPreviousTurns || olderLoad) return Promise.resolve(null);
-        return new Promise(resolve => {
-          olderLoad = { previous: new Set(current.turns.map(({ id }) => id)), resolve };
-          turnLimit += TURN_WINDOW_STEP;
-          select(entry);
-        });
+        if (!transcript || !current?.hasPreviousTurns) return Promise.resolve(null);
+        return transcript.controller.loadOlder(ROUTINE_TRANSCRIPT_ITEM_CREDIT);
       },
       observeGitArcProposal(proposalId, variant) {
         if (disposed) return () => {};
