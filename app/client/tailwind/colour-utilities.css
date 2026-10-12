@@ -101,3 +101,12 @@
   background-color: oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*]));
   background-color: color-mix(in srgb, oklch(var(--oklch-text-lightness) var(--hue-chroma, 90%) --value(number, [*])) calc(--modifier(number, [*]) * 1%), transparent);
 }
+
+/* Brighter, more vivid hues for highlighting part of something drawn in the plain hue: bg-hue-bright-150. */
+@utility bg-hue-bright-* {
+  background-color: oklch(min(calc(var(--oklch-text-lightness) + 30%), 90%) 60% --value(number, [*]));
+}
+
+@utility border-hue-bright-* {
+  border-color: oklch(min(calc(var(--oklch-text-lightness) + 30%), 90%) 60% --value(number, [*]));
+}

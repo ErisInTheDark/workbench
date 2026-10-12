@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsView: feed the app's stats store its view facts, nudge history import and limit refresh, and render the shared controls and the routed tab.
+ * - default WorkbenchStatsView: feed the app's stats store its view facts, nudge history import and limit refresh, and render the routed tab's lead, the shared controls, and the tab.
  */
 import { useContext, useEffect, useLayoutEffect, useState, type ComponentType } from "react";
 
@@ -14,13 +14,15 @@ import useStats from "./use-stats";
 import WorkbenchStatsControls from "./WorkbenchStatsControls";
 import type { StatsInputs } from "./WorkbenchStatsStore";
 import WorkbenchStatsToolsTab from "./tools/WorkbenchStatsToolsTab";
+import WorkbenchStatsLimits from "./usage/WorkbenchStatsLimits";
 import WorkbenchStatsUsageTab from "./usage/WorkbenchStatsUsageTab";
 import WorkbenchStatsWorkspacesTab from "./workspaces/WorkbenchStatsWorkspacesTab";
 
-const TABS: Record<WorkbenchStatsTab, ComponentType> = {
-  tools: WorkbenchStatsToolsTab,
-  usage: WorkbenchStatsUsageTab,
-  workspaces: WorkbenchStatsWorkspacesTab,
+/** `Lead` renders above the shared controls, for panels the controls do not narrow. */
+const TABS: Record<WorkbenchStatsTab, { Lead?: ComponentType; Body: ComponentType }> = {
+  tools: { Body: WorkbenchStatsToolsTab },
+  usage: { Lead: WorkbenchStatsLimits, Body: WorkbenchStatsUsageTab },
+  workspaces: { Body: WorkbenchStatsWorkspacesTab },
 };
 
 export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, projects, scope, tab, threadRoute }: {
@@ -65,11 +67,12 @@ export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, pro
     };
   }, [daemon, workspace]);
 
-  const Tab = TABS[tab];
+  const { Lead, Body } = TABS[tab];
   return (
     <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 pb-10 pt-1">
+      {Lead ? <Lead key={`${tab}:lead`} /> : null}
       <WorkbenchStatsControls error={actionError} tab={tab} />
-      <Tab key={tab} />
+      <Body key={tab} />
     </div>
   );
 }

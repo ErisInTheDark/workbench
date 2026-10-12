@@ -52,6 +52,7 @@
  * - MessageCircleDashedIcon/MessageCircleQuestionMarkIcon/MessageCircleCheckIcon/MessageCircleGitCommitIcon/MessageCircleMoreIcon/MessageCircleXIcon: message glyphs.
  * - SquarePenIcon/CheckCheckIcon/AlarmClockIcon/ZzzIcon: editing and status glyphs.
  * - Trash2Icon/TriangleAlertIcon: miscellaneous base glyphs.
+ * - TriangleIcon/DiamondIcon: trend direction and steady glyphs.
  * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - SlashIcon: compact skill overflow glyph.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
@@ -487,6 +488,14 @@ export function ClockIcon(props: IconProps) {
       <path d="M12 6v6l4 2" />
     </OutlinedIcon>
   );
+}
+
+export function TriangleIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /></OutlinedIcon>;
+}
+
+export function DiamondIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.41 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.41 0Z" /></OutlinedIcon>;
 }
 
 export function TriangleAlertIcon(props: IconProps) {

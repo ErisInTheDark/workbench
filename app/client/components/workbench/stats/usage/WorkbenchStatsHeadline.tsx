@@ -6,16 +6,17 @@ import useStats from "../use-stats";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import Sparkline from "../../../ui/Sparkline";
 import { compactNumber, formatMoney, formatPercent, statsDelta } from "../stats-formatters";
+import StatsTrend from "../StatsTrend";
 
 /** Only spend has a good direction; other counts change without being better or worse. */
 function Delta({ current, previous, judged }: { current: number; previous: number; judged: boolean }) {
   const delta = statsDelta(current, previous);
   if (delta === null) return <span className="text-fg/muted">{current > 0 ? "new this period" : " "}</span>;
   const rounded = Math.round(delta);
-  if (rounded === 0) return <span className="text-fg/muted">same as before</span>;
   return (
-    <span className={!judged ? "text-fg/muted" : rounded > 0 ? "text-hue-40 [--hue-chroma:60%]" : "text-hue-150 [--hue-chroma:55%]"}>
-      {rounded > 0 ? "▲" : "▼"} {Math.abs(rounded)}%<span className="text-fg/muted"> vs previous</span>
+    <span className="inline-flex items-center gap-1 text-fg/muted">
+      <StatsTrend better={judged ? "down" : null} change={rounded} />
+      {rounded === 0 ? "same as before" : <span><span className="text-text">{Math.abs(rounded)}%</span> vs previous</span>}
     </span>
   );
 }
