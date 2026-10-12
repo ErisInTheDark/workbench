@@ -7,7 +7,7 @@
  */
 "use client";
 
-import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CompositionEvent, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -16,7 +16,12 @@ import {
   type InlineMentionSuggestion,
 } from "../../../workbench/thread/inline-mention-highlights";
 import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
+import { getCollapsedRangeRect } from "../../../workbench/dom/layout/viewport-metrics";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
+import {
+  getInlineMentionSuggestionsPortalStyle,
+  type InlineMentionSuggestionsPortalStyle,
+} from "./plaintext-editable-suggestion-geometry";
 import VoiceInputControl, { useVoiceInput } from "../voice/VoiceInputControl";
 import { capturePlaintextSelection, restorePlaintextSelection } from "./plaintext-selection";
 import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
@@ -45,9 +50,6 @@ function normalizePlaintextEditableValue (value: string) {
   const normalizedValue = value.replace(/\r\n/g, "\n");
   return normalizedValue.replace(/\n/g, "") ? normalizedValue : "";
 }
-
-const INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX = 8;
-const INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX = 8;
 
 function getEditableCaretOffset (element: HTMLElement) {
   const selection = window.getSelection?.();
@@ -116,35 +118,14 @@ function renderHighlightContent (value: string, highlights: readonly PlaintextHi
   return content.length ? content : "\u00a0";
 }
 
-function getInlineMentionSuggestionsPortalStyle (
-  anchor: HTMLElement,
-  placement: "above" | "below",
-): CSSProperties {
-  const anchorRect = anchor.getBoundingClientRect();
-  const viewportWidth = window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth;
-  const availableWidth = Math.max(
-    0,
-    viewportWidth - INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX * 2,
-  );
-  const width = Math.min(Math.max(anchorRect.width, 0), availableWidth);
-  const maxLeft = Math.max(
-    INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX,
-    viewportWidth - width - INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX,
-  );
-  const left = Math.min(
-    Math.max(anchorRect.left, INLINE_MENTION_SUGGESTIONS_VIEWPORT_GUTTER_PX),
-    maxLeft,
-  );
-  const top = placement === "above"
-    ? anchorRect.top - INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX
-    : anchorRect.bottom + INLINE_MENTION_SUGGESTIONS_ANCHOR_GAP_PX;
+function getEditableCaretRect (element: HTMLElement) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) {
+    return null;
+  }
 
-  return {
-    left,
-    top,
-    transform: placement === "above" ? "translateY(-100%)" : undefined,
-    width,
-  };
+  const range = selection.getRangeAt(0);
+  return element.contains(range.startContainer) ? getCollapsedRangeRect(range) : null;
 }
 
 function InlineMentionSuggestionLabel ({ suggestion }: { suggestion: InlineMentionSuggestion }) {
@@ -317,7 +298,7 @@ export default function PlaintextEditable ({
   const [caretOffset, setCaretOffset] = useState<number | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
   const [suggestionsPortalHost, setSuggestionsPortalHost] = useState<HTMLElement | null>(null);
-  const [suggestionsPortalStyle, setSuggestionsPortalStyle] = useState<CSSProperties | null>(null);
+  const [suggestionsPortalStyle, setSuggestionsPortalStyle] = useState<InlineMentionSuggestionsPortalStyle | null>(null);
   const suggestions = useMemo(() => (
     mentionSources && !readOnly && !disabled
       ? buildInlineMentionSuggestions(value, caretOffset, mentionSources)
@@ -347,13 +328,20 @@ export default function PlaintextEditable ({
 
   useLayoutEffect(() => {
     const container = containerRef.current;
-    if (!suggestions.length || !container) {
+    const element = elementRef.current;
+    if (!suggestions.length || !container || !element) {
       setSuggestionsPortalStyle(null);
       return;
     }
 
     const updateSuggestionsPortalStyle = () => {
-      setSuggestionsPortalStyle(getInlineMentionSuggestionsPortalStyle(container, mentionSuggestionsPlacement));
+      const fieldRect = container.getBoundingClientRect();
+      setSuggestionsPortalStyle(getInlineMentionSuggestionsPortalStyle(
+        fieldRect,
+        getEditableCaretRect(element) ?? fieldRect,
+        mentionSuggestionsPlacement,
+        window.visualViewport?.width ?? document.documentElement.clientWidth ?? window.innerWidth,
+      ));
     };
 
     updateSuggestionsPortalStyle();

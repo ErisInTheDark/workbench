@@ -10,6 +10,7 @@
  * - serializeInlineRunContainerForMarkupSignature: normalize an inline run for rich-text round-trip markup signatures. Keywords: workbench, inline format, markup, save guard.
  */
 
+import { getCollapsedRangeRect } from "../dom/layout/viewport-metrics";
 import { selectInsertedNodes } from "../dom/selection/selection-dom";
 import {
     escapeMarkdownText,
@@ -607,37 +608,6 @@ function WorkbenchInlineFormatController(
     materializePendingInlineFormatsAtCaret(pendingInlineFormats);
     options.updateCustomCaret();
     return null;
-  }
-
-  function getCollapsedRangeRect(range: Range) {
-    const directRect = range.getBoundingClientRect();
-    if (directRect.height > 0) {
-      return directRect;
-    }
-
-    const rects = range.getClientRects();
-    if (rects.length > 0 && rects[0].height > 0) {
-      return rects[0];
-    }
-
-    const marker = document.createElement("span");
-    marker.textContent = "\u200b";
-    marker.dataset.caretMeasure = "true";
-    marker.style.position = "relative";
-    marker.style.display = "inline-block";
-    marker.style.width = "0";
-    marker.style.overflow = "hidden";
-    marker.style.pointerEvents = "none";
-    marker.style.lineHeight = "inherit";
-
-    const measurementRange = range.cloneRange();
-    measurementRange.insertNode(marker);
-    const markerRect = marker.getBoundingClientRect();
-    marker.remove();
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    return markerRect;
   }
 
   function getCaretInlineContext(range: Range): CaretRenderContext | null {

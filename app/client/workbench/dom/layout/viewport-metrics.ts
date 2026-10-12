@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - VisualViewportMetrics: viewport offset and size values normalized across visualViewport-aware and fallback browsers. Keywords: workbench, viewport, metrics, geometry, mobile.
+ * - getCollapsedRangeRect: measure a caret range, inserting a temporary marker when the browser reports no box.
  * - getEditorLineHeight: read the rendered editor line height with a font-size fallback for caret and gutter layout. Keywords: workbench, editor, line height, geometry, caret.
  * - getExpandedRangeRect: resolve a non-empty DOMRect for a range using client rect fallbacks when the primary rect collapses. Keywords: workbench, range, rect, geometry, selection.
  * - getVisualViewportMetrics: read viewport offsets and dimensions with visualViewport fallbacks. Keywords: workbench, viewport, visualViewport, geometry, toolbar.
@@ -11,6 +12,37 @@ export interface VisualViewportMetrics {
   left: number;
   top: number;
   width: number;
+}
+
+export function getCollapsedRangeRect(range: Range) {
+  const directRect = range.getBoundingClientRect();
+  if (directRect.height > 0) {
+    return directRect;
+  }
+
+  const rects = range.getClientRects();
+  if (rects.length > 0 && rects[0].height > 0) {
+    return rects[0];
+  }
+
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  marker.dataset.caretMeasure = "true";
+  marker.style.position = "relative";
+  marker.style.display = "inline-block";
+  marker.style.width = "0";
+  marker.style.overflow = "hidden";
+  marker.style.pointerEvents = "none";
+  marker.style.lineHeight = "inherit";
+
+  const measurementRange = range.cloneRange();
+  measurementRange.insertNode(marker);
+  const markerRect = marker.getBoundingClientRect();
+  marker.remove();
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  return markerRect;
 }
 
 export function getEditorLineHeight(editor: HTMLElement) {
