@@ -4,7 +4,7 @@
  * - dimWebSocketDetail: style secondary transport details grey.
  * - formatWebSocketBytes: use consistent B/KB/MB units for requests and event traffic.
  * - formatWebSocketEventSummary: render one bounded traffic window line without payloads.
- * - WebSocketSubjectWindow/webSocketSubjectKey/formatWebSocketSubjectSummary: roll frames about the same threads into one line.
+ * - WebSocketSubjectWindow/webSocketSubjectKey/formatWebSocketSubjectSummary: roll related subject frames into one line.
  * - threadEventSubject: the thread a provider event names, as a log subject.
  */
 const ANSI_DIM = "\u001b[2m";
@@ -28,10 +28,10 @@ export function formatWebSocketEventSummary(direction: "in" | "out", label: stri
   return ` WS ${direction} ${boundWebSocketLogText(label)} ${dimWebSocketDetail(`(count: ${count}, ${direction}: ${formatWebSocketBytes(bytes)})`)}`;
 }
 
-/** What frames about the same subjects (thread or project id prefixes) carried during one window. */
+/** What related frames carried during one window, including every thread or project id prefix they named. */
 export interface WebSocketSubjectWindow {
   direction: "in" | "out";
-  subjects: readonly string[];
+  subjects: Set<string>;
   /** Event kinds in arrival order, e.g. `codex:item/started` or a workspace observation kind. */
   kinds: Set<string>;
   fields: Set<string>;
@@ -52,14 +52,15 @@ export function threadEventSubject(params: unknown): { subjects: string[]; field
   return threadId && THREAD_ID.test(threadId) ? { subjects: [threadId.slice(0, 8)], fields: [] } : null;
 }
 
-export function webSocketSubjectKey(direction: "in" | "out", subjects: readonly string[]) {
-  return `${direction}:${subjects.join(",")}`;
+export function webSocketSubjectKey(direction: "in" | "out", subjects: readonly string[], group?: string) {
+  return group ? `${direction}:group:${group}` : `${direction}:subjects:${subjects.join(",")}`;
 }
 
 /** One line per subject window: `WS out c6c7f1bd: thread, summaries [-waitingFor, status] (count: 3, out: 1.3KB)`. */
 export function formatWebSocketSubjectSummary(window: WebSocketSubjectWindow) {
-  const subjects = window.subjects.length > 3
-    ? `${window.subjects.slice(0, 3).join(", ")} +${window.subjects.length - 3}` : window.subjects.join(", ");
+  const namedSubjects = [...window.subjects];
+  const subjects = namedSubjects.length > 3
+    ? `${namedSubjects.slice(0, 3).join(", ")} +${namedSubjects.length - 3}` : namedSubjects.join(", ");
   const kinds = [...window.kinds];
   const fields = [...window.fields];
   const label = `${subjects}: ${kinds.slice(0, 6).join(", ")}${kinds.length > 6 ? ", ..." : ""}`

@@ -341,7 +341,9 @@ export default class WorkbenchWebSocketRequestController {
       } }
       : { method: WORKSPACE_UPDATED_METHOD, params: value };
     const eventDetail = change ? `${value.kind} ${describeObservationDelta(change.delta)}` : `${value.kind} reset=restore`;
-    const eventSubject = change ? { ...observationDeltaSubjects(change.delta), kind: value.kind } : null;
+    const eventSubject = change
+      ? { ...observationDeltaSubjects(change.delta), kind: value.kind, group: `workspace:${value.kind}` }
+      : null;
     void this.sendJsonToClient(client, message, { eventDetail, eventSubject, warnAboveBytes: WORKSPACE_PUSH_WARNING_BYTES })
       .catch(error => this.reportSendFailure({ method: message.method }, error));
   }

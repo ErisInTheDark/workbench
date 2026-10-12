@@ -144,6 +144,55 @@ test("lean rows leave out archived threads and their subagents but count them", 
   assert.equal("previousTitles" in rows.entries[0]!, false);
 });
 
+test("thread summary reads and announcements publish one delta per task", async context => {
+  const entries = [thread(0), thread(1)].map(entry => {
+    if (entry.entryKind !== "thread") throw new Error("Expected thread fixture.");
+    return entry;
+  });
+  const summaries = new Map(entries.map(entry => [
+    entry.identity.threadId as string,
+    { projectId: a, summary: createThreadSummary(entry, {}) },
+  ]));
+  const known = new Set<string>();
+  let announce: (threadId: string) => void = () => {};
+  const f = fixture(context, { summaries: {
+    peek: threadId => known.has(threadId) ? summaries.get(threadId) ?? null : null,
+    read: async threadId => { known.add(threadId); return summaries.get(threadId) ?? null; },
+    subscribe: listener => { announce = listener; return () => {}; },
+  } });
+  const threadIds = entries.map(entry => entry.identity.threadId);
+  const opened = f.observe({ kind: "threadSummaries", threadIds: threadIds.map(id => ThreadReferenceSchema.parse(id)) });
+  assert.equal(opened.phase, "pending");
+  const loaded = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.phase === "current");
+  assert.ok(loaded.kind === "threadSummaries");
+  assert.equal(f.updates.filter(update => update.value.subscriptionId === opened.subscriptionId).length, 1,
+    "reads settling together publish one batch");
+
+  for (const [index, entry] of entries.entries()) {
+    summaries.set(entry.identity.threadId, {
+      projectId: a, summary: createThreadSummary(entry, { requiredTodoCount: index + 1 }),
+    });
+    announce(entry.identity.threadId);
+  }
+  const changed = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.revision > loaded.revision);
+  assert.ok(changed.kind === "threadSummaries");
+  assert.equal(f.updates.filter(update => update.value.subscriptionId === opened.subscriptionId).length, 2,
+    "synchronous announcements publish one later batch");
+  assert.deepEqual(threadIds.map(id => changed.summaries[id]?.summary.facts.requiredTodoCount), [1, 2]);
+
+  announce(threadIds[0]!);
+  f.owner.retarget("connection", {
+    subscriptionId: opened.subscriptionId, generation: opened.generation,
+    query: { kind: "threadSummaries", threadIds: [ThreadReferenceSchema.parse(threadIds[1])] },
+  });
+  await Promise.resolve();
+  const retargeted = f.updates.at(-1)!.value;
+  assert.ok(retargeted.kind === "threadSummaries");
+  assert.deepEqual(Object.keys(retargeted.summaries), [threadIds[1]]);
+  assert.equal(f.updates.filter(update => update.value.subscriptionId === opened.subscriptionId).length, 3,
+    "retargeting clears an obsolete queued summary without another publication");
+});
+
 test("a thread summary batch reads unknown threads, retargets as deltas, and follows summary changes", async context => {
   const [first, second] = [thread(0), thread(1)];
   if (first.entryKind !== "thread" || second.entryKind !== "thread") throw new Error("Expected thread fixtures.");
@@ -178,7 +227,7 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
 
   summaries.set(secondId, { projectId: a, summary: createThreadSummary(second, { requiredTodoCount: 4 }) });
   announce(secondId);
-  const counted = f.updates.at(-1)!.value;
+  const counted = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.revision > shrunk.revision);
   assert.ok(counted.kind === "threadSummaries");
   assert.equal(counted.summaries[secondId]?.projectId, a);
   assert.deepEqual(counted.summaries[secondId]?.summary.facts, { requiredTodoCount: 4 });

@@ -72,14 +72,17 @@ function describeFrame(frame: Frame): string {
   }
 }
 
-type FrameSubject = { subjects: readonly string[]; fields: readonly string[]; kind: string };
+type FrameSubject = { subjects: readonly string[]; fields: readonly string[]; kind: string; group?: string };
 
 /** The threads a frame is about, so traffic logs can say what each thread did instead of listing frames. */
 function frameSubject(frame: Frame, aboutThread: string | null): FrameSubject | null {
   if (frame.kind === "workspaceDelta") {
     const found = observationDeltaSubjects(frame.delta.delta);
     const about = found.subjects.length ? null : threadEventSubject({ threadId: aboutThread });
-    return { subjects: about?.subjects ?? found.subjects, fields: found.fields, kind: frame.delta.kind };
+    return {
+      subjects: about?.subjects ?? found.subjects, fields: found.fields, kind: frame.delta.kind,
+      group: `workspace:${frame.delta.kind}`,
+    };
   }
   if (frame.kind === "threadEvent") {
     const subject = threadEventSubject(frame.notification.params);
@@ -393,13 +396,14 @@ export default class WorkbenchAppEventSocketController {
     this.scheduleTraffic();
   }
 
-  /** Frames about the same threads roll into one line per window, whichever views and tabs they went to. */
+  /** Related subject frames roll into one line per window, whichever views and tabs they went to. */
   private recordSubjectTraffic(direction: "in" | "out", subject: FrameSubject, connection: string, bytes: number) {
-    const key = webSocketSubjectKey(direction, subject.subjects);
+    const key = webSocketSubjectKey(direction, subject.subjects, subject.group);
     const window = this.subjectTraffic.get(key) ?? {
-      direction, subjects: subject.subjects, kinds: new Set<string>(), fields: new Set<string>(),
+      direction, subjects: new Set<string>(), kinds: new Set<string>(), fields: new Set<string>(),
       connections: new Set<string>(), count: 0, bytes: 0,
     };
+    for (const named of subject.subjects) window.subjects.add(named);
     window.kinds.add(subject.kind);
     for (const field of subject.fields) window.fields.add(field);
     window.connections.add(connection);

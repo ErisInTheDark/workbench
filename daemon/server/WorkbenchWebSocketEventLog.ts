@@ -16,6 +16,8 @@ export interface WebSocketEventSubject {
   subjects: readonly string[];
   fields: readonly string[];
   kind?: string;
+  /** Stable traffic class whose changing subjects share one bounded log window. */
+  group?: string;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -116,11 +118,12 @@ export default class WorkbenchWebSocketEventLog {
 
   /** A subject window opens on its first event and logs once when its window ends. */
   private recordSubject(direction: "in" | "out", kind: string, subject: WebSocketEventSubject, bytes: number) {
-    const key = webSocketSubjectKey(direction, subject.subjects);
+    const key = webSocketSubjectKey(direction, subject.subjects, subject.group);
     const window = this.subjectWindows.get(key) ?? {
-      direction, subjects: subject.subjects, kinds: new Set<string>(), fields: new Set<string>(),
+      direction, subjects: new Set<string>(), kinds: new Set<string>(), fields: new Set<string>(),
       connections: new Set<string>(), count: 0, bytes: 0, deadline: this.now() + DEFAULT_WINDOW_MS,
     };
+    for (const named of subject.subjects) window.subjects.add(named);
     window.kinds.add(kind);
     for (const field of subject.fields) window.fields.add(field);
     window.count += 1;

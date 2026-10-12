@@ -183,6 +183,20 @@ test("everything one thread did in a window logs as one line while subject-less 
   logger.dispose();
 });
 
+test("workspace observations group changing thread subjects into one bounded window", () => {
+  const { logger, lines, advance } = fixture();
+  const summary = (subject: string, field: string) => ({
+    subjects: [subject], fields: [field], kind: "threadSummaries", group: "workspace:threadSummaries",
+  });
+  logger.record("out", "workbench", "workspace/delta", 300, "threadSummaries", summary("c6c7f1bd", "activityAt"));
+  logger.record("out", "workbench", "workspace/delta", 400, "threadSummaries", summary("5f6e4475", "lifecycle"));
+  advance(2_000);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /c6c7f1bd, 5f6e4475: threadSummaries \[activityAt, lifecycle\]/);
+  assert.match(lines[0]!, /count: 2, out: 700B/);
+  logger.dispose();
+});
+
 test("excluded incoming receipts schedule nothing without hiding other traffic", () => {
   const { logger, lines, timers, advance } = fixture();
   logger.record("in", "workbench", WORKBENCH_EVENT_STREAM_ACK_METHOD, 100);

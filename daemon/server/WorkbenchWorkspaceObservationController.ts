@@ -53,6 +53,8 @@ interface Observation<Client extends object> {
   stats: { invalidate(kind: WorkbenchStatsInvalidation): void; release(): void } | null;
   /** Last seen inputs of a working-tree summary: changed paths and claims. A summary reruns only when one moves. */
   summaryInputs: { changes: string | null; claims: string | null } | null;
+  /** Summary ids changed during this task; one flush projects their latest canonical values. */
+  pendingSummaries: Set<string>;
 }
 
 type ProjectListKind = "summaries" | "projectPlacement" | "projectThreads" | "archivedThreads";
@@ -79,6 +81,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private readonly observations = new Map<string, Observation<Client>>();
   private readonly unsubscribe: Array<() => void>;
   private closed = false;
+  private summaryFlushQueued = false;
 
   constructor(private readonly owners: {
     installationUpdate?: Pick<import("./WorkbenchInstallationUpdateController").default, "read" | "subscribe">;
@@ -144,6 +147,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const observation: Observation<Client> = {
       client, connectionId, request, value: initial, opening: true, cancellation: new AbortController(),
       dirty: new Set(), work: null, identityRead: null, stopTree: null, stats: null, summaryInputs: null,
+      pendingSummaries: new Set(),
     };
     this.observations.set(key, observation);
     try { this.start(observation); }
@@ -364,12 +368,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   }
 
   /**
-   * Publishes every requested thread already summarised, then reads the rest. Threads dropped by a retarget leave the
-   * value; a read that lands after its thread left the batch is discarded.
+   * Publishes every requested thread already summarised, removes threads dropped by a retarget, then reads the rest.
+   * A read that lands after its thread left the batch is discarded.
    */
   private readSummaries(observation: Observation<Client>) {
     const query = observation.request.query;
     if (query.kind !== "threadSummaries" || observation.value.kind !== "threadSummaries") return;
+    observation.pendingSummaries.clear();
     const index = this.owners.summaries;
     if (!index) {
       this.update(observation, { kind: "threadSummaries", phase: "unavailable", failure: "Thread summaries are unavailable.", summaries: {} });
@@ -386,7 +391,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
     this.update(observation, { kind: "threadSummaries", phase: missing.length ? "pending" : "current", failure: null, summaries });
     for (const threadId of missing) {
-      void index.read(threadId).then(summary => this.acceptSummary(observation, threadId, summary), error => {
+      void index.read(threadId).then(() => this.acceptSummary(observation, threadId), error => {
         const message = failure(error);
         this.owners.warn(`Thread summary read failed: ${message}`);
         if (!this.active(observation) || observation.value.kind !== "threadSummaries") return;
@@ -396,22 +401,44 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   }
 
   /** A read or change lands only while its thread is still in the batch. */
-  private acceptSummary(observation: Observation<Client>, threadId: string, summary: LocatedThreadSummary | null) {
+  private acceptSummary(observation: Observation<Client>, threadId: string) {
     const query = observation.request.query;
     if (!this.active(observation) || query.kind !== "threadSummaries" || observation.value.kind !== "threadSummaries"
       || !query.threadIds.includes(ThreadReferenceSchema.parse(threadId))) return;
-    const summaries = { ...observation.value.summaries, [threadId]: summary };
-    const pending = query.threadIds.some(id => !(id in summaries));
-    this.update(observation, { ...observation.value, phase: pending ? "pending" : "current", summaries });
+    this.queueSummary(observation, threadId);
   }
 
   private summaryChanged(threadId: string) {
-    const summary = this.owners.summaries?.peek(threadId) ?? null;
     for (const observation of this.observations.values()) {
       if (observation.value.kind === "threadSummaries" && threadId in observation.value.summaries) {
-        this.acceptSummary(observation, threadId, summary);
+        this.queueSummary(observation, threadId);
       }
     }
+  }
+
+  private queueSummary(observation: Observation<Client>, threadId: string) {
+    observation.pendingSummaries.add(threadId);
+    if (this.summaryFlushQueued) return;
+    this.summaryFlushQueued = true;
+    queueMicrotask(() => {
+      this.summaryFlushQueued = false;
+      if (this.closed) return;
+      for (const current of this.observations.values()) this.flushSummaries(current);
+    });
+  }
+
+  private flushSummaries(observation: Observation<Client>) {
+    const query = observation.request.query;
+    if (!observation.pendingSummaries.size || query.kind !== "threadSummaries"
+      || observation.value.kind !== "threadSummaries") return;
+    const requested = new Set<string>(query.threadIds);
+    const changed = [...observation.pendingSummaries].filter(threadId => requested.has(threadId));
+    observation.pendingSummaries.clear();
+    if (!changed.length) return;
+    const summaries = { ...observation.value.summaries };
+    for (const threadId of changed) summaries[threadId] = this.owners.summaries?.peek(threadId) ?? null;
+    const pending = query.threadIds.some(threadId => !(threadId in summaries));
+    this.update(observation, { ...observation.value, phase: pending ? "pending" : "current", summaries });
   }
 
   private catalogueChanged() {
