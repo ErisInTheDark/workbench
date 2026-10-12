@@ -471,13 +471,13 @@ const unstack = defineWorkbenchAgentCommand({
 });
 
 const status = defineWorkbenchAgentCommand({
-  description: "Read compact proposals, dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
+  description: "Read compact proposals, active dirty/clean claims and unclaimed dirt for the caller or another Workbench thread. Use --full=baseline to list pending sealed-proposal guards. On follow-ups use status before rereading; lost claims include changes since their exact loss boundary.",
   effects: { readOnly: true, idempotent: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "status"],
-  usage: "wb git arc status [--thread <id>] [--full=dirty,clean,unclaimed-dirt]",
+  usage: "wb git arc status [--thread <id>] [--full=dirty,clean,unclaimed-dirt,baseline]",
   inputSchema: z.object({
-    full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to show as complete path lists instead of counts above five."),
+    full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to expand; baseline also includes pending sealed-proposal guards."),
     threadId: requiredText.optional().describe("Workbench thread to inspect; omit for the caller."),
   }).strict(),
   parseCliArgs(args) {

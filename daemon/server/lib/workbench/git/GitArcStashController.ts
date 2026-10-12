@@ -7,7 +7,8 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import type { GitArcStashResult } from "./WorkbenchGitCheckpointController";
-import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError, type GitArcPreparedOperation } from "./GitArcRegistry";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
+import GitArcRegistry, { findGitArcCollisions, GitArcCollisionError, type GitArcPreparedOperation } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcStackController from "./GitArcStackController";
@@ -43,7 +44,9 @@ export default class GitArcStashController {
     }
     const saved = await snapshots.readOwnedStash(identity, current);
     const arc = current?.phase === "plan" ? current.retainedArc : current?.phase === "active" ? current : null;
-    const live = current ? getGitArcLiveClaimPaths(current) : [];
+    const live = current
+      ? (await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)).activeClaims
+      : [];
     const head = await repository.headOrNull();
     const headTree = await repository.resolveTree(head);
     let updates: GitRefUpdate[] = [];
@@ -65,8 +68,14 @@ export default class GitArcStashController {
       paths = [...live];
       const snapshot = { head, tree: await repository.writeScopedWorktreeTree(paths, head) };
       const next = current.phase === "plan"
-        ? { ...current, claimedPaths: paths, phase: "stashed" as const, proposalIds: arc.proposalIds ?? [] }
-        : { ...current, claimedPaths: paths, phase: "stashed" as const };
+        ? {
+          ...current,
+          activeClaimedPaths: paths,
+          claimedPaths: paths,
+          phase: "stashed" as const,
+          proposalIds: arc.proposalIds ?? [],
+        }
+        : { ...current, activeClaimedPaths: paths, claimedPaths: paths, phase: "stashed" as const };
       const mutation = await registry.prepareSet(next, current.checkpointCommit, { claimLossSnapshot: snapshot });
       updates = mutation.updates;
       targetTree = headTree;
@@ -89,9 +98,17 @@ export default class GitArcStashController {
           : await snapshots.prepareDeleteAdopted(identity, saved.paths);
         if (current) {
           const next = saved.legacy && current.retainedArc && current.phase === "stashed"
-            ? { ...current, phase: "plan" as const, claimedPaths: [], retainedArc: null, proposalId: null, proposalIds: [] }
+            ? {
+              ...current,
+              activeClaimedPaths: [],
+              phase: "plan" as const,
+              claimedPaths: [],
+              retainedArc: null,
+              proposalId: null,
+              proposalIds: [],
+            }
             : saved.legacy
-              ? { ...current, phase: "resolved" as const, claimedPaths: [] }
+              ? { ...current, activeClaimedPaths: [], phase: "resolved" as const, claimedPaths: [] }
               : { ...current, savedStash: null };
           updates = (await registry.prepareSet(next, current.checkpointCommit)).updates;
         }
@@ -139,6 +156,7 @@ export default class GitArcStashController {
         });
         const proposalIds = [...new Set([...(arc?.proposalIds ?? []), ...saved.proposalIds])];
         const retained = {
+          activeClaimedPaths: combined,
           checkpointCommit: prepared.checkpointCommit, claimedPaths: combined,
           intentName: arc?.intentName ?? saved.intentName,
           intentDescription: arc?.intentDescription ?? saved.intentDescription,

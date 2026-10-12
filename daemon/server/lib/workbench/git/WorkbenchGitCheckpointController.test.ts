@@ -114,8 +114,8 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   const acceptedHead = await repository.currentHead();
   const accepted = await controller.readStatus(identity);
   assert.deepEqual(accepted.accepted, [{ proposalId: proposal.proposalId, title: "change one", commitSha: acceptedHead }]);
-  assert.deepEqual(accepted.recovery[0]?.comparison, []);
-  assert.deepEqual(accepted.recovery[0]?.commits, []);
+  assert.deepEqual(accepted.recovery, [], "accepting one proposal keeps unrelated active ownership");
+  assert.deepEqual(accepted.cleanClaims, ["two.txt"]);
   await controller.createPlan({ ...identity, intentName: "next", paths: ["two.txt"] });
   assert.deepEqual((await controller.readStatus(identity)).accepted, accepted.accepted);
   await controller.startArc(identity);
@@ -987,9 +987,12 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   assert.equal(secondAccepted.changes.find(change => change.path === "loose.txt")?.kind.type, "delete");
   assert.equal(await git(source, ["show", ":unchecked.txt"]), "keep staged\n");
   assert.equal(await fs.readFile(path.join(source, "unchecked.txt"), "utf8"), "unchecked drift\n");
-  const resolved = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
-  assert.equal(resolved?.phase, "resolved");
-  assert.deepEqual(resolved?.claimedPaths, []);
+  const retained = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
+  assert.equal(retained?.phase, "active");
+  assert.deepEqual(retained?.claimedPaths, ["one.txt"]);
+  await controller.editArcClaims({
+    cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, removePaths: ["one.txt"],
+  });
   const completed = await controller.continueArc({
     checkpointCommit: started!.checkpointCommit,
     cwd: source,
@@ -1001,7 +1004,7 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   assert.deepEqual(completed.acceptedProposals.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
   completed.acceptedProposals.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
   const resolvedComparison = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(resolvedComparison.scopePaths, ["one.txt", "two.txt"]);
+  assert.deepEqual(resolvedComparison.scopePaths, ["one.txt"]);
   assert.deepEqual(resolvedComparison.changes, []);
   const followUp = await controller.editArcClaims({
     cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, addPaths: ["planned.txt"],

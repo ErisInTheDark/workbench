@@ -21,6 +21,7 @@ import {
   type GitArcThreadIdentityResolver,
 } from "./git-arc-thread-identity";
 import GitArcPublishState from "./GitArcPublishState";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, { REGISTRY_REF, getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcStackController, { type GitArcStackStatusResolver } from "./GitArcStackController";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
@@ -244,54 +245,65 @@ function proposalAlreadyCommitted(proposal: StoredProposal) {
 
 async function prepareAcceptedClaimTransition({
   acceptedHead,
-  active,
   commitRemaps,
   harness,
   proposalId,
+  proposalPaths,
   registry,
+  resolveThreadIdentity,
   repository,
   source,
   stack,
   store,
   threadId,
-  worktreeTree,
 }: {
   acceptedHead: string;
-  active: GitArcRegistryEntry;
   commitRemaps?: ReadonlyMap<string, string>;
   harness: GitArcHarness;
   proposalId: string;
+  proposalPaths: string[];
   registry: GitArcRegistry;
+  resolveThreadIdentity: GitArcThreadIdentityResolver;
   repository: WorkbenchGitRepository;
   source: StoredCheckpoint;
   stack: GitArcStackController;
   store: GitCheckpointStore;
   threadId: string;
-  /** Captured worktree content covering every claimed path. */
-  worktreeTree: string;
 }) {
+  const current = await registry.find({ harness, threadId });
+  if (!current) {
+    throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
+  }
   // A stack stops shaping the baseline once nothing in its chain is pending after this acceptance.
-  const stackTip = active.stackTip && await stack.chainHasPending(await stack.readChain(active.stackTip), proposalId)
-    ? commitRemaps?.get(active.stackTip) ?? active.stackTip
+  const stackTip = current.stackTip && await stack.chainHasPending(await stack.readChain(current.stackTip), proposalId)
+    ? commitRemaps?.get(current.stackTip) ?? current.stackTip
     : null;
-  const lifecycle = lifecycleEntry(active);
+  const lifecycle = lifecycleEntry(current);
   if (!lifecycle) {
     throw new GitArcRejectionError({ reason: "proposalNotOwned" }, "The proposal no longer belongs to this thread's Git arc.");
   }
   const currentTree = lifecycle.claimedPaths.length
-    ? await repository.writeTreeWithPathsFromSource(acceptedHead, worktreeTree, lifecycle.claimedPaths)
+    ? await repository.writeScopedWorktreeTree(lifecycle.claimedPaths, acceptedHead)
     : null;
-  const changedPaths = currentTree
-    ? await repository.listChangedPaths(acceptedHead, currentTree, lifecycle.claimedPaths)
-    : [];
-  // A claim stays when a changed path equals or lies beneath it.
+  const ownership = new GitArcClaimOwnershipController(repository, resolveThreadIdentity);
+  const before = await ownership.project(current, currentTree);
+  const sealed = Boolean(await stack.sealingLayer(current, proposalId));
+  const selected = new GitArcPathSet(proposalPaths);
+  const changedPaths = currentTree ? await repository.listChangedPaths(acceptedHead, currentTree, before.activeClaims) : [];
   const changed = new GitArcPathSet(changedPaths);
-  const claimedPaths = lifecycle.claimedPaths.filter((claimedPath) => changed.has(claimedPath) || changed.contains(claimedPath));
+  const activeClaimedPaths = sealed ? before.activeClaims : before.activeClaims.filter((claimedPath) => (
+    !selected.overlaps(claimedPath) || changed.has(claimedPath) || changed.contains(claimedPath)
+  ));
+  const currentGuards = new GitArcPathSet(before.guardClaims);
+  const baselineClaims = (await stack.pendingOwnBaselinePaths(current, proposalId))
+    .filter(path => currentGuards.covers(path));
+  const claimedPaths = [...new Set([...activeClaimedPaths, ...baselineClaims])]
+    .sort((left, right) => left.localeCompare(right));
   const sourceCheckpoint = commitRemaps?.get(source.checkpointCommit) ?? source.checkpointCommit;
   let successorCheckpoint: string | null = null;
   const updates: GitRefUpdate[] = [];
   // A claim-free acceptance hides every accepted proposal status already showed.
-  const visibility = acceptedVisibility(active);
+  const visibility = acceptedVisibility(current);
   const dismissal = claimedPaths.length ? {} : {
     acceptedVisibility: { dismissed: [...new Set([...visibility.dismissed, ...visibility.viewed])], viewed: [] },
   };
@@ -320,24 +332,25 @@ async function prepareAcceptedClaimTransition({
   const nextLifecycle: NonNullable<GitArcRegistryEntry["retainedArc"]> = {
     ...lifecycle,
     checkpointCommit: successorCheckpoint ?? sourceCheckpoint,
+    activeClaimedPaths,
     claimedPaths,
     phase: claimedPaths.length ? "active" : "resolved",
   };
-  const registryMutation = await registry.prepareClaim(active.phase === "plan" ? {
-    ...active,
+  const registryMutation = await registry.prepareClaim(current.phase === "plan" ? {
+    ...current,
     ...dismissal,
-    checkpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
+    checkpointCommit: commitRemaps?.get(current.checkpointCommit) ?? current.checkpointCommit,
     retainedArc: nextLifecycle,
     stackTip,
   } : {
-    ...active,
+    ...current,
     ...nextLifecycle,
     ...dismissal,
     retainedArc: null,
     stackTip,
   }, {
     commitRemaps,
-    expectedCheckpointCommit: commitRemaps?.get(active.checkpointCommit) ?? active.checkpointCommit,
+    expectedCheckpointCommit: commitRemaps?.get(current.checkpointCommit) ?? current.checkpointCommit,
     ...(currentTree ? { claimLossSnapshot: { head: acceptedHead, tree: currentTree } } : {}),
   });
   updates.push(...registryMutation.updates);
@@ -1678,17 +1691,17 @@ export default class GitArcProposalController {
           }
           const transition = await prepareAcceptedClaimTransition({
             acceptedHead: newHead,
-            active,
             commitRemaps: arcPlan.commits,
             harness,
             proposalId,
+            proposalPaths: proposal.metadata.livePaths,
             registry,
+            resolveThreadIdentity: this.resolveThreadIdentity,
             repository,
             source: activeSource,
             stack,
             store,
             threadId,
-            worktreeTree: worktree.tree,
           });
           for (const update of transition.updates) {
             updates.push(update);
@@ -1769,16 +1782,16 @@ export default class GitArcProposalController {
     }
     const transition = await prepareAcceptedClaimTransition({
       acceptedHead: committedSha,
-      active,
       harness,
       proposalId,
+      proposalPaths: proposal.metadata.livePaths,
       registry,
+      resolveThreadIdentity: this.resolveThreadIdentity,
       repository,
       source: activeSource,
       stack,
       store,
       threadId,
-      worktreeTree: worktree.tree,
     });
     const outcomeUpdate = await store.prepareOutcome(harness, threadId, {
       acceptedProposals,
@@ -1857,7 +1870,10 @@ export default class GitArcProposalController {
     const registry = this.registry(repository);
     const active = await registry.find({ harness, threadId: input.threadId });
     const arc = active?.phase === "plan" ? active.retainedArc : active;
-    if (!active || !arc || arc.phase !== "active" || !arc.claimedPaths.length) {
+    const ownership = active
+      ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(active)
+      : null;
+    if (!active || !arc || arc.phase !== "active" || !ownership?.activeClaims.length) {
       throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own active Git arc claims.");
     }
     const checkpoint = await this.store(repository).readCheckpoint(harness, input.threadId, arc.checkpointCommit);
@@ -1874,7 +1890,7 @@ export default class GitArcProposalController {
       active,
       arc,
       checkpoint,
-      claimedPaths: arc.claimedPaths,
+      claimedPaths: ownership.activeClaims,
       harness,
       metadata,
       proposalIds: arc.proposalIds ?? (active.proposalId ? [active.proposalId] : []),

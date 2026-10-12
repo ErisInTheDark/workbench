@@ -25,6 +25,7 @@ import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-a
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
 import GitArcLifecycleController from "./GitArcLifecycleController";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, {
   findGitArcCollisions,
   getGitArcLiveClaimPaths,
@@ -468,8 +469,9 @@ export default class WorkbenchGitCheckpointController {
 
   async assertArcReleasable(input: ControllerInput): Promise<void> {
     await GitObjectReadSession.run(async () => {
-      const { lifecycle, repository } = await this.requireReleasableArc(input);
-      await this.partitionArcReleaseClaims(repository, lifecycle.claimedPaths);
+      const { active, repository } = await this.requireReleasableArc(input);
+      const ownership = await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(active);
+      await this.partitionArcReleaseClaims(repository, ownership.activeClaims);
     });
   }
 
@@ -487,9 +489,11 @@ export default class WorkbenchGitCheckpointController {
     const releasedEntry = active.phase === "plan"
       ? {
         ...active,
-        retainedArc: active.retainedArc ? { ...active.retainedArc, claimedPaths: [], phase: "resolved" as const } : null,
+        retainedArc: active.retainedArc
+          ? { ...active.retainedArc, activeClaimedPaths: [], claimedPaths: [], phase: "resolved" as const }
+          : null,
       }
-      : { ...active, claimedPaths: [], phase: "resolved" as const };
+      : { ...active, activeClaimedPaths: [], claimedPaths: [], phase: "resolved" as const };
     const registryMutation = await registry.prepareSet(releasedEntry, active.checkpointCommit);
     const previousOutcome = await readArcOutcome(repository, harness, threadId, checkpoint.checkpointCommit, this.resolveThreadIdentity);
     const outcomeUpdate = await prepareArcOutcome(repository, harness, threadId, {
@@ -519,6 +523,7 @@ export default class WorkbenchGitCheckpointController {
 
   private async createActiveSuccessor({
     active,
+    activeClaimedPaths,
     harness,
     metadata,
     parent,
@@ -530,6 +535,7 @@ export default class WorkbenchGitCheckpointController {
     withPublish,
   }: {
     active: GitArcRegistryEntry;
+    activeClaimedPaths: string[];
     harness: GitArcHarness;
     metadata: CheckpointMetadata;
     parent: string | null;
@@ -553,6 +559,7 @@ export default class WorkbenchGitCheckpointController {
     const checkpointCommit = await repository.createCommitFromTree(tree, parent, checkpointMessage(nextMetadata));
     const checkpointRef = await checkpointRefName(repository.root, harness, threadId, checkpointCommit, this.resolveThreadIdentity);
     const registryMutation = await registry.prepareClaim({
+      activeClaimedPaths,
       checkpointCommit,
       claimedPaths: scopePaths,
       harness,
@@ -691,12 +698,62 @@ export default class WorkbenchGitCheckpointController {
   async releaseArc({ cwd, disown, harness: rawHarness, threadId }: ControllerInput & { disown: boolean }): Promise<GitArcReleaseResult> {
     return await GitObjectReadSession.run(async () => {
       const releasable = await this.requireReleasableArc({ cwd, harness: rawHarness, threadId });
+      const ownership = await new GitArcClaimOwnershipController(
+        releasable.repository,
+        this.resolveThreadIdentity,
+      ).project(releasable.active);
+      if (disown && ownership.baselineClaims.length) {
+        const releasedEntry = releasable.active.phase === "plan" && releasable.active.retainedArc
+          ? {
+            ...releasable.active,
+            retainedArc: {
+              ...releasable.active.retainedArc,
+              activeClaimedPaths: [],
+              claimedPaths: ownership.baselineClaims,
+            },
+          }
+          : {
+            ...releasable.active,
+            activeClaimedPaths: [],
+            claimedPaths: ownership.baselineClaims,
+          };
+        const registryMutation = await releasable.registry.prepareSet(
+          releasedEntry,
+          releasable.active.checkpointCommit,
+        );
+        await releasable.repository.updateRefs(registryMutation.updates);
+        return {
+          checkpointCommit: releasable.checkpoint.checkpointCommit,
+          checkpointRef: releasable.checkpoint.checkpointRef,
+          intentName: releasable.lifecycle.intentName ?? null,
+          kind: "arc",
+          phase: releasable.active.phase === "plan" ? "plan" : "active",
+          releasedClaims: ownership.activeClaims,
+          repoRoot: releasable.repository.root,
+          scopePaths: [],
+        };
+      }
       if (disown) return await this.finishArcRelease({ ...releasable, threadId });
       const { cleanClaims, dirtyClaims } = await this.partitionArcReleaseClaims(
         releasable.repository,
-        releasable.lifecycle.claimedPaths,
+        ownership.activeClaims,
       );
-      if (!dirtyClaims.length) return await this.finishArcRelease({ ...releasable, threadId });
+      if (!dirtyClaims.length && !cleanClaims.length) {
+        return {
+          checkpointCommit: releasable.checkpoint.checkpointCommit,
+          checkpointRef: releasable.checkpoint.checkpointRef,
+          intentName: releasable.lifecycle.intentName ?? null,
+          kind: "arc",
+          phase: releasable.active.phase === "plan" ? "plan" : "active",
+          releasedClaims: [],
+          repoRoot: releasable.repository.root,
+          scopePaths: [],
+          unchanged: true,
+        };
+      }
+      if (!dirtyClaims.length && !ownership.baselineClaims.length) {
+        return await this.finishArcRelease({ ...releasable, threadId });
+      }
       if (!cleanClaims.length) {
         return {
           checkpointCommit: releasable.checkpoint.checkpointCommit,
@@ -724,7 +781,11 @@ export default class WorkbenchGitCheckpointController {
       if (!retainedArc) throw new Error("The inactive Git arc plan does not retain an active arc.");
       const registryMutation = await releasable.registry.prepareSet({
         ...releasable.active,
-        retainedArc: { ...retainedArc, claimedPaths: dirtyClaims },
+        retainedArc: {
+          ...retainedArc,
+          activeClaimedPaths: dirtyClaims,
+          claimedPaths: [...new Set([...dirtyClaims, ...ownership.baselineClaims])].sort(),
+        },
       }, releasable.active.checkpointCommit);
       await releasable.repository.updateRefs(registryMutation.updates);
       return {
@@ -815,7 +876,10 @@ export default class WorkbenchGitCheckpointController {
       const current = owner
         ? entries.find(entry => entry.harness === harness && entry.threadId === normalizeThreadId(owner.threadId))
         : undefined;
-      const claims = current ? getGitArcLiveClaimPaths(current) : [];
+      const ownership = current
+        ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current, tree)
+        : { activeClaims: [], baselineClaims: [], guardClaims: [] };
+      const claims = ownership.activeClaims;
       const savedPaths = current?.savedStash?.paths ?? (current?.phase === "stashed" ? current.claimedPaths : []);
       const dirt = await repository.listAllChangedPaths(head, tree);
       const dirtPaths = new GitArcPathSet(dirt);
@@ -827,6 +891,7 @@ export default class WorkbenchGitCheckpointController {
         ...proposals,
         dirtyClaims: claims.filter(claim => dirtPaths.overlaps(claim)),
         cleanClaims: claims.filter(claim => !dirtPaths.overlaps(claim)),
+        baselineClaims: ownership.baselineClaims,
         stashedClaims: savedPaths,
         unclaimedDirt: dirt.filter(file => !allClaims.overlaps(file)),
         recovery: [], unavailableRecovery: [],
@@ -913,7 +978,9 @@ export default class WorkbenchGitCheckpointController {
   private async findActiveArcClaimPaths({ cwd, harness, threadId }: ControllerInput) {
     const repository = await WorkbenchGitRepository.open(cwd);
     const active = await this.registry(repository).find({ harness: normalizeHarness(harness), threadId });
-    return active?.phase === "active" ? active.claimedPaths : null;
+    return active?.phase === "active"
+      ? (await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(active)).activeClaims
+      : null;
   }
 
   private async findEditClaimCollisions({ cwd, harness, threadId }: ControllerInput, paths: string[]) {
@@ -948,12 +1015,17 @@ export default class WorkbenchGitCheckpointController {
       const claimed = new GitArcPathSet(metadata.scopePaths);
       const additionalClaims = claimPaths.filter((candidate) => !claimed.covers(candidate));
       await rejectIgnoredGitArcPaths(repository, additionalClaims);
+      const ownership = await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(active);
+      const activeClaimedPaths = [...new Set([
+        ...await expandGitArcClaimPaths(repository, ownership.activeClaims),
+        ...claimPaths,
+      ])].sort((left, right) => left.localeCompare(right));
       // Existing folder claims convert to file claims alongside the new ones.
       const scopePaths = [...new Set([...await expandGitArcClaimPaths(repository, metadata.scopePaths), ...claimPaths])]
         .sort((left, right) => left.localeCompare(right));
       const tree = await repository.writeTreeWithPathsFromSource(currentHead, checkpoint.checkpointCommit, metadata.scopePaths);
       return await this.createActiveSuccessor({
-        active, harness, metadata, parent: currentHead, registry, repository, scopePaths, threadId, tree,
+        active, activeClaimedPaths, harness, metadata, parent: currentHead, registry, repository, scopePaths, threadId, tree,
         withPublish: async (publish) => await write(publish, additionalClaims),
       });
     });
@@ -963,11 +1035,13 @@ export default class WorkbenchGitCheckpointController {
     { cwd, harness: rawHarness, patches, paths: rawPaths, threadId }: ControllerInput & { patches?: boolean; paths?: string[] },
     inspection: GitArcInspectionSnapshot,
   ): Promise<GitCheckpointCompareResult> {
-    const { checkpoint, harness, metadata, repository } = await this.requireActiveArc(
+    const { active, checkpoint, harness, metadata, repository } = await this.requireActiveArc(
       { cwd, harness: rawHarness, threadId },
       inspection,
     );
-    const paths = rawPaths?.length ? repository.normalizePaths(rawPaths) : repository.normalizePaths(metadata.scopePaths);
+    const ownership = await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity)
+      .project(active, inspection.tree);
+    const paths = rawPaths?.length ? repository.normalizePaths(rawPaths) : ownership.activeClaims;
     const baseline = await this.proposals.logicalBaseline({
       checkpointCommit: checkpoint.checkpointCommit,
       checkpointParent: checkpoint.parent,

@@ -9,7 +9,8 @@ import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-stora
 import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { GitArcReleaseResult } from "./WorkbenchGitCheckpointController";
-import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
+import GitArcRegistry, { type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcProposalController from "./GitArcProposalController";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
@@ -87,6 +88,11 @@ export default class GitArcOwnershipTransferController {
     const stashes = new GitArcClaimLossStore(repository, this.resolveThreadIdentity);
     const proposals = new GitArcProposalController(undefined, this.resolveThreadIdentity);
     const [target, origin] = await Promise.all([registry.find(caller), registry.find(source)]);
+    const ownership = new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity);
+    const [targetOwnership, sourceOwnership] = await Promise.all([
+      target ? ownership.project(target) : null,
+      origin ? ownership.project(origin) : null,
+    ]);
     const [callerStash, sourceStash] = await Promise.all([
       stashes.readOwnedStash(caller, target), stashes.readOwnedStash(source, origin),
     ]);
@@ -114,7 +120,7 @@ export default class GitArcOwnershipTransferController {
     // A child whose top is one of the releasing thread's lower layers has nothing of its own above it, so it
     // fast-forwards to the releaser's top, unless the skipped layers changed files the child already owns.
     const skippedIndex = targetPendingTip ? sourceChain.findIndex(({ tipCommit }) => tipCommit === targetPendingTip) : -1;
-    const targetOwned = target ? getGitArcLiveClaimPaths(target) : [];
+    const targetOwned = targetOwnership?.guardClaims ?? [];
     const targetOwnedSet = new Set(targetOwned);
     const fastForward = Boolean(sourceTip && targetPendingTip && !targetAtSourceTip && skippedIndex >= 0
       && !sourceChain.slice(skippedIndex + 1).some(({ scopePaths }) => scopePaths.some(scope => targetOwnedSet.has(scope))));
@@ -123,7 +129,7 @@ export default class GitArcOwnershipTransferController {
     }
     const recipientStackTip = sourceTip && (!targetPendingTip || fastForward) ? sourceTip : undefined;
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
-    const sourceLive = origin ? getGitArcLiveClaimPaths(origin) : [];
+    const sourceLive = sourceOwnership?.guardClaims ?? [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
     const sourceLiveSet = new Set(sourceLive);
     if (selectedPaths && (new Set(requested).size !== selectedPaths.length
@@ -133,7 +139,9 @@ export default class GitArcOwnershipTransferController {
     const incoming = selectedPaths ? requested : sourceLive;
     const incomingSet = new Set(incoming);
     const remaining = sourceLive.filter(value => !incomingSet.has(value));
+    const remainingActive = (sourceOwnership?.activeClaims ?? []).filter(value => !incomingSet.has(value));
     const existing = targetOwned;
+    const targetActive = [...new Set([...(targetOwnership?.activeClaims ?? []), ...incoming])].sort();
     if (!incoming.length && !moveStash) throw new Error("The source thread owns no selected live claims or saved stash.");
     if (moveStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
     const head = await repository.headOrNull();
@@ -203,6 +211,7 @@ export default class GitArcOwnershipTransferController {
     const checkpointCommit = prepared?.checkpointCommit ?? target?.checkpointCommit ?? stashCheckpoint!.checkpointCommit;
     const retained = {
       checkpointCommit: prepared?.checkpointCommit ?? callerArc?.checkpointCommit ?? checkpointCommit,
+      activeClaimedPaths: targetActive,
       claimedPaths, intentName, intentDescription, phase: claimedPaths.length ? "active" as const : "resolved" as const,
       proposalIds: callerArc?.proposalIds ?? target?.proposalIds ?? [],
     };
@@ -226,13 +235,19 @@ export default class GitArcOwnershipTransferController {
       ? {
         ...origin, phase: "plan" as const, claimedPaths: remaining,
         retainedArc: sourcePrepared && origin.retainedArc
-          ? { ...origin.retainedArc, checkpointCommit: sourcePrepared.checkpointCommit, claimedPaths: remaining } : null,
+          ? {
+            ...origin.retainedArc,
+            activeClaimedPaths: remainingActive,
+            checkpointCommit: sourcePrepared.checkpointCommit,
+            claimedPaths: remaining,
+          } : null,
         proposalId: remaining.length ? origin.proposalId : null,
         proposalIds: remaining.length ? origin.proposalIds : [],
         savedStash: moveStash ? null : origin.savedStash,
       }
       : {
         ...origin, checkpointCommit: sourcePrepared?.checkpointCommit ?? origin.checkpointCommit,
+        activeClaimedPaths: remainingActive,
         phase: remaining.length ? "active" as const : "resolved" as const,
         claimedPaths: remaining, savedStash: moveStash ? null : origin.savedStash,
       } : null;

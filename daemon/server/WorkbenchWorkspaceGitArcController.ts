@@ -428,6 +428,7 @@ export default class WorkbenchWorkspaceGitArcController {
         }), undefined, "read");
         const result: GitArcStatus = {
           pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
+          ...(request.full.includes("baseline") ? { baselineClaims: [] } : {}),
         };
         for (const { member, result: status } of values) {
           const qualify = (paths: string[]) => paths.map(file => this.qualify(project, member, file));
@@ -442,6 +443,9 @@ export default class WorkbenchWorkspaceGitArcController {
           if (status.unavailable?.length) (result.unavailable ??= []).push(...status.unavailable);
           result.dirtyClaims.push(...qualify(status.dirtyClaims));
           result.cleanClaims.push(...qualify(status.cleanClaims));
+          if (request.full.includes("baseline") && status.baselineClaims?.length) {
+            result.baselineClaims!.push(...qualify(status.baselineClaims));
+          }
           result.stashedClaims.push(...qualify(status.stashedClaims));
           result.unclaimedDirt.push(...qualify(status.unclaimedDirt));
           result.unavailableRecovery.push(...status.unavailableRecovery.map(() => member.roots[0]!.id));

@@ -7,6 +7,7 @@ import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { CheckpointMetadata, GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcRegistry, { findGitArcCollisions, getGitArcLiveClaimPaths, GitArcCollisionError } from "./GitArcRegistry";
 import GitArcProposalController from "./GitArcProposalController";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import { GitCheckpointDirtyPathsError, partitionIgnoredGitArcPaths } from "./GitArcPlanController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcStackController from "./GitArcStackController";
@@ -41,7 +42,7 @@ export default class GitArcLifecycleController {
     const current = await new GitArcRegistry(repository, this.resolveThreadIdentity).find({ harness, threadId: input.threadId });
     if (!current) return null;
     const checkpoint = await new GitCheckpointStore(repository, this.resolveThreadIdentity).readCheckpoint(harness, input.threadId, current.checkpointCommit);
-    const live = getGitArcLiveClaimPaths(current);
+    const live = (await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)).activeClaims;
     const savedPaths = current.savedStash?.paths ?? (current.phase === "stashed" ? current.claimedPaths : []);
     return {
       phase: savedPaths.length && !live.length ? "stashed" : current.phase ?? "active",
@@ -84,7 +85,11 @@ export default class GitArcLifecycleController {
     if (!current) throw new GitArcRejectionError({ reason: "missingActiveArc" }, "This thread does not own an active Git arc.");
     if (current.phase === "stashed") throw new Error("This Git arc is stashed. Unstash it before continuing or editing claims.");
     if (request?.kind === "add") {
-      const existing = new GitArcPathSet(getGitArcLiveClaimPaths(current));
+      const lifecycle = current.phase === "plan" ? current.retainedArc : current;
+      const active = current.stackTip
+        ? (await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)).activeClaims
+        : lifecycle?.activeClaimedPaths ?? getGitArcLiveClaimPaths(current);
+      const existing = new GitArcPathSet(active);
       const overlapping = request.paths.filter((candidate) => existing.overlaps(candidate));
       if (overlapping.length) throw new Error(`Arc paths are already covered by the claimed set: ${overlapping.join(", ")}`);
     }
@@ -110,24 +115,29 @@ export default class GitArcLifecycleController {
     const acceptedProposals = await this.proposals.readAcceptedOutcomes({
       ...input, harness, checkpointCommit: checkpoint.checkpointCommit, checkpoint, repository,
     });
-    const existing = getGitArcLiveClaimPaths(current);
+    const ownershipController = new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity);
+    const ownership = await ownershipController.project(current);
+    const existing = ownership.activeClaims;
+    const guards = ownership.guardClaims;
     if (current.phase !== "resolved" && (
-      existing.length !== metadata.scopePaths.length
-      || existing.some((candidate, index) => candidate !== metadata.scopePaths[index])
+      guards.length !== metadata.scopePaths.length
+      || guards.some((candidate, index) => candidate !== metadata.scopePaths[index])
     )) throw new Error("The active Git arc registry does not match its checkpoint claim set.");
     const additions = await partitionIgnoredGitArcPaths(repository, changes?.addPaths ?? []);
     const adoptions = await partitionIgnoredGitArcPaths(repository, changes?.adoptPaths ?? []);
     const removePaths = changes?.removePaths?.length ? repository.normalizePaths(changes.removePaths) : [];
     // Live claims name files; this also converts folder claims stored before that rule.
-    const scopePaths = await expandGitArcClaimPaths(repository, applyGitClaimChanges(existing, {
+    const activeClaimedPaths = await expandGitArcClaimPaths(repository, applyGitClaimChanges(existing, {
       inherit: true, addPaths: additions.paths, adoptPaths: adoptions.paths, removePaths,
     }));
+    const scopePaths = [...new Set([...activeClaimedPaths, ...ownership.baselineClaims])]
+      .sort((left, right) => left.localeCompare(right));
     const skippedIgnoredPaths = [...new Set([...additions.skippedIgnoredPaths, ...adoptions.skippedIgnoredPaths])];
     const entries = await registry.list();
     const collisions = findGitArcCollisions(entries, { harness, threadId: input.threadId }, scopePaths);
     if (collisions.length) throw new GitArcCollisionError(collisions);
     const existingClaims = new GitArcPathSet(existing);
-    const nextClaims = new GitArcPathSet(scopePaths);
+    const nextClaims = new GitArcPathSet(activeClaimedPaths);
     const ownedAdoptions = adoptions.paths.filter((candidate) => existingClaims.overlaps(candidate));
     if (ownedAdoptions.length) throw new GitArcRejectionError({ reason: "adoptionRequiresUnclaimed", paths: ownedAdoptions }, `Adoption requires unclaimed paths: ${ownedAdoptions.join(", ")}`);
     const result: GitArcMutationResult = {
@@ -137,7 +147,7 @@ export default class GitArcLifecycleController {
       kind: "arc",
       phase: current.phase === "resolved" ? "resolved" : "active",
       scopePaths: existing,
-      addedClaims: scopePaths.filter((candidate) => !existingClaims.has(candidate)),
+      addedClaims: activeClaimedPaths.filter((candidate) => !existingClaims.has(candidate)),
       removedClaims: existing.filter((candidate) => !nextClaims.has(candidate)),
       adoptedPaths: adoptions.paths,
       acceptedProposals,
@@ -151,7 +161,7 @@ export default class GitArcLifecycleController {
     if (current.phase === "resolved" && !scopePaths.length) return result;
     const headIdentity = await repository.readHead();
     const head = headIdentity?.commit ?? null;
-    const retained = existing.filter((scope) => nextClaims.overlaps(scope));
+    const retained = guards.filter((scope) => new GitArcPathSet(scopePaths).overlaps(scope));
     const movement = await new GitArcStackController(repository, this.resolveThreadIdentity).arcDrift(current, checkpoint, retained, head);
     if (current.phase !== "resolved" && movement.incompatible) {
       throw new GitArcRejectionError({ reason: "incompatibleHead" }, "Repository HEAD moved incompatibly after this arc began. Create a new plan before continuing.");
@@ -165,7 +175,7 @@ export default class GitArcLifecycleController {
         && head === checkpoint.parent) return result;
     }
     if (changes) {
-      const paths = [...new Set([...existing, ...scopePaths])];
+      const paths = [...new Set([...existing, ...activeClaimedPaths])];
       const dirtyPaths = paths.length ? await repository.listWorktreeChangedPaths(head, paths) : [];
       const exposed = dirtyPaths.filter((candidate) => existingClaims.covers(candidate) && !nextClaims.covers(candidate));
       // Unlanded sealed layers differ from HEAD; dropping their claims would leave that content unguarded.
@@ -201,7 +211,7 @@ export default class GitArcLifecycleController {
     const checkpointCommit = prepared?.checkpointCommit ?? checkpoint.checkpointCommit;
     // Proposals are frozen snapshots validated at commit time, so continuing keeps every one listed and committable.
     const registryMutation = await registry.prepareClaim({
-      ...current, checkpointCommit, claimedPaths: scopePaths, phase,
+      ...current, activeClaimedPaths, checkpointCommit, claimedPaths: scopePaths, phase,
       retainedArc: undefined,
     }, { expectedCheckpointCommit: current.checkpointCommit });
     const outcomeUpdate = await store.prepareOutcome(harness, input.threadId, {

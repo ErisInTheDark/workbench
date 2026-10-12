@@ -66,7 +66,13 @@ test("stacked proposals wait on sealed layers, reject sealed mutations and land 
   await assert.rejects(controller.adoptArc({ cwd, threadId: "other", source: { harness: "codex", threadId: "owner" } }), /stack/iu);
   assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt"], "rejections leave ownership intact");
 
-  await commit("owner", revised.proposalId, "first revised");
+  const lowerEntry = { proposalId: revised.proposalId, title: "first revised", description: "", includeNewer: false };
+  const worktree = await controller.captureAcceptanceWorktree({ ...owner, entries: [lowerEntry] });
+  await fs.writeFile(path.join(cwd, "three.txt"), "adopted after capture\n");
+  await controller.editArcClaims({ ...owner, inherit: true, adoptPaths: ["three.txt"] });
+  assert.equal((await controller.commitProposals({ ...owner, entries: [lowerEntry], worktree })).failed, null);
+  assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt", "three.txt"],
+    "acceptance preserves active claims adopted after the batch capture");
   assert.equal(await git("show", "HEAD:one.txt"), "first\n");
   assert.equal((await read("owner", state.upper)).waitingForLayer, null);
   await commit("owner", state.upper, "second");
@@ -79,6 +85,7 @@ test("stacked proposals wait on sealed layers, reject sealed mutations and land 
   assert.ok(proposedAt.every(Boolean));
   assert.deepEqual((await git("log", "-2", "--date=raw", "--format=%ad|%cd")).trim().split("\n"),
     proposedAt.map(date => `${date}|${date}`));
+  await controller.createProposal({ ...owner, paths: ["three.txt"], title: "late work", description: "" });
 });
 
 test("a lower layer that lands differently makes stacked proposals unavailable", async () => {
@@ -91,6 +98,14 @@ test("a lower layer that lands differently makes stacked proposals unavailable",
 test("claim and plan changes keep sealed proposals visible, and unstack reopens an unused top layer", async () => {
   const { cwd, read, state } = branch("sealed");
   const owner = { cwd, threadId: "owner" };
+  const sealedStatus = await controller.readStatus(owner);
+  assert.deepEqual([sealedStatus.dirtyClaims, sealedStatus.cleanClaims], [[], []],
+    "sealed baseline guards stay out of default active-claim status");
+  assert.deepEqual(sealedStatus.baselineClaims, ["one.txt"]);
+  assert.deepEqual((await controller.releaseArc({ ...owner, disown: true })).releasedClaims, []);
+  const statusAfterDisown = await controller.readStatus(owner);
+  assert.deepEqual(statusAfterDisown.baselineClaims, ["one.txt"],
+    "disowning active work preserves pending proposal guards");
   await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["three.txt"] });
   assert.equal((await read("owner", state.lower)).status, "proposed", "continuing work never retires a sealed layer");
   assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [state.lower],

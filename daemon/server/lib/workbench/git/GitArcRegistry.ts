@@ -16,8 +16,10 @@
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { GitArcSavedStashSchema, type GitArcSavedStash } from "workbench-shared/workbench/git/git-arc-storage";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type { DaemonReloadScope } from "workbench-shared/types";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
+import { z } from "zod";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import {
@@ -40,7 +42,10 @@ export interface GitArcAcceptedVisibility {
 
 export interface GitArcRegistryEntry extends GitArcIdentity {
   acceptedVisibility?: GitArcAcceptedVisibility | null;
+  /** Current editable ownership. Absent rows use legacy projection from guards and pending stack metadata. */
+  activeClaimedPaths?: string[];
   checkpointCommit: string;
+  /** Collision guards: active ownership plus paths represented by pending sealed proposals. */
   claimedPaths: string[];
   intentDescription: string;
   intentName: string;
@@ -49,6 +54,7 @@ export interface GitArcRegistryEntry extends GitArcIdentity {
   proposalIds?: string[];
   reloadScopes?: DaemonReloadScope[];
   retainedArc?: {
+    activeClaimedPaths?: string[];
     checkpointCommit: string;
     claimedPaths: string[];
     intentDescription: string;
@@ -88,6 +94,53 @@ interface GitArcRegistryState {
   entries: GitArcRegistryEntry[];
   version: 1;
 }
+
+const pathsSchema = z.array(z.string().min(1));
+const acceptedVisibilitySchema = z.object({
+  dismissed: pathsSchema.default([]),
+  viewed: pathsSchema.default([]),
+}).passthrough();
+const retainedArcSchema = z.object({
+  activeClaimedPaths: pathsSchema.optional(),
+  checkpointCommit: z.string().min(1),
+  claimedPaths: pathsSchema.default([]),
+  intentDescription: z.string().default(""),
+  intentName: z.string().default(""),
+  phase: z.enum(["active", "resolved"]).default("active"),
+  proposalIds: pathsSchema.default([]),
+  reloadScopes: pathsSchema.optional(),
+}).passthrough();
+const registryEntrySchema = z.object({
+  acceptedVisibility: acceptedVisibilitySchema.nullable().optional(),
+  activeClaimedPaths: pathsSchema.optional(),
+  checkpointCommit: z.string().min(1),
+  claimedPaths: pathsSchema.default([]),
+  harness: z.string().min(1),
+  intentDescription: z.string().default(""),
+  intentName: z.string().default(""),
+  phase: z.enum(["active", "plan", "stashed", "resolved"]).optional(),
+  proposalId: z.string().min(1).nullable().optional(),
+  proposalIds: pathsSchema.optional(),
+  reloadScopes: pathsSchema.optional(),
+  retainedArc: retainedArcSchema.nullable().optional(),
+  savedStash: GitArcSavedStashSchema.nullable().optional(),
+  stackTip: z.string().min(1).nullable().optional(),
+  threadId: z.string().min(1),
+  updatedAt: z.string().default(""),
+}).passthrough();
+const registryStateSchema = z.object({
+  entries: z.array(z.unknown()).default([]),
+  version: z.literal(1),
+}).passthrough();
+const INVALID_ENTRY_DEFAULTS: z.input<typeof registryEntrySchema> = {
+  checkpointCommit: "__invalid__",
+  claimedPaths: [],
+  harness: "__invalid__",
+  intentDescription: "",
+  intentName: "",
+  threadId: "__invalid__",
+  updatedAt: "",
+};
 
 export interface GitArcRegistryMutation {
   nextState: GitArcRegistryState;
@@ -154,10 +207,32 @@ function proposalIdList(value: unknown) {
 }
 
 function parseState(contents: string): GitArcRegistryState {
-  const parsed = JSON.parse(contents) as Partial<GitArcRegistryState>;
-  if (parsed.version !== 1 || !Array.isArray(parsed.entries)) throw new Error("The active arc registry is invalid.");
+  let candidate: unknown = null;
+  try {
+    candidate = JSON.parse(contents);
+  } catch {
+    // Conformance below reports and repairs an unreadable registry to its empty safe state.
+  }
+  const root = conformToZodSchema(registryStateSchema, candidate, { entries: [], version: 1 });
+  const repaired: string[] = root.repairedPaths.map(path => path.join(".") || "(root)");
+  const parsedEntries = root.data.entries.flatMap((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      repaired.push(`entries.${index}`);
+      return [];
+    }
+    const conformed = conformToZodSchema(registryEntrySchema, raw, INVALID_ENTRY_DEFAULTS);
+    repaired.push(...conformed.repairedPaths.map(path => `entries.${index}${path.length ? `.${path.join(".")}` : ""}`));
+    return conformed.data.harness === "__invalid__"
+      || conformed.data.threadId === "__invalid__"
+      || conformed.data.checkpointCommit === "__invalid__"
+      ? []
+      : [conformed.data];
+  });
+  if (repaired.length) {
+    console.warn(`[git-arc-registry] repaired stored fields: ${repaired.slice(0, 10).join(", ")}`);
+  }
   return {
-    entries: parsed.entries.map((entry) => {
+    entries: parsedEntries.map((entry) => {
       const proposalIds = Array.isArray(entry.proposalIds)
         ? proposalIdList(entry.proposalIds)
         : entry.proposalId ? [entry.proposalId] : [];

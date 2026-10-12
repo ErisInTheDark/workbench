@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatGitArcStatus, GitArcStatusSchema, parseGitArcStatus, type GitArcStatus } from "./git-arc-status";
+import { formatGitArcStatus, GitArcStatusSchema, parseGitArcStatus, projectGitArcStatus, type GitArcStatus } from "./git-arc-status";
 
 const empty: GitArcStatus = {
   pending: [], accepted: [], dirtyClaims: [], cleanClaims: [], stashedClaims: [], unclaimedDirt: [], recovery: [], unavailableRecovery: [],
@@ -22,6 +22,16 @@ test("compact status preserves counts separately from expanded and ambiguous lit
   assert.equal(expanded.data.unclaimedDirt, 6);
   assert.equal(formatGitArcStatus(empty), "");
   assert.deepEqual(parseGitArcStatus("").data, empty);
+});
+
+test("baseline guards are absent by default and round trip only when selected", () => {
+  const input = { ...empty, baselineClaims: ["src/sealed.ts"] };
+  assert.equal(formatGitArcStatus(input), "");
+  assert.equal("baselineClaims" in projectGitArcStatus(input), false);
+  const output = formatGitArcStatus(input, ["baseline"]);
+  assert.equal(output, "Baseline claims: src/sealed.ts");
+  assert.deepEqual(parseGitArcStatus(output).data, input);
+  assert.deepEqual(projectGitArcStatus(input, ["baseline"]).baselineClaims, ["src/sealed.ts"]);
 });
 
 test("status round-trips proposal identities and recovery counts without section injection", () => {

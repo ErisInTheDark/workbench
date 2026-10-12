@@ -54,7 +54,7 @@ test("adopted saved work survives ordinary claim edits and follows checkpoint hi
   await assert.rejects(registry.prepareRelease({ harness: "codex", threadId: "wb-owner" }), /saved work/u);
 });
 
-function fixture(entries: GitArcRegistryEntry[]) {
+function fixture(entries: unknown[]) {
   const written = new Map<string, string>();
   const resolutions: string[] = [];
   let nextBlob = 0;
@@ -81,6 +81,18 @@ function fixture(entries: GitArcRegistryEntry[]) {
   };
   return { registry: new GitArcRegistry(repository, resolve), resolutions, written };
 }
+
+test("registry conformance preserves valid active ownership and drops only malformed rows without writing", async (context) => {
+  const valid = { ...entry("provider-owner", ["owned.ts"]), activeClaimedPaths: ["owned.ts"], futureField: "kept" };
+  context.mock.method(console, "warn", () => undefined);
+  const { registry, written } = fixture([valid, { checkpointCommit: "broken" }, "not-an-entry"]);
+
+  const rows = await registry.list();
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0]?.activeClaimedPaths, ["owned.ts"]);
+  assert.equal((rows[0] as GitArcRegistryEntry & { futureField?: string })?.futureField, "kept");
+  assert.equal(written.size, 0, "read-time conformance never eagerly migrates the registry");
+});
 
 test("registry projects mapped owners while hiding orphan rows from live ownership", async () => {
   const { registry } = fixture([

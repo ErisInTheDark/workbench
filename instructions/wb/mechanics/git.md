@@ -13,7 +13,7 @@
 <docs tools="git_arc_status">
 overall:
 - On user-triggered events like questionnaire responses and new turns, reflexively use <tool id="git_arc_status" />. User actions before events can change routing; status cheaply catches you up
-- Use compact status first. Request `full` only when a returned count is insufficient, and only for needed groups.
+- Compact status shows active claims, not baseline guards. Request `full` only for needed counted groups; use `--full=baseline` to discover pending sealed-proposal guards for handoff.
 </docs>
 
 scope and phases:
@@ -102,7 +102,7 @@ follow-up scope:
 <docs tools="git_arc_adopt">
 ### adopt claims from another thread
 - <tool id="git_arc_adopt" /> transfers complete live claims. If the source has saved stash, set `transferStash` explicitly to move or leave it. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
-- Exact `paths` select live claims; `transferStash` independently selects saved stash. `releaseToSubagent` hands the selection from one owned child to another atomically.
+- Exact `paths` select active or baseline guards; the recipient gets active ownership on its inherited stack. `transferStash` independently selects saved stash. `releaseToSubagent` hands the selection from one owned child to another atomically.
 - Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
 </docs>
 
@@ -170,8 +170,9 @@ amending accepted commits:
 <docs tools="git_arc_stack">
 ### stack proposals
 sealing a layer:
-- <tool id="git_arc_stack" /> with `title` seals ALL pending unsealed proposals as one layer; their result becomes the arc baseline, claims stay
+- <tool id="git_arc_stack" /> with `title` seals ALL pending unsealed proposals as one layer; proposal paths become baseline guards. Editing beyond that tip activates them again
 - Compare, diff, selected restore and new proposals measure from the top layer; the user commits layers bottom-up
+- Acceptance releases only its proposal's active or baseline ownership; unrelated active claims and later guards stay
 <!-- Failure: agents piled new edits onto pending proposal files, leaving proposals stale or mixed. Edit hooks now deny unsealed proposal files, so building on them requires a layer. -->
 - Editing files in unsealed pending proposals is denied; stack to build on them, call again per layer
 

@@ -21,6 +21,7 @@ import {
   type StackLayerMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, { REGISTRY_REF, type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type { StoredProposal } from "./GitCheckpointStore";
@@ -141,6 +142,20 @@ export default class GitArcStackController {
 
   async sealedProposalIds(entry: GitArcRegistryEntry | null | undefined) {
     return new Set((await this.readOwnLayers(entry)).flatMap(({ layer }) => layer.proposalIds));
+  }
+
+  /** Paths represented by this owner's still-pending sealed proposals. */
+  async pendingOwnBaselinePaths(entry: GitArcRegistryEntry, excludedProposalId?: string) {
+    const store = this.store();
+    const paths: string[] = [];
+    for (const { layer } of await this.readOwnLayers(entry)) {
+      for (const proposalId of layer.proposalIds) {
+        if (proposalId === excludedProposalId) continue;
+        const proposal = await store.readProposal(layer.harness as GitArcHarness, layer.threadId, proposalId);
+        if (proposal.metadata.status === "proposed") paths.push(...proposal.metadata.livePaths);
+      }
+    }
+    return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
   }
 
   /** Rebuild the target layer and every layer above it, preserving each layer's own scoped proposal content. */
@@ -407,7 +422,14 @@ export default class GitArcStackController {
       stackLayer,
       version: 3,
     });
-    const mutation = await registry.prepareSet({ ...entry, stackTip: prepared.checkpointCommit }, entry.checkpointCommit);
+    const ownership = new GitArcClaimOwnershipController(this.repository, this.resolveThreadIdentity);
+    const active = (await ownership.project(entry)).activeClaims;
+    const sealedPaths = new GitArcPathSet(pending.flatMap(({ metadata }) => metadata.paths));
+    const nextEntry = ownership.withActiveClaims(
+      { ...entry, stackTip: prepared.checkpointCommit },
+      active.filter(path => !sealedPaths.covers(path)),
+    );
+    const mutation = await registry.prepareSet(nextEntry, entry.checkpointCommit);
     const updates = [prepared.update, ...mutation.updates];
     return this.operation(updates, {
       ...this.resultBase(entry),
@@ -435,7 +457,12 @@ export default class GitArcStackController {
     if (layerId && top.layer.layerId !== layerId) return null;
     await this.requireLayerUnused(entry, top);
     const nextTip = chain.at(-2)?.tipCommit ?? null;
-    const mutation = await registry.prepareSet({ ...entry, stackTip: nextTip }, entry.checkpointCommit);
+    const ownership = new GitArcClaimOwnershipController(this.repository, this.resolveThreadIdentity);
+    const active = (await ownership.project(entry)).activeClaims;
+    const mutation = await registry.prepareSet(ownership.withActiveClaims(
+      { ...entry, stackTip: nextTip },
+      [...active, ...top.scopePaths],
+    ), entry.checkpointCommit);
     return this.operation(mutation.updates, {
       ...this.resultBase(entry),
       layerId: top.layer.layerId,

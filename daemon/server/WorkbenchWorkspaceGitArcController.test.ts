@@ -37,6 +37,7 @@ test("workspace status qualifies recovery facts and keeps roots with no lifecycl
       calls.push(input.cwd);
       return {
         pending: [], accepted: [], dirtyClaims: ["one.ts"], cleanClaims: [], stashedClaims: [], unclaimedDirt: ["loose.ts"],
+        baselineClaims: ["sealed.ts"],
         recovery: [{ paths: ["old.ts"], headMovement: "same", commits: [], omittedCommits: 0,
           comparison: [{ path: "old.ts", additions: 1, deletions: 0, kind: "update", binary: false }] }],
         unavailableRecovery: [],
@@ -49,7 +50,12 @@ test("workspace status qualifies recovery facts and keeps roots with no lifecycl
   assert.equal(calls.length, 2);
   assert.deepEqual(result.dirtyClaims, ["api:one.ts", "web:one.ts"]);
   assert.deepEqual(result.unclaimedDirt, ["api:loose.ts", "web:loose.ts"]);
+  assert.equal(result.baselineClaims, undefined);
   assert.deepEqual(result.recovery.flatMap(value => value.comparison.map(change => change.path)), ["api:old.ts", "web:old.ts"]);
+  const expanded = GitArcStatusSchema.parse(await controller.execute(project, {
+    action: "arcStatus", cwd: project.cwd, harness: "codex", threadId: "thread-one", full: ["baseline"],
+  }));
+  assert.deepEqual(expanded.baselineClaims, ["api:sealed.ts", "web:sealed.ts"]);
 });
 
 test("proposal lookup never mistakes unexpected missing-data errors for an absent proposal", async () => {
