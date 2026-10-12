@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 import OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
 
 test("marks managed sessions and refreshes filtered instructions before each prompt", async () => {
@@ -64,7 +65,7 @@ test("marks managed sessions and refreshes filtered instructions before each pro
   assert.deepEqual((updates[1] as { permissions: object[] }).permissions, controller.creation().permissions);
   assert.deepEqual((updates[2] as { permissions: object[] }).permissions, [
     ...controller.creation().permissions,
-    { action: "wb_git_arc_propose", resource: "*", effect: "deny" },
+    ...WORKBENCH_PARENT_ONLY_TOOLS.map(id => ({ action: `wb_${id}`, resource: "*", effect: "deny" })),
   ]);
   assert.deepEqual(operations, ["permissions", "instructions", "permissions", "instructions", "permissions", "instructions"]);
   assert.deepEqual(puts, [

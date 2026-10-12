@@ -38,8 +38,10 @@ export interface WorkbenchInstructionFilterContext {
   onWarning: (warning: WorkbenchInstructionFilterWarning) => void;
   /** Receives each rendered line inside a `<docs>` region with its innermost region's tools; prompt-cost accounting only. */
   onDocsLine?: (tools: readonly string[], line: string) => void;
-  /** The caller's visible tool catalogue; `<docs>` regions render only when one of their tools resolves. */
+  /** Formats a `<tool id>` reference from the caller's visible catalogue; null when not visible. */
   resolveTool?: (id: string) => string | null;
+  /** Whether the caller sees a tool or any of its subtools; `<docs>` regions render only when one of their tools is served. */
+  servesTool?: (id: string) => boolean;
   shell: WorkbenchShell;
   sourceSections?: readonly RenderedInstructionContent[];
 }
@@ -385,7 +387,7 @@ function matches(control: SelectorControl, context: WorkbenchInstructionFilterCo
       : control.value === context.model;
   }
   if (control.axis === "shell") return control.value === context.shell;
-  if (control.axis === "docs") return docsTools(control).some(id => Boolean(context.resolveTool?.(id)));
+  if (control.axis === "docs") return docsTools(control).some(id => context.servesTool?.(id) ?? false);
   if (control.axis === "workspace") return context.facts.workspace.has(control.value as WorkbenchInstructionWorkspaceFact);
   return context.facts.settings.has(control.value as WorkbenchInstructionSetting);
 }

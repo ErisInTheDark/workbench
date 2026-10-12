@@ -7,7 +7,7 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
 import { collectWorkbenchInstructionToolDocs } from "../lib/workbench/instructions/instruction-tool-docs";
-import { resolveWorkbenchInstructionToolReference, type WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
+import { listWorkbenchInstructionToolFamily, resolveWorkbenchInstructionToolReference, servesWorkbenchInstructionTool, type WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
 
 export interface WorkbenchToolPromptCost {
   readonly docsTokens: number;
@@ -72,12 +72,17 @@ export default class WorkbenchToolCatalogueTokens {
         harness,
         model: null,
         resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, instructionTools),
+        servesTool: (id) => servesWorkbenchInstructionTool(id, instructionTools),
         shell: process.platform === "win32" ? "pwsh" : "bash",
       });
-      // Shared docs split evenly, so the per-tool figures sum to the real prompt cost.
+      // Shared docs split evenly across gate ids, then across each id's subtools, so per-tool figures sum to the real cost.
       for (const region of docs) {
-        const tokens = count(region.text);
-        for (const tool of region.tools) add(tool, "docsTokens", tokens / region.tools.length);
+        const tokens = count(region.text) / region.tools.length;
+        for (const gate of region.tools) {
+          const family = listWorkbenchInstructionToolFamily(gate, instructionTools);
+          const members = family.length ? family : [gate];
+          for (const tool of members) add(tool, "docsTokens", tokens / members.length);
+        }
       }
     });
     const value: WorkbenchToolPromptCost = {

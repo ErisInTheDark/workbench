@@ -495,9 +495,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
     const instructionTools = controller.listInstructionTools();
     assert.deepEqual(
-      instructionTools.map(({ id }) => id).filter((id) => !hiddenFromCodex.has(id)).sort(),
+      instructionTools.filter(({ hiddenFromMcp }) => !hiddenFromMcp).map(({ id }) => id).filter((id) => !hiddenFromCodex.has(id)).sort(),
       projectInventory.tools.map(({ name }) => name).sort(),
     );
+    // CLI-only commands stay in the instruction catalogue so `<docs>` gates reflect what the agent can use.
+    assert.equal(instructionTools.find(({ id }) => id === "git_arc_edit_start")?.hiddenFromMcp, true);
     assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_release")?.codeModeEligible, false);
     assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);

@@ -26,7 +26,7 @@ test("selected skill returns only filtered body with relative imports", async ()
       "{./notes.md}",
       "</harness:opencode>",
       "<model:gpt-other>wrong model</model:gpt-other>",
-      "<available:browse-raw>raw browse enabled</available:browse-raw>",
+      "<setting:browse-raw>raw browse enabled</setting:browse-raw>",
     ].join("\n"));
     await fs.writeFile(path.join(path.dirname(skillPath), "notes.md"), "imported instructions\n");
     let browseRawEnabled = false;

@@ -1,4 +1,4 @@
-/* No production exports. Protect per-tool prompt cost: served spec text, evenly split docs, provider averaging, and always-on sources only. */
+/* No production exports. Protect per-tool prompt cost: served spec text, evenly split docs (across gates and tool families), provider averaging, and always-on sources only. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -38,4 +38,23 @@ test("tool prompt cost averages served specs and evenly split docs across provid
   assert.deepEqual(result.tools.get("beta"), { specTokens: 4, docsTokens: 2 });
   assert.equal(result.specTokens, 14);
   assert.equal(result.docsTokens, 5);
+});
+
+test("docs gated on a tool family split evenly across its served subtools", async () => {
+  const cost = new WorkbenchToolCatalogueTokens({
+    count,
+    harnesses: ["claude"],
+    readInstructionSources: async () => [{ relativePath: "wb/mechanics/git.md", content: "<docs tools=\"edit\">\n1234\n</docs>" }],
+    readInstructionTools: async () => [
+      { id: "edit_start", codeModeEligible: false, hiddenFromMcp: true },
+      { id: "edit_end", codeModeEligible: false, hiddenFromMcp: true },
+      { id: "editor", codeModeEligible: true },
+    ],
+    readToolSpecs: async () => [],
+  });
+  const result = await cost.read();
+  assert.deepEqual(result.tools.get("edit_start"), { specTokens: 0, docsTokens: 2 });
+  assert.deepEqual(result.tools.get("edit_end"), { specTokens: 0, docsTokens: 2 });
+  assert.equal(result.tools.has("edit"), false);
+  assert.equal(result.tools.has("editor"), false);
 });

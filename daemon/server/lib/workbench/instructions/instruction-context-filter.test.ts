@@ -36,6 +36,7 @@ function filter(
       onWarning: (warning) => warnings.push(warning),
       // "missing" stands for a tool the caller cannot see, such as a parent-only tool for a subagent.
       resolveTool: id => id === "missing" ? null : `tools.${harness}.${id}`,
+      servesTool: id => id !== "missing",
       shell,
       sourceSections,
     }),

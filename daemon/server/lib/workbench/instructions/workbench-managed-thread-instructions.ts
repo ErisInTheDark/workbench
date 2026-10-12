@@ -8,7 +8,7 @@
  */
 import type { WorkbenchHarness, WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
 import { filterWorkbenchInstructionContent, formatWorkbenchInstructionFilterWarning } from "./instruction-context-filter";
-import { resolveWorkbenchInstructionToolReference, type WorkbenchInstructionTool } from "./instruction-tool-reference";
+import { resolveWorkbenchInstructionToolReference, servesWorkbenchInstructionTool, type WorkbenchInstructionTool } from "./instruction-tool-reference";
 import type { InstructionSourceSpan } from "./instruction-file-generation";
 import { listWorkbenchInstructionMechanics } from "./workbench-instruction-mechanics";
 import { loadWorkbenchPromptAssembly } from "./workbench-prompt-generation";
@@ -42,6 +42,7 @@ export async function createManagedThreadFilter(
       model: context.model,
       onWarning: warning => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
       resolveTool: id => resolveWorkbenchInstructionToolReference(id, context.harness, catalogue),
+      servesTool: id => servesWorkbenchInstructionTool(id, catalogue),
       shell: process.platform === "win32" ? "pwsh" : "bash",
       sourceSections: value ? [{ content: value, sources }] : undefined,
     })

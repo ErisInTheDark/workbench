@@ -7,23 +7,16 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
-import { getWorkbenchAgentCommandToolName } from "../commands/workbench-agent-command-definition";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import { filterWorkbenchInstructionContent, type WorkbenchInstructionFilterWarning } from "./instruction-context-filter";
 import { readWorkbenchInstructionSources } from "./instruction-source";
 import { collectWorkbenchInstructionToolDocs } from "./instruction-tool-docs";
-import { resolveWorkbenchInstructionToolReference } from "./instruction-tool-reference";
+import { listWorkbenchInstructionTools, resolveWorkbenchInstructionToolReference, servesWorkbenchInstructionTool } from "./instruction-tool-reference";
 
 const instructionRoot = fileURLToPath(new URL("../../../../../instructions", import.meta.url));
-const catalogue = [
-  { id: WORKBENCH_SHELL_MCP_TOOL_NAME, codeModeEligible: true },
-  ...listWorkbenchAgentCommands([], "agent", { virtualRepos: true })
-    .filter(({ hideFromMcp }) => !hideFromMcp)
-    .map((definition) => ({ id: getWorkbenchAgentCommandToolName(definition), codeModeEligible: definition.mcpCodeModeEligible === true })),
-];
-const registered = new Set(catalogue.map(({ id }) => id));
+const catalogue = listWorkbenchInstructionTools(listWorkbenchAgentCommands([], "agent", { virtualRepos: true }));
+const mcpServed = new Set(catalogue.filter(({ hiddenFromMcp }) => !hiddenFromMcp).map(({ id }) => id));
 
 test("docs text groups by tools across sources and only counts what this caller would render", () => {
   const docs = collectWorkbenchInstructionToolDocs([
@@ -34,9 +27,33 @@ test("docs text groups by tools across sources and only counts what this caller 
     harness: "codex",
     model: null,
     resolveTool: (id) => id === "message" ? "tools.mcp__wb__message" : null,
+    servesTool: (id) => id === "message",
     shell: "pwsh",
   });
   assert.deepEqual(docs, [{ text: "send\nagain", tools: ["message"] }]);
+});
+
+test("docs regions render for any usable subtool, CLI-only included, but never for a mere name prefix", () => {
+  const catalogue = [
+    { id: "git_arc_edit_start", codeModeEligible: false, hiddenFromMcp: true },
+    { id: "messages", codeModeEligible: true },
+  ];
+  const output = filterWorkbenchInstructionContent(
+    "<docs tools=\"git_arc_edit\">\nedit sessions\n</docs>\n<docs tools=\"message\">\nmessaging\n</docs>",
+    {
+      facts: { settings: new Set(), workspace: new Set() },
+      field: "family.md",
+      harness: "claude",
+      model: null,
+      onWarning: () => {},
+      resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, "claude", catalogue),
+      servesTool: (id) => servesWorkbenchInstructionTool(id, catalogue),
+      shell: "pwsh",
+    },
+  );
+  assert.equal(output, "edit sessions");
+  // CLI-only tools gate docs but have no MCP name a `<tool id>` reference could print.
+  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_edit_start", "claude", catalogue), null);
 });
 
 test("every docs region and tool reference in repository instructions names a served wb tool", async () => {
@@ -45,10 +62,10 @@ test("every docs region and tool reference in repository instructions names a se
     // Inline code shows syntax examples, not live references.
     const live = content.replace(/`[^`\n]*`/gu, "");
     for (const [, ids] of live.matchAll(/<docs tools="([^"]*)">/gu)) {
-      for (const id of ids!.split(" ")) if (!registered.has(id)) unknown.push(`${relativePath}: docs ${id}`);
+      for (const id of ids!.split(" ")) if (!servesWorkbenchInstructionTool(id, catalogue)) unknown.push(`${relativePath}: docs ${id}`);
     }
     for (const [, id] of live.matchAll(/<tool id="([^"]*)"\s*\/>/gu)) {
-      if (!registered.has(id!)) unknown.push(`${relativePath}: tool ${id}`);
+      if (!mcpServed.has(id!)) unknown.push(`${relativePath}: tool ${id}`);
     }
   }
   assert.deepEqual(unknown, []);
@@ -68,6 +85,7 @@ test("repository instructions render without selector warnings for root and suba
           model: null,
           onWarning: ({ field, line, message }) => warnings.push({ field, line, message }),
           resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, visible),
+          servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
           shell: "pwsh",
         });
       }

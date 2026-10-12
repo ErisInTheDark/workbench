@@ -12,10 +12,8 @@ import { contextCompactionThreshold } from "workbench-shared/workbench/thread/th
 
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchPromptInstructions } from "./lib/workbench/instructions/WorkbenchPromptFiles";
-import type { WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
+import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
-import { getWorkbenchAgentCommandToolName } from "./lib/workbench/commands/workbench-agent-command-definition";
-import { WORKBENCH_SHELL_MCP_TOOL_NAME } from "workbench-shared/workbench/commands/workbench-shell-command";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import type { JsonRpcRequest } from "./bridge-types";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
@@ -79,15 +77,7 @@ function pathsEqual(left: string, right: string) {
 }
 
 function readDefaultInstructionTools(): Promise<readonly WorkbenchInstructionTool[]> {
-  return Promise.resolve([
-    { id: WORKBENCH_SHELL_MCP_TOOL_NAME, codeModeEligible: true },
-    ...listWorkbenchAgentCommands()
-      .filter(definition => !definition.hideFromMcp)
-      .map(definition => ({
-        id: getWorkbenchAgentCommandToolName(definition),
-        codeModeEligible: definition.mcpCodeModeEligible === true,
-      })),
-  ]);
+  return Promise.resolve(listWorkbenchInstructionTools(listWorkbenchAgentCommands()));
 }
 
 export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexInstructionPort {
