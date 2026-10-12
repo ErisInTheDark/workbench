@@ -110,7 +110,7 @@ export default memo(function WorkbenchThreadSidebar({
   const ownerProjectId = logicalProject?.id ?? projectId;
   const selection = selectedProjectIds ?? (ownerProjectId ? [ownerProjectId] : []);
   const createProject = resolveSidebarCreateProject({
-    createProjectId, logicalProject, logicalProjects, projects, selectedProjectIds: selection,
+    createProjectId, logicalProject, logicalProjects, projects, selectedOwnerProjectId, selectedProjectIds: selection,
   });
 
   const errorText = useThreads.sidebarErrors(selection);

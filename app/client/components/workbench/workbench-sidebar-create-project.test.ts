@@ -38,12 +38,24 @@ test("multi-project selection without a route project resolves the selected logi
   assert.equal(resolved, b);
 });
 
+test("the current thread owner wins over the first selected project", () => {
+  const a = logical("a");
+  const b = logical("b");
+  const resolved = resolveSidebarCreateProject({
+    createProjectId: "a", logicalProject: null, logicalProjects: [a, b],
+    projects: [physical("a"), physical("b")], selectedOwnerProjectId: b.id,
+    selectedProjectIds: [a.id, b.id],
+  });
+  assert.equal(resolved, b);
+});
+
 test("an unavailable selected project does not block an available one", () => {
   const offline = logical("offline", false);
   const online = logical("online");
   const resolved = resolveSidebarCreateProject({
     createProjectId: "online", logicalProject: null, logicalProjects: [offline, online],
-    projects: [physical("online")], selectedProjectIds: [offline.id, online.id],
+    projects: [physical("online")], selectedOwnerProjectId: offline.id,
+    selectedProjectIds: [offline.id, online.id],
   });
   assert.equal(resolved, online);
 });
