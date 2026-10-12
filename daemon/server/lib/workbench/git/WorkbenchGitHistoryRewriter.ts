@@ -10,6 +10,7 @@
  */
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
 import GitArcPublishState from "./GitArcPublishState";
+import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { replaceCoAuthorTrailers } from "./git-commit-trailers";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF, type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import type { GitArcHistoryRewritePlan } from "./GitArcHistoryRewriter";
@@ -60,7 +61,7 @@ export default class WorkbenchGitHistoryRewriter {
   /** Resolves targets in input order; the range starts at the oldest target and ends at HEAD. */
   private async readAmendRange(targets: readonly string[], preparedHead?: WorkbenchGitPreparedHead) {
     const headRef = preparedHead ? preparedHead.ref : await this.repository.symbolicHead();
-    if (!headRef) throw new Error("Detached HEAD is unsafe for an amend.");
+    if (!headRef) throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend.");
     const head = preparedHead ? preparedHead.commit : await this.repository.currentHead();
     const arcRewriter = new GitArcHistoryRewriter(this.repository);
     const resolvedTargets: string[] = [];
@@ -105,7 +106,6 @@ export default class WorkbenchGitHistoryRewriter {
       if (publishState.kind === "pushed") {
         return { reason: `Commit is already present on remote refs: ${publishState.refs.join(", ")}`, status: "unavailable" };
       }
-      if (publishState.kind === "detached") return { reason: "Detached HEAD is unsafe for an amend.", status: "unavailable" };
       return { reason: publishState.reason, status: "unavailable" };
     } catch (error) {
       return { reason: error instanceof Error ? error.message : String(error), status: "unavailable" };

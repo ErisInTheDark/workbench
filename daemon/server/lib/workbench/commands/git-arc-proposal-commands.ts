@@ -9,8 +9,8 @@ import { defineWorkbenchAgentCommand, managedWorkbenchAgentCommandBody, postWork
 
 const text = z.string().trim().min(1);
 const proposalInput = z.object({
-  amend: z.union([z.boolean(), text]).default(false),
-  amendProposalId: text.optional(),
+  /** Proposal id to revise, revive or amend; amends always name their target proposal, never bare HEAD. */
+  amend: text.optional(),
   title: z.string().default(""),
   description: z.string().default(""),
   freshTitle: text.optional(),
@@ -18,12 +18,8 @@ const proposalInput = z.object({
   paths: z.array(text).default([]),
   rootId: text.optional(),
 }).strict().superRefine((input, context) => {
-  const contentAmend = Boolean(input.amend) || Boolean(input.amendProposalId && input.paths.length);
-  if (typeof input.amend === "string" && input.amendProposalId && input.amend !== input.amendProposalId) {
-    context.addIssue(gitArcRejectionIssue({ reason: "conflictingAmendmentTargets" }, "Supply one amendment target."));
-  }
-  if (!contentAmend && !input.title.trim()) context.addIssue(gitArcRejectionIssue({ reason: "missingCommitTitle" }, "title is required unless amending content."));
-  if (!contentAmend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
+  if (!input.amend && !input.title.trim()) context.addIssue(gitArcRejectionIssue({ reason: "missingCommitTitle" }, "title is required unless amending content."));
+  if (!input.amend && (input.freshTitle !== undefined || input.freshDescription !== undefined)) {
     context.addIssue(gitArcRejectionIssue({ reason: "unexpectedFreshMetadata" }, "Fresh commit metadata requires content amendment."));
   }
 });
@@ -31,23 +27,16 @@ const proposalInput = z.object({
 const propose = defineWorkbenchAgentCommand({
   description: "Propose claimed changes, revise a pending proposal, revive a rescinded proposal, or amend a committed proposal.",
   helpGroups: ["git-arc"], words: ["git", "arc", "propose"],
-  usage: "wb git arc propose [--root <root>] [--amend [<proposal-id>] [--fresh-title <title>] [--fresh-description <description>]] [--title <title>] [--description <description>] [-- <path>...]",
+  usage: "wb git arc propose [--root <root>] [--amend <proposal-id> [--fresh-title <title>] [--fresh-description <description>]] [--title <title>] [--description <description>] [-- <path>...]",
   inputSchema: proposalInput,
   parseCliArgs(args) {
-    const normalized = [...args];
-    const amendIndex = normalized.indexOf("--amend");
-    let target: string | undefined;
-    if (amendIndex >= 0 && normalized[amendIndex + 1] && !normalized[amendIndex + 1]!.startsWith("-")) {
-      target = normalized[amendIndex + 1];
-      normalized.splice(amendIndex + 1, 1);
-    }
-    const values = ["--description", "--fresh-description", "--fresh-title", "--root", "--title"];
-    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(normalized, { boolean: ["--amend"], values }), {
-      boolean: ["--amend"], values, trailing: true,
+    const values = ["--amend", "--description", "--fresh-description", "--fresh-title", "--root", "--title"];
+    const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { values }), {
+      values, trailing: true,
       leadingDashValues: ["--description", "--fresh-description", "--fresh-title", "--title"],
     });
     return {
-      amend: target ?? flags.has("--amend"),
+      amend: flags.optional("--amend") ?? undefined,
       title: flags.optional("--title") ?? "",
       description: flags.optional("--description") ?? "",
       freshTitle: flags.optional("--fresh-title") ?? undefined,
@@ -57,11 +46,10 @@ const propose = defineWorkbenchAgentCommand({
     };
   },
   buildRequest(input, context) {
-    const amendProposalId = typeof input.amend === "string" ? input.amend : input.amendProposalId;
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
       ...managedWorkbenchAgentCommandBody(context), action: "proposalCreate",
-      amend: Boolean(input.amend) || Boolean(input.amendProposalId && input.paths.length), title: input.title, description: input.description,
-      ...(amendProposalId ? { amendProposalId } : {}),
+      amend: Boolean(input.amend), title: input.title, description: input.description,
+      ...(input.amend ? { amendProposalId: input.amend } : {}),
       ...(input.freshTitle ? { freshTitle: input.freshTitle } : {}),
       ...(input.freshDescription !== undefined ? { freshDescription: input.freshDescription } : {}),
       ...(input.paths.length ? { paths: input.paths } : {}),

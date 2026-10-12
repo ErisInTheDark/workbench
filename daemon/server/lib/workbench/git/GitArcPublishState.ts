@@ -1,13 +1,12 @@
 /*
  * Exports:
- * - default GitArcPublishState: own coalesced remote refresh, publication classification and the unpushed-amend requirement. Keywords: git, arc, publish, remote, amend.
- * - GitArcCommitPublishState: classify whether a commit is safe to amend. Keywords: git, commit, pushed, unpushed.
+ * - default GitArcPublishState: own coalesced remote refresh, publication classification and the unpushed-amend requirement.
+ * - GitArcCommitPublishState: whether a commit is pushed, unpushed or unknown.
  */
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 
 export type GitArcCommitPublishState =
-  | { kind: "detached" }
   | { kind: "pushed"; refs: string[] }
   | { kind: "unknown"; reason: string }
   | { kind: "unpushed" };
@@ -17,11 +16,10 @@ const refreshes = new Map<string, Promise<void>>();
 export default class GitArcPublishState {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
-  /** Reject every state except `unpushed`; `subject` names the target in the published message. */
-  static requireUnpushed(state: GitArcCommitPublishState, subject = "Commit") {
+  /** Reject every state except `unpushed`. */
+  static requireUnpushed(state: GitArcCommitPublishState) {
     if (state.kind === "unpushed") return;
-    if (state.kind === "pushed") throw new GitArcRejectionError({ reason: "publishedCommit", refs: state.refs }, `${subject} is already present on remote refs: ${state.refs.join(", ")}`);
-    if (state.kind === "detached") throw new GitArcRejectionError({ reason: "detachedHead" }, "Detached HEAD is unsafe for an amend.");
+    if (state.kind === "pushed") throw new GitArcRejectionError({ reason: "publishedCommit", refs: state.refs }, `Commit is already present on remote refs: ${state.refs.join(", ")}`);
     throw new Error(state.reason);
   }
 
@@ -33,12 +31,6 @@ export default class GitArcPublishState {
     });
     refreshes.set(this.repository.root, refresh);
     return await refresh;
-  }
-
-  async classifyCurrentHead({ refresh = true }: { refresh?: boolean } = {}): Promise<GitArcCommitPublishState> {
-    const headRef = await this.repository.symbolicHead();
-    if (!headRef) return { kind: "detached" };
-    return await this.classifyCommit(await this.repository.currentHead(), { refresh });
   }
 
   async classifyCommit(commit: string, { refresh = true }: { refresh?: boolean } = {}): Promise<GitArcCommitPublishState> {

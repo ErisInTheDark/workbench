@@ -320,6 +320,11 @@ test("proposal and plan diagnostics encode explicit lifecycle targets", () => {
     title: "",
     ...common,
   }).success, true);
+  const untargetedAmend = GitCheckpointRequestSchema.safeParse({
+    action: "proposalCreate", amend: true, description: "", freshTitle: "Fresh", title: "", ...common,
+  });
+  assert.equal(untargetedAmend.success, false);
+  if (!untargetedAmend.success) assert.deepEqual(readGitArcValidationRejection(untargetedAmend.error.issues), { reason: "missingAmendTarget" });
   assert.equal(GitCheckpointRequestSchema.safeParse({
     action: "proposalCommit",
     description: "",

@@ -1048,6 +1048,7 @@ export default class GitArcProposalController {
     paths?: string[];
     title: string;
   }): Promise<GitCheckpointProposalReceipt> {
+    if (amend && !amendProposalId) throw new GitArcRejectionError({ reason: "missingAmendTarget" });
     if (amendProposalId && !amend && !rawPaths?.length) {
       return await this.createMessageOnlyProposal({
         amendProposalId,
@@ -1128,20 +1129,16 @@ export default class GitArcProposalController {
       }
       liveBaseCommit = headMovement.currentHead;
     }
-    if (amend && liveBaseCommit === null) throw new Error("An amend requires an existing HEAD commit.");
-    const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? revivalAmendSha ?? (amend ? liveBaseCommit : null);
+    const requestedAmendTarget = amendTargetProposal?.metadata.committedSha ?? revivalAmendSha;
     let amendTargetSha: string | null = null;
     if (requestedAmendTarget) {
-      const publish = new GitArcPublishState(repository);
-      const publishState = amendTargetProposal || revivalAmendSha
-        ? await publish.classifyCommit(requestedAmendTarget)
-        : await publish.classifyCurrentHead();
+      const publishState = await new GitArcPublishState(repository).classifyCommit(requestedAmendTarget);
       if (publishState.kind === "pushed" && freshTitle?.trim()) {
         // Pushed targets cannot be amended; keep only the fresh-commit choice so agents never need to pre-check.
         title = freshTitle;
         description = freshDescription ?? "";
       } else {
-        GitArcPublishState.requireUnpushed(publishState, amendTargetProposal ? "Commit" : "Current HEAD");
+        GitArcPublishState.requireUnpushed(publishState);
         amendTargetSha = requestedAmendTarget;
       }
     }

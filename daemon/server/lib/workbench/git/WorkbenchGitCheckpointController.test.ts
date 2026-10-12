@@ -18,6 +18,7 @@ import { CONTROLLER_OPERATIONS_FIXTURE, type ControllerFixtureState } from "./Gi
 import { proposalMessage } from "workbench-shared/workbench/git/git-arc-storage";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
+import WorkbenchGitHistoryRewriter from "./WorkbenchGitHistoryRewriter";
 
 const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
@@ -276,11 +277,15 @@ async function checkRegistryRetries(repository: WorkbenchGitRepository) {
 
 async function checkRemoteFailures(local: ControllerBranch<"remote">) {
   await git(local.source, ["remote", "set-url", "origin", path.join(local.root, "missing.git")]);
-  const state = await new GitArcPublishState(local.repository).classifyCurrentHead();
+  const head = await local.repository.currentHead();
+  const state = await new GitArcPublishState(local.repository).classifyCommit(head);
   assert.equal(state.kind, "unknown");
   if (state.kind === "unknown") assert.match(state.reason, /Unable to refresh remote refs/u);
   await git(local.source, ["checkout", "--detach", "--quiet"]);
-  assert.deepEqual(await new GitArcPublishState(local.repository).classifyCurrentHead(), { kind: "detached" });
+  assert.deepEqual(
+    await new WorkbenchGitHistoryRewriter(local.repository).classifyAmendability(head, { refresh: false }),
+    { reason: "Detached HEAD is unsafe for an amend.", status: "unavailable" },
+  );
 }
 
 controllerTest("empty", "empty and ignored plans preserve visibility and no-op boundaries", async ({ source }) => {
@@ -1440,10 +1445,19 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
 controllerTest("remote", "published amend targets become fresh commits; unavailable refreshes and detached HEAD reject", async (fixture) => {
   const { source } = fixture;
   const controller = new WorkbenchGitCheckpointController();
+  const identity = { cwd: source, harness: "codex" as const, threadId: "adopt-thread" };
+  await fs.writeFile(path.join(source, "one.txt"), "published proposal\n");
+  const published = await controller.createProposal({ ...identity, description: "", paths: ["one.txt"], title: "publish one" });
+  await controller.commitProposal({
+    ...identity, description: "", includeNewer: false, proposalId: published.proposalId, title: "publish one",
+  });
+  await git(source, ["push", "--quiet", "origin", "HEAD:refs/heads/main"]);
   const head = await fixture.repository.currentHead();
-  await fs.writeFile(path.join(source, "one.txt"), "amend pushed head\n");
+  await controller.addToArc({ ...identity, paths: ["one.txt"] });
+  await fs.writeFile(path.join(source, "one.txt"), "amend pushed proposal\n");
   const proposal = await controller.createProposal({
     amend: true,
+    amendProposalId: published.proposalId,
     cwd: source,
     description: "",
     freshDescription: "separate body",

@@ -277,12 +277,14 @@ test("proposal targeting uses amend for pending or committed content and reword 
   assert.equal(pending.body?.amendProposalId, "pending-id");
   assert.equal(pending.body?.freshTitle, undefined);
   const content = await propose.buildRequestFromJson({
-    amendProposalId: "accepted-id", paths: ["one.ts"], freshTitle: "new commit",
+    amend: "accepted-id", paths: ["one.ts"], freshTitle: "new commit",
   }, context);
   assert.equal(content.body?.amend, true);
   assert.equal(content.body?.amendProposalId, "accepted-id");
   assert.equal(content.body?.title, "");
   await assert.rejects(propose.buildRequestFromJson({ replace: "pending-id" }, context));
+  await assert.rejects(propose.buildRequestFromJson({ amend: true, freshTitle: "head amend" }, context));
+  await assert.rejects(propose.buildRequestFromJson({ amendProposalId: "accepted-id", title: "twin" }, context));
   const reword = await parseWorkbenchAgentCliCommand(["git", "arc", "reword", "--proposal", "accepted-id", "--title", "message only"], gitArcOptions);
   assert.equal(reword.kind, "request");
   assert.equal(reword.request.body?.amend, false);
@@ -990,7 +992,7 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   });
   assert.equal((await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--amend", "--title", "Amend only",
-  ], gitOptions)).kind, "request");
+  ], gitOptions)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand([
     "git", "arc", "propose", "--amend", "proposal-one", "--title", "Targeted content amend", "--", "src/file.ts",
   ], gitOptions)).kind, "request");

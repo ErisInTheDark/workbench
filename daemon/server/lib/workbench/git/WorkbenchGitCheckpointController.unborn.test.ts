@@ -46,9 +46,6 @@ unbornTest("unborn arcs adopt initial files and accept only selected content int
   await controller.continueArc(identity);
   const compared = await controller.compare(identity);
   assert.deepEqual(compared.changes.map(({ path }) => path), ["one.txt", "two.txt"]);
-  await assert.rejects(controller.createProposal({
-    ...identity, amend: true, freshTitle: "first", title: "first", description: "",
-  }), /commit|HEAD/u);
   const proposal = await controller.createProposal({
     ...identity, paths: ["one.txt"], title: "first", description: "",
   });

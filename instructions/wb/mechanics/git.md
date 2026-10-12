@@ -140,33 +140,32 @@ follow-up scope:
 <!-- git_arc_propose is parent-only, so this outer region keeps proposal mechanics out of subagent prompts. -->
 <docs tools="git_arc_propose">
 ### proposals
+- Treat proposals like real commits; can build on top
+- Proposals can be amended, replaced, proposed in parallel, and sealed to be stacked atop
+- Proposals can and often should amend accepted, unpushed commits
+- Split proposals by purpose if touched files disjoint
+<docs tools="git_arc_rescind">- Amend proposals or accepted commits for fixes/polish</docs>
+
 proposing:
-- Proposal creation requires prior arc comparison or diff inspection.
-<!-- Failure: long arcs forget outcomes; titles hide changes; descriptions hide work. -->
-- Track all arc outcomes against the full selected diff.
-- <tool id="git_arc_propose" /> with `title`, optional `description`, and no `paths` proposes all changed claims in the UI without committing.
-- Title names a simple symptom/outcome for the whole changeset.
-- Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
+- CRITICAL: Messaging of proposals MUST BE ACCURATE!
+  <docs tools="git_arc_diff git_arc_compare">- Must have already used <tool id="git_arc_compare" /> and at minimum focused <tool id="git_arc_diff" /> before proposing; helps collect full scope of commit for messaging</docs>
+  - Suggested title/description rules: Title names a simple symptom/outcome for the whole changeset. Description identifies every distinct/unrelated bundled item, its reason and technical changes; never repeat the title or label expected constituent work "also".
+  - Ensure that amendments get messaging that represents the new complete commit.
+  - Ensure that follow-up commits that AREN'T amendments get fresh messaging.
+  - Description is optional. Avoid noisily listing everything; make only truly useful notes durable
+
+- No `paths` proposes all changed claims in the UI without committing
 
 <docs tools="git_arc_rescind">
-rescinding:
-- Use <tool id="git_arc_rescind" /> to rescind one pending unsealed proposal; to revise its content, rescind, edit, then `amend: proposalId` revives it.
+amending proposals:
+- If proposal not accepted or sealed and could use amendment, <tool id="git_arc_rescind" />, then revise, then to preserve same messaging, can use `amend: proposalId` in <tool id="git_arc_propose" />
 </docs>
 
-amending:
-<!-- Failure: corrective amends rewrite history; additive amends hide scope. -->
-<!-- Failure: agents avoided amend proposals or pre-checked HEAD/push state. Amend proposals carry both amend and fresh-commit choices, and Workbench converts impossible amends (e.g. pushed targets) into fresh-commit proposals, so the agent never needs to judge amendability. -->
-- Set `amend: proposalId` to revise a pending proposal, revive a rescinded one, or amend a committed proposal. Pending revisions and revivals default to the target's paths and message.
-- Use `amend: true` for HEAD; do not pre-check committed targets.
-- The user chooses amend or fresh; Workbench handles impossible amends. Compare against the target.
-- Update title/description for changed scope, or omit both to inherit.
-- Content amendments to committed proposals require `freshTitle` and optional `freshDescription`.
-<docs tools="git_arc_reword">
-- Use <tool id="git_arc_reword" /> for message-only changes to pending or committed proposals.
-</docs>
-
-acceptance:
-- Preserve excluded newer work when a proposal is accepted.
+amending accepted commits:
+- If <tool id="git_arc_status" /> reports prior proposal accepted but could use amendment, use `amend: <its proposalId>`
+- Do not use raw `git` to determine viability of amendment; workbench supports amend of all unpushed commits, only presents fresh to user if amend impossible
+- Update title/description for changed scope; omit both to inherit
+- If amending file changes, provide `freshTitle` and optional `freshDescription`; workbench gives user option to amend or commit fresh
 
 <docs tools="git_arc_stack">
 ### stack proposals

@@ -25,6 +25,7 @@ const simpleMessages = {
   conflictingProposalTargets: "A proposal can't be replaced and amended at the same time.",
   conflictingReplacementTargets: "The request selects different proposals to replace.",
   conflictingAmendmentTargets: "The request selects different proposals to amend.",
+  missingAmendTarget: "The amendment doesn't name a proposal to amend.",
   missingCommitTitle: "The proposed commit has no title.",
   missingFreshTitle: "The amendment has no title for its separate commit choice.",
   unexpectedFreshMetadata: "A separate commit choice is only available for a content amendment.",

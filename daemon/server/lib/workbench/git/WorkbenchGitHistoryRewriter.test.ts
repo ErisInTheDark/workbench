@@ -426,7 +426,7 @@ historyTest("root amendments preserve parentless proposal history and accepted r
   assert.ok(accepted.committedSha);
   await write(fixture.root, "one.txt", "amended\n");
   const amendment = await controller.createProposal({
-    ...identity, amend: true, title: "amended", description: "", freshTitle: "fresh",
+    ...identity, amend: true, amendProposalId: accepted.proposalId, title: "amended", description: "", freshTitle: "fresh",
   });
   const amended = await controller.commitProposal({
     ...identity, proposalId: amendment.proposalId, title: "amended", description: "", includeNewer: false,
