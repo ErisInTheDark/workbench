@@ -458,6 +458,7 @@ test("prefetch fills a byte budget across database ranges without splitting an o
       return repository.read(request);
     },
     async readTranscriptItemRange(request: Parameters<typeof repository.readItemRange>[0]) {
+      await this.start();
       rangeReads += 1;
       return repository.readItemRange({ ...request, limit: 1 });
     },

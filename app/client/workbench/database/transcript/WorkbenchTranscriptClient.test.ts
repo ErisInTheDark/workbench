@@ -73,6 +73,31 @@ test("source freshness fences only its subscription and a fresh baseline restore
   } finally { client.dispose(); }
 });
 
+test("transcript demand returns validated loaded turn ids", async context => {
+  const errors: string[] = [];
+  context.mock.method(console, "error", (message: string) => { errors.push(message); });
+  let response: unknown = { demanded: true, loadedTurnIds: ["older", "current"] };
+  const client = new WorkbenchTranscriptClient({ transport: {
+    onNotification: () => () => {},
+    request: async () => response,
+  } });
+  try {
+    assert.deepEqual(
+      await client.demand({ itemCredit: 24, subscriptionId: "subscription" }),
+      ["older", "current"],
+    );
+    response = { demanded: true, loadedTurnIds: [42] };
+    await assert.rejects(
+      client.demand({ itemCredit: 24, subscriptionId: "subscription" }),
+      /Incompatible workbench\/transcript\/demand response/u,
+    );
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /loadedTurnIds\.0/u);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("incremental subscriptions negotiate independently and reject malformed stream updates without admitting them", async () => {
   let notify!: (notification: { method: string; params: unknown }) => void;
   let disconnect!: () => void;

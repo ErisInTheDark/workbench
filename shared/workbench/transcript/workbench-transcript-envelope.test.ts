@@ -11,7 +11,6 @@ import { projectWorkbenchTranscript } from "./workbench-transcript-projection.ts
 import {
   composeWorkbenchTranscriptWindow,
   packWorkbenchTranscriptEnvelopes,
-  prependWorkbenchTranscriptWindow,
   splitWorkbenchTranscriptSnapshot,
 } from "./workbench-transcript-envelope.ts";
 
@@ -130,16 +129,3 @@ test("byte packing never splits an envelope and admits one oversize envelope", (
   assert.equal(oversize.hasMore, true);
 });
 
-test("an older credited window prepends without losing the newer window", () => {
-  const source = snapshot();
-  const partition = splitWorkbenchTranscriptSnapshot(source);
-  const newer = composeWorkbenchTranscriptWindow(partition.catalog, [partition.envelopes[1]!], {
-    hasPreviousItems: true,
-  });
-  const older = composeWorkbenchTranscriptWindow(partition.catalog, [partition.envelopes[0]!], {
-    hasPreviousItems: false,
-  });
-  const merged = prependWorkbenchTranscriptWindow(newer, older, { hasPreviousItems: false });
-  assert.deepEqual(projectWorkbenchTranscript(merged), projectWorkbenchTranscript(source));
-  assert.equal(merged.hasPreviousTurns, false);
-});

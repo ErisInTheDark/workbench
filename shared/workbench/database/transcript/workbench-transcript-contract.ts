@@ -678,11 +678,6 @@ export interface WorkbenchTranscriptUpdatedParams {
   snapshot: WorkbenchTranscriptSnapshot | null;
   stream: "workbench:transcript";
   subscriptionId: string;
-  window?: {
-    firstCursor?: WorkbenchTranscriptItemCursor;
-    hasPreviousItems: boolean;
-    lastCursor?: WorkbenchTranscriptItemCursor;
-  };
 }
 
 export const WORKBENCH_TRANSCRIPT_PROTOCOL_VERSION = 5;
@@ -840,7 +835,7 @@ export function conformWorkbenchTranscriptUpdated(
   }
   const repairedPaths: DatabaseConformancePath[] = [];
   for (const key of Object.keys(value)) {
-    if (key !== "snapshot" && key !== "stream" && key !== "subscriptionId" && key !== "window") repairedPaths.push([key]);
+    if (key !== "snapshot" && key !== "stream" && key !== "subscriptionId") repairedPaths.push([key]);
   }
   const snapshot = value.snapshot === null ? null : conformWorkbenchTranscriptSnapshot(value.snapshot);
   if (snapshot) repairedPaths.push(...snapshot.repairedPaths.map((path) => ["snapshot", ...path]));
@@ -850,24 +845,6 @@ export function conformWorkbenchTranscriptUpdated(
   if (value.stream !== "workbench:transcript") issues.push(invalidValue(["stream"]));
   if (typeof value.subscriptionId !== "string" || !value.subscriptionId.trim()) {
     issues.push(invalidValue(["subscriptionId"]));
-  }
-  let window: WorkbenchTranscriptUpdatedParams["window"];
-  if (value.window !== undefined) {
-    if (!isRecord(value.window) || typeof value.window.hasPreviousItems !== "boolean") {
-      issues.push(invalidValue(["window"]));
-    } else {
-      const first = value.window.firstCursor === undefined ? null : decodeItemCursor(value.window.firstCursor);
-      const last = value.window.lastCursor === undefined ? null : decodeItemCursor(value.window.lastCursor);
-      if (first && "message" in first) issues.push(invalidValue(["window", "firstCursor"]));
-      if (last && "message" in last) issues.push(invalidValue(["window", "lastCursor"]));
-      if ((!first || "data" in first) && (!last || "data" in last)) {
-        window = {
-          hasPreviousItems: value.window.hasPreviousItems,
-          ...(first && "data" in first ? { firstCursor: first.data } : {}),
-          ...(last && "data" in last ? { lastCursor: last.data } : {}),
-        };
-      }
-    }
   }
   if (issues.length) return { issues, repairedPaths, success: false };
   let conformedSnapshot: WorkbenchTranscriptSnapshot | null = null;
@@ -880,7 +857,6 @@ export function conformWorkbenchTranscriptUpdated(
       snapshot: conformedSnapshot,
       stream: "workbench:transcript",
       subscriptionId: (value.subscriptionId as string).trim(),
-      ...(window ? { window } : {}),
     },
     repairedPaths,
     success: true,

@@ -11,8 +11,11 @@ import type {
   WorkbenchTranscriptPrefetchResult,
   WorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
+import { compareWorkbenchTranscriptItemCursors as cursorOrder } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
+/** One refill fetches several browser pages ahead without one huge daemon read delaying first paint or evicting the reservoir. */
+const REFILL_FRACTION = 8;
 
 interface SerializedEnvelope {
   bytes: number;
@@ -79,26 +82,6 @@ export interface WorkbenchTranscriptReservoirDiagnostics {
 export interface WorkbenchTranscriptReservoirLease {
   demand(credit: number): Promise<WorkbenchTranscriptPrefetchResult>;
   release(): void;
-}
-
-function cursorBefore(
-  left: WorkbenchTranscriptItemCursor,
-  right: WorkbenchTranscriptItemCursor,
-) {
-  return left.turnIndex < right.turnIndex
-    || left.turnIndex === right.turnIndex && (
-      left.itemPosition < right.itemPosition
-      || left.itemPosition === right.itemPosition && left.itemId < right.itemId
-    );
-}
-
-function cursorOrder(
-  left: WorkbenchTranscriptItemCursor,
-  right: WorkbenchTranscriptItemCursor,
-) {
-  if (cursorBefore(left, right)) return -1;
-  if (cursorBefore(right, left)) return 1;
-  return 0;
 }
 
 function boundedError(error: unknown) {
@@ -249,7 +232,7 @@ export default class WorkbenchTranscriptReservoir {
     if (!thread) return null;
     const candidates = thread.blocks
       .flatMap(block => block.envelopes.map(envelope => ({ block, envelope })))
-      .filter(({ envelope }) => !lease.before || cursorBefore(envelope.cursor, lease.before))
+      .filter(({ envelope }) => !lease.before || cursorOrder(envelope.cursor, lease.before) < 0)
       .sort((left, right) => cursorOrder(left.envelope.cursor, right.envelope.cursor));
     if (candidates.length < credit && !thread.exhausted) return null;
     const selected = candidates.slice(-credit);
@@ -298,7 +281,7 @@ export default class WorkbenchTranscriptReservoir {
     let failure: Error | null = null;
     const work = source.prefetch({
       ...(before ? { before } : {}),
-      maxBytes: this.#maxBytes,
+      maxBytes: Math.max(1, Math.floor(this.#maxBytes / REFILL_FRACTION)),
       protocolVersion: 5,
       threadId,
     }, cancellation.signal).then(result => {

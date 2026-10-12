@@ -414,8 +414,7 @@ export default class WorkbenchTranscriptController {
     if (!Number.isSafeInteger(request.maxBytes) || request.maxBytes <= 0) {
       throw new Error("Transcript prefetch byte budget must be a positive integer.");
     }
-    const readRange = this.#database.readTranscriptItemRange;
-    if (!readRange) throw new Error("Transcript item prefetch is unavailable.");
+    if (!this.#database.readTranscriptItemRange) throw new Error("Transcript item prefetch is unavailable.");
 
     let before = request.before;
     let catalog: WorkbenchTranscriptSnapshot | null = null;
@@ -423,7 +422,7 @@ export default class WorkbenchTranscriptController {
     let retainedBytes = 0;
     let hasMore = false;
     while (true) {
-      const range = await readRange({
+      const range = await this.#database.readTranscriptItemRange({
         ...(before ? { before } : {}),
         limit: PREFETCH_DATABASE_RANGE_ITEMS,
         threadId: request.threadId,

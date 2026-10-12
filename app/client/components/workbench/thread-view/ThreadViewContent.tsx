@@ -344,6 +344,8 @@ export default memo(function ThreadViewContent ({
   const [isMessageBoardOpen, setIsMessageBoardOpen] = useState(false);
   useEffect(() => { setIsMessageBoardOpen(false); }, [thread.id]);
   const [previousTurnLoadStates, dispatchPreviousTurnLoad] = useReducer(previousTurnLoadReducer, {});
+  // Older history can land inside the first loaded turn, so each completed page opens a new paging boundary.
+  const [historyPage, setHistoryPage] = useState(0);
   const [workbenchSkills, setWorkbenchSkills] = useState<WorkbenchSkillSummary[]>([]);
   const threadViewRef = useRef<HTMLDivElement>(null);
   const [historySentinel, setHistorySentinel] = useState<HTMLDivElement | null>(null);
@@ -477,7 +479,7 @@ export default memo(function ThreadViewContent ({
     : null;
   const canLoadPreviousTurn = activeTurns.canLoadOlder;
   const previousTurnLoadKey = activeThread && canLoadPreviousTurn
-    ? `${activeThread.id}:${loadedTurns[0]?.id ?? ""}`
+    ? `${activeThread.id}:${loadedTurns[0]?.id ?? ""}:${historyPage}`
     : "";
   const previousTurnLoadStatus = previousTurnLoadKey
     ? previousTurnLoadStates[previousTurnLoadKey]
@@ -602,6 +604,7 @@ export default memo(function ThreadViewContent ({
 
       historyPaging.succeed(transaction, turnIds);
       dispatchPreviousTurnLoad({ type: "succeed", key: previousTurnLoadKey });
+      setHistoryPage(page => page + 1);
     } catch (error) {
       if (loadGeneration !== historyLoadGenerationRef.current) {
         return;

@@ -14,13 +14,13 @@ import {
   type WorkbenchTranscriptSnapshot,
   type WorkbenchTranscriptSubscribeParams,
   type WorkbenchTranscriptUnsubscribeParams,
-  type WorkbenchTranscriptUpdatedParams,
   workbenchTranscriptNotifications,
   workbenchTranscriptOperations,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { TranscriptStreamUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type { DatabaseConformancePath } from "workbench-shared/database/schema/schema-conformance";
 import { WorkspaceTranscriptStateSchema, type WorkspaceTranscriptState } from "workbench-shared/workbench/workspace/workspace-observation";
+import { WorkspaceTranscriptDemandResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 
 export type { WorkbenchTranscriptConformanceReport } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
@@ -58,10 +58,7 @@ export default class WorkbenchTranscriptClient {
   private readonly subscriptions = new Map<string, {
     failed: boolean;
     onFailure?: (error: Error) => void;
-    onSnapshot(
-      snapshot: WorkbenchTranscriptSnapshot | null,
-      window?: WorkbenchTranscriptUpdatedParams["window"],
-    ): void;
+    onSnapshot(snapshot: WorkbenchTranscriptSnapshot | null): void;
     onUpdate?: (update: TranscriptStreamUpdate) => void;
     onState?: (state: WorkspaceTranscriptState) => void;
   }>();
@@ -110,10 +107,7 @@ export default class WorkbenchTranscriptClient {
 
   async subscribe(
     params: WorkbenchTranscriptSubscribeParams,
-    listener: (
-      snapshot: WorkbenchTranscriptSnapshot | null,
-      window?: WorkbenchTranscriptUpdatedParams["window"],
-    ) => void,
+    listener: (snapshot: WorkbenchTranscriptSnapshot | null) => void,
     streamListener?: (update: TranscriptStreamUpdate) => void,
     streamFailure?: (error: Error) => void,
     stateListener?: (state: WorkspaceTranscriptState) => void,
@@ -139,9 +133,12 @@ export default class WorkbenchTranscriptClient {
 
   async demand(params: { itemCredit: number; subscriptionId: string }) {
     const result = await this.transport.request("workbench/transcript/demand", params);
-    if (!result || typeof result !== "object" || !("demanded" in result) || result.demanded !== true) {
+    const parsed = WorkspaceTranscriptDemandResultSchema.safeParse(result);
+    if (!parsed.success) {
+      reportClientSchemaError("Rejected workbench/transcript/demand response", parsed.error);
       throw new Error("Incompatible workbench/transcript/demand response.");
     }
+    return parsed.data.loadedTurnIds;
   }
 
   private async request<Kind extends string, Method extends string, Params, Result>(
@@ -231,7 +228,7 @@ export default class WorkbenchTranscriptClient {
     const subscription = this.subscriptions.get(conformed.data.subscriptionId);
     if (subscription) {
       subscription.failed = false;
-      subscription.onSnapshot(conformed.data.snapshot, conformed.data.window);
+      subscription.onSnapshot(conformed.data.snapshot);
     }
   }
 

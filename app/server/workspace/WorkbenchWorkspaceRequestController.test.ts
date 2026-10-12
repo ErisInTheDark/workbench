@@ -10,6 +10,7 @@ import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
+import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import WorkbenchDaemonSources from "./WorkbenchDaemonSources";
 import WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
@@ -19,9 +20,14 @@ import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench
 import {
   emptyTranscriptSnapshotRows,
   type WorkbenchTranscriptPrefetchResult,
+  type WorkbenchTranscriptStreamedParams,
   type WorkbenchTranscriptUpdatedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import { composeWorkbenchTranscriptWindow } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import {
+  applyTranscriptLayoutPatch, applyTranscriptStructure, type TranscriptLayout, type TranscriptStructureUpdate,
+} from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 function transcriptPrefetch(threadId: string, count: number): WorkbenchTranscriptPrefetchResult {
   const turns = [{
@@ -73,6 +79,7 @@ function transcriptPrefetch(threadId: string, count: number): WorkbenchTranscrip
       type: "assistantMessage",
       updated_at: index,
     });
+    rows.itemIdentities.push({ id: `item-${index}`, thread_id: threadId });
     rows.threadItemAssistantMessages.push({
       item_id: index + 1,
       item_type: "assistantMessage",
@@ -291,7 +298,7 @@ async function fixture(
   };
 }
 
-test("transcript demand publishes bounded cached item windows and releases its reservoir lease", async context => {
+test("bounded transcript delivery streams only browser-relevant changes and releases its reservoir lease", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());
   const projectId = ProjectIdSchema.parse("owner-project");
   const requestedThreadId = ThreadReferenceSchema.parse("provider-thread");
@@ -302,13 +309,18 @@ test("transcript demand publishes bounded cached item windows and releases its r
     location: { daemonId, projectId },
     logicalProjectId: null,
   };
-  const prefetched = transcriptPrefetch(threadId, 5);
+  const available = transcriptPrefetch(threadId, 6);
+  const prefetched = { ...available, envelopes: available.envelopes.slice(0, 5) };
   assert.ok(prefetched.catalog);
   const fullSnapshot = composeWorkbenchTranscriptWindow(prefetched.catalog, prefetched.envelopes, {
     hasPreviousItems: false,
   });
+  const liveSnapshot = composeWorkbenchTranscriptWindow(prefetched.catalog, [available.envelopes[5]!], {
+    hasPreviousItems: true,
+  });
   let daemonReads = 0;
   let upstreamReleased = false;
+  let publishTranscript!: (event: WorkbenchDaemonTranscriptEvent) => void;
   const source = {
     id: daemonId,
     socket: {
@@ -317,8 +329,9 @@ test("transcript demand publishes bounded cached item windows and releases its r
     },
     observeTranscript: (
       _query: object,
-      publish: (event: { kind: "transcriptSnapshot"; data: WorkbenchTranscriptUpdatedParams }) => void,
+      publish: (event: WorkbenchDaemonTranscriptEvent) => void,
     ) => {
+      publishTranscript = publish;
       publish({ kind: "transcriptSnapshot", data: {
         snapshot: fullSnapshot,
         stream: "workbench:transcript",
@@ -344,19 +357,116 @@ test("transcript demand publishes bounded cached item windows and releases its r
     kind: "subscribe",
     params: { subscriptionId, threadId: requestedThreadId, turnLimit: 4, protocolVersion: 5, initialItemCredit: 2 },
   });
-  const initial = await f.waitTranscript(event => event.kind === "transcriptSnapshot"
-    && "subscriptionId" in event.data && event.data.subscriptionId === subscriptionId);
-  assert.equal(initial.kind, "transcriptSnapshot");
-  const initialData = initial.data as WorkbenchTranscriptUpdatedParams;
-  assert.deepEqual(initialData.snapshot?.rows.threadItems.map(item => item.item_position), [3, 4]);
-  assert.equal(initialData.window?.hasPreviousItems, true);
+  const structures = () => f.transcriptEvents.flatMap(event => event.kind === "transcriptStream"
+    && (event.data as WorkbenchTranscriptStreamedParams).subscriptionId === subscriptionId
+    && (event.data as WorkbenchTranscriptStreamedParams).update.kind === "structure"
+    ? [(event.data as WorkbenchTranscriptStreamedParams).update as TranscriptStructureUpdate] : []);
+  const browser = { layout: null as TranscriptLayout | null, projection: null as WorkbenchTranscriptProjection | null, seen: 0 };
+  const browserItems = () => {
+    for (const update of structures().slice(browser.seen)) {
+      browser.layout = applyTranscriptLayoutPatch(update.reset ? null : browser.layout, update.layout);
+      browser.projection = applyTranscriptStructure(update.reset ? null : browser.projection, update, browser.layout);
+    }
+    browser.seen = structures().length;
+    return browser.projection?.display.orderedItems.map(item => item.itemId) ?? [];
+  };
+  await f.waitTranscript(() => structures().length > 0);
+  assert.equal(f.transcriptEvents.some(event => event.kind === "transcriptSnapshot"), false,
+    "bounded delivery never republishes complete snapshots");
+  assert.equal(structures()[0]!.reset, true);
+  assert.deepEqual(browserItems(), ["item-3", "item-4"]);
+  assert.equal(browser.projection?.hasPreviousTurns, true);
 
-  await f.owner.transcript({ kind: "demand", params: { subscriptionId, itemCredit: 2 } });
-  const older = await f.waitTranscript(event => event !== initial && event.kind === "transcriptSnapshot"
-    && "subscriptionId" in event.data && event.data.subscriptionId === subscriptionId);
-  const olderData = older.data as WorkbenchTranscriptUpdatedParams;
-  assert.deepEqual(olderData.snapshot?.rows.threadItems.map(item => item.item_position), [1, 2]);
+  const published = structures().length;
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: {
+      hasPreviousTurns: true,
+      kind: "structure",
+      layout: {
+        items: {
+          deleteCount: 0,
+          offset: 0,
+          values: [{ itemId: "item-0", itemIndex: 0, turnId: `${threadId}-turn` }],
+        },
+      },
+      removedItemIds: [],
+      reset: false,
+      snapshot: composeWorkbenchTranscriptWindow(prefetched.catalog, [available.envelopes[0]!], {
+        hasPreviousItems: false,
+      }),
+    },
+  } });
+  assert.equal(structures().length, published, "off-window history publishes nothing");
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: { kind: "text", threadId, turnId: `${threadId}-turn`, itemId: "item-0",
+      field: "agentMessageText", index: null, text: "x", append: true },
+  } });
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: { kind: "text", threadId, turnId: `${threadId}-turn`, itemId: "item-4",
+      field: "agentMessageText", index: null, text: "x", append: true },
+  } });
+  assert.deepEqual(f.transcriptEvents.flatMap(event => event.kind === "transcriptStream"
+    && (event.data as WorkbenchTranscriptStreamedParams).update.kind === "text"
+    ? [((event.data as WorkbenchTranscriptStreamedParams).update as { itemId: string }).itemId] : []), ["item-4"],
+  "text reaches the browser only for delivered items");
+
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: {
+      hasPreviousTurns: true,
+      kind: "structure",
+      layout: {
+        items: {
+          deleteCount: 0,
+          offset: 894,
+          values: [{ itemId: "item-5", itemIndex: 894, turnId: `${threadId}-turn` }],
+        },
+      },
+      removedItemIds: [],
+      reset: false,
+      snapshot: liveSnapshot,
+    },
+  } });
+  const live = structures().at(-1)!;
+  assert.equal(live.reset, false);
+  assert.deepEqual(live.snapshot.rows.threadItems.map(item => item.public_id), ["item-5"],
+    "live changes travel alone, never with the delivered window");
+  assert.deepEqual(browserItems(), ["item-3", "item-4", "item-5"]);
+
+  const olderReceipt = await f.owner.transcript({ kind: "demand", params: { subscriptionId, itemCredit: 2 } });
+  assert.deepEqual(olderReceipt, { demanded: true, loadedTurnIds: [`${threadId}-turn`] });
+  assert.deepEqual(structures().at(-1)!.snapshot.rows.threadItems.map(item => item.public_id), ["item-1", "item-2"]);
+  assert.deepEqual(browserItems(), ["item-1", "item-2", "item-3", "item-4", "item-5"]);
   assert.equal(daemonReads, 1);
+
+  const completeReceipt = await f.owner.transcript({ kind: "demand", params: { subscriptionId, itemCredit: 2 } });
+  assert.deepEqual(completeReceipt, { demanded: true, loadedTurnIds: [`${threadId}-turn`] });
+  assert.deepEqual(browserItems(), ["item-0", "item-1", "item-2", "item-3", "item-4", "item-5"]);
+  assert.equal(browser.projection?.hasPreviousTurns, false);
+
+  publishTranscript({ kind: "transcriptSnapshot", data: {
+    snapshot: fullSnapshot,
+    stream: "workbench:transcript",
+    subscriptionId: "upstream",
+  } });
+  assert.deepEqual(browserItems(), ["item-0", "item-1", "item-2", "item-3", "item-4", "item-5"]);
+
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: {
+      hasPreviousTurns: true,
+      kind: "structure",
+      layout: {},
+      removedItemIds: ["item-3"],
+      reset: false,
+      snapshot: liveSnapshot,
+    },
+  } });
+  assert.deepEqual(browserItems(), ["item-0", "item-1", "item-2", "item-4", "item-5"]);
+  assert.equal(browser.projection?.hasPreviousTurns, false);
 
   await f.owner.transcript({ kind: "unsubscribe", params: { subscriptionId } });
   assert.equal(upstreamReleased, true);

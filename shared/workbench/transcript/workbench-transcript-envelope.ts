@@ -1,9 +1,9 @@
 /*
  * Exports:
  * - WorkbenchTranscriptItemCursor/WorkbenchTranscriptItemEnvelope: stable ordered item and its complete relational mini-snapshot.
- * - WorkbenchTranscriptEnvelopeCatalog/WorkbenchTranscriptEnvelopePartition: shared non-item facts and partitioned transcript items.
+ * - WorkbenchTranscriptEnvelopePartition: shared non-item facts and partitioned transcript items.
+ * - compareWorkbenchTranscriptItemCursors: canonical (turn index, item position, item id) order.
  * - splitWorkbenchTranscriptSnapshot/composeWorkbenchTranscriptWindow: losslessly partition and rebuild canonical transcript windows.
- * - prependWorkbenchTranscriptWindow: merge an older delivered item window into the browser's credited snapshot.
  * - packWorkbenchTranscriptEnvelopes: select a byte-bounded contiguous envelope prefix without splitting an item.
  */
 import {
@@ -67,19 +67,37 @@ function serializedBytes(value: object) {
   return JSON.stringify(value).length * 2;
 }
 
-function itemRows(
-  rows: WorkbenchTranscriptSnapshotRows,
-  itemId: number,
-): Pick<WorkbenchTranscriptSnapshotRows, ItemRowTableName> {
-  const selected = {} as Pick<WorkbenchTranscriptSnapshotRows, ItemRowTableName>;
-  for (const name of itemRowTableNames) {
-    selected[name] = (rows[name] as ItemRow[]).filter(row => row.item_id === itemId) as never;
+function groupBy<Value, Key>(values: readonly Value[], key: (value: Value) => Key) {
+  const groups = new Map<Key, Value[]>();
+  for (const value of values) {
+    const group = groups.get(key(value));
+    if (group) group.push(value);
+    else groups.set(key(value), [value]);
   }
-  return selected;
+  return groups;
+}
+
+/** One pass per table, so splitting stays linear in snapshot size. */
+function itemRowIndex(rows: WorkbenchTranscriptSnapshotRows) {
+  const tables = itemRowTableNames.map(name => [name, groupBy(rows[name] as ItemRow[], row => row.item_id)] as const);
+  return (itemId: number) => {
+    const selected = {} as Pick<WorkbenchTranscriptSnapshotRows, ItemRowTableName>;
+    for (const [name, groups] of tables) selected[name] = (groups.get(itemId) ?? []) as never;
+    return selected;
+  };
 }
 
 function uniqueBy<Value, Key>(values: readonly Value[], key: (value: Value) => Key) {
   return [...new Map(values.map(value => [key(value), value])).values()];
+}
+
+export function compareWorkbenchTranscriptItemCursors(
+  left: WorkbenchTranscriptItemCursor,
+  right: WorkbenchTranscriptItemCursor,
+) {
+  return left.turnIndex - right.turnIndex
+    || left.itemPosition - right.itemPosition
+    || (left.itemId < right.itemId ? -1 : left.itemId > right.itemId ? 1 : 0);
 }
 
 export function splitWorkbenchTranscriptSnapshot(
@@ -87,12 +105,12 @@ export function splitWorkbenchTranscriptSnapshot(
 ): WorkbenchTranscriptEnvelopePartition {
   const turns = new Map(snapshot.turns.map(turn => [turn.id, turn]));
   const itemIdentities = new Map(snapshot.rows.itemIdentities.map(identity => [identity.id, identity]));
-  const sourceAliases = new Map<string, WorkbenchTranscriptSnapshotRows["itemSourceAliases"]>();
-  for (const alias of snapshot.rows.itemSourceAliases) {
-    const aliases = sourceAliases.get(alias.item_identity_id);
-    if (aliases) aliases.push(alias);
-    else sourceAliases.set(alias.item_identity_id, [alias]);
-  }
+  const sourceAliases = groupBy(snapshot.rows.itemSourceAliases, alias => alias.item_identity_id);
+  const itemRows = itemRowIndex(snapshot.rows);
+  const assetRefs = groupBy(snapshot.rows.transcriptAssetRefs, reference => reference.item_id);
+  const assets = new Map(snapshot.rows.transcriptAssets.map(asset => [asset.digest, asset]));
+  const approvalOutcomes = groupBy(snapshot.approvalOutcomes ?? [], outcome => outcome.itemId);
+  const expiredItemPayloads = groupBy(snapshot.expiredItemPayloads ?? [], payload => payload.itemId);
   const threadAssetRefs = snapshot.rows.transcriptAssetRefs.filter(reference => reference.item_id === null);
   const threadAssetDigests = new Set(threadAssetRefs.map(reference => reference.asset_digest));
   const catalogRows = emptyTranscriptSnapshotRows();
@@ -116,16 +134,19 @@ export function splitWorkbenchTranscriptSnapshot(
     const identity = itemIdentities.get(root.public_id);
     if (identity) rows.itemIdentities.push(identity);
     rows.itemSourceAliases.push(...(sourceAliases.get(root.public_id) ?? []));
-    Object.assign(rows, itemRows(snapshot.rows, root.id));
-    rows.transcriptAssetRefs.push(...snapshot.rows.transcriptAssetRefs.filter(reference => reference.item_id === root.id));
+    Object.assign(rows, itemRows(root.id));
+    rows.transcriptAssetRefs.push(...(assetRefs.get(root.id) ?? []));
     const assetDigests = new Set([
       ...rows.transcriptAssetRefs.map(reference => reference.asset_digest),
       ...rows.threadBrowseEntries.flatMap(entry => entry.asset_digest ? [entry.asset_digest] : []),
     ]);
-    rows.transcriptAssets.push(...snapshot.rows.transcriptAssets.filter(asset => assetDigests.has(asset.digest)));
+    for (const digest of assetDigests) {
+      const asset = assets.get(digest);
+      if (asset) rows.transcriptAssets.push(asset);
+    }
     const miniSnapshot: WorkbenchTranscriptSnapshot = {
-      approvalOutcomes: snapshot.approvalOutcomes?.filter(outcome => outcome.itemId === root.public_id),
-      expiredItemPayloads: snapshot.expiredItemPayloads?.filter(payload => payload.itemId === root.id),
+      approvalOutcomes: snapshot.approvalOutcomes ? approvalOutcomes.get(root.public_id) ?? [] : undefined,
+      expiredItemPayloads: snapshot.expiredItemPayloads ? expiredItemPayloads.get(root.id) ?? [] : undefined,
       expiredTurnPayloads: [],
       hasPreviousTurns: false,
       loadedTurnIds: [turn.id],
@@ -140,9 +161,7 @@ export function splitWorkbenchTranscriptSnapshot(
     };
     return { ...value, retainedBytes: serializedBytes(value) };
   });
-  envelopes.sort((left, right) => left.cursor.turnIndex - right.cursor.turnIndex
-    || left.cursor.itemPosition - right.cursor.itemPosition
-    || left.cursor.itemId.localeCompare(right.cursor.itemId));
+  envelopes.sort((left, right) => compareWorkbenchTranscriptItemCursors(left.cursor, right.cursor));
   return { catalog, envelopes };
 }
 
@@ -151,9 +170,7 @@ export function composeWorkbenchTranscriptWindow(
   source: readonly WorkbenchTranscriptItemEnvelope[],
   options: { hasPreviousItems: boolean },
 ): WorkbenchTranscriptSnapshot {
-  const envelopes = [...source].sort((left, right) => left.cursor.turnIndex - right.cursor.turnIndex
-    || left.cursor.itemPosition - right.cursor.itemPosition
-    || left.cursor.itemId.localeCompare(right.cursor.itemId));
+  const envelopes = [...source].sort((left, right) => compareWorkbenchTranscriptItemCursors(left.cursor, right.cursor));
   const rows = emptyTranscriptSnapshotRows();
   rows.threadHeldSteers.push(...catalog.rows.threadHeldSteers);
   rows.threadHeldSteerParts.push(...catalog.rows.threadHeldSteerParts);
@@ -177,23 +194,6 @@ export function composeWorkbenchTranscriptWindow(
     thread: catalog.thread,
     turns: catalog.turns,
   };
-}
-
-export function prependWorkbenchTranscriptWindow(
-  current: WorkbenchTranscriptSnapshot,
-  older: WorkbenchTranscriptSnapshot,
-  options: { hasPreviousItems: boolean },
-) {
-  const currentPartition = splitWorkbenchTranscriptSnapshot(current);
-  const olderPartition = splitWorkbenchTranscriptSnapshot(older);
-  const envelopes = new Map(currentPartition.envelopes.map(envelope => [envelope.itemId, envelope]));
-  for (const envelope of olderPartition.envelopes) envelopes.set(envelope.itemId, envelope);
-  const turns = new Map(currentPartition.catalog.turns.map(turn => [turn.id, turn]));
-  for (const turn of olderPartition.catalog.turns) turns.set(turn.id, turn);
-  return composeWorkbenchTranscriptWindow({
-    ...currentPartition.catalog,
-    turns: [...turns.values()].sort((left, right) => left.turn_index - right.turn_index),
-  }, [...envelopes.values()], options);
 }
 
 export function packWorkbenchTranscriptEnvelopes(

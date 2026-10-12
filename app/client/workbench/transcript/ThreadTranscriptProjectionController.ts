@@ -7,11 +7,8 @@
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
 import type {
-  WorkbenchTranscriptItemCursor,
   WorkbenchTranscriptSnapshot,
-  WorkbenchTranscriptUpdatedParams,
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
-import { prependWorkbenchTranscriptWindow } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { isThreadItemVisible } from "workbench-shared/workbench/thread/thread-item-visibility";
 import { getWorkbenchTurnAdmission, type WorkbenchAdmissionTurn } from "workbench-shared/workbench/thread/thread-admission";
@@ -25,7 +22,7 @@ import {
   type WorkbenchTranscriptProjection,
 } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import {
-  applyTranscriptLayoutPatch, applyTranscriptStructure, readTranscriptText, writeTranscriptText,
+  applyTranscriptLayoutPatch, applyTranscriptStructure, createTranscriptLayout, readTranscriptText, writeTranscriptText,
   type TranscriptLayout, type TranscriptStreamUpdate, type TranscriptTextUpdate, type TranscriptToolPatchUpdate,
 } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import { isUndeliveredInitialOptimisticInputItem } from "../thread/thread-optimistic-items";
@@ -154,9 +151,7 @@ export default class ThreadTranscriptProjectionController {
   readonly #toolPatches = new Map<string, TranscriptToolPatchUpdate>();
   #incremental = false;
   #localInitials: ReturnType<typeof localInitials> = [];
-  #snapshot: WorkbenchTranscriptSnapshot | null = null;
-  #firstCursor: WorkbenchTranscriptItemCursor | null = null;
-  #pendingHistoryDemand: PromiseWithResolvers<readonly string[] | null> | null = null;
+  #pendingHistoryDemand: Promise<readonly string[] | null> | null = null;
 
   constructor({
     available = false,
@@ -182,9 +177,6 @@ export default class ThreadTranscriptProjectionController {
     this.#selection = null;
     this.#localInitials = [];
     this.#projection = null;
-    this.#snapshot = null;
-    this.#firstCursor = null;
-    this.#pendingHistoryDemand?.resolve(null);
     this.#pendingHistoryDemand = null;
     this.#streamItems.clear();
     this.#patchPreview = null;
@@ -204,17 +196,17 @@ export default class ThreadTranscriptProjectionController {
 
   loadOlder(itemCredit: number) {
     if (!this.#activeSubscriptionId || !this.#transcripts.demand || this.#pendingHistoryDemand) return Promise.resolve(null);
-    const pending = Promise.withResolvers<readonly string[] | null>();
-    this.#pendingHistoryDemand = pending;
-    void this.#transcripts.demand({
+    const subscriptionId = this.#activeSubscriptionId;
+    const pending = this.#transcripts.demand({
       itemCredit,
-      subscriptionId: this.#activeSubscriptionId,
-    }).catch(error => {
-      if (this.#pendingHistoryDemand !== pending) return;
-      this.#pendingHistoryDemand = null;
-      pending.reject(error);
+      subscriptionId,
+    }).then(loadedTurnIds => this.#activeSubscriptionId === subscriptionId
+      ? loadedTurnIds
+      : null).finally(() => {
+      if (this.#pendingHistoryDemand === pending) this.#pendingHistoryDemand = null;
     });
-    return pending.promise;
+    this.#pendingHistoryDemand = pending;
+    return pending;
   }
 
   setAvailable(available: boolean) {
@@ -229,7 +221,6 @@ export default class ThreadTranscriptProjectionController {
     if (!available) {
       this.#generation += 1;
       this.#activeSubscriptionId = null;
-      this.#pendingHistoryDemand?.resolve(null);
       this.#pendingHistoryDemand = null;
       if (!this.#publishProjection("loading")) this.#publishUnavailableOrIdle();
       return;
@@ -264,9 +255,6 @@ export default class ThreadTranscriptProjectionController {
     this.#localInitials = nextLocalInitials;
     if (previousThreadId !== nextThreadId) {
       this.#projection = null;
-      this.#snapshot = null;
-      this.#firstCursor = null;
-      this.#pendingHistoryDemand?.resolve(null);
       this.#pendingHistoryDemand = null;
       this.#streamItems.clear();
       this.#patchPreview = null;
@@ -492,7 +480,6 @@ export default class ThreadTranscriptProjectionController {
   #receiveSnapshot(
     generation: number,
     snapshot: WorkbenchTranscriptSnapshot | null,
-    window?: WorkbenchTranscriptUpdatedParams["window"],
   ) {
     if (this.#disposed || !this.#available) return;
     // A superseded window can reveal the same thread while its replacement loads,
@@ -505,8 +492,6 @@ export default class ThreadTranscriptProjectionController {
       this.#patchPreview = null;
       this.#toolPatches.clear();
       this.#streamLayout = null;
-      this.#snapshot = null;
-      this.#firstCursor = null;
       const threadId = this.#selection?.thread.id;
       this.#onStateChange(threadId
         ? { status: "absent", threadId }
@@ -514,14 +499,7 @@ export default class ThreadTranscriptProjectionController {
       return;
     }
     if (snapshot.thread.id !== this.#selection?.thread.id) return;
-    const prepend = Boolean(window?.firstCursor && this.#firstCursor
-      && this.#cursorBefore(window.firstCursor, this.#firstCursor));
-    const accepted = prepend && this.#snapshot
-      ? prependWorkbenchTranscriptWindow(this.#snapshot, snapshot, {
-        hasPreviousItems: window?.hasPreviousItems ?? snapshot.hasPreviousTurns,
-      })
-      : snapshot;
-    const result = projectWorkbenchTranscript(accepted);
+    const result = projectWorkbenchTranscript(snapshot);
     if ("issues" in result) {
       if (generation !== this.#generation) return;
       this.#failureMessage = "SQLite transcript data could not be projected.";
@@ -529,21 +507,17 @@ export default class ThreadTranscriptProjectionController {
         message: this.#failureMessage,
         projection: this.#visibleProjection(this.#projection?.value ?? null),
         status: "failed",
-        threadId: accepted.thread.id,
+        threadId: snapshot.thread.id,
       });
       this.#onError(new Error("SQLite transcript data could not be projected."));
       return;
     }
     this.#failureMessage = null;
-    this.#snapshot = accepted;
-    this.#firstCursor = window?.firstCursor ?? null;
+    this.#streamItems = new Map(result.data.turns.flatMap(turn =>
+      turn.items.map(item => [item.id, { turnId: turn.id, item }] as const)));
+    this.#streamLayout = createTranscriptLayout(result.data);
     this.#projection = { value: result.data, generation };
     this.#publishProjection();
-    if (this.#pendingHistoryDemand) {
-      const pending = this.#pendingHistoryDemand;
-      this.#pendingHistoryDemand = null;
-      pending.resolve(snapshot.loadedTurnIds);
-    }
   }
 
   #receiveStream(generation: number, update: TranscriptStreamUpdate) {
@@ -660,8 +634,6 @@ export default class ThreadTranscriptProjectionController {
     const cause = error instanceof Error ? error : new Error(String(error));
     const threadId = this.#selection?.thread.id ?? "none";
     const turnIds = this.#selection?.thread.turns.map(({ id }) => id).join(",") || "none";
-    this.#pendingHistoryDemand?.reject(cause);
-    this.#pendingHistoryDemand = null;
     if (generation === this.#generation && this.#selection) {
       this.#failureMessage = `Unable to load the SQLite transcript: ${cause.message}`.slice(0, 500);
       this.#onStateChange({
@@ -705,7 +677,7 @@ export default class ThreadTranscriptProjectionController {
           threadId: selection.thread.id,
           ...(turnIds.length ? { turnIds } : {}),
           turnLimit: selection.turnLimit ?? this.#turnLimit,
-        }, (snapshot, window) => this.#receiveSnapshot(generation, snapshot, window),
+        }, snapshot => this.#receiveSnapshot(generation, snapshot),
         update => this.#receiveStream(generation, update),
         error => this.#failStream(error, generation),
         state => {
@@ -729,11 +701,4 @@ export default class ThreadTranscriptProjectionController {
       .catch((error) => this.#reportError(error, generation));
   }
 
-  #cursorBefore(left: WorkbenchTranscriptItemCursor, right: WorkbenchTranscriptItemCursor) {
-    return left.turnIndex < right.turnIndex
-      || left.turnIndex === right.turnIndex && (
-        left.itemPosition < right.itemPosition
-        || left.itemPosition === right.itemPosition && left.itemId < right.itemId
-      );
-  }
 }

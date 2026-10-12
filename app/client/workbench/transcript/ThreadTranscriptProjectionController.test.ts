@@ -163,6 +163,35 @@ function streamBaseline(threadId: string): TranscriptStreamUpdate {
   };
 }
 
+test("history demand resolves from its app receipt, not an unrelated snapshot", async context => {
+  const demand = Promise.withResolvers<string[]>();
+  let receiveSnapshot!: (snapshot: WorkbenchTranscriptSnapshot) => void;
+  const controller = new ThreadTranscriptProjectionController({
+    available: true,
+    transcripts: {
+      demand: async () => demand.promise,
+      subscribe: async (_params, snapshot) => { receiveSnapshot = snapshot; },
+      unsubscribe: async () => {},
+    },
+    turnLimit: 4,
+  });
+  context.after(() => controller.dispose());
+  controller.select({ thread: thread("thread") });
+  await flush();
+
+  const loading = controller.loadOlder(24);
+  let settled = false;
+  void loading.then(() => { settled = true; });
+  const baseline = streamBaseline("thread");
+  assert.ok(baseline.kind === "structure");
+  receiveSnapshot(baseline.snapshot);
+  await flush();
+  assert.equal(settled, false);
+
+  demand.resolve(["older"]);
+  assert.deepEqual(await loading, ["older"]);
+});
+
 test("incremental projections overlay live item lifecycle timing", async () => {
   const states: ThreadTranscriptProjectionState[] = [];
   let receive!: (update: TranscriptStreamUpdate) => void;
