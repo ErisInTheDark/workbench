@@ -13,6 +13,7 @@ import {
   proposalNamespace,
   type ProposalMetadata,
 } from "workbench-shared/workbench/git/git-arc-storage";
+import GitObjectReadSession from "./GitObjectReadSession";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitArcProposalController from "./GitArcProposalController";
 import { COMMIT_REWRITE_MAP_REF } from "./GitArcHistoryRewriter";
@@ -62,6 +63,7 @@ function commitIdentity(message: string): GitCommitIdentity {
 class FakeProposalRepository {
   readonly commitReads: string[][] = [];
   readonly namespaceReads: string[][] = [];
+  readonly root = "C:/repo";
 
   constructor(
     private readonly refs: Array<{ ref: string; value: string }>,
@@ -84,6 +86,10 @@ class FakeProposalRepository {
       })),
       errors: new Map(),
     };
+  }
+
+  refMemoPrefix() {
+    return `refs:${this.root}:`;
   }
 }
 
@@ -122,12 +128,37 @@ test("proposal summary groups read only the requested thread proposal namespaces
   assert.deepEqual(repository.commitReads, [[proposedCommit, committedCommit]], "one batched commit read, no diffs");
   assert.deepEqual(summaries, [[
     // Proposals written before totals were recorded summarise without them.
-    { changes: null, committedSha: null, description: "", mode: "commit", paths: ["changed.ts"], proposalId: "proposal-one", status: "proposed", title: "proposal-one" },
+    {
+      changes: null, committedSha: null, description: "", livePaths: ["changed.ts"], mode: "commit",
+      paths: ["changed.ts"], proposalId: "proposal-one", status: "proposed", title: "proposal-one",
+    },
     {
       changes: [{ additions: 3, deletions: 1, kind: "update", path: "two.ts" }],
-      committedSha, description: "why", mode: "amend", paths: ["two.ts"], proposalId: "proposal-two", status: "committed", title: "proposal-two",
+      committedSha, description: "why", livePaths: ["changed.ts"], mode: "amend", paths: ["two.ts"],
+      proposalId: "proposal-two", status: "committed", title: "proposal-two",
     },
   ]]);
+});
+
+test("proposal summary groups reuse one ref-scoped snapshot until publication invalidates it", async () => {
+  const namespace = proposalNamespace("codex", "thread");
+  const commit = "1".repeat(40);
+  const repository = new FakeProposalRepository(
+    [{ ref: `${namespace}/proposal`, value: commit }],
+    new Map([[commit, commitIdentity(proposalMessage(proposalMetadata("proposal", "proposed", null)))]]),
+  );
+  const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository);
+  const request = [{ harness: "codex" as const, proposalIds: ["proposal"], threadId: "thread" }];
+
+  await GitObjectReadSession.run(async () => {
+    await store.readProposalSummaryGroups(request);
+    await store.readProposalSummaryGroups(request);
+    assert.deepEqual([repository.namespaceReads.length, repository.commitReads.length], [1, 1]);
+
+    GitObjectReadSession.forget(repository.refMemoPrefix());
+    await store.readProposalSummaryGroups(request);
+    assert.deepEqual([repository.namespaceReads.length, repository.commitReads.length], [2, 2]);
+  });
 });
 
 test("proposal summary groups with no proposal ids do not enumerate refs", async () => {

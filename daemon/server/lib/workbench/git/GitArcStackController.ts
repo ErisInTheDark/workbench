@@ -25,6 +25,7 @@ import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, { REGISTRY_REF, type GitArcPreparedOperation, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type { StoredProposal } from "./GitCheckpointStore";
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
@@ -85,21 +86,29 @@ export default class GitArcStackController {
 
   /** Bottom-first stack tips reachable from `tip`. An unreadable tip ends the chain with a warning. */
   async readChain(tip: string | null | undefined): Promise<GitArcStackLayer[]> {
-    const layers: GitArcStackLayer[] = [];
-    let cursor = tip ?? null;
-    while (cursor && layers.length < MAX_STACK_DEPTH) {
-      const resolved = await this.repository.readCommitAt(cursor);
-      if (!resolved) {
-        console.warn(`Git arc stack tip ${cursor.slice(0, 12)} is unreadable; ignoring it and lower layers.`);
-        break;
+    if (!tip) return [];
+    const immutable = /^[a-f0-9]{40,64}$/iu.test(tip);
+    const key = immutable
+      ? `stack-chain:${this.repository.root}:${tip}`
+      : `${this.repository.refMemoPrefix()}stack-chain:${tip}`;
+    return await GitObjectReadSession.memo(key, async () => {
+      const layers: GitArcStackLayer[] = [];
+      let cursor: string | null = tip;
+      while (cursor && layers.length < MAX_STACK_DEPTH) {
+        const resolved = await this.repository.readCommitAt(cursor);
+        if (!resolved) {
+          GitObjectReadSession.forget(key);
+          console.warn(`Git arc stack tip ${cursor.slice(0, 12)} is unreadable; ignoring it and lower layers.`);
+          break;
+        }
+        const metadata = parseMarkedMetadata<CheckpointMetadata>(resolved.identity.message, CHECKPOINT_METADATA_MARKER);
+        if (metadata?.kind !== "stack" || !metadata.stackLayer) break;
+        const parent = resolved.identity.parents[0] ?? null;
+        layers.push({ layer: metadata.stackLayer, parent, scopePaths: metadata.scopePaths, tipCommit: resolved.commit });
+        cursor = parent;
       }
-      const metadata = parseMarkedMetadata<CheckpointMetadata>(resolved.identity.message, CHECKPOINT_METADATA_MARKER);
-      if (metadata?.kind !== "stack" || !metadata.stackLayer) break;
-      const parent = resolved.identity.parents[0] ?? null;
-      layers.push({ layer: metadata.stackLayer, parent, scopePaths: metadata.scopePaths, tipCommit: resolved.commit });
-      cursor = parent;
-    }
-    return layers.reverse();
+      return layers.reverse();
+    });
   }
 
   ownLayers(chain: readonly GitArcStackLayer[], identity: { harness: string; threadId: string }) {
@@ -146,15 +155,20 @@ export default class GitArcStackController {
 
   /** Paths represented by this owner's still-pending sealed proposals. */
   async pendingOwnBaselinePaths(entry: GitArcRegistryEntry, excludedProposalId?: string) {
-    const store = this.store();
+    const ownLayers = await this.readOwnLayers(entry);
+    const summaries = await this.store().readProposalSummaryGroups(ownLayers.map(({ layer }) => ({
+      harness: layer.harness as GitArcHarness,
+      proposalIds: layer.proposalIds,
+      threadId: layer.threadId,
+    })));
     const paths: string[] = [];
-    for (const { layer } of await this.readOwnLayers(entry)) {
-      for (const proposalId of layer.proposalIds) {
-        if (proposalId === excludedProposalId) continue;
-        const proposal = await store.readProposal(layer.harness as GitArcHarness, layer.threadId, proposalId);
-        if (proposal.metadata.status === "proposed") paths.push(...proposal.metadata.livePaths);
+    ownLayers.forEach(({ layer }, index) => {
+      for (const proposal of summaries[index] ?? []) {
+        if (proposal.proposalId !== excludedProposalId && proposal.status === "proposed") {
+          paths.push(...proposal.livePaths);
+        }
       }
-    }
+    });
     return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
   }
 

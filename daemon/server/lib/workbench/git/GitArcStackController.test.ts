@@ -7,7 +7,9 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import GitArcRegistry from "./GitArcRegistry";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
+import GitObjectReadSession from "./GitObjectReadSession";
 import GitTestFixtureCache, { type GitTestFixtureCopy } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -29,6 +31,69 @@ function branch<Key extends keyof StackFixtureState>(key: Key) {
   const git = async (...args: string[]) => await (await WorkbenchGitRepository.open(cwd)).run(args);
   return { commit, cwd, git, read, state };
 }
+
+test("stack projection reuses immutable layers and bulk-reads pending proposal paths", async (context) => {
+  const { cwd } = branch("stacked");
+  const repository = await WorkbenchGitRepository.open(cwd);
+  const entry = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "owner" });
+  assert.ok(entry?.stackTip);
+  const stack = new GitArcStackController(repository);
+  const chainReads = context.mock.method(repository, "readCommitAt");
+  let firstChainReads = 0;
+  let repeatedChainReads = 0;
+  await GitObjectReadSession.run(async () => {
+    await stack.readChain(entry.stackTip);
+    firstChainReads = chainReads.mock.callCount();
+    await stack.readChain(entry.stackTip);
+    repeatedChainReads = chainReads.mock.callCount();
+  });
+  chainReads.mock.restore();
+
+  const unreadableTip = "f".repeat(40);
+  let objectAvailable = false;
+  const warnings = context.mock.method(console, "warn", () => undefined);
+  const incompleteReads = context.mock.method(repository, "readCommitAt", async (commitish: string) => (
+    commitish === unreadableTip && !objectAvailable
+      ? null
+      : await WorkbenchGitRepository.prototype.readCommitAt.call(
+        repository,
+        commitish === unreadableTip ? entry.stackTip! : commitish,
+      )
+  ));
+  let unreadableChainReads = 0;
+  let recoveredChainReads = 0;
+  await GitObjectReadSession.run(async () => {
+    await stack.readChain(unreadableTip);
+    unreadableChainReads = incompleteReads.mock.callCount();
+    objectAvailable = true;
+    await stack.readChain(unreadableTip);
+    recoveredChainReads = incompleteReads.mock.callCount();
+  });
+  incompleteReads.mock.restore();
+  warnings.mock.restore();
+
+  const proposalReads = context.mock.method(GitCheckpointStore.prototype, "readProposal");
+  const groupedReads = context.mock.method(GitCheckpointStore.prototype, "readProposalSummaryGroups");
+  await stack.pendingOwnBaselinePaths(entry);
+  const projectionReads = {
+    grouped: groupedReads.mock.callCount(),
+    serial: proposalReads.mock.callCount(),
+  };
+  proposalReads.mock.restore();
+  groupedReads.mock.restore();
+
+  assert.deepEqual({
+    firstChainReads,
+    projectionReads,
+    retriedUnreadableChain: recoveredChainReads > unreadableChainReads,
+    repeatedChainReads,
+  }, {
+    firstChainReads,
+    projectionReads: { grouped: 1, serial: 0 },
+    retriedUnreadableChain: true,
+    repeatedChainReads: firstChainReads,
+  });
+});
 
 test("stacked proposals wait on sealed layers, reject sealed mutations and land bottom-up", async () => {
   const { commit, cwd, git, read, state } = branch("stacked");

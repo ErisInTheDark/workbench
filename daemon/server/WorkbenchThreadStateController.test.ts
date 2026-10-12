@@ -11,7 +11,7 @@ import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchGitArcLifecycleState, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
@@ -2245,6 +2245,76 @@ test("headless provider refresh preserves Git lifecycle and MCP generation witho
   assert.deepEqual(reopenedEntry?.entryKind === "thread" ? { gitArc: reopenedEntry.gitArc, gitArcPlan: reopenedEntry.gitArcPlan } : null, { gitArc: { ...gitArc, stashedPaths: [] }, gitArcPlan });
   await reopened.dispose();
   await temporary.dispose();
+});
+
+test("Git arc acceptance progress publishes transiently without resolving or persisting Git state", async () => {
+  const persistence = new MemoryThreadStatePersistence();
+  const publications: WorkbenchThreadSidebarSnapshot[] = [];
+  let resolves = 0;
+  let gitArc: WorkbenchGitArcLifecycleState = {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentDescription: "", intentName: "Commit stack",
+    phase: "active" as const, proposals: [{ proposalId: "one", status: "proposed" as const }], updatedAt: new Date(0).toISOString(),
+  };
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    onProject: snapshot => publications.push(snapshot),
+    reconcileProject: async () => [],
+    resolveGitArc: async () => { resolves += 1; return gitArc; },
+    storageRoot: "transient-git-acceptance",
+    threadStateStore: persistence,
+  });
+  await controller.ensureProviderEntry(fixtureProjectIds["project"], {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureThreadIds["thread"] },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Commit stack",
+  });
+  await controller.refreshGitArcState(fixtureProjectIds["project"], "codex", fixtureThreadIds["thread"]);
+  assert.equal(resolves, 1);
+  publications.length = 0;
+
+  await controller.publishGitArcAcceptance(fixtureProjectIds["project"], "codex", fixtureThreadIds["thread"], {
+    landingId: "two",
+    queuedIds: ["three"],
+  });
+
+  const transient = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+    entry => entry.entryKind !== "draft" && entry.identity.threadId === fixtureThreadIds["thread"],
+  );
+  assert.deepEqual(transient?.entryKind === "thread" ? transient.gitArc?.acceptance : null, {
+    landingId: "two",
+    queuedIds: ["three"],
+  });
+  assert.equal(resolves, 1);
+  const stored = await persistence.readProject(fixtureProjectIds["project"]) as {
+    records: Array<{ gitArc?: { acceptance?: unknown } }>;
+  };
+  assert.equal(stored.records.some(record => record.gitArc?.acceptance !== undefined), false);
+  assert.equal(publications.length, 1);
+  const published = publications[0]?.entries.find(
+    entry => entry.entryKind !== "draft" && entry.identity.threadId === fixtureThreadIds["thread"],
+  );
+  assert.deepEqual(published?.entryKind === "thread" ? published.gitArc?.acceptance : null, {
+    landingId: "two",
+    queuedIds: ["three"],
+  });
+
+  gitArc = {
+    ...gitArc,
+    checkpointCommit: "b".repeat(40),
+    proposals: [{ proposalId: "two", status: "committed" as const }],
+    updatedAt: new Date(1).toISOString(),
+  };
+  await controller.refreshGitArcState(fixtureProjectIds["project"], "codex", fixtureThreadIds["thread"]);
+  const durable = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+    entry => entry.entryKind !== "draft" && entry.identity.threadId === fixtureThreadIds["thread"],
+  );
+  assert.equal(durable?.entryKind === "thread" ? durable.gitArc?.acceptance : null, undefined);
+  assert.deepEqual(durable?.entryKind === "thread" ? durable.gitArc?.proposals : null, gitArc.proposals);
+  assert.equal(resolves, 2);
+  await controller.dispose();
 });
 
 test("legacy settled thread metadata receives a fresh persisted retention grace window", async () => {

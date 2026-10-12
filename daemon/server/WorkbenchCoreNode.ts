@@ -391,6 +391,10 @@ function createWorkbenchCoreFeature(
       if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
       return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
     },
+    publishGitArcAcceptance: async (projectId, harness, threadId, acceptance) => {
+      if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
+      await threadState.controller.publishGitArcAcceptance(projectId, harness, threadId, acceptance);
+    },
     refreshThreadGitArcState: async (projectId, harness, threadId) => {
       if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
       await threadState.controller.refreshGitArcState(projectId, harness, threadId);

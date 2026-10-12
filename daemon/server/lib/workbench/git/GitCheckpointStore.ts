@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default GitCheckpointStore: own canonical writes and WB-first/provider-fallback checkpoint, lineage, outcome, history, and proposal reads.
- * - GitArcProposalSummary: normalized proposal identity, status, message, scope and recorded totals, read in bulk without diffs.
+ * - GitArcProposalSummary: normalized proposal identity, status, message, stored/live scope and recorded totals, read in bulk without diffs.
  * - GitArcProposalSummaryRequest: thread-qualified proposal summary selection.
  * - StoredCheckpoint: owned checkpoint identity, metadata, and nullable parent.
  * - StoredProposal: owned proposal identity, metadata, and tree.
@@ -43,6 +43,7 @@ export interface GitArcProposalSummary {
   changes: GitArcChangeTotal[] | null;
   committedSha: string | null;
   description: string;
+  livePaths: string[];
   mode: "amend" | "commit";
   paths: string[];
   proposalId: string;
@@ -230,36 +231,41 @@ export default class GitCheckpointStore {
   }
 
   async readProposalSummaryGroups(requests: GitArcProposalSummaryRequest[]) {
-    const resolvedRequests = await Promise.all(requests.map(async request => ({
-      ...request,
-      namespaces: request.proposalIds.length ? await this.proposalNamespaces(request.harness, request.threadId) : [],
-    })));
-    const namespaces = [...new Set(resolvedRequests.flatMap(request => request.namespaces))];
-    if (!namespaces.length) return requests.map(() => []);
-    const refs = await this.repository.listRefsWithValues(...namespaces);
-    const byRef = new Map(refs.map((entry) => [entry.ref, entry]));
-    const selections = resolvedRequests.map(({ namespaces: requestNamespaces, proposalIds }) => {
-      return [...new Set(proposalIds)].map((proposalId) => ({
-        entry: requestNamespaces.map(namespace => byRef.get(`${namespace}/${proposalId}`)).find(entry => entry) ?? null,
-        proposalId,
+    const key = `${this.repository.refMemoPrefix()}proposal-summary-groups:${JSON.stringify(requests)}`;
+    return await GitObjectReadSession.memo(key, async () => {
+      const resolvedRequests = await Promise.all(requests.map(async request => ({
+        ...request,
+        namespaces: request.proposalIds.length ? await this.proposalNamespaces(request.harness, request.threadId) : [],
+      })));
+      const namespaces = [...new Set(resolvedRequests.flatMap(request => request.namespaces))];
+      if (!namespaces.length) return requests.map(() => []);
+      const refs = await this.repository.listRefsWithValues(...namespaces);
+      const byRef = new Map(refs.map((entry) => [entry.ref, entry]));
+      const selections = resolvedRequests.map(({ namespaces: requestNamespaces, proposalIds }) => {
+        return [...new Set(proposalIds)].map((proposalId) => ({
+          entry: requestNamespaces.map(namespace => byRef.get(`${namespace}/${proposalId}`)).find(entry => entry) ?? null,
+          proposalId,
+        }));
+      });
+      const commits = await this.repository.readCommits(selections.flatMap((selection) => selection.flatMap(({ entry }) => entry ? [entry.value] : [])));
+      const missing = (proposalId: string): GitArcProposalSummary => ({
+        changes: null, committedSha: null, description: "", livePaths: [], mode: "commit", paths: [],
+        proposalId, status: "unavailable", title: "",
+      });
+      return selections.map((selection) => selection.map(({ entry, proposalId }): GitArcProposalSummary => {
+        if (!entry) return missing(proposalId);
+        const identity = commits.commits.get(entry.value);
+        if (!identity) return missing(proposalId);
+        const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
+        if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
+        const metadata = normalizeProposalMetadata(parsed);
+        return {
+          changes: metadata.changes ?? null, committedSha: metadata.committedSha, description: metadata.description,
+          livePaths: metadata.livePaths, mode: metadata.mode, paths: metadata.paths,
+          proposalId, status: metadata.status, title: metadata.title,
+        };
       }));
     });
-    const commits = await this.repository.readCommits(selections.flatMap((selection) => selection.flatMap(({ entry }) => entry ? [entry.value] : [])));
-    const missing = (proposalId: string): GitArcProposalSummary => ({
-      changes: null, committedSha: null, description: "", mode: "commit", paths: [], proposalId, status: "unavailable", title: "",
-    });
-    return selections.map((selection) => selection.map(({ entry, proposalId }): GitArcProposalSummary => {
-      if (!entry) return missing(proposalId);
-      const identity = commits.commits.get(entry.value);
-      if (!identity) return missing(proposalId);
-      const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
-      if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
-      const metadata = normalizeProposalMetadata(parsed);
-      return {
-        changes: metadata.changes ?? null, committedSha: metadata.committedSha, description: metadata.description,
-        mode: metadata.mode, paths: metadata.paths, proposalId, status: metadata.status, title: metadata.title,
-      };
-    }));
   }
 
   /**

@@ -198,13 +198,20 @@ test("proposal dispatch preserves on-demand inspection and inspected selection",
   assert.equal(result.mode, "commit");
 });
 
-test("a batched acceptance publishes which proposal is landing and which wait after every landing, then clears", async () => {
-  const observed: Array<object | null> = [];
+test("a batched acceptance durably refreshes only at its boundaries and publishes lightweight progress after every landing", async () => {
+  const durable: Array<object | null> = [];
+  const progress: Array<{ landingId: string | null; queuedIds: string[] }> = [];
   let feature!: WorkbenchGitArcFeature;
   feature = waitFeature({
+    publishGitArcAcceptance: async (
+      _project: string,
+      _harness: "codex",
+      _threadId: string,
+      acceptance: { landingId: string | null; queuedIds: string[] },
+    ) => { progress.push(acceptance); },
     refreshThreadGitArcState: async (_project: string, harness: "codex", threadId: string) => {
       const state = await feature.findLifecycleState("C:/Git/Project", harness, fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId));
-      observed.push(state?.acceptance ?? null);
+      durable.push(state?.acceptance ?? null);
     },
   });
   const internal = feature as unknown as {
@@ -226,12 +233,43 @@ test("a batched acceptance publishes which proposal is landing and which wait af
     entries: ["one", "two"].map(proposalId => ({ proposalId, title: proposalId, description: "", includeNewer: false })),
   });
   assert.equal(response.ok, true, await response.text());
-  assert.deepEqual(observed, [
+  assert.deepEqual(durable, [
     { landingId: "one", queuedIds: ["two"] },
-    { landingId: "two", queuedIds: [] },
-    { landingId: null, queuedIds: [] },
     null,
   ]);
+  assert.deepEqual(progress, [
+    { landingId: "two", queuedIds: [] },
+    { landingId: null, queuedIds: [] },
+  ]);
+});
+
+test("a failed lightweight acceptance publication never falsifies landed Git results", async context => {
+  const reported = context.mock.method(console, "error", () => undefined);
+  const feature = waitFeature({
+    publishGitArcAcceptance: async () => { throw new Error("progress exploded"); },
+  });
+  const internal = feature as unknown as {
+    workspaceController: {
+      commitProposals: (
+        project: object,
+        request: { entries: Array<{ proposalId: string }> },
+        afterLanded: (proposal: object) => Promise<void>,
+      ) => Promise<object>;
+    };
+  };
+  internal.workspaceController.commitProposals = async (_project, request, afterLanded) => {
+    for (const { proposalId } of request.entries) await afterLanded({ proposalId });
+    return { failed: null, landed: [] };
+  };
+
+  const response = await feature.executeRequest({
+    action: "proposalCommitMany", cwd: "C:/Git/Project", harness: "codex", threadId: "thread",
+    entries: [{ proposalId: "one", title: "one", description: "", includeNewer: false }],
+  });
+
+  assert.equal(response.ok, true, await response.text());
+  assert.equal(reported.mock.callCount(), 1);
+  assert.match(String(reported.mock.calls[0]?.arguments[0]), /acceptance progress.*progress exploded/u);
 });
 
 test("startup claim reconciliation seeds current scopes at observation time", async () => {

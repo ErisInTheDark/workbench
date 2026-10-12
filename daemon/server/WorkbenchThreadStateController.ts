@@ -1318,6 +1318,41 @@ export default class WorkbenchThreadStateController {
     };
   }
 
+  async publishGitArcAcceptance(
+    projectId: ProjectId,
+    harness: WorkbenchHarnessId,
+    threadId: WorkbenchThreadId,
+    acceptance: NonNullable<WorkbenchGitArcLifecycleState["acceptance"]>,
+  ) {
+    projectId = this.canonicalProjectId(projectId);
+    const state = await this.getProject(projectId);
+    const key = `${harness}:${threadId}`;
+    return await this.enqueue(`${projectId}:thread:${key}`, async () => {
+      const entry = state.entries.get(key);
+      if (!entry || entry.entryKind === "draft" || !entry.gitArc) {
+        throw new Error("The thread Git arc is not available for acceptance progress publication.");
+      }
+      const current = entry.gitArc.acceptance;
+      if (
+        current?.landingId === acceptance.landingId
+        && current.queuedIds.length === acceptance.queuedIds.length
+        && current.queuedIds.every((proposalId, index) => proposalId === acceptance.queuedIds[index])
+      ) {
+        return entry;
+      }
+      const next = parseWorkbenchThreadStateEntry({
+        ...entry,
+        gitArc: {
+          ...entry.gitArc,
+          acceptance: { landingId: acceptance.landingId, queuedIds: [...acceptance.queuedIds] },
+        },
+      });
+      state.entries.set(key, next);
+      this.publish(projectId, state, next);
+      return next;
+    });
+  }
+
   async refreshGitArcState(projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) {
     projectId = this.canonicalProjectId(projectId);
     const state = await this.getProject(projectId);
