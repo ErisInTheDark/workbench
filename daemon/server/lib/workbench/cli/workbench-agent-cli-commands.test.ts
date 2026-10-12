@@ -585,6 +585,26 @@ test("claim analysis parses as a read-only cli command without MCP exposure", as
   assert.equal(command?.effects.readOnly, true);
 });
 
+test("commit thread lookup is a read-only cli command without MCP exposure", async () => {
+  const result = await parseWorkbenchAgentCliCommand([
+    "git", "thread", "abcdef1",
+  ], { cwd: "C:/workspace" });
+  assert.equal(result.kind, "request");
+  assert.deepEqual(result.kind === "request" ? result.request : null, {
+    body: { action: "thread", commit: "abcdef1", cwd: "C:/workspace" },
+    method: "POST",
+    path: "/api/git",
+    responseKind: "native",
+  });
+  const command = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git thread");
+  assert.equal(command?.hideFromMcp, true);
+  assert.equal(command?.effects.readOnly, true);
+  const help = await parseWorkbenchAgentCliCommand(["git", "--help"], { cwd: "C:/workspace" });
+  assert.match(help.kind === "help" ? help.help : "", /wb git thread <commit>/u);
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "thread"], { cwd: "C:/workspace" })).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "thread", "one", "two"], { cwd: "C:/workspace" })).kind, "error");
+});
+
 test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", async () => {
   const questions = [{
     header: "details",

@@ -4,7 +4,7 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 
 import type { WorkbenchThreadGitAmendRequest } from "./lib/workbench/git/WorkbenchThreadGit";
-import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
+import WorkbenchThreadGitFeature, { findCommitThreadId } from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 
@@ -15,6 +15,40 @@ function threadGitIdentities() {
   }
   return database.identities.threads;
 }
+
+test("finds one commit owner across summary and member proposal evidence", () => {
+  const commit = "a".repeat(40);
+  const proposal = {
+    proposalId: "proposal", status: "committed" as const,
+    summary: { changes: [], committedSha: commit, description: "", mode: "commit" as const, title: "land change" },
+  };
+  const arc = {
+    checkpointCommit: "b".repeat(40), claimedPaths: [], intentDescription: "", intentName: "lookup",
+    phase: "resolved" as const, proposals: [proposal], stashedPaths: [], updatedAt: "2026-10-13T00:00:00.000Z",
+  };
+  assert.deepEqual(findCommitThreadId([
+    { gitArc: arc, threadId: "thread-one" },
+    {
+      gitArc: {
+        ...arc,
+        members: [{
+          ...arc, harness: "codex" as const, repoRoot: "C:/Git/Project", rootId: "root",
+          rootIds: ["root"], threadId: "thread-two",
+        }],
+        proposals: [],
+      },
+      threadId: "thread-two",
+    },
+  ], commit), { kind: "ambiguous", threadIds: ["thread-one", "thread-two"] });
+  assert.deepEqual(findCommitThreadId([
+    { gitArc: arc, threadId: "thread-one" },
+    { gitArc: { ...arc, members: [{ ...arc, harness: "codex" as const, repoRoot: "C:/Git/Project", rootId: "root", rootIds: ["root"], threadId: "thread-one" }] }, threadId: "thread-one" },
+  ], commit), { kind: "found", threadId: "thread-one" });
+  assert.deepEqual(findCommitThreadId(
+    [{ gitArc: arc, threadId: "thread-one" }],
+    "c".repeat(40),
+  ), { kind: "missing" });
+});
 
 test("preserves thread Git selection and commit responses behind the daemon boundary", async () => {
   const feature = new WorkbenchThreadGitFeature({

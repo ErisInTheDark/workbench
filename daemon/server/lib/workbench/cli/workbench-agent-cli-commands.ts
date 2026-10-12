@@ -93,7 +93,7 @@ const ROOT_HELP_COMMAND_ORDER = [
   "task set", "task get", "task completed", "task blocked",
   "todo", "todo remove",
   "thread recall", "thread recall search", "thread recall expand",
-  "git add", "git unstage", "git commit", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
+  "git add", "git unstage", "git commit", "git thread", "git repo", "git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims",
   "git arc status", "git arc edit start", "git arc edit view", "git arc edit apply", "git arc edit revert", "git arc edit end", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore",
   "browse run", "browse raw", "browse sessions", "browse stop", "browse forget",
 ] as const;
@@ -190,12 +190,12 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     key: "thread-recall", usage: "wb thread recall [command] [options]", words: ["thread", "recall"],
   },
   {
-    commandOrder: ["git add", "git unstage", "git commit", "git repo"],
+    commandOrder: ["git add", "git unstage", "git commit", "git thread", "git repo"],
     footer: [
       "Run from the repository root and use . with add to select all changed files.",
       "Run from the repository root and use . with unstage to clear the thread selection.",
       "Use --worktree with an absolute registered worktree path while keeping the command cwd as the control-plane project.",
-      "Git commands derive the current managed thread ID from Workbench caller context.",
+      "Git mutation commands derive the current managed thread ID from Workbench caller context.",
       "Unrelated files in the ordinary Git index remain outside the thread-owned commit.",
     ].join("\n"),
     key: "git", usage: "wb git <command> [options]", words: ["git"],

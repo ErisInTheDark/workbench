@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions shared by CLI and MCP, plus CLI-only history amend.
+ * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions, plus CLI-only history amend and commit-owner lookup.
  */
 import { z } from "zod";
 
@@ -139,4 +139,25 @@ const amend = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_GIT_COMMANDS = [selectionCommand("add"), selectionCommand("unstage"), commit, amend] as const;
+const thread = defineWorkbenchAgentCommand({
+  description: "Print the canonical Workbench thread that owns a committed Git arc proposal.",
+  effects: { readOnly: true },
+  helpGroups: ["git"],
+  hideFromMcp: true,
+  words: ["git", "thread"],
+  usage: "wb git thread <commit>",
+  inputSchema: z.object({ commit: requiredText }).strict(),
+  parseCliArgs(args) {
+    if (args.length !== 1) throw new Error("wb git thread requires exactly one commit.");
+    return { commit: args[0] };
+  },
+  buildRequest(input, { cwd }) {
+    return postWorkbenchAgentCommand("/api/git", {
+      action: "thread", commit: input.commit, cwd,
+    });
+  },
+});
+
+export const WORKBENCH_GIT_COMMANDS = [
+  selectionCommand("add"), selectionCommand("unstage"), commit, amend, thread,
+] as const;

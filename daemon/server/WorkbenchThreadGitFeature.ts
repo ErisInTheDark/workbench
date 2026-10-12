@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - WorkbenchThreadGitFeatureOptions: project resolution, thread Git construction and stable transition ports.
- * - default WorkbenchThreadGitFeature: own validated thread-scoped add, unstage, commit and history amend requests.
+ * - CommitThreadLookup/findCommitThreadId: classify committed proposal ownership across thread arc summaries.
+ * - default WorkbenchThreadGitFeature: own validated thread-scoped mutations and committed-proposal owner lookup.
  */
 import type http from "node:http";
 import { ThreadReferenceSchema, type WorkbenchThreadId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 
 import WorkbenchThreadGit from "./lib/workbench/git/WorkbenchThreadGit";
 import type {
@@ -13,12 +15,23 @@ import type {
   WorkbenchThreadGitCommitResult,
   WorkbenchThreadGitSelectionResult,
 } from "./lib/workbench/git/WorkbenchThreadGit";
+import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
-type ThreadGitAction = "add" | "amend" | "commit" | "unstage";
+type ThreadGitAction = "add" | "amend" | "commit" | "thread" | "unstage";
+
+export type CommitThreadLookup =
+  | { kind: "ambiguous"; threadIds: string[] }
+  | { kind: "found"; threadId: string }
+  | { kind: "missing" };
+
+interface CommitThreadRecord {
+  gitArc?: WorkbenchGitArcLifecycleState | null;
+  threadId: string;
+}
 
 interface ThreadGitPort {
   add(paths: string[]): Promise<WorkbenchThreadGitSelectionResult>;
@@ -31,13 +44,15 @@ interface ThreadGitPort {
 export interface WorkbenchThreadGitFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   createThreadGit?: (options: { cwd: string; targetWorktree?: string; threadId: WorkbenchThreadId }) => Promise<ThreadGitPort>;
-  selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection">;
+  selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "readThreadStateProject">;
   resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
-  transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">;
+  transitions: Pick<WorkbenchThreadTransitionCoordinator, "read" | "run">;
 }
 
 function readAction(value: unknown): ThreadGitAction | null {
-  return value === "add" || value === "amend" || value === "commit" || value === "unstage" ? value : null;
+  return value === "add" || value === "amend" || value === "commit" || value === "thread" || value === "unstage"
+    ? value
+    : null;
 }
 
 function readString(value: unknown) {
@@ -83,6 +98,19 @@ function rewriteResponse(result: WorkbenchThreadGitCommitResult, amended: Readon
 
 function readPaths(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+export function findCommitThreadId(records: readonly CommitThreadRecord[], commitSha: string): CommitThreadLookup {
+  const owners = new Set<string>();
+  for (const record of records) {
+    if (!record.gitArc) continue;
+    for (const arc of [record.gitArc, ...record.gitArc.members ?? []]) {
+      if (arc.proposals.some(proposal => proposal.summary?.committedSha === commitSha)) owners.add(record.threadId);
+    }
+  }
+  const threadIds = [...owners].sort((left, right) => left.localeCompare(right));
+  if (!threadIds.length) return { kind: "missing" };
+  return threadIds.length === 1 ? { kind: "found", threadId: threadIds[0]! } : { kind: "ambiguous", threadIds };
 }
 
 function selectionResponse(verb: string, changedPaths: string[], selectedPaths: string[]) {
@@ -141,10 +169,35 @@ export default class WorkbenchThreadGitFeature {
       const action = readAction(body.action);
       const cwd = readString(body.cwd);
       const targetWorktree = readString(body.targetWorktree) || undefined;
-      const threadId = readString(body.threadId);
       if (!action) throw new Error("A valid thread Git action is required.");
-      if (!threadId) throw new Error("A managed Workbench thread id is required.");
       const resolved = await this.options.resolveProjectFromCwd(cwd);
+      if (action === "thread") {
+        const commitish = readString(body.commit);
+        if (!commitish) throw new Error("A Git commit is required.");
+        if (!resolved.project) throw new Error("The current directory has no Workbench project.");
+        if (!this.options.selectionStore) throw new Error("Thread Git database storage is unavailable.");
+        const projectId = resolved.project.id;
+        const selectionStore = this.options.selectionStore;
+        const repository = await WorkbenchGitRepository.open(resolved.cwd);
+        return await this.options.transitions.read(repository.root, async () => {
+          const resolvedCommit = await repository.readCommitAt(commitish);
+          if (!resolvedCommit) throw new Error(`Git commit is unavailable: ${commitish}`);
+          const document = await selectionStore.readThreadStateProject(projectId);
+          const match = findCommitThreadId(document.records.map(record => ({
+            gitArc: record.gitArc,
+            threadId: record.identity.threadId,
+          })), resolvedCommit.commit);
+          if (match.kind === "missing") throw new Error(`No Workbench thread owns commit ${resolvedCommit.commit}.`);
+          if (match.kind === "ambiguous") {
+            throw new Error(`Commit ${resolvedCommit.commit} belongs to multiple Workbench threads: ${match.threadIds.join(", ")}`);
+          }
+          return new Response(`${match.threadId}\n`, {
+            headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+          });
+        });
+      }
+      const threadId = readString(body.threadId);
+      if (!threadId) throw new Error("A managed Workbench thread id is required.");
       const identity = await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: resolved.project?.id });
       if (!identity) throw new Error("The managed thread has no Git storage identity.");
       const threadGit = await this.createThreadGit({

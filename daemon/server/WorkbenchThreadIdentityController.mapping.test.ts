@@ -284,7 +284,10 @@ test("thread Git resolves public and native callers to the same existing selecti
   const feature = new WorkbenchThreadGitFeature({
     identities: owners.threads,
     resolveProjectFromCwd: async () => ({ cwd: "C:/repo", project: { id: fixtureIdentityValues.ProjectId.project } }),
-    transitions: { run: async (_root, operation) => operation() },
+    transitions: {
+      read: async (_root, operation) => operation(),
+      run: async (_root, operation) => operation(),
+    },
     createThreadGit: async ({ threadId }) => {
       selected.push(threadId);
       return {
