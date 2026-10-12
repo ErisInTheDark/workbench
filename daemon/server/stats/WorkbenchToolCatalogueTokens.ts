@@ -41,12 +41,14 @@ export default class WorkbenchToolCatalogueTokens {
   constructor(private readonly options: WorkbenchToolCatalogueTokensOptions) {}
 
   async read(): Promise<WorkbenchToolPromptCost> {
-    const [instructionTools, allSources, ...served] = await Promise.all([
+    const [catalogue, allSources, ...served] = await Promise.all([
       this.options.readInstructionTools(),
       this.options.readInstructionSources(),
       ...this.options.harnesses.map((harness) => this.options.readToolSpecs(harness)),
     ]);
     const sources = allSources.filter(({ relativePath }) => isAlwaysOnSource(relativePath));
+    // A typical root thread has no optional local capabilities enabled.
+    const instructionTools = catalogue.filter(({ requiresCapability }) => !requiresCapability);
     // Counting is the expensive part; the inputs are cheap to read and compare as one signature.
     const specTexts = served.map((specs) => specs.map((spec) => `${spec.name}\n${spec.description ?? ""}\n${JSON.stringify(spec.inputSchema)}`));
     const key = [
@@ -67,8 +69,8 @@ export default class WorkbenchToolCatalogueTokens {
     this.options.harnesses.forEach((harness, index) => {
       served[index]!.forEach((spec, specIndex) => add(spec.name, "specTokens", count(specTexts[index]![specIndex]!)));
       const docs = collectWorkbenchInstructionToolDocs(sources, {
-        // A typical root thread: one project root, no optional local settings, no model-specific guidance.
-        facts: { settings: new Set(), workspace: new Set(["project"]) },
+        // A typical root thread: one project root, no model-specific guidance.
+        facts: { workspace: new Set(["project"]) },
         harness,
         model: null,
         resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, instructionTools),

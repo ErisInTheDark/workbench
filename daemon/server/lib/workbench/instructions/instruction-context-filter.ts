@@ -1,8 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_INSTRUCTION_WORKSPACE_FACTS/WorkbenchInstructionWorkspaceFact: `<workspace:…>` selector values (project, daemon, multi-root).
- * - WORKBENCH_INSTRUCTION_SETTINGS/WorkbenchInstructionSetting: `<setting:…>` selector values from local capability settings.
- * - WorkbenchInstructionFacts: one caller's workspace facts and enabled settings.
+ * - WorkbenchInstructionFacts: one caller's workspace facts.
  * - WorkbenchInstructionFilterContext/WorkbenchInstructionFilterWarning: trusted final-payload selector inputs and bounded recovery warnings.
  * - stripWorkbenchInstructionHtmlComments: remove source comments outside Markdown fences while preserving line structure.
  * - filterWorkbenchInstructionContent: strip comments, apply selectors, `<docs tools>` tool gates, `<else>` fallbacks and provider tool references, and collapse inline wrapper regions.
@@ -15,17 +14,13 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
 
-/** `available` is retired: its tags still parse so they strip with a warning instead of leaking into payloads. */
+/** `available` and `setting` are retired: their tags still parse so they strip with a warning instead of leaking into payloads. */
 type SelectorAxis = "available" | "docs" | "else" | "harness" | "model" | "setting" | "shell" | "role" | "tool" | "workspace" | "wrapper";
 type WorkbenchShell = "bash" | "pwsh";
 
 export const WORKBENCH_INSTRUCTION_WORKSPACE_FACTS = ["project", "daemon", "multi-root"] as const;
 export type WorkbenchInstructionWorkspaceFact = typeof WORKBENCH_INSTRUCTION_WORKSPACE_FACTS[number];
-export const WORKBENCH_INSTRUCTION_SETTINGS = ["browse-raw"] as const;
-export type WorkbenchInstructionSetting = typeof WORKBENCH_INSTRUCTION_SETTINGS[number];
-
 export interface WorkbenchInstructionFacts {
-  readonly settings: ReadonlySet<WorkbenchInstructionSetting>;
   readonly workspace: ReadonlySet<WorkbenchInstructionWorkspaceFact>;
 }
 
@@ -90,7 +85,6 @@ const SELECTOR_LOOKALIKE = /^\s*<\/?(?:available|docs|else|harness|model|setting
 const MODEL_VALUE = /^[^\s<>]{1,200}$/u;
 const MAX_MODEL_REGEX_LENGTH = 200;
 const WORKSPACE_FACTS = new Set<string>(WORKBENCH_INSTRUCTION_WORKSPACE_FACTS);
-const SETTINGS = new Set<string>(WORKBENCH_INSTRUCTION_SETTINGS);
 const ANSI_RED = "\u001b[31m";
 const ANSI_YELLOW = "\u001b[33m";
 const ANSI_RESET = "\u001b[0m";
@@ -361,13 +355,12 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
 function isKnownValue(axis: SelectorAxis, value: string) {
   // Docs tool ids are syntax-checked by their tag; whether one resolves is visibility, not validity.
   if (axis === "wrapper" || axis === "else" || axis === "docs") return true;
-  if (axis === "tool" || axis === "available") return false;
+  if (axis === "tool" || axis === "available" || axis === "setting") return false;
   if (axis === "role") return value === "agent" || value === "voice-to-text";
   if (axis === "harness") return ProviderKeySchema.safeParse(value).success;
   if (axis === "model") return MODEL_VALUE.test(value);
   if (axis === "shell") return value === "pwsh" || value === "bash";
-  if (axis === "workspace") return WORKSPACE_FACTS.has(value);
-  return SETTINGS.has(value);
+  return WORKSPACE_FACTS.has(value);
 }
 
 function docsTools(control: SelectorControl) {
@@ -388,8 +381,8 @@ function matches(control: SelectorControl, context: WorkbenchInstructionFilterCo
   }
   if (control.axis === "shell") return control.value === context.shell;
   if (control.axis === "docs") return docsTools(control).some(id => context.servesTool?.(id) ?? false);
-  if (control.axis === "workspace") return context.facts.workspace.has(control.value as WorkbenchInstructionWorkspaceFact);
-  return context.facts.settings.has(control.value as WorkbenchInstructionSetting);
+  if (control.axis === "available" || control.axis === "setting") return false;
+  return context.facts.workspace.has(control.value as WorkbenchInstructionWorkspaceFact);
 }
 
 function sanitizeWarningSource(source: string) {
@@ -475,11 +468,11 @@ function warningMessage(
   value?: string,
 ) {
   if (recovery === "fenced") return "Instruction wrapper cannot contain a fenced code block";
-  if (recovery === "malformed" && (axis === "workspace" || axis === "setting") && value) {
-    return `Unknown ${axis} selector ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
+  if (recovery === "malformed" && axis === "workspace" && value) {
+    return `Unknown workspace selector ${sanitizeWarningSource(value).slice(0, MAX_WARNING_VALUE_LENGTH)}`;
   }
   if (recovery === "malformed" && axis === "tool") return "Unknown Workbench tool id";
-  if (recovery === "malformed" && axis === "available") return "Retired selector: use <docs tools=\"…\">, <workspace:…> or <setting:…>";
+  if (recovery === "malformed" && (axis === "available" || axis === "setting")) return "Retired selector: use <docs tools=\"…\"> or <workspace:…>";
   if (recovery === "malformed" && axis === "else") return "Instruction else must sit directly inside <>";
   if (recovery === "malformed") return "Malformed instruction selector";
   if (recovery === "unclosed") return "Instruction selector is not closed";

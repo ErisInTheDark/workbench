@@ -49,6 +49,8 @@ test("docs gated on a tool family split evenly across its served subtools", asyn
       { id: "edit_start", codeModeEligible: false, hiddenFromMcp: true },
       { id: "edit_end", codeModeEligible: false, hiddenFromMcp: true },
       { id: "editor", codeModeEligible: true },
+      // A typical thread has no optional capabilities, so gated tools neither open docs nor share their cost.
+      { id: "edit_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" },
     ],
     readToolSpecs: async () => [],
   });
@@ -57,4 +59,5 @@ test("docs gated on a tool family split evenly across its served subtools", asyn
   assert.deepEqual(result.tools.get("edit_end"), { specTokens: 0, docsTokens: 2 });
   assert.equal(result.tools.has("edit"), false);
   assert.equal(result.tools.has("editor"), false);
+  assert.equal(result.tools.has("edit_raw"), false);
 });

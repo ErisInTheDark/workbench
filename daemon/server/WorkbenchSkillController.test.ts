@@ -26,7 +26,7 @@ test("selected skill returns only filtered body with relative imports", async ()
       "{./notes.md}",
       "</harness:opencode>",
       "<model:gpt-other>wrong model</model:gpt-other>",
-      "<setting:browse-raw>raw browse enabled</setting:browse-raw>",
+      "<docs tools=\"browse_raw\">raw browse enabled</docs>",
     ].join("\n"));
     await fs.writeFile(path.join(path.dirname(skillPath), "notes.md"), "imported instructions\n");
     let browseRawEnabled = false;
@@ -38,7 +38,10 @@ test("selected skill returns only filtered body with relative imports", async ()
         path: skillPath,
         relativePath,
       }],
-      readInstructionTools: async () => [{ id: "rg", codeModeEligible: true }],
+      readInstructionTools: async () => [
+        { id: "rg", codeModeEligible: true },
+        { id: "browse_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" },
+      ],
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: browseRawEnabled }),
     });
     const response = await controller.execute({

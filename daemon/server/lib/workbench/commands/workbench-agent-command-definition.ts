@@ -5,6 +5,7 @@
  * - managedWorkbenchAgentCommandBody: validated managed identity for command requests.
  * - JsonValue/WorkbenchAgentCommandRequest/WorkbenchAgentCommandResponseKind/WorkbenchAgentMcpRuntimeDrainPolicy: transport and MCP lifecycle contracts.
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
+ * - WorkbenchLocalCapability: a local capability setting a command can require.
  * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
  * - isWorkbenchAgentCommandVisibleTo: whether a provider sees a command in MCP registration and CLI help.
@@ -14,6 +15,9 @@
  */
 import { z } from "zod";
 import { ProviderKeySchema, type ProviderKey } from "workbench-shared/workbench/provider/provider-key";
+import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+
+export type WorkbenchLocalCapability = keyof WorkbenchLocalCapabilitySettings;
 
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -120,6 +124,8 @@ export interface WorkbenchAgentCommandDefinition {
   mcpCodeModeEligible?: boolean;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
+  /** Local capability that must be enabled before an agent can use this command. */
+  requiresCapability?: WorkbenchLocalCapability;
   usage: string;
   /** Usage shown instead of `usage` to callers at the Workbench repository root, documenting root-only options. */
   workbenchRootUsage?: string;
@@ -142,6 +148,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   parseCliArgs(args: string[]): z.input<TSchema>;
+  requiresCapability?: WorkbenchLocalCapability;
   usage: string;
   workbenchRootUsage?: string;
   words: readonly string[];
@@ -174,6 +181,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     mcpCodeModeEligible: definition.mcpCodeModeEligible,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
+    requiresCapability: definition.requiresCapability,
     usage: definition.usage,
     workbenchRootUsage: definition.workbenchRootUsage,
     words: definition.words,

@@ -8,8 +8,8 @@ When activated, load the `/browse` skill (follow normal skill precedence rules) 
 
 Even if browser use is activated, default to using normal web/search tools for internet research.
 
-<setting:browse-raw>
+<docs tools="browse_raw">
 Workbench's Browser Use is a wrapper over Browserbase's `browse` package. In this repository, and only when necessary, the wb browse CLI provides a passthrough command to the raw browse CLI. Be very careful when using the raw browse CLI — it is not sandboxed. It being enabled does NOT give you permission to use it as a workaround for sandbox restrictions.
-</setting:browse-raw>
+</docs>
 
 </docs>

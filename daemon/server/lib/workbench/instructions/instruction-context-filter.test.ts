@@ -8,7 +8,6 @@ import {
   formatWorkbenchInstructionFilterWarning,
   stripWorkbenchInstructionHtmlComments,
   type WorkbenchInstructionFilterWarning,
-  type WorkbenchInstructionSetting,
   type WorkbenchInstructionWorkspaceFact,
 } from "./instruction-context-filter";
 import type { RenderedInstructionContent } from "./instruction-file-generation";
@@ -21,14 +20,13 @@ function filter(
   workspace: ReadonlySet<WorkbenchInstructionWorkspaceFact> = new Set(["project"]),
   model: string | null = "gpt-6-astra",
   sourceSections?: readonly RenderedInstructionContent[],
-  settings: ReadonlySet<WorkbenchInstructionSetting> = new Set(),
 ) {
   const warnings: WorkbenchInstructionFilterWarning[] = [];
   const docs: Array<[string, string]> = [];
   return {
     docs,
     output: filterWorkbenchInstructionContent(value, {
-      facts: { settings, workspace },
+      facts: { workspace },
       field: "test",
       harness,
       model,
@@ -113,7 +111,7 @@ test("inline selectors work for every axis and compose with standalone blocks", 
 
   const warnings: WorkbenchInstructionFilterWarning[] = [];
   const voice = filterWorkbenchInstructionContent(value, {
-    facts: { settings: new Set(), workspace: new Set(["project"]) }, field: "test", harness: "codex",
+    facts: { workspace: new Set(["project"]) }, field: "test", harness: "codex",
     model: "gpt-6-astra", onWarning: warning => warnings.push(warning),
     role: "voice-to-text", shell: "pwsh",
   });
@@ -160,7 +158,7 @@ test("trusted voice role excludes agent guidance and composes with other selecto
   const source = "<role:agent>\nordinary\n</role:agent>\n<role:voice-to-text>\n<harness:codex>\nvoice\n</harness:codex>\n</role:voice-to-text>";
   const warnings: WorkbenchInstructionFilterWarning[] = [];
   const context = {
-    facts: { settings: new Set<never>(), workspace: new Set<never>() }, field: "pack", harness: "codex" as const,
+    facts: { workspace: new Set<never>() }, field: "pack", harness: "codex" as const,
     model: null, shell: "pwsh" as const,
     onWarning: (warning: WorkbenchInstructionFilterWarning) => warnings.push(warning),
     role: "voice-to-text" as const,
@@ -258,15 +256,18 @@ test("an unclosed html comment opener remains literal", () => {
 });
 
 test("unknown and malformed controls preserve body and warn", () => {
-  const result = filter("<setting:not-real>\nbody\n</setting:not-real>");
+  const result = filter("<workspace:not-real>\nbody\n</workspace:not-real>");
   assert.equal(result.output, "body");
   assert.equal(result.warnings.length, 2);
 
-  // A user pack written before `available` retired keeps its content and says why instead of leaking tags.
-  const retired = filter("<available:thread-recall>\nbody\n</available:thread-recall>");
-  assert.equal(retired.output, "body");
-  assert.deepEqual(retired.warnings.map(warning => warning.recovery), ["malformed", "malformed"]);
-  assert.match(retired.warnings[0]?.message ?? "", /^Retired selector/u);
+  // A user pack written before `available` or `setting` retired keeps its content and says why instead of leaking tags.
+  for (const retiredTag of ["available:thread-recall", "setting:browse-raw"]) {
+    const [axis] = retiredTag.split(":");
+    const retired = filter(`<${retiredTag}>\nbody\n</${retiredTag}>`);
+    assert.equal(retired.output, "body", axis);
+    assert.deepEqual(retired.warnings.map(warning => warning.recovery), ["malformed", "malformed"]);
+    assert.match(retired.warnings[0]?.message ?? "", /^Retired selector/u);
+  }
 
   const malformedModel = filter("<model:gpt 6>\nmodel body\n</model:gpt 6>");
   assert.equal(malformedModel.output, "model body");
@@ -322,12 +323,6 @@ test("workspace facts keep multi-root and project-only instructions out of other
   assert.equal(filter(value).output, "before\ngit\nafter");
   assert.equal(filter(value, "codex", "pwsh", new Set(["project", "multi-root"])).output, "before\nworkspace arc\ngit\nafter");
   assert.equal(filter(value, "codex", "pwsh", new Set(["daemon"])).output, "before\nafter");
-});
-
-test("setting selectors follow the caller's enabled local settings", () => {
-  const value = "<setting:browse-raw>\nraw Browse\n</setting:browse-raw>";
-  assert.equal(filter(value).output, "");
-  assert.equal(filter(value, "codex", "pwsh", new Set(["project"]), "gpt-6-astra", undefined, new Set(["browse-raw"])).output, "raw Browse");
 });
 
 test("docs regions render when any listed tool is visible and drop out when none are", () => {

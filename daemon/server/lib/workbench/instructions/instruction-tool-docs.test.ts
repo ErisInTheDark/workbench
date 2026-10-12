@@ -23,7 +23,7 @@ test("docs text groups by tools across sources and only counts what this caller 
     { relativePath: "a.md", content: "<docs tools=\"message\">\nsend\n<harness:opencode>\nopencode only\n</harness:opencode>\n</docs>" },
     { relativePath: "b.md", content: "<docs tools=\"message\">\nagain\n</docs>\n<docs tools=\"hidden_tool\">\nunseen\n</docs>" },
   ], {
-    facts: { settings: new Set(), workspace: new Set(["project"]) },
+    facts: { workspace: new Set(["project"]) },
     harness: "codex",
     model: null,
     resolveTool: (id) => id === "message" ? "tools.mcp__wb__message" : null,
@@ -41,7 +41,7 @@ test("docs regions render for any usable subtool, CLI-only included, but never f
   const output = filterWorkbenchInstructionContent(
     "<docs tools=\"git_arc_edit\">\nedit sessions\n</docs>\n<docs tools=\"message\">\nmessaging\n</docs>",
     {
-      facts: { settings: new Set(), workspace: new Set() },
+      facts: { workspace: new Set() },
       field: "family.md",
       harness: "claude",
       model: null,
@@ -79,7 +79,7 @@ test("repository instructions render without selector warnings for root and suba
       const visible = catalogue.filter(({ id }) => isWorkbenchToolVisibleTo(id, subagent));
       for (const { content, relativePath } of sources) {
         filterWorkbenchInstructionContent(content, {
-          facts: { settings: new Set(["browse-raw"]), workspace: new Set(["project", "multi-root"]) },
+          facts: { workspace: new Set(["project", "multi-root"]) },
           field: relativePath,
           harness,
           model: null,

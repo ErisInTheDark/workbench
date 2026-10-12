@@ -137,28 +137,34 @@ ${bodyMarker}
   }
 });
 
-test("managed setting selectors follow injected local capabilities", async () => {
+test("docs gated on a capability-bound CLI tool follow injected local capabilities", async () => {
   const override = path.join(libraryRoot, "AGENTS.override.md");
   const rawMarker = "RAW BROWSE MECHANIC MARKER";
   await fs.mkdir(libraryRoot, { recursive: true });
   await fs.writeFile(override, [
     "base policy",
-    "<setting:browse-raw>",
+    "<docs tools=\"browse_raw\">",
     rawMarker,
-    "</setting:browse-raw>",
+    "</docs>",
   ].join("\n"), "utf8");
+  const context = {
+    ...createContext(),
+    readInstructionTools: async () => [{
+      id: "browse_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" as const,
+    }],
+  };
 
   try {
     const enabled = await managed.buildWorkbenchManagedThreadInstructions(
-      createContext(),
+      context,
       async () => ({ browseRawCommandsEnabled: true }),
     );
     const disabled = await managed.buildWorkbenchManagedThreadInstructions(
-      createContext(),
+      context,
       readNoLocalCapabilities,
     );
     assert.match(enabled.baseInstructions ?? "", new RegExp(rawMarker, "u"));
-    assert.doesNotMatch(enabled.baseInstructions ?? "", /<setting:browse-raw>/u);
+    assert.doesNotMatch(enabled.baseInstructions ?? "", /<docs/u);
     assert.doesNotMatch(disabled.baseInstructions ?? "", new RegExp(rawMarker, "u"));
   } finally {
     await fs.rm(override, { force: true });
