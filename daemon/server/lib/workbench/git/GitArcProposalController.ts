@@ -248,7 +248,6 @@ async function prepareAcceptedClaimTransition({
   commitRemaps,
   harness,
   proposalId,
-  proposalPaths,
   registry,
   resolveThreadIdentity,
   repository,
@@ -261,7 +260,6 @@ async function prepareAcceptedClaimTransition({
   commitRemaps?: ReadonlyMap<string, string>;
   harness: GitArcHarness;
   proposalId: string;
-  proposalPaths: string[];
   registry: GitArcRegistry;
   resolveThreadIdentity: GitArcThreadIdentityResolver;
   repository: WorkbenchGitRepository;
@@ -287,13 +285,8 @@ async function prepareAcceptedClaimTransition({
     : null;
   const ownership = new GitArcClaimOwnershipController(repository, resolveThreadIdentity);
   const before = await ownership.project(current, currentTree);
-  const sealed = Boolean(await stack.sealingLayer(current, proposalId));
-  const selected = new GitArcPathSet(proposalPaths);
   const changedPaths = currentTree ? await repository.listChangedPaths(acceptedHead, currentTree, before.activeClaims) : [];
-  const changed = new GitArcPathSet(changedPaths);
-  const activeClaimedPaths = sealed ? before.activeClaims : before.activeClaims.filter((claimedPath) => (
-    !selected.overlaps(claimedPath) || changed.has(claimedPath) || changed.contains(claimedPath)
-  ));
+  const activeClaimedPaths = changedPaths.length ? before.activeClaims : [];
   const currentGuards = new GitArcPathSet(before.guardClaims);
   const baselineClaims = (await stack.pendingOwnBaselinePaths(current, proposalId))
     .filter(path => currentGuards.covers(path));
@@ -1694,7 +1687,6 @@ export default class GitArcProposalController {
             commitRemaps: arcPlan.commits,
             harness,
             proposalId,
-            proposalPaths: proposal.metadata.livePaths,
             registry,
             resolveThreadIdentity: this.resolveThreadIdentity,
             repository,
@@ -1784,7 +1776,6 @@ export default class GitArcProposalController {
       acceptedHead: committedSha,
       harness,
       proposalId,
-      proposalPaths: proposal.metadata.livePaths,
       registry,
       resolveThreadIdentity: this.resolveThreadIdentity,
       repository,

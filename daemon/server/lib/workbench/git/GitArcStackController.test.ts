@@ -132,12 +132,13 @@ test("stacked proposals wait on sealed layers, reject sealed mutations and land 
   assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt"], "rejections leave ownership intact");
 
   const lowerEntry = { proposalId: revised.proposalId, title: "first revised", description: "", includeNewer: false };
+  await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["clean.txt"] });
   const worktree = await controller.captureAcceptanceWorktree({ ...owner, entries: [lowerEntry] });
   await fs.writeFile(path.join(cwd, "three.txt"), "adopted after capture\n");
   await controller.editArcClaims({ ...owner, inherit: true, adoptPaths: ["three.txt"] });
   assert.equal((await controller.commitProposals({ ...owner, entries: [lowerEntry], worktree })).failed, null);
-  assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["one.txt", "three.txt"],
-    "acceptance preserves active claims adopted after the batch capture");
+  assert.deepEqual(await controller.readScope(owner).then(scope => scope?.claimedPaths), ["clean.txt", "one.txt", "three.txt"],
+    "one dirty claim preserves the complete active set, including clean and late-adopted claims");
   assert.equal(await git("show", "HEAD:one.txt"), "first\n");
   assert.equal((await read("owner", state.upper)).waitingForLayer, null);
   await commit("owner", state.upper, "second");
@@ -150,7 +151,15 @@ test("stacked proposals wait on sealed layers, reject sealed mutations and land 
   assert.ok(proposedAt.every(Boolean));
   assert.deepEqual((await git("log", "-2", "--date=raw", "--format=%ad|%cd")).trim().split("\n"),
     proposedAt.map(date => `${date}|${date}`));
-  await controller.createProposal({ ...owner, paths: ["three.txt"], title: "late work", description: "" });
+  const late = await controller.createProposal({ ...owner, paths: ["three.txt"], title: "late work", description: "" });
+  await commit("owner", late.proposalId, "late work");
+  const resolved = await controller.readScope(owner);
+  assert.equal(resolved?.phase, "resolved");
+  assert.deepEqual(resolved?.claimedPaths, [], "acceptance clears the complete active set once every claim is clean");
+  assert.deepEqual((await controller.readStatus(owner)).recovery.map(({ kind, paths }) => ({ kind, paths })), [{
+    kind: "lost",
+    paths: ["clean.txt", "one.txt", "three.txt"],
+  }], "status reports the ownership boundary after acceptance clears the active set");
 });
 
 test("a lower layer that lands differently makes stacked proposals unavailable", async () => {

@@ -59,7 +59,7 @@ unbornTest("unborn arcs adopt initial files and accept only selected content int
   assert.equal(await repository.run(["show", ":unrelated.txt"]), "staged unrelated\n");
   assert.equal(await fs.readFile(path.join(source, "two.txt"), "utf8"), "second file\n");
   const continued = await controller.continueArc(identity);
-  assert.deepEqual(continued.scopePaths, ["two.txt"]);
+  assert.deepEqual(continued.scopePaths, ["one.txt", "two.txt"]);
   assert.notEqual(continued.checkpointCommit, active.checkpointCommit);
 });
 

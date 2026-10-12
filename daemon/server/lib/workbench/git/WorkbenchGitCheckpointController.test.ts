@@ -114,8 +114,11 @@ controllerTest("status", "status and proposal reads preserve pending state, mate
   const acceptedHead = await repository.currentHead();
   const accepted = await controller.readStatus(identity);
   assert.deepEqual(accepted.accepted, [{ proposalId: proposal.proposalId, title: "change one", commitSha: acceptedHead }]);
-  assert.deepEqual(accepted.recovery, [], "accepting one proposal keeps unrelated active ownership");
-  assert.deepEqual(accepted.cleanClaims, ["two.txt"]);
+  assert.deepEqual(accepted.recovery.map(({ kind, paths }) => ({ kind, paths })), [{
+    kind: "lost",
+    paths: ["added.txt", "one.txt", "two.txt"],
+  }], "all-clean acceptance reports the cleared ownership boundary");
+  assert.deepEqual(accepted.cleanClaims, []);
   await controller.createPlan({ ...identity, intentName: "next", paths: ["two.txt"] });
   assert.deepEqual((await controller.readStatus(identity)).accepted, accepted.accepted);
   await controller.startArc(identity);
@@ -988,11 +991,8 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   assert.equal(await git(source, ["show", ":unchecked.txt"]), "keep staged\n");
   assert.equal(await fs.readFile(path.join(source, "unchecked.txt"), "utf8"), "unchecked drift\n");
   const retained = await new GitArcRegistry(repository).find({ harness: "codex", threadId: "partial-thread" });
-  assert.equal(retained?.phase, "active");
-  assert.deepEqual(retained?.claimedPaths, ["one.txt"]);
-  await controller.editArcClaims({
-    cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, removePaths: ["one.txt"],
-  });
+  assert.equal(retained?.phase, "resolved");
+  assert.deepEqual(retained?.claimedPaths, []);
   const completed = await controller.continueArc({
     checkpointCommit: started!.checkpointCommit,
     cwd: source,
@@ -1004,7 +1004,7 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   assert.deepEqual(completed.acceptedProposals.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
   completed.acceptedProposals.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
   const resolvedComparison = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
-  assert.deepEqual(resolvedComparison.scopePaths, ["one.txt"]);
+  assert.deepEqual(resolvedComparison.scopePaths, ["one.txt", "two.txt"]);
   assert.deepEqual(resolvedComparison.changes, []);
   const followUp = await controller.editArcClaims({
     cwd: source, harness: "codex", threadId: "partial-thread", inherit: true, addPaths: ["planned.txt"],
@@ -1428,7 +1428,7 @@ controllerTest("retained", "replacement plans retain every dirty claim and relea
   const retainedPlan = await controller.findPlanState({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(retainedPlan?.scopePaths, revised.scopePaths);
   assert.equal(registryEntry?.intentName, replacement.intentName);
-  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["two.txt"]);
+  assert.deepEqual(registryEntry?.retainedArc?.claimedPaths, ["one.txt", "two.txt"]);
   await assert.rejects(controller.removeFromPlan({
     cwd: source, harness: "codex", paths: ["two.txt"], threadId: "partial-thread",
   }), /must include every dirty claimed file: two\.txt/u);
