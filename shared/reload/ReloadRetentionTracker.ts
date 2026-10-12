@@ -2,25 +2,41 @@
  * Exports:
  * - default ReloadRetentionTracker: report retired reload generations and node instances that stay reachable.
  */
+import { constants, performance, PerformanceObserver } from "node:perf_hooks";
 
 interface RetainedEntry {
   label: string;
-  /** Reload count when nothing live should reference the target anymore; null while still in use. */
+  reported: boolean;
+  target: WeakRef<object>;
+  /** Monotonic retirement time; null while still in use. */
   retiredAt: number | null;
 }
 
-/** Garbage collection is lazy; only report targets that survived this many later reloads. */
-const REPORT_AFTER_RELOADS = 2;
+interface GarbageCollectionPerformanceEntry extends PerformanceEntry {
+  detail?: { kind?: number };
+}
+
+let lastMajorGarbageCollectionAt = Number.NEGATIVE_INFINITY;
+const garbageCollectionObserver = new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    if ((entry as GarbageCollectionPerformanceEntry).detail?.kind === constants.NODE_PERFORMANCE_GC_MAJOR) {
+      lastMajorGarbageCollectionAt = Math.max(lastMajorGarbageCollectionAt, entry.startTime + entry.duration);
+    }
+  }
+});
+garbageCollectionObserver.observe({ entryTypes: ["gc"] });
 
 export default class ReloadRetentionTracker {
   readonly #entries = new Map<number, RetainedEntry>();
   readonly #generationTokens = new Map<number, number>();
   readonly #registry = new FinalizationRegistry<number>(token => { this.#entries.delete(token); });
   #nextToken = 0;
-  #reloads = 0;
+
+  constructor(private readonly lastMajorCollectionAt = () => lastMajorGarbageCollectionAt) {}
 
   /** Track a module-owned object whose lifetime matches one loaded module generation. */
-  trackGeneration(generation: number, target: object) {
+  trackGeneration(generation: number, target: { label: string }) {
+    target.label = `workbench reload generation ${generation}`;
     const token = this.#track(target, `module generation ${generation}`, null);
     this.#generationTokens.set(generation, token);
   }
@@ -31,36 +47,45 @@ export default class ReloadRetentionTracker {
       if (used.has(generation)) continue;
       this.#generationTokens.delete(generation);
       const entry = this.#entries.get(token);
-      if (entry) entry.retiredAt = this.#reloads;
+      if (entry) entry.retiredAt = performance.now();
     }
   }
 
   trackRetiredNode(id: string, generation: number, instance: object) {
-    this.#track(instance, `${id} node (generation ${generation})`, this.#reloads);
+    this.#track(instance, `${id} node (generation ${generation})`, performance.now());
   }
 
   /**
-   * Count one completed reload attempt and describe retired targets that outlived the collection grace,
+   * Describe retired targets that survived a later major garbage collection,
    * naming `stillRunning` work on retired nodes as the likely holders.
    */
   completeReload(stillRunning: readonly string[] = []) {
-    this.#reloads += 1;
-    const retained = [...this.#entries.values()].filter(entry =>
-      entry.retiredAt !== null && this.#reloads - entry.retiredAt >= REPORT_AFTER_RELOADS);
+    const collectionAt = this.lastMajorCollectionAt();
+    const retained: RetainedEntry[] = [];
+    for (const [token, entry] of this.#entries) {
+      if (!entry.target.deref()) {
+        this.#entries.delete(token);
+        continue;
+      }
+      if (!entry.reported && entry.retiredAt !== null && collectionAt > entry.retiredAt) retained.push(entry);
+    }
     if (!retained.length) return null;
+    for (const entry of retained) entry.reported = true;
     const heap = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
     const labels = retained.slice(0, 6).map(entry => entry.label).join(", ");
     const holders = stillRunning.length
       ? ` Still running on retired nodes: ${stillRunning.slice(0, 6).join(", ")}${stillRunning.length > 6 ? ", ..." : ""}.`
       : " No operations are still running on retired nodes.";
-    return `${retained.length} retired reload object(s) still reachable ${REPORT_AFTER_RELOADS}+ reloads after retirement `
+    return `${retained.length} retired reload object(s) survived a later major garbage collection `
       + `(heap ${heap}MB): ${labels}${retained.length > 6 ? ", ..." : ""}. `
-      + `Something outside the live graph still references old modules or node objects.${holders}`;
+      + `Something outside the live graph still references old modules or node objects.${holders} `
+      + "Capture retaining paths before another reload with `wb debug heap`; "
+      + "generation markers are searchable as `workbench reload generation <number>`.";
   }
 
   #track(target: object, label: string, retiredAt: number | null) {
     const token = this.#nextToken++;
-    this.#entries.set(token, { label, retiredAt });
+    this.#entries.set(token, { label, reported: false, retiredAt, target: new WeakRef(target) });
     this.#registry.register(target, token);
     return token;
   }

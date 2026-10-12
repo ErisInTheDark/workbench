@@ -59,6 +59,7 @@ export interface ReloadableNodeHostOptions {
   }[];
   requiredRegistrations?: readonly PropertyKey[];
   requiredScopes?: readonly DaemonReloadScope[];
+  retentionLastMajorCollectionAt?: () => number;
   runtimeDrainTimeoutMs?: number;
   topologyScope?: DaemonReloadScope;
 }
@@ -165,7 +166,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private starting: Promise<void> | null = null;
   private topology: readonly DaemonReloadScope[] = [];
   private readonly topologyScope: DaemonReloadScope;
-  private readonly retention = new ReloadRetentionTracker();
+  private readonly retention: ReloadRetentionTracker;
   /** Weak, so the retention diagnostic can name holders without becoming one. */
   private readonly retiredNodes = new Set<WeakRef<ActiveNode<TContext, TFeatures, TNotification>>>();
   private readonly retiredNodeCleanup = new FinalizationRegistry<WeakRef<ActiveNode<TContext, TFeatures, TNotification>>>(
@@ -188,6 +189,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     this.processScopes = options.processScopes ?? [];
     this.requiredRegistrations = options.requiredRegistrations ?? [];
     this.requiredScopes = options.requiredScopes ?? [];
+    this.retention = new ReloadRetentionTracker(options.retentionLastMajorCollectionAt);
     this.runtimeDrainTimeoutMs = options.runtimeDrainTimeoutMs ?? DEFAULT_RUNTIME_DRAIN_TIMEOUT_MS;
     this.topologyScope = options.topologyScope
       ?? (() => { throw new Error("A reloadable graph topology scope is required."); })();
@@ -450,8 +452,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
   ) {
     const generation = this.loadedGenerations++;
-    // `roots` is the graph module's own export, so it lives exactly as long as that module generation.
-    this.retention.trackGeneration(generation, loaded.roots);
+    this.retention.trackGeneration(generation, loaded.retentionMarker);
     for (const definition of definitions.values()) this.definitionGenerations.set(definition, generation);
   }
 

@@ -412,6 +412,7 @@ test("a stalled startup step names its node and phase once, then reports when it
 
 test("the retention warning names operations still running on retired nodes", async () => {
   const errors: string[] = [];
+  let lastMajorCollectionAt = 0;
   const graph = () => defineReloadableNodeGraph([ReloadableNode.define<object, { value: number }, never>()({
     access: "agent", children: [], requires: [], provides: ["value"], scope: "server:value",
     lifecycle: "atomic", safeAll: true, description: "fixture",
@@ -420,6 +421,7 @@ test("the retention warning names operations still running on retired nodes", as
   const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, {
     topologyScope: "server:topology",
     logError: message => errors.push(message),
+    retentionLastMajorCollectionAt: () => lastMajorCollectionAt,
     // Drain expires at once, so the held operation keeps running on a retired node.
     createRuntimeDrainDeadline: () => ({ cancel() {}, expired: Promise.resolve() }),
   });
@@ -429,8 +431,10 @@ test("the retention warning names operations still running on retired nodes", as
   const held = host.run("value", async () => { entered.resolve(); await release.promise; }, "held shell");
   try {
     await entered.promise;
-    for (let reload = 0; reload < 3; reload += 1) await host.reload(["server:value"]);
-    const report = errors.filter(message => message.includes("still reachable")).at(-1) ?? "";
+    await host.reload(["server:value"]);
+    lastMajorCollectionAt = Number.POSITIVE_INFINITY;
+    await host.reload(["server:value"]);
+    const report = errors.filter(message => message.includes("survived a later major garbage collection")).at(-1) ?? "";
     assert.match(report, /Still running on retired nodes: server:value: held shell \(/u);
     release.resolve();
     await held;

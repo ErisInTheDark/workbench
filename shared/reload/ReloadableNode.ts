@@ -6,7 +6,8 @@
  * - ReloadableNodeInstance/ReloadableNodeBuild: lifecycle, direct-parent construction and leased operation contracts.
  * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with inferred direct-parent access;
  *   source ownership comes from imports plus declared out-of-process entries and non-module assets.
- * - ReloadableNodeGraph/defineReloadableNodeGraph: direct-root graph definition loaded by the stable host.
+ * - ReloadableNodeGraph/ReloadableNodeRetentionMarker/defineReloadableNodeGraph: direct-root graph definition
+ *   and searchable generation marker loaded by the stable host.
  * - ReloadableNodeSourceObservation/ReloadableNodeSourceMetadata: scoped observations and discovered generation sources.
  */
 import type { WorkbenchReloadScope } from "./workbench-reload.ts";
@@ -132,9 +133,14 @@ export default class ReloadableNode<TContext, TObjects extends object, TNotifica
 }
 
 export interface ReloadableNodeGraph<TContext, TObjects extends object, TNotification> {
+  retentionMarker: ReloadableNodeRetentionMarker;
   roots: readonly ReloadableNode<TContext, TObjects, TNotification>[];
   sourceObservations?: readonly ReloadableNodeSourceObservation[];
   sourceMetadata?: ReloadableNodeSourceMetadata;
+}
+
+export interface ReloadableNodeRetentionMarker {
+  label: string;
 }
 
 export interface ReloadableNodeSourceObservation {
@@ -152,5 +158,9 @@ export function defineReloadableNodeGraph<TContext, TObjects extends object, TNo
   roots: readonly ReloadableNode<TContext, TObjects, TNotification>[],
   sourceObservations: readonly ReloadableNodeSourceObservation[] = [],
 ): ReloadableNodeGraph<TContext, TObjects, TNotification> {
-  return Object.freeze({ roots: Object.freeze([...roots]), sourceObservations: Object.freeze([...sourceObservations]) });
+  return Object.freeze({
+    retentionMarker: { label: "workbench reload generation pending" },
+    roots: Object.freeze([...roots]),
+    sourceObservations: Object.freeze([...sourceObservations]),
+  });
 }
