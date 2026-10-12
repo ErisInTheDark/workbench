@@ -259,6 +259,8 @@ Bundled calls can result in one command failing and wasting time on pointless va
 
 **Hard rule: when workflow/project/user instruction allows, BEFORE implementing a bug fix, new tests and assertions must run red for correct expected reason; use to verify planned fix target**
 
+**Hard rule: do not not defer task validation if tests are not working. Proactively fix tests, propose test fixes, then stack assigned work on top. Avoid subsequent approval gates for required test fixes unless required by workflow, project, or user**
+
 ## When Reviewing
 
 - When the user asks for a review, take a code-review stance.
