@@ -9,6 +9,7 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
+import useHeightTransition from "./use-height-transition";
 
 function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
@@ -20,9 +21,10 @@ const stickySurfaceClassName = `
   group/composer relative grid rounded-[1.15rem] border border-transparent bg-fg/4 backdrop-blur-[8px] p-3
   [transition:
     border-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    padding var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
+    padding var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
   ]
-  stuck:(border-fg-alpha/20 [animation: sticky-composer-enter var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease) both])
+  stuck:(content-end border-fg-alpha/20 [animation: sticky-composer-enter var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease) both])
   data-[collapsed=true]:stuck:[padding-bottom: calc(0.75rem + min(0.75rem, var(--workbench-safe-area-bottom, 0px)))]
   coarse-touch:stuck:([margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px))] rounded-b-none)
   motion-reduce:(transition-none stuck:animate-none)
@@ -43,9 +45,9 @@ const expandedClassName = `
     absolute inset-3 overflow-clip invisible opacity-0 pointer-events-none
     transform-[translateY(-0.25rem) scale(0.985)]
     [transition:
-      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-      visibility 0s linear var(--sticky-composer-motion-duration)
+      opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+      transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+      visibility 0s linear var(--sticky-composer-exit-duration)
     ]
   )
   motion-reduce:(animate-none transition-none group-data-[collapsed=true]/composer:stuck:transition-none)
@@ -54,25 +56,30 @@ const expandedClassName = `
 const chevronColumnClassName = `
   min-w-0 overflow-clip [overflow-clip-margin: 0.25rem] invisible opacity-0
   [transition:
-    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    visibility 0s linear var(--sticky-composer-motion-duration)
+    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    visibility 0s linear var(--sticky-composer-exit-duration)
   ]
   stuck:(visible opacity-100 [transition: opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)])
   motion-reduce:transition-none
 `;
 
 const collapsedClassName = `
-  hidden col-start-1 row-start-1 opacity-0 transform-[translateY(0.35rem) scale(0.985)]
+  hidden col-start-1 row-start-1 self-end opacity-0 transform-[translateY(0.35rem) scale(0.985)]
   [transition:
-    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    display var(--sticky-composer-motion-duration) allow-discrete
+    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    display var(--sticky-composer-exit-duration) allow-discrete
   ]
   [transition-behavior: allow-discrete]
   group-data-[collapsed=true]/composer:stuck:(
     grid min-h-[2.8rem] grid-cols-[auto minmax(0, 1fr) auto] items-center gap-3
     cursor-pointer text-text text-[0.92em] leading-[1.45] opacity-100 outline-none
     transform-[translateY(0) scale(1)]
+    [transition:
+      opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+      display var(--sticky-composer-motion-duration) allow-discrete
+    ]
   )
   starting:group-data-[collapsed=true]/composer:stuck:(opacity-0 transform-[translateY(0.35rem) scale(0.985)])
   group-data-[collapsed=true]/composer:stuck:focus-visible:(rounded-[0.85rem] [box-shadow: 0 0 0 2px var(--accent-soft)])
@@ -118,6 +125,7 @@ function StickyComposerSurface({
     expand();
   };
   const collapseControlLabel = collapsed ? collapsedLabel : collapseLabel;
+  const cancelCollapseHeightTransition = useHeightTransition(surfaceRef, collapsed ? "collapsed" : "expanded");
 
   // Child layout effects run before the ancestor viewport ref is attached.
   useEffect(() => {
@@ -152,6 +160,8 @@ function StickyComposerSurface({
         : surface.dataset.collapsed === "true"
           ? naturalTop >= viewportBottom
           : naturalTop + pinnedHeight > pinLine);
+      // A collapse resize only means something while pinned; finish it before the reserve can measure a mid-flight height.
+      if (shell.dataset.stickyStuck !== String(stuck)) cancelCollapseHeightTransition();
       shell.dataset.stickyStuck = String(stuck);
       shell.dataset.stickyNatural = String(!stuck && !docked);
       // Stuck styles cap or collapse the shell, so the reserve measures only the unstuck box.
@@ -191,7 +201,7 @@ function StickyComposerSurface({
       delete shell.dataset.stickyStuck;
       delete shell.dataset.stickyNatural;
     };
-  }, [hasBottomUi, getViewport, threadScrollViewport]);
+  }, [cancelCollapseHeightTransition, hasBottomUi, getViewport, threadScrollViewport]);
 
   const reserve = (
     <div
@@ -223,6 +233,7 @@ function StickyComposerSurface({
           sticky [bottom:var(--sticky-composer-inset)] z-20 col-start-1 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80
           [--sticky-composer-inset:calc(env(safe-area-inset-bottom,0px)+0.75rem)] coarse-touch:[--sticky-composer-inset:0px]
           [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)]
+          [--sticky-composer-exit-duration:calc(var(--sticky-composer-motion-duration)*0.3)]
           data-[sticky-natural=true]:(relative [bottom:auto])
           ${bottomUi ? "row-start-1 row-span-2" : "row-start-2"}
         `}

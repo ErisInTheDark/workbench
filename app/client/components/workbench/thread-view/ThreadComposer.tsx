@@ -82,31 +82,36 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+// Leaving content fades on the short exit timing so a resizing container never clips still-bright text.
 const modePanelClassName = `
   hidden absolute inset-0 col-start-1 row-start-1 min-w-0 overflow-clip opacity-0
   transform-[translateY(0.45rem) scale(0.985)]
+  [transition:
+    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    display var(--sticky-composer-exit-duration) allow-discrete
+  ]
   [transition-behavior: allow-discrete]
   data-[active=true]:(block relative inset-auto opacity-100 transform-[translateY(0) scale(1)])
+  data-[active=true]:[transition:
+    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    display var(--sticky-composer-motion-duration) allow-discrete
+  ]
   starting:data-[active=true]:(opacity-0 transform-[translateY(0.45rem) scale(0.985)])
   motion-reduce:(animate-none transition-none)
 `;
 
-const modePanelTransitionClassName = `[transition:
-  opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-  transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-  display var(--sticky-composer-motion-duration) allow-discrete
-]`;
-
 const modePanelsClassName = `
-  relative grid overflow-clip
+  relative grid
   [transition: height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
 `;
 
 const actionClusterClassName = `
   col-start-1 row-start-1 min-w-0 invisible opacity-0
   [transition:
-    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    visibility 0s linear var(--sticky-composer-motion-duration)
+    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
+    visibility 0s linear var(--sticky-composer-exit-duration)
   ]
   data-[active=true]:(visible opacity-100 [transition: opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)])
   motion-reduce:transition-none
@@ -680,7 +685,7 @@ export default function ThreadComposer ({
             {visiblePendingUserInputRequest ? (
               <div
                 aria-hidden={!isQuestionnairePanelActive}
-                className={`${modePanelClassName} ${modePanelTransitionClassName}`}
+                className={modePanelClassName}
                 data-active={isQuestionnairePanelActive ? "true" : "false"}
                 inert={!isQuestionnairePanelActive}
               >
@@ -713,7 +718,7 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className={`${modePanelClassName} ${modePanelTransitionClassName}`}
+              className={modePanelClassName}
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >
