@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "./WorkbenchToolchain.mjs";
+import WorkbenchPackageRegistration from "./WorkbenchPackageRegistration.mjs";
 
 export default class WorkbenchBootstrap {
   constructor({
@@ -18,7 +20,9 @@ export default class WorkbenchBootstrap {
     packageRoot = path.dirname(fileURLToPath(import.meta.url)),
     environment = process.env,
     prompt = new WorkbenchInstallPrompt(),
-    commands = new WorkbenchBootstrapCommand(),
+    commands = new WorkbenchBootstrapCommand({ environment }),
+    toolchain = new WorkbenchToolchain({ home, environment, commands }),
+    registration = new WorkbenchPackageRegistration({ home, environment, packageRoot }),
     write = text => process.stdout.write(text),
   } = {}) {
     this.home = home;
@@ -26,6 +30,8 @@ export default class WorkbenchBootstrap {
     this.environment = environment;
     this.prompt = prompt;
     this.commands = commands;
+    this.toolchain = toolchain;
+    this.registration = registration;
     this.write = write;
     this.registry = path.join(home, ".workbench", "installation.json");
   }
@@ -151,12 +157,11 @@ export default class WorkbenchBootstrap {
     }
     await this.requireTool("git");
     await this.requireTool("bash");
-    await this.requireTool("vp");
     const warning = installed?.phase === "ready"
       ? `\nNote: Previous installation at ${installed.root} no longer exists and will be recreated.`
       : installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
     const choice = await this.prompt.choose(
-      `Workbench is not installed. This command will clone the repository and run build commands. It may take 1-2 minutes. Continue?${warning}`,
+      `Workbench is not installed. This command will provision a private Vite+ toolchain if needed, clone the repository, run build commands, and register wb through your package manager. Continue?${warning}`,
       ["Let's go!", "Cancel"],
     );
     if (choice !== "Let's go!") throw new DOMException("Setup cancelled.", "AbortError");
@@ -191,6 +196,8 @@ export default class WorkbenchBootstrap {
       }
       if (latest && latest.phase !== "ready") await this.discardIncomplete(latest);
       await this.requireEmptyDestination(root);
+      await this.registration.prepare();
+      await this.toolchain.ensure();
       let record = { version: 1, root, phase: "cloning" };
       await this.writeInstallation(record);
       await this.prompt.withHeader(async () => {
@@ -203,6 +210,7 @@ export default class WorkbenchBootstrap {
           record = { ...record, phase: "setup" };
           await this.writeInstallation(record);
           await this.commands.run(process.execPath, [path.join(root, "installation", "install.mjs"), "--prepare"], { cwd: root });
+          await this.registration.register(root);
         } catch (error) {
           try { await this.discardIncomplete(record); }
           catch (cleanupError) {

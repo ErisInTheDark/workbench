@@ -12,6 +12,12 @@ npx @inthedark/wb
 npx @inthedark/wb connect
 ```
 
+start with node 22.13.0 or newer, npm (or `pnpm dlx @inthedark/wb`), git, and bash. windows needs git bash.
+
+workbench reuses an existing vite+ installation or installs a private, pinned copy in its OS data directory (`WORKBENCH_DATA_ROOT` overrides it). vite+ installs the checkout's pinned node and pnpm without changing your shell setup or default development tools. the workbench library (`~/.workbench`) is not toolchain storage.
+
+the package manager that launched setup registers `wb` in its existing global bin directory, which must be writable and on `PATH`. workbench checks that before cloning. dependencies and the frontend are still built through vite+, and `wb repair` reuses the recorded toolchain even when `vp` is not on `PATH`.
+
 ## features
 
 key features:

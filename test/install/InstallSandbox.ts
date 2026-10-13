@@ -9,11 +9,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
+import resolveWorkbenchDataRoot from "../../package/workbench-data-root.mjs";
 
 export interface InstallSandboxOptions {
   source?: string;
   parent?: string;
   write?: (text: string) => void;
+  toolchain?: "existing" | "missing";
 }
 
 const windows = process.platform === "win32";
@@ -55,12 +58,16 @@ export default class InstallSandbox {
   readonly vpHome: string;
   readonly npmPrefix: string;
   readonly repository: string;
+  readonly dataRoot: string;
   readonly links: string[] = [];
   environment: Environment = {};
 
-  private constructor(readonly root: string, private readonly write: (text: string) => void) {
+  private constructor(readonly root: string, private readonly write: (text: string) => void, readonly toolchain: "existing" | "missing") {
     this.home = path.join(root, "home");
-    this.vpHome = path.join(root, "vp-home");
+    this.dataRoot = resolveWorkbenchDataRoot({
+      homeDirectory: this.home, environment: windows ? { LOCALAPPDATA: path.join(this.home, "AppData", "Local") } : {},
+    });
+    this.vpHome = toolchain === "existing" ? path.join(root, "vp-home") : path.join(this.dataRoot, "toolchain");
     this.npmPrefix = path.join(root, "npm-global");
     this.repository = path.join(root, "source");
   }
@@ -79,8 +86,8 @@ export default class InstallSandbox {
 
   get vpBin() { return path.join(this.vpHome, "bin"); }
 
-  static async create({ source = projectRoot, parent = os.tmpdir(), write = () => {} }: InstallSandboxOptions = {}) {
-    const sandbox = new InstallSandbox(await fs.mkdtemp(path.join(parent, "wb-install-sandbox-")), write);
+  static async create({ source = projectRoot, parent = os.tmpdir(), write = () => {}, toolchain = "missing" }: InstallSandboxOptions = {}) {
+    const sandbox = new InstallSandbox(await fs.mkdtemp(path.join(parent, "wb-install-sandbox-")), write, toolchain);
     try {
       await sandbox.prepare(path.resolve(source));
       return sandbox;
@@ -95,7 +102,7 @@ export default class InstallSandbox {
 
   private async prepare(source: string) {
     const hostVpHome = process.env.VP_HOME || path.join(os.homedir(), ".vite-plus");
-    const hostPnpmStore = await this.hostPnpmStore(source);
+    const hostPnpmStore = this.toolchain === "existing" ? await this.hostPnpmStore(source) : null;
     const manifest = JSON.parse(await fs.readFile(path.join(source, "package.json"), "utf8"));
     const nodeVersion: string | undefined = manifest.devEngines?.runtime?.version;
     const packageManager: { name?: string; version?: string } | undefined = manifest.devEngines?.packageManager;
@@ -111,18 +118,22 @@ export default class InstallSandbox {
       if (directory) await fs.mkdir(directory, { recursive: true });
     }
 
-    this.write("Seeding Vite+ from the host (read-only links)...\n");
-    // Junctions are safe because npm's global prefix is redirected below; nothing writes into these.
-    await this.link(await fs.realpath(path.join(hostVpHome, "current")), path.join(this.vpHome, "current"));
-    await this.link(path.join(hostVpHome, "js_runtime", "node", nodeVersion), path.join(this.vpHome, "js_runtime", "node", nodeVersion));
-    await this.link(path.join(hostVpHome, "package_manager", packageManager.name, packageManager.version),
-      path.join(this.vpHome, "package_manager", packageManager.name, packageManager.version));
-    if (await exists(path.join(hostVpHome, "config.json"))) {
-      await fs.copyFile(path.join(hostVpHome, "config.json"), path.join(this.vpHome, "config.json"));
+    if (this.toolchain === "existing") {
+      this.write("Seeding Vite+ from the host (read-only links)...\n");
+      // Junctions are safe because npm's global prefix is redirected below; nothing writes into these.
+      await this.link(await fs.realpath(path.join(hostVpHome, "current")), path.join(this.vpHome, "current"));
+      await this.link(path.join(hostVpHome, "js_runtime", "node", nodeVersion), path.join(this.vpHome, "js_runtime", "node", nodeVersion));
+      await this.link(path.join(hostVpHome, "package_manager", packageManager.name, packageManager.version),
+        path.join(this.vpHome, "package_manager", packageManager.name, packageManager.version));
+      if (await exists(path.join(hostVpHome, "config.json"))) {
+        await fs.copyFile(path.join(hostVpHome, "config.json"), path.join(this.vpHome, "config.json"));
+      }
+      // Host trampolines resolve VP_HOME from their own location; the sandbox needs its own.
+      await this.run(path.join(this.vpHome, "current", "bin", windows ? "vp.exe" : "vp"), ["env", "setup"]);
+      if (hostPnpmStore) await this.run("pnpm", ["config", "set", "store-dir", hostPnpmStore, "--global"]);
+    } else {
+      this.write("Starting without Vite+; Workbench will run the official installer and use a cold package store.\n");
     }
-    // Host trampolines resolve VP_HOME from their own location; the sandbox needs its own.
-    await this.run(path.join(this.vpHome, "current", "bin", windows ? "vp.exe" : "vp"), ["env", "setup"]);
-    if (hostPnpmStore) await this.run("pnpm", ["config", "set", "store-dir", hostPnpmStore, "--global"]);
 
     const leaked = await this.which("wb");
     if (leaked) throw new Error(`Install sandbox PATH still resolves a host wb: ${leaked}`);
@@ -167,7 +178,8 @@ export default class InstallSandbox {
       XDG_DATA_HOME: path.join(this.home, ".local", "share"),
       XDG_CACHE_HOME: path.join(this.home, ".cache"),
       XDG_STATE_HOME: path.join(this.home, ".local", "state"),
-      VP_HOME: this.vpHome,
+      ...(this.toolchain === "existing" ? { VP_HOME: this.vpHome } : {}),
+      WORKBENCH_DATA_ROOT: this.dataRoot,
       PNPM_HOME: pnpmHome,
       // npm's default global prefix is the Node runtime directory, which is a link to the host's.
       npm_config_prefix: this.npmPrefix,
@@ -190,7 +202,8 @@ export default class InstallSandbox {
     }
     setVariable(environment, "PATH", [
       windows ? this.npmPrefix : path.join(this.npmPrefix, "bin"),
-      path.join(this.vpHome, "bin"),
+      ...(this.toolchain === "existing" ? [path.join(this.vpHome, "bin")] : []),
+      path.dirname(process.execPath),
       path.join(pnpmHome, "bin"),
       ...inherited,
     ].join(path.delimiter));
@@ -248,8 +261,9 @@ export default class InstallSandbox {
   async run(command: string, args: readonly string[], { cwd = this.home, environment = this.environment }: {
     cwd?: string; environment?: Environment;
   } = {}) {
+    const [executable, ...prefix] = await new WorkbenchBootstrapCommand({ environment }).resolve(command);
     return await new Promise<string>((resolve, reject) => {
-      const child = spawn(command, args, { cwd, env: environment, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(executable, [...prefix, ...args], { cwd, env: environment, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
       let output = "";
       let errorOutput = "";
       child.stdout.on("data", chunk => { output += String(chunk); });

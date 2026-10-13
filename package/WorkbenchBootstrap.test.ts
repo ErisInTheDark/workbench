@@ -60,6 +60,11 @@ async function fixture(context, options = {}) {
     ...options,
     prompt,
     commands,
+    toolchain: {
+      ensure: async () => {},
+      runNode: async (_root, entry, args = [], config = {}) => commands.run(process.execPath, [entry, ...args], config),
+    },
+    registration: { prepare: async () => {}, register: async () => {} },
   });
   return { bootstrap, home, checkout, calls, prompts, output };
 }
@@ -76,7 +81,7 @@ test("missing Git fails before consent or filesystem changes", async context => 
   assert.deepEqual(await fs.readdir(f.home), []);
 });
 
-test("missing vp fails before consent or installation record", async context => {
+test("missing vp is provisioned after consent instead of rejected as a prerequisite", async context => {
   const f = await fixture(context);
   const original = f.bootstrap.commands.run;
   f.bootstrap.commands.run = async (command, args, config) => {
@@ -85,9 +90,33 @@ test("missing vp fails before consent or installation record", async context => 
     }
     return original(command, args, config);
   };
-  await assert.rejects(f.bootstrap.run([]), /vp.*PATH/i);
-  assert.deepEqual(f.prompts, []);
-  assert.deepEqual(await fs.readdir(f.home), []);
+  let provisioned = false;
+  f.bootstrap.toolchain = {
+    ensure: async () => {
+      assert.ok(f.prompts.length > 0, "toolchain provisioning requires consent");
+      provisioned = true;
+    },
+    runNode: async (_root, entry, args = [], config = {}) => original(process.execPath, [entry, ...args], config),
+  };
+  await f.bootstrap.run([]);
+  assert.equal(provisioned, true);
+  assert.equal(JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")).phase, "ready");
+});
+
+test("registration retains the original environment and follows checkout preparation", async context => {
+  const f = await fixture(context);
+  const events = [];
+  const original = f.bootstrap.commands.run;
+  f.bootstrap.commands.run = async (command, args, config) => {
+    if (args.includes("--prepare")) events.push("build");
+    return original(command, args, config);
+  };
+  f.bootstrap.registration = {
+    prepare: async () => { events.push("registration-preflight"); },
+    register: async root => { assert.equal(root, f.checkout); events.push("register"); },
+  };
+  await f.bootstrap.run([]);
+  assert.deepEqual(events, ["registration-preflight", "build", "register"]);
 });
 
 test("only human launch and connect may install, and refusal writes nothing", async context => {
@@ -240,6 +269,8 @@ test("an abruptly exited installer cannot leave a permanent installation lock", 
       home: ${JSON.stringify(f.home)},
       packageRoot: ${JSON.stringify(path.join(f.home, "cache", "package"))},
       environment: {},
+      toolchain: { ensure: async () => {} },
+      registration: { prepare: async () => {}, register: async () => {} },
       prompt: { choose: async () => "Let's go!", location: async () => root, withHeader: task => task() },
       commands: { run: async (command, args) => {
         if (command === "git" && args[0] === "clone") {

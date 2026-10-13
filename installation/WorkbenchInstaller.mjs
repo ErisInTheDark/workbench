@@ -6,11 +6,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchInstallPrompt from "../package/WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
 
 export default class WorkbenchInstaller {
   constructor({
     root,
     commands = new WorkbenchBootstrapCommand(),
+    toolchain = new WorkbenchToolchain({ commands }),
     prompt = new WorkbenchInstallPrompt(),
     detectTailscale,
     nodeVersion = process.versions.node,
@@ -18,6 +20,7 @@ export default class WorkbenchInstaller {
   }) {
     this.root = root;
     this.commands = commands;
+    this.toolchain = toolchain;
     this.prompt = prompt;
     this.detectTailscale = detectTailscale ?? (() => this.hasTailscale());
     this.nodeVersion = nodeVersion;
@@ -26,8 +29,9 @@ export default class WorkbenchInstaller {
 
   async prepare() {
     this.write("Installing pinned runtime...\n");
-    await this.commands.run("vp", ["env", "install"], { cwd: this.root });
-    await this.commands.run("vp", ["node", path.join(this.root, "installation", "install.mjs"), "--prepare-pinned"], {
+    await this.toolchain.ensure();
+    await this.toolchain.run(["env", "install"], { cwd: this.root });
+    await this.toolchain.runNode(this.root, path.join(this.root, "installation", "install.mjs"), ["--prepare-pinned"], {
       cwd: this.root,
     });
   }
@@ -42,7 +46,7 @@ export default class WorkbenchInstaller {
     let installOutput = "";
     let missingPython = false;
     try {
-      await this.commands.run("vp", ["install"], {
+      await this.toolchain.run(["install"], {
         cwd: this.root,
         onOutput: text => {
           installOutput = `${installOutput}${text}`.slice(-4096);
@@ -56,10 +60,8 @@ export default class WorkbenchInstaller {
       throw error;
     }
     this.write("Building frontend...\n");
-    await this.commands.run("vp", ["run", "build:app"], { cwd: this.root });
-    this.write("Installing Workbench CLI...\n");
-    await this.commands.run("vp", ["install", "-g", path.join(this.root, "package")], { cwd: this.root });
-    this.write("Setup complete.\n");
+    await this.toolchain.run(["run", "build:app"], { cwd: this.root });
+    this.write("Checkout preparation complete.\n");
   }
 
   async welcome() {
@@ -90,7 +92,7 @@ export default class WorkbenchInstaller {
   }
 
   async dispatch(args) {
-    await this.commands.run(process.execPath, [path.join(this.root, "cli", "dispatch.mjs"), ...args], { cwd: this.root });
+    await this.toolchain.runNode(this.root, path.join(this.root, "cli", "dispatch.mjs"), args, { cwd: this.root });
   }
 
   async hasTailscale() {

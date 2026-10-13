@@ -9,13 +9,23 @@ import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory.t
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { runRepair } from "./update-repair.mjs";
+import { runRepair as repair, type RepairOptions } from "./update-repair.mjs";
 import { InstallationRepairJournalSchema, type InstallationRepairJournal } from "../shared/workbench/installation-update.ts";
 import { isRepairPending, readJournal, resolveDataRoot, writeJournal } from "./update-journal.mjs";
 import resolveWorkbenchDataRoot from "../shared/workbench-data-root.ts";
 
 const fromSha = "a".repeat(40);
 const toSha = "b".repeat(40);
+
+function runRepair(options: RepairOptions) {
+  return repair({
+    toolchain: {
+      ensure: async () => {},
+      run: (args, config) => args[0] === "env" ? Promise.resolve() : options.commands!.run("vp", args, config),
+    },
+    ...options,
+  });
+}
 
 function fixture(phase: InstallationRepairJournal["phase"] = "pending", failures: string[] = [], rollback = true) {
   let journal: InstallationRepairJournal = {
@@ -92,6 +102,38 @@ test("failed process stop strands without installing", async () => {
   f.options.stop = async () => { throw new Error("host stop failed"); };
   assert.equal((await runRepair(f.options))?.phase, "stranded");
   assert.equal(f.events.some(e => e.startsWith("vp ")), false);
+});
+
+test("toolchain failure strands repair before stopping, cleanup or rollback", async () => {
+  const f = fixture();
+  const result = await runRepair({
+    ...f.options,
+    toolchain: {
+      ensure: async () => { throw new Error("Recorded Vite+ is unavailable"); },
+      run: async () => { assert.fail("unavailable toolchain cannot install dependencies"); },
+    },
+  });
+  assert.equal(result?.phase, "stranded");
+  assert.match(result?.lastError ?? "", /Recorded Vite/u);
+  assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), []);
+  assert.equal(result?.failure, null, "a toolchain failure is not a rolled-back dependency update");
+});
+
+test("unavailable pinned runtimes fail repair before dependency cleanup or rollback", async () => {
+  const f = fixture();
+  const result = await runRepair({
+    ...f.options,
+    toolchain: {
+      ensure: async () => {},
+      run: async args => {
+        if (args[0] === "env") throw new Error("pinned runtime unavailable");
+        f.events.push("dependency install");
+      },
+    },
+  });
+  assert.equal(result?.phase, "stranded");
+  assert.match(result?.lastError ?? "", /pinned runtime unavailable/u);
+  assert.deepEqual(f.events.filter(e => /^(stop|clean|git |dependency install)/u.test(e)), []);
 });
 
 test("explicit repair restarts stranded recovery at clean install", async () => {
@@ -287,11 +329,16 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
     "installation/update-repair.mjs",
     "installation/update-journal.mjs",
     "package/WorkbenchBootstrapCommand.mjs",
+    "package/WorkbenchToolchain.mjs",
+    "package/vite-plus-installer.mjs",
+    "package/workbench-data-root.mjs",
   ]) {
     await fs.mkdir(path.dirname(path.join(root, filename)), { recursive: true });
     await fs.copyFile(path.join(checkout, filename), path.join(root, filename));
   }
   const dataRoot = path.join(root, "data");
+  await fs.mkdir(path.join(dataRoot, "installation"), { recursive: true });
+  await fs.writeFile(path.join(dataRoot, "installation", "toolchain.json"), "{}");
   const f = fixture("stranded");
   await writeJournal({ ...f.journal(), lastError: "fixture install failure",
     logPath: path.join(root, ".workbench", "logs", "update.log") }, dataRoot);

@@ -21,9 +21,9 @@ async function main() {
   process.stdout.write([
     "",
     `Install sandbox: ${sandbox.root}`,
-    "  real:    npm wb package, git clone of your working tree, vp runtime/dependencies/build, global CLI registration",
+    "  real:    npm wb package, official Vite+ bootstrap, git clone, pinned runtime/dependencies/build, npm CLI registration",
     "  pretend: wake service, desktop shortcut, app launch, process view",
-    "  isolated: HOME, AppData, VP_HOME, npm prefix, pnpm home (pnpm store is shared with the host)",
+    "  isolated: HOME, AppData, Workbench data/toolchain, npm prefix, pnpm home and a cold package store",
     `Run \`wb\` to start. Type \`exit\` to leave and ${keep ? "keep" : "delete"} the sandbox (Ctrl+C only cancels the current command).`,
     "",
   ].join("\n"));

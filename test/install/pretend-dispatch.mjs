@@ -16,7 +16,14 @@ const pretend = {
   view: `opening the ${args[1] ?? "process"} view`,
 };
 
-if (Object.hasOwn(pretend, command)) {
+if (command === "repair") {
+  const { runRepair } = await import(
+    new URL("../installation/update-repair.mjs", import.meta.url).href,
+  );
+  const journal = await runRepair({ root, force: true });
+  if (journal?.phase !== "done") throw new Error(`Sandbox dependency repair failed: ${journal?.lastError}`);
+  process.stdout.write("[install sandbox] dependency repair complete\n");
+} else if (Object.hasOwn(pretend, command)) {
   process.stdout.write(`[install sandbox] pretending: ${pretend[command]}\n`);
 } else {
   try {

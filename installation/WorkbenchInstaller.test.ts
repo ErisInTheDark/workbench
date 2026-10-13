@@ -11,10 +11,16 @@ function fixture(answers = [], tailscale = false, nodeVersion = process.versions
   const prompts = [];
   const output = [];
   const root = path.resolve(import.meta.dirname, "..");
+  const commands = { run: async (command, args, config) => { calls.push({ command, args, config }); } };
   const setup = new WorkbenchInstaller({
     root,
     nodeVersion,
-    commands: { run: async (command, args, config) => { calls.push({ command, args, config }); } },
+    commands,
+    toolchain: {
+      ensure: async () => {},
+      run: (args, config) => commands.run("vp", args, config),
+      runNode: (_root, entry, args, config) => commands.run("vp", ["node", entry, ...args], config),
+    },
     prompt: { choose: async (question, choices) => { prompts.push(question); return answers.shift() ?? choices.at(-1); } },
     detectTailscale: async () => tailscale,
     write: text => output.push(text),
@@ -31,13 +37,12 @@ test("repository handoff installs the runtime and relaunches under pinned Node",
   ]);
 });
 
-test("pinned repository setup uses vp for dependencies, frontend and global CLI in order", async () => {
+test("pinned repository setup builds without registering a public CLI through its private toolchain", async () => {
   const f = fixture();
   await f.setup.preparePinned();
   assert.deepEqual(f.calls.map(({ command, args }) => [command, ...args]), [
     ["vp", "install"],
     ["vp", "run", "build:app"],
-    ["vp", "install", "-g", path.join(f.root, "package")],
   ]);
   assert.ok(!f.calls.some(call => ["cargo", "go"].includes(call.command)));
   assert.equal(f.prompts.length, 0);
@@ -65,7 +70,7 @@ test("first launch can skip wake and shortcut independently", async () => {
   await f.setup.welcome();
   const dispatches = f.calls.filter(call => call.args.some(arg => arg.endsWith("dispatch.mjs")));
   assert.equal(dispatches.length, 1);
-  assert.equal(dispatches[0].args.length, 1);
+  assert.equal(dispatches[0].args.length, 2);
   assert.equal(f.prompts.length, 2);
   assert.ok(f.output.join("").includes("wb shortcut"));
 });

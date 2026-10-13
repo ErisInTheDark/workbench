@@ -20,9 +20,39 @@ export default class WorkbenchBootstrapCommand {
     return key === undefined ? undefined : this.environment[key];
   }
 
+  environmentFor(overrides = {}) {
+    const environment = { ...this.environment };
+    for (const [name, value] of Object.entries(overrides)) {
+      for (const key of Object.keys(environment)) {
+        if (key === name || process.platform === "win32" && key.toLowerCase() === name.toLowerCase()) delete environment[key];
+      }
+      if (value !== undefined && value !== null) environment[name] = value;
+    }
+    return environment;
+  }
+
+  async findExecutable(command) {
+    const names = process.platform === "win32" ? [`${command}.exe`] : [command];
+    for (const directory of (this.variable("PATH") || "").split(path.delimiter).filter(Boolean)) {
+      for (const name of names) {
+        const candidate = path.resolve(directory, name);
+        try {
+          const stat = await fs.stat(candidate);
+          if (stat.isFile()) return candidate;
+        } catch (error) {
+          if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
+        }
+      }
+    }
+    return null;
+  }
+
   async resolve(command) {
     if (process.platform === "win32" && command === "bash") return [await this.resolveBash()];
-    if (process.platform !== "win32" || !["npm", "pnpm"].includes(command)) return [command];
+    if (!["npm", "pnpm"].includes(command)) return [command];
+    const direct = await this.findExecutable(command);
+    if (direct) return [direct];
+    if (process.platform !== "win32") throw Object.assign(new Error(`${command} is unavailable on PATH.`), { code: "ENOENT" });
     const directories = [path.dirname(process.execPath), ...(this.variable("PATH") || "").split(path.delimiter)];
     for (const directory of directories) {
       if (!directory) continue;
@@ -92,7 +122,7 @@ export default class WorkbenchBootstrapCommand {
     return await new Promise((resolve, reject) => {
       const child = spawn(executable, [...prefix, ...args], {
         cwd,
-        env: { ...this.environment, ...environment },
+        env: this.environmentFor(environment),
         windowsHide: true,
         stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
         signal,

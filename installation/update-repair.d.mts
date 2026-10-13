@@ -37,5 +37,9 @@ export interface RepairOptions {
   commands?: {
     run(command: string, args: string[], options: { cwd: string; onOutput?: (text: string) => void }): Promise<void>;
   };
+  toolchain?: {
+    ensure(options?: { onOutput?: (text: string) => void }): Promise<object | void>;
+    run(args: string[], options: { cwd: string; onOutput?: (text: string) => void }): Promise<void>;
+  };
 }
 export function runRepair(options?: RepairOptions): Promise<InstallationRepairJournal | null>;

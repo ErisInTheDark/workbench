@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
 import { resolveDataRoot, readJournal, writeJournal, isRepairPending, journalPath } from "./update-journal.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -284,6 +285,7 @@ async function repair(options) {
   // Writing in the output sink itself would escape its error boundary.
   const commandOutput = { write() {} };
   const commands = options.commands ?? new WorkbenchBootstrapCommand({ output: commandOutput, errorOutput: commandOutput });
+  const toolchain = options.toolchain ?? new WorkbenchToolchain({ dataRoot, commands });
   const stop = options.stop ?? (() => stopProcesses(dataRoot, {
     files, alive: options.alive ?? isAlive, sleep: options.sleep ?? delay, log,
     verify: options.verify ?? verifyPublication,
@@ -319,6 +321,12 @@ async function repair(options) {
   if (["pending", "stopping"].includes(phase)) phase = "installing";
   if (phase === "rolling-back" && !journal.fromSha) phase = "clean-installing";
   try {
+    const onToolchainOutput = text => {
+      if (!options.commands) appendFileSync(journal.logPath, text);
+      process.stderr.write(text);
+    };
+    await toolchain.ensure({ onOutput: onToolchainOutput });
+    await toolchain.run(["env", "install"], { cwd: root, onOutput: onToolchainOutput });
     // Keep the recovery rung durable on resume; a second crash during stopping
     // must not accidentally move a rollback/clean repair back to the first rung.
     if (journal.phase === "pending") await persist("stopping");
@@ -346,7 +354,7 @@ async function repair(options) {
           }
           if (phase === "clean-installing") await clean();
           await log("Running vp install.");
-          await commands.run("vp", ["install"], { cwd: root, onOutput });
+          await toolchain.run(["install"], { cwd: root, onOutput });
           succeeded = true;
           break;
         } catch (error) {

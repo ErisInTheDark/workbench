@@ -78,6 +78,20 @@ test("setup preserves process failures and does not run cancelled commands", asy
     error.code === "ENOENT" && /workbench-nonexistent-command-for-test.*PATH/i.test(error.message));
 });
 
+test("child overrides remove inherited variables without changing the runner environment", async () => {
+  const environment = { ...process.env, WORKBENCH_TEST_REMOVE: "parent", WORKBENCH_TEST_OVERRIDE: "parent" };
+  const output = new PassThrough();
+  let text = "";
+  output.on("data", bytes => { text += bytes.toString(); });
+  const command = new WorkbenchBootstrapCommand({ environment, output });
+  await command.run(process.execPath, [
+    "-e", "process.stdout.write((process.env.WORKBENCH_TEST_REMOVE ?? 'absent') + '/' + process.env.WORKBENCH_TEST_OVERRIDE)",
+  ], { environment: { WORKBENCH_TEST_REMOVE: undefined, WORKBENCH_TEST_OVERRIDE: "child" } });
+  assert.equal(text, "absent/child");
+  assert.equal(environment.WORKBENCH_TEST_REMOVE, "parent");
+  assert.equal(environment.WORKBENCH_TEST_OVERRIDE, "parent");
+});
+
 test("interactive handoff releases signal forwarding after child exit and startup failure", async () => {
   const command = new WorkbenchBootstrapCommand();
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;

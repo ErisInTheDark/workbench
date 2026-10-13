@@ -4,6 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
 import { readJournal, isRepairPending } from "../installation/update-journal.mjs";
 import { runRepair } from "../installation/update-repair.mjs";
 
@@ -31,10 +32,9 @@ try {
       : command === "ports"
         ? "cli/workbench-ports.ts"
         : ["start", "shortcut"].includes(command) ? "app/server/desktop.ts" : "daemon/host/connect.ts";
-    await new WorkbenchBootstrapCommand().run(process.execPath, [
-      "--disable-warning=ExperimentalWarning", "--import", "tsx", path.join(root, entry),
+    await new WorkbenchToolchain().runNode(root, path.join(root, entry), [
       ...(view ? args.slice(1) : command === "ports" ? [] : [command]),
-    ], { cwd: root, interactive: view });
+    ], { cwd: root, interactive: view, nodeOptions: ["--disable-warning=ExperimentalWarning", "--import", "tsx"] });
   } else {
     await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args]);
   }

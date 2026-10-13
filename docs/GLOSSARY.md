@@ -2,6 +2,7 @@
 |---|---|
 | Workbench instructions | The project-owned prompt, workflow, injection, agent, and bundled skill Markdown sources under `instructions/`, mirrored into the Workbench Library by daemon-owned instruction code |
 | Workbench Library | An external user-owned folder, defaulting to `~/.workbench`, that stores Workbench-wide skills, agents, and instruction material outside any selected project |
+| Workbench data root | Per-user OS data directory resolved by `resolveWorkbenchDataRoot`, overridable with `WORKBENCH_DATA_ROOT`. Distinct from the user-editable Workbench Library. |
 | Workbench Skill | A harness-neutral skill package surfaced to supported harnesses through a compact manifest that tells the harness when and where to read the full skill instructions. Workbench Skills can come from the Workbench Library or the selected project |
 | Project Skill | A skill package stored inside the selected project and surfaced to supported harnesses for that project |
 | Project Agent | An agent prompt stored inside `.agents/agents` in the selected project and surfaced in the composer agent selector for that project |
