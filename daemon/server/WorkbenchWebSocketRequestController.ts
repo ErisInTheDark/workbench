@@ -5,7 +5,7 @@
  * - WorkbenchWebSocketReloadDirtObserverState: reload-dirt subscriber identity.
  * - WorkbenchWebSocketRequestControllerState: request, observer, and stream handoff.
  * - WorkbenchWebSocketRequestControllerOptions: routing, clock, scheduler, and logging ports.
- * - default WorkbenchWebSocketRequestController: route feature requests, own event-stream health, and answer socket spy queries from recorded frames.
+ * - default WorkbenchWebSocketRequestController: route feature requests, own event-stream health, answer socket spy queries from recorded frames, and ask connected apps to fetch from peer daemons.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -70,6 +70,10 @@ import WebSocketTrafficBuffer, {
   WEBSOCKET_SPY_QUERY_METHOD, WEBSOCKET_SPY_RESULT_METHOD, WebSocketSpyResultNotificationSchema,
   type WebSocketTrafficQuery, type WebSocketTrafficResult,
 } from "workbench-shared/process/WebSocketTrafficBuffer";
+import {
+  GIT_PEER_FETCH_REQUEST_METHOD, GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchResultNotificationSchema,
+  type GitPeerFetchOutcome, type GitPeerFetchQuestion,
+} from "workbench-shared/workbench/git/git-peer-contracts";
 import { randomUUID } from "node:crypto";
 
 const WORKBENCH_HARNESS_FIELD = "workbenchHarness";
@@ -251,6 +255,8 @@ export default class WorkbenchWebSocketRequestController {
   private readonly traffic = new WebSocketTrafficBuffer();
   private readonly connectionIds = new Map<BridgeClient, string>();
   private readonly spyQueries = new Map<string, (result: WebSocketTrafficResult) => void>();
+  private readonly peerFetches = new Map<string, (outcome: GitPeerFetchOutcome) => void>();
+  private readonly peerFetchClients = new Map<string, BridgeClient>();
 
   constructor({
     voice,
@@ -411,6 +417,12 @@ export default class WorkbenchWebSocketRequestController {
       const answer = WebSocketSpyResultNotificationSchema.safeParse(message);
       if (answer.success) this.spyQueries.get(answer.data.params.requestId)?.(answer.data.params.result);
       else this.writeLine("[socket-spy] rejected an app spy result that did not match its contract");
+      return;
+    }
+    if (method === GIT_PEER_FETCH_RESULT_METHOD) {
+      const answer = GitPeerFetchResultNotificationSchema.safeParse(message);
+      if (answer.success) this.peerFetches.get(answer.data.params.requestId)?.(answer.data.params.outcome);
+      else this.writeLine("[git-peer] rejected an app peer fetch result that did not match its contract");
       return;
     }
 
@@ -610,6 +622,63 @@ export default class WorkbenchWebSocketRequestController {
     });
   }
 
+  /**
+   * Asks every connected app to fetch a named peer's branch into one of this daemon's folders; the first fetch wins.
+   * Apps acknowledge within SPY_ANSWER_DEADLINE_MS or count as unable (peer daemons, older apps, apps mid-reload);
+   * an acknowledged fetch runs as long as the transfer takes, bounded only by the caller's cancellation.
+   */
+  async askPeerFetch(question: GitPeerFetchQuestion, signal: AbortSignal) {
+    this.assertActive();
+    const clients = [...this.connectionIds].filter(([client]) => client.readyState === client.OPEN);
+    if (!clients.length) throw new Error("No Workbench app is connected to this daemon. Open Workbench in a tab or run `wb view`, then retry.");
+    const outcomes = await new Promise<string[] | Extract<GitPeerFetchOutcome, { kind: "fetched" }>>((resolve, reject) => {
+      const failures: string[] = [];
+      const requests = new Map<string, { timer: ReturnType<typeof this.schedule> | null }>();
+      const settle = (requestId: string, failure: string | null) => {
+        const request = requests.get(requestId);
+        if (!request || !this.peerFetches.delete(requestId)) return;
+        this.peerFetchClients.delete(requestId);
+        if (request.timer) this.cancel(request.timer);
+        requests.delete(requestId);
+        if (failure) failures.push(failure);
+        if (!requests.size) finish(failures);
+      };
+      const finish = (result: string[] | Extract<GitPeerFetchOutcome, { kind: "fetched" }> | Error) => {
+        for (const [requestId, request] of requests) {
+          this.peerFetches.delete(requestId);
+          this.peerFetchClients.delete(requestId);
+          if (request.timer) this.cancel(request.timer);
+        }
+        requests.clear();
+        signal.removeEventListener("abort", abort);
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      };
+      const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Peer fetch was cancelled."));
+      signal.addEventListener("abort", abort, { once: true });
+      for (const [client] of clients) {
+        const requestId = randomUUID();
+        const request = { timer: this.schedule(() => settle(requestId, null), SPY_ANSWER_DEADLINE_MS) as ReturnType<typeof this.schedule> | null };
+        requests.set(requestId, request);
+        this.peerFetchClients.set(requestId, client);
+        this.peerFetches.set(requestId, outcome => {
+          if (outcome.kind === "accepted") {
+            if (request.timer) this.cancel(request.timer);
+            request.timer = null;
+          } else if (outcome.kind === "fetched") finish(outcome);
+          else settle(requestId, outcome.failure);
+        });
+        void this.sendJsonToClient(client, { method: GIT_PEER_FETCH_REQUEST_METHOD, params: { requestId, question } })
+          .catch(error => settle(requestId, `send failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`));
+      }
+      if (signal.aborted) abort();
+    });
+    if (Array.isArray(outcomes)) {
+      throw new Error(outcomes.length ? outcomes.join("\n") : "No connected Workbench app could fetch from peers. Update Workbench, then retry.");
+    }
+    return outcomes;
+  }
+
   reportSendFailure(message: unknown, error: unknown) {
     process.stderr.write(`${formatWebSocketSendFailure(message, error)}\n`);
   }
@@ -719,6 +788,9 @@ export default class WorkbenchWebSocketRequestController {
     this.assertActive();
     const requests = [...(this.pending.get(client)?.values() ?? [])];
     for (const request of requests) this.complete(request, "closed", this.now() - request.startedAt, 0, 0, 0);
+    for (const [requestId, asked] of this.peerFetchClients) {
+      if (asked === client) this.peerFetches.get(requestId)?.({ kind: "failed", failure: "The app disconnected during the fetch." });
+    }
     this.connectionIds.delete(client);
     this.stream.disconnect(client);
     this.reloadDirtObservers.delete(connectionId);

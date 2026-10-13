@@ -189,7 +189,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
       executeThreadGitRequest: async (body, signal) => {
         signal.throwIfAborted();
-        return await build.get("threadGit").executeRequest(body);
+        return await build.get("threadGit").executeRequest(body, {
+          signal,
+          // The connected app reaches peer daemons; this daemon only asks over the socket the app already holds.
+          fetchPeer: async (question, fetchSignal) => await build.run("webSocketRequests",
+            controller => controller.askPeerFetch(question, fetchSignal), "peer fetch"),
+        });
       },
       executeThreadRecallRequest: async (request, signal) => {
         const url = new URL(request.path, context.localDaemonOrigin);

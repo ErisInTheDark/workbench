@@ -1,11 +1,13 @@
 /*
  * Exports:
  * - default WorkbenchGitPeerSync: own each observed folder's peers (its logical project's other visible folders on other
- *   daemons), fetch a peer's branch whenever its HEAD moves, and run Pull and Send between a folder and one peer.
+ *   daemons), fetch a peer's branch whenever its HEAD moves, run Pull and Send between a folder and one peer, and fetch a
+ *   named peer for a daemon's agent.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type {
-  GitBranchPosition, GitPeerAddress, GitPeerIntegrationResult, GitPeerStatus, GitPeerTransfer, WorkspaceGitPeers,
+  GitBranchPosition, GitPeerAddress, GitPeerFetchOutcome, GitPeerFetchQuestion, GitPeerIntegrationResult, GitPeerStatus,
+  GitPeerTransfer, WorkspaceGitPeers,
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { DaemonId } from "workbench-shared/workbench/identity";
@@ -108,6 +110,24 @@ export default class WorkbenchGitPeerSync {
     const result = await this.relay.integrate(receiver, sender, branch);
     if (result.kind === "applied") await this.relay.fetch(receiver, sender, branch);
     return result;
+  }
+
+  /** Answers a daemon's agent: fetch the named peer's branch into that daemon's folder and say which peer it was. */
+  async fetchForAgent(daemonId: DaemonId, question: GitPeerFetchQuestion): Promise<GitPeerFetchOutcome> {
+    if (this.closed) throw new Error("Peer sync is reloading.");
+    const location = { daemonId, projectId: question.projectId };
+    const normalize = (value: string) => value.replace(/\\/gu, "/").replace(/\/+$/u, "").toLowerCase();
+    const peers = this.findPeers(location);
+    const folder = question.folder ? normalize(question.folder) : null;
+    const matches = peers.filter(peer => peer.hostname.toLowerCase() === question.host.toLowerCase()
+      && (!folder || normalize(peer.rootPath) === folder || normalize(peer.rootPath).endsWith(`/${folder}`)));
+    const listed = peers.map(peer => `${peer.hostname}:${peer.rootPath}`).join(", ") || "none";
+    if (!matches.length) return { kind: "failed", failure: `No visible peer folder matches ${question.host}${question.folder ? `:${question.folder}` : ""}. Peers: ${listed}.` };
+    if (matches.length > 1) return { kind: "failed", failure: `Several folders on ${question.host} match; name one as <host>:<folder>. Peers: ${listed}.` };
+    const peer = matches[0]!;
+    const address = { daemonId: peer.daemonId, projectId: peer.projectId };
+    const tip = await this.relay.fetch(address, location, question.branch);
+    return { kind: "fetched", peer: address, hostname: peer.hostname, rootPath: peer.rootPath, tip };
   }
 
   dispose() {

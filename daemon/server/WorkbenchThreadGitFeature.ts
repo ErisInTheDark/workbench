@@ -1,8 +1,10 @@
 /*
  * Exports:
- * - WorkbenchThreadGitFeatureOptions: project resolution, thread Git construction and stable transition ports.
+ * - WorkbenchThreadGitFeatureOptions: project resolution, thread Git construction, stable transition and integration claim ports.
+ * - WorkbenchThreadGitRequestPorts: per-request cancellation and peer fetch supplied by the agent command host.
  * - CommitThreadLookup/findCommitThreadId: classify committed proposal ownership across thread arc summaries.
- * - default WorkbenchThreadGitFeature: own validated thread-scoped mutations and committed-proposal owner lookup.
+ * - default WorkbenchThreadGitFeature: own validated thread-scoped mutations, committed-proposal owner lookup and
+ *   `wb git integrate` sessions.
  */
 import type http from "node:http";
 import { ThreadReferenceSchema, type WorkbenchThreadId, type ProjectId } from "workbench-shared/workbench/identity";
@@ -16,12 +18,22 @@ import type {
   WorkbenchThreadGitSelectionResult,
 } from "./lib/workbench/git/WorkbenchThreadGit";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
+import WorkbenchGitIntegrationSession, { type WorkbenchGitIntegrationClaim } from "./lib/workbench/git/WorkbenchGitIntegrationSession";
+import type { GitPeerFetchOutcome, GitPeerFetchQuestion } from "workbench-shared/workbench/git/git-peer-contracts";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 
 const MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
 
-type ThreadGitAction = "add" | "amend" | "commit" | "thread" | "unstage";
+type ThreadGitAction = "add" | "amend" | "commit" | "integrate" | "thread" | "unstage";
+const INTEGRATE_OPERATIONS = ["start", "view", "resolve", "wait", "apply", "end"] as const;
+type IntegrateOperation = typeof INTEGRATE_OPERATIONS[number];
+
+/** Per-request ports the agent command host supplies: caller cancellation and the connected app's peer fetch. */
+export interface WorkbenchThreadGitRequestPorts {
+  signal?: AbortSignal;
+  fetchPeer?(question: GitPeerFetchQuestion, signal: AbortSignal): Promise<Extract<GitPeerFetchOutcome, { kind: "fetched" }>>;
+}
 
 export type CommitThreadLookup =
   | { kind: "ambiguous"; threadIds: string[] }
@@ -47,12 +59,29 @@ export interface WorkbenchThreadGitFeatureOptions {
   selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "readThreadStateProject">;
   resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "read" | "run">;
+  /** `wb git integrate`: live claims per thread, and re-running a blocked check whenever claims change. */
+  integrations?: {
+    listClaims(repository: WorkbenchGitRepository): Promise<WorkbenchGitIntegrationClaim[]>;
+    waitForClaims<Result extends { kind: string }>(
+      attempt: () => Promise<Result | { kind: "blocked" }>, signal: AbortSignal,
+    ): Promise<Exclude<Result, { kind: "blocked" }>>;
+  };
 }
 
 function readAction(value: unknown): ThreadGitAction | null {
-  return value === "add" || value === "amend" || value === "commit" || value === "thread" || value === "unstage"
+  return value === "add" || value === "amend" || value === "commit" || value === "integrate" || value === "thread" || value === "unstage"
     ? value
     : null;
+}
+
+function readIntegrateOperation(value: unknown): IntegrateOperation {
+  const operation = INTEGRATE_OPERATIONS.find(candidate => candidate === value);
+  if (!operation) throw new Error("A valid integrate operation is required.");
+  return operation;
+}
+
+function textResponse(text: string) {
+  return new Response(text, { headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" } });
 }
 
 function readString(value: unknown) {
@@ -163,7 +192,7 @@ export default class WorkbenchThreadGitFeature {
     }
   }
 
-  async executeRequest(input: object) {
+  async executeRequest(input: object, ports: WorkbenchThreadGitRequestPorts = {}) {
     try {
       const body = input as Record<string, unknown>;
       const action = readAction(body.action);
@@ -171,6 +200,7 @@ export default class WorkbenchThreadGitFeature {
       const targetWorktree = readString(body.targetWorktree) || undefined;
       if (!action) throw new Error("A valid thread Git action is required.");
       const resolved = await this.options.resolveProjectFromCwd(cwd);
+      if (action === "integrate") return await this.integrate(body, resolved, ports);
       if (action === "thread") {
         const commitish = readString(body.commit);
         if (!commitish) throw new Error("A Git commit is required.");
@@ -225,6 +255,60 @@ export default class WorkbenchThreadGitFeature {
         headers: { "Cache-Control": "no-store" },
         status: 400,
       });
+    }
+  }
+
+  /** `wb git integrate`: builds read-only under the worktree transition; only apply holds it exclusively. */
+  private async integrate(body: Record<string, unknown>, resolved: { cwd: string; project?: { id: ProjectId } },
+    ports: WorkbenchThreadGitRequestPorts) {
+    const integrations = this.options.integrations;
+    if (!integrations) throw new Error("Integration sessions are unavailable.");
+    const operation = readIntegrateOperation(body.operation);
+    const threadId = readString(body.threadId);
+    if (!threadId) throw new Error("A managed Workbench thread id is required.");
+    const identity = await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: resolved.project?.id });
+    if (!identity) throw new Error("The managed thread has no Git storage identity.");
+    const repository = await WorkbenchGitRepository.open(resolved.cwd);
+    const session = new WorkbenchGitIntegrationSession({
+      repository, threadId: identity.threadId, listClaims: () => integrations.listClaims(repository),
+    });
+    const signal = ports.signal ?? new AbortController().signal;
+    const read = <Value>(work: () => Promise<Value>) => this.options.transitions.read(repository.root, work);
+    switch (operation) {
+      case "start": {
+        const from = readString(body.from);
+        if (!from) throw new Error("--from upstream|<host>[:<folder>] is required.");
+        const mode = body.merge === true ? "merge" as const : "replay" as const;
+        const carryOwn = body.carryOwn === true;
+        if (from === "upstream") {
+          const upstream = (await repository.run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).catch(() => "")).trim();
+          if (!upstream) throw new Error("The checked-out branch has no upstream.");
+          // Fetching writes only remote-tracking refs, so it runs outside the worktree transition like the updater's.
+          await repository.run(["fetch", "--quiet"], { ...process.env, GIT_TERMINAL_PROMPT: "0" }, signal);
+          const incoming = (await repository.run(["rev-parse", "@{u}"])).trim();
+          return textResponse(await read(() => session.start({ incoming, source: { kind: "upstream", ref: upstream }, mode, carryOwn })));
+        }
+        if (!ports.fetchPeer) throw new Error("Peer fetches are unavailable here.");
+        if (!resolved.project) throw new Error("The current directory has no Workbench project.");
+        const branchRef = (await repository.run(["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
+        if (!branchRef.startsWith("refs/heads/")) throw new Error("Detached HEAD cannot integrate incoming commits.");
+        const separator = from.indexOf(":");
+        const fetched = await ports.fetchPeer({
+          projectId: resolved.project.id, branch: branchRef.slice("refs/heads/".length),
+          host: separator < 0 ? from : from.slice(0, separator), folder: separator < 0 ? null : from.slice(separator + 1) || null,
+        }, signal);
+        return textResponse(await read(() => session.start({
+          incoming: fetched.tip, source: { kind: "peer", hostname: fetched.hostname, rootPath: fetched.rootPath }, mode, carryOwn,
+        })));
+      }
+      case "view": return textResponse(await read(() => session.view()));
+      case "resolve": return textResponse(await read(() => session.resolve()));
+      case "wait": {
+        const result = await integrations.waitForClaims(() => read(() => session.waitAttempt()), signal);
+        return textResponse(result.text);
+      }
+      case "apply": return textResponse(await this.options.transitions.run(repository.root, () => session.apply()));
+      case "end": return textResponse(await session.end());
     }
   }
 }

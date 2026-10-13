@@ -4,7 +4,8 @@
  * - WorkbenchGitArcLifecycleState: public lifecycle with canonical owner and member identities.
  * - WorkbenchGitArcPlanState: public plan with canonical owner and member identities.
  * - WorkbenchGitArcActiveClaim: public claim with a canonical thread owner.
- * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress, and proposal diff lifecycle.
+ * - default WorkbenchGitArcFeature: own Git arc dispatch, canonical identity ingress, proposal diff lifecycle, and waits on
+ *   claim mutations.
  */
 import type http from "node:http";
 
@@ -540,6 +541,13 @@ export default class WorkbenchGitArcFeature {
     const signal = this.lifecycleSignal(callerSignal);
     const attempt = await this.claimMutations.waitUntil(async () => await this.tryStartWaitingPlan(project, request, owner, signal), signal);
     return attempt.result;
+  }
+
+  /** Re-runs a blocked check after each claim mutation, for other owners that wait on sibling claims clearing. */
+  async waitForClaimChanges<Result extends { kind: string }>(
+    attempt: () => Promise<Result | { kind: "blocked" }>, callerSignal?: AbortSignal,
+  ) {
+    return await this.claimMutations.waitUntil(attempt, this.lifecycleSignal(callerSignal));
   }
 
   private lifecycleSignal(callerSignal?: AbortSignal) {

@@ -17,6 +17,7 @@ import {
 import { isWorkbenchPublicNotification, type WorkbenchTranscriptNotification } from "../workbench/provider/provider-observation.ts";
 import { WORKSPACE_DELTA_METHOD, WORKSPACE_UPDATED_METHOD } from "./workspace/workspace-observation";
 import { WEBSOCKET_SPY_QUERY_METHOD } from "../process/WebSocketTrafficBuffer.ts";
+import { GIT_PEER_FETCH_REQUEST_METHOD } from "./git/git-peer-contracts";
 import type { WorkbenchRpcResponse } from "./workbench-rpc.ts";
 import WorkbenchRpcSocketClient from "./WorkbenchRpcSocketClient.ts";
 
@@ -31,7 +32,8 @@ type WorkbenchNotification = {
     | typeof WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
     | (typeof workbenchTranscriptNotifications)[keyof typeof workbenchTranscriptNotifications]["method"]
     | typeof WORKBENCH_STATS_IMPORT_UPDATED_METHOD
-    | typeof WEBSOCKET_SPY_QUERY_METHOD;
+    | typeof WEBSOCKET_SPY_QUERY_METHOD
+    | typeof GIT_PEER_FETCH_REQUEST_METHOD;
   params: unknown;
 };
 type Timer = ReturnType<typeof setTimeout>;
@@ -159,7 +161,8 @@ export default class WorkbenchSocketClient {
       || workbenchMessage.method === WORKBENCH_RELOAD_DIRT_UPDATED_METHOD
       || Object.values(workbenchTranscriptNotifications).some(notification => notification.method === workbenchMessage.method)
       || workbenchMessage.method === WORKBENCH_STATS_IMPORT_UPDATED_METHOD
-      || workbenchMessage.method === WEBSOCKET_SPY_QUERY_METHOD) {
+      || workbenchMessage.method === WEBSOCKET_SPY_QUERY_METHOD
+      || workbenchMessage.method === GIT_PEER_FETCH_REQUEST_METHOD) {
       for (const listener of this.workbenchNotificationListeners) listener(parsed as unknown as WorkbenchNotification);
       return;
     }

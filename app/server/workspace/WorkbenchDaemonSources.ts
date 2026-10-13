@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchDaemonSources: reconcile verified daemon publications into independent retained connections.
+ * - default WorkbenchDaemonSources: reconcile verified daemon publications into independent retained connections, routing
+ *   each daemon's peer fetch requests to the app's peer sync.
  */
 import { DaemonIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController";
@@ -9,6 +10,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { WorkspaceDaemonFact } from "workbench-shared/workbench/workspace/workspace-observation";
 import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuffer";
 import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
+import type { GitPeerFetchOutcome, GitPeerFetchQuestion } from "workbench-shared/workbench/git/git-peer-contracts";
 
 type Network = Pick<WorkbenchNetworkController, "daemonSources" | "canAccessPeer" | "subscribe">;
 interface Entry {
@@ -44,6 +46,8 @@ export default class WorkbenchDaemonSources {
     /** Browser traffic for `wb socket spy`; only the attached local daemon may read it. */
     traffic?: Pick<WebSocketTrafficBuffer, "query">;
     transcriptReservoir?: WorkbenchTranscriptReservoir;
+    /** Fetches a named peer's branch into a folder of the asking daemon, for its agents. */
+    answerPeerFetch?: (daemonId: DaemonId, question: GitPeerFetchQuestion) => Promise<GitPeerFetchOutcome>;
   }) {
     this.transcriptReservoir = options.transcriptReservoir ?? new WorkbenchTranscriptReservoir();
   }
@@ -140,6 +144,7 @@ export default class WorkbenchDaemonSources {
               warn: this.options.warn,
               transcriptReservoir: this.transcriptReservoir,
               answerSpy: traffic ? query => id === this.attachedId ? traffic.query(query) : null : undefined,
+              answerPeerFetch: this.options.answerPeerFetch ? question => this.options.answerPeerFetch!(id, question) : undefined,
             });
           this.entries.set(id, { source, descriptor: next.descriptor, peers: next.peers,
             unsubscribe: source.subscribe(() => { if (!this.reconciling) this.publish(); }) });

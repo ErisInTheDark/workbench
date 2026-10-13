@@ -97,6 +97,8 @@ import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import WorkbenchInstallationUpdateNode from "./WorkbenchInstallationUpdateNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import WorkbenchGitPeerController from "./WorkbenchGitPeerController";
+import GitArcRegistry, { getGitArcLiveClaimPaths } from "./lib/workbench/git/GitArcRegistry";
+import type { GitArcThreadIdentityResolver } from "./lib/workbench/git/git-arc-thread-identity";
 import WorkbenchBranchPositionController from "./WorkbenchBranchPositionController";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -463,11 +465,22 @@ function createWorkbenchCoreFeature(
       readInstructionSources: () => readWorkbenchInstructionSources(),
     }),
   });
+  const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => {
+    const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(input.repositoryRoot, { endpointName: "Working tree" });
+    return await threadIdentity.resolveGitArcThreadIdentity({
+      ...input, harness: WorkbenchHarnessSchema.parse(input.harness), projectId: resolved.project.id,
+    });
+  };
   const threadGit = new WorkbenchThreadGitFeature({
     selectionStore: database,
     identities: threadIdentity,
     resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
     transitions: worktreeGitTransitions,
+    integrations: {
+      listClaims: async repository => (await new GitArcRegistry(repository, resolveGitArcIdentity).list())
+        .map(entry => ({ threadId: entry.threadId, paths: getGitArcLiveClaimPaths(entry) })),
+      waitForClaims: (attempt, signal) => gitArc.waitForClaimChanges(attempt, signal),
+    },
   });
   const provider = (harness: WorkbenchHarness) => {
     const key = installedProviderKeys.find(key => key === harness);
@@ -778,12 +791,7 @@ function createWorkbenchCoreFeature(
   });
   const workingTree = new WorkbenchWorkingTreeController({
     resolveProject: projectId => projectCatalog.resolveProjectById(projectId),
-    resolveIdentity: async input => {
-      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(input.repositoryRoot, { endpointName: "Working tree" });
-      return await threadIdentity.resolveGitArcThreadIdentity({
-        ...input, harness: WorkbenchHarnessSchema.parse(input.harness), projectId: resolved.project.id,
-      });
-    },
+    resolveIdentity: resolveGitArcIdentity,
     readOwner: async (threadId, harness) => {
       const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
       if (!identity) return null;

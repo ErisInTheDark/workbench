@@ -32,9 +32,10 @@ export function hasVisibleInstallationUpdate(update: InstallationUpdate | null, 
 // Update-issue references are agent-facing, so they carry the detail the button deliberately leaves out.
 function conflictPrompt(update: InstallationUpdate) {
   const source = update.upstream ?? "upstream";
+  const steps = "Integrate it with `wb git integrate start --from upstream` (`wb git --help` lists the integrate steps), preserving my local work.";
   return update.conflicts.length
-    ? `Pulling Workbench updates from \`${source}\` would conflict with local changes in:\n\n${update.conflicts.map(file => `- \`${file}\``).join("\n")}\n\nHelp me resolve this so the update can be pulled, preserving my local work.`
-    : `Pulling Workbench updates from \`${source}\` is blocked: ${update.reason ?? "rebasing my local Workbench commits would conflict."}\n\nHelp me resolve this so the update can be pulled, preserving my local work.`;
+    ? `Pulling Workbench updates from \`${source}\` would conflict with local changes in:\n\n${update.conflicts.map(file => `- \`${file}\``).join("\n")}\n\n${steps}`
+    : `Pulling Workbench updates from \`${source}\` is blocked: ${update.reason ?? "rebasing my local Workbench commits would conflict."}\n\n${steps}`;
 }
 
 function failurePrompt(update: InstallationUpdate, failure: NonNullable<InstallationUpdate["failure"]>) {

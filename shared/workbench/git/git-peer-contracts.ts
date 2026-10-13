@@ -10,6 +10,9 @@
  *   and the marker for a receive without a bundle.
  * - GitPeerHavesRequestSchema, GitPeerBundleRequestSchema, GitPeerReceiveQuerySchema, GitPeerIntegrateRequestSchema,
  *   GitPeerHavesResultSchema, GitPeerReceiveResultSchema: daemon HTTP bodies for one app-relayed transfer.
+ * - GIT_PEER_FETCH_REQUEST_METHOD/GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchQuestionSchema/GitPeerFetchQuestion,
+ *   GitPeerFetchOutcomeSchema/GitPeerFetchOutcome, GitPeerFetchRequestNotificationSchema, GitPeerFetchResultNotificationSchema:
+ *   a daemon asking its connected apps to fetch a named peer's branch for `wb git integrate`.
  */
 import { z } from "zod";
 import { DaemonIdSchema, ProjectIdSchema } from "../identity";
@@ -74,7 +77,7 @@ export type GitPeerTransfer = z.infer<typeof GitPeerTransferSchema>;
 export const GitPeerIntegrationResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("current") }).strict(),
   z.object({
-    kind: z.literal("applied"), mode: z.enum(["fastForward", "replay"]), fromSha: sha, toSha: sha,
+    kind: z.literal("applied"), mode: z.enum(["fastForward", "replay", "merge"]), fromSha: sha, toSha: sha,
     warnings: z.array(z.string().max(512)),
   }).strict(),
   z.object({ kind: z.literal("blocked"), reason: failure, conflicts: z.array(z.string()) }).strict(),
@@ -106,3 +109,33 @@ export const GitPeerReceiveQuerySchema = z.object({
 }).strict();
 export const GitPeerReceiveResultSchema = z.object({ tip: sha }).strict();
 export const GitPeerIntegrateRequestSchema = GitPeerHavesRequestSchema;
+
+/**
+ * A daemon asks its connected apps to fetch a named peer's branch into one of its folders, for agents that run
+ * `wb git integrate`. Apps acknowledge at once, then answer with the fetched tip or a failure.
+ */
+export const GIT_PEER_FETCH_REQUEST_METHOD = "workbench/git-peer/fetch";
+export const GIT_PEER_FETCH_RESULT_METHOD = "workbench/git-peer/fetch-result";
+export const GitPeerFetchQuestionSchema = z.object({
+  projectId: ProjectIdSchema,
+  branch: GitBranchNameSchema,
+  /** The peer's hostname, matched case-insensitively. */
+  host: z.string().min(1).max(255),
+  /** A path suffix telling apart several folders on that host. */
+  folder: z.string().min(1).max(4096).nullable(),
+}).strict();
+export type GitPeerFetchQuestion = z.infer<typeof GitPeerFetchQuestionSchema>;
+export const GitPeerFetchOutcomeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("accepted") }).strict(),
+  z.object({ kind: z.literal("fetched"), peer: GitPeerAddressSchema, hostname: z.string(), rootPath: z.string(), tip: sha }).strict(),
+  z.object({ kind: z.literal("failed"), failure: z.string().max(1024) }).strict(),
+]);
+export type GitPeerFetchOutcome = z.infer<typeof GitPeerFetchOutcomeSchema>;
+export const GitPeerFetchRequestNotificationSchema = z.object({
+  method: z.literal(GIT_PEER_FETCH_REQUEST_METHOD),
+  params: z.object({ requestId: z.uuid(), question: GitPeerFetchQuestionSchema }).strict(),
+});
+export const GitPeerFetchResultNotificationSchema = z.object({
+  method: z.literal(GIT_PEER_FETCH_RESULT_METHOD),
+  params: z.object({ requestId: z.uuid(), outcome: GitPeerFetchOutcomeSchema }).strict(),
+});

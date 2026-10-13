@@ -1,12 +1,14 @@
 /*
  * Exports:
  * - default WorkbenchGitIntegration: bring an incoming commit into the current branch by fast-forward or rewriter-aware
- *   replay of local first-parent commits, predicted in memory and published atomically with every Workbench ref.
- * - WorkbenchGitIntegrationPlan: one prepared integration (current, fastForward, replay or blocked) with its counts.
+ *   replay of local first-parent commits, predicted in memory and published atomically with every Workbench ref; also
+ *   reports whether local commits may be replayed and publishes merge plans built elsewhere.
+ * - WorkbenchGitIntegrationPlan: one prepared integration (current, fastForward, replay, merge or blocked) with its counts.
+ * - listDirtyPaths: every dirty or untracked worktree path, rename sources included.
  */
 import GitArcHistoryRewriter, { type GitArcHistoryRewritePlan } from "./GitArcHistoryRewriter";
 import GitArcPublishState from "./GitArcPublishState";
-import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
+import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF, type GitCommitIdentity } from "./WorkbenchGitRepository";
 
 interface PlanFacts {
   ahead: number;
@@ -19,7 +21,8 @@ export type WorkbenchGitIntegrationPlan = PlanFacts & (
   | { kind: "current" }
   | { kind: "blocked"; conflicts: string[]; reason: string | null }
   | {
-    kind: "fastForward" | "replay";
+    /** `merge` adds one merge commit over HEAD, so no existing commit is rewritten. */
+    kind: "fastForward" | "replay" | "merge";
     headRef: string;
     oldHead: string;
     newHead: string;
@@ -27,6 +30,11 @@ export type WorkbenchGitIntegrationPlan = PlanFacts & (
     arcPlan: GitArcHistoryRewritePlan | null;
   }
 );
+
+/** Every dirty or untracked path, rename sources included, in one porcelain read. */
+export async function listDirtyPaths(repository: WorkbenchGitRepository) {
+  return dirtyPaths(await repository.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
+}
 
 function dirtyPaths(status: string) {
   const entries = status.split("\0");
@@ -68,33 +76,16 @@ export default class WorkbenchGitIntegration {
       ({ ...facts, kind: "blocked", conflicts, reason });
     if (!headRef) return blocked([], "Detached HEAD cannot integrate incoming commits.");
 
-    const dirty = dirtyPaths(await repository.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
+    const dirty = await listDirtyPaths(repository);
     const dirtyOverlaps = dirty.filter(local => incomingPaths.some(remote => overlaps(local, remote)));
     if (dirtyOverlaps.length) return blocked([...new Set(dirtyOverlaps)]);
 
     const generation = await repository.readRef(GIT_STATE_GENERATION_REF);
     if (!ahead) return { ...facts, kind: "fastForward", headRef, oldHead, newHead: target, generation, arcPlan: null };
 
-    const base = (await repository.run(["merge-base", oldHead, target])).trim();
-    const local = await repository.listFirstParentRange(`${base}..${oldHead}`);
-    const batch = await repository.readCommits(local);
-    const commits = local.map(commit => {
-      const metadata = batch.commits.get(commit);
-      if (!metadata) throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
-      return { commit, metadata };
-    });
-    if (commits.length !== ahead || commits.some(({ metadata }) => metadata.parents.length > 1)) {
-      return blocked([], "Local commits include merges, so they cannot be replayed onto incoming commits.");
-    }
-    if (commits.some(({ metadata }) => metadata.signed)) {
-      return blocked([], "Local commits are signed, so replaying them would drop their signatures.");
-    }
-    // Every later commit descends from the oldest, so an unpublished oldest commit proves the whole range unpublished.
-    const published = await new GitArcPublishState(repository).classifyCommit(commits[0]!.commit, { refresh: false });
-    if (published.kind === "pushed") {
-      return blocked([], `Local commits are already published on ${published.refs.join(", ")}; replaying would rewrite them.`);
-    }
-    if (published.kind !== "unpushed") return blocked([], published.kind === "unknown" ? published.reason : null);
+    const replayable = await this.replayable(oldHead, target);
+    if (replayable.kind === "blocked") return blocked([], replayable.reason);
+    const commits = replayable.commits;
 
     const branchCommits = new Map<string, string>();
     let parent = target;
@@ -108,9 +99,45 @@ export default class WorkbenchGitIntegration {
     return { ...facts, kind: "replay", headRef, oldHead, newHead: parent, generation, arcPlan };
   }
 
-  /** Publish a prepared fast-forward or replay. Callers hold the worktree Git transition for prepare and apply. */
+  /**
+   * Local first-parent commits since the merge base with `target`, oldest first, when replaying them is safe: no merges,
+   * no signatures and none held by any `refs/remotes` ref (a configured remote or a peer daemon).
+   */
+  async replayable(oldHead: string, target: string): Promise<
+    { kind: "replayable"; base: string; commits: Array<{ commit: string; metadata: GitCommitIdentity }> }
+    | { kind: "blocked"; reason: string | null }
+  > {
+    const repository = this.repository;
+    const base = (await repository.run(["merge-base", oldHead, target])).trim();
+    const local = await repository.listFirstParentRange(`${base}..${oldHead}`);
+    const ahead = Number((await repository.run(["rev-list", "--count", `${base}..${oldHead}`])).trim());
+    const batch = await repository.readCommits(local);
+    const commits = local.map(commit => {
+      const metadata = batch.commits.get(commit);
+      if (!metadata) throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
+      return { commit, metadata };
+    });
+    if (commits.length !== ahead || commits.some(({ metadata }) => metadata.parents.length > 1)) {
+      return { kind: "blocked", reason: "Local commits include merges, so they cannot be replayed onto incoming commits." };
+    }
+    if (commits.some(({ metadata }) => metadata.signed)) {
+      return { kind: "blocked", reason: "Local commits are signed, so replaying them would drop their signatures." };
+    }
+    if (!commits.length) return { kind: "replayable", base, commits };
+    // Every later commit descends from the oldest, so an unpublished oldest commit proves the whole range unpublished.
+    const published = await new GitArcPublishState(repository).classifyCommit(commits[0]!.commit, { refresh: false });
+    if (published.kind === "pushed") {
+      return { kind: "blocked", reason: `Local commits are already published on ${published.refs.join(", ")}; replaying would rewrite them.` };
+    }
+    if (published.kind !== "unpushed") return { kind: "blocked", reason: published.kind === "unknown" ? published.reason : null };
+    return { kind: "replayable", base, commits };
+  }
+
+  /** Publish a prepared fast-forward, replay or merge. Callers hold the worktree Git transition for prepare and apply. */
   async apply(plan: WorkbenchGitIntegrationPlan) {
-    if (plan.kind !== "fastForward" && plan.kind !== "replay") throw new Error("Integration plan has nothing to apply.");
+    if (plan.kind !== "fastForward" && plan.kind !== "replay" && plan.kind !== "merge") {
+      throw new Error("Integration plan has nothing to apply.");
+    }
     const repository = this.repository;
     if (await repository.currentHead() !== plan.oldHead
       || await repository.readRef(GIT_STATE_GENERATION_REF) !== plan.generation) {

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions, plus CLI-only history amend and commit-owner lookup.
+ * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions, plus CLI-only history amend, commit-owner lookup
+ *   and the resumable `wb git integrate` session.
  */
 import { z } from "zod";
 
@@ -158,6 +159,51 @@ const thread = defineWorkbenchAgentCommand({
   },
 });
 
+const integrateStart = defineWorkbenchAgentCommand({
+  description: "Start integrating incoming commits into the checked-out branch, from its upstream or a peer daemon's same-named branch. Replays local commits (or adds one merge commit with --merge) in memory; nothing in the worktree moves until apply.",
+  helpGroups: ["git"],
+  hideFromMcp: true,
+  words: ["git", "integrate", "start"],
+  usage: "wb git integrate start --from upstream|<host>[:<folder>] [--carry-own] [--merge]",
+  inputSchema: z.object({ from: requiredText, carryOwn: z.boolean().default(false), merge: z.boolean().default(false) }).strict(),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--carry-own", "--merge"], values: ["--from"] });
+    return { from: flags.required("--from"), carryOwn: flags.has("--carry-own"), merge: flags.has("--merge") };
+  },
+  buildRequest(input, { callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/git", {
+      action: "integrate", operation: "start", cwd, from: input.from, carryOwn: input.carryOwn, merge: input.merge,
+      threadId: requireCallerThreadId(callerThreadId),
+    });
+  },
+});
+
+function integrateStep(operation: "view" | "resolve" | "wait" | "apply" | "end", description: string) {
+  return defineWorkbenchAgentCommand({
+    description,
+    ...(operation === "view" ? { effects: { readOnly: true } } : {}),
+    helpGroups: ["git"],
+    hideFromMcp: true,
+    words: ["git", "integrate", operation],
+    usage: `wb git integrate ${operation}`,
+    inputSchema: z.object({}).strict(),
+    parseCliArgs(args) {
+      if (args.length) throw new Error(`wb git integrate ${operation} takes no arguments.`);
+      return {};
+    },
+    buildRequest(_input, { callerThreadId, cwd }) {
+      return postWorkbenchAgentCommand("/api/git", {
+        action: "integrate", operation, cwd, threadId: requireCallerThreadId(callerThreadId),
+      });
+    },
+  });
+}
+
 export const WORKBENCH_GIT_COMMANDS = [
-  selectionCommand("add"), selectionCommand("unstage"), commit, amend, thread,
+  selectionCommand("add"), selectionCommand("unstage"), commit, amend, thread, integrateStart,
+  integrateStep("view", "Show this thread's integration: progress, conflicted scratch files, and dirty files that would block apply."),
+  integrateStep("resolve", "Read resolved scratch files back into the conflicted step and continue building the integration."),
+  integrateStep("wait", "Wait until other threads' dirty claimed files no longer block applying this thread's integration."),
+  integrateStep("apply", "Move the branch, index and worktree to the built integration, carrying your dirty claimed files three-way with --carry-own."),
+  integrateStep("end", "Discard this thread's integration session and its scratch files; the branch and worktree stay as they are."),
 ] as const;

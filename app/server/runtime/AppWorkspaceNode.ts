@@ -25,7 +25,15 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const warn = (message: string) => build.get("logger").error("app", message);
     // Browser frames for `wb socket spy`: recorded by the HTTP node's sockets, read through the attached daemon.
     const socketTraffic = new WebSocketTrafficBuffer();
-    const sources = new WorkbenchDaemonSources({ network: build.get("network"), warn, traffic: socketTraffic });
+    // Peer sync needs the sources it answers through, so their peer fetch requests reach it once it exists.
+    let gitPeers: WorkbenchGitPeerSync | null = null;
+    const sources = new WorkbenchDaemonSources({
+      network: build.get("network"), warn, traffic: socketTraffic,
+      answerPeerFetch: async (daemonId, question) => {
+        if (!gitPeers) throw new Error("Peer sync is starting.");
+        return await gitPeers.fetchForAgent(daemonId, question);
+      },
+    });
     const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn, canProject: canAdmit });
     const workspaceThreads = new WorkbenchWorkspaceThreads({ sources, presentation, warn, canProject: canAdmit });
     const workspaceDrafts = new WorkbenchWorkspaceDrafts({
@@ -35,9 +43,9 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       sources, presentation, logger: build.get("logger"), canAdmit,
     });
     const gitPeerRelay = new WorkbenchGitPeerRelay({ sources });
-    const gitPeers = new WorkbenchGitPeerSync({ sources, workspace, relay: gitPeerRelay, warn });
+    const peerSync = gitPeers = new WorkbenchGitPeerSync({ sources, workspace, relay: gitPeerRelay, warn });
     const dispose = async () => {
-      gitPeers.dispose();
+      peerSync.dispose();
       gitPeerRelay.dispose();
       const importing = presentationImport.close();
       const launching = workspaceDrafts.dispose();
@@ -64,7 +72,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         },
         commit: dispose,
       }),
-      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, gitPeers, presentationImport },
+      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, gitPeers: peerSync, presentationImport },
       start: () => {
         workspace.start();
         workspaceThreads.start();

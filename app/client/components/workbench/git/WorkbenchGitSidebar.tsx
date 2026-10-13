@@ -23,7 +23,9 @@ function blockedPrompt(outcome: WorkbenchGitPeerOutcome, branch: string | null) 
     : `Sending \`${branch ?? "the branch"}\` to ${outcome.peer.hostname} (\`${outcome.peer.rootPath}\`)`;
   const conflicts = outcome.conflicts.length
     ? `\n\nConflicting files:\n\n${outcome.conflicts.map(file => `- \`${file}\``).join("\n")}` : "";
-  return `${direction} is blocked: ${outcome.reason}${conflicts}\n\nHelp me bring those commits together, preserving local work on both sides.`;
+  const command = `wb git integrate start --from ${outcome.peer.hostname}:${outcome.peer.rootPath}`;
+  const then = outcome.action === "send" ? ` so this folder holds their commits; Send then fast-forwards ${outcome.peer.hostname}` : "";
+  return `${direction} is blocked: ${outcome.reason}${conflicts}\n\nIntegrate their commits here with \`${command}\` (\`wb git --help\` lists the integrate steps)${then}. Preserve local work on both sides.`;
 }
 
 function GitPeerRows ({ location, onAskAgent }: {

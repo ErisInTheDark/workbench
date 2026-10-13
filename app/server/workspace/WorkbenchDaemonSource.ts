@@ -3,7 +3,8 @@
  * - WorkbenchDaemonSourceDescriptor: verified endpoint and access facts for one durable daemon.
  * - WorkbenchDaemonObservationFact: received data with connection-aware freshness.
  * - WorkbenchDaemonTranscriptEvent: source-owned transcript baseline, stream and freshness delivery.
- * - default WorkbenchDaemonSource: own one daemon connection, shared read interests, operation retention and socket spy answers.
+ * - default WorkbenchDaemonSource: own one daemon connection, shared read interests, operation retention, socket spy answers
+ *   and the daemon's peer fetch requests.
  */
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -25,6 +26,10 @@ import {
   type WorkspaceDaemonFact, type WorkspaceSourcePhase, type WorkspaceTranscriptState,
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { applyObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
+import {
+  GIT_PEER_FETCH_REQUEST_METHOD, GIT_PEER_FETCH_RESULT_METHOD, GitPeerFetchRequestNotificationSchema,
+  type GitPeerFetchOutcome, type GitPeerFetchQuestion,
+} from "workbench-shared/workbench/git/git-peer-contracts";
 import {
   conformWorkbenchTranscriptUpdated, conformWorkbenchTranscriptStreamed, workbenchTranscriptOperations,
   type WorkbenchTranscriptSubscribeParams, type WorkbenchTranscriptUpdatedParams, type WorkbenchTranscriptStreamedParams,
@@ -109,6 +114,8 @@ export default class WorkbenchDaemonSource {
       createSocket?: (url: string) => WebSocket;
       /** Answers `wb socket spy` for this daemon; null withholds browser traffic (e.g. from peer daemons). */
       answerSpy?: (query: WebSocketTrafficQuery) => WebSocketTrafficResult | null;
+      /** Fetches a named peer's branch into one of this daemon's folders for its agents. */
+      answerPeerFetch?: (question: GitPeerFetchQuestion) => Promise<GitPeerFetchOutcome>;
       transcriptReservoir?: WorkbenchTranscriptReservoir;
     },
   ) {
@@ -152,6 +159,23 @@ export default class WorkbenchDaemonSource {
         }
         const result = this.options.answerSpy?.(query.data.params.query);
         if (result) this.socket.send({ method: WEBSOCKET_SPY_RESULT_METHOD, params: { requestId: query.data.params.requestId, result } });
+      }),
+      this.socket.onWorkbenchNotification(notification => {
+        if (notification.method !== GIT_PEER_FETCH_REQUEST_METHOD) return;
+        const request = GitPeerFetchRequestNotificationSchema.safeParse(notification);
+        if (!request.success) {
+          reportClientSchemaError("Rejected daemon peer fetch request", request.error);
+          return;
+        }
+        const { requestId, question } = request.data.params;
+        const answer = (outcome: GitPeerFetchOutcome) => this.socket.send({ method: GIT_PEER_FETCH_RESULT_METHOD, params: { requestId, outcome } });
+        const fetch = this.options.answerPeerFetch;
+        if (!fetch) {
+          answer({ kind: "failed", failure: "This app cannot fetch from peer daemons." });
+          return;
+        }
+        answer({ kind: "accepted" });
+        void fetch(question).then(answer, error => answer({ kind: "failed", failure: bounded(error) }));
       }),
       this.socket.onWorkbenchNotification(notification => {
         if (notification.method === "workbench/transcript/updated" || notification.method === "workbench/transcript/streamed") {
