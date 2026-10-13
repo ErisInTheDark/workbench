@@ -57,9 +57,19 @@ export default class ThreadReadingAnchorController<Anchor> {
   }
 }
 
-/** Children of an in-flow block are ordered by position, so the first one reaching `line` is found by bisection. */
+function flowChildren(parent: Element): Element[] {
+  const children: Element[] = [];
+  for (const child of parent.children) {
+    const style = getComputedStyle(child);
+    if (style.display === "contents") children.push(...flowChildren(child));
+    else if (style.display !== "none" && !/^(?:sticky|fixed|absolute)$/.test(style.position)) children.push(child);
+  }
+  return children;
+}
+
+/** Only flow boxes are ordered: boxless wrappers and positioned siblings invalidate a raw DOM bisection. */
 function firstChildReaching(parent: Element, line: number) {
-  const children = parent.children;
+  const children = flowChildren(parent);
   let low = 0;
   let high = children.length;
   while (low < high) {
@@ -67,13 +77,12 @@ function firstChildReaching(parent: Element, line: number) {
     if (children[middle].getBoundingClientRect().bottom > line) high = middle;
     else low = middle + 1;
   }
-  // Sticky, fixed and absolute boxes sit where scrolling puts them, not in content order: anchor to flow content.
   // Zero-height boxes (turn markers, paging sentinels) sit at insertion points, so content prepended there would land
   // below them and never move the anchor.
   for (let index = low; index < children.length; index += 1) {
     const child = children[index];
     if (child.getBoundingClientRect().height <= 1) continue;
-    if (!/^(?:sticky|fixed|absolute)$/.test(getComputedStyle(child).position)) return child;
+    return child;
   }
   return null;
 }
