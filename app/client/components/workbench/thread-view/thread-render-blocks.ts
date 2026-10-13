@@ -18,16 +18,13 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { findWorkbenchThreadItemTimelineEntry, type WorkbenchThreadItemTimelineEntry } from "workbench-shared/workbench/thread/thread-item-timeline";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
-import { isWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
 import {
   readWorkbenchAgentMessageInput, readWorkbenchAgentMessageItem, type WorkbenchAgentMessage,
 } from "workbench-shared/workbench/thread/thread-agent-message";
 import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-history";
 import { getWorkbenchInputState, type WorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { getWorkbenchThreadItemIdentityKind } from "workbench-shared/workbench/thread/thread-item-identity";
-import {
-  isVisibleWorkbenchAgentMessageText, isWorkbenchHiddenSystemSteerInput,
-} from "workbench-shared/workbench/thread/thread-recovery-message";
+import { isVisibleWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { unwrapWorkbenchSteerDisplayInput } from "workbench-shared/workbench/thread/thread-steer-display";
 import { readComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
@@ -447,8 +444,7 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (item.type === "plan") continue;
     if (hidden.itemIds?.has(item.id)) continue;
     if (isAlreadyMatchingTaskTitle(item, fallbackCwd)) continue;
-    if (item.type === "userMessage" && (isWorkbenchHiddenSystemSteerInput(item.content)
-      || (item.content.length > 0 && item.content.every(isWorkbenchActivatedSkillsInput)))) continue;
+    if (item.type === "userMessage" && !unwrapWorkbenchSteerDisplayInput(item.content).length) continue;
     const text = item.type === "agentMessage" ? item.text
       : item.type === "reasoning" ? [...item.summary, ...item.content].join("\n") : null;
     const normalized = text?.replace(/\s+/gu, " ").replace(/[^\p{L}\p{N}\s#`./:-]+/gu, "").trim().toLowerCase();
@@ -457,7 +453,6 @@ export function buildRenderableBlocks(items: ThreadItem[], hidden: HiddenThreadI
     if (key) narrativeKeys.add(key);
     if (item.type === "contextCompaction") compacted = true;
     if (item.type === "agentMessage" && (!isVisibleWorkbenchAgentMessageText(item.text) || hidden.controlAgentMessages)) continue;
-    if (item.type === "userMessage" && hidden.controlUserMessages && isWorkbenchHiddenSystemSteerInput(item.content)) continue;
     const incoming = readIncomingAgentMessageItem(item);
     if (incoming) {
       flush();

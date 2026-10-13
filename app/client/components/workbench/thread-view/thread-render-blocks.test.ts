@@ -6,6 +6,8 @@ import test from "node:test";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
+import { createWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
   buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
@@ -42,6 +44,28 @@ function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted"
   return withWorkbenchInputState(user(id), { kind: "steer", status });
 }
 const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
+
+test("questionnaire and skill transport with no display input creates no render block", () => {
+  const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
+  const questionnaireResponse = createWorkbenchQuestionnaireResponseInput({
+    answers: { route: { answers: ["/auto"] } },
+  });
+  const transport: Extract<ThreadItem, { type: "userMessage" }> = {
+    clientId: null,
+    content: [...questionnaireResponse, activated],
+    id: "questionnaire-skill",
+    type: "userMessage",
+  };
+
+  assert.deepEqual(buildRenderableBlocks([transport]), []);
+  assert.deepEqual(buildRenderableBlocks([{ ...transport, content: [] }]), []);
+  assert.deepEqual(
+    buildRenderableBlocks([{ ...transport, content: [...transport.content, { text: "visible", text_elements: [], type: "text" }] }])
+      .flatMap(getRenderableBlockItems)
+      .map(({ id }) => id),
+    [transport.id],
+  );
+});
 
 test("native file attempts share file sequences without merging identities or crossing narrative", () => {
   const edit = (id: string): Extract<ThreadItem, { type: "dynamicToolCall" }> => ({

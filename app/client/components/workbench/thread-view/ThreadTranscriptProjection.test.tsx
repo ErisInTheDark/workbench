@@ -116,7 +116,7 @@ function renderItems(
   );
 }
 
-test("standalone skill transport adds no display while visible and missing user content survive", () => {
+test("standalone skill and empty transport add no display while visible content survives", () => {
   const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
   const message = (id: string, content: Extract<ThreadItem, { type: "userMessage" }>["content"]): ThreadItem => ({
     clientId: null, content, id, type: "userMessage",
@@ -143,7 +143,7 @@ test("standalone skill transport adds no display while visible and missing user 
     }
     const empty = message("empty", []);
     const visible = message("visible", visibleParts[0]);
-    assert.notEqual(render([visible, empty]), render([visible]), "missing content is not hidden transport");
+    assert.equal(render([visible, empty]), render([visible]), "empty provider input must not add display");
   }
 });
 

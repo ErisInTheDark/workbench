@@ -36,7 +36,7 @@ export function renderUserInputMarkdown(input: readonly UserInput[]) {
     }
   }).filter(Boolean);
 
-  return parts.length ? parts.join("\n\n") : "No user content captured.";
+  return parts.join("\n\n");
 }
 
 function renderQuestionnaireMarkdown(piece: Extract<WorkbenchThreadContextPiece, { kind: "questionnaire" }>) {

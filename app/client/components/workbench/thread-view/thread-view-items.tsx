@@ -1105,6 +1105,7 @@ function ThreadUserMessageItem ({
   const { content: displayContent, references } = splitLeadingComposerReferences(unwrapWorkbenchSteerDisplayInput(item.content));
   // `=====` lines split one stored message into several bubbles; the agent still receives the whole message.
   const bubbles = splitUserMessageBubbles(displayContent);
+  if (!bubbles.length && !references.length) return null;
   return (
     <section
       className="flex flex-col items-end gap-2 py-2"
@@ -1126,9 +1127,7 @@ function ThreadUserMessageItem ({
                 projectRootPath={projectRootPath}
                 workspaceRoots={workspaceRoots}
               />
-            )) : references.length ? null : (
-              <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">No user content captured.</p>
-            )}
+            )) : null}
           </ThreadSteerDecoration>
           <ThreadBubbleCopyButton
             actions={steerState === "unsent" && bubbleIndex === bubbles.length - 1
