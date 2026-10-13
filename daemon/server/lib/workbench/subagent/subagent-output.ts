@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection.
- * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns.
+ * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with any failure or interruption.
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output.
  * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and settlement receipts.
  */
@@ -35,12 +35,21 @@ export function renderSubagentQuestionnaireOutput(thread: { turns: Turn[] }, req
   return [trailingCommentary(thread), renderQuestion(request)].filter(Boolean).join("\n\n");
 }
 
+function renderTurnEnding(turn: Turn | undefined) {
+  if (turn?.status === "failed") {
+    const message = turn.error?.message.trim();
+    return message ? `Turn failed: ${message}` : "Turn failed without a provider error message.";
+  }
+  return turn?.status === "interrupted" ? "Turn was interrupted." : "";
+}
+
 export function renderSubagentTurnOutput(thread: { turns: Turn[] }) {
-  const messages = (thread.turns.at(-1)?.items ?? []).filter((item): item is Extract<typeof item, { type: "agentMessage" }> => (
+  const turn = thread.turns.at(-1);
+  const messages = (turn?.items ?? []).filter((item): item is Extract<typeof item, { type: "agentMessage" }> => (
     item.type === "agentMessage" && Boolean(item.text.trim())
   ));
   const finalMessage = messages.slice().reverse().find((item) => item.phase === "final_answer");
-  return (finalMessage ?? messages.at(-1))?.text.trim() ?? "";
+  return [renderTurnEnding(turn), (finalMessage ?? messages.at(-1))?.text.trim() ?? ""].filter(Boolean).join("\n\n");
 }
 
 export function renderSubagentWaitResultOutput({

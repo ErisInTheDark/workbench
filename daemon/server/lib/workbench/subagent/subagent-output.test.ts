@@ -32,10 +32,11 @@ const questionnaire: WorkbenchUserInputRequest = {
   title: "Direction needed",
 };
 
-function thread(items: Turn["items"]): { turns: Turn[] } {
+function thread(items: Turn["items"], status: Turn["status"] = "completed", errorMessage: string | null = null): { turns: Turn[] } {
   return { turns: [{
-    id: "turn", items, status: "completed", itemsView: "full",
-    error: null, startedAt: null, completedAt: null, durationMs: null,
+    id: "turn", items, status, itemsView: "full",
+    error: errorMessage ? { additionalDetails: null, codexErrorInfo: null, misalignment: null, message: errorMessage } : null,
+    startedAt: null, completedAt: null, durationMs: null,
   }] };
 }
 
@@ -60,6 +61,14 @@ test("renders final output and creates an explicitly empty response", () => {
   assert.deepEqual(createEmptySubagentQuestionnaireResponse(questionnaire), {
     answers: { direction: { answers: [] } },
   });
+});
+
+test("reports failed and interrupted turns instead of empty output", () => {
+  const partial = { id: "partial", memoryCitation: null, delivery: null, questions: null, phase: "commentary", text: "Halfway", type: "agentMessage" } as const;
+  assert.equal(renderSubagentTurnOutput(thread([], "failed", "Selected model is at capacity.")), "Turn failed: Selected model is at capacity.");
+  assert.equal(renderSubagentTurnOutput(thread([partial], "failed", "Selected model is at capacity.")), "Turn failed: Selected model is at capacity.\n\nHalfway");
+  assert.equal(renderSubagentTurnOutput(thread([], "failed")), "Turn failed without a provider error message.");
+  assert.equal(renderSubagentTurnOutput(thread([partial], "interrupted")), "Turn was interrupted.\n\nHalfway");
 });
 
 test("identifies multiplexed wait results while preserving singular output", () => {
