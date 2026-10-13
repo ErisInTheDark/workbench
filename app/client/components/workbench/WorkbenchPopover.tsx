@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchPopover: own non-modal anchored popup positioning, dismissal and focus restoration.
+ * - default WorkbenchPopover: own non-modal anchored popup positioning, portal-event isolation, dismissal and focus restoration.
  */
 "use client";
 
@@ -75,6 +75,17 @@ export default function WorkbenchPopover({
       tabIndex={-1}
       style={position ?? { visibility: "hidden" }}
       className="fixed z-50 grid min-h-0 grid-rows-[auto minmax(0, 1fr)] overflow-hidden rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass text-text shadow-float backdrop-blur-xl focus:outline-none"
+      onClick={event => event.stopPropagation()}
+      onContextMenu={event => event.stopPropagation()}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        onClose();
+      }}
+      onKeyUp={event => event.stopPropagation()}
+      onPointerDown={event => event.stopPropagation()}
+      onPointerUp={event => event.stopPropagation()}
     >
       {children}
     </div>,

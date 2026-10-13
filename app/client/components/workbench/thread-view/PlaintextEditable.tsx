@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default PlaintextEditable: plaintext input with autofocus, overlays and mention suggestions.
+ * - default PlaintextEditable: plaintext input with autofocus, overlays and portal-isolated mention suggestions.
  * - PlaintextEditableHandle: focus the editor at a model-text offset.
  * - PlaintextHighlight: one overlay range and its classes.
  * - threadPlaintextEditableClassName: shared Tailwind styling for thread text editors.
@@ -170,6 +170,10 @@ function InlineMentionSuggestionsPopup ({
     <div
       ref={containerRef}
       className="scrollbar-hover-reveal grid grid-cols-[auto 1fr] max-h-56 overflow-y-auto rounded-[0.85rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color-mix(in srgb, var(--bg) 96%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 96%, var(--app-bg-solid))] p-1.5 shadow-lg backdrop-blur"
+      onClick={event => event.stopPropagation()}
+      onContextMenu={event => event.stopPropagation()}
+      onMouseDown={event => event.stopPropagation()}
+      onPointerDown={event => event.stopPropagation()}
       role="listbox"
     >
       {suggestions.map((suggestion, index) => {

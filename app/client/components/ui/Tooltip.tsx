@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default Tooltip: clone a trigger without wrapper DOM and own a delayed, surface-styleable portal tooltip, opening right of or above it.
+ * - default Tooltip: clone a trigger without wrapper DOM and own a delayed, surface-styleable portal tooltip, opening right of or above it while isolating interactive surface events from the trigger tree.
  *   Tooltips on triggers nested inside another trigger stack in the outermost tooltip's panel; tooltips on triggers
  *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in tooltip-layers.
  */
@@ -292,7 +292,19 @@ export default function Tooltip({
   );
 
   const section = (
-    <div className={nestedIn ? `mt-2 border-t border-fg/10 pt-2 ${interactive ? "pointer-events-auto" : ""}` : undefined} ref={nestedIn ? surfaceRef : undefined}>
+    <div
+      className={nestedIn ? `mt-2 border-t border-fg/10 pt-2 ${interactive ? "pointer-events-auto" : ""}` : undefined}
+      onClick={interactive ? event => event.stopPropagation() : undefined}
+      onContextMenu={interactive ? event => event.stopPropagation() : undefined}
+      onKeyDown={interactive ? event => {
+        event.stopPropagation();
+        if (event.key === "Escape") hide();
+      } : undefined}
+      onKeyUp={interactive ? event => event.stopPropagation() : undefined}
+      onPointerDown={interactive ? event => event.stopPropagation() : undefined}
+      onPointerUp={interactive ? event => event.stopPropagation() : undefined}
+      ref={nestedIn ? surfaceRef : undefined}
+    >
       <TooltipNestingContext.Provider value={null}>
         <TooltipLayerContext.Provider value={{ layer: layer + 1, owner: id }}>
           {content}

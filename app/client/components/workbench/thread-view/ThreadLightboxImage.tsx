@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadLightboxImage: render a thumbnail button and document-level image lightbox. Keywords: thread, image, lightbox, portal.
+ * - default ThreadLightboxImage: render a thumbnail button and portal-isolated document-level image lightbox. Keywords: thread, image, lightbox, portal.
  * - Local helpers: class joining and Escape-key lightbox close handling. Keywords: image preview, modal, document body.
  */
 "use client";
@@ -46,9 +46,13 @@ export default function ThreadLightboxImage({
   const lightbox = isLightboxOpen ? (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--bg)_74%,transparent)] p-6 backdrop-blur-sm"
-      onClick={() => {
+      onClick={(event) => {
+        event.stopPropagation();
         setIsLightboxOpen(false);
       }}
+      onContextMenu={event => event.stopPropagation()}
+      onPointerDown={event => event.stopPropagation()}
+      onPointerUp={event => event.stopPropagation()}
     >
       <img
         src={src}
