@@ -277,36 +277,6 @@ function createProjectFileLinkRoots (
   return roots;
 }
 
-function formatQuickOpenTimestamp (updatedAt: string | null | undefined) {
-  if (!updatedAt) {
-    return "Unknown time";
-  }
-
-  const date = new Date(updatedAt);
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown time";
-  }
-
-  return date.toLocaleString([], {
-    day: "numeric",
-    hour: "2-digit",
-    hour12: false,
-    minute: "2-digit",
-    month: "short",
-  });
-}
-
-function formatQuickOpenChangeSummary (additions: number, deletions: number) {
-  const parts: string[] = [];
-  if (additions) {
-    parts.push(`+${additions}`);
-  }
-  if (deletions) {
-    parts.push(`-${deletions}`);
-  }
-  return parts.join(" ");
-}
-
 function formatWorkbenchPageTitle (projectName: string | null | undefined) {
   const normalizedProjectName = projectName?.trim();
   return normalizedProjectName ? `${normalizedProjectName} / Workbench` : "Workbench";
@@ -509,7 +479,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
   const [createDialogError, setCreateDialogError] = useState("");
-  const [quickOpenUpdatedAtByPath, setQuickOpenUpdatedAtByPath] = useState<Record<string, string>>({});
   const [workspaceController] = useState(() => new WorkbenchWorkspaceController({
     createDraft: () => {
       throw new Error("Workspace draft creation is not connected.");
@@ -1426,12 +1395,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [controls, openFileFromExplorer, openThreadFromExplorer]);
 
   const createDialogParentLabel = createDialogParentPath || "project";
-  const quickOpenPaths = Array.from(new Set([
-    ...explorer.locallyModifiedPaths,
-    ...Object.keys(explorer.changes),
-  ]))
-    .filter((path) => isWorkbenchOpenableFile(path))
-    .slice(0, 8);
   const canOpenFileFromExplorer = useCallback((path: string) => (
     resolvedSettings.fileOpenBehavior !== "workbench" || isWorkbenchOpenableFile(path)
   ), [resolvedSettings.fileOpenBehavior]);
@@ -1454,10 +1417,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : null;
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
-  const sidebarCreateProjectId = workbenchClient.mounted?.presentationClient
-    ? (selectedLogicalProject ?? selectedLogicalProjects[0])?.locations
-      .find(location => location.project)?.target.projectId ?? browseLocation?.projectId ?? ""
-    : selectedPhysicalProjects[0]?.id || "";
   const showFullBleedMainView = showMosaicView;
   const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
     if (showMosaicView || !controls) return;
@@ -2087,41 +2046,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [activeFilePath, applyMobileShellHeaderEvent, isDirectThreadSurface, isMobile, mobileShellHeaderVisibility,
     selectedThreadIdForView, shouldShowShellHeader, threadSurfaceKey]);
 
-  useEffect(() => {
-    if (!showEmptyState || !quickOpenPaths.length) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const projectId = explorer.currentProjectId || route.projectId;
-    void Promise.all(quickOpenPaths.map(async (path) => {
-      if (!controls) return null;
-      const payload = await controls.daemon.projects.files.read({ path, projectId }).catch(() => null);
-      if (!payload) return null;
-      return [path, payload.updatedAt] as const;
-    })).then((entries) => {
-      if (cancelled) {
-        return;
-      }
-
-      setQuickOpenUpdatedAtByPath((current) => {
-        const next = { ...current };
-        for (const entry of entries) {
-          if (!entry) {
-            continue;
-          }
-          next[entry[0]] = entry[1];
-        }
-        return next;
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [controls, explorer.currentProjectId, quickOpenPaths, route.projectId, showEmptyState]);
-
   const handleHarnessChange = (nextHarness: WorkbenchHarness,
     location?: ProjectLocationReference | null) => {
     if (!location && nextHarness === harness && currentThread?.harness === nextHarness) {
@@ -2672,65 +2596,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </div>
                 ) : showEmptyState && !shouldRenderMainLayout ? (
                   <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="flex w-full max-w-[42rem] flex-col gap-8">
-                      {!selectionProjectIds.length ? (
-                        <p className="m-0 px-4 text-[0.9rem] text-fg/muted">
-                          {route.selectedProjectIds === null
-                            ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
-                            : "No projects selected. Select a project to see its threads."}
-                        </p>
-                      ) : <button
-                        type="button"
-                        className={`${workbenchOptionRowClassName} ${workbenchOptionHoverClassName} w-fit border-transparent px-4 py-2 text-[0.84rem] text-text md:py-2`}
-                        disabled={!controls || !sidebarCreateProjectId
-                          || Boolean(workbenchClient.mounted?.presentationClient && !selectedLogicalProjects.length && !browseLocation)}
-                        onClick={() => {
-                          if (!controls || !sidebarCreateProjectId) return;
-                          createThreadFromSidebar(sidebarCreateProjectId);
-                        }}
-                      >
-                        <span className="inline-flex size-4 items-center justify-center text-[1.05em] leading-none">+</span>
-                        <span>{workbenchClient.mounted?.presentationClient && !selectedLogicalProjects.length
-                          ? logicalProjects?.length ? "Project folder unavailable"
-                            : "Waiting for project identities" : "Create new thread"}</span>
-                      </button>}
-                      {quickOpenPaths.length ? (
-                        <div className="space-y-2">
-                          {quickOpenPaths.map((path) => (
-                            <button
-                              key={path}
-                              type="button"
-                              className="flex w-full items-start justify-between gap-4 rounded-[1.15rem] px-4 py-3 text-left transition hover:bg-[color-mix(in srgb, var(--text) 4%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-soft"
-                              onClick={() => {
-                                void openFileFromExplorer(path);
-                              }}
-                              title={path}
-                            >
-                              <span className="min-w-0 space-y-1">
-                                <span className="inline-flex min-w-0 items-center gap-2">
-                                  <span className="block truncate text-[0.95rem] font-medium text-text">{path}</span>
-                                  {modifiedPaths.has(path) ? (
-                                    <span
-                                      aria-hidden="true"
-                                      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#d0ad12]"
-                                    />
-                                  ) : null}
-                                </span>
-                                <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.78rem] text-fg/muted">
-                                  <span>{formatQuickOpenTimestamp(quickOpenUpdatedAtByPath[path])}</span>
-                                  {explorer.changes[path] ? (
-                                    <span>{formatQuickOpenChangeSummary(explorer.changes[path].additions, explorer.changes[path].deletions)}</span>
-                                  ) : null}
-                                  {modifiedPaths.has(path) ? (
-                                    <span>Draft</span>
-                                  ) : null}
-                                </span>
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
+                    {!selectionProjectIds.length ? (
+                      <p className="m-0 w-full max-w-[42rem] px-4 text-[0.9rem] text-fg/muted">
+                        {route.selectedProjectIds === null
+                          ? dynamicSelectionPending ? "Loading projects..." : "No projects have unarchived threads."
+                          : "No projects selected. Select a project to see its threads."}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
                 {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (

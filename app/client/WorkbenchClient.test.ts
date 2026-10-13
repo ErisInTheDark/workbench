@@ -6,7 +6,7 @@ import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/wor
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -23,6 +23,18 @@ const noLayout = {
   revision: 0, daemons: [], projects: [], locations: [], defaults: [], drafts: [],
   folders: [], members: [], divergences: [], sourceMappings: [],
 } as unknown as PresentationSnapshot;
+type ObservedSocket = Awaited<ReturnType<ReturnType<typeof createWorkspaceClientFixture>["open"]>>;
+async function providePresentation(socket: ObservedSocket, data: PresentationSnapshot = noLayout) {
+  const presentation = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "presentation");
+  await socket.observation(presentation, { kind: "presentation", phase: "current", failure: null, data });
+}
+async function openProjectHome(client: ReturnType<typeof WorkbenchClient>, route: WorkbenchRoute) {
+  const result = await client.controls.applyRoute(route);
+  assert.equal(result.ok, true);
+  assert.ok(result.canonicalRoute);
+  return client.controls.applyRoute(result.canonicalRoute);
+}
 /** The app server's membership for these rows, as the browser receives it. */
 const membership = (rows: WorkbenchLogicalThreadRow[]) => ({ ...projectWorkbenchThreadMembership(rows, noLayout), projects: [] });
 const memberTitles = (client: ReturnType<typeof WorkbenchClient>) =>
@@ -50,18 +62,111 @@ function facts(registered: boolean): WorkspaceProjects {
   };
 }
 
-test("empty and multi-project list routes do not invent a browsed folder", async context => {
+test("default and empty project list routes do not invent a browsed folder", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();
   const client = WorkbenchClient({ workspace: fixture.workspace });
   context.after(() => { client.dispose(); fixture.dispose(); });
-  for (const selected of [[], [logicalId, "another-project"]]) {
+  for (const selected of [null, []] as const) {
     const result = await client.controls.applyRoute(createProjectSelectionRoute(selected));
     assert.equal(result.ok, true);
+    assert.equal(result.canonicalRoute, undefined);
     assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, selected);
   }
   assert.equal(socket.sent.some(item => item.method === "workspace/observe"
     && item.params.query.kind === "projectTree"), false);
+});
+
+test("project home opens a new thread at the latest accepted selected project folder", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const secondId = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  const secondProject = {
+    ...project,
+    id: ProjectIdSchema.parse("local://C:/git/app/other"),
+    name: "other",
+    relativePath: "other",
+    rootPath: "C:/git/app/other",
+  };
+  const latestProject = {
+    ...secondProject,
+    id: ProjectIdSchema.parse("local://C:/git/app/other-worktree"),
+    relativePath: "other-worktree",
+    rootPath: "C:/git/app/other-worktree",
+  };
+  const secondLocation = { daemonId, projectId: secondProject.id };
+  const latestLocation = { daemonId, projectId: latestProject.id };
+  const data = facts(true);
+  data.projects.push({
+    id: secondId, label: "other", matchKey: "local://C:/git/app/other",
+    locations: [
+      { target: secondLocation, daemonId, hostname: "local", name: "other",
+        rootPath: secondProject.rootPath, project: secondProject },
+      { target: latestLocation, daemonId, hostname: "local", name: "other-worktree",
+        rootPath: latestProject.rootPath, project: latestProject },
+    ],
+  });
+  const projects = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "projects");
+  await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  const presentation = await socket.request("workspace/observe", 0,
+    request => request.params.query.kind === "presentation");
+  await socket.observation(presentation, { kind: "presentation", phase: "current", failure: null, data: {
+    revision: 3,
+    daemons: [{ id: daemonId, hostname: "local" }],
+    projects: [
+      { id: logicalId, matchKey: "local://C:/git/app/bak", label: "bak" },
+      { id: secondId, matchKey: "local://C:/git/app/other", label: "other" },
+    ],
+    locations: [
+      { target: location, logicalProjectId: logicalId, identityKey: "local://C:/git/app/bak",
+        name: "bak", rootPath: project.rootPath },
+      { target: secondLocation, logicalProjectId: secondId, identityKey: "local://C:/git/app/other",
+        name: "other", rootPath: secondProject.rootPath },
+      { target: latestLocation, logicalProjectId: secondId, identityKey: "local://C:/git/app/other",
+        name: "other-worktree", rootPath: latestProject.rootPath },
+    ],
+    defaults: [], folders: [], members: [], divergences: [], sourceMappings: [],
+    drafts: [{
+      id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000001"),
+      logicalProjectId: secondId,
+      target: latestLocation,
+      prompt: "",
+      updatedAt: 3,
+      revision: 3,
+      phase: "accepted",
+      pinned: false,
+      snoozed: false,
+      launchId: null,
+      acceptedThreadId: "latest",
+      attachments: [],
+      selection: { kind: "custom", settings: {
+        agentPath: null,
+        agentSource: null,
+        harness: "codex",
+        model: "model",
+        reasoningEffort: null,
+        serviceTier: null,
+        contextWindowTokens: null,
+      } },
+    }],
+  } });
+
+  const selected = [logicalId, secondId];
+  const result = await client.controls.applyRoute(createProjectSelectionRoute(selected));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.canonicalRoute?.selectedProjectIds, selected);
+  assert.equal(result.canonicalRoute?.threadTarget?.kind, "new");
+  assert.equal(result.canonicalRoute?.logical?.threadOwnerProjectId, secondId);
+  assert.deepEqual(result.canonicalRoute?.logical?.location, latestLocation);
+
+  assert.ok(result.canonicalRoute);
+  assert.equal((await client.controls.applyRoute(result.canonicalRoute)).ok, true);
+  const draft = client.threadRuntime.getSnapshot().currentThread;
+  assert.ok(draft?.isDraft);
+  assert.deepEqual(client.draftLocationFor(draft.id), latestLocation);
 });
 
 test("settings keeps zero, one or many selected logical projects without browsing a physical folder", async context => {
@@ -181,8 +286,9 @@ test("project row observations hand off without blanking visible threads", async
   const projects = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
   await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data });
+  await providePresentation(socket);
 
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId))).ok, true);
   const firstQuery = await socket.request("workspace/observe", 0, request =>
     request.params.query.kind === "projectThreads" && request.params.query.projects?.length === 1);
   const firstRow = {
@@ -271,7 +377,8 @@ test("an older app broadens row demand only when project groups are unavailable"
   const projects = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projects");
   await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  await providePresentation(socket);
+  assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId))).ok, true);
   const focused = await socket.request("workspace/observe", 0,
     request => request.params.query.kind === "projectThreads"
       && request.params.query.projects?.length === 1);
@@ -359,7 +466,10 @@ test("observed unsettled opencode threads warm their source but settled and code
   context.after(() => { client.dispose(); fixture.dispose(); });
   const projects = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projects");
   await socket.observation(projects, { kind: "projects", phase: "current", failure: null, data: facts(true) });
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  await providePresentation(socket);
+  const home = await client.controls.applyRoute(createLogicalProjectRoute(logicalId));
+  assert.equal(home.ok, true);
+  assert.ok(home.canonicalRoute);
   const rows = await socket.request("workspace/observe", 0, request => request.params.query.kind === "projectThreads"
     && request.params.query.projects?.length === 1);
   const base = {
@@ -410,7 +520,6 @@ test("a registered offline folder can open a draft without claiming live explore
   assert.deepEqual(tree.params.query, { kind: "projectTree", location });
 });
 
-type ObservedSocket = Awaited<ReturnType<ReturnType<typeof createWorkspaceClientFixture>["open"]>>;
 const browsedProjectIds = (socket: ObservedSocket) => socket.sent.flatMap(item =>
   item.method === "workspace/observe" && item.params.query.kind === "projectTree" ? [item.params.query.location.projectId] : []);
 
@@ -429,12 +538,13 @@ test("a multi-folder project browses its own folder, never a sibling worktree", 
     displayPath: "+convex-lab", project: { ...project, id: other.projectId, name: "convex-lab" },
   });
   await socket.observation(query, { kind: "projects", phase: "current", failure: null, data });
+  await providePresentation(socket);
 
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId))).ok, true);
+  assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId))).ok, true);
   assert.deepEqual(new Set(browsedProjectIds(socket)), new Set([location.projectId]),
     "An omitted folder address implies the project's own folder, never a sibling worktree");
 
-  assert.equal((await client.controls.applyRoute(createLogicalProjectRoute(logicalId, location))).ok, true);
+  assert.equal((await openProjectHome(client, createLogicalProjectRoute(logicalId, location))).ok, true);
   assert.ok(browsedProjectIds(socket).includes(location.projectId));
 });
 

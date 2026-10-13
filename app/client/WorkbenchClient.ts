@@ -18,7 +18,7 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import {
   createHomeRoute, createLogicalThreadRoute, createLogicalExistingThreadRoute,
   createLogicalProjectRoute, getWorkbenchMosaicThreadRootIds,
-  getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, withProjectSelection, type WorkbenchRoute,
+  createThreadRoute, getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import {
   WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema,
@@ -30,7 +30,8 @@ import type {
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import { WorkspaceThreadActionResultSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import {
-  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, projectPresentationDraftRow, type WorkbenchProjectedThreadRow,
+  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, preferredSelectedLaunchTarget,
+  projectPresentationDraftRow, type WorkbenchProjectedThreadRow,
 } from "workbench-shared/workbench/project/workbench-project-projection";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
@@ -661,7 +662,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     // The url folder owns the browse scope; the draft channel keeps its own folder intent.
     const browseFolder = projectNavigator.folderForRoute(route) ?? null;
     selectRowsForRoute(route);
-    if (route.view === "home" || route.view === "project" && route.selectedProjectIds?.length !== 1
+    if (route.view === "home" || route.view === "project" && !route.selectedProjectIds?.length
       || route.view === "git" && (route.logical || !route.projectId || route.folderAddress?.length)
       || route.view === "settings"
       || route.view === "stats"
@@ -674,6 +675,42 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     }
     const facts = projectFacts();
     if (!facts) return { ok: false, pending: true };
+    if (route.view === "project" && route.selectedProjectIds?.length) {
+      const presentationState = presentation.snapshot();
+      if (!presentationState.data) {
+        return presentationState.phase === "failed"
+          ? { ok: false, error: presentationState.error ?? "Project presentation is unavailable." }
+          : { ok: false, pending: true };
+      }
+      const preferred = preferredSelectedLaunchTarget(
+        facts.projects,
+        route.selectedProjectIds,
+        presentationState.data,
+      );
+      let canonicalRoute: WorkbenchRoute | null = null;
+      if (preferred) {
+        canonicalRoute = withProjectSelection(createLogicalThreadRoute(
+          route.selectedProjectIds.length === 1 ? preferred.project.id : null,
+          preferred.project.id,
+          preferred.location,
+          { kind: "new" },
+        ), route.selectedProjectIds);
+      } else if (route.projectId) {
+        canonicalRoute = createThreadRoute(route.projectId, { kind: "new" });
+      }
+      if (canonicalRoute) {
+        return {
+          ok: true,
+          canonicalRoute: route.folderAddress === undefined ? canonicalRoute : {
+            ...canonicalRoute,
+            folderAddress: route.folderAddress && [...route.folderAddress],
+          },
+        };
+      }
+      return facts.catalogues.some(item => item.phase === "pending" || item.phase === "stale")
+        ? { ok: false, pending: true }
+        : { ok: false, error: "No available folder belongs to the selected projects." };
+    }
     const logical = facts.projects.find(item => item.id === (logicalId ?? route.logical?.threadOwnerProjectId));
     const saved = target?.kind === "draft" ? presentation.draft(target.draftId) : null;
     const draftRouteTarget = route.view === "thread" && (target?.kind === "new" || target?.kind === "draft");
