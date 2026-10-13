@@ -38,7 +38,7 @@ const expandedClassName = `
   [transition-behavior: allow-discrete]
   stuck:grid-cols-[auto minmax(0, 1fr)]
   group-data-[collapsed=true]/composer:stuck:(
-    absolute inset-3 invisible opacity-0 pointer-events-none
+    absolute inset-3 overflow-clip invisible opacity-0 pointer-events-none
     transform-[translateY(-0.25rem) scale(0.985)]
     [transition:
       opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
@@ -93,6 +93,7 @@ function StickyComposerSurface({
   const flowReserverRef = useRef<HTMLDivElement>(null);
   const originMarkerRef = useRef<HTMLSpanElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const bottomReserveRef = useRef<HTMLDivElement>(null);
   const hasBottomUi = Boolean(bottomUi);
@@ -111,9 +112,12 @@ function StickyComposerSurface({
     const flowReserver = flowReserverRef.current;
     const originMarker = originMarkerRef.current;
     const shell = shellRef.current;
+    const surface = surfaceRef.current;
     const viewport = getViewport ? getViewport() : threadScrollViewport.getViewport();
-    if (!flowReserver || !originMarker || !shell || !viewport) return;
+    if (!flowReserver || !originMarker || !shell || !surface || !viewport) return;
 
+    // Pinned height observed for a given natural height; predicts where re-pinning would put the shell's top.
+    let pinned: { height: number; naturalHeight: number } | null = null;
     const syncFlowReserver = () => {
       const bottom = bottomRef.current;
       const bottomReserve = bottomReserveRef.current;
@@ -122,18 +126,26 @@ function StickyComposerSurface({
         && viewport.dataset.threadScrollProximity === "near");
       if (bottom) bottom.dataset.docked = String(docked);
       const shellStyle = getComputedStyle(shell);
-      const marginBlockEnd = Number.parseFloat(shellStyle.marginBottom);
-      const shellRect = shell.getBoundingClientRect();
-      const stuck = !docked && shellRect.bottom + (bottom ? 0 : marginBlockEnd)
-        < flowReserver.getBoundingClientRect().bottom - 0.5;
-      const stuckValue = stuck ? "true" : "false";
-      if (shell.dataset.stickyStuck !== stuckValue) {
-        shell.dataset.stickyStuck = stuckValue;
-      }
-      if (!stuck) {
-        const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
-        flowReserver.style.height = `${shellRect.height + marginBlockStart + (bottom ? 0 : marginBlockEnd)}px`;
-      }
+      const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
+      const flowMarginEnd = bottom ? 0 : Number.parseFloat(shellStyle.marginBottom);
+      const reserveRect = flowReserver.getBoundingClientRect();
+      const naturalTop = reserveRect.top + marginBlockStart;
+      const naturalHeight = reserveRect.height - marginBlockStart - flowMarginEnd;
+      const viewportBottom = viewport.getBoundingClientRect().bottom;
+      const pinLine = viewportBottom - Number.parseFloat(shellStyle.getPropertyValue("--sticky-composer-inset"));
+      const pinnedHeight = pinned?.naturalHeight === naturalHeight ? pinned.height : naturalHeight;
+      // Hand over at the top edge, so pinned and natural shells meet without a jump. A collapsed bar returns only once its slot is off screen.
+      const stuck = !docked && (shell.dataset.stickyStuck === "true"
+        ? naturalTop > shell.getBoundingClientRect().top
+        : surface.dataset.collapsed === "true"
+          ? naturalTop >= viewportBottom
+          : naturalTop + pinnedHeight > pinLine);
+      shell.dataset.stickyStuck = String(stuck);
+      shell.dataset.stickyNatural = String(!stuck && !docked);
+      // Stuck styles cap or collapse the shell, so the reserve measures only the unstuck box.
+      const height = shell.getBoundingClientRect().height;
+      if (stuck) pinned = { height, naturalHeight };
+      else flowReserver.style.height = `${height + marginBlockStart + flowMarginEnd}px`;
       if (bottom && bottomReserve) {
         const rect = bottom.getBoundingClientRect();
         const footer = rect.bottom - flowReserver.getBoundingClientRect().bottom;
@@ -165,6 +177,7 @@ function StickyComposerSurface({
       shell.style.marginBottom = "";
       shell.style.bottom = "";
       delete shell.dataset.stickyStuck;
+      delete shell.dataset.stickyNatural;
     };
   }, [hasBottomUi, getViewport, threadScrollViewport]);
 
@@ -195,12 +208,15 @@ function StickyComposerSurface({
       <div
         ref={shellRef}
         className={`
-          sticky bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-20 col-start-1 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80
-          [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)] coarse-touch:bottom-0
+          sticky [bottom:var(--sticky-composer-inset)] z-20 col-start-1 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80
+          [--sticky-composer-inset:calc(env(safe-area-inset-bottom,0px)+0.75rem)] coarse-touch:[--sticky-composer-inset:0px]
+          [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)]
+          data-[sticky-natural=true]:(relative [bottom:auto])
           ${bottomUi ? "row-start-1 row-span-2" : "row-start-2"}
         `}
       >
         <div
+          ref={surfaceRef}
           className={stickySurfaceClassName}
           data-collapsed={collapsed ? "true" : "false"}
         >

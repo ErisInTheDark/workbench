@@ -97,17 +97,12 @@ const modePanelTransitionClassName = `[transition:
 ]`;
 
 const stickyComposerContentClassName = `
-  [transition:
-    max-height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
-  ]
   stuck:(
     [max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem))]
     overflow-y-auto overscroll-contain
     [padding-bottom: min(0.75rem, var(--workbench-safe-area-bottom, 0px))]
     pr-[0.15rem] [scrollbar-gutter: stable]
   )
-  motion-reduce:(animate-none transition-none)
 `;
 
 export default function ThreadComposer ({
@@ -698,7 +693,7 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className={`${modePanelClassName} ${stickyMode ? stickyComposerContentClassName : modePanelTransitionClassName}`}
+              className={`${modePanelClassName} ${modePanelTransitionClassName} ${stickyMode ? stickyComposerContentClassName : ""}`}
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >

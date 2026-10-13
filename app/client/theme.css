@@ -64,6 +64,13 @@
   }
 }
 
+/* Typed so StickyComposerSurface can read its pin inset as resolved px. */
+@property --sticky-composer-inset {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 @keyframes sticky-composer-enter {
   from {
     opacity: 0.72;
