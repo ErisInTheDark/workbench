@@ -9,6 +9,8 @@ import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
   checkpointNamespace,
   legacyCheckpointNamespace,
+  legacyProposalNamespace,
+  proposalNamespace,
   type GitArcHarness,
 } from "workbench-shared/workbench/git/git-arc-storage";
 import {
@@ -63,16 +65,26 @@ export default class GitArcRetentionController {
     ]))];
     // Only the thread's own namespaces; Git matches each prefix up to a slash, never a longer thread id.
     const refs = await repository.listRefsWithValues(...prefixes);
+    const committedIds = new Set((await new GitCheckpointStore(repository, this.resolveThreadIdentity)
+      .readCommittedProposalHistory(harness, threadId)).map(({ proposalId }) => proposalId));
+    const proposalPrefixes = new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
+      proposalNamespace(harness, storageId),
+      legacyProposalNamespace(storageId),
+    ]));
+    const retained = new Set(refs.filter(({ ref }) => {
+      const separator = ref.lastIndexOf("/");
+      return proposalPrefixes.has(ref.slice(0, separator)) && committedIds.has(ref.slice(separator + 1));
+    }).map(({ ref }) => ref));
     const registryMutation = await registry.prepareRelease(
       { harness, threadId },
       entry ? { expectedCheckpointCommit: entry.checkpointCommit } : undefined,
     );
     await repository.updateRefs(
       registryMutation?.updates ?? [],
-      refs.map(({ ref, value }) => ({ oldValue: value, ref })),
+      refs.filter(({ ref }) => !retained.has(ref)).map(({ ref, value }) => ({ oldValue: value, ref })),
     );
     return {
-      prunedRefCount: refs.length,
+      prunedRefCount: refs.length - retained.size,
       registryEntryRemoved: Boolean(registryMutation?.updates.length),
     };
   }

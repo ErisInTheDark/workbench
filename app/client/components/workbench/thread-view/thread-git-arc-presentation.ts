@@ -4,7 +4,7 @@
  * - readThreadGitArcProposalTranscriptItem/readThreadGitArcMcpProposalTranscriptItem: read CLI or MCP proposal identity and editable message intent.
  * - proposalIntentOwnsMessage: identify proposal intent that provides an explicit editable message.
  * - ThreadGitArcProposalPresentation: index proposal message intents and latest source turns from loaded transcript turns.
- * - getThreadGitArcWork: select a thread's useful Git arc work (claims, stash, actionable proposals, accepted commits from the current turn) using observed proposal validity.
+ * - getThreadGitArcWork: select a thread's useful Git arc work (claims, stash, actionable proposals, accepted commit history) using observed proposal validity.
  * - default getThreadGitArcProposalPresentation: derive proposal presentation facts from loaded transcript turns.
  */
 
@@ -103,15 +103,13 @@ export function readThreadGitArcMcpProposalTranscriptItem(
 }
 
 export function getThreadGitArcWork({
-  currentTurnId,
   gitArc,
   proposalObservations,
-  proposalTurnIds,
 }: {
-  currentTurnId: string | null;
+  currentTurnId?: string | null;
   gitArc: WorkbenchGitArcLifecycleState | null;
   proposalObservations: Readonly<Record<string, ThreadGitArcProposalObservation>>;
-  proposalTurnIds: ReadonlyMap<string, string>;
+  proposalTurnIds?: ReadonlyMap<string, string>;
 }) {
   if (!gitArc) return null;
   // Observed Git validity wins over the lifecycle's status; only actionable or landed proposals are work.
@@ -128,10 +126,7 @@ export function getThreadGitArcWork({
   if (gitArc.claimedPaths.length || gitArc.stashedPaths?.length || gitArc.phase === "stashed") return work;
   if (!proposals.length) return null;
   if (proposals.some(({ status }) => status === "proposed")) return work;
-  // Accepted-only work is news for the turn that landed it, not for every later turn.
-  return currentTurnId && proposals.some(({ proposalId }) => (
-    proposalTurnIds.get(proposalId) === currentTurnId
-  )) ? work : null;
+  return work;
 }
 
 export default function getThreadGitArcProposalPresentation({

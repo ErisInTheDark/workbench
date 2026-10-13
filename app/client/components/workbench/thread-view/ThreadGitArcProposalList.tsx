@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcProposalList: the thread's only interactive proposal cards, grouped into sealed stack layer disclosures (behind a leading accepted-commits disclosure while work is pending), under a header disclosure whose open state persists per browser, and offers stack-ordered commit all (whether or not the header is collapsed) backed by observed summaries.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit history, grouped under persisted disclosures with stack-ordered commit all backed by observed summaries.
  */
 "use client";
 
@@ -122,8 +122,7 @@ export default function ThreadGitArcProposalList({
   const unsealedProposals = proposals.filter(({ proposalId }) => !sealedIds.has(proposalId));
   // Commit all walks the stack bottom-up, then unsealed work built on top of it.
   const proposedIds = [...layerGroups.flatMap(({ pendingIds }) => pendingIds), ...pendingIdsOf(unsealedProposals)];
-  // While work is pending, landed unsealed commits fold into one closed group ahead of it.
-  const acceptedProposals = proposedIds.length ? unsealedProposals.filter(({ status }) => status === "committed") : [];
+  const acceptedProposals = unsealedProposals.filter(({ status }) => status === "committed");
   const trailingProposals = acceptedProposals.length
     ? unsealedProposals.filter(({ status }) => status !== "committed")
     : unsealedProposals;

@@ -162,12 +162,12 @@ test("Git arc work keeps only useful current work", () => {
     proposalObservations: observed(proposal("proposal", "proposed")),
     proposalTurnIds: oldProposalTurns,
   }), "old pending proposals remain actionable");
-  assert.equal(getThreadGitArcWork({
+  assert.ok(getThreadGitArcWork({
     currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),
     proposalObservations: observed(proposal("proposal", "committed")),
     proposalTurnIds: oldProposalTurns,
-  }), null, "old accepted-only proposals stop being work");
+  }), "accepted-only proposals remain durable work across turns");
   assert.ok(getThreadGitArcWork({
     currentTurnId: currentTurn.id,
     gitArc: gitArc({ proposals: [{ proposalId: "proposal", status: "committed" }] }),

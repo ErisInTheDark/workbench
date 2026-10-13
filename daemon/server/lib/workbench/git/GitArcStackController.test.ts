@@ -218,8 +218,11 @@ test("claim and plan changes keep sealed proposals visible, and unstack reopens 
   const active = await registry.find({ harness: "codex", threadId: owner.threadId });
   assert.ok(active);
   await registry.set({ ...active, proposalId: null, proposalIds: [] }, active.checkpointCommit);
-  assert.deepEqual((await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId), [replacement.proposalId],
-    "stack metadata recovers proposals omitted by older lifecycle state");
+  assert.deepEqual(
+    (await controller.findLifecycleState(owner))?.proposals.map(({ proposalId }) => proposalId),
+    [landed.proposalId, replacement.proposalId],
+    "committed history remains ahead of stack proposals omitted by older lifecycle state",
+  );
   await controller.commitProposal({
     ...owner, proposalId: replacement.proposalId, title: "replacement", description: "", includeNewer: false,
   });

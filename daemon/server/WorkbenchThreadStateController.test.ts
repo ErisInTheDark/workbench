@@ -2473,6 +2473,7 @@ test("resolved Git history expires after 24 hours independently of thread settle
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-resolved-git-retention-");
   const resolvedAt = Date.parse("2026-09-01T00:00:00.000Z");
   let now = resolvedAt + 24 * 60 * 60 * 1_000;
+  let cleaned = false;
   const pruned: Array<Array<{ harness: string; threadId: string }>> = [];
   const providerEntry: WorkbenchThreadSidebarEntry = {
     activityAt: resolvedAt,
@@ -2483,7 +2484,13 @@ test("resolved Git history expires after 24 hours independently of thread settle
       intentDescription: "",
       intentName: "resolved work",
       phase: "resolved",
-      proposals: [],
+      proposals: [{
+        proposalId: "accepted",
+        status: "committed",
+        summary: {
+          changes: [], committedSha: "b".repeat(40), description: "", mode: "commit", title: "accepted",
+        },
+      }],
       updatedAt: new Date(resolvedAt).toISOString(),
     },
     identity: { harness: "codex", threadId: fixtureThreadIds.retained },
@@ -2494,9 +2501,13 @@ test("resolved Git history expires after 24 hours independently of thread settle
   const controller = new WorkbenchThreadStateController({
     getProjectCatalog: projectCatalog,
     now: () => now,
-    pruneExpiredGitState: async (_projectId, identities) => { pruned.push(identities); },
-    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
+    pruneExpiredGitState: async (_projectId, identities) => {
+      pruned.push(identities);
+      cleaned = true;
+    },
+    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
       await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
+      if (cleaned) await acceptGitArcSnapshot({ arcs: [], plans: [] });
       return [];
     },
     storageRoot: temporary.path,
@@ -2514,6 +2525,7 @@ test("resolved Git history expires after 24 hours independently of thread settle
   assert.deepEqual(pruned[0], [providerEntry.identity]);
   const retained = (await controller.getSnapshot(fixtureProjectIds.project)).entries.find(entry => entry.entryKind !== "draft");
   assert.equal(retained?.lifecycle.settled, false);
+  assert.deepEqual(retained?.entryKind === "thread" ? retained.gitArc?.proposals : null, providerEntry.gitArc?.proposals);
   await controller.dispose();
   await temporary.dispose();
 });

@@ -44,16 +44,16 @@ function clientState(open: boolean) {
 }
 
 /** Bulk summaries stand in for cards that a collapsed header never lets load, so readiness is real. */
-function renderList(open: boolean, proposalIds: readonly string[]) {
+function renderList(open: boolean, proposalIds: readonly string[], status: "committed" | "proposed" = "proposed") {
   const commitActions = new ThreadCheckpointCommitActions();
-  commitActions.setStored(proposalIds.map(stored), () => {});
+  commitActions.setStored(status === "proposed" ? proposalIds.map(stored) : [], () => {});
   return renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, { value: clientState(open) },
     createElement(ThreadGitArcProposalList, {
       acceptance: null,
       commitActions,
       cwd: "/repo",
       harness: "opencode",
-      proposals: proposalIds.map(proposalId => ({ proposalId, status: "proposed" as const })),
+      proposals: proposalIds.map(proposalId => ({ proposalId, status })),
       stackLayers: [],
       threadId: "thread",
     })));
@@ -79,5 +79,12 @@ test("a collapsed proposals header keeps commit all available, including for a s
 test("an open proposals header leaves a single proposal to its own card", () => {
   const html = renderList(true, ["only"]);
   assert.match(html, /<details[^>]*\bopen=/u);
+  assert.equal(commitAllTag(html), null);
+});
+
+test("accepted-only history renders its accepted disclosure without commit all", () => {
+  const html = renderList(true, ["one", "two"], "committed");
+  assert.match(html, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(html, /Accepted/u);
   assert.equal(commitAllTag(html), null);
 });

@@ -1880,7 +1880,21 @@ export default class WorkbenchThreadStateController {
     let changed = false;
     for (const [key, entry] of state.entries) {
       if (entry.entryKind === "draft") continue;
-      const gitArc = arcs.get(key) ?? null;
+      const observedGitArc = arcs.get(key) ?? null;
+      const committed = entry.gitArc?.proposals.filter(({ status }) => status === "committed") ?? [];
+      const gitArc = observedGitArc ?? (
+        entry.gitHistoryCleanedAt !== null && entry.gitArc && committed.length
+          ? {
+            checkpointCommit: entry.gitArc.checkpointCommit,
+            claimedPaths: [],
+            intentDescription: entry.gitArc.intentDescription,
+            intentName: entry.gitArc.intentName,
+            phase: "resolved" as const,
+            proposals: committed,
+            updatedAt: entry.gitArc.updatedAt,
+          }
+          : null
+      );
       const next = parseWorkbenchThreadStateEntry({
         ...entry,
         gitArc,

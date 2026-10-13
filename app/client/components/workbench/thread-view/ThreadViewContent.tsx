@@ -1048,10 +1048,8 @@ export default memo(function ThreadViewContent ({
     />
   ) : null;
   const gitArcWork = getThreadGitArcWork({
-    currentTurnId: currentTurn?.id ?? null,
     gitArc: activeGitArcSelection?.gitArc ?? null,
     proposalObservations: active.gitArcProposals,
-    proposalTurnIds: visibleGitArcProposalPresentation.proposalTurnIds,
   });
   const transcriptSourceMessage = activeTranscriptSource?.status === "failed"
     ? activeTranscriptSource.message

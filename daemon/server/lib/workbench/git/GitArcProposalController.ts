@@ -155,6 +155,17 @@ function projectedProposalIds(
   return [...new Set([...stackLayers.flatMap(({ proposalIds }) => proposalIds), ...lifecycle.proposalIds])];
 }
 
+function lifecycleSummaries(
+  committed: readonly GitArcProposalSummary[],
+  current: readonly GitArcProposalSummary[],
+) {
+  const currentIds = new Set(current.map(({ proposalId }) => proposalId));
+  return [
+    ...committed.filter(({ proposalId }) => !currentIds.has(proposalId)),
+    ...current,
+  ];
+}
+
 function savedLifecycle(entry: GitArcRegistryEntry, saved: GitArcSavedStash | null) {
   const live = lifecycleEntry(entry);
   return saved && (!live || live.phase !== "active" || !live.claimedPaths.length) ? {
@@ -744,15 +755,25 @@ export default class GitArcProposalController {
     const projected = candidates.filter(value => value.lifecycle !== null);
     const stack = this.stack(repository);
     const stackLayers = await Promise.all(projected.map(async ({ entry }) => await stack.projectLayers(entry)));
-    const summaries = await this.store(repository).readProposalSummaryGroups(
+    const store = this.store(repository);
+    const summaries = await store.readProposalSummaryGroups(
       projected.map(({ entry, lifecycle }, index) => ({
         harness: normalizeHarness(entry.harness),
         proposalIds: projectedProposalIds(lifecycle!, stackLayers[index] ?? []),
         threadId: entry.threadId,
       })),
     );
+    const committed = await Promise.all(projected.map(async ({ entry }) => (
+      await store.readCommittedProposalHistory(normalizeHarness(entry.harness), entry.threadId)
+    )));
     return projected.map(({ entry, lifecycle, saved }, index) => (
-      projectLifecycleState(entry, lifecycle!, summaries[index] ?? [], saved, stackLayers[index] ?? [])
+      projectLifecycleState(
+        entry,
+        lifecycle!,
+        lifecycleSummaries(committed[index] ?? [], summaries[index] ?? []),
+        saved,
+        stackLayers[index] ?? [],
+      )
     ));
   }
 
@@ -766,12 +787,14 @@ export default class GitArcProposalController {
     const lifecycle = savedLifecycle(entry, saved);
     if (!lifecycle) return null;
     const stackLayers = await this.stack(repository).projectLayers(entry);
-    const summaries = await this.store(repository).readProposalSummaries(
+    const store = this.store(repository);
+    const summaries = await store.readProposalSummaries(
       harness,
       input.threadId,
       projectedProposalIds(lifecycle, stackLayers),
     );
-    return projectLifecycleState(entry, lifecycle, summaries, saved, stackLayers);
+    const committed = await store.readCommittedProposalHistory(harness, input.threadId);
+    return projectLifecycleState(entry, lifecycle, lifecycleSummaries(committed, summaries), saved, stackLayers);
   }
 
   async readAcceptedOutcomes(input: ArcIdentityInput & {

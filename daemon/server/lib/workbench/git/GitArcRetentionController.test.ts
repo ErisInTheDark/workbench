@@ -115,6 +115,19 @@ test("expired plan-only thread cleanup removes its refs without touching another
   await repository.updateRef(canonicalRef, active.checkpointCommit);
   const unrelatedRef = "refs/worktree/agents/codex/other-thread/checkpoints/preserved";
   await repository.updateRef(unrelatedRef, active.checkpointCommit);
+  const committedProposalId = "committed-retention";
+  const committedProposalRef = `${proposalNamespace("codex", nativeThreadId)}/${committedProposalId}`;
+  const committedProposalCommit = await repository.createCommitFromTree(
+    await repository.resolveTree(baseCommit),
+    baseCommit,
+    proposalMessage({
+      ...metadata,
+      committedSha: baseCommit,
+      proposalId: committedProposalId,
+      status: "committed",
+    }),
+  );
+  await repository.updateRef(committedProposalRef, committedProposalCommit);
 
   const result = await controller.pruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
@@ -122,7 +135,7 @@ test("expired plan-only thread cleanup removes its refs without touching another
 
   assert.equal(result.prunedRefCount, ownerRefsBefore.length + 1);
   assert.equal(result.registryEntryRemoved, true);
-  assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${nativeThreadId}`), []);
+  assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${nativeThreadId}`), [committedProposalRef]);
   assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${canonicalThreadId}`), []);
   assert.equal(await repository.readRef(unrelatedRef), active.checkpointCommit);
   assert.equal(await registry.find({ harness: "codex", threadId: nativeThreadId }), null);

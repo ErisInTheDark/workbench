@@ -173,6 +173,28 @@ test("proposal summary groups with no proposal ids do not enumerate refs", async
   assert.deepEqual(repository.commitReads, []);
 });
 
+test("committed proposal history reads every surviving thread proposal in acceptance order", async () => {
+  const namespace = proposalNamespace("codex", "thread");
+  const older = "1".repeat(40);
+  const newer = "2".repeat(40);
+  const superseded = "3".repeat(40);
+  const repository = new FakeProposalRepository([
+    { ref: `${namespace}/newer`, value: newer },
+    { ref: `${namespace}/superseded`, value: superseded },
+    { ref: `${namespace}/older`, value: older },
+  ], new Map([
+    [older, { ...commitIdentity(proposalMessage(proposalMetadata("older", "committed", "a".repeat(40)))), committerDate: "1 +0000" }],
+    [newer, { ...commitIdentity(proposalMessage(proposalMetadata("newer", "committed", "b".repeat(40)))), committerDate: "2 +0000" }],
+    [superseded, { ...commitIdentity(proposalMessage(proposalMetadata("superseded", "superseded", "c".repeat(40)))), committerDate: "3 +0000" }],
+  ]));
+  const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository);
+
+  assert.deepEqual(
+    (await store.readCommittedProposalHistory("codex", "thread")).map(({ proposalId }) => proposalId),
+    ["older", "newer"],
+  );
+});
+
 test("checkpoint, proposal, and outcome writes use only the canonical WB namespace", async () => {
   const repository = {
     root: "C:/repo",

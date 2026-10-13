@@ -101,6 +101,21 @@ function normalizeProposalMetadata(metadata: ProposalMetadata): ProposalMetadata
     : metadata;
 }
 
+function proposalSummary(metadata: ProposalMetadata): GitArcProposalSummary {
+  const normalized = normalizeProposalMetadata(metadata);
+  return {
+    changes: normalized.changes ?? null,
+    committedSha: normalized.committedSha,
+    description: normalized.description,
+    livePaths: normalized.livePaths,
+    mode: normalized.mode,
+    paths: normalized.paths,
+    proposalId: normalized.proposalId,
+    status: normalized.status,
+    title: normalized.title,
+  };
+}
+
 export default class GitCheckpointStore {
   constructor(
     private readonly repository: WorkbenchGitRepository,
@@ -230,6 +245,30 @@ export default class GitCheckpointStore {
     return (await this.readProposalSummaryGroups([{ harness, proposalIds, threadId }]))[0] ?? [];
   }
 
+  async readCommittedProposalHistory(harness: GitArcHarness, threadId: string) {
+    const namespaces = await this.proposalNamespaces(harness, threadId);
+    const refs = await this.repository.listRefsWithValues(...namespaces);
+    const commits = await this.repository.readCommits(refs.map(({ value }) => value));
+    const byId = new Map<string, { acceptedAt: number; summary: GitArcProposalSummary }>();
+    for (const { ref, value } of refs) {
+      const identity = commits.commits.get(value);
+      if (!identity) continue;
+      const metadata = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
+      const proposalId = ref.slice(ref.lastIndexOf("/") + 1);
+      if (!metadata || metadata.proposalId !== proposalId || normalizeProposalMetadata(metadata).status !== "committed") continue;
+      if (!byId.has(proposalId)) {
+        byId.set(proposalId, {
+          acceptedAt: Number(identity.committerDate.split(" ", 1)[0]) || 0,
+          summary: proposalSummary(metadata),
+        });
+      }
+    }
+    return [...byId.values()]
+      .sort((left, right) => left.acceptedAt - right.acceptedAt
+        || left.summary.proposalId.localeCompare(right.summary.proposalId))
+      .map(({ summary }) => summary);
+  }
+
   async readProposalSummaryGroups(requests: GitArcProposalSummaryRequest[]) {
     const key = `${this.repository.refMemoPrefix()}proposal-summary-groups:${JSON.stringify(requests)}`;
     return await GitObjectReadSession.memo(key, async () => {
@@ -258,12 +297,7 @@ export default class GitCheckpointStore {
         if (!identity) return missing(proposalId);
         const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
         if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
-        const metadata = normalizeProposalMetadata(parsed);
-        return {
-          changes: metadata.changes ?? null, committedSha: metadata.committedSha, description: metadata.description,
-          livePaths: metadata.livePaths, mode: metadata.mode, paths: metadata.paths,
-          proposalId, status: metadata.status, title: metadata.title,
-        };
+        return proposalSummary(parsed);
       }));
     });
   }
