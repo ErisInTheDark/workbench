@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default Tooltip: clone a trigger without wrapper DOM and own a delayed portal tooltip, opening right of or above it.
+ * - default Tooltip: clone a trigger without wrapper DOM and own a delayed, surface-styleable portal tooltip, opening right of or above it.
  *   Tooltips on triggers nested inside another trigger stack in the outermost tooltip's panel; tooltips on triggers
  *   inside tooltip content open one layer higher. Open state, exclusivity and pointer safety live in tooltip-layers.
  */
@@ -106,6 +106,7 @@ export default function Tooltip({
   hoverDistancePx = DEFAULT_HOVER_DISTANCE_PX,
   interactive = false,
   placement = "right",
+  surfaceClassName = "",
 }: {
   children: ReactElement<TooltipTriggerProps>;
   content: ReactNode;
@@ -114,6 +115,7 @@ export default function Tooltip({
   hoverDistancePx?: number;
   interactive?: boolean;
   placement?: TooltipPlacement;
+  surfaceClassName?: string;
 }) {
   const ownerRef = useRef(Symbol("workbench-tooltip"));
   const id = ownerRef.current;
@@ -322,6 +324,7 @@ export default function Tooltip({
           className={`
             fixed flex w-max flex-col overflow-x-hidden overflow-y-auto rounded-[1.1rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-overlay-glass px-3 py-2.5 text-sm text-text shadow-float backdrop-blur-xl
             ${interactive ? "pointer-events-auto" : "pointer-events-none"}
+            ${surfaceClassName}
           `}
           style={tooltipStyle}
         >

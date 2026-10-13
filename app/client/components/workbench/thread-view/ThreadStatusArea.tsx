@@ -12,6 +12,7 @@ import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thr
 import type { WorkbenchHarnessId, WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import LoaderIcon from "../LoaderIcon";
+import Tooltip from "../../ui/Tooltip";
 import WorkbenchRelativeTime from "../WorkbenchRelativeTime";
 import { useThread } from "../use-thread";
 import {
@@ -69,7 +70,7 @@ export default function ThreadStatusArea({
   const { intersections, logicalProjectId, ownerProjectId } = useThread.claimIntersections(threadId, harness, "plan");
   const overlapCount = intersections.hasScope ? intersections.activeEntries.length : 0;
   const plannedOverlapCount = intersections.hasScope ? intersections.plannedEntries.length : 0;
-  const overlapInSlot = !live && overlapCount > 0;
+  const showPlanIntersectionStatus = !live && intersections.hasScope;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
   const accepted = claim?.proposals.filter(({ status }) => status === "committed").length ?? 0;
@@ -175,12 +176,39 @@ export default function ThreadStatusArea({
       // A stopped turn that leaves proposals to review opens them, once per pending set.
       attention={!gitArc?.running && proposals.length ? { key: proposals.map(({ proposalId }) => proposalId).join("\0"), panel: "arc" } : null}
       inline={skills?.skills.length ? <ThreadSkillPills onDeactivate={skills.onDeactivate} skills={skills.skills} /> : null}
-      leading={overlapInSlot ? {
+      leading={showPlanIntersectionStatus ? {
         content: (
-          <span className={`flex min-w-0 items-center gap-2 ${amberClassName}`}>
-            <GitArcUnclaimIcon className="shrink-0" size={16} />
-            <span className="truncate">Planned changes overlap {overlapCount} active {overlapCount === 1 ? "thread" : "threads"}</span>
-          </span>
+          <Tooltip
+            content={(
+              <ThreadGitArcIntersectionCard
+                chrome="flush"
+                intersections={intersections}
+                logicalProjectId={logicalProjectId}
+                onOpenThread={onOpenThread}
+                ownerProjectId={ownerProjectId}
+              />
+            )}
+            interactive
+            placement="top"
+            surfaceClassName={`
+              !px-0 !py-0 !backdrop-blur-none
+              ${overlapCount
+                ? "!border-amber-500/55 !bg-[color-mix(in_srgb,var(--color-amber-500)_12%,var(--app-bg-solid))]"
+                : "!bg-[var(--app-bg-solid)]"}
+            `}
+          >
+            <span
+              className={`flex min-w-0 items-center gap-2 ${overlapCount ? amberClassName : ""}`}
+              data-thread-plan-intersection-status={overlapCount ? "active" : "clear"}
+            >
+              <GitArcUnclaimIcon className="shrink-0" size={16} />
+              <span className="truncate">
+                {overlapCount
+                  ? `Planned changes overlap ${overlapCount} active ${overlapCount === 1 ? "thread" : "threads"}`
+                  : "No planned claims intersect active threads"}
+              </span>
+            </span>
+          </Tooltip>
         ),
         panel: "arc",
       } : null}
