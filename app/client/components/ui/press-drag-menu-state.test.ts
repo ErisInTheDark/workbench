@@ -1,7 +1,7 @@
-/* Exports: none. Tests protect press-drag confirmation and cancellation semantics. */
+/* Exports: none. Tests protect press-drag confirmation, cancellation and touch intent semantics. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { transitionPressDragMenu, type PressDragMenuState } from "./press-drag-menu-state";
+import { getPressDragTouchIntent, transitionPressDragMenu, type PressDragMenuState } from "./press-drag-menu-state";
 
 const closed: PressDragMenuState = { kind: "closed" };
 const press = () => transitionPressDragMenu(closed, { kind: "press", pointerId: 1, x: 10, y: 100 }).state;
@@ -62,4 +62,11 @@ test("a drag returning to the trigger cancels rather than becoming a click", () 
   const result = transitionPressDragMenu(moved, { kind: "release", pointerId: 1, x: 10, y: 100, id: null, onTrigger: true });
   assert.equal(result.state.kind, "closed");
   assert.equal(result.activate, false);
+});
+
+test("touch intent ignores jitter and follows the dominant movement axis", () => {
+  assert.equal(getPressDragTouchIntent(10, 10, 14, 13), "pending");
+  assert.equal(getPressDragTouchIntent(10, 10, 24, 17), "horizontal");
+  assert.equal(getPressDragTouchIntent(10, 10, 17, 24), "vertical");
+  assert.equal(getPressDragTouchIntent(10, 10, 22, 22), "vertical");
 });

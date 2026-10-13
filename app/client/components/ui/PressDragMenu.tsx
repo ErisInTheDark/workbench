@@ -9,7 +9,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ChevronIcon from "../workbench/ChevronIcon";
-import { transitionPressDragMenu, type PressDragMenuEvent, type PressDragMenuState } from "./press-drag-menu-state";
+import { getPressDragTouchIntent, transitionPressDragMenu, type PressDragMenuEvent, type PressDragMenuState, type PressDragTouchIntent } from "./press-drag-menu-state";
 import { positionWorkbenchPopover } from "../workbench/workbench-popover-geometry";
 import WorkbenchMenuAction from "../workbench/WorkbenchMenuAction";
 import WorkbenchMenuSurface from "../workbench/WorkbenchMenuSurface";
@@ -67,6 +67,7 @@ export default function PressDragMenu ({
   const trigger = useRef<HTMLButtonElement>(null);
   const popup = useRef<HTMLDivElement>(null);
   const hoveredGroup = useRef<string | null>(null);
+  const pendingTouch = useRef<{ pointerId: number; x: number; y: number; intent: PressDragTouchIntent } | null>(null);
   const menuId = useId();
   const [menu, setMenu] = useState<{ interaction: PressDragMenuState; items: readonly PressDragMenuItem[] }>({
     interaction: { kind: "closed" }, items: [],
@@ -247,16 +248,45 @@ export default function PressDragMenu ({
       `}
       onPointerDown={event => {
         if (event.button !== 0 || menu.interaction.kind === "dragging") return;
+        if (pendingTouch.current) {
+          pendingTouch.current = null;
+          return;
+        }
+        if (event.pointerType === "touch" && getComputedStyle(event.currentTarget).touchAction !== "none") {
+          pendingTouch.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, intent: "pending" };
+          return;
+        }
         event.preventDefault();
         begin({ kind: "press", pointerId: event.pointerId, x: event.clientX, y: event.clientY });
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={event => {
+        const pending = pendingTouch.current;
+        if (pending?.pointerId === event.pointerId) {
+          if (pending.intent === "horizontal") return;
+          pending.intent = getPressDragTouchIntent(pending.x, pending.y, event.clientX, event.clientY);
+          if (pending.intent !== "vertical") return;
+          pendingTouch.current = null;
+          begin({ kind: "press", pointerId: event.pointerId, x: pending.x, y: pending.y });
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
         if (menu.interaction.kind !== "dragging") return;
         if (groups) hoverGroup(event.clientX, event.clientY);
         dispatch({ kind: "move", pointerId: event.pointerId, x: event.clientX, y: event.clientY, id: hit(event.clientX, event.clientY) });
       }}
       onPointerUp={event => {
+        const pending = pendingTouch.current;
+        if (pending?.pointerId === event.pointerId) {
+          pendingTouch.current = null;
+          const intent = pending.intent === "pending"
+            ? getPressDragTouchIntent(pending.x, pending.y, event.clientX, event.clientY)
+            : pending.intent;
+          if (intent !== "pending") return;
+          if (onActivate) onActivate(event.currentTarget);
+          else begin({ kind: "open", activeId: null });
+          return;
+        }
         const box = event.currentTarget.getBoundingClientRect();
         dispatch({
           kind: "release", pointerId: event.pointerId, x: event.clientX, y: event.clientY, id: hit(event.clientX, event.clientY),
@@ -264,6 +294,10 @@ export default function PressDragMenu ({
         });
       }}
       onPointerCancel={event => {
+        if (pendingTouch.current?.pointerId === event.pointerId) {
+          pendingTouch.current = null;
+          return;
+        }
         if (menu.interaction.kind === "dragging" && menu.interaction.pointerId === event.pointerId) dispatch({ kind: "cancel" });
       }}
       onLostPointerCapture={event => {
@@ -279,6 +313,7 @@ export default function PressDragMenu ({
         else begin({ kind: "open", activeId: null });
       }}
       onBlur={event => {
+        pendingTouch.current = null;
         if (!(event.relatedTarget instanceof Node) || !popup.current?.contains(event.relatedTarget)) dispatch({ kind: "cancel" });
       }}
       onKeyDown={keyboard}

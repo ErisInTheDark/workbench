@@ -1,8 +1,11 @@
 /*
  * Exports:
  * - PressDragMenuState/PressDragMenuEvent: one menu's display and pointer lifecycle.
+ * - getPressDragTouchIntent: classify undecided touch movement before a menu owns the pointer.
  * - transitionPressDragMenu: compute highlighting, dismissal and a single confirmed action.
  */
+export type PressDragTouchIntent = "pending" | "horizontal" | "vertical";
+
 export type PressDragMenuState =
   | { kind: "closed" }
   | { kind: "open"; activeId: string | null }
@@ -17,6 +20,13 @@ export type PressDragMenuEvent =
   | { kind: "select"; id: string }
   | { kind: "key"; key: string; ids: readonly string[] }
   | { kind: "cancel" };
+
+export function getPressDragTouchIntent(startX: number, startY: number, x: number, y: number): PressDragTouchIntent {
+  const deltaX = Math.abs(x - startX);
+  const deltaY = Math.abs(y - startY);
+  if (Math.hypot(deltaX, deltaY) <= 8) return "pending";
+  return deltaX > deltaY ? "horizontal" : "vertical";
+}
 
 export function transitionPressDragMenu(state: PressDragMenuState, event: PressDragMenuEvent, activation: "action" | "menu" = "action"): { state: PressDragMenuState; selectedId: string | null; activate: boolean } {
   const result = (next: PressDragMenuState, selectedId: string | null = null, activate = false) => ({ state: next, selectedId, activate });

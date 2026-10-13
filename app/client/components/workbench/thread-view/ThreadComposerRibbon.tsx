@@ -46,7 +46,7 @@ export default function ThreadComposerRibbon({
   showsReasoningEffortControl: boolean;
 }) {
   return (
-    <div className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>span[aria-hidden]]:h-4">
+    <div className="inline-flex min-w-0 max-w-full items-center overflow-x-auto whitespace-nowrap text-[0.78em] font-medium text-text *:shrink-0 [&>button]:touch-pan-x [&>span[aria-hidden]]:h-4">
       {targetControl ? <>{targetControl}<span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /></> : null}
       {showsProfileControl && profileControl ? <>{profileControl}
       {!selectedProfileLabel ? <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" /> : null}</> : null}
