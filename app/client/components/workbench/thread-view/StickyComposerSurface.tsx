@@ -32,21 +32,17 @@ const stickySurfaceClassName = `
 
 const expandedClassName = `
   grid col-start-1 row-start-1 grid-cols-[0rem minmax(0, 1fr)] gap-y-3 gap-x-0 opacity-100
-  transform-[translateY(0) scale(1)]
   [transition:
     opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
     grid-template-columns var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
     column-gap var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
   ]
   [transition-behavior: allow-discrete]
   stuck:(grid-cols-[2.25rem minmax(0, 1fr)] gap-x-3)
   group-data-[collapsed=true]/composer:stuck:(
-    absolute inset-3 overflow-clip invisible opacity-0 pointer-events-none
-    transform-[translateY(-0.25rem) scale(0.985)]
+    absolute col-start-auto row-start-auto inset-x-3 bottom-3 invisible opacity-0 pointer-events-none
     [transition:
       opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
-      transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
       visibility 0s linear var(--sticky-composer-exit-duration)
     ]
   )
@@ -64,24 +60,21 @@ const chevronColumnClassName = `
 `;
 
 const collapsedClassName = `
-  hidden col-start-1 row-start-1 self-end opacity-0 transform-[translateY(0.35rem) scale(0.985)]
+  hidden col-start-1 row-start-1 self-end min-h-[2.8rem] grid-cols-[auto minmax(0, 1fr) auto] items-center gap-3
+  text-text text-[0.92em] leading-[1.45] opacity-0 outline-none
   [transition:
     opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
     display var(--sticky-composer-exit-duration) allow-discrete
   ]
   [transition-behavior: allow-discrete]
   group-data-[collapsed=true]/composer:stuck:(
-    grid min-h-[2.8rem] grid-cols-[auto minmax(0, 1fr) auto] items-center gap-3
-    cursor-pointer text-text text-[0.92em] leading-[1.45] opacity-100 outline-none
-    transform-[translateY(0) scale(1)]
+    grid cursor-pointer opacity-100
     [transition:
       opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-      transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
       display var(--sticky-composer-motion-duration) allow-discrete
     ]
   )
-  starting:group-data-[collapsed=true]/composer:stuck:(opacity-0 transform-[translateY(0.35rem) scale(0.985)])
+  starting:group-data-[collapsed=true]/composer:stuck:opacity-0
   group-data-[collapsed=true]/composer:stuck:focus-visible:(rounded-[0.85rem] [box-shadow: 0 0 0 2px var(--accent-soft)])
   motion-reduce:(animate-none transition-none)
 `;
