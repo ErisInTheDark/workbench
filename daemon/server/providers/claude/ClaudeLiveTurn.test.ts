@@ -83,7 +83,8 @@ function fixture(
       if (!facts.lifecycle) return;
       assert.equal(facts.projectId, projectId, "lifecycle facts must apply before thread state loads the project");
       log.push(`observe:${facts.lifecycle.event.kind}${
-        facts.lifecycle.event.kind === "turnCompleted" ? `:${facts.lifecycle.event.status}` : ""}`);
+        facts.lifecycle.event.kind === "turnCompleted"
+          ? `:${facts.lifecycle.event.status}${facts.lifecycle.event.error ? `:${facts.lifecycle.event.error}` : ""}` : ""}`);
       if (facts.lifecycle.event.kind === "acceptedIntent") {
         log.push(`prompts:${queue.pushed.length}`);
         onAccepted?.(turn, log);
@@ -251,7 +252,15 @@ test("a failed query settles failed and still publishes idle", async context => 
   const { task } = await turn.start("hi");
   push(new Error("native crash"));
   await task;
-  assert.deepEqual(log.slice(5), ["release", "settle:failed", "reported:failed", "observe:turnCompleted:failed", "turn/completed", "status:idle"]);
+  assert.deepEqual(log.slice(5), ["release", "settle:failed", "reported:failed", "observe:turnCompleted:failed:native crash", "turn/completed", "status:idle"]);
+});
+
+test("a failed result forwards its provider errors", async () => {
+  const { turn, push, log } = fixture();
+  const { task } = await turn.start("hi");
+  push(result({ subtype: "error_during_execution", is_error: true, errors: ["Overloaded", "retry later"] }));
+  await task;
+  assert.ok(log.includes("observe:turnCompleted:failed:Overloaded\nretry later"), log.join(" | "));
 });
 
 test("interruption settles exactly once as interrupted and retires undelivered steers", async () => {

@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection.
- * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with any failure or interruption.
+ * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with the lifecycle's thread error or interruption.
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output.
  * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and settlement receipts.
  */
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchSubagentSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 
@@ -35,21 +36,18 @@ export function renderSubagentQuestionnaireOutput(thread: { turns: Turn[] }, req
   return [trailingCommentary(thread), renderQuestion(request)].filter(Boolean).join("\n\n");
 }
 
-function renderTurnEnding(turn: Turn | undefined) {
-  if (turn?.status === "failed") {
-    const message = turn.error?.message.trim();
-    return message ? `Turn failed: ${message}` : "Turn failed without a provider error message.";
-  }
-  return turn?.status === "interrupted" ? "Turn was interrupted." : "";
+function renderLifecycleEnding(lifecycle: WorkbenchThreadLifecycle | null) {
+  if (lifecycle?.kind !== "needsAttention") return "";
+  if (lifecycle.reason === "providerFailed") return `Thread error: ${lifecycle.error}`;
+  return lifecycle.reason === "interrupted" ? "Turn was interrupted." : "";
 }
 
-export function renderSubagentTurnOutput(thread: { turns: Turn[] }) {
-  const turn = thread.turns.at(-1);
-  const messages = (turn?.items ?? []).filter((item): item is Extract<typeof item, { type: "agentMessage" }> => (
+export function renderSubagentTurnOutput(thread: { turns: Turn[] }, lifecycle: WorkbenchThreadLifecycle | null) {
+  const messages = (thread.turns.at(-1)?.items ?? []).filter((item): item is Extract<typeof item, { type: "agentMessage" }> => (
     item.type === "agentMessage" && Boolean(item.text.trim())
   ));
   const finalMessage = messages.slice().reverse().find((item) => item.phase === "final_answer");
-  return [renderTurnEnding(turn), (finalMessage ?? messages.at(-1))?.text.trim() ?? ""].filter(Boolean).join("\n\n");
+  return [renderLifecycleEnding(lifecycle), (finalMessage ?? messages.at(-1))?.text.trim() ?? ""].filter(Boolean).join("\n\n");
 }
 
 export function renderSubagentWaitResultOutput({

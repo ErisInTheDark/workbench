@@ -22,7 +22,7 @@
  * - WorkbenchThreadDraftAttachmentSchema: typed persisted attachment identity and URL.
  * - DraftReferenceKindSchema/DraftReferenceKind: composer reference kinds an app draft can carry.
  * - WorkbenchThreadStateSnapshot/WorkbenchThreadStateRequest/WorkbenchThreadStateMutationResult/WorkbenchThreadTitleMutationResult: notification, intent, and acknowledgement types.
- * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs and owning turn identity.
+ * - WorkbenchLifecycleEvent/getWorkbenchLifecycleTurnId: lifecycle inputs, including provider failure text, and owning turn identity.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: canonical blank, draft, provider, and parent-owned subagent identity.
  * - WorkbenchThreadRouteTargetSchema/WorkbenchThreadRouteTarget: parsed route references or already-resolved targets.
  * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
@@ -198,6 +198,13 @@ export function hasWorkbenchThreadDraftContent(draft: { attachments: readonly un
   return Boolean(draft.prompt.trim() || draft.attachments.length || draft.references?.length);
 }
 
+const WORKBENCH_THREAD_ERROR_MAX_LENGTH = 500;
+const MISSING_PROVIDER_ERROR = "The provider turn failed without an error message.";
+
+function boundThreadError(error: string | undefined) {
+  return error?.trim().slice(0, WORKBENCH_THREAD_ERROR_MAX_LENGTH).trim() || MISSING_PROVIDER_ERROR;
+}
+
 const AgentTurnSchema = z.object({
   agentStatus: z.enum(["working", "completed", "blocked"]),
   turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">(),
@@ -215,6 +222,10 @@ const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("noActiveTurn"), settled: z.literal(false) }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("interrupted"), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
+  z.object({
+    error: z.string().trim().min(1).max(WORKBENCH_THREAD_ERROR_MAX_LENGTH), kind: z.literal("needsAttention"), reason: z.literal("providerFailed"),
+    settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">(),
+  }).strict(),
   z.object({ agent: AgentStatusSchema.extend({ agentStatus: z.literal("blocked") }), kind: z.literal("needsAttention"), reason: z.literal("agentBlocked"), settled: z.literal(false) }).strict(),
 ]);
 
@@ -853,7 +864,7 @@ export type WorkbenchLifecycleEvent =
   | { kind: "pendingInput"; requestKey: string; turnId?: WorkbenchTurnId }
   | { kind: "inputResolved"; requestKey: string; turnId?: WorkbenchTurnId; answered?: true }
   | { kind: "agentStatus"; status: "completed" | "blocked"; turnId?: WorkbenchTurnId }
-  | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId }
+  | { kind: "turnCompleted"; status: "completed" | "interrupted" | "failed"; turnId: WorkbenchTurnId; error?: string }
   /** Live provider items arrived in this running turn. */
   | { kind: "providerTurnActive"; turnId: WorkbenchTurnId }
   | { kind: "recoveryFailed" }
@@ -893,7 +904,7 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
         || current?.kind === "stopped"
         || (current?.kind === "needsAttention" && (
           current.reason === "pendingInput"
-          || (current.reason === "interrupted" && current.turnId === event.turnId)
+          || ((current.reason === "interrupted" || current.reason === "providerFailed") && current.turnId === event.turnId)
         ))
       ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
@@ -925,6 +936,9 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (current?.kind === "stopped") return current;
       if (currentTurnId !== event.turnId) return current!;
       if (event.status === "interrupted") return { kind: "needsAttention", reason: "interrupted", settled: false, turnId: event.turnId };
+      if (event.status === "failed") {
+        return { kind: "needsAttention", reason: "providerFailed", settled: false, turnId: event.turnId, error: boundThreadError(event.error) };
+      }
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "providerTurnActive": {
@@ -932,7 +946,8 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       const revivable = current?.kind === "working"
         || (current?.kind === "completed" && current.reason === "providerInactive")
         || (current?.kind === "needsAttention" && (
-          current.reason === "noActiveTurn" || (current.reason === "interrupted" && current.turnId !== event.turnId)
+          current.reason === "noActiveTurn"
+          || ((current.reason === "interrupted" || current.reason === "providerFailed") && current.turnId !== event.turnId)
         ));
       return revivable
         ? { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false }
@@ -957,7 +972,7 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
     }
     case "settle":
       if (current?.kind === "needsAttention") {
-        return current.reason === "noActiveTurn" || current.reason === "interrupted" || current.reason === "agentBlocked"
+        return current.reason !== "pendingInput"
           ? { kind: "completed", reason: "userCompleted", settled: true }
           : current;
       }

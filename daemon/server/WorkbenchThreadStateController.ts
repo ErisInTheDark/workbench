@@ -841,7 +841,7 @@ export default class WorkbenchThreadStateController {
       // waiting on a questionnaire must never be left in the state that gate treats as resumable,
       // and a turn boundary must not end the wait.
       const recoverableLifecycle = reducedLifecycle.kind === "needsAttention"
-        && (reducedLifecycle.reason === "noActiveTurn" || reducedLifecycle.reason === "interrupted");
+        && (reducedLifecycle.reason === "noActiveTurn" || reducedLifecycle.reason === "interrupted" || reducedLifecycle.reason === "providerFailed");
       const lifecycle = heldQuestionnaire && (retainedQuestionnaire || recoverableLifecycle)
         ? this.waitOnQuestionnaire(existing.lifecycle, heldQuestionnaire)
         : reducedLifecycle;

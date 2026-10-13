@@ -2,7 +2,7 @@
  * Exports:
  * - default CodexProviderObservations: translate admitted Codex ingress without a second lifecycle.
  * - CodexProviderPublication: public notification and typed shared-state facts beside retained native input.
- * - mapProviderLifecycleNotification: decode compatible Codex lifecycle events at the provider edge.
+ * - mapProviderLifecycleNotification: decode compatible Codex lifecycle events, including failed-turn messages, at the provider edge.
  * - mapProviderTurnStartedNotification: decode compatible Codex turn starts at the provider edge.
  * - admitCodexTranscriptObservations/mapCodexTranscriptObservation: supply Codex identity evidence to shared admission.
  */
@@ -75,8 +75,10 @@ export function mapProviderLifecycleNotification(
     const turn = record(params.turn);
     const turnId = typeof turn?.id === "string" ? identities.knownTurn(TurnReferenceSchema.parse(turn.id)).turnId : null;
     const status = turn?.status;
+    const message = record(turn?.error)?.message;
+    const error = status === "failed" && typeof message === "string" && message.trim() ? message.trim() : null;
     return turnId && (status === "completed" || status === "interrupted" || status === "failed")
-      ? { event: { kind: "turnCompleted", status, turnId }, threadId } : null;
+      ? { event: { kind: "turnCompleted", status, turnId, ...(error ? { error } : {}) }, threadId } : null;
   }
   if (notification.method === "questionnaire/requested") {
     const requestKey = typeof params.requestKey === "string" ? params.requestKey : null;

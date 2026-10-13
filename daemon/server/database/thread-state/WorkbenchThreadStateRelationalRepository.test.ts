@@ -211,11 +211,24 @@ test("draft writes reject empty content without rejecting attachment-only drafts
   } finally { database.close(); }
 });
 
-test("lifecycle upgrade preserves existing facts and permits thread-owned turnless states", () => {
+test("lifecycle upgrade preserves existing facts", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   try {
     installWorkbenchDatabaseSchema(database, { targetVersion: 24 });
+    const [threadId] = seedIdentities(database, "project", "thread");
+    assert.ok(threadId);
+    database.prepare(`INSERT INTO workbench_thread_lifecycle(thread_id, lifecycle_kind, reason, settled, agent_status, updated_at)
+      VALUES (?, 'working', 'acceptedIntent', 0, 'working', 7)`).run(threadId);
+    const before = database.prepare("SELECT * FROM workbench_thread_lifecycle").all();
+    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.threadOwnedLifecycle.version });
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_lifecycle").all(), before);
+  } finally { database.close(); }
+});
+
+test("current lifecycle storage permits thread-owned turnless states", () => {
+  const database = openDatabase();
+  try {
     const [threadId] = seedIdentities(database, "project", "thread");
     assert.ok(threadId);
     const repository = new WorkbenchThreadStateRelationalRepository(database);
@@ -225,13 +238,7 @@ test("lifecycle upgrade preserves existing facts and permits thread-owned turnle
       metadata: { archived: false, pinned: true, snoozed: false },
       profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
     };
-    repository.writeRecords([record]);
-    const before = database.prepare("SELECT * FROM workbench_thread_lifecycle").all();
     const selection = { selection: "threads" as const, threadIds: [threadId] };
-    const saved = repository.readRecords(selection);
-    installWorkbenchDatabaseSchema(database, { targetVersion: databaseReleases.threadOwnedLifecycle.version });
-    assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_lifecycle").all(), before);
-    assert.deepEqual(repository.readRecords(selection), saved);
     for (const lifecycle of [
       { kind: "completed", reason: "agentCompleted", agent: { agentStatus: "completed" }, settled: false },
       { kind: "needsAttention", reason: "agentBlocked", agent: { agentStatus: "blocked" }, settled: false },
@@ -427,6 +434,31 @@ test("affected-record writes preserve unchanged caches and roll back an entire f
     assert.equal(repository.readRecords({ selection: "threads", threadIds: [firstId!] })[0]?.title, "updated");
     assert.deepEqual(repository.readRecords({ selection: "threads", threadIds: [foreignId!] }), []);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("a thread error persists with its failed turn and disappears when the lifecycle moves on", () => {
+  const database = openDatabase();
+  try {
+    const [threadId] = seedIdentities(database, "project", "failed");
+    const turnId = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("failed-turn");
+    database.prepare(`INSERT INTO thread_turns(id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
+      VALUES (?, ?, 0, 'codex', 'C:/project', 'failed', 'failed', 1)`).run(turnId, threadId);
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    const record = (lifecycle: WorkbenchThreadLifecycle): WorkbenchThreadStateRecord => ({
+      entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title: "Failed", activityAt: 1, lifecycle,
+      metadata: { archived: false, pinned: false, snoozed: false },
+      profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    });
+    const failed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "Model at capacity." };
+    repository.writeRecords([record(failed)]);
+    const read = () => repository.readRecords({ selection: "threads", threadIds: [threadId!] })[0]?.lifecycle;
+    assert.deepEqual(read(), failed);
+    repository.writeRecords([record({ ...failed, error: "Different failure." })]);
+    assert.deepEqual(read(), { ...failed, error: "Different failure." });
+    repository.writeRecords([record({ kind: "working", reason: "acceptedIntent", agent: { agentStatus: "working", turnId }, settled: false })]);
+    assert.equal(read()?.kind, "working");
+    assert.equal(database.prepare("SELECT error_text FROM workbench_thread_lifecycle WHERE thread_id = ?").pluck().get(threadId), null);
   } finally { database.close(); }
 });
 

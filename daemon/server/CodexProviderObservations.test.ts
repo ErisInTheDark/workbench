@@ -7,7 +7,7 @@ import WorkbenchThreadIdentityRepository from "./database/thread-identity/Workbe
 import WorkbenchTranscriptIdentityRepository from "./database/transcript/WorkbenchTranscriptIdentityRepository";
 import WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import CodexProviderObservations, { admitCodexTranscriptObservations } from "./CodexProviderObservations";
+import CodexProviderObservations, { admitCodexTranscriptObservations, mapProviderLifecycleNotification } from "./CodexProviderObservations";
 import { NativeThreadIdSchema, NativeTurnIdSchema } from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
@@ -100,4 +100,19 @@ test("one provider ingress publishes admitted references without rewriting conte
     threads.dispose();
     database.close();
   }
+});
+
+test("a failed turn completion forwards the provider error", () => {
+  const identities = {
+    knownThread: (threadId: string) => ({ threadId: threadId as never }),
+    knownTurn: (turnId: string) => ({ turnId: turnId as never }),
+  };
+  const complete = (turn: Record<string, unknown>) => mapProviderLifecycleNotification({
+    method: "turn/completed", params: { threadId: "thread", turn: { id: "turn", ...turn } },
+  }, identities)?.event;
+  assert.deepEqual(complete({ status: "failed", error: { message: "Selected model is at capacity." } }), {
+    kind: "turnCompleted", status: "failed", turnId: "turn", error: "Selected model is at capacity.",
+  });
+  assert.deepEqual(complete({ status: "failed", error: null }), { kind: "turnCompleted", status: "failed", turnId: "turn" });
+  assert.deepEqual(complete({ status: "completed", error: { message: "ignored" } }), { kind: "turnCompleted", status: "completed", turnId: "turn" });
 });

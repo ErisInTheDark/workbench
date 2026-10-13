@@ -1237,7 +1237,7 @@ export default memo(function ThreadViewContent ({
             } : null}
           />
         ) : null}
-        {activeThread && transcriptCanRender && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
+        {activeThread && transcriptCanRender && !isDraftThreadView ? <ThreadErrorCard lifecycle={activeSidebarEntry?.lifecycle} /> : null}
         {agentTabs ? (
           <div className="mt-6">{agentTabs}</div>
         ) : null}

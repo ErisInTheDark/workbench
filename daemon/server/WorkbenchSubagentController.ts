@@ -458,7 +458,7 @@ export default class WorkbenchSubagentController {
           multiplexed: records.length > 1,
           name: ready.record.name,
           outcome: pending ? "needs-interaction" : "finished",
-          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(ready.record.threadId, renderSubagentTurnOutput(thread)),
+          output: pending ? renderSubagentQuestionnaireOutput(thread, pending.request) : this.withQueueNote(ready.record.threadId, renderSubagentTurnOutput(thread, ready.entry.lifecycle)),
           threadId: await this.publicThreadId(ready.record.threadId, ready.record.projectId),
         }) };
       }
@@ -499,7 +499,7 @@ export default class WorkbenchSubagentController {
             multiplexed: records.length > 1,
             name: finishedState.record.name,
             outcome: "finished",
-            output: this.withQueueNote(finishedState.record.threadId, renderSubagentTurnOutput(thread)),
+            output: this.withQueueNote(finishedState.record.threadId, renderSubagentTurnOutput(thread, null)),
             threadId: await this.publicThreadId(finishedState.record.threadId, finishedState.record.projectId),
           }) };
         }

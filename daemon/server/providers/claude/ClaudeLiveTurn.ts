@@ -121,6 +121,7 @@ export default class ClaudeLiveTurn {
   private beforePrompt: { context: string[]; steers: SDKUserMessage[] } | null = { context: [], steers: [] };
   private stopped = false;
   private settled = false;
+  private failure: string | null = null;
   private closing: Promise<void> | null = null;
   private task: Promise<void> = Promise.resolve();
   /** True while run() reads the session; false before start, after a pause, and after settlement. */
@@ -261,9 +262,8 @@ export default class ClaudeLiveTurn {
       status = await this.consume();
     } catch (error) {
       if (!this.stopped) {
-        console.error("[claude] query failed",
-          error instanceof Error ? error.message.slice(0, 500) : "unknown failure",
-          this.options.session.stderr().slice(-1000));
+        this.failure = error instanceof Error ? error.message.slice(0, 500) : "unknown failure";
+        console.error("[claude] query failed", this.failure, this.options.session.stderr().slice(-1000));
       }
     } finally {
       this.running = false;
@@ -303,7 +303,9 @@ export default class ClaudeLiveTurn {
         // Steers Claude has not consumed yet run as follow-up results inside this Workbench turn. Other queued
         // context, such as a late working-status notice, does not earn another model turn.
         if (!this.stopped && this.undelivered.size > 0) continue;
-        return message.subtype === "success" && !message.is_error ? "completed" : "failed";
+        if (message.subtype === "success" && !message.is_error) return "completed";
+        this.failure = (message.subtype === "success" ? message.result : message.errors.join("\n")).trim() || message.subtype;
+        return "failed";
       }
     }
   }
@@ -355,7 +357,9 @@ export default class ClaudeLiveTurn {
     this.options.settling(status);
     await this.options.observe({
       projectId: this.options.projectId, turnStarted: null, displayLabel: null,
-      lifecycle: { threadId: this.threadId, event: { kind: "turnCompleted", turnId: this.turnId, status } },
+      lifecycle: { threadId: this.threadId, event: {
+        kind: "turnCompleted", turnId: this.turnId, status, ...(status === "failed" && this.failure ? { error: this.failure } : {}),
+      } },
     });
     const turn = await this.options.readTurn();
     if (turn) this.options.broadcast({ method: "turn/completed", params: { threadId: this.threadId, turn } });

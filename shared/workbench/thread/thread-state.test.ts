@@ -561,6 +561,26 @@ test("lifecycle parsing preserves canonical attention variants and normalizes le
   });
 });
 
+test("a failed turn holds its provider error as the thread error until the thread continues", () => {
+  const turnId = fixtureIdentityValues.WorkbenchTurnId["new"];
+  const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId });
+  const failed = reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "failed", turnId, error: "  Model at capacity.  " });
+  assert.deepEqual(failed, { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "Model at capacity." });
+  assert.deepEqual(WorkbenchThreadLifecycleSchema.parse(failed), failed);
+  assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "failed", turnId }).reason, "providerFailed");
+  assert.equal(reduceWorkbenchThreadLifecycle(failed, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), failed);
+  for (const event of [
+    { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+    { kind: "userInputDelivered", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+    { kind: "providerTurnActive", turnId: fixtureIdentityValues.WorkbenchTurnId["turn"] },
+  ] as const) {
+    assert.equal(reduceWorkbenchThreadLifecycle(failed, event).kind, "working");
+  }
+  for (const entryKind of ["thread", "subagent"] as const) {
+    assert.deepEqual(reduceWorkbenchThreadLifecycle(failed, { kind: "settle", entryKind }), { kind: "completed", reason: "userCompleted", settled: true });
+  }
+});
+
 test("exact-turn transitions reject stale completion and stopped settlement preserves lifecycle", () => {
   const working = reduceWorkbenchThreadLifecycle(null, { kind: "acceptedIntent", turnId: fixtureIdentityValues.WorkbenchTurnId["new"] });
   assert.equal(reduceWorkbenchThreadLifecycle(working, { kind: "turnCompleted", status: "completed", turnId: fixtureIdentityValues.WorkbenchTurnId["old"] }), working);

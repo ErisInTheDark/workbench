@@ -68,7 +68,8 @@ export default function ThreadContextStatus ({
   const canCompact = !thread.isDraft || launching;
   const inactiveByWorkbenchState = lifecycle?.kind === "stopped"
     || (lifecycle?.kind === "needsAttention"
-      && (lifecycle.reason === "noActiveTurn" || lifecycle.reason === "interrupted" || lifecycle.reason === "agentBlocked"
+      && (lifecycle.reason === "noActiveTurn" || lifecycle.reason === "interrupted" || lifecycle.reason === "providerFailed"
+        || lifecycle.reason === "agentBlocked"
         || (snoozed && lifecycle.reason === "pendingInput")));
   const active = launching || isThreadActive(thread) && !inactiveByWorkbenchState;
   const compactDisabled = isCompacting || active;

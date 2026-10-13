@@ -67,6 +67,7 @@ interface ThreadStateRow {
   turn_id: WorkbenchTurnId | null;
   request_key: string | null;
   agent_status: "working" | "completed" | "blocked" | null;
+  error_text: string | null;
   settled_at: number | null;
   git_history_cleaned_at: number | null;
   mcp_generation: string | null;
@@ -77,7 +78,7 @@ const SELECT_THREAD_STATES = `
     child.parent_thread_id, child.cwd, child.name, child.profile_id, child.profile_name,
     child.direct_subagent_index, child.created_at, child.updated_at, child.pinned AS child_pinned,
     lifecycle.lifecycle_kind, lifecycle.reason, lifecycle.settled, lifecycle.turn_id,
-    lifecycle.request_key, lifecycle.agent_status,
+    lifecycle.request_key, lifecycle.agent_status, lifecycle.error_text,
     retention.settled_at, retention.git_history_cleaned_at, retention.mcp_generation
   FROM workbench_thread_states state
   JOIN workbench_threads thread ON thread.id = state.thread_id
@@ -121,19 +122,6 @@ function decodeProfileRow(row: Record<string, SqlValue> | ProfileRow) {
     },
     ...(row.approval_mode !== null && row.approval_mode !== undefined ? { approvalMode: row.approval_mode } : {}),
   });
-}
-
-function lifecycleRow(lifecycle: WorkbenchThreadLifecycle) {
-  const agent = "agent" in lifecycle ? lifecycle.agent : undefined;
-  const providerTurnId = "turnId" in lifecycle ? lifecycle.turnId : agent?.turnId ?? null;
-  return {
-    lifecycle_kind: lifecycle.kind,
-    reason: lifecycle.reason,
-    settled: lifecycle.settled ? 1 : 0,
-    provider_turn_id: providerTurnId ?? null,
-    request_key: "requestKey" in lifecycle ? lifecycle.requestKey : null,
-    agent_status: agent?.agentStatus ?? (lifecycle.kind === "working" ? "working" : null),
-  } satisfies SqlRow;
 }
 
 export default class WorkbenchThreadStateRelationalRepository {
@@ -609,9 +597,10 @@ export default class WorkbenchThreadStateRelationalRepository {
       turn_id: "turnId" in lifecycle ? lifecycle.turnId : agent?.turnId ?? null,
       request_key: "requestKey" in lifecycle ? lifecycle.requestKey : null,
       agent_status: agent?.agentStatus ?? null,
+      error_text: "error" in lifecycle ? lifecycle.error : null,
     };
     const previousLifecycle = this.database.prepare(`
-      SELECT thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status
+      SELECT thread_id, lifecycle_kind, reason, settled, turn_id, request_key, agent_status, error_text
       FROM workbench_thread_lifecycle WHERE thread_id = ?
     `).get(threadId);
     if (!isDeepStrictEqual(previousLifecycle, lifecycleFacts)) {
@@ -750,6 +739,7 @@ export default class WorkbenchThreadStateRelationalRepository {
       }),
       ...(row.turn_id !== null && row.agent_status === null ? { turnId: row.turn_id } : {}),
       ...(row.request_key === null ? {} : { requestKey: row.request_key }),
+      ...(row.error_text === null ? {} : { error: row.error_text }),
     });
     const { profile, questionnaires, titles, dependencies } = related;
     const common = {

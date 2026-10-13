@@ -1,26 +1,13 @@
 /*
  * Exports:
- * - default ThreadErrorCard: render the latest provider error while a thread remains in system-error state.
+ * - default ThreadErrorCard: render the thread error a failed provider turn left until the thread continues.
  */
 
-import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { CircleAlertIcon } from "../workbench-icons";
 
-export default function ThreadErrorCard({
-  status,
-  lastTurn,
-}: {
-  status: string;
-  lastTurn: Pick<Turn, "error"> | null;
-}) {
-  if (status !== "systemError") {
-    return null;
-  }
-
-  const message = lastTurn?.error?.message.trim();
-  if (!message) {
-    return null;
-  }
+export default function ThreadErrorCard({ lifecycle }: { lifecycle: WorkbenchThreadLifecycle | null | undefined }) {
+  if (lifecycle?.kind !== "needsAttention" || lifecycle.reason !== "providerFailed") return null;
 
   return (
     <section
@@ -30,7 +17,7 @@ export default function ThreadErrorCard({
       role="alert"
     >
       <CircleAlertIcon className="mt-[0.1em] shrink-0" size={16} />
-      <p className="m-0 min-w-0 whitespace-pre-wrap text-[0.86em] leading-[1.55]">{message}</p>
+      <p className="m-0 min-w-0 whitespace-pre-wrap text-[0.86em] leading-[1.55]">{lifecycle.error}</p>
     </section>
   );
 }
