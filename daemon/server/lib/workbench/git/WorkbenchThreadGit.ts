@@ -12,6 +12,7 @@ import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { readRegisteredGitWorktrees } from "../../git";
 import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabaseController";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitHistoryRewriter, { type WorkbenchGitIdentityOverride } from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { gitProcesses } from "./GitProcessHost";
@@ -175,6 +176,11 @@ export default class WorkbenchThreadGit {
    * identity and co-author changes apply to every selected commit.
    */
   async amend(request: WorkbenchThreadGitAmendRequest): Promise<WorkbenchThreadGitCommitResult> {
+    // One operation scope shares a single object stream and actor/format memos across every rewrite step.
+    return await GitObjectReadSession.run(() => this.amendInScope(request));
+  }
+
+  private async amendInScope(request: WorkbenchThreadGitAmendRequest): Promise<WorkbenchThreadGitCommitResult> {
     const repository = new WorkbenchGitRepository(this.repoRoot);
     const targets: string[] = [];
     for (const commit of request.commits) targets.push(await repository.resolveCommit(commit));

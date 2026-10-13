@@ -5,6 +5,7 @@
  * - GitCommitIdentity/GitCommitBatch/GitBlobBatch: parsed metadata and per-object batch results.
  * - GIT_STATE_GENERATION_REF: per-worktree mutation generation ref.
  * Notable members: normalizeCommitActor lets Git canonicalise actor dates; listFirstParentRange expands `base..tip`;
+ * firstParentRange walks only from HEAD back to the amend target; currentHead and readCommitMessage read through the operation's object stream;
  * object writes, tree-to-tree path changes and writeTreeWithPathSources run in-process (GitObjectWriter/GitTreeObjects);
  * readCheckoutBytes materialises selected tree entries through Git's checkout filters in one disposable temporary index;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
@@ -370,7 +371,9 @@ export default class WorkbenchGitRepository {
   }
 
   async currentHead() {
-    return (await this.run(["rev-parse", "HEAD"])).trim();
+    const [object] = await GitObjectReadSession.read(this.root, ["HEAD^{commit}"], "info");
+    if (!object || object.type !== "commit") throw new Error("Git HEAD does not resolve to a commit.");
+    return object.objectId;
   }
 
   async headOrNull(): Promise<string | null> {
@@ -509,8 +512,11 @@ export default class WorkbenchGitRepository {
     return result;
   }
 
+  /** The message exactly as `git show -s --format=%B` prints it: raw message plus the format terminator. */
   async readCommitMessage(commit: string) {
-    return await this.run(["show", "-s", "--format=%B", commit]);
+    const resolved = await this.readCommitAt(commit);
+    if (!resolved) throw new Error(`Git object ${commit} is missing.`);
+    return `${resolved.identity.message}\n`;
   }
 
   async refsPointingAt(commit: string, ...namespaces: string[]) {
@@ -921,12 +927,13 @@ export default class WorkbenchGitRepository {
     };
   }
 
+  /** `target` through `head` along first parents; the walk stops at the target's parents instead of the root. */
   async firstParentRange(target: string, head: string) {
-    const commits = (await this.run(["rev-list", "--reverse", "--first-parent", head]))
+    const { parents } = await this.readCommit(target);
+    const commits = (await this.run(["rev-list", "--reverse", "--first-parent", head, ...parents.length ? ["--not", ...parents] : [], "--"]))
       .split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
-    const targetIndex = commits.indexOf(target);
-    if (targetIndex < 0) throw new Error("Amend target is not on the current branch's first-parent chain.");
-    return commits.slice(targetIndex);
+    if (commits[0] !== target) throw new Error("Amend target is not on the current branch's first-parent chain.");
+    return commits;
   }
 
   /** Refs under the namespaces with their values and object types; shared within an operation until it publishes refs. */

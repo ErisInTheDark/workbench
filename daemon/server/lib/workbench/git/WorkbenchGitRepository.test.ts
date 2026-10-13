@@ -102,6 +102,33 @@ test("Git arc ref publication supports admitted object formats and ref backends"
   });
 });
 
+test("first-parent ranges and commit messages read history exactly", async context => {
+  const root = await initialiseRepository(context, "sha1", "files");
+  assert.ok(root);
+  const commit = async (message: string) => {
+    await git(root, ["commit", "--quiet", "--allow-empty", "--cleanup=verbatim", "-m", message]);
+    return (await git(root, ["rev-parse", "HEAD"])).trim();
+  };
+  const base = (await git(root, ["rev-parse", "HEAD"])).trim();
+  await git(root, ["checkout", "--quiet", "-b", "side"]);
+  const side = await commit("side");
+  await git(root, ["checkout", "--quiet", "main"]);
+  const first = await commit("first");
+  await git(root, ["merge", "--quiet", "--no-ff", "side", "-m", "merge"]);
+  const merge = (await git(root, ["rev-parse", "HEAD"])).trim();
+  const head = await commit("subject\n\nbody without trailing newline");
+  const repository = new WorkbenchGitRepository(root);
+
+  await GitObjectReadSession.run(async () => {
+    assert.equal(await repository.currentHead(), head);
+    assert.deepEqual(await repository.firstParentRange(first, head), [first, merge, head]);
+    assert.deepEqual(await repository.firstParentRange(base, head), [base, first, merge, head]);
+    assert.deepEqual(await repository.firstParentRange(head, head), [head]);
+    await assert.rejects(repository.firstParentRange(side, head), /first-parent chain/u);
+    assert.equal(await repository.readCommitMessage(head), await git(root, ["show", "-s", "--format=%B", head]));
+  });
+});
+
 test("object-only three-way merges return text markers without disturbing Git operation state", async (context) => {
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
   context.after(fixture.dispose);
