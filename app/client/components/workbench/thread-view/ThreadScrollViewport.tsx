@@ -131,7 +131,7 @@ function ActiveThreadScrollViewport ({
   const bottomListeners = useRef(new Set<() => void>());
   const readerMovedListeners = useRef(new Set<() => void>());
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
-  const progressiveWindowStartsRef = useRef(new Map<string, number>());
+  const progressiveWindowStartsRef = useRef(new Map<string, string>());
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
     const metrics = readScrollMetrics(viewport);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);

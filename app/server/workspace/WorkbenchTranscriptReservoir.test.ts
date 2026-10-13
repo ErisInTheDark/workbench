@@ -95,6 +95,73 @@ function result(threadId: string, itemId: string, text: string, hasMore = false)
   };
 }
 
+function turnResult(itemId: string, turnIndex: number, hasMore: boolean): WorkbenchTranscriptPrefetchResult {
+  const base = result("thread", itemId, itemId, hasMore);
+  const envelope = base.envelopes[0]!;
+  const turnId = `turn-${turnIndex}`;
+  const rows = {
+    ...envelope.snapshot.rows,
+    threadItems: envelope.snapshot.rows.threadItems.map(item => ({ ...item, turn_id: turnId })),
+  };
+  const turns = envelope.snapshot.turns.map(turn => ({ ...turn, id: turnId, native_turn_id: turnId, turn_index: turnIndex }));
+  return {
+    ...base,
+    envelopes: [{
+      ...envelope,
+      cursor: { ...envelope.cursor, turnIndex },
+      snapshot: { ...envelope.snapshot, loadedTurnIds: [turnId], rows, turns },
+    }],
+  };
+}
+
+test("a live seed that does not reach the cached range replaces it, so pages never skip a gap", async () => {
+  const fills = [turnResult("old", 1, true), turnResult("between", 4, false)];
+  const requests: unknown[] = [];
+  const reservoir = new WorkbenchTranscriptReservoir({ maxBytes: 64 * 1024 });
+  reservoir.registerSource({
+    daemonId: "daemon",
+    generation: 1,
+    prefetch: async request => {
+      requests.push(request.before ?? null);
+      return fills.shift()!;
+    },
+  });
+  const earlier = reservoir.open({ consumerId: "earlier", daemonId: "daemon", generation: 1, threadId: "thread" });
+  assert.deepEqual((await earlier.demand(1)).envelopes.map(envelope => envelope.itemId), ["old"]);
+  earlier.release();
+
+  reservoir.seed({ daemonId: "daemon", generation: 1, replaceTurnIds: ["turn-5"], result: turnResult("live", 5, true), threadId: "thread" });
+  const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+  const page = await lease.demand(2);
+  assert.deepEqual(page.envelopes.map(envelope => envelope.itemId), ["between", "live"]);
+  assert.deepEqual(requests[1], { itemId: "live", itemPosition: 0, turnIndex: 5 }, "refill continues below the live window");
+  reservoir.dispose();
+});
+
+test("a live seed overlapping the cached range keeps the older cache", async () => {
+  const fills = [turnResult("first", 0, true), turnResult("second", 1, true)];
+  let prefetches = 0;
+  const reservoir = new WorkbenchTranscriptReservoir({ maxBytes: 64 * 1024 });
+  reservoir.registerSource({
+    daemonId: "daemon",
+    generation: 1,
+    prefetch: async () => {
+      prefetches += 1;
+      return fills.pop()!;
+    },
+  });
+  const earlier = reservoir.open({ consumerId: "earlier", daemonId: "daemon", generation: 1, threadId: "thread" });
+  await earlier.demand(1);
+  await earlier.demand(1);
+  earlier.release();
+
+  reservoir.seed({ daemonId: "daemon", generation: 1, replaceTurnIds: ["turn-1"], result: turnResult("second-live", 1, true), threadId: "thread" });
+  const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+  assert.deepEqual((await lease.demand(2)).envelopes.map(envelope => envelope.itemId), ["first", "second-live"]);
+  assert.equal(prefetches, 2);
+  reservoir.dispose();
+});
+
 test("repeated demand coalesces one refill and source replacement aborts every retained owner", async () => {
   const fill = deferred<WorkbenchTranscriptPrefetchResult>();
   let calls = 0;

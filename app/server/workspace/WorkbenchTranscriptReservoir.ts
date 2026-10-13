@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptReservoirDiagnostics: reachable retention and lifecycle counts for leak diagnostics.
  * - WorkbenchTranscriptReservoirLease: one browser's constant-size contiguous transcript demand.
- * - default WorkbenchTranscriptReservoir: own global serialized transcript retention, eviction, coalesced refill, fairness, and source generations.
+ * - default WorkbenchTranscriptReservoir: own global serialized transcript retention, eviction, coalesced refill, fairness, contiguous live seeding, and source generations.
  */
 import type {
   WorkbenchTranscriptItemCursor,
@@ -171,6 +171,7 @@ export default class WorkbenchTranscriptReservoir {
     if (this.#disposed) throw new Error("Transcript reservoir is disposed.");
     const source = this.#sources.get(input.daemonId);
     if (!source || source.generation !== input.generation) throw sourceChangedError();
+    this.#dropDisconnected(source, input.threadId, input.result);
     this.#insert(source, input.threadId, input.result, input.replaceTurnIds);
     this.#fulfil(source, input.threadId);
     if (this.#hasPendingDemand(source, input.threadId) && input.result.hasMore) {
@@ -364,6 +365,19 @@ export default class WorkbenchTranscriptReservoir {
     this.#residentBytes += block.bytes;
     this.#evict(block);
     return result.envelopes.length > 0;
+  }
+
+  /**
+   * Cached blocks must stay one contiguous range ending at the newest item. A live window seeds whole turns, so a
+   * cache ending in an older turn may be missing everything in between and has to be refilled below the seed.
+   */
+  #dropDisconnected(source: SourceState, threadId: string, seeded: WorkbenchTranscriptPrefetchResult) {
+    const thread = this.#threads.get(this.#threadKey(source.daemonId, source.generation, threadId));
+    const seededOldestTurn = Math.min(...seeded.envelopes.map(envelope => envelope.cursor.turnIndex));
+    if (!thread || !Number.isFinite(seededOldestTurn)) return;
+    const cachedNewestTurn = Math.max(-1, ...thread.blocks.flatMap(block => block.envelopes.map(envelope => envelope.cursor.turnIndex)));
+    if (cachedNewestTurn >= seededOldestTurn) return;
+    for (const block of [...thread.blocks]) this.#removeBlock(block);
   }
 
   #evict(inserted: Block) {

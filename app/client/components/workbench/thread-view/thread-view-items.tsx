@@ -122,6 +122,7 @@ import ThreadContextCommandItem from "./ThreadContextCommandItem";
 import Disclosure, { DisclosureStaticRow } from "../../ui/Disclosure";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import ThreadProgressiveWindow, { type ThreadProgressiveWindowChunk } from "./ThreadProgressiveWindow";
+import ThreadStableChunkIdentities from "./ThreadStableChunkIdentities";
 import ThreadGenericItem from "./ThreadGenericItem";
 import ThreadDurationText from "./ThreadDurationText";
 import ThreadDynamicToolCallItem from "./ThreadDynamicToolCallItem";
@@ -2989,6 +2990,21 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
   let stableBlockIndex = 0;
   const stableEntries = entries.map(entry => entry.kind === "block"
     ? { ...entry, block: stableBlocks[stableBlockIndex++]! } : entry);
+  // Content keys, never positions: history landing above must not re-key the rows already on screen.
+  const keyOccurrences = new Map<string, number>();
+  const entryKeys = stableEntries.map(entry => {
+    const base = entry.kind === "generic"
+      ? `generic:${entry.item.id}`
+      : initialInactiveItemIds
+        ? `${entry.block.kind}:${getRenderableBlockItems(entry.block)[0]?.id}`
+        : getRenderableBlockKey(entry.block);
+    const occurrence = (keyOccurrences.get(base) ?? 0) + 1;
+    keyOccurrences.set(base, occurrence);
+    return occurrence > 1 ? `${base}#${occurrence}` : base;
+  });
+  const chunkIdentitiesRef = useRef<ThreadStableChunkIdentities | null>(null);
+  chunkIdentitiesRef.current ??= new ThreadStableChunkIdentities();
+  const chunkIdentities = chunkIdentitiesRef.current;
 
   const primaryUserBlock = stableEntries.flatMap((entry) => (
     entry.kind === "block" && entry.block.kind === "item" && entry.block.item.id === initialUserItemId
@@ -2998,12 +3014,6 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     item.type === "agentMessage" && item.phase === "final_answer"
   ))?.id
     ?? null;
-  const getRenderEntryKey = (entry: RenderEntry, index: number) => {
-    const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
-    return entry.kind === "generic" ? `generic:${entry.item.id}` : initialInactiveItemIds
-      ? `${entry.block.kind}:${firstItem?.id}`
-      : `${getRenderableBlockKey(entry.block)}:${index}`;
-  };
   const renderEntry = (entry: RenderEntry, index: number) => {
     const firstItem = entry.kind === "block" ? getRenderableBlockItems(entry.block)[0] : null;
     const identity = entry.kind === "generic"
@@ -3014,7 +3024,7 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
     return <ThreadEntryMotion
       enabled={animateEntries && !(entry.kind === "block" && entry.block.kind === "fileChangeSequence")}
       identity={identity}
-      key={getRenderEntryKey(entry, index)}
+      key={entryKeys[index]}
     >
       {(animate) => <div className={animate ? `block ${enterMotionClassName}` : undefined}>
         {entry.kind === "generic" ? (
@@ -3048,48 +3058,51 @@ export const ThreadTranscriptItemsDetails = memo(function ThreadTranscriptItemsD
       </div>}
     </ThreadEntryMotion>;
   };
-  const renderWindowedEntries = (windowEntries: RenderEntry[], start: number) => {
-    const chunks: RenderEntry[][] = [];
-    for (let index = 0; index < windowEntries.length; index += THREAD_WINDOW_CHUNK_SIZE) {
-      chunks.push(windowEntries.slice(index, index + THREAD_WINDOW_CHUNK_SIZE));
-    }
-    let chunkOffset = 0;
-    const progressiveChunks: ThreadProgressiveWindowChunk[] = chunks.map((chunk) => {
-      const chunkStart = start + chunkOffset;
-      chunkOffset += chunk.length;
-      const firstEntry = chunk[0]!;
-      const key = `window:${getRenderEntryKey(firstEntry, chunkStart)}`;
-      return {
-        key,
-        content: (
-          <ThreadMeasuredContent
-            key={key}
-            visibilityRange="approaching"
-            windowed
-          >
-            <div className="space-y-2">
-              {chunk.map((entry, index) => renderEntry(entry, chunkStart + index))}
-            </div>
-          </ThreadMeasuredContent>
-        ),
-      };
-    });
+  const renderWindowedEntries = (windowEntries: RenderEntry[], start: number, groupIdentity: string) => {
+    const windowKeys = entryKeys.slice(start, start + windowEntries.length);
+    const progressiveChunks: ThreadProgressiveWindowChunk[] = chunkIdentities
+      .chunks(groupIdentity, windowKeys, THREAD_WINDOW_CHUNK_SIZE)
+      .map((chunk) => {
+        const key = `window:${chunk.identity}`;
+        return {
+          key,
+          content: (
+            <ThreadMeasuredContent
+              key={key}
+              visibilityRange="approaching"
+              windowed
+            >
+              <div className="space-y-2">
+                {windowEntries.slice(chunk.start, chunk.end).map((entry, index) => renderEntry(entry, start + chunk.start + index))}
+              </div>
+            </ThreadMeasuredContent>
+          ),
+        };
+      });
     return (
       <ThreadProgressiveWindow
-        key={`progressive:${turnId}:${start}`}
+        key={`progressive:${turnId}:${groupIdentity}`}
         chunks={progressiveChunks}
-        identity={`${turnId}:${start}`}
+        identity={`${turnId}:${groupIdentity}`}
       />
     );
   };
-  let offset = 0;
   const groups = initialInactiveItemIds ? partitionWorkedRows(stableEntries) : [stableEntries];
-  const progressiveGroups: ThreadProgressiveWindowChunk[] = groups.map(group => {
-    const start = offset;
+  const groupStarts: number[] = [];
+  let offset = 0;
+  for (const group of groups) {
+    groupStarts.push(offset);
     offset += group.length;
-    const children = renderWindowedEntries(group, start);
+  }
+  const groupIdentities = chunkIdentities.groups(groups.map((group, index) => (
+    entryKeys.slice(groupStarts[index]!, groupStarts[index]! + group.length)
+  )));
+  const progressiveGroups: ThreadProgressiveWindowChunk[] = groups.map((group, groupIndex) => {
+    const start = groupStarts[groupIndex]!;
+    const groupIdentity = groupIdentities[groupIndex]!;
+    const children = renderWindowedEntries(group, start, groupIdentity);
     const firstEntry = group[0];
-    const key = firstEntry ? `group:${getRenderEntryKey(firstEntry, start)}` : `group:${turnId}:${start}`;
+    const key = `group:${groupIdentity}`;
     if (!firstEntry?.eligible) return { key, content: children };
     const ids = group.flatMap(entry => entry.kind === "block" ? getRenderableBlockItems(entry.block).map(item => item.id) : [entry.item.id]);
     const activity = ids.map(id => {

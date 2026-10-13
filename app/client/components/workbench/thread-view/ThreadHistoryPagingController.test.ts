@@ -90,6 +90,16 @@ test("automatic paging waits for a dwell and cancels when the reader leaves", ()
   assert.equal(f.loads, 1);
 });
 
+test("continuous upward scrolling at the top still loads after one dwell", () => {
+  const f = fixture();
+  f.controller.reconcile();
+  for (let elapsed = 0; elapsed < 500; elapsed += 100) {
+    f.move(true);
+    f.advance(100);
+  }
+  assert.equal(f.loads, 1);
+});
+
 test("retention suppression blocks exposed-sentinel reload until upward history intent", () => {
   const f = fixture();
   f.controller.reconcile();

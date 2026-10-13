@@ -61,6 +61,11 @@ export default class WorkbenchDeliveredTranscriptWindow {
     return this.#projection !== null;
   }
 
+  /** Live changes can be rebased: a baseline was delivered, or an empty thread waits for its first live one. */
+  get acceptsLive() {
+    return this.#projection !== null || this.#awaitingLiveBaseline;
+  }
+
   get loadedTurnIds(): readonly string[] {
     return this.#layout?.turns ?? [];
   }

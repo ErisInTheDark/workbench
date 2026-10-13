@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { Fragment, useMemo, useState, type Ref } from "react";
+import { Fragment, useMemo, useRef, type Ref } from "react";
 
 import type {
   ThreadPayload,
@@ -22,6 +22,7 @@ import { useStableBrowseResultEntriesByTurn } from "./stable-browse-result-entri
 import type { ThreadReasoningStepReference } from "./thread-reasoning-display";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import { ThreadTranscriptItemsDetails } from "./thread-view-items";
+import { admitSettledItems, type SettledItemAdmission } from "./thread-worked-run";
 
 const EMPTY_BROWSE_RESULT_ENTRIES: readonly WorkbenchBrowseResultEntry[] = [];
 
@@ -41,8 +42,10 @@ function mergeAdjacentTurnSegments(
         items: [...previous.items, ...segment.items],
       };
     } else {
+      // Keyed by turn, not by its first segment: history landing inside a turn must not remount the whole turn.
+      const repeats = result.filter(entry => entry.turnId === segment.turnId).length;
       result.push({
-        id: segment.id,
+        id: repeats ? `${segment.turnId}#${repeats + 1}` : segment.turnId,
         isFirstForTurn: segment.isFirstForTurn,
         items: segment.items,
         turnId: segment.turnId,
@@ -84,16 +87,13 @@ export default function ThreadTranscriptProjection({
   subagents: readonly WorkbenchSubagentSummary[];
   workspaceRoots: readonly WorkspaceFileLinkRoot[];
 }) {
-  const [initialInactive, setInitialInactive] = useState(() => ({
-    threadId: projection.thread.id,
-    itemIds: new Set(projection.turns.filter(turn => turn.id !== liveTurnId).flatMap(turn => turn.items.map(item => item.id))),
-  }));
-  if (initialInactive.threadId !== projection.thread.id) {
-    setInitialInactive({
-      threadId: projection.thread.id,
-      itemIds: new Set(projection.turns.filter(turn => turn.id !== liveTurnId).flatMap(turn => turn.items.map(item => item.id))),
-    });
+  const settledRef = useRef<{ threadId: string; admission: SettledItemAdmission } | null>(null);
+  if (settledRef.current?.threadId !== projection.thread.id) {
+    settledRef.current = { threadId: projection.thread.id, admission: admitSettledItems(null, projection.turns, liveTurnId) };
+  } else {
+    settledRef.current.admission = admitSettledItems(settledRef.current.admission, projection.turns, liveTurnId);
   }
+  const settledItemIds = settledRef.current.admission.settled;
   // A turn renders live only while the thread works on it; an orphaned provider status renders settled.
   const displayStatus = (turn: WorkbenchTranscriptProjection["turns"][number]) => turn.id === liveTurnId ? "inProgress" as const
     : turn.status === "inProgress" ? "completed" as const : turn.status;
@@ -139,7 +139,7 @@ export default function ThreadTranscriptProjection({
                 : "pb-3"}
               >
                 <ThreadTranscriptItemsDetails
-                  initialInactiveItemIds={initialInactive.threadId === projection.thread.id ? initialInactive.itemIds : new Set<string>()}
+                  initialInactiveItemIds={settledItemIds}
                   initialUserItemId={turn.items.find((item) => item.type === "userMessage")?.id ?? null}
                   browseResultEntries={browseResultEntries}
                   hiddenReasoningStep={hiddenReasoningStep}

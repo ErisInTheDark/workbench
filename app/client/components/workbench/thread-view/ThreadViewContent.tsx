@@ -78,7 +78,7 @@ import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
 import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadRateLimits from "./ThreadRateLimits";
-import ThreadEntryMotionController, { getThreadEntryMotionIdentities } from "./ThreadEntryMotionController";
+import ThreadEntryMotionController, { getProjectedEntryMotionIdentities } from "./ThreadEntryMotionController";
 import ThreadWorkedRunController from "./ThreadWorkedRunController";
 import {
   ThreadScrollViewportContext,
@@ -406,21 +406,27 @@ export default memo(function ThreadViewContent ({
     workedRunController: ThreadWorkedRunController;
     key: string;
     seeded: boolean;
+    admitted: WorkbenchTranscriptProjection["turns"] | null;
   } | null>(null);
   // Items already present when the turns first arrive are history, not new activity: they never animate in.
-  const motionTurns = activeTranscriptProjection ? activeTurns.turns : null;
-  const motionIdentities = (turns: readonly Turn[]) => turns.flatMap(turn => turn.items.flatMap(getThreadEntryMotionIdentities));
+  // Seeded from the rendered projection: the provider-item turns omit generic and interaction items.
+  const motionTurns = activeTranscriptProjection?.turns ?? null;
+  const motionIdentities = (turns: NonNullable<typeof motionTurns>) => turns.flatMap(turn => turn.items.flatMap(getProjectedEntryMotionIdentities));
   if (entryMotionOwnerRef.current?.key !== entryMotionOwnerKey) {
     entryMotionOwnerRef.current = {
       controller: new ThreadEntryMotionController(motionTurns ? motionIdentities(motionTurns) : undefined),
       workedRunController: new ThreadWorkedRunController(),
       key: entryMotionOwnerKey,
       seeded: Boolean(motionTurns),
+      admitted: null,
     };
   } else if (!entryMotionOwnerRef.current.seeded && motionTurns) {
     entryMotionOwnerRef.current.controller.seed(motionIdentities(motionTurns));
     entryMotionOwnerRef.current.seeded = true;
+  } else if (motionTurns && entryMotionOwnerRef.current.admitted !== motionTurns) {
+    entryMotionOwnerRef.current.controller.admit(motionIdentities(motionTurns));
   }
+  if (entryMotionOwnerRef.current.seeded) entryMotionOwnerRef.current.admitted = motionTurns;
   const entryMotionController = entryMotionOwnerRef.current.controller;
   const workedRunController = entryMotionOwnerRef.current.workedRunController;
   const entryMotionContext = useMemo(() => ({
@@ -1037,6 +1043,8 @@ export default memo(function ThreadViewContent ({
       : activeTranscriptSource?.status === "unavailable"
         ? "The SQLite transcript source is unavailable."
         : null;
+  // Thread chrome under the transcript waits for it, so opening goes skeleton -> whole view in one step.
+  const transcriptCanRender = !usesSqlTranscript || activeTranscriptProjection !== null || transcriptSourceMessage !== null;
   const initialThreadContentReady = Boolean(
     activeThread && (!usesSqlTranscript || activeTranscriptProjection || transcriptSourceMessage),
   );
@@ -1175,7 +1183,7 @@ export default memo(function ThreadViewContent ({
           )}
           </>}
         </div>
-        {activeThread && !isMessageBoardOpen && (liveActivityView || !isDraftThreadView) ? (
+        {activeThread && transcriptCanRender && !isMessageBoardOpen && (liveActivityView || !isDraftThreadView) ? (
           <ThreadStatusArea
             addressedFeedback={active.head?.addressedFeedback ?? []}
             // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
@@ -1219,7 +1227,7 @@ export default memo(function ThreadViewContent ({
             } : null}
           />
         ) : null}
-        {activeThread && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
+        {activeThread && transcriptCanRender && !isDraftThreadView ? <ThreadErrorCard lastTurn={activityTurn} status={activeThread.status} /> : null}
         {agentTabs ? (
           <div className="mt-6">{agentTabs}</div>
         ) : null}

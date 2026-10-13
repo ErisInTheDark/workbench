@@ -28,6 +28,14 @@ test("selected-thread items seed without motion and new entries animate only onc
   assert.equal(controller.shouldAnimate("new-tool"), true);
 });
 
+test("history landing above seen entries never animates, while entries after them still do", () => {
+  const controller = new ThreadEntryMotionController(["item:b", "item:c"]);
+  controller.admit(["item:a0", "item:a1", "item:b", "item:c", "item:d"]);
+  assert.equal(controller.shouldAnimate("item:a0"), false);
+  assert.equal(controller.shouldAnimate("item:a1"), false);
+  assert.equal(controller.shouldAnimate("item:d"), true);
+});
+
 test("presentation remounts share the logical entry admission", () => {
   const controller = new ThreadEntryMotionController();
 

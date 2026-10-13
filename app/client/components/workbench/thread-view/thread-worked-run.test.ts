@@ -3,7 +3,19 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canCollapseWorkedRun, reconcileWorkedRun, revealWorkedRun, workedRunReadyAt, type WorkedRunGate } from "./thread-worked-run";
+import {
+  admitSettledItems, canCollapseWorkedRun, reconcileWorkedRun, revealWorkedRun, workedRunReadyAt, type WorkedRunGate,
+} from "./thread-worked-run";
+
+const turn = (id: string, ...items: string[]) => ({ id, items: items.map(item => ({ id: item })) });
+
+test("history arriving later is settled on arrival, while a turn that finishes in view keeps its state", () => {
+  const opened = admitSettledItems(null, [turn("old", "a"), turn("live", "b")], "live");
+  assert.deepEqual([...opened.settled], ["a"]);
+  const paged = admitSettledItems(opened, [turn("older", "z"), turn("old", "a"), turn("live", "b", "c")], null);
+  assert.deepEqual([...paged.settled].sort(), ["a", "z"]);
+  assert.equal(admitSettledItems(paged, [turn("older", "z"), turn("old", "a"), turn("live", "b", "c")], null), paged);
+});
 
 const gate: WorkedRunGate = { count: 5, newestActivityAt: 100, initialInactive: false, above: true, now: 1_800_101 };
 

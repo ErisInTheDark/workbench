@@ -29,7 +29,10 @@ const REVEAL_LOOKAHEAD_SCREENS = 2;
 export default class ThreadProgressiveWindowController {
   readonly #options: ProgressiveWindowOptions;
   #identity: object | null = null;
-  /** Hidden count when the last reveal was requested; no further reveal until React commits it. */
+  /**
+   * Hidden count when the last reveal was requested; no further reveal until it changes. Chunks landing above can
+   * raise it while the reveal commits, so any change ends the wait, not only a drop.
+   */
   #pendingHiddenCount: number | null = null;
   #viewport: object | null = null;
 
@@ -45,7 +48,7 @@ export default class ThreadProgressiveWindowController {
     const view = this.#read();
     if (!view) return;
     if (this.#pendingHiddenCount !== null) {
-      if (view.hiddenCount >= this.#pendingHiddenCount) return;
+      if (view.hiddenCount === this.#pendingHiddenCount) return;
       this.#pendingHiddenCount = null;
     }
     if (view.hiddenCount <= 0) return;

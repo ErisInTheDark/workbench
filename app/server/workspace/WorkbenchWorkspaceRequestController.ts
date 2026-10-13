@@ -89,8 +89,19 @@ interface TranscriptSubscription {
   leaseGeneration: number | null;
   pendingDemand: Promise<void> | null;
   requestedCredit: number;
+  /** Item delivery starts on the lease's first live baseline, once that baseline has refreshed the reservoir. */
+  deliveryStarted: boolean;
+  /** Live events after that baseline but before the first delivery, replayed onto it rather than dropped. */
+  earlyLive: WorkbenchDaemonTranscriptEvent[];
   delivered: WorkbenchDeliveredTranscriptWindow;
   stop: Array<() => void>;
+}
+
+function isLiveBaseline(event: WorkbenchDaemonTranscriptEvent) {
+  if (event.kind === "transcriptSnapshot") return true;
+  if (event.kind !== "transcriptStream") return false;
+  const { update } = event.data;
+  return update.kind === "absent" || update.kind === "structure" && update.reset;
 }
 
 export default class WorkbenchWorkspaceRequestController {
@@ -330,6 +341,8 @@ export default class WorkbenchWorkspaceRequestController {
       leaseGeneration: null,
       pendingDemand: null,
       requestedCredit: query.initialItemCredit ?? 0,
+      deliveryStarted: false,
+      earlyLive: [],
       delivered: new WorkbenchDeliveredTranscriptWindow(),
       stop: [],
     };
@@ -338,6 +351,8 @@ export default class WorkbenchWorkspaceRequestController {
       subscription.lease?.release();
       subscription.lease = null;
       subscription.leaseGeneration = null;
+      subscription.deliveryStarted = false;
+      subscription.earlyLive = [];
       subscription.delivered.clear();
     };
     const openDelivery = (source: WorkbenchDaemonSource) => {
@@ -353,6 +368,9 @@ export default class WorkbenchWorkspaceRequestController {
       subscription.requestedCredit = Math.max(subscription.requestedCredit, initialItemCredit ?? 0);
     };
     const startDelivery = () => {
+      if (subscription.deliveryStarted || !subscription.lease) return;
+      subscription.deliveryStarted = true;
+      if (subscription.requestedCredit <= 0) return;
       void this.demandTranscript(id, subscription, subscription.requestedCredit).catch(error => {
         if (this.transcripts.get(id) !== subscription) return;
         const message = this.failure(error);
@@ -398,10 +416,8 @@ export default class WorkbenchWorkspaceRequestController {
             return;
           }
           try {
-            if (subscription.leaseGeneration !== source.socket.getSnapshot().generation) {
-              openDelivery(source);
-              startDelivery();
-            }
+            if (subscription.leaseGeneration !== source.socket.getSnapshot().generation) openDelivery(source);
+            if (isLiveBaseline(event)) startDelivery();
             this.receiveDeliveredTranscript(id, subscription, event);
           } catch (error) {
             const message = this.failure(error);
@@ -411,7 +427,6 @@ export default class WorkbenchWorkspaceRequestController {
             } });
           }
         });
-        if (subscription.lease && subscription.requestedCredit > 0) startDelivery();
       } catch (error) {
         closeDelivery();
         subscription.read = null;
@@ -1177,6 +1192,7 @@ export default class WorkbenchWorkspaceRequestController {
 
   private async demandTranscript(id: string, subscription: TranscriptSubscription, credit: number) {
     subscription.requestedCredit = Math.max(subscription.requestedCredit, credit);
+    if (!subscription.deliveryStarted) return;
     if (subscription.pendingDemand) {
       const pending = subscription.pendingDemand;
       await pending;
@@ -1202,9 +1218,13 @@ export default class WorkbenchWorkspaceRequestController {
         if (this.transcripts.get(id) !== subscription || subscription.lease !== lease) return;
         const update = subscription.delivered.deliver(result);
         if (update) this.publishTranscriptUpdate(id, update);
+        if (subscription.delivered.acceptsLive) {
+          for (const event of subscription.earlyLive.splice(0)) this.receiveDeliveredTranscript(id, subscription, event);
+        }
       }
     })().finally(() => {
       if (subscription.pendingDemand === work) subscription.pendingDemand = null;
+      if (!subscription.delivered.acceptsLive) subscription.earlyLive = [];
     });
     subscription.pendingDemand = work;
     return work;
@@ -1221,8 +1241,14 @@ export default class WorkbenchWorkspaceRequestController {
       ? event.data.snapshot ? { kind: "structure" as const, snapshot: event.data.snapshot, removedItemIds: [] } : { kind: "absent" as const }
       : event.data.update;
     if (update.kind === "absent") {
+      subscription.earlyLive = [];
       delivered.awaitLiveBaseline();
       this.publishTranscriptUpdate(id, update);
+      return;
+    }
+    if (!delivered.acceptsLive) {
+      // Bounded by the first delivery: once no demand is in flight, nothing would ever replay the buffer.
+      if (subscription.pendingDemand) subscription.earlyLive.push(event);
       return;
     }
     if (update.kind === "structure") {

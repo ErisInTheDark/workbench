@@ -5,6 +5,10 @@ import { randomUUID } from "node:crypto";
 import { DaemonIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { daemonObservationShape, type DaemonWorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation";
 import { diffObservationValue } from "workbench-shared/workbench/workspace/observation-patch";
+import {
+  emptyTranscriptSnapshotRows,
+  type WorkbenchTranscriptSnapshot,
+} from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchDaemonSource, { type WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
 
@@ -83,6 +87,51 @@ test("socket generations register one validated reservoir prefetch edge and remo
   assert.equal(reservoir.getDiagnostics().sources, 0);
   lease.release();
   release();
+});
+
+test("a streamed live baseline refreshes the reservoir's newest end", async context => {
+  const reservoir = new WorkbenchTranscriptReservoir();
+  const f = fixture(reservoir);
+  context.after(() => { f.source.dispose(); reservoir.dispose(); });
+  const threadId = randomUUID();
+  const transcript = f.source.observeTranscript({ threadId, turnLimit: 4, protocolVersion: 5, initialItemCredit: 1 }, () => {});
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = await socket.request("workbench/transcript/subscribe");
+  const rows = emptyTranscriptSnapshotRows();
+  rows.threadItems.push({
+    created_at: 1, id: 1, item_position: 0, public_id: "live-item", thread_id: threadId, turn_id: "turn", type: "assistantMessage", updated_at: 1,
+  });
+  rows.itemIdentities.push({ id: "live-item", thread_id: threadId });
+  rows.threadItemAssistantMessages.push({ item_id: 1, item_type: "assistantMessage", phase: "commentary", state: "completed", text: "newest" });
+  const snapshot: WorkbenchTranscriptSnapshot = {
+    hasPreviousTurns: true,
+    loadedTurnIds: ["turn"],
+    rows,
+    thread: {
+      activity_at: 1, archived: 0, created_at: 1, id: threadId, identity_origin: "workbench", next_turn_index: 1,
+      pinned: 0, project_id: "project", project_root: "C:/project", snoozed: 0, title: "thread",
+      transcript_content_version: 1, updated_at: 1,
+    },
+    turns: [{
+      created_at: 1, duration_ms: null, ended_at: null, harness_id: "codex", id: "turn", identity_origin: "workbench",
+      native_location: "C:/project", native_thread_id: threadId, native_turn_id: "turn", started_at: 1,
+      state: "inProgress", thread_id: threadId, turn_index: 3,
+    }],
+  };
+  socket.notify({ method: "workbench/transcript/streamed", params: {
+    subscriptionId: request.params.subscriptionId,
+    update: { kind: "structure", reset: true, snapshot, removedItemIds: [], layout: {}, hasPreviousTurns: true },
+  } });
+  socket.notify({ id: request.id, result: { subscribed: true } });
+  assert.equal(reservoir.getDiagnostics().blocks, 1, "the live window is cached before any browser demands it");
+
+  const lease = reservoir.open({ consumerId: "browser", daemonId: f.source.id, generation: f.source.socket.getSnapshot().generation, threadId });
+  const page = await lease.demand(1);
+  assert.deepEqual(page.envelopes.map(envelope => envelope.itemId), ["live-item"]);
+  assert.equal(socket.sent.some(item => item.method === "workbench/transcript/prefetch"), false);
+  lease.release();
+  transcript.release();
 });
 
 test("passive reload and update status leaves sleeping daemons cold while explicit work retains them", async context => {

@@ -35,18 +35,26 @@ export default function ThreadProgressiveWindow({
   const viewport = useThreadScrollViewportContext();
   const identityToken = useMemo(() => ({}), [identity]);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const [visibleStart, setVisibleStart] = useState(() => (
+  const initialStart = Math.max(0, chunks.length - INITIAL_CHUNK_COUNT);
+  // The first visible chunk is held by key, so chunks landing above stay hidden instead of shifting what is shown.
+  const [firstVisibleKey, setFirstVisibleKey] = useState<string | null>(() => (
     viewport.progressiveWindowing
-      ? viewport.progressiveWindowStarts?.get(identity) ?? Math.max(0, chunks.length - INITIAL_CHUNK_COUNT)
-      : 0
+      ? viewport.progressiveWindowStarts?.get(identity) ?? chunks[initialStart]?.key ?? null
+      : null
   ));
-  const visibleStartRef = useRef(visibleStart);
-  const boundedStart = Math.min(visibleStart, Math.max(0, chunks.length - INITIAL_CHUNK_COUNT));
+  const visibleStartRef = useRef(0);
+  const keyedStart = !viewport.progressiveWindowing ? 0
+    : firstVisibleKey === null ? initialStart
+    : chunks.findIndex(chunk => chunk.key === firstVisibleKey);
+  const boundedStart = Math.min(keyedStart < 0 ? visibleStartRef.current : keyedStart, initialStart);
   visibleStartRef.current = boundedStart;
+  const chunksRef = useRef(chunks);
+  chunksRef.current = chunks;
+  const firstVisibleChunkKey = chunks[boundedStart]?.key;
   // A windowed slice that unmounts and remounts must come back at its measured height, not one chunk.
   useEffect(() => {
-    viewport.progressiveWindowStarts?.set(identity, boundedStart);
-  }, [boundedStart, identity, viewport.progressiveWindowStarts]);
+    if (firstVisibleChunkKey !== undefined) viewport.progressiveWindowStarts?.set(identity, firstVisibleChunkKey);
+  }, [firstVisibleChunkKey, identity, viewport.progressiveWindowStarts]);
 
   const readView = useCallback(() => {
     const scrollTarget = viewport.getViewport();
@@ -62,8 +70,8 @@ export default function ThreadProgressiveWindow({
     };
   }, [identityToken, viewport]);
   const reveal = useCallback((count: number) => {
-    // From the bounded start: a chunk list that shrank must not swallow the reveal and leave it pending forever.
-    setVisibleStart(current => Math.max(0, Math.min(current, visibleStartRef.current) - count));
+    const next = chunksRef.current[Math.max(0, visibleStartRef.current - count)];
+    if (next) setFirstVisibleKey(next.key);
   }, []);
   const bindingsRef = useRef<ProgressiveWindowOptions>({ readView, reveal });
   bindingsRef.current = { readView, reveal };

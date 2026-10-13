@@ -65,9 +65,10 @@ export default class ThreadHistoryPagingController {
     if (this.#pending?.transaction === transaction) this.#pending = null;
   }
 
+  /** Upward intent keeps a running dwell: a reader wheeling steadily at the top must not restart it forever. */
   interrupt({ historyIntent = false }: { historyIntent?: boolean } = {}) {
     if (historyIntent) this.#historyIntentRequired = false;
-    this.#cancelScheduled();
+    else this.#cancelScheduled();
     this.reconcile();
   }
 

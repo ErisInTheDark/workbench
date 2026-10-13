@@ -1,12 +1,15 @@
 /*
  * Exports:
- * - default ThreadEntryMotionController: remember thread-owned logical entries across presentation remounts.
+ * - default ThreadEntryMotionController: remember thread-owned logical entries across presentation remounts, admitting
+ *   history that lands above seen entries without motion.
  * - getThreadEntryMotionIdentity: preserve user-input identity across optimistic and canonical item ids.
  * - getThreadFileChangeMotionIdentity: identify one streamed row within a file-change item.
  * - getThreadEntryMotionIdentities: enumerate one item's block and nested row motion identities.
+ * - getProjectedEntryMotionIdentities: the same for any rendered transcript item, generic and interaction included.
  */
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { WorkbenchProjectedTranscriptItem } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 export function getThreadEntryMotionIdentity(item: ThreadItem) {
   return item.type === "userMessage" && item.clientId
@@ -27,6 +30,13 @@ export function getThreadEntryMotionIdentities(item: ThreadItem) {
   ];
 }
 
+/** Every rendered transcript item, including generic and interaction items the provider-item turns leave out. */
+export function getProjectedEntryMotionIdentities(item: WorkbenchProjectedTranscriptItem) {
+  return item.type === "generic" || "requestKey" in item
+    ? [`item:${item.id}`]
+    : getThreadEntryMotionIdentities(item);
+}
+
 export default class ThreadEntryMotionController {
   private readonly seen: Set<string>;
 
@@ -36,6 +46,18 @@ export default class ThreadEntryMotionController {
 
   seed(identities: Iterable<string>) {
     for (const identity of identities) this.seen.add(identity);
+  }
+
+  /** Unseen entries ordered before the newest seen one are history arriving above the reader, never new activity. */
+  admit(ordered: readonly string[]) {
+    let newestSeen = -1;
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      if (this.seen.has(ordered[index]!)) {
+        newestSeen = index;
+        break;
+      }
+    }
+    for (let index = 0; index < newestSeen; index += 1) this.seen.add(ordered[index]!);
   }
 
   shouldAnimate(identity: string) {

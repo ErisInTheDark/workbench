@@ -473,6 +473,84 @@ test("bounded transcript delivery streams only browser-relevant changes and rele
   assert.equal(f.sources.transcriptReservoir.getDiagnostics().leases, 0);
 });
 
+test("item delivery starts from the live baseline and keeps live changes that race the first page", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const projectId = ProjectIdSchema.parse("owner-project");
+  const threadId = WorkbenchThreadIdSchema.parse(randomUUID());
+  const owner = {
+    phase: "current" as const,
+    identity: { harness: "codex" as const, projectId, threadId },
+    location: { daemonId, projectId },
+    logicalProjectId: null,
+  };
+  const available = transcriptPrefetch(threadId, 6);
+  const prefetched = { ...available, envelopes: available.envelopes.slice(0, 5) };
+  assert.ok(prefetched.catalog);
+  const catalog = prefetched.catalog;
+  let daemonReads = 0;
+  const fill = Promise.withResolvers<WorkbenchTranscriptPrefetchResult>();
+  let publishTranscript!: (event: WorkbenchDaemonTranscriptEvent) => void;
+  const source = {
+    id: daemonId,
+    socket: { getSnapshot: () => ({ generation: 1 }), onNotification: () => () => {} },
+    observeTranscript: (_query: object, publish: (event: WorkbenchDaemonTranscriptEvent) => void) => {
+      publishTranscript = publish;
+      return { release: () => {} };
+    },
+  };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined }, {
+    observe: () => ({ getSnapshot: () => owner, release: () => {} }),
+  });
+  f.sources.transcriptReservoir.registerSource({
+    daemonId,
+    generation: 1,
+    prefetch: () => {
+      daemonReads += 1;
+      return fill.promise;
+    },
+  });
+
+  const subscriptionId = randomUUID();
+  await f.owner.transcript({
+    kind: "subscribe",
+    params: { subscriptionId, threadId: ThreadReferenceSchema.parse("provider-thread"), turnLimit: 4, protocolVersion: 5, initialItemCredit: 2 },
+  });
+  assert.equal(daemonReads, 0, "the reservoir is not read before the live baseline can refresh it");
+  publishTranscript({ kind: "transcriptSnapshot", data: {
+    snapshot: composeWorkbenchTranscriptWindow(catalog, prefetched.envelopes, { hasPreviousItems: false }),
+    stream: "workbench:transcript",
+    subscriptionId: "upstream",
+  } });
+  assert.equal(daemonReads, 1);
+  publishTranscript({ kind: "transcriptStream", data: {
+    subscriptionId: "upstream",
+    update: {
+      hasPreviousTurns: true,
+      kind: "structure",
+      layout: {},
+      removedItemIds: [],
+      reset: false,
+      snapshot: composeWorkbenchTranscriptWindow(catalog, [available.envelopes[5]!], { hasPreviousItems: true }),
+    },
+  } });
+  fill.resolve(prefetched);
+
+  const structures = () => f.transcriptEvents.flatMap(event => event.kind === "transcriptStream"
+    && (event.data as WorkbenchTranscriptStreamedParams).subscriptionId === subscriptionId
+    && (event.data as WorkbenchTranscriptStreamedParams).update.kind === "structure"
+    ? [(event.data as WorkbenchTranscriptStreamedParams).update as TranscriptStructureUpdate] : []);
+  await f.waitTranscript(() => structures().length >= 2);
+  let layout: TranscriptLayout | null = null;
+  let projection: WorkbenchTranscriptProjection | null = null;
+  for (const update of structures()) {
+    layout = applyTranscriptLayoutPatch(update.reset ? null : layout, update.layout);
+    projection = applyTranscriptStructure(update.reset ? null : projection, update, layout);
+  }
+  assert.equal(structures()[0]!.reset, true);
+  assert.deepEqual(projection?.display.orderedItems.map(item => item.itemId), ["item-3", "item-4", "item-5"]);
+  await f.owner.transcript({ kind: "unsubscribe", params: { subscriptionId } });
+});
+
 test("provider-wide model changes reach browsers without thread demand", async context => {
   const f = await fixture(context);
   let notify: (notification: { method: "models/updated"; params: object }, harness: "opencode") => void = () => {

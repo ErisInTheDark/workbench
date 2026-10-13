@@ -31,6 +31,7 @@ import {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
 import { splitWorkbenchTranscriptSnapshot } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
 export type WorkbenchDaemonTranscriptEvent =
   | { kind: "transcriptSnapshot"; data: WorkbenchTranscriptUpdatedParams }
@@ -482,21 +483,7 @@ export default class WorkbenchDaemonSource {
       if (parsed.repairedPaths.length) this.options.warn(`Daemon transcript snapshot required ${parsed.repairedPaths.length} schema repairs.`);
       event = { kind: "transcriptSnapshot", data: parsed.data };
       baseline = true;
-      if (interest.request.protocolVersion === 5 && parsed.data.snapshot && this.options.transcriptReservoir) {
-        const partition = splitWorkbenchTranscriptSnapshot(parsed.data.snapshot);
-        this.options.transcriptReservoir.seed({
-          daemonId: this.id,
-          generation: this.socket.getSnapshot().generation,
-          replaceTurnIds: parsed.data.snapshot.loadedTurnIds,
-          result: {
-            catalog: partition.catalog,
-            envelopes: partition.envelopes,
-            hasMore: parsed.data.snapshot.hasPreviousTurns,
-            retainedBytes: partition.envelopes.reduce((sum, envelope) => sum + envelope.retainedBytes, 0),
-          },
-          threadId: interest.request.threadId,
-        });
-      }
+      if (parsed.data.snapshot) this.seedTranscriptReservoir(interest, parsed.data.snapshot);
     } else {
       const parsed = conformWorkbenchTranscriptStreamed(notification.params);
       if (!parsed.success) {
@@ -507,6 +494,9 @@ export default class WorkbenchDaemonSource {
       event = { kind: "transcriptStream", data: parsed.data };
       baseline = parsed.data.update.kind === "absent"
         || parsed.data.update.kind === "structure" && parsed.data.update.reset;
+      if (parsed.data.update.kind === "structure" && parsed.data.update.reset) {
+        this.seedTranscriptReservoir(interest, parsed.data.update.snapshot);
+      }
     }
     const generation = this.socket.getSnapshot().generation;
     if (baseline) {
@@ -519,6 +509,24 @@ export default class WorkbenchDaemonSource {
     for (const listener of interest.listeners.values()) {
       if (listener.generation === generation) this.deliver(() => listener.publish(event));
     }
+  }
+
+  /** Every live baseline refreshes the reservoir's newest end, so item delivery never starts from a stale cache. */
+  private seedTranscriptReservoir(interest: TranscriptInterest, snapshot: WorkbenchTranscriptSnapshot) {
+    if (interest.request.protocolVersion !== 5 || !this.options.transcriptReservoir) return;
+    const partition = splitWorkbenchTranscriptSnapshot(snapshot);
+    this.options.transcriptReservoir.seed({
+      daemonId: this.id,
+      generation: this.socket.getSnapshot().generation,
+      replaceTurnIds: snapshot.loadedTurnIds,
+      result: {
+        catalog: partition.catalog,
+        envelopes: partition.envelopes,
+        hasMore: snapshot.hasPreviousTurns,
+        retainedBytes: partition.envelopes.reduce((sum, envelope) => sum + envelope.retainedBytes, 0),
+      },
+      threadId: interest.request.threadId,
+    });
   }
 
   private failTranscript(interest: TranscriptInterest, message: string) {
