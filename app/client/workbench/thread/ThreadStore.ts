@@ -9,6 +9,7 @@
  * - ThreadStoreSource: one feed that publishes slices and owns actions and deferred transcript bodies (legacy document owner or observed daemon channels).
  * - ThreadInterest: how much of a thread one consumer needs.
  * - ThreadFeed: which feed backs a store (observed daemon channels, or a local draft document).
+ * - EMPTY_THREAD_STORE_STATE: initial empty slices shared by stores and unavailable views.
  * - default ThreadStore: per-thread slice cache with per-slice listeners and consumer leases over one source.
  */
 import type {
@@ -126,6 +127,8 @@ export type ThreadSliceName = keyof ThreadStoreState;
 
 export interface ThreadStoreActions {
   send(input: UserInput[], options?: WorkbenchSendThreadMessageOptions): Promise<void>;
+  /** Present a draft's first input while its existing save and launch operation runs. */
+  submitDraft(input: UserInput[], submit: () => Promise<boolean>): Promise<boolean>;
   stop(): Promise<void>;
   compact(): Promise<void>;
   resendSteer(itemId: string): Promise<void>;

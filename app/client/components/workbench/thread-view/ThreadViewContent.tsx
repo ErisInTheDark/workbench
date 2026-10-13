@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadViewContent: render admitted thread content and source-local transcript state, or the subagent message board in its place.
+ * - default ThreadViewContent: render draft launch previews, admitted thread content, or the subagent message board.
  */
 "use client";
 import { useThread } from "../use-thread";
@@ -57,7 +57,7 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
-import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadAgentTabs from "./ThreadAgentTabs";
@@ -462,7 +462,7 @@ export default memo(function ThreadViewContent ({
     if (activeProfileSlot && projectedProfile !== undefined) composerProfileController.observeSelection(activeProfileSlot, projectedProfile);
   }, [activeProfileSlot, composerProfileController, projectedProfile]);
   const historyPagingIdentity = useMemo(() => ({}), [projectId, viewInstanceKey, activeThread?.id]);
-  const loadedTurns = activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
+  const loadedTurns = activeThread?.isDraft || activeTranscriptProjection ? activeTurns.turns : EMPTY_TURNS;
   const renderedHistoryTurnIds = useMemo(() => loadedTurns.map(({ id }) => id), [loadedTurns]);
   const loadedTurnIds = renderedHistoryTurnIds;
   const activeItemApprovals = useMemo(
@@ -475,6 +475,8 @@ export default memo(function ThreadViewContent ({
     stopShell: itemId => active.actions.stopShell(itemId),
   }), [active.actions]);
   const isDraftThreadView = Boolean(activeThread?.isDraft);
+  const isLaunchingDraft = isDraftThreadView && loadedTurns.length > 0;
+  const showDraftComposer = isDraftThreadView && !isLaunchingDraft;
   const activityTurn = loadedTurns.at(-1) ?? null;
   const currentTurn = activityTurn;
   // The thread's lifecycle decides liveness; a provider's turn status never does.
@@ -1074,7 +1076,7 @@ export default memo(function ThreadViewContent ({
           data-thread-project-file-link-boundary="true"
           className={joinClasses(
             "mx-auto min-h-full w-full min-w-0 max-w-content overflow-x-clip md:overflow-x-visible",
-            isDraftThreadView
+            showDraftComposer
               ? "flex flex-col"
               : "grid grid-cols-1 grid-rows-[1fr auto auto]",
             mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
@@ -1083,7 +1085,7 @@ export default memo(function ThreadViewContent ({
           style={{ fontSize: `${fontSizeRem}rem` }}
         >
         {isDraftThreadView ? (
-          <>
+          <div className={isLaunchingDraft ? "hidden" : "contents"}>
             <div className={joinClasses(
               "flex w-full flex-1 items-center",
               contained ? "py-4" : null,
@@ -1097,13 +1099,13 @@ export default memo(function ThreadViewContent ({
                 {composer}
               </div>
             </div>
-          </>
+          </div>
         ) : null}
 
         <div
-          hidden={isDraftThreadView}
+          hidden={showDraftComposer}
           data-thread-transcript="true"
-          className={isDraftThreadView
+          className={showDraftComposer
             ? undefined
             : "col-start-1 row-start-1 flex min-w-0 flex-col justify-end"}
         >
@@ -1175,7 +1177,20 @@ export default memo(function ThreadViewContent ({
                   <ThreadLoadingSkeleton contained />
                 )
               )
-            ) : null
+            ) : isLaunchingDraft ? loadedTurns.map(turn => (
+              <ThreadTurnDetails
+                key={turn.id}
+                threadId={activeThread.id}
+                threadCwdPath={activeThread.cwd}
+                turn={turn}
+                inlineMentionSources={inlineMentionSources}
+                knownSkills={workbenchSkills}
+                projectFilePaths={projectFilePaths}
+                projectId={projectId}
+                projectRootPath={projectRootPath}
+                workspaceRoots={workspaceFileLinkRoots}
+              />
+            )) : null
           ) : (
             <div className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-4">
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>

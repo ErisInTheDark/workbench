@@ -283,6 +283,7 @@ export default function createObservedThreadSource(
     feed: "observed",
     transcriptBodies,
     actions: {
+      submitDraft: async () => { throw new Error("An existing thread cannot launch a draft."); },
       async send(input, options = {}) {
         const entry = requireEntry();
         const normalized = await Promise.all(normalizeInput(input).map(async part => part.type === "image"

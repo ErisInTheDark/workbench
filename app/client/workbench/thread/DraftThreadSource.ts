@@ -1,12 +1,15 @@
 /*
  * Exports:
  * - DraftThreadSourcePorts: the client-owned draft document, its change signal, account limits and draft settings controls.
- * - default createDraftThreadSource: feed a draft's thread store from its local draft document; drafts have no daemon channels until their first send launches a thread.
+ * - default createDraftThreadSource: own a draft's local launch preview and feed its document and account state.
  */
 import type { ThreadPayload, WorkbenchControls, WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { DraftId } from "workbench-shared/workbench/identity";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
+import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { EMPTY_THREAD_STORE_STATE, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
+import { createOptimisticItem } from "./thread-optimistic-items";
 
 export interface DraftThreadSourcePorts {
   draftId: DraftId;
@@ -34,7 +37,10 @@ export default function createDraftThreadSource(
   publish: (next: Partial<ThreadStoreState>) => void,
 ): ThreadStoreSource {
   let leases = 0;
+  let disposed = false;
+  let launchTurn: Turn | null = null;
   const sync = () => {
+    if (disposed) return;
     const draft = ports.readDraft();
     if (draft && leases) ports.watchRateLimits(draft.harness);
     publish({
@@ -45,6 +51,11 @@ export default function createDraftThreadSource(
         rateLimits: draft ? ports.readRateLimits(draft.harness) : null,
         draftDocument: draft,
       },
+      turns: {
+        ...EMPTY_THREAD_STORE_STATE.turns,
+        turns: launchTurn ? [launchTurn] : EMPTY_THREAD_STORE_STATE.turns.turns,
+        liveTurnId: launchTurn?.id ?? null,
+      },
     });
   };
   // The draft document is client state: mirror it for the store's whole life, so reads without a lease stay current.
@@ -53,6 +64,35 @@ export default function createDraftThreadSource(
   return {
     feed: "draft",
     actions: {
+      async submitDraft(input, submit) {
+        if (disposed || launchTurn) return false;
+        const id = crypto.randomUUID();
+        const item = createOptimisticItem({
+          clientUserMessageId: null, handle: id, input, placement: "initial", status: "pending",
+        });
+        launchTurn = {
+          id, status: "inProgress", itemsView: "full", error: null,
+          startedAt: Date.now() / 1000, completedAt: null, durationMs: null,
+          items: [item],
+        };
+        sync();
+        let accepted = false;
+        try {
+          accepted = await submit();
+          if (accepted && !disposed) {
+            launchTurn = {
+              ...launchTurn,
+              items: [withWorkbenchInputState(item, {
+                kind: "optimistic", placement: "initial", status: "sent",
+              })],
+            };
+          }
+          return accepted;
+        } finally {
+          if (!accepted) launchTurn = null;
+          sync();
+        }
+      },
       // Drafts launch through the app's saved-draft flow (the view sends with the draft document).
       send: unsupported("send directly"),
       stop: async () => {},
@@ -87,6 +127,10 @@ export default function createDraftThreadSource(
       return () => { if (!released) { released = true; leases--; } };
     },
     recover: async () => {},
-    dispose: unsubscribe,
+    dispose() {
+      disposed = true;
+      launchTurn = null;
+      unsubscribe();
+    },
   };
 }

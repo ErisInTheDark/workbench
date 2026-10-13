@@ -41,6 +41,7 @@ const MISSING_THREAD_FILE_INDEX: WorkbenchProjectFileIndexSnapshot = {
 
 function unavailable(): never { throw new Error("The thread is not ready."); }
 const unavailableActions: ThreadStoreActions = {
+  submitDraft: unavailable,
   send: unavailable, stop: unavailable, compact: unavailable, resendSteer: unavailable, dismissSteer: unavailable,
   stopShell: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable, changeAgent: unavailable,
   changeModel: unavailable, changeReasoningEffort: unavailable, changeServiceTier: unavailable, changeSettings: unavailable,

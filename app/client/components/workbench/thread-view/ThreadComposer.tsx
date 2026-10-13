@@ -202,7 +202,7 @@ export default function ThreadComposer ({
   onTodosSent?: (ids: readonly number[]) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
-  const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? null
+  const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? { kind: "draft", draftId: thread.id }
     : threadTarget?.kind === "subagent" && threadTarget.threadId === thread.id ? threadTarget
     : { kind: "provider", harness: thread.harness, threadId: thread.id }, onQuestionnaireError);
   const threadController = questionnaire.thread;
@@ -454,16 +454,19 @@ export default function ThreadComposer ({
       }, () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
       return;
     }
-    await editing.session.submit(async (submitted, options) => {
-      return await runThreadComposerSubmission({
-        clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
-        preserveDurableDraft: async () => {
-          await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
-        },
-        send,
-        showError: setError,
-      });
-    });
+    await threadController.actions.submitDraft(
+      createThreadComposerMessageInput(trimmedValue, attachments, references),
+      () => editing.session.submit(async (submitted, options) => {
+        return await runThreadComposerSubmission({
+          clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
+          preserveDurableDraft: async () => {
+            await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
+          },
+          send,
+          showError: setError,
+        });
+      }),
+    );
   };
 
   const stop = async () => {
