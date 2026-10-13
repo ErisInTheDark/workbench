@@ -21,6 +21,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const inherited = build.handoffState as OpenCodeServiceHandoff | undefined;
     const service = new OpenCodeServiceController();
     let restart = false;
+    const detach = async () => {
+      try {
+        restart = await service.suspend() || restart;
+      } catch (error) {
+        restart = true;
+        throw error;
+      }
+      return { restart } satisfies OpenCodeServiceHandoff;
+    };
     return {
       registrations: { openCodeService: service },
       start: async () => {
@@ -29,10 +38,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       beginHandoff: () => ({
         waitForIdle: async () => undefined,
         expire: () => undefined,
-        detach: async () => {
-          restart = await service.suspend();
-          return { restart } satisfies OpenCodeServiceHandoff;
-        },
+        detach,
+        retryDetach: detach,
         resume: async () => {
           if (restart) await service.acquire();
         },

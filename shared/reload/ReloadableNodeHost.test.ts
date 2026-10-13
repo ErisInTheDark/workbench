@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect generic node operation access, nested reload draining, collectable retired nodes, and retention holder reports.
+ * No production exports. Tests protect owner-local recovery, dependency admission, nested draining, and retired-generation collection.
  */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -9,6 +9,190 @@ import { runInNewContext } from "node:vm";
 import ReloadableNode, { defineReloadableNodeGraph } from "./ReloadableNode";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import type { ReloadDirtSourceState } from "./ReloadDirtController";
+import type { ReloadableNodeHandoff, ReloadableNodeLease } from "./ReloadableNode";
+
+interface RecoveryOwner {
+  generation: number;
+  lease: ReloadableNodeLease;
+}
+
+function recoveryFixture(restartable = true) {
+  type Features = Record<"first" | "second" | "child" | "unrelated", RecoveryOwner>;
+  const control = () => ({
+    failStart: false, failResume: false, failDetach: false, failActivate: false,
+    onStart: null as (() => Promise<void>) | null,
+    resumes: 0, repairs: 0, commits: 0,
+    state: { retained: Symbol("retained state") },
+  });
+  const first = control();
+  const second = control();
+  let generation = 0;
+  const node = ReloadableNode.define<object, Features, never>();
+  const graph = () => {
+    const current = ++generation;
+    const leaf = (key: "child" | "unrelated") => node({
+      scope: `server:${key}`, provides: [key], requires: [], children: [],
+      access: "agent", lifecycle: "atomic", safeAll: true, description: key,
+      create: (_context, build) => ({
+        registrations: { [key]: { generation: current, lease: build.lease } },
+        start() {}, dispose() {},
+      }),
+    });
+    const owner = (key: "first" | "second", state: typeof first) => node({
+      scope: `server:${key}`, provides: [key], requires: [],
+      children: key === "first" ? [leaf("child")] : [],
+      access: "agent", lifecycle: "handoff", safeAll: true, description: key,
+      create: (_context, build) => {
+        if (build.mode === "replacement") assert.equal(build.handoffState, state.state);
+        const handoff = {
+          waitForIdle: async () => {},
+          expire() {},
+          detach: () => state.state,
+          ...(restartable ? {
+            retryDetach: () => {
+              state.repairs++;
+              if (state.failDetach) throw new Error(`${key} cleanup failed`);
+              return state.state;
+            },
+          } : {}),
+          resume() {
+            state.resumes++;
+            if (state.failResume) throw new Error(`${key} resume failed`);
+          },
+          commit() { state.commits++; },
+        } satisfies ReloadableNodeHandoff;
+        return {
+          registrations: { [key]: { generation: current, lease: build.lease } },
+          async start() {
+            if (state.failStart) throw new Error(`${key} candidate failed`);
+            await state.onStart?.();
+          },
+          activate() { if (state.failActivate) throw new Error(`${key} activation failed`); },
+          beginHandoff: () => handoff,
+          dispose() {},
+        };
+      },
+    });
+    return defineReloadableNodeGraph([owner("first", first), owner("second", second), leaf("unrelated")]);
+  };
+  const host = new ReloadableNodeHost({}, { load: graph, reload: graph }, { topologyScope: "server:topology" });
+  const fail = async (both = false) => {
+    first.failStart = first.failResume = true;
+    second.failResume = both;
+    await assert.rejects(host.reload(["server:first", "server:second", "server:unrelated"]));
+    first.failStart = false;
+  };
+  return { host, first, second, fail };
+}
+
+test("failed handoffs fence only their owners and dependants while unrelated reloads remain usable", async () => {
+  const f = recoveryFixture();
+  await f.host.start();
+  const child = f.host.get("child");
+  try {
+    await f.fail(true);
+    assert.equal(await f.host.run("unrelated", value => value.lease.isCurrent()), true);
+    assert.equal(child.lease.isCurrent(), false);
+    await assert.rejects(f.host.run("first", () => true), /unavailable/u);
+    await assert.rejects(f.host.run("child", () => true), /unavailable/u);
+    await f.host.reload(["server:unrelated"]);
+    await f.host.reload(["server:first"]);
+    assert.equal(await f.host.run("child", value => value.lease.isCurrent()), true);
+    await assert.rejects(f.host.run("second", () => true), /unavailable/u);
+    assert.equal(f.second.repairs, 0);
+    await f.host.reload(["server:second"]);
+    assert.equal(await f.host.run("second", value => value.lease.isCurrent()), true);
+  } finally { await f.host.dispose(); }
+});
+
+test("fresh replacement repairs a restartable owner without requiring the old resume to succeed", async () => {
+  const f = recoveryFixture();
+  await f.host.start();
+  const previous = f.host.get("first");
+  try {
+    await f.fail();
+    const resumes = f.first.resumes;
+    await f.host.reload(["server:first"]);
+    assert.equal(f.first.resumes, resumes);
+    assert.equal(f.first.repairs, 1);
+    assert.equal(f.first.commits, 1);
+    assert.equal(previous.lease.isCurrent(), false);
+    assert.ok(await f.host.run("first", value => value.generation > previous.generation));
+  } finally { await f.host.dispose(); }
+});
+
+test("repeated repair failures preserve the handoff until cleanup and replacement both succeed", async () => {
+  const f = recoveryFixture();
+  await f.host.start();
+  try {
+    await f.fail();
+    f.first.failDetach = true;
+    await assert.rejects(f.host.reload(["server:first"]));
+    f.first.failDetach = false;
+    f.first.failStart = true;
+    await assert.rejects(f.host.reload(["server:first"]));
+    assert.equal(f.first.commits, 0);
+    assert.equal(await f.host.run("unrelated", value => value.lease.isCurrent()), true);
+    await assert.rejects(f.host.run("child", () => true), /unavailable/u);
+    f.first.failStart = false;
+    await f.host.reload(["server:first"]);
+    assert.equal(f.first.repairs, 3);
+    assert.equal(f.first.commits, 1);
+    assert.equal(await f.host.run("child", value => value.lease.isCurrent()), true);
+  } finally { await f.host.dispose(); }
+});
+
+test("transactional owners must resume before replacement and recover independently", async () => {
+  const f = recoveryFixture(false);
+  await f.host.start();
+  try {
+    await f.fail(true);
+    await assert.rejects(f.host.reload(["server:first"]), /unavailable|resume/u);
+    f.first.failResume = false;
+    await assert.rejects(f.host.reload(["server:first", "server:second"]));
+    assert.equal(await f.host.run("first", value => value.lease.isCurrent()), true);
+    const secondResumes = f.second.resumes;
+    await f.host.reload(["server:first"]);
+    assert.equal(await f.host.run("first", value => value.lease.isCurrent()), true);
+    await assert.rejects(f.host.run("second", () => true), /unavailable/u);
+    assert.equal(f.second.resumes, secondResumes);
+  } finally { await f.host.dispose(); }
+});
+
+test("repair remains fenced through candidate startup and failed activation", async () => {
+  const f = recoveryFixture();
+  await f.host.start();
+  const starting = deferred();
+  const release = deferred();
+  try {
+    await f.fail();
+    f.first.onStart = async () => { starting.resolve(); await release.promise; };
+    f.first.failActivate = true;
+    const reload = assert.rejects(f.host.reload(["server:first"]));
+    await starting.promise;
+    await assert.rejects(f.host.run("first", () => true), /unavailable/u);
+    assert.equal(await f.host.run("unrelated", value => value.lease.isCurrent()), true);
+    release.resolve();
+    await reload;
+    await assert.rejects(f.host.run("child", () => true), /unavailable/u);
+    f.first.failActivate = false;
+    f.first.onStart = null;
+    await f.host.reload(["server:first"]);
+    assert.equal(await f.host.run("child", value => value.lease.isCurrent()), true);
+  } finally { release.resolve(); await f.host.dispose(); }
+});
+
+test("a dependant-only reload names the failed parent without expanding destructive scope", async () => {
+  const f = recoveryFixture();
+  await f.host.start();
+  try {
+    await f.fail();
+    const previous = f.host.get("child");
+    await assert.rejects(f.host.reload(["server:child"]), /server:first/u);
+    assert.equal(f.host.get("child"), previous);
+    assert.equal(f.first.repairs, 0);
+  } finally { await f.host.dispose(); }
+});
 
 function deferred() {
   let resolve!: () => void;

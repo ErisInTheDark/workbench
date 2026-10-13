@@ -2,7 +2,7 @@
  * Exports:
  * - ReloadableNodeModuleLoader: load fresh parent-owned graph definitions.
  * - ReloadableNodeHostOptions: process-owned deadline, clock, logging, and swap ports.
- * - default ReloadableNodeHost: validate topology, lease dependencies, replace node closures with parent-only build views, name startup steps that stall, and report retired generations that stay reachable with the work still holding them.
+ * - default ReloadableNodeHost: validate and lease dependency graphs, replace closures with owner-local recovery, diagnose stalled startup and retained generations.
  */
 import { createGitignoreMatcher, type GitignoreMatcher } from "../source-pattern-matcher.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -91,9 +91,8 @@ interface ActiveNode<TContext, TFeatures extends object, TNotification> {
   drainExpired: boolean;
 }
 
-interface PendingRollback<TContext, TFeatures extends object, TNotification> {
-  nodes: readonly ActiveNode<TContext, TFeatures, TNotification>[];
-  handoffs: Map<string, ReloadableNodeHandoff>;
+interface PendingRollback {
+  handoff: ReloadableNodeHandoff;
   error: Error;
 }
 
@@ -159,7 +158,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   private nodes = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private readonly candidates = new Map<string, ActiveNode<TContext, TFeatures, TNotification>>();
   private reloadTail: Promise<void> | null = null;
-  private readonly pendingRollbacks = new Set<PendingRollback<TContext, TFeatures, TNotification>>();
+  private readonly pendingRollbacks = new Map<string, PendingRollback>();
   private readonly retirements = new Set<Retirement<TContext, TFeatures, TNotification>>();
   private readonly runtimeDrainTimeoutMs: number;
   private started = false;
@@ -433,7 +432,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         const selected = topologyChanged
           ? this.changedTopologyClosure(fresh.definitions, scopes)
           : this.selectDependants(scopes, fresh.definitions);
-        await this.retryRollbacks(selected, transition);
+        await this.retryRollbacks(selected, fresh.definitions, transition);
         if (selected.size) await this.replaceGraph(fresh.definitions, fresh.topology, selected, transition, fresh.processPaths);
       } finally {
         transition.finish();
@@ -465,7 +464,6 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     for (const definition of this.definitions.values()) mark(definition);
     for (const node of this.nodes.values()) mark(node.definition);
     for (const retirement of this.retirements) for (const node of retirement.nodes) mark(node.definition);
-    for (const rollback of this.pendingRollbacks) for (const node of rollback.nodes) mark(node.definition);
     this.retention.retireUnusedGenerations(used);
     const report = this.retention.completeReload(this.retiredOperationLabels());
     if (report) this.logError(report);
@@ -586,8 +584,11 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       for (const node of previous) {
         const id = node.definition.id;
         node.drainExpired = false;
-        if (this.started) states.set(id, node.instance.captureReloadState?.());
-        if (node.definition.lifecycle === "handoff") {
+        const rollback = this.pendingRollbacks.get(id);
+        if (this.started && !rollback) states.set(id, node.instance.captureReloadState?.());
+        if (rollback) {
+          handoffs.set(id, rollback.handoff);
+        } else if (node.definition.lifecycle === "handoff") {
           handoffs.set(id, node.instance.beginHandoff!({ isReplacing: (scope) => selected.has(scope) }));
         }
       }
@@ -610,8 +611,13 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
           batch.draining = false;
         }
         for (const node of [...previous].reverse()) {
-          const handoff = handoffs.get(node.definition.id);
-          if (handoff) states.set(node.definition.id, await transition.step(`${node.definition.id}: detach`, () => handoff.detach()));
+          const id = node.definition.id;
+          const handoff = handoffs.get(id);
+          if (handoff) {
+            const repairing = this.pendingRollbacks.has(id);
+            states.set(id, await transition.step(`${id}: ${repairing ? "retry detach" : "detach"}`, () =>
+              repairing ? handoff.retryDetach!() : handoff.detach()));
+          }
         }
       }
       this.assertAcceptingWork();
@@ -655,26 +661,25 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
         catch (failure) { failures.push(failure); }
         this.openGate(node);
       }
-      const failedHandoffs = new Map<string, ReloadableNodeHandoff>();
       for (const [id, handoff] of handoffs) {
-        try { await transition.step(`${id}: resume`, () => handoff.resume()); }
+        try {
+          await transition.step(`${id}: resume`, () => handoff.resume());
+          this.pendingRollbacks.delete(id);
+        }
         catch (failure) {
           failures.push(failure);
-          failedHandoffs.set(id, handoff);
+          this.pendingRollbacks.set(id, {
+            handoff,
+            error: new Error(`Reloadable owner ${id} is unavailable after failed rollback.`, { cause: failure }),
+          });
         }
       }
       const failure = failures.length === 1 ? error : new AggregateError(failures, "Branch replacement failed during rollback.");
-      if (failedHandoffs.size) {
-        this.pendingRollbacks.add({
-          nodes: previous,
-          handoffs: failedHandoffs,
-          error: failure instanceof Error ? failure : new Error("Branch rollback requires resource recovery."),
-        });
-      }
       for (const node of previous) this.openGate(node);
       candidates.clear();
       throw failure;
     }
+    for (const node of previous) this.pendingRollbacks.delete(node.definition.id);
     for (const node of [...previous, ...candidates.values()]) this.openGate(node);
     for (const node of candidates.values()) {
       try { node.instance.afterCommit?.(); }
@@ -686,23 +691,34 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     await this.retireNodes([...previous].reverse(), handoffs, transition);
   }
 
-  private async retryRollbacks(selected: ReadonlySet<string>, transition: ReloadableNodeTransition) {
-    for (const rollback of this.pendingRollbacks) {
-      if (!rollback.nodes.some((node) => selected.has(node.definition.id))) continue;
-      const failures: unknown[] = [];
-      for (const [id, handoff] of rollback.handoffs) {
-        try {
-          await transition.step(`${id}: retry rollback`, () => handoff.resume());
-          rollback.handoffs.delete(id);
-        } catch (error) { failures.push(error); }
+  private async retryRollbacks(
+    selected: ReadonlySet<string>,
+    freshDefinitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>>,
+    transition: ReloadableNodeTransition,
+  ) {
+    for (const id of selected) {
+      const dependencies = new Set([
+        ...this.dependencyClosure(id),
+        ...this.dependencyClosure(id, new Set(), freshDefinitions),
+      ]);
+      for (const dependency of dependencies) {
+        if (!selected.has(dependency) && this.pendingRollbacks.has(dependency)) {
+          throw new Error(`Reload ${dependency} to recover its unavailable resources before reloading ${id}.`);
+        }
       }
-      if (failures.length) {
-        rollback.error = new AggregateError(failures, "Retained branch resources are still unavailable.");
-        throw rollback.error;
-      }
-      for (const node of rollback.nodes) this.openGate(node);
-      this.pendingRollbacks.delete(rollback);
     }
+    const failures: Error[] = [];
+    for (const [id, rollback] of this.pendingRollbacks) {
+      if (!selected.has(id) || rollback.handoff.retryDetach) continue;
+      try {
+        await transition.step(`${id}: retry rollback`, () => rollback.handoff.resume());
+        this.pendingRollbacks.delete(id);
+      } catch (error) {
+        rollback.error = new Error(`Retained owner ${id} is still unavailable.`, { cause: error });
+        failures.push(rollback.error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, "Retained branch resources are still unavailable.");
   }
 
   private reportLifecycleFailure(scope: string, phase: string, error: unknown) {
@@ -775,7 +791,8 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
       run: (key, operation, label) => this.run(key, operation, label),
       handoffState,
       isReplacing: (candidateId) => selected.has(candidateId),
-      lease: { isCurrent: () => !this.hardShutdownStarted && !this.isUnavailable(nodeId) && this.nodes.get(nodeId)?.token === token },
+      lease: { isCurrent: () => !this.hardShutdownStarted && this.nodes.get(nodeId)?.token === token
+        && this.dependencyClosure(nodeId).every(id => !this.isUnavailable(id)) },
       mode,
     };
   }
@@ -966,10 +983,14 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
     return owners;
   }
 
-  private dependencyClosure(nodeId: string, result = new Set<string>()) {
+  private dependencyClosure(
+    nodeId: string,
+    result = new Set<string>(),
+    definitions: ReadonlyMap<string, DaemonFeatureNodeDefinition<TContext, TFeatures, TNotification>> = this.definitions,
+  ) {
     if (result.has(nodeId)) return [...result];
     result.add(nodeId);
-    for (const dependency of this.definitions.get(nodeId)?.dependencies ?? []) this.dependencyClosure(dependency, result);
+    for (const dependency of definitions.get(nodeId)?.dependencies ?? []) this.dependencyClosure(dependency, result, definitions);
     return [...result];
   }
 
@@ -1001,10 +1022,7 @@ export default class ReloadableNodeHost<TContext, TFeatures extends object, TNot
   }
 
   private isUnavailable(nodeId: string) {
-    for (const rollback of this.pendingRollbacks) {
-      if (rollback.nodes.some((node) => node.definition.id === nodeId)) return rollback.error;
-    }
-    return null;
+    return this.pendingRollbacks.get(nodeId)?.error ?? null;
   }
 
   private async waitForOpenDependencyChain(nodeId: string) {

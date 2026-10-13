@@ -1,9 +1,10 @@
 /*
- * Keywords: reload, grace, lifecycle, phase, diagnostics.
  * Exports:
  * - ReloadableNodeTransitionDeadline: cancellable process-owned old-work grace deadline.
  * - default ReloadableNodeTransition: own one grace budget and generation-fenced phase diagnostics.
  */
+import { describeErrorCauseChain } from "../process/error-cause-chain";
+
 export interface ReloadableNodeTransitionDeadline {
   cancel(): void;
   expired: Promise<void>;
@@ -64,6 +65,9 @@ export default class ReloadableNodeTransition {
         if (this.finished || this.phaseOwner !== owner) return;
         this.phase = `${label}: ${detail.replace(/\s+/gu, " ").trim().slice(0, 200)}`;
       });
+    } catch (error) {
+      this.logError(`Reload failed during ${label}: ${describeErrorCauseChain(error)}`);
+      throw error;
     } finally {
       if (this.phaseOwner === owner) this.phaseOwner = null;
     }

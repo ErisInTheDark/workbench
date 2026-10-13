@@ -131,6 +131,7 @@ export default class OpenCodeServiceController {
   private acquiring: Promise<WorkbenchOpenCodeClient> | null = null;
   private active = false;
   private stopService: ((options?: StopOptions) => Promise<void>) | null = null;
+  private stopping: Promise<void> | null = null;
   private lifetime = new AbortController();
   private disposed = false;
   private readonly serviceStateHome: string;
@@ -263,8 +264,11 @@ export default class OpenCodeServiceController {
 
   private async stopOwnedService() {
     if (!this.active) return;
-    this.active = false;
-    await this.stopService?.({ file: this.serviceFile, pty: "handoff" });
+    this.stopping ??= Promise.resolve().then(async () => {
+      await this.stopService?.({ file: this.serviceFile, pty: "handoff" });
+      this.active = false;
+    }).finally(() => { this.stopping = null; });
+    await this.stopping;
   }
 
   private async retireGeneration(reason: Error, options: { drain: boolean; renew: boolean }) {

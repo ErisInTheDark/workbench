@@ -1,5 +1,4 @@
 /*
- * Keywords: reload, grace, phase, retirement, diagnostics.
  * No exports. Controlled deadlines prove force-drain and phase fencing without wall-clock timers.
  */
 import assert from "node:assert/strict";
@@ -11,6 +10,22 @@ function signal() {
   const promise = new Promise<void>((complete) => { resolve = complete; });
   return { promise, resolve };
 }
+
+test("failed lifecycle steps log phase and nested cause without changing the thrown error", async () => {
+  const logs: string[] = [];
+  const deadline = signal();
+  const transition = new ReloadableNodeTransition(
+    { cancel() {}, expired: deadline.promise }, 30_000, () => "", message => logs.push(message),
+  );
+  const failure = new Error("service failed", { cause: new Error("spawn denied") });
+  try {
+    await assert.rejects(transition.step("harness:fixture: resume", () => { throw failure; }), error => error === failure);
+    assert.equal(logs.length, 1);
+    for (const detail of ["harness:fixture", "resume", "service failed", "spawn denied"]) {
+      assert.ok(logs[0]!.includes(detail));
+    }
+  } finally { transition.finish(); }
+});
 
 test("one grace budget forces every remaining wait without cancelling the transition", async () => {
   const deadline = signal();

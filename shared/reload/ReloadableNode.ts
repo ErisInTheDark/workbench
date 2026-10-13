@@ -2,7 +2,7 @@
  * Exports:
  * - ReloadableNodeLifecycle/ReloadableNodeAccess: node replacement and caller-access policies.
  * - ReloadableNodeLease/ReloadableNodeRuntimeDrainPending: generation fencing and bounded drain diagnostics.
- * - ReloadableNodeHandoff: reversible resource transfer, separate from expirable old-work waits.
+ * - ReloadableNodeHandoff: reversible resource transfer, optional failed-resume recovery, and expirable old-work waits.
  * - ReloadableNodeInstance/ReloadableNodeBuild: lifecycle, direct-parent construction and leased operation contracts.
  * - ReloadableNodeOptions/default ReloadableNode: parent-owned node definition with inferred direct-parent access;
  *   source ownership comes from imports plus declared out-of-process entries and non-module assets.
@@ -29,6 +29,8 @@ export interface ReloadableNodeHandoff {
   waitForIdle(): Promise<void>;
   expire(): void;
   detach(): Promise<unknown> | unknown;
+  /** After failed resume, quiesce remaining resources for fresh replacement without restoring service health. */
+  retryDetach?(): ReturnType<ReloadableNodeHandoff["detach"]>;
   resume(): Promise<void> | void;
   commit(): Promise<void> | void;
 }

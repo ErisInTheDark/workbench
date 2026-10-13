@@ -10,6 +10,53 @@ const modelApi = {
   default: async () => ({ data: null }),
 };
 
+test("a failed stop retains service ownership for the next cleanup attempt", async () => {
+  let stops = 0;
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => {},
+    ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
+    createClient: () => ({
+      model: modelApi,
+      plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+    }) as never,
+    stopService: async () => { if (++stops === 1) throw new Error("stop failed"); },
+  });
+  try {
+    await controller.acquire();
+    await assert.rejects(controller.suspend(), /stop failed/u);
+    assert.equal(await controller.suspend(), true);
+    assert.equal(stops, 2);
+  } finally { await controller.dispose(); }
+});
+
+test("overlapping suspension and disposal share the same service stop", async () => {
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let stops = 0;
+  const controller = new OpenCodeServiceController({
+    prepareServiceDirectory: async () => {},
+    ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
+    createClient: () => ({
+      model: modelApi,
+      plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+    }) as never,
+    stopService: async () => {
+      if (++stops > 1) throw new Error("duplicate stop");
+      enter();
+      await released;
+    },
+  });
+  await controller.acquire();
+  const suspending = controller.suspend();
+  await entered;
+  const closing = Promise.all([suspending, controller.dispose()]);
+  release();
+  await closing;
+  assert.equal(stops, 1);
+});
+
 test("coalesces acquisition through the dedicated Workbench OpenCode service", async () => {
   let ensures = 0;
   let creates = 0;
