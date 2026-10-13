@@ -285,6 +285,8 @@ export interface DaemonRuntimeObjects {
   threadActions: WorkbenchThreadActionController;
   threadContextRollover: import("./WorkbenchThreadContextRolloverController").default;
   gitArc: WorkbenchGitArcFeature;
+  gitPeer: import("./WorkbenchGitPeerController").default;
+  branchPositions: import("./WorkbenchBranchPositionController").default;
   harnesses: WorkbenchHarnessController;
   mcp: WorkbenchAgentMcpController;
   modules: DaemonReloadableModules;

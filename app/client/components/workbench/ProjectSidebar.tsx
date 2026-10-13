@@ -47,11 +47,12 @@ function projectFolderMenu(
   const visibleLock = isDaemonOwnedProject(project.matchKey) ? "Each daemon's own Workbench folder always stays visible."
     : project.locations.length <= 1 ? "A project must keep at least one visible folder." : null;
   const folders = [
+    // A registered folder without catalogue facts sits on a daemon this app cannot reach right now.
     ...project.locations.map(location => ({ ...location.target, hostname: location.hostname, rootPath: location.rootPath,
-      checked: true, lock: visibleLock })),
+      checked: true, lock: visibleLock, offline: location.project === null })),
     ...(project.observedLocations ?? []).map(location => ({ ...location, checked: true,
-      lock: isDaemonOwnedProject(project.matchKey) ? visibleLock : null })),
-    ...(project.hiddenLocations ?? []).map(location => ({ ...location, checked: false, lock: null })),
+      lock: isDaemonOwnedProject(project.matchKey) ? visibleLock : null, offline: false })),
+    ...(project.hiddenLocations ?? []).map(location => ({ ...location, checked: false, lock: null, offline: false })),
   ];
   const targets = new Map(folders.map(folder => [`${folder.daemonId}/${folder.projectId}`,
     { daemonId: folder.daemonId, projectId: folder.projectId }]));
@@ -67,8 +68,10 @@ function projectFolderMenu(
         id: hostname, label: hostname,
         items: folders.filter(folder => folder.hostname === hostname)
           .sort((left, right) => left.rootPath.localeCompare(right.rootPath))
-          .map(folder => ({ id: `${folder.daemonId}/${folder.projectId}`, label: labels.get(folder) ?? folder.rootPath,
-            title: folder.lock ? `${folder.rootPath}\n${folder.lock}` : folder.rootPath,
+          .map(folder => ({ id: `${folder.daemonId}/${folder.projectId}`,
+            label: `${labels.get(folder) ?? folder.rootPath}${folder.offline ? " · offline" : ""}`,
+            title: [folder.rootPath, folder.offline ? `${folder.hostname} is offline; this folder stays listed until it reconnects.` : null, folder.lock]
+              .filter(Boolean).join("\n"),
             checked: folder.checked, disabled: folder.lock !== null })),
       })),
       onToggle: (ids, checked) => onToggle(ids.flatMap(id => targets.get(id) ?? []), !checked),

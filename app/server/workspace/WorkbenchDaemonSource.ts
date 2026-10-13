@@ -182,7 +182,7 @@ export default class WorkbenchDaemonSource {
   private get hasActiveDemand() {
     return this.leases.size > 0 || this.transcripts.size > 0 || [...this.interests.values()].some(interest =>
       interest.query.kind !== "catalogue" && interest.query.kind !== "summaries"
-      && interest.query.kind !== "runtime" && interest.query.kind !== "update");
+      && interest.query.kind !== "runtime" && interest.query.kind !== "update" && interest.query.kind !== "branchPosition");
   }
   get httpOrigin() {
     if (!this.available || !this.socket.url) return null;

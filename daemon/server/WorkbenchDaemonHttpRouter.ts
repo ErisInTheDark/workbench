@@ -5,6 +5,7 @@
  */
 import type http from "node:http";
 import { isLoopbackConnection } from "workbench-shared/http/loopback-connection";
+import { GIT_PEER_ROUTES } from "workbench-shared/workbench/git/git-peer-contracts";
 
 interface HttpController {
   handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void>;
@@ -21,6 +22,7 @@ interface ProjectCatalogHttpController extends HttpController {
 export interface WorkbenchDaemonHttpRouterOptions {
   agentCommand: HttpController;
   gitArc: HttpController;
+  gitPeer: HttpController;
   mcp: HttpController;
   projectCatalog: ProjectCatalogHttpController;
   projectSnapshot: ProjectSnapshotHttpController;
@@ -54,6 +56,12 @@ export default class WorkbenchDaemonHttpRouter {
         methods: ["POST"],
         path: "/daemon/git-arc",
       },
+      ...Object.values(GIT_PEER_ROUTES).map(path => ({
+        errorMessage: "Peer Git request failed.",
+        handle: (request: http.IncomingMessage, response: http.ServerResponse) => options.gitPeer.handleHttpRequest(request, response),
+        methods: ["POST"],
+        path,
+      })),
       {
         errorMessage: "Thread Git request failed.",
         handle: (request, response) => options.threadGit.handleHttpRequest(request, response),

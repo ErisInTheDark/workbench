@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole) and publication fences.
+ * - default WorkbenchWorkspaceRequestController: own one app caller's named query interests (incl. retargetable thread summary batches each daemon answers whole, and folder peer sync) and publication fences.
  */
 import {
   WorkspaceObserveSchema, WorkspaceReleaseSchema, WorkspaceRetargetSchema, workspaceObservationShape,
@@ -25,6 +25,7 @@ import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
+import type WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
 import { z } from "zod";
 import { WorkspaceCommandSchema, WorkspaceThreadMutationSchema, WorkspaceThreadActionSchema, workspaceCommandRoutes, type WorkspaceThreadActionResult, type WorkspaceThreadMutation } from "workbench-shared/workbench/workspace/workspace-commands";
 import { VoiceStartSchema, type VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
@@ -79,6 +80,7 @@ interface Interest {
   summaryBatches: Map<DaemonId, Observation>;
   /** `projectThreads`: the full rows behind the published membership; layout edits resolve against them. */
   threadRows: readonly WorkbenchProjectedThreadRow[];
+  gitPeers: ReturnType<WorkbenchGitPeerSync["observe"]> | null;
 }
 interface TranscriptSubscription {
   source: WorkbenchDaemonSource | null;
@@ -133,6 +135,7 @@ export default class WorkbenchWorkspaceRequestController {
       subscribe(listener: () => void): () => void;
     };
     reloadOperation?: Pick<WorkbenchAppReloadOrchestrator, "read" | "subscribe">;
+    gitPeers?: Pick<WorkbenchGitPeerSync, "observe">;
     appState: {
       read(browserStateId: string | null): Promise<Extract<WorkspaceObservation, { kind: "appState" }>["data"]>;
       subscribe(browserStateId: string | null, listener: () => void): () => void;
@@ -539,7 +542,7 @@ export default class WorkbenchWorkspaceRequestController {
     if (existing) this.retire(existing);
     const interest: Interest = {
       request, opening: true, stop: [], sources: new Map(), owner: null, thread: null,
-      summaryBatches: new Map(), threadRows: [],
+      summaryBatches: new Map(), threadRows: [], gitPeers: null,
       value: { ...this.initial(request), subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 },
     };
     this.interests.set(request.subscriptionId, interest);
@@ -636,6 +639,9 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
       }
+      case "gitPeers":
+        if (this.options.gitPeers) interest.gitPeers = this.options.gitPeers.observe(request.query.location, refresh);
+        break;
       case "thread":
       case "threadOwner":
         interest.owner = this.options.threads.observe(request.query.threadId, refresh);
@@ -716,6 +722,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null, runtime: {} };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
+      case "gitPeers": return { ...base, kind: "gitPeers", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
       case "threadVis": return { ...base, kind: "threadVis", data: null };
@@ -837,6 +844,10 @@ export default class WorkbenchWorkspaceRequestController {
           data: fact?.value?.kind === "workingTreeSummary" ? fact.value.summary : null });
         return;
       }
+      case "gitPeers":
+        this.update(interest, { kind: "gitPeers", ...interest.gitPeers?.read()
+          ?? { phase: "unavailable", failure: "Peer sync is unavailable.", data: null } });
+        return;
       case "stats": this.projectStats(interest); return;
       case "threadVis":
       case "visSnapshot": this.relayThreadVis(interest); return;
@@ -1163,6 +1174,7 @@ export default class WorkbenchWorkspaceRequestController {
     for (const stop of interest.stop) stop();
     interest.owner?.release();
     interest.thread?.observation.release();
+    interest.gitPeers?.release();
     for (const source of interest.sources.values()) source.observation.release();
     for (const batch of interest.summaryBatches.values()) batch.release();
     this.pendingRefresh.delete(interest);

@@ -5,7 +5,6 @@
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import { watch } from "node:fs";
 import path from "node:path";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
 import {
@@ -16,6 +15,7 @@ import {
 import type { ProjectId } from "workbench-shared/workbench/identity";
 import WorkbenchGitIntegration from "./lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
+import watchGitRefs from "./lib/workbench/git/git-ref-watch";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 type GitResult = { code: number; stdout: string; stderr: string };
@@ -115,16 +115,8 @@ export default class WorkbenchInstallationUpdateController {
       else {
         const gitDir = path.resolve(this.options.repoRoot, (await this.required(["rev-parse", "--git-dir"])).trim());
         const commonDir = path.resolve(this.options.repoRoot, (await this.required(["rev-parse", "--git-common-dir"])).trim());
-        const attach = (directory: string, recursive: boolean) => {
-          const watcher = watch(directory, { recursive }, (_event, filename) => {
-            if (recursive || !filename || ["HEAD", "index", "config", "packed-refs"].includes(filename.toString())) changed();
-          });
-          watcher.on("error", error => this.options.warn(`Installation update watcher failed: ${message(error)}`));
-          stops.push(() => watcher.close());
-        };
-        for (const directory of new Set([gitDir, commonDir])) attach(directory, false);
-        // Watch only the small branch-ref tree, not object storage or the checkout.
-        attach(path.join(commonDir, "refs", "heads"), true);
+        stops.push(await watchGitRefs({ gitDir, commonDir }, ["heads"], changed,
+          error => this.options.warn(`Installation update watcher failed: ${message(error)}`)));
       }
     } catch (error) {
       this.options.warn(`Installation update watcher unavailable: ${message(error)}`);

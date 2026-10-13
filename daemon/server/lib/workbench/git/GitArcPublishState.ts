@@ -34,9 +34,8 @@ export default class GitArcPublishState {
   }
 
   async classifyCommit(commit: string, { refresh = true }: { refresh?: boolean } = {}): Promise<GitArcCommitPublishState> {
-    const remotes = await this.repository.remotes();
-    if (!remotes.length) return { kind: "unpushed" };
-    if (refresh) {
+    // Peer daemons write refs/remotes/wb-* without any configured remote, so containment is checked regardless.
+    if (refresh && (await this.repository.remotes()).length) {
       try {
         await this.refreshRemotes();
       } catch (error) {

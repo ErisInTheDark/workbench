@@ -20,6 +20,7 @@ import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTraff
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
+import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchWorkspaceAssetRoutes from "../workspace/WorkbenchWorkspaceAssetRoutes";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
@@ -113,6 +114,7 @@ export default class WorkbenchAppHttpRouter {
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
+    gitPeers?: WorkbenchGitPeerSync;
     presentationImport?: WorkbenchPresentationImportController;
     runtime?: ConstructorParameters<typeof WorkbenchAppEventSocketController>[0]["runtime"];
     supportsAppWebSockets?: boolean;
@@ -164,7 +166,7 @@ export default class WorkbenchAppHttpRouter {
           settings: this.settingsRoutes, port: this.portRoutes,
           sources: options.sources, workspace: options.workspace,
           workspaceThreads: options.workspaceThreads, workspaceDrafts: options.workspaceDrafts,
-          traffic: options.socketTraffic,
+          gitPeers: options.gitPeers, traffic: options.socketTraffic,
         }) : null;
     this.staticRequests = new StaticHttpRequestController({
       cacheSeconds: 0,

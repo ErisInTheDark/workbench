@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch and presentation import.
+ * - default AppWorkspaceNode: own cross-daemon connections, queries, draft launch, peer Git sync and presentation import.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 import WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
@@ -8,6 +8,8 @@ import WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTrafficBuf
 import WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
+import WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
+import WorkbenchGitPeerRelay from "../workspace/WorkbenchGitPeerRelay";
 import WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
 import type { AppProcessContext } from "./app-process-context";
 import type { AppRuntimeObjects } from "./app-runtime-objects";
@@ -32,7 +34,11 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     const presentationImport = new WorkbenchPresentationImportController({
       sources, presentation, logger: build.get("logger"), canAdmit,
     });
+    const gitPeerRelay = new WorkbenchGitPeerRelay({ sources });
+    const gitPeers = new WorkbenchGitPeerSync({ sources, workspace, relay: gitPeerRelay, warn });
     const dispose = async () => {
+      gitPeers.dispose();
+      gitPeerRelay.dispose();
       const importing = presentationImport.close();
       const launching = workspaceDrafts.dispose();
       workspaceThreads.dispose();
@@ -58,7 +64,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         },
         commit: dispose,
       }),
-      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, presentationImport },
+      registrations: { sources, socketTraffic, workspace, workspaceThreads, workspaceDrafts, gitPeers, presentationImport },
       start: () => {
         workspace.start();
         workspaceThreads.start();
@@ -70,7 +76,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   },
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
   lifecycle: "handoff",
-  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "workspaceDrafts", "presentationImport"],
+  provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "workspaceDrafts", "gitPeers", "presentationImport"],
   requires: ["network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",

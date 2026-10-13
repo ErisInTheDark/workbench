@@ -20,6 +20,7 @@ import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceCo
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
+import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import type { VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
 import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
@@ -136,6 +137,7 @@ export default class WorkbenchAppEventSocketController {
     workspace?: WorkbenchWorkspaceController;
     workspaceThreads?: WorkbenchWorkspaceThreads;
     workspaceDrafts?: WorkbenchWorkspaceDrafts;
+    gitPeers?: Pick<WorkbenchGitPeerSync, "observe" | "transfer">;
     /** Records every browser frame for `wb socket spy`. */
     traffic?: Pick<WebSocketTrafficBuffer, "record">;
   }) {}
@@ -217,6 +219,7 @@ export default class WorkbenchAppEventSocketController {
           subscribe: listener => this.options.runtime!.subscribe(listener),
         },
         reloadOperation: this.options.runtime.operations,
+        gitPeers: this.options.gitPeers,
         appState: {
           read: browserStateId => {
             bindState(browserStateId);
@@ -342,6 +345,10 @@ export default class WorkbenchAppEventSocketController {
           return await this.options.workspaceDrafts.launch(input.params.draftId, input.params.expectedRevision, {
             ...input.params.context, additionalWritableRoots: input.params.additionalWritableRoots,
           });
+        }
+        if (input.method === "workspace/git/peer") {
+          if (!this.options.gitPeers) throw new Error("Peer sync is unavailable.");
+          return await this.options.gitPeers.transfer(input.params);
         }
         if (input.method === "app/network/action") {
           if (!workbenchNetworkActionKeepsAppConnection(input.params.action)) {

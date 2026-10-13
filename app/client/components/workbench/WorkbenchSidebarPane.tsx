@@ -210,7 +210,8 @@ export default function WorkbenchSidebarPane({
             }}
             selected={browseLocation}
           >
-            {browseLocation && gitRoute ? <WorkbenchGitSidebar active={showGitView} route={gitRoute} onNavigate={event => {
+            {browseLocation && gitRoute ? <WorkbenchGitSidebar active={showGitView} location={browseLocation} route={gitRoute}
+              onAskAgent={askAgentWithReferences} onNavigate={event => {
               if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
               event.preventDefault();
               navigateToRoute(gitRoute);

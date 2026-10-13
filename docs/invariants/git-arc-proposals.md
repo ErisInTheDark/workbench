@@ -12,6 +12,7 @@
 - Resolved Git snapshots expire 24 hours after their resolution epoch, independently of thread settlement. Live/stashed claims, non-empty plans, saved stash, pending/unavailable proposals, and stack tips block deletion at the final ref mutation.
 - Proposal diff cache entries expire one day after last access and remain subject to the byte cap.
 - Every new Workbench Git ref must be handled explicitly by the history rewriter and covered across replacement history.
+- Peer transfers write only `refs/remotes/wb-<daemon>-<folder>/*` and never carry Workbench refs. Integration never rewrites commits contained in any `refs/remotes` ref, configured remote or not.
 - Stashing an arc preserves its complete claimed-path snapshot and original merge base while releasing every live claim. Unstash reacquires the complete claim set, three-way applies all saved changes onto clean target paths, leaves textual conflicts as ordinary worktree markers with no Git operation in progress, and compensates both sides on failure.
 - Stashing retained claims beneath an inactive plan preserves that plan, releases every live claim, and restores the retained arc beneath the unchanged plan on unstash; later work remains visible as planning drift. Successful conflicted unstash sends supported passive agent context without starting a turn; unsupported delivery warns.
 - Publishing or activating successor work over an ordinary stashed arc atomically promotes its frozen snapshot into the saved-stash slot; the successor owns live claims while restore and discard still target the saved work.

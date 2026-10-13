@@ -46,6 +46,14 @@ test("local commits already on a remote ref are blocked instead of rewritten", a
   assert.equal(await f.git("rev-parse", "HEAD"), f.local);
 });
 
+test("local commits a peer daemon already holds are blocked even with no configured remote", async t => {
+  const f = await fixture(t);
+  await f.git("update-ref", "refs/remotes/wb-peer/main", f.local);
+  const plan = await f.integration.prepare(f.incoming);
+  assert.equal(plan.kind, "blocked");
+  assert.match(plan.kind === "blocked" ? plan.reason ?? "" : "", /refs\/remotes\/wb-peer\/main/u);
+});
+
 test("failed ref publication restores the worktree and index to the original HEAD", async t => {
   const f = await fixture(t);
   const checkpointRef = "refs/worktree/agents/claude/thread/checkpoints/1";

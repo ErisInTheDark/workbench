@@ -96,6 +96,8 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import WorkbenchInstallationUpdateNode from "./WorkbenchInstallationUpdateNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
+import WorkbenchGitPeerController from "./WorkbenchGitPeerController";
+import WorkbenchBranchPositionController from "./WorkbenchBranchPositionController";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
 
@@ -790,6 +792,13 @@ function createWorkbenchCoreFeature(
     },
     transitions: worktreeGitTransitions,
   });
+  const resolveCheckoutRoot = async (projectId: string) => (await projectCatalog.resolveProjectById(projectId)).rootPath;
+  const gitPeer = new WorkbenchGitPeerController({
+    resolveRoot: resolveCheckoutRoot, transitions: worktreeGitTransitions, warn: message => logThreadStateWarning(message),
+  });
+  const branchPositions = new WorkbenchBranchPositionController({
+    resolveRoot: resolveCheckoutRoot, warn: message => logThreadStateWarning(message),
+  });
   const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
   const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
     read: async (threadId, harness) => {
@@ -895,7 +904,7 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,
@@ -976,6 +985,7 @@ function createWorkbenchCoreFeature(
       await transcriptReconciliation.dispose();
       reportPhase("working-tree disposal");
       await workingTree.dispose();
+      branchPositions.dispose();
       accountLimits.dispose();
       reportPhase("browse session cleanup disposal");
       browseSessionCleanup.dispose();

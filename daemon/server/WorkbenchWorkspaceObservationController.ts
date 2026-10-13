@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, live vis sessions, and retargetable thread summary batches); publish typed keyed deltas after each first value.
+ * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, branch positions against peers, live vis sessions, and retargetable thread summary batches); publish typed keyed deltas after each first value.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -25,6 +25,7 @@ import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbe
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
 import type WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
+import type WorkbenchBranchPositionController from "./WorkbenchBranchPositionController";
 import type WorkbenchVisController from "./vis/WorkbenchVisController";
 import type { WorkbenchProjectStateUpdate } from "workbench-shared/workbench/project/project-state";
 import type { WorkbenchStatsInvalidation } from "./stats/WorkbenchStatsObservation";
@@ -96,6 +97,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
+    branchPositions?: Pick<WorkbenchBranchPositionController, "observe">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
     vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
@@ -185,6 +187,22 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         const opened = handle;
         observation.stopTree = () => opened.release();
         this.update(observation, { kind: "accountLimits", ...opened.read() });
+        break;
+      }
+      case "branchPosition": {
+        const positions = this.owners.branchPositions;
+        if (!positions) {
+          this.update(observation, { kind: "branchPosition", phase: "unavailable", failure: "Branch positions are unavailable.", position: null });
+          break;
+        }
+        // Counting may settle synchronously; the read below covers that.
+        let handle: ReturnType<typeof positions.observe> | null = null;
+        handle = positions.observe(request.query.projectId, request.query.peers, () => {
+          if (handle) this.update(observation, { kind: "branchPosition", ...handle.read() });
+        });
+        const opened = handle;
+        observation.stopTree = () => opened.release();
+        this.update(observation, { kind: "branchPosition", ...opened.read() });
         break;
       }
       case "threadVis": {
@@ -359,6 +377,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       };
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null, runtime: {} };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
+      case "branchPosition": return { ...envelope, kind: "branchPosition", phase: "pending", failure: null, position: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
       case "threadVis": return { ...envelope, kind: "threadVis", phase: "pending", failure: null, data: null };

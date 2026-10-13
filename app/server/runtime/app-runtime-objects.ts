@@ -18,6 +18,7 @@ import type WebSocketTrafficBuffer from "workbench-shared/process/WebSocketTraff
 import type WorkbenchWorkspaceController from "../workspace/WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThreads";
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
+import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController";
 
 export interface AppRuntimeObjects {
@@ -38,5 +39,6 @@ export interface AppRuntimeObjects {
   workspace: WorkbenchWorkspaceController;
   workspaceThreads: WorkbenchWorkspaceThreads;
   workspaceDrafts: WorkbenchWorkspaceDrafts;
+  gitPeers: WorkbenchGitPeerSync;
   presentationImport: WorkbenchPresentationImportController;
 }

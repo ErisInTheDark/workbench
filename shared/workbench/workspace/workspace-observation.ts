@@ -2,11 +2,11 @@
  * Exports:
  * - WorkspaceSourcePhaseSchema/WorkspaceSourcePhase: independently observed source freshness.
  * - WorkspaceTranscriptStateSchema/WorkspaceTranscriptState: caller-local transcript subscription freshness.
- * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts (incl. the running checkout's `update` position, a project's unclaimed working-tree `workingTreeSummary` and a provider's `accountLimits`), independent of socket selection.
+ * - DaemonWorkspaceQuerySchema/DaemonWorkspaceQuery: demanded daemon facts (incl. the running checkout's `update` position, a project's unclaimed working-tree `workingTreeSummary`, its `branchPosition` against peers and a provider's `accountLimits`), independent of socket selection.
  * - DaemonWorkspaceObserveSchema/DaemonWorkspaceObserve: named daemon observation arguments.
  * - DaemonWorkspaceObservationSchema/DaemonWorkspaceObservation: versioned partial daemon results.
  * - WorkspaceProjectReferenceSchema/WorkspaceProjectReference: registered project or explicit observed location.
- * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate` and the app's `reloadOperation`).
+ * - WorkspaceQuerySchema/WorkspaceQuery: browser workspace intents without transport destinations (incl. relayed `daemonUpdate`, the app's `reloadOperation` and a folder's `gitPeers`).
  * - WorkspaceDaemonFactSchema/WorkspaceDaemonFact: app-owned daemon connection facts.
  * - WorkspaceProjectsSchema/WorkspaceProjects: merged and not-yet-registered projects.
  * - WorkspaceProjectGroupsSchema/WorkspaceProjectGroups: app-owned cross-daemon sidebar project pools.
@@ -62,6 +62,7 @@ import { WorkbenchStatsReadRequestSchema } from "../stats/workbench-stats-contra
 import { WorkbenchStatsObservedResponseSchema } from "../stats/workbench-stats-conformance";
 import { ObservationDeltaSchema, observationShape, type ObservationShape } from "./observation-patch";
 import { WorkingTreeSummarySchema } from "../git/working-tree-contracts";
+import { GitBranchPositionSchema, GitPeerAddressSchema, WorkspaceGitPeersSchema } from "../git/git-peer-contracts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account";
 import { ProviderKeySchema } from "../provider/provider-key";
 import { VisSnapshotKindSchema, VisSnapshotSchema, VisThreadSchema, type VisLiveSession } from "../vis/vis-contract";
@@ -106,6 +107,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("workingTreeSummary"), projectId: ProjectIdSchema }).strict(),
+  z.object({ kind: z.literal("branchPosition"), projectId: ProjectIdSchema, peers: z.array(GitPeerAddressSchema).max(32) }).strict(),
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema }).strict(),
   z.object({ kind: z.literal("threadIdentity"), threadId: ThreadReferenceSchema }).strict(),
   z.object({ kind: z.literal("thread"), projectId: ProjectIdSchema, threadId: ThreadReferenceSchema }).strict(),
@@ -184,6 +186,7 @@ export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({
     ...envelope, kind: z.literal("workingTreeSummary"), summary: WorkingTreeSummarySchema.nullable(),
   }).strict(),
+  z.object({ ...envelope, kind: z.literal("branchPosition"), position: GitBranchPositionSchema.nullable() }).strict(),
   z.object({
     ...envelope, kind: z.literal("accountLimits"), limits: WorkbenchAccountLimitsSchema.nullable(),
   }).strict(),
@@ -223,6 +226,8 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
   z.object({ kind: z.literal("workingTreeSummary"), location: ProjectLocationReferenceSchema }).strict(),
+  /** The folder's branch against its logical project's other visible folders on other daemons. */
+  z.object({ kind: z.literal("gitPeers"), location: ProjectLocationReferenceSchema }).strict(),
   /** `daemonId` null observes the app's attached daemon. */
   z.object({ kind: z.literal("accountLimits"), provider: ProviderKeySchema, daemonId: DaemonIdSchema.nullable() }).strict(),
   z.object({ kind: z.literal("threadOwner"), threadId: ThreadReferenceSchema }).strict(),
@@ -452,6 +457,7 @@ export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
   z.object({ ...envelope, kind: z.literal("projectTree"), sourceGeneration: revision.default(0),
     data: WorkbenchProjectStateUpdateSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("workingTreeSummary"), data: WorkingTreeSummarySchema.nullable() }).strict(),
+  z.object({ ...envelope, kind: z.literal("gitPeers"), data: WorkspaceGitPeersSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("accountLimits"), data: WorkbenchAccountLimitsSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("threadOwner"), data: WorkspaceThreadOwnerSchema }).strict(),
   z.object({
