@@ -7,8 +7,9 @@ import type { PresentationSnapshot } from "workbench-shared/state/workbench-pres
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import {
-  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, projectLogicalGroups, projectLogicalProjects,
-  projectLogicalSummaries, projectLogicalThreadRows, projectWorkbenchThreadMembership,
+  materializeWorkspaceThreadRow, preferredLogicalLaunchLocation, preferredSelectedLaunchTarget,
+  projectLogicalGroups, projectLogicalProjects, projectLogicalSummaries, projectLogicalThreadRows,
+  projectWorkbenchThreadMembership,
 } from "./workbench-project-projection";
 import { groupWorkbenchThreadSidebarEntries, type WorkbenchProjectThreadSidebars, type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 
@@ -288,6 +289,62 @@ test("launch suggestion follows the latest used target inside one logical projec
   assert.deepEqual(preferredLogicalLaunchLocation(
     projectLogicalProjects(available, new Map([[first, [catalog("C:/repo")]]]))[0]!, available,
   ), firstTarget);
+});
+
+test("selected launch target ignores newer accepted threads outside the selected projects", () => {
+  const firstTarget = { daemonId: first, projectId: concrete };
+  const secondTarget = { daemonId: second, projectId: ProjectIdSchema.parse("c597a4b6-7af9-41f1-83ea-a53aed6f3b0b") };
+  const unavailableTarget = { daemonId: second, projectId: ProjectIdSchema.parse("d597a4b6-7af9-41f1-83ea-a53aed6f3b0c") };
+  const snapshot: PresentationSnapshot = {
+    revision: 20,
+    daemons: [],
+    projects: [
+      { id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" },
+      { id: localId, matchKey: "local://C:/local", label: "local" },
+    ],
+    locations: [
+      { target: firstTarget, logicalProjectId: remoteId, identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo" },
+      { target: secondTarget, logicalProjectId: localId, identityKey: "local://C:/local", name: "local", rootPath: "C:/local" },
+    ],
+    defaults: [],
+    drafts: [
+      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000011"), logicalProjectId: remoteId,
+        target: firstTarget, prompt: "", updatedAt: 1, revision: 10, phase: "accepted",
+        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "first", attachments: [],
+        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
+      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000012"), logicalProjectId: localId,
+        target: secondTarget, prompt: "", updatedAt: 2, revision: 12, phase: "accepted",
+        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "second", attachments: [],
+        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
+      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000013"), logicalProjectId: remoteId,
+        target: firstTarget, prompt: "", updatedAt: 3, revision: 14, phase: "unsent",
+        pinned: false, snoozed: false, launchId: null, acceptedThreadId: null, attachments: [],
+        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
+      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000014"), logicalProjectId: localId,
+        target: unavailableTarget, prompt: "", updatedAt: 4, revision: 16, phase: "accepted",
+        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "unavailable", attachments: [],
+        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
+    ],
+    folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const projects = projectLogicalProjects(snapshot, new Map([
+    [first, [catalog("C:/repo")]],
+    [second, [{ ...catalog("C:/local"), id: secondTarget.projectId }]],
+  ]));
+
+  assert.deepEqual(preferredSelectedLaunchTarget(projects, [remoteId], snapshot), {
+    project: projects.find(project => project.id === remoteId),
+    location: firstTarget,
+  });
+  assert.deepEqual(preferredSelectedLaunchTarget(projects, [remoteId, localId], snapshot), {
+    project: projects.find(project => project.id === localId),
+    location: secondTarget,
+  });
+  assert.deepEqual(preferredSelectedLaunchTarget(projects, [remoteId, localId], { ...snapshot, drafts: [] }), {
+    project: projects.find(project => project.id === remoteId),
+    location: firstTarget,
+  });
+  assert.equal(preferredSelectedLaunchTarget(projects, [], snapshot), null);
 });
 
 test("one logical project includes thread rows from both daemon folders", () => {

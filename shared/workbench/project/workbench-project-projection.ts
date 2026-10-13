@@ -4,6 +4,7 @@
  *   hidden folders move to `hiddenLocations`, so every downstream projection sees only visible folders.
  * - isDaemonOwnedProject: whether a logical project's folders are each daemon's own and can't be hidden.
  * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
+ * - preferredSelectedLaunchTarget: choose the newest accepted thread's available selected project and folder.
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
  * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
@@ -315,6 +316,32 @@ export function preferredLogicalLaunchLocation(
       || left.target.projectId.localeCompare(right.target.projectId))[0];
   return latest?.target ?? project.locations.find(location => location.project)?.target
     ?? project.locations[0]?.target ?? null;
+}
+
+export function preferredSelectedLaunchTarget(
+  projects: readonly WorkbenchLogicalProject[],
+  selectedProjectIds: readonly string[],
+  presentation: PresentationSnapshot,
+) {
+  const selectedProjects = selectedProjectIds.flatMap(id => {
+    const project = projects.find(candidate => candidate.id === id);
+    return project ? [project] : [];
+  });
+  const selectedProjectsById = new Map(selectedProjects.map(project => [project.id, project]));
+  const accepted = presentation.drafts
+    .filter(draft => draft.phase === "accepted")
+    .sort((left, right) => right.revision - left.revision || right.id.localeCompare(left.id));
+  for (const draft of accepted) {
+    const project = selectedProjectsById.get(draft.logicalProjectId);
+    const location = project?.locations.find(item =>
+      item.target.daemonId === draft.target.daemonId && item.target.projectId === draft.target.projectId);
+    if (project && location) return { project, location: location.target };
+  }
+  for (const project of selectedProjects) {
+    const location = project.locations.find(item => item.project)?.target;
+    if (location) return { project, location };
+  }
+  return null;
 }
 
 export function projectLogicalSummaries(

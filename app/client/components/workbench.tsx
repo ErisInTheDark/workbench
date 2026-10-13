@@ -63,7 +63,10 @@ import {
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
-import { projectLogicalThreadDisplayOrder } from "workbench-shared/workbench/project/workbench-project-projection";
+import {
+    preferredSelectedLaunchTarget,
+    projectLogicalThreadDisplayOrder,
+} from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { useThread } from "./workbench/use-thread";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
@@ -1052,10 +1055,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const searchActionContext = useMemo<WorkbenchActionContext>(() => ({
     createThread: () => {
       if (workbenchClient.mounted?.presentationClient) {
-        const project = selectedLogicalProject ?? selectedLogicalProjects[0];
-        const location = project?.locations.find(item => item.project)?.target;
+        const presentation = workbenchClient.mounted.presentationClient.snapshot().data;
+        const preferred = presentation
+          ? preferredSelectedLaunchTarget(logicalProjects, selectionProjectIds, presentation)
+          : null;
+        const project = preferred?.project;
+        const location = preferred?.location;
         if (project && location) navigateToRoute(createLogicalThreadRoute(
-          route.logical?.projectId ?? null, project.id, location, { kind: "new" },
+          project.id, project.id, location, { kind: "new" },
         ));
       }
       else if (selectedPhysicalProjects[0]) navigateToRoute(createThreadRoute(selectedPhysicalProjects[0].id, { kind: "new" }));
@@ -1072,9 +1079,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [attachedProjectId, isMobile, navigateToRoute, selectedLogicalProjects, selectedPhysicalProjects, settingsRoute,
-    resolvedSettings.editorFontSize, route.logical?.projectId, searchController, selectedLogicalProject,
-    updateEditorFontSize, viewedProjectId, workbenchClient.mounted]);
+  }), [attachedProjectId, isMobile, logicalProjects, navigateToRoute, selectedPhysicalProjects, selectionProjectIds,
+    settingsRoute, resolvedSettings.editorFontSize, searchController, updateEditorFontSize, viewedProjectId,
+    workbenchClient.mounted]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
       case "action":
