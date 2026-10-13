@@ -59,6 +59,7 @@ import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
+import useHeightTransition from "./use-height-transition";
 import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
 import {
   composerReferenceKey, type ComposerReference,
@@ -95,6 +96,11 @@ const modePanelTransitionClassName = `[transition:
   transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
   display var(--sticky-composer-motion-duration) allow-discrete
 ]`;
+
+const modePanelsClassName = `
+  relative grid overflow-clip
+  [transition: height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
+`;
 
 const actionClusterClassName = `
   col-start-1 row-start-1 min-w-0 invisible opacity-0
@@ -261,6 +267,7 @@ export default function ThreadComposer ({
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const composerInputRef = useRef<PlaintextEditableHandle>(null);
+  const modePanelsRef = useRef<HTMLDivElement>(null);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(threadState);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(threadState);
@@ -651,6 +658,7 @@ export default function ThreadComposer ({
   const activeComposerMode = showQuestionnairePanel ? "questionnaire" : "composer";
   const isComposerPanelActive = activeComposerMode === "composer";
   const isQuestionnairePanelActive = activeComposerMode === "questionnaire";
+  useHeightTransition(modePanelsRef, activeComposerMode);
   const composerForm = (
       <form
         className={joinClasses(
@@ -668,7 +676,7 @@ export default function ThreadComposer ({
               {header}
             </div>
           ) : null}
-          <div className="relative grid [interpolate-size: allow-keywords]" data-active-mode={activeComposerMode}>
+          <div ref={modePanelsRef} className={modePanelsClassName} data-active-mode={activeComposerMode}>
             {visiblePendingUserInputRequest ? (
               <div
                 aria-hidden={!isQuestionnairePanelActive}
