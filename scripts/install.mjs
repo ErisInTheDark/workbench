@@ -3,7 +3,7 @@
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import WorkbenchInstaller from "./WorkbenchInstaller.mjs";
+import WorkbenchInstaller from "./installation/WorkbenchInstaller.mjs";
 
 try {
   if (process.env.WORKBENCH_THREAD_ID || process.env.CODEX_THREAD_ID) {

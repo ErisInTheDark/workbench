@@ -1,6 +1,6 @@
 /* No exports. Tests protect companion ownership and complete orphan reporting. */
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import test from "node:test";
@@ -46,4 +46,28 @@ test("scenario tests require exact selection without hiding ordinary sibling tes
   } finally {
     await temporary.dispose();
   }
+});
+
+test("discovers CLI and script tests with nested installation owners while preserving exclusions", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-operational-tests-");
+  context.after(() => temporary.dispose());
+  const file = (name: string) => path.join(temporary.path, name);
+  const owners = ["cli/Command.mjs", "scripts/publish.mjs", "scripts/installation/Installer.mjs"];
+  const tests = owners.map(owner => owner.replace(/\.mjs$/u, ".test.ts"));
+  for (const name of [
+    ...owners, ...tests, "scripts/installation/Installer.scenario.test.ts",
+    "scripts/node_modules/dependency/Unowned.test.ts",
+  ]) {
+    await mkdir(path.dirname(file(name)), { recursive: true });
+    await writeFile(file(name), "");
+  }
+  const catalog = await ProjectTestCatalog.read(temporary.path);
+  assert.doesNotThrow(() => catalog.validate());
+  assert.deepEqual(catalog.select(), tests.map(file).sort());
+  assert.deepEqual(catalog.companions(owners.map(file)), tests.map(file).sort());
+  assert.deepEqual(catalog.select(["scripts/installation"]), [file("scripts/installation/Installer.test.ts")]);
+
+  await writeFile(file("scripts/installation/Unowned.test.ts"), "");
+  const invalid = await ProjectTestCatalog.read(temporary.path);
+  assert.throws(() => invalid.validate(), /Unowned\.test\.ts/u);
 });

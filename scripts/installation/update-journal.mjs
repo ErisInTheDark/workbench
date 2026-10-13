@@ -9,7 +9,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import resolveDataRoot from "../package/workbench-data-root.mjs";
+import resolveDataRoot from "../../package/workbench-data-root.mjs";
 export { resolveDataRoot };
 
 export function journalPath(dataRoot = resolveDataRoot()) {

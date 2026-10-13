@@ -6,12 +6,20 @@ import { EventEmitter } from "node:events";
 import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
-import test from "node:test";
+import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { ChildProcess } from "node:child_process";
 
 import { WORKBENCH_TEMPORARY_ROOT_ENV } from "../daemon/server/lib/workbench/WorkbenchTemporaryDirectory";
 import ProjectTestRunner from "./ProjectTestRunner";
+
+const outerRegistry = process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+// Mocked nested runners must not retire resources registered by sibling real workers.
+before(() => { delete process.env.WORKBENCH_TEST_SERVICE_RECORDS; });
+after(() => {
+  if (outerRegistry === undefined) delete process.env.WORKBENCH_TEST_SERVICE_RECORDS;
+  else process.env.WORKBENCH_TEST_SERVICE_RECORDS = outerRegistry;
+});
 
 test("rejects all orphaned tests before acquiring fixtures or launching children", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("test-catalog-");
@@ -87,12 +95,6 @@ test("cleans up child-registered scenario workspaces owned by the runner's proje
   await mkdir(fixtures, { recursive: true });
   const scenarioRoot = await mkdtemp(path.join(fixtures, "wb-scenario-"));
   context.after(async () => await rm(scenarioRoot, { force: true, recursive: true }));
-  // This test's own runner may provide a registry; the inner runner must own a fresh one.
-  const outerRegistry = process.env.WORKBENCH_TEST_SERVICE_RECORDS;
-  delete process.env.WORKBENCH_TEST_SERVICE_RECORDS;
-  context.after(() => {
-    if (outerRegistry !== undefined) process.env.WORKBENCH_TEST_SERVICE_RECORDS = outerRegistry;
-  });
   assert.notEqual(process.cwd(), projectRoot, "the ward needs a cwd that differs from the project root");
 
   const runner = new ProjectTestRunner(projectRoot, {

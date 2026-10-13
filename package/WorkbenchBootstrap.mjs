@@ -41,7 +41,7 @@ export default class WorkbenchBootstrap {
       const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
       if (manifest.name !== "workbench-root") return false;
       await fs.access(path.join(root, "wb"));
-      await fs.access(path.join(root, "installation", "install.mjs"));
+      await fs.access(path.join(root, "scripts", "install.mjs"));
       await fs.access(path.join(root, "cli", "dispatch.mjs"));
       return true;
     } catch (error) {
@@ -209,7 +209,7 @@ export default class WorkbenchBootstrap {
           if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
           record = { ...record, phase: "setup" };
           await this.writeInstallation(record);
-          await this.commands.run(process.execPath, [path.join(root, "installation", "install.mjs"), "--prepare"], { cwd: root });
+          await this.commands.run(process.execPath, [path.join(root, "scripts", "install.mjs"), "--prepare"], { cwd: root });
           await this.registration.register(root);
         } catch (error) {
           try { await this.discardIncomplete(record); }
@@ -228,7 +228,7 @@ export default class WorkbenchBootstrap {
     }
     // Persist readiness before optional platform actions: missing native artifacts
     // must not turn a usable source installation into an endless setup loop.
-    await this.commands.run(process.execPath, [path.join(root, "installation", "install.mjs"),
+    await this.commands.run(process.execPath, [path.join(root, "scripts", "install.mjs"),
       args[0] === "connect" ? "--connect" : "--welcome"], { cwd: root, interactive: true });
   }
 

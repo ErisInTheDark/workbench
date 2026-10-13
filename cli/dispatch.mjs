@@ -5,8 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
-import { readJournal, isRepairPending } from "../installation/update-journal.mjs";
-import { runRepair } from "../installation/update-repair.mjs";
+import { readJournal, isRepairPending } from "../scripts/installation/update-journal.mjs";
+import { runRepair } from "../scripts/installation/update-repair.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);

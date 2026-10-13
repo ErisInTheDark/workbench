@@ -4,8 +4,8 @@
  * - resolveDataRoot/journalPath: dependency-free user-data paths.
  * - readJournal/writeJournal/isRepairPending: typed durable journal boundary.
  */
-import type { InstallationRepairJournal } from "../shared/workbench/installation-update.ts";
-import type { WorkbenchDataRootOptions } from "../shared/workbench-data-root.ts";
+import type { InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
+import type { WorkbenchDataRootOptions } from "../../shared/workbench-data-root.ts";
 
 export interface JournalReadFiles {
   readFile(filename: string, encoding: "utf8"): Promise<string>;

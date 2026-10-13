@@ -34,11 +34,11 @@ async function fixture(context, options = {}) {
     async run(command, args, config) {
       calls.push({ command, args, config, pinned: header.pinned });
       if (command === "git" && args[0] === "clone") {
-        await fs.mkdir(path.join(checkout, "installation"), { recursive: true });
+        await fs.mkdir(path.join(checkout, "scripts"), { recursive: true });
         await fs.mkdir(path.join(checkout, "cli"), { recursive: true });
         await fs.mkdir(path.join(checkout, ".git"));
         await fs.writeFile(path.join(checkout, "package.json"), '{"name":"workbench-root"}');
-        await fs.writeFile(path.join(checkout, "installation", "install.mjs"), "");
+        await fs.writeFile(path.join(checkout, "scripts", "install.mjs"), "");
         await fs.writeFile(path.join(checkout, "cli", "dispatch.mjs"), "");
         await fs.writeFile(path.join(checkout, "wb"), "");
       }
@@ -274,12 +274,12 @@ test("an abruptly exited installer cannot leave a permanent installation lock", 
       prompt: { choose: async () => "Let's go!", location: async () => root, withHeader: task => task() },
       commands: { run: async (command, args) => {
         if (command === "git" && args[0] === "clone") {
-          await fs.mkdir(path.join(root, "installation"), { recursive: true });
+          await fs.mkdir(path.join(root, "scripts"), { recursive: true });
           await fs.mkdir(path.join(root, "cli"), { recursive: true });
           await fs.mkdir(path.join(root, ".git"));
           await fs.writeFile(path.join(root, "package.json"), '{"name":"workbench-root"}');
           await fs.writeFile(path.join(root, "wb"), "");
-          await fs.writeFile(path.join(root, "installation/install.mjs"), "");
+          await fs.writeFile(path.join(root, "scripts/install.mjs"), "");
           await fs.writeFile(path.join(root, "cli/dispatch.mjs"), "");
         } else if (args.includes("--prepare")) {
           process.send("setup-entered");

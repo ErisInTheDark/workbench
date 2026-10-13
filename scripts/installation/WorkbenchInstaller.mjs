@@ -4,9 +4,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import WorkbenchInstallPrompt from "../package/WorkbenchInstallPrompt.mjs";
-import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
-import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
+import WorkbenchInstallPrompt from "../../package/WorkbenchInstallPrompt.mjs";
+import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
 
 export default class WorkbenchInstaller {
   constructor({
@@ -31,7 +31,7 @@ export default class WorkbenchInstaller {
     this.write("Installing pinned runtime...\n");
     await this.toolchain.ensure();
     await this.toolchain.run(["env", "install"], { cwd: this.root });
-    await this.toolchain.runNode(this.root, path.join(this.root, "installation", "install.mjs"), ["--prepare-pinned"], {
+    await this.toolchain.runNode(this.root, path.join(this.root, "scripts", "install.mjs"), ["--prepare-pinned"], {
       cwd: this.root,
     });
   }

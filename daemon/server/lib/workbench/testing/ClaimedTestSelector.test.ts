@@ -1,6 +1,6 @@
 /* No exports. Tests protect claim-directed impact without unrelated dependency expansion. */
 import assert from "node:assert/strict";
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -91,4 +91,20 @@ test("loads project reload definitions without starting their services and selec
   const skillSelection = selector.select(["daemon/server/lib/workbench/commands/skill-command-definition.ts"]);
   assert.ok(skillSelection.files.includes(path.join(root, "app/client/workbench/thread/thread-command-matchers.test.ts")));
   assert.ok(!skillSelection.files.includes(path.join(root, "app/client/workbench/thread/inline-mention-highlights.skills.test.ts")));
+  const operationalCompanions = [
+    ["cli/workbench-ports.ts", "cli/workbench-ports.test.ts"],
+    ["scripts/publish-package.mjs", "scripts/publish-package.test.ts"],
+    ["scripts/installation/WorkbenchInstaller.mjs", "scripts/installation/WorkbenchInstaller.test.ts"],
+    ["scripts/installation/update-repair.mjs", "scripts/installation/update-repair.test.ts"],
+  ];
+  const sourceClaims = selector.select(operationalCompanions.map(([owner]) => owner));
+  const testClaims = selector.select(operationalCompanions.map(([, companion]) => companion));
+  for (const [, companion] of operationalCompanions) {
+    assert.ok(sourceClaims.files.includes(path.join(root, companion)), `Source claim omitted ${companion}`);
+    assert.ok(testClaims.files.includes(path.join(root, companion)), `Direct test claim omitted ${companion}`);
+  }
+  const installation = selector.select(["scripts/installation"]);
+  for (const name of ["WorkbenchInstaller.test.ts", "update-repair.test.ts"]) {
+    assert.ok(installation.files.includes(path.join(root, "scripts/installation", name)), `Folder claim omitted ${name}`);
+  }
 });

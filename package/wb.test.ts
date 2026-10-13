@@ -20,19 +20,15 @@ async function packageFixture(options: { checkoutCli?: boolean } = {}) {
   const workingDirectory = path.join(root, "project");
   await fs.mkdir(path.dirname(adapterPath), { recursive: true });
   await fs.mkdir(path.dirname(checkoutCliPath), { recursive: true });
-  await fs.mkdir(path.join(root, "installation"), { recursive: true });
+  await fs.mkdir(path.join(root, "scripts"), { recursive: true });
   await fs.mkdir(workingDirectory);
   await fs.copyFile(packageAdapterPath, adapterPath);
-  for (const name of [
-    "WorkbenchBootstrap.mjs",
-    "WorkbenchInstallPrompt.mjs",
-    "installer-cube.mjs",
-    "WorkbenchBootstrapCommand.mjs",
-  ]) {
+  const manifest = JSON.parse(await fs.readFile(path.join(import.meta.dirname, "package.json"), "utf8"));
+  for (const name of manifest.files.filter((name: string) => name.endsWith(".mjs"))) {
     await fs.copyFile(path.join(import.meta.dirname, name), path.join(root, "package", name));
   }
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "workbench-root", type: "module" }));
-  await fs.writeFile(path.join(root, "installation", "install.mjs"), "");
+  await fs.writeFile(path.join(root, "scripts", "install.mjs"), "");
   await fs.writeFile(path.join(root, "wb"), "");
   await fs.writeFile(path.join(workingDirectory, "caller-sentinel"), "", "utf8");
 

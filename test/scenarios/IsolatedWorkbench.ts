@@ -299,8 +299,7 @@ export default class IsolatedWorkbench {
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
     const ignored = new Set(["node_modules", ".workbench", ".git", ".next", "dist", "target", ".env.local"]);
-    // Launchers import update-journal.mjs from installation/, so the fixture needs it beside them.
-    for (const directory of ["app", "daemon", "shared", "instructions", "package", "installation"]) {
+    for (const directory of ["app", "daemon", "shared", "instructions", "package", "scripts"]) {
       signal.throwIfAborted();
       await fs.cp(path.join(source, directory), path.join(project, directory), {
         recursive: true, filter: (file) => !ignored.has(path.basename(file)),

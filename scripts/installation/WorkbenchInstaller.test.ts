@@ -10,7 +10,7 @@ function fixture(answers = [], tailscale = false, nodeVersion = process.versions
   const calls = [];
   const prompts = [];
   const output = [];
-  const root = path.resolve(import.meta.dirname, "..");
+  const root = path.resolve(import.meta.dirname, "../..");
   const commands = { run: async (command, args, config) => { calls.push({ command, args, config }); } };
   const setup = new WorkbenchInstaller({
     root,
@@ -33,7 +33,7 @@ test("repository handoff installs the runtime and relaunches under pinned Node",
   await f.setup.prepare();
   assert.deepEqual(f.calls.map(({ command, args }) => [command, ...args]), [
     ["vp", "env", "install"],
-    ["vp", "node", path.join(f.root, "installation", "install.mjs"), "--prepare-pinned"],
+    ["vp", "node", path.join(f.root, "scripts", "install.mjs"), "--prepare-pinned"],
   ]);
 });
 

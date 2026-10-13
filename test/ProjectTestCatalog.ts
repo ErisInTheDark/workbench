@@ -5,7 +5,7 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 
-const ROOTS = ["app", "daemon", "package", "shared", "test"];
+const ROOTS = ["app", "cli", "daemon", "package", "scripts", "shared", "test"];
 const EXCLUDED = new Set([".next", "build", "coverage", "dist", "generated", "node_modules", ".git", ".workbench", "target", "gen"]);
 const TEST = /\.test\.tsx?$/u;
 const OPT_IN_SCENARIO = /\.scenario\.test\.tsx?$/u;

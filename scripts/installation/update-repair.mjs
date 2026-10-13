@@ -7,8 +7,8 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import WorkbenchBootstrapCommand from "../package/WorkbenchBootstrapCommand.mjs";
-import WorkbenchToolchain from "../package/WorkbenchToolchain.mjs";
+import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
+import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
 import { resolveDataRoot, readJournal, writeJournal, isRepairPending, journalPath } from "./update-journal.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -248,7 +248,7 @@ export async function runRepair(options = {}) {
 }
 
 async function repair(options) {
-  const root = options.root ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const root = options.root ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const dataRoot = options.dataRoot ?? resolveDataRoot();
   const files = options.files ?? fs;
   const now = options.now ?? Date.now;

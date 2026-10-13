@@ -62,5 +62,5 @@ note: have tried to keep dependencies minimal for the most part
 `/shared` — shared stuff between the projects  
 `/shared/network/native` — tailscale integration (go)  
 `/test` — test runner  
-`/scripts` — stuff used by package scripts plus anything i didn't notice an agent left behind :3  
+`/scripts` - checkout installation, repair, build, and maintenance commands (`install.mjs` starts setup, `installation/` owns its implementation)  
 `/docs` — help agents find things and not break them without eating all their tokens

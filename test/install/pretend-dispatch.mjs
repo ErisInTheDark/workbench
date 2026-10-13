@@ -18,7 +18,7 @@ const pretend = {
 
 if (command === "repair") {
   const { runRepair } = await import(
-    new URL("../installation/update-repair.mjs", import.meta.url).href,
+    new URL("../scripts/installation/update-repair.mjs", import.meta.url).href,
   );
   const journal = await runRepair({ root, force: true });
   if (journal?.phase !== "done") throw new Error(`Sandbox dependency repair failed: ${journal?.lastError}`);

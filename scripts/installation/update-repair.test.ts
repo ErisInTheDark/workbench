@@ -5,14 +5,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs/promises";
 import path from "node:path";
-import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory.ts";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory.ts";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { runRepair as repair, type RepairOptions } from "./update-repair.mjs";
-import { InstallationRepairJournalSchema, type InstallationRepairJournal } from "../shared/workbench/installation-update.ts";
+import { InstallationRepairJournalSchema, type InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
 import { isRepairPending, readJournal, resolveDataRoot, writeJournal } from "./update-journal.mjs";
-import resolveWorkbenchDataRoot from "../shared/workbench-data-root.ts";
+import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
 
 const fromSha = "a".repeat(40);
 const toSha = "b".repeat(40);
@@ -155,7 +155,7 @@ test("explicit repair recovers from an unreadable journal and keeps it for inspe
     stop: async () => {}, clean: async () => { events.push("clean"); },
     commands: { run: async (command: string) => { events.push(command); } },
   });
-  assert.equal(result?.phase, "done");
+  assert.equal(result?.phase, "done", result?.lastError ?? undefined);
   assert.deepEqual(events.filter(e => e === "clean" || e === "vp"), ["clean", "vp"]);
   assert.ok((await fs.readdir(path.join(dataRoot, "update"))).includes("journal.json.invalid-5"));
 });
@@ -322,12 +322,12 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-repair-bootstrap-");
   context.after(() => temporary.dispose());
   const root = temporary.path;
-  const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const entries = ["app/server/launch.mjs", "daemon/host/launch-node.mjs", "daemon/host/launch-foreground.mjs"];
   for (const filename of [
     ...entries,
-    "installation/update-repair.mjs",
-    "installation/update-journal.mjs",
+    "scripts/installation/update-repair.mjs",
+    "scripts/installation/update-journal.mjs",
     "package/WorkbenchBootstrapCommand.mjs",
     "package/WorkbenchToolchain.mjs",
     "package/vite-plus-installer.mjs",
@@ -357,7 +357,7 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
   }
   // Managed threads never touch the journal.
   const untouched = (await readJournal(dataRoot))?.updatedAt;
-  for (const entry of ["app/server/launch.mjs", "installation/update-repair.mjs"]) {
+  for (const entry of ["app/server/launch.mjs", "scripts/installation/update-repair.mjs"]) {
     await assert.rejects(promisify(execFile)(process.execPath, [path.join(root, entry)], {
       cwd: root, env: { ...process.env, WORKBENCH_DATA_ROOT: dataRoot, WORKBENCH_THREAD_ID: "fixture-managed" },
     }), error => {

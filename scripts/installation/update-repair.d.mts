@@ -3,7 +3,7 @@
  * - RepairFiles/RepairOptions: injectable built-in repair boundaries.
  * - runRepair: resume repair without loading installed dependencies.
  */
-import type { InstallationRepairJournal } from "../shared/workbench/installation-update.ts";
+import type { InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
 import type { JournalReadFiles } from "./update-journal.mjs";
 
 export interface RepairFiles extends JournalReadFiles {
