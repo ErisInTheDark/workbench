@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchDeliveredTranscriptWindow: own one browser subscription's delivered transcript items, turns, layout and
- *   history boundary; rebase reservoir pages and daemon live changes into incremental browser structure updates.
+ *   history boundary; rebase reservoir pages and daemon live changes into incremental browser structure updates, and keep
+ *   settled tool output bodies app-side until the browser opens them.
  */
 import {
   emptyTranscriptSnapshotRows,
@@ -16,6 +17,7 @@ import {
   splitWorkbenchTranscriptSnapshot,
 } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import { deferWorkbenchTranscriptEnvelopeBody } from "workbench-shared/workbench/transcript/workbench-transcript-deferred-bodies";
 import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import {
   projectWorkbenchTranscript,
@@ -46,6 +48,8 @@ export default class WorkbenchDeliveredTranscriptWindow {
   readonly #roots = new Map<string, DeliveredRoot>();
   /** Last delivered rows per item, so daemon baselines that replay unchanged items publish nothing. */
   readonly #signatures = new Map<string, string>();
+  /** Complete envelopes of delivered items whose output rows were left out, served when the browser opens them. */
+  readonly #bodies = new Map<string, WorkbenchTranscriptItemEnvelope>();
   readonly #turns = new Map<string, Turn>();
   readonly #loadedTurns = new Set<string>();
   #firstCursor: WorkbenchTranscriptItemCursor | null = null;
@@ -75,6 +79,7 @@ export default class WorkbenchDeliveredTranscriptWindow {
     this.#layout = null;
     this.#roots.clear();
     this.#signatures.clear();
+    this.#bodies.clear();
     this.#turns.clear();
     this.#loadedTurns.clear();
     this.#firstCursor = null;
@@ -103,23 +108,34 @@ export default class WorkbenchDeliveredTranscriptWindow {
     }
     this.#awaitingLiveBaseline = false;
     this.#hasPreviousItems = result.hasMore;
-    const envelopes = result.envelopes.filter(envelope => !this.#roots.has(envelope.itemId));
+    const fresh = result.envelopes.filter(envelope => !this.#roots.has(envelope.itemId));
     if (!this.#projection || !this.#thread) {
       this.#thread = result.catalog.thread;
       this.#signatures.clear();
-      this.#remember(envelopes);
+      this.#bodies.clear();
+      this.#remember(fresh);
+      // The live turn's recent tools feed the live terminal, so only settled turns start deferred.
+      const liveTurns = new Set(result.catalog.turns
+        .filter(turn => turn.state === "inProgress" || turn.state === "admitted").map(turn => turn.id));
+      const envelopes = fresh.map(envelope => liveTurns.has(envelope.snapshot.rows.threadItems[0]?.turn_id ?? "")
+        ? envelope : this.#defer(envelope));
       return this.#apply(composeWorkbenchTranscriptWindow(result.catalog, envelopes, {
         hasPreviousItems: result.hasMore,
       }), [], true);
     }
-    this.#remember(envelopes);
+    this.#remember(fresh);
+    const envelopes = fresh.map(envelope => this.#defer(envelope));
     if (!envelopes.length && hadPrevious === result.hasMore) return null;
     // Reservoir catalogues can predate live state: live turns, thread and held steers stay authoritative.
+    // The browser already holds every known turn, so a page carries only its own and newly seen ones.
+    const pageTurnIds = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
     const catalog: WorkbenchTranscriptSnapshot = {
       ...result.catalog,
       rows: emptyTranscriptSnapshotRows(),
       thread: this.#thread,
-      turns: result.catalog.turns.map(turn => this.#turns.get(turn.id) ?? turn),
+      turns: result.catalog.turns
+        .filter(turn => pageTurnIds.has(turn.id) || !this.#turns.has(turn.id))
+        .map(turn => this.#turns.get(turn.id) ?? turn),
     };
     return this.#apply(composeWorkbenchTranscriptWindow(catalog, envelopes, {
       hasPreviousItems: result.hasMore,
@@ -150,6 +166,34 @@ export default class WorkbenchDeliveredTranscriptWindow {
     for (const envelope of envelopes) this.#signatures.set(envelope.itemId, signature(envelope));
   }
 
+  #defer(envelope: WorkbenchTranscriptItemEnvelope) {
+    const deferred = deferWorkbenchTranscriptEnvelopeBody(envelope);
+    if (!deferred) return envelope;
+    this.#bodies.set(envelope.itemId, envelope);
+    return deferred;
+  }
+
+  /** Complete rows for delivered items whose bodies were deferred; unknown ids fail rather than return partial data. */
+  bodies(itemIds: readonly string[]): WorkbenchTranscriptSnapshot {
+    if (!this.#thread) throw new Error("Transcript delivery has not started.");
+    const envelopes = itemIds.map(itemId => {
+      const envelope = this.#bodies.get(itemId);
+      if (!envelope) throw new Error(`Transcript item ${itemId.slice(0, 80)} has no deferred body.`);
+      return envelope;
+    });
+    const turnIds = new Set(envelopes.flatMap(envelope => envelope.snapshot.loadedTurnIds));
+    return composeWorkbenchTranscriptWindow({
+      hasPreviousTurns: false,
+      loadedTurnIds: [],
+      rows: emptyTranscriptSnapshotRows(),
+      thread: this.#thread,
+      turns: [...turnIds].flatMap(id => {
+        const turn = this.#turns.get(id);
+        return turn ? [turn] : [];
+      }),
+    }, envelopes, { hasPreviousItems: false });
+  }
+
   /** Same rule as the daemon live view: item-free changes matter when they carry turn, approval or thread facts. */
   #unchanged(snapshot: WorkbenchTranscriptSnapshot) {
     return snapshot.rows.threadItems.length === 0
@@ -169,6 +213,8 @@ export default class WorkbenchDeliveredTranscriptWindow {
       const next = signature(envelope);
       if (this.#signatures.get(envelope.itemId) === next) return false;
       this.#signatures.set(envelope.itemId, next);
+      // Live changes travel complete, so the browser no longer needs a deferred body for this item.
+      this.#bodies.delete(envelope.itemId);
       return true;
     });
     if (changed.length === partition.envelopes.length) return snapshot;
@@ -203,6 +249,7 @@ export default class WorkbenchDeliveredTranscriptWindow {
     for (const id of removed) {
       this.#roots.delete(id);
       this.#signatures.delete(id);
+      this.#bodies.delete(id);
     }
     const newestLoaded = Math.max(-1, ...[...this.#loadedTurns].map(id => this.#turns.get(id)?.turn_index ?? -1));
     for (const root of snapshot.rows.threadItems) {

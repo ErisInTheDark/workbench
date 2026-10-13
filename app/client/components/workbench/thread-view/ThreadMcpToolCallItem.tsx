@@ -16,7 +16,7 @@ import {
 import ThreadDurationText from "./ThreadDurationText";
 import Disclosure from "../../ui/Disclosure";
 import ThreadSummaryText from "./ThreadSummaryText";
-import ThreadToolCallDetails from "./ThreadToolCallDetails";
+import { ThreadHydratedToolCallDetails } from "./ThreadToolCallDetails";
 import { formatMcpToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 import { ThreadApprovalGlyph, ThreadCommandSummary } from "./thread-view-primitives";
@@ -131,11 +131,12 @@ export default function ThreadMcpToolCallItem ({
           </div>
         ) : null}
         {details}
-        <ThreadToolCallDetails
+        <ThreadHydratedToolCallDetails
           invocation={formatMcpToolInvocation({ argumentsValue: item.arguments, server: item.server, tool: item.tool })}
-          output={item.resultExpiredAt
+          item={item}
+          output={body => body.resultExpiredAt
             ? "Result expired after 1 day."
-            : item.error?.message || formatToolCallOutput({ content: item.result?.content, fallback: item.result?.structuredContent ?? item.result?._meta })}
+            : body.error?.message || formatToolCallOutput({ content: body.result?.content, fallback: body.result?.structuredContent ?? body.result?._meta })}
         />
       </>
       )}

@@ -13,6 +13,7 @@ import { isWorkbenchPendingSteerUserMessage } from "workbench-shared/workbench/t
 import { projectWorkbenchThreadItemTimelines } from "workbench-shared/workbench/thread/thread-item-timeline";
 import { createOptimisticItem, type OptimisticInputPlacement, type OptimisticInputStatus } from "../thread/thread-optimistic-items";
 import {
+  emptyTranscriptSnapshotRows,
   transcriptSnapshotTables,
   type WorkbenchTranscriptSnapshot,
   type WorkbenchTranscriptSnapshotRows,
@@ -314,6 +315,14 @@ test("claude displays only message-tool prose while retaining snapshot and strea
         const intentional = visible().turns[0]!.items.find(item => item.id === deliveredItemId);
         assert.ok(intentional?.type === "agentMessage");
         assert.equal(intentional.text, "intentional more");
+        const published = visible();
+        receiveStream({
+          kind: "structure", reset: false, removedItemIds: [], layout: {}, hasPreviousTurns: false,
+          snapshot: { ...snapshot, turns: [], loadedTurnIds: [], rows: emptyTranscriptSnapshotRows() },
+        });
+        assert.notEqual(visible(), published, "the structural update republished");
+        assert.equal(visible().turns[0], published.turns[0], "untouched turns keep their published identity");
+        assert.equal(visible().display.segments[0], published.display.segments[0], "untouched segments keep their published identity");
         // Replacing the source baseline must not resurrect hidden items.
         receiveStream(baseline);
         assert.deepEqual(visible().turns[0]!.items.map(item => item.id), expected);

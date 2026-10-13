@@ -192,7 +192,7 @@ import { buildThreadCommentaryRuns, type ThreadCommentaryRunActions } from "./th
 import { splitUserMessageBubbles } from "./user-message-bubbles";
 import ComposerReferencePills from "./ComposerReferencePills";
 import { readComposerReferenceMessage, type ComposerReference } from "workbench-shared/workbench/thread/composer-reference";
-import useThreadPresentedText from "./use-thread-presented-text";
+import { TranscriptBodiesContext, useTranscript } from "../use-transcript";
 import { useThreadItemLiveDuration } from "./use-thread-live-duration";
 import {
   buildRenderableBlocks, buildCommandSequenceRenderSegments, getWorkedBlockRows,
@@ -1200,7 +1200,7 @@ function ThreadAgentMessageItem ({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const text = stripWorkbenchTurnEndMarker(useThreadPresentedText({
+  const text = stripWorkbenchTurnEndMarker(useTranscript.presentedText({
     canonicalText: item.text,
     field: "agentMessageText",
     itemId: item.id,
@@ -1324,7 +1324,7 @@ function ThreadReasoningSequence ({
   const visibleItems = block.items.filter(hasReasoningSteps);
   const steps = getThreadReasoningSteps(visibleItems);
   const canonicalOnlyStep = steps.length === 1 ? steps[0] : null;
-  const presentedOnlyStepMarkdown = useThreadPresentedText({
+  const presentedOnlyStepMarkdown = useTranscript.presentedText({
     canonicalText: canonicalOnlyStep?.markdown ?? "",
     field: canonicalOnlyStep?.source === "content" ? "reasoningContent" : "reasoningSummary",
     index: canonicalOnlyStep?.sectionIndex ?? null,
@@ -1505,10 +1505,14 @@ function LiveThreadSubagentActivityWindow (props: ThreadSubagentActivityWindowPr
   const live = useThread(props.projectId ?? "", {
     harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
   }, "view");
-  const { turns } = useThread.turns(live.store);
+  const { turns } = useTranscript.turns(live.store);
   const thread = useMemo(() => live.head && turns.length ? { ...live.head, turns } : props.fallbackThread,
     [live.head, props.fallbackThread, turns]);
-  return <ThreadSubagentActivityWindowBody {...props} thread={thread} />;
+  return (
+    <TranscriptBodiesContext.Provider value={live.store?.transcriptBodies ?? null}>
+      <ThreadSubagentActivityWindowBody {...props} thread={thread} />
+    </TranscriptBodiesContext.Provider>
+  );
 }
 
 function ThreadSubagentActivityWindowBody ({
@@ -2370,7 +2374,7 @@ function ThreadCommandSequence ({
   const activeCommand = canonicalItems.findLast((item): item is CommandItem => (
     item.type === "commandExecution" && item.status === "inProgress"
   ));
-  const presentedOutput = useThreadPresentedText({
+  const presentedOutput = useTranscript.presentedText({
     canonicalText: activeCommand?.aggregatedOutput ?? "",
     field: "commandExecutionOutput",
     itemId: activeCommand?.id ?? "",

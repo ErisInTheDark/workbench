@@ -111,6 +111,7 @@ export function splitWorkbenchTranscriptSnapshot(
   const assets = new Map(snapshot.rows.transcriptAssets.map(asset => [asset.digest, asset]));
   const approvalOutcomes = groupBy(snapshot.approvalOutcomes ?? [], outcome => outcome.itemId);
   const expiredItemPayloads = groupBy(snapshot.expiredItemPayloads ?? [], payload => payload.itemId);
+  const deferredItemBodies = new Set((snapshot.deferredItemBodies ?? []).map(body => body.itemId));
   const threadAssetRefs = snapshot.rows.transcriptAssetRefs.filter(reference => reference.item_id === null);
   const threadAssetDigests = new Set(threadAssetRefs.map(reference => reference.asset_digest));
   const catalogRows = emptyTranscriptSnapshotRows();
@@ -147,6 +148,7 @@ export function splitWorkbenchTranscriptSnapshot(
     const miniSnapshot: WorkbenchTranscriptSnapshot = {
       approvalOutcomes: snapshot.approvalOutcomes ? approvalOutcomes.get(root.public_id) ?? [] : undefined,
       expiredItemPayloads: snapshot.expiredItemPayloads ? expiredItemPayloads.get(root.id) ?? [] : undefined,
+      ...(deferredItemBodies.has(root.id) ? { deferredItemBodies: [{ itemId: root.id }] } : {}),
       expiredTurnPayloads: [],
       hasPreviousTurns: false,
       loadedTurnIds: [turn.id],
@@ -187,6 +189,7 @@ export function composeWorkbenchTranscriptWindow(
   return {
     approvalOutcomes: envelopes.flatMap(envelope => envelope.snapshot.approvalOutcomes ?? []),
     expiredItemPayloads: envelopes.flatMap(envelope => envelope.snapshot.expiredItemPayloads ?? []),
+    deferredItemBodies: envelopes.flatMap(envelope => envelope.snapshot.deferredItemBodies ?? []),
     expiredTurnPayloads: (catalog.expiredTurnPayloads ?? []).filter(payload => loaded.has(payload.turnId)),
     hasPreviousTurns: options.hasPreviousItems,
     loadedTurnIds: catalog.turns.filter(turn => loaded.has(turn.id)).map(turn => turn.id),

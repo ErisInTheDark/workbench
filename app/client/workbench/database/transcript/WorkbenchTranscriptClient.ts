@@ -6,6 +6,7 @@
  */
 import {
   conformWorkbenchTranscriptCapabilities,
+  conformWorkbenchTranscriptSnapshot,
   conformWorkbenchTranscriptUpdated,
   conformWorkbenchTranscriptStreamed,
   type WorkbenchTranscriptConformanceReport,
@@ -139,6 +140,25 @@ export default class WorkbenchTranscriptClient {
       throw new Error("Incompatible workbench/transcript/demand response.");
     }
     return parsed.data.loadedTurnIds;
+  }
+
+  /** Complete rows for delivered items whose tool output was deferred. */
+  async bodies(params: { itemIds: string[]; subscriptionId: string }) {
+    const result = await this.transport.request("workbench/transcript/bodies", params);
+    const conformed = typeof result === "object" && result !== null && "snapshot" in result
+      ? conformWorkbenchTranscriptSnapshot(result.snapshot) : null;
+    if (!conformed || !("data" in conformed)) {
+      this.reportConformanceOnce({
+        method: "workbench/transcript/bodies",
+        repairedPaths: conformed?.repairedPaths ?? [],
+        issues: conformed && "issues" in conformed ? conformed.issues : [{ code: "invalidRow", path: [] }],
+      });
+      throw new Error("Incompatible workbench/transcript/bodies response.");
+    }
+    if (conformed.repairedPaths.length) {
+      this.reportConformanceOnce({ method: "workbench/transcript/bodies", repairedPaths: conformed.repairedPaths, issues: [] });
+    }
+    return conformed.data;
   }
 
   private async request<Kind extends string, Method extends string, Params, Result>(

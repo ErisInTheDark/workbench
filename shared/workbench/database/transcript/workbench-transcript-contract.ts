@@ -131,6 +131,8 @@ export interface WorkbenchTranscriptSnapshot {
   /** Approval outcomes of tool items in the loaded turns; a live update may carry only new ones. */
   approvalOutcomes?: WorkbenchApprovalOutcomeEntry[];
   hasPreviousTurns: boolean;
+  /** Completed tool items whose output rows were left out; their bodies hydrate on demand. */
+  deferredItemBodies?: { itemId: number }[];
   expiredItemPayloads?: { expiredAt: number; itemId: number }[];
   expiredTurnPayloads?: { expiredAt: number; turnId: string }[];
   loadedTurnIds: string[];
@@ -168,7 +170,7 @@ export function conformWorkbenchTranscriptSnapshot(
   const issues: DatabaseConformanceIssue[] = [];
   const knownRootKeys = new Set([
     "thread", "turns", "loadedTurnIds", "hasPreviousTurns", "rows", "approvalOutcomes",
-    "expiredItemPayloads", "expiredTurnPayloads",
+    "deferredItemBodies", "expiredItemPayloads", "expiredTurnPayloads",
   ]);
   const approvalOutcomes = value.approvalOutcomes === undefined ? undefined
     : Array.isArray(value.approvalOutcomes) && value.approvalOutcomes.every(isApprovalOutcome) ? value.approvalOutcomes
@@ -196,6 +198,13 @@ export function conformWorkbenchTranscriptSnapshot(
   if (value.expiredItemPayloads !== undefined
     && (!Array.isArray(value.expiredItemPayloads) || expiredItemPayloads.length !== value.expiredItemPayloads.length)) {
     issues.push(invalidValue(["expiredItemPayloads"]));
+  }
+  const deferredItemBodies = Array.isArray(value.deferredItemBodies)
+    ? value.deferredItemBodies.filter((entry): entry is { itemId: number } => isRecord(entry) && Number.isInteger(entry.itemId))
+    : [];
+  if (value.deferredItemBodies !== undefined
+    && (!Array.isArray(value.deferredItemBodies) || deferredItemBodies.length !== value.deferredItemBodies.length)) {
+    issues.push(invalidValue(["deferredItemBodies"]));
   }
   const expiredTurnPayloads = Array.isArray(value.expiredTurnPayloads)
     ? value.expiredTurnPayloads.filter((entry): entry is { expiredAt: number; turnId: string } => (
@@ -241,6 +250,7 @@ export function conformWorkbenchTranscriptSnapshot(
       expiredTurnPayloads,
       rows: rows as WorkbenchTranscriptSnapshotRows,
       ...(approvalOutcomes ? { approvalOutcomes } : {}),
+      ...(deferredItemBodies.length ? { deferredItemBodies } : {}),
     },
     repairedPaths,
     success: true,

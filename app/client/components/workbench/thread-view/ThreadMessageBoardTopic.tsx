@@ -12,6 +12,7 @@ import { deriveThreadMessageBoardHistory, type ThreadMessageBoardMessage } from 
 import { getSubagentSummary, resolveWorkbenchSubagentCommandTargets } from "../../../workbench/thread/thread-subagents";
 import { describeThreadEntry } from "../thread-entry-presentation";
 import { useThread } from "../use-thread";
+import { useTranscript } from "../use-transcript";
 import WorkbenchThreadButton from "../WorkbenchThreadButton";
 import WorkbenchThreadListItem from "../WorkbenchThreadListItem";
 import { ArrowRightIcon } from "../workbench-icons";
@@ -114,7 +115,7 @@ function ThreadMessageBoardHistory({
   const live = useThread(projectId, {
     harness: subagent.harness, kind: "subagent", parentThreadId: subagent.parentThreadId, threadId: subagent.threadId,
   }, "view");
-  const { transcript, turns, canLoadOlder } = useThread.turns(live.store);
+  const { transcript, turns, canLoadOlder } = useTranscript.turns(live.store);
   const projection = "projection" in transcript ? transcript.projection : null;
   const history = useMemo(
     () => projection ? deriveThreadMessageBoardHistory(turns, projection.turnHistory) : [],

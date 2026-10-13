@@ -6,7 +6,7 @@
  * - createThreadTurnsSlice: build a turns slice whose provider-item turns are derived once per projection.
  * - ThreadStoreState/ThreadSliceName: all slices and their keys.
  * - ThreadStoreActions: id-based thread actions.
- * - ThreadStoreSource: one feed that publishes slices and owns actions (legacy document owner or observed daemon channels).
+ * - ThreadStoreSource: one feed that publishes slices and owns actions and deferred transcript bodies (legacy document owner or observed daemon channels).
  * - ThreadInterest: how much of a thread one consumer needs.
  * - ThreadFeed: which feed backs a store (observed daemon channels, or a local draft document).
  * - default ThreadStore: per-thread slice cache with per-slice listeners and consumer leases over one source.
@@ -30,6 +30,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import type { ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
+import type ThreadTranscriptBodies from "../transcript/ThreadTranscriptBodies";
 import type { ThreadGitArcClaimObservation } from "./ThreadGitArcClaimObserver";
 import type { ThreadGitArcProposalObservation, ThreadGitArcProposalVariant } from "./ThreadGitArcProposalObserver";
 
@@ -161,6 +162,8 @@ export type ThreadInterest = "summary" | "view" | "route";
 export interface ThreadStoreSource {
   readonly feed: ThreadFeed;
   readonly actions: ThreadStoreActions;
+  /** Deferred tool output hydration for the source's transcript; drafts have none. */
+  readonly transcriptBodies?: ThreadTranscriptBodies;
   /** `view` consumers need turn content; `summary` consumers only the summary slice; `route` is the route's own view. */
   acquire(interest: ThreadInterest): () => void;
   /** Retries a failed open. */
@@ -205,6 +208,7 @@ export default class ThreadStore {
   get threadId() { return this.target.kind === "draft" ? this.target.draftId : this.target.threadId; }
   get feed() { return this.#source.feed; }
   get actions() { return this.#source.actions; }
+  get transcriptBodies() { return this.#source.transcriptBodies ?? null; }
   get hasConsumers() { return this.#consumers > 0; }
 
   getSlice<Name extends ThreadSliceName>(name: Name): ThreadStoreState[Name] {

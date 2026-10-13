@@ -28,6 +28,16 @@ import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbe
 import { WorkbenchHarnessSchema, type WorkbenchThreadRouteTarget } from "workbench-shared/workbench/thread/thread-state";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 
+/** Transcript calls the browser addresses to the daemon, routed through the app's typed transcript owner. */
+const transcriptRequestKinds = new Map<string, z.infer<typeof WorkspaceTranscriptRequestSchema>["kind"]>([
+  [workbenchTranscriptOperations.read.method, "read"],
+  [workbenchTranscriptOperations.subscribe.method, "subscribe"],
+  [workbenchTranscriptOperations.unsubscribe.method, "unsubscribe"],
+  [workbenchTranscriptOperations.reportConformance.method, "report"],
+  ["workbench/transcript/demand", "demand"],
+  ["workbench/transcript/bodies", "bodies"],
+]);
+
 type WorkspaceScope = { kind: "folder"; location: ProjectLocationReference }
   | { kind: "installation"; daemonId?: DaemonId } | { kind: "thread"; threadId: string };
 type Notification = Parameters<Parameters<WorkbenchSocketClient["onWorkbenchNotification"]>[0]>[0]
@@ -164,14 +174,9 @@ export default class WorkbenchWorkspaceClient {
           const mutation = WorkspaceThreadMutationSchema.parse({ ...params, method });
           return await this.rpc.requestRaw({ method: "workspace/thread/mutate", params: mutation }) as Result;
         }
-        if (method === workbenchTranscriptOperations.read.method || method === workbenchTranscriptOperations.subscribe.method
-          || method === workbenchTranscriptOperations.unsubscribe.method || method === workbenchTranscriptOperations.reportConformance.method
-          || method === "workbench/transcript/demand") {
-          const kind = method === workbenchTranscriptOperations.read.method ? "read"
-            : method === workbenchTranscriptOperations.subscribe.method ? "subscribe"
-              : method === workbenchTranscriptOperations.reportConformance.method ? "report"
-                : method === "workbench/transcript/demand" ? "demand" : "unsubscribe";
-          const input = WorkspaceTranscriptRequestSchema.parse({ kind, params });
+        const transcriptKind = transcriptRequestKinds.get(method);
+        if (transcriptKind) {
+          const input = WorkspaceTranscriptRequestSchema.parse({ kind: transcriptKind, params });
           return await this.rpc.requestRaw({ method: "workspace/transcript", params: input }) as Result;
         }
         if (!(method in workspaceCommandRoutes)) throw new Error("This daemon operation is not a workspace command.");

@@ -133,6 +133,8 @@ export type ThreadItem =
     appContext: McpToolCallAppContext | null; mcpAppResourceUri?: string; pluginId: string | null;
     readOnlyHint: boolean | null; result: McpToolCallResult | null; error: McpToolCallError | null; durationMs: number | null;
     toolCallGroupId?: string; resultExpiredAt?: number;
+    /** Transcript presentation only: result content was left out of delivery and hydrates on demand. */
+    bodyDeferred?: true;
   }
   | {
     type: "dynamicToolCall"; id: string; namespace: string | null; tool: string; arguments: JsonValue;
@@ -140,6 +142,8 @@ export type ThreadItem =
     toolCallGroupId?: string;
     metadata?: JsonValue;
     resultExpiredAt?: number;
+    /** Transcript presentation only: content items were left out of delivery and hydrate on demand. */
+    bodyDeferred?: true;
     /** Live presentation only; callable-source persistence deliberately excludes this field. */
     patchPreview?: ToolPatchPreviewFile[];
   }

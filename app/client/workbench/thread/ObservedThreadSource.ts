@@ -21,12 +21,13 @@ import type ThreadObservationController from "./ThreadObservationController";
 import { getThreadObservationKey } from "./ThreadObservationController";
 import type ThreadTranscriptProjectionController from "../transcript/ThreadTranscriptProjectionController";
 import type { ThreadTranscriptLocalThread, ThreadTranscriptProjectionState } from "../transcript/ThreadTranscriptProjectionController";
+import ThreadTranscriptBodies from "../transcript/ThreadTranscriptBodies";
 import { createOptimisticItem } from "./thread-optimistic-items";
 import ThreadGitArcClaimObserver from "./ThreadGitArcClaimObserver";
 import ThreadGitArcProposalObserver from "./ThreadGitArcProposalObserver";
 import { ThreadMessageNotSentError } from "./thread-message-submission";
 import { createThreadTurnsSlice, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
-import { ROUTINE_TRANSCRIPT_ITEM_CREDIT } from "../../components/workbench/thread-view/thread-progressive-window-policy";
+import { HISTORY_TRANSCRIPT_ITEM_CREDIT } from "../../components/workbench/thread-view/thread-progressive-window-policy";
 
 type ObservedTarget = Exclude<WorkbenchThreadRouteTarget, { kind: "new" | "draft" }>;
 type ThreadEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>;
@@ -156,6 +157,8 @@ export default function createObservedThreadSource(
   /** The projection controller reports availability while it is constructed, before `transcript` is assigned. */
   let creatingTranscript = false;
   let transcriptState: ThreadTranscriptProjectionState = { status: "idle" };
+  // One stable owner for hook subscribers; each open transcript binds it and closing drops hydrated bodies.
+  const transcriptBodies = new ThreadTranscriptBodies();
   let turnLimit = TURN_WINDOW_STEP;
   const pending = new Map<string, PendingInput>();
   const gitArc = new ThreadGitArcProposalObserver({
@@ -231,6 +234,8 @@ export default function createObservedThreadSource(
       creatingTranscript = true;
       try { transcript = ports.createTranscript(acceptTranscript, presentText); }
       finally { creatingTranscript = false; }
+      const controller = transcript.controller;
+      transcriptBodies.bind(itemIds => controller.readBodies(itemIds));
       select(entry);
     }
     const runtime = state.observation?.runtime ?? {};
@@ -260,6 +265,7 @@ export default function createObservedThreadSource(
     transcript?.stopAvailability();
     void transcript?.controller.dispose();
     transcript = null;
+    transcriptBodies.bind(null);
     transcriptState = { status: "idle" };
   };
 
@@ -275,6 +281,7 @@ export default function createObservedThreadSource(
 
   return {
     feed: "observed",
+    transcriptBodies,
     actions: {
       async send(input, options = {}) {
         const entry = requireEntry();
@@ -374,7 +381,7 @@ export default function createObservedThreadSource(
       loadOlder() {
         const current = projection();
         if (!transcript || !current?.hasPreviousTurns) return Promise.resolve(null);
-        return transcript.controller.loadOlder(ROUTINE_TRANSCRIPT_ITEM_CREDIT);
+        return transcript.controller.loadOlder(HISTORY_TRANSCRIPT_ITEM_CREDIT);
       },
       observeGitArcProposal(proposalId, variant) {
         if (disposed) return () => {};

@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTranscriptProjectionSelection: selected window and locally owned input presentation.
  * - ThreadTranscriptProjectionState: SQLite source presentation lifecycle.
- * - default ThreadTranscriptProjectionController: own incremental publication, provider-aware visibility, transient/local presentation, failures and subscriptions.
+ * - default ThreadTranscriptProjectionController: own incremental publication, provider-aware visibility, transient/local presentation, failures, subscriptions, history demand and deferred body reads.
  */
 import type { ThreadPayload } from "workbench-shared/types";
 import type WorkbenchTranscriptClient from "../database/transcript/WorkbenchTranscriptClient";
@@ -105,6 +105,12 @@ function overlayLiveItemTimelines(
   };
 }
 
+type ProjectedTurn = WorkbenchTranscriptProjection["turns"][number];
+type ProjectedSegment = WorkbenchTranscriptProjection["display"]["segments"][number];
+/** Provider-visible copies keyed by their immutable source turn or segment. */
+const visibleTurns = new WeakMap<ProjectedTurn, ProjectedTurn>();
+const visibleSegments = new WeakMap<ProjectedSegment, ProjectedSegment>();
+
 function localInitials(thread: ThreadTranscriptLocalThread | undefined) {
   return (thread?.turns ?? []).flatMap(turn => {
     const items = turn.items.filter(item => item.type === "userMessage" && isUndeliveredInitialOptimisticInputItem(item));
@@ -124,7 +130,7 @@ interface ThreadTranscriptProjectionControllerOptions {
   onText?: (update: TranscriptTextUpdate, canonicalText: string) => void;
   initialItemCredit?: number;
   transcripts: Pick<WorkbenchTranscriptClient, "subscribe" | "unsubscribe">
-    & Partial<Pick<WorkbenchTranscriptClient, "demand">>;
+    & Partial<Pick<WorkbenchTranscriptClient, "demand" | "bodies">>;
   turnLimit: number;
 }
 
@@ -207,6 +213,13 @@ export default class ThreadTranscriptProjectionController {
     });
     this.#pendingHistoryDemand = pending;
     return pending;
+  }
+
+  /** Complete rows for deferred tool bodies the current subscription delivered. */
+  readBodies(itemIds: string[]) {
+    const subscriptionId = this.#activeSubscriptionId;
+    if (!subscriptionId || !this.#transcripts.bodies) return Promise.reject(new Error("The transcript is not connected."));
+    return this.#transcripts.bodies({ itemIds, subscriptionId });
   }
 
   setAvailable(available: boolean) {
@@ -380,15 +393,29 @@ export default class ThreadTranscriptProjectionController {
       itemTimeline: turn.itemTimeline, loadState: "loaded" as const,
       startedAt: turn.startedAt, status: turn.status, turnId: turn.id,
     }));
+    const display = planCanonicalTranscriptDisplay({
+      items: projection.display.orderedItems,
+      turns: turns.map(turn => ({ turnId: turn.id, turnIndex: turn.turnIndex })),
+      virtualHead,
+      virtualTail,
+    });
+    // Replanning around local overlays must not hand every untouched history segment a new identity.
+    const previous = new Map(projection.display.segments.map(segment => [segment.id, segment]));
     return {
       ...projection,
       turns,
-      display: planCanonicalTranscriptDisplay({
-        items: projection.display.orderedItems,
-        turns: turns.map(turn => ({ turnId: turn.id, turnIndex: turn.turnIndex })),
-        virtualHead,
-        virtualTail,
-      }),
+      display: {
+        ...display,
+        segments: display.segments.map(segment => {
+          const prior = previous.get(segment.id);
+          return prior && prior.kind === segment.kind && prior.turnId === segment.turnId
+            && prior.isFirstForTurn === segment.isFirstForTurn && prior.isLastForTurn === segment.isLastForTurn
+            && prior.ownsCanonicalTerminal === segment.ownsCanonicalTerminal
+            && prior.items.length === segment.items.length
+            && prior.items.every((item, index) => item === segment.items[index])
+            ? prior : segment;
+        }),
+      },
       turnHistory: [
         ...projection.turnHistory.map(entry => histories.find(history => history.turnId === entry.turnId) ?? entry),
         ...histories.filter(history => !projection.turnHistory.some(entry => entry.turnId === history.turnId)),
@@ -400,10 +427,16 @@ export default class ThreadTranscriptProjectionController {
     if (projection && this.#selection?.thread.harness === "claude") {
       // Keep raw baselines for every streamed delta; only published presentation is filtered.
       const visible = (item: WorkbenchProjectedTranscriptItem) => isThreadItemVisible("claude", item);
+      // Unchanged turns and segments keep their source identity across publishes, so their filtered copies must too:
+      // a fresh copy per publish re-renders every loaded segment on each live delta.
       const turns = projection.turns.map(turn => {
+        const cached = visibleTurns.get(turn);
+        if (cached) return cached;
         const items = turn.items.filter(visible);
         const ids = new Set(items.map(item => item.id));
-        return { ...turn, items, itemTimeline: turn.itemTimeline.filter(entry => ids.has(entry.itemId)) };
+        const filtered = { ...turn, items, itemTimeline: turn.itemTimeline.filter(entry => ids.has(entry.itemId)) };
+        visibleTurns.set(turn, filtered);
+        return filtered;
       });
       const turnsById = new Map(turns.map(turn => [turn.id, turn]));
       projection = {
@@ -417,7 +450,13 @@ export default class ThreadTranscriptProjectionController {
         }),
         display: {
           orderedItems: projection.display.orderedItems.filter(entry => visible(entry.payload)),
-          segments: projection.display.segments.map(segment => ({ ...segment, items: segment.items.filter(visible) })),
+          segments: projection.display.segments.map(segment => {
+            const cached = visibleSegments.get(segment);
+            if (cached) return cached;
+            const filtered = { ...segment, items: segment.items.filter(visible) };
+            visibleSegments.set(segment, filtered);
+            return filtered;
+          }),
         },
       };
     }

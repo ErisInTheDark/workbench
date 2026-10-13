@@ -11,13 +11,14 @@ import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { clearQuestionnaireDraft, saveQuestionnaireDraft } from "../../workbench/state/draft-persistence";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "./workbench-client-state-context";
 import { useThread } from "./use-thread";
+import { useTranscript } from "./use-transcript";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-view/thread-user-input-request-submission";
 
 export default function useWorkbenchQuestionnaire(projectId: string, target: WorkbenchThreadTarget | null, onError?: (message: string) => void) {
   const thread = useThread(projectId, target);
   const { pending: request } = useThread.questionnaire(thread.store);
-  const { transcript, turns } = useThread.turns(thread.store);
+  const { transcript, turns } = useTranscript.turns(thread.store);
   const clientState = useWorkbenchClientStateSnapshot();
   const client = useWorkbenchClientController();
   const store = useWorkbenchClientStateController();

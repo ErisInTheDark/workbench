@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - useThread: lease one thread store (summary or view interest) and read its summary slice and actions. Members:
- *   `turns/questionnaire/approvals` read further slices of a leased store; `summary` leases one thread's batched summary
- *   for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous titles with
- *   rename/dismiss intent; `presentedText` subscribes to one exact streaming text field; `fileIndex` reads the owning
+ * - useThread: lease one thread store (summary or view interest) and read its summary slice and actions; transcript reads
+ *   live on `useTranscript`. Members: `questionnaire` reads a leased store's pending input; `summary` leases one thread's
+ *   batched summary for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous
+ *   titles with rename/dismiss intent; `fileIndex` reads the owning
  *   folder's file suggestions; `models` reads the owner's account model cache; `attention` reads its questionnaire label; `subagent` reads a thread's subagent
  *   relationship; `claimIntersections/collisions/arc` select
  *   narrow Git arc facts from the owner's source sidebar.
@@ -24,9 +24,7 @@ import type ThreadStore from "../../workbench/thread/ThreadStore";
 import {
   EMPTY_THREAD_STORE_STATE, type ThreadInterest, type ThreadSliceName, type ThreadStoreActions, type ThreadStoreState,
 } from "../../workbench/thread/ThreadStore";
-import type { ThreadTextPresentationKey } from "../../workbench/thread/ThreadTextPresentationController";
 import type { WorkbenchProjectFileIndexSnapshot } from "../../workbench/project/WorkbenchProjectFileIndexStore";
-import ThreadTextPresentationContext from "./ThreadTextPresentationContext";
 import WorkbenchClientContext, { useWorkbenchClientController, type WorkbenchClientController } from "./workbench-client-context";
 import { useProject } from "./use-projects";
 import { useThreads } from "./use-threads";
@@ -99,9 +97,7 @@ useThread.summary = function useThreadSummary(threadId: string | null) {
   return useSyncExternalStore(subscribe, read, read);
 };
 
-useThread.turns = function useThreadTurns(store: ThreadStore | null) { return useSlice(store, "turns"); };
 useThread.questionnaire = function useThreadQuestionnaire(store: ThreadStore | null) { return useSlice(store, "questionnaire"); };
-useThread.approvals = function useThreadApprovals(store: ThreadStore | null) { return useSlice(store, "approvals"); };
 
 /** One project-owned thread sidebar row by identity; null while unknown or owned by another project. */
 useThread.sidebarEntry = function useThreadSidebarEntry(
@@ -130,34 +126,6 @@ useThread.titleHistory = function useThreadTitleHistory(projectId: ProjectId, ha
     if (!accepted) throw new Error("The current title cannot be dismissed.");
   }, [client.controls, harness, projectId, threadId]);
   return { previousTitles: thread.entry?.previousTitles ?? [], reapply, dismiss };
-};
-
-/** One exact streaming text field, falling back to its canonical text. */
-useThread.presentedText = function useThreadPresentedText(
-  key: ThreadTextPresentationKey | null, canonicalText: string, explicitClient?: WorkbenchClientController,
-) {
-  const providedClient = useContext(WorkbenchClientContext);
-  const standaloneText = useContext(ThreadTextPresentationContext);
-  const mounted = (explicitClient ?? providedClient)?.mounted;
-  const controller = key
-    ? mounted?.threadTextPresentationFor(key.threadId) ?? standaloneText
-    : mounted?.threadTextPresentation ?? standaloneText;
-  const stableKey = useMemo<ThreadTextPresentationKey | null>(() => key ? {
-    field: key.field,
-    index: key.index,
-    itemId: key.itemId,
-    source: { kind: key.source.kind, sourceKey: key.source.sourceKey },
-    threadId: key.threadId,
-    turnId: key.turnId,
-  } : null, [key?.field, key?.index, key?.itemId, key?.source.kind, key?.source.sourceKey, key?.threadId, key?.turnId]);
-  const getSnapshot = useCallback(
-    () => stableKey ? controller?.getSnapshot(stableKey) ?? canonicalText : canonicalText,
-    [canonicalText, controller, stableKey],
-  );
-  const subscribe = useCallback((listener: () => void) => (
-    stableKey && controller ? controller.subscribe(stableKey, canonicalText, listener) : EMPTY_SUBSCRIBE(listener)
-  ), [canonicalText, controller, stableKey]);
-  return useSyncExternalStore(subscribe, getSnapshot, () => canonicalText);
 };
 
 /** The owning daemon folder's file suggestions, without selecting browse state. */

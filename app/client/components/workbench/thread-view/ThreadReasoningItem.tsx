@@ -10,7 +10,7 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import type { InlineMentionHighlightSources } from "../../../workbench/thread/inline-mention-highlights";
 import type { ThreadTextPresentationSource } from "../../../workbench/thread/ThreadTextPresentationController";
 import MarkdownRender from "../../ui/MarkdownRender";
-import useThreadPresentedText from "./use-thread-presented-text";
+import { useTranscript } from "../use-transcript";
 
 function joinClasses (...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -45,7 +45,7 @@ function ThreadReasoningSection({
   projectRootPath?: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
-  const markdown = useThreadPresentedText({
+  const markdown = useTranscript.presentedText({
     canonicalText: canonicalMarkdown,
     field: source === "summary" ? "reasoningSummary" : "reasoningContent",
     index,

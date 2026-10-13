@@ -4,6 +4,7 @@
  */
 "use client";
 import { useThread } from "../use-thread";
+import { TranscriptBodiesContext, useTranscript } from "../use-transcript";
 
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { WorkbenchThreadDisplaySettingsContext } from "./WorkbenchThreadDisplaySettingsContext";
@@ -323,7 +324,7 @@ export default memo(function ThreadViewContent ({
   const activeTarget: WorkbenchThreadTarget = activeThreadId === thread.id ? rootTarget
     : { kind: "subagent", parentThreadId: ThreadReferenceSchema.parse(thread.id), threadId: ThreadReferenceSchema.parse(activeThreadId) };
   const active = useThread(projectId, activeTarget, "view");
-  const activeTurns = useThread.turns(active.store);
+  const activeTurns = useTranscript.turns(active.store);
   const visQuery = useMemo(() => ({ kind: "threadVis" as const, threadId: ThreadReferenceSchema.parse(activeThreadId) }), [activeThreadId]);
   const vis = useWorkspaceObservation(useContext(WorkbenchWorkspaceContext), visQuery).value?.data ?? null;
   const visActions = useMemo(() => ({
@@ -335,7 +336,7 @@ export default memo(function ThreadViewContent ({
     },
   }), [activeThreadId, daemon]);
   const { pending: activePendingUserInputRequest } = useThread.questionnaire(active.store);
-  const { entries: activeApprovalEntries } = useThread.approvals(active.store);
+  const { entries: activeApprovalEntries } = useTranscript.approvals(active.store);
   const transcriptSource = activeTurns.transcript;
   const threadScrollViewport = useThreadScrollViewportContext();
   const rateLimits = active.rateLimits;
@@ -1131,6 +1132,7 @@ export default memo(function ThreadViewContent ({
                       {activeTranscriptSource.message}
                     </div>
                   ) : null}
+                  <TranscriptBodiesContext.Provider value={active.store?.transcriptBodies ?? null}>
                   <ThreadItemApprovalsContext.Provider value={activeItemApprovals}>
                   <ThreadItemActionsContext.Provider value={activeItemActions}>
                   <ThreadTranscriptProjection
@@ -1154,6 +1156,7 @@ export default memo(function ThreadViewContent ({
                   />
                   </ThreadItemActionsContext.Provider>
                   </ThreadItemApprovalsContext.Provider>
+                  </TranscriptBodiesContext.Provider>
                 </>
               ) : (
                 transcriptSourceMessage ? (

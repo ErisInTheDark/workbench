@@ -16,7 +16,7 @@ import { LoaderIcon } from "../workbench-icons";
 import MarkdownRender from "../../ui/MarkdownRender";
 import { projectThreadReasoningMarkdown } from "./thread-reasoning-display";
 import { ThreadWebSearchActionRow } from "./ThreadWebSearchItem";
-import useThreadPresentedText from "./use-thread-presented-text";
+import { useTranscript } from "../use-transcript";
 import type { LiveThreadActivity, ThreadTerminalContext, ThreadTerminalRetention } from "./thread-live-activity";
 import ThreadCommandTerminal from "./ThreadCommandTerminal";
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
@@ -59,7 +59,7 @@ export default function useThreadLiveActivity({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }): ThreadLiveActivityView | null {
   const reasoningStep = activity?.kind === "reasoning" ? activity.hiddenStep : null;
-  const presentedMarkdown = useThreadPresentedText({
+  const presentedMarkdown = useTranscript.presentedText({
     canonicalText: activity?.kind === "reasoning" ? activity.markdown ?? "" : "",
     field: reasoningStep?.source === "content" ? "reasoningContent" : "reasoningSummary",
     index: reasoningStep?.sectionIndex ?? null,

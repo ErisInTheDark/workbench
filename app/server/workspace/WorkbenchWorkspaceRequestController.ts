@@ -309,6 +309,11 @@ export default class WorkbenchWorkspaceRequestController {
         loadedTurnIds: [...subscription.delivered.loadedTurnIds],
       } satisfies WorkspaceTranscriptDemandResult;
     }
+    if (request.kind === "bodies") {
+      const subscription = this.transcripts.get(request.params.subscriptionId);
+      if (!subscription?.delivered.published) throw new Error("Transcript bodies are unavailable for this subscription.");
+      return { snapshot: subscription.delivered.bodies(request.params.itemIds) };
+    }
     if (request.kind === "read") return this.options.threads.withThread(request.params.threadId, (source, owner) =>
       source.request<Json>(workbenchTranscriptOperations.read.method, {
         ...request.params, threadId: owner.identity.threadId, protocolVersion: 4,

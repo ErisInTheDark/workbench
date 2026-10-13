@@ -28,7 +28,7 @@ import ThreadDurationText from "./ThreadDurationText";
 import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadMessageTimestamp from "./ThreadMessageTimestamp";
 import ThreadSummaryText from "./ThreadSummaryText";
-import ThreadToolCallDetails from "./ThreadToolCallDetails";
+import { ThreadHydratedToolCallDetails } from "./ThreadToolCallDetails";
 import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
@@ -460,9 +460,10 @@ function ThreadGenericDynamicToolCallItem ({
         </>
       )}
       summaryClassName="text-[0.92em] leading-[1.6] text-fg/muted"
-      renderContent={() => <ThreadToolCallDetails
+      renderContent={() => <ThreadHydratedToolCallDetails
         invocation={formatDynamicToolInvocation({ argumentsValue: item.arguments, namespace: item.namespace, tool: item.tool })}
-        output={item.resultExpiredAt ? null : formatToolCallOutput({ content: item.contentItems })}
+        item={item}
+        output={body => body.resultExpiredAt ? null : formatToolCallOutput({ content: body.contentItems })}
       />}
     />
   );

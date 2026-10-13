@@ -609,6 +609,7 @@ function createIndexes(rows: Rows, sourceIdsByItemId: ReadonlyMap<number, string
 export function projectWorkbenchTranscriptItems(
   rows: WorkbenchTranscriptSnapshot["rows"],
   expiredPayloads: readonly { expiredAt: number; itemId: number }[] = [],
+  deferredBodies: readonly { itemId: number }[] = [],
 ): WorkbenchTranscriptItemProjectionResult {
   try {
     const itemRootsById = new Map(rows.threadItems.map((item) => [item.id, item]));
@@ -628,12 +629,16 @@ export function projectWorkbenchTranscriptItems(
     }
     const indexes = createIndexes(rows, sourceIdsByItemId);
     const expiredAtByItemId = new Map(expiredPayloads.map(({ expiredAt, itemId }) => [itemId, expiredAt]));
+    const deferredItemIds = new Set(deferredBodies.map(({ itemId }) => itemId));
     return {
       data: rows.threadItems.map((root) => {
         if (root.public_id !== null && identities.get(root.public_id)?.thread_id !== root.thread_id) {
           fail("invalidReference", "itemIdentities", root.public_id);
         }
-        const projected = projectItem(root, indexes);
+        const base = projectItem(root, indexes);
+        const projected = deferredItemIds.has(root.id) && (base.type === "mcpToolCall" || base.type === "dynamicToolCall")
+          ? { ...base, bodyDeferred: true as const }
+          : base;
         const expiredAt = expiredAtByItemId.get(root.id);
         const item = expiredAt === undefined || ![
           "commandExecution", "dynamicToolCall", "functionCallOutput", "mcpToolCall",

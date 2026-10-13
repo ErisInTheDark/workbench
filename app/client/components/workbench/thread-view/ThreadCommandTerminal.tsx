@@ -9,7 +9,7 @@ import { getThreadTerminalEntries, type ThreadTerminalContext, type ThreadTermin
 import ThreadScrollViewport, { ThreadScrollViewportEnd } from "./ThreadScrollViewport";
 import ThreadTerminalText from "./ThreadTerminalText";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
-import useThreadPresentedText from "./use-thread-presented-text";
+import { useTranscript } from "../use-transcript";
 
 function TerminalOutputSubscription({ entry, controller, presentationSource, threadId, turnId }: {
   entry: Pick<ThreadTerminalEntry, "id" | "output">;
@@ -18,7 +18,7 @@ function TerminalOutputSubscription({ entry, controller, presentationSource, thr
   threadId: string;
   turnId: string;
 }) {
-  const output = useThreadPresentedText({
+  const output = useTranscript.presentedText({
     canonicalText: entry.output, field: "commandExecutionOutput", itemId: entry.id,
     source: presentationSource, threadId, turnId,
   });

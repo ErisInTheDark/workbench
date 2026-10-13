@@ -211,12 +211,12 @@ test("a failed submission drops its optimistic input and reports the failure", a
   f.release();
 });
 
-test("loading older history requests one routine item credit without replacing the subscription", async () => {
+test("loading older history demands one item page without replacing the subscription", async () => {
   const f = fixture();
   f.publish(projection([{ id: "turn-3" }, { id: "turn-4" }], true));
   const selections = f.selections.length;
   const loading = f.source.actions.loadOlder();
-  assert.deepEqual(f.historyDemands, [24]);
+  assert.equal(f.historyDemands.length, 1);
   assert.equal(f.selections.length, selections);
   f.publish(projection([{ id: "turn-1" }, { id: "turn-2" }, { id: "turn-3" }, { id: "turn-4" }]));
   f.resolveOlder(["turn-1", "turn-2"]);

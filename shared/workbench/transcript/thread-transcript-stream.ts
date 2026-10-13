@@ -95,13 +95,17 @@ export function createTranscriptLayout(projection: WorkbenchTranscriptProjection
   };
 }
 
-function sequenceEdit<Value>(previous: readonly Value[], next: readonly Value[]): TranscriptSequenceEdit<Value> | undefined {
+function sequenceEdit<Value>(
+  previous: readonly Value[],
+  next: readonly Value[],
+  equal: (left: Value, right: Value) => boolean = areDeeplyEqual,
+): TranscriptSequenceEdit<Value> | undefined {
   let start = 0;
-  while (start < previous.length && start < next.length && areDeeplyEqual(previous[start], next[start])) start++;
+  while (start < previous.length && start < next.length && equal(previous[start]!, next[start]!)) start++;
   if (start === previous.length && start === next.length) return undefined;
   let previousEnd = previous.length;
   let nextEnd = next.length;
-  while (previousEnd > start && nextEnd > start && areDeeplyEqual(previous[previousEnd - 1], next[nextEnd - 1])) {
+  while (previousEnd > start && nextEnd > start && equal(previous[previousEnd - 1]!, next[nextEnd - 1]!)) {
     previousEnd--;
     nextEnd--;
   }
@@ -112,9 +116,22 @@ export function createTranscriptLayoutPatch(previous: TranscriptLayout | null, n
   return {
     turns: sequenceEdit(previous?.turns ?? [], next.turns),
     history: sequenceEdit(previous?.history ?? [], next.history),
-    items: sequenceEdit(previous?.items ?? [], next.items),
-    segments: sequenceEdit(previous?.segments ?? [], next.segments),
+    // Item indexes and segment offsets are positional and re-derived on apply, so prepending history
+    // does not resend every later entry.
+    items: sequenceEdit(previous?.items ?? [], next.items,
+      (left, right) => left.itemId === right.itemId && left.turnId === right.turnId),
+    segments: sequenceEdit(previous?.segments ?? [], next.segments,
+      (left, right) => areDeeplyEqual({ ...left, offset: 0 }, { ...right, offset: 0 })),
   };
+}
+
+function withSegmentOffsets(segments: TranscriptLayout["segments"]) {
+  let offset = 0;
+  return segments.map(segment => {
+    const next = segment.offset === offset ? segment : { ...segment, offset };
+    offset += segment.count;
+    return next;
+  });
 }
 
 function applySequence<Value>(previous: Value[], edit: TranscriptSequenceEdit<Value> | undefined): Value[] {
@@ -128,8 +145,9 @@ export function applyTranscriptLayoutPatch(previous: TranscriptLayout | null, pa
   return {
     turns: applySequence(previous?.turns ?? [], patch.turns),
     history: applySequence(previous?.history ?? [], patch.history),
-    items: applySequence(previous?.items ?? [], patch.items),
-    segments: applySequence(previous?.segments ?? [], patch.segments),
+    items: applySequence(previous?.items ?? [], patch.items)
+      .map((item, itemIndex) => item.itemIndex === itemIndex ? item : { ...item, itemIndex }),
+    segments: withSegmentOffsets(applySequence(previous?.segments ?? [], patch.segments)),
   };
 }
 

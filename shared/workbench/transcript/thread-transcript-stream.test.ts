@@ -25,6 +25,26 @@ test("layout edits preserve retained order through append, middle replacement an
   assert.deepEqual(applyTranscriptLayoutPatch(replaced, createTranscriptLayoutPatch(replaced, removed)), removed);
 });
 
+test("prepending history sends only the new entries yet rebuilds positional indexes and offsets", () => {
+  const segment = (id: string, count: number, offset: number) => ({
+    id, kind: "turn" as never, turnId: "a", isFirstForTurn: false, isLastForTurn: false, ownsCanonicalTerminal: false, offset, count,
+  });
+  const items = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => ({
+    itemId: `item-${from + index}`, turnId: "a", itemIndex: index,
+  }));
+  const current: TranscriptLayout = {
+    turns: ["a"], history: ["a"], items: items(10, 100), segments: [segment("s1", 40, 0), segment("s2", 50, 40)],
+  };
+  const prepended: TranscriptLayout = {
+    turns: ["a"], history: ["a"], items: items(0, 100),
+    segments: [segment("s0", 10, 0), segment("s1", 40, 10), segment("s2", 50, 50)],
+  };
+  const patch = createTranscriptLayoutPatch(current, prepended);
+  assert.equal(patch.items?.values.length, 10);
+  assert.equal(patch.segments?.values.length, 1);
+  assert.deepEqual(applyTranscriptLayoutPatch(current, patch), prepended);
+});
+
 test("a current-turn structural update leaves historical render inputs stable", () => {
   const rows = Object.fromEntries(Object.keys(transcriptSnapshotTables).map(name => [name, []])) as unknown as WorkbenchTranscriptSnapshot["rows"];
   const snapshot: WorkbenchTranscriptSnapshot = {

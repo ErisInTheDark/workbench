@@ -138,6 +138,57 @@ test("live changes reach the browser incrementally without replaying or losing i
   assert.equal(browser.projection?.hasPreviousTurns, false);
 });
 
+/** Turns item `index` into a completed native Read call with one output body row. */
+function withReadTool(source: ReturnType<typeof history>, index: number) {
+  const envelope = source.envelopes[index]!;
+  const rows = emptyTranscriptSnapshotRows();
+  const id = index + 1;
+  rows.threadItems.push({ ...envelope.snapshot.rows.threadItems[0]!, type: "operation" });
+  rows.itemIdentities.push(...envelope.snapshot.rows.itemIdentities);
+  rows.threadItemOperations.push({ item_id: id, item_type: "operation", source_kind: "tool", source_revision: 1 });
+  rows.threadOperationToolSources.push({
+    duration_ms: 5, item_id: id, item_type: "operation", source_kind: "tool", source_revision: 1,
+    state: "completed", tool_kind: "callable", tool_name: "Read",
+  });
+  rows.threadOperationCallableToolSources.push({
+    app_action_name: null, app_connector_id: null, app_link_id: null, app_name: null, app_resource_uri: null,
+    arguments_json: "{}", callable_kind: "dynamic", error_text: null, item_id: id, legacy_resource_uri: null,
+    namespace: null, plugin_id: null, provider_metadata_json: null, read_only_hint: null, server_name: null,
+    source_revision: 1, state: "completed", success: 1, tool_call_group_id: null, tool_kind: "callable", tool_name: "Read",
+  });
+  rows.threadCallableDynamicContent.push({
+    callable_kind: "dynamic", content_index: 0, content_kind: "inputText", item_id: id, source_revision: 1, text: "file body", url: null,
+  });
+  source.envelopes[index] = { ...envelope, snapshot: { ...envelope.snapshot, rows } };
+}
+
+test("settled history tool bodies stay app-side until the browser asks for them", () => {
+  const source = history(4);
+  withReadTool(source, 0);
+  const window = new WorkbenchDeliveredTranscriptWindow();
+  const browser = new Browser();
+  browser.apply(window.deliver(page(source, 2, 4, true)));
+  const older = window.deliver(page(source, 0, 2, false));
+  assert.deepEqual(older?.snapshot.deferredItemBodies, [{ itemId: 1 }]);
+  assert.deepEqual(older?.snapshot.rows.threadCallableDynamicContent, []);
+  browser.apply(older);
+  const summary = browser.item("item-0");
+  assert.ok(summary?.type === "dynamicToolCall");
+  assert.equal(summary.bodyDeferred, true);
+
+  const body = window.bodies(["item-0"]);
+  assert.equal(body.rows.threadCallableDynamicContent[0]?.text, "file body");
+  assert.throws(() => window.bodies(["item-1"]), /no deferred body/);
+
+  const corrected = live(source, 0);
+  corrected.rows.threadCallableDynamicContent[0] = { ...corrected.rows.threadCallableDynamicContent[0]!, text: "changed" };
+  browser.apply(window.receive(corrected, []));
+  const replaced = browser.item("item-0");
+  assert.ok(replaced?.type === "dynamicToolCall");
+  assert.equal(replaced.bodyDeferred, undefined, "live changes arrive complete");
+  assert.throws(() => window.bodies(["item-0"]), /no deferred body/);
+});
+
 test("a thread without history takes its first live baseline as the browser baseline", () => {
   const source = history(2);
   const window = new WorkbenchDeliveredTranscriptWindow();

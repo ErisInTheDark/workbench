@@ -150,7 +150,7 @@ export function projectWorkbenchTranscript(
       if (!loadedTurnIds.has(root.turn_id)) fail("invalidReference", "threadItems", root.public_id);
       if (root.thread_id !== snapshot.thread.id) fail("invalidReference", "threadItems", root.public_id);
     }
-    const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows, snapshot.expiredItemPayloads);
+    const itemProjection = projectWorkbenchTranscriptItems(snapshot.rows, snapshot.expiredItemPayloads, snapshot.deferredItemBodies);
     if ("issues" in itemProjection) {
       return { issues: itemProjection.issues, success: false };
     }

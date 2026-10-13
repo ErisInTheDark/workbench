@@ -10,7 +10,7 @@
  * - WorkspaceDraftLaunchSchema: saved-draft launch intent.
  * - WorkspaceLayoutRequest/WorkspaceLayoutRequestSchema: app-owned layout edits.
  * - WorkspaceHomeLayoutIntent/WorkspaceHomeLayoutIntentSchema: home row or project-folder move intent.
- * - WorkspaceTranscriptDemandSchema/WorkspaceTranscriptDemandResultSchema/WorkspaceTranscriptRequestSchema: typed transcript reads, subscriptions, and bounded item demand.
+ * - WorkspaceTranscriptDemandSchema/WorkspaceTranscriptDemandResultSchema/WorkspaceTranscriptBodiesSchema/WorkspaceTranscriptRequestSchema: typed transcript reads, subscriptions, bounded item demand, and deferred body reads.
  * - WorkspaceSearchResponseSchema: source-qualified search results and partial failure.
  */
 import { z } from "zod";
@@ -297,9 +297,15 @@ export const WorkspaceTranscriptDemandResultSchema = z.object({
   loadedTurnIds: z.array(z.string().trim().min(1)),
 }).strict();
 export type WorkspaceTranscriptDemandResult = z.infer<typeof WorkspaceTranscriptDemandResultSchema>;
+/** Deferred tool bodies of items this subscription delivered. */
+export const WorkspaceTranscriptBodiesSchema = z.object({
+  itemIds: z.array(z.string().trim().min(1)).min(1).max(64),
+  subscriptionId: z.string().trim().min(1),
+}).strict();
 
 export const WorkspaceTranscriptRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("demand"), params: WorkspaceTranscriptDemandSchema }).strict(),
+  z.object({ kind: z.literal("bodies"), params: WorkspaceTranscriptBodiesSchema }).strict(),
   z.object({ kind: z.literal("report"),
     params: z.custom<WorkbenchTranscriptConformanceReport>(value => workbenchTranscriptOperations.reportConformance.decodeParams(value).success),
   }).strict(),
