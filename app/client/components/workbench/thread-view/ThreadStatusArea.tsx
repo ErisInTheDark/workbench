@@ -9,7 +9,12 @@ import type { ReactNode } from "react";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
-import type { WorkbenchHarnessId, WorkbenchThreadLifecycle, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchHarnessId,
+  WorkbenchThreadGitCommit,
+  WorkbenchThreadLifecycle,
+  WorkbenchThreadTarget,
+} from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import LoaderIcon from "../LoaderIcon";
 import Tooltip from "../../ui/Tooltip";
@@ -26,6 +31,7 @@ import ThreadStatusRow, { threadStatusSegmentClassName, type ThreadStatusPanel }
 import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessionCard";
 import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
+import { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "../feedback-presentation";
 
@@ -38,6 +44,7 @@ function count(value: number) {
 export default function ThreadStatusArea({
   addressedFeedback = [],
   gitArc,
+  gitCommits = [],
   harness,
   live,
   onFeedbackDeleted,
@@ -51,6 +58,7 @@ export default function ThreadStatusArea({
 }: {
   addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
   gitArc: Omit<ThreadGitArcWorkProps, "projectFilePaths" | "projectId" | "projectRootPath" | "threadId" | "workspaceRoots"> | null;
+  gitCommits?: readonly WorkbenchThreadGitCommit[];
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
   onFeedbackDeleted: () => Promise<void>;
@@ -73,7 +81,7 @@ export default function ThreadStatusArea({
   const showPlanIntersectionStatus = !live && intersections.hasScope;
   const claim = gitArc?.claim ?? null;
   const proposals = claim?.proposals.filter(({ status }) => status === "proposed") ?? [];
-  const accepted = claim?.proposals.filter(({ status }) => status === "committed").length ?? 0;
+  const accepted = getThreadAcceptedGitHistory(claim?.proposals ?? [], gitCommits).acceptedCount;
   const claimed = claim?.claimedPaths.length ?? 0;
   const stashed = claim?.stashedPaths?.length ?? 0;
   const feedback = addressedFeedback;
@@ -139,7 +147,7 @@ export default function ThreadStatusArea({
               ownerProjectId={ownerProjectId}
             />
           ) : null}
-          {gitArc ? <ThreadGitArcWork {...gitArc} {...shared} threadId={threadId} /> : null}
+          {gitArc ? <ThreadGitArcWork {...gitArc} history={gitCommits} {...shared} threadId={threadId} /> : null}
         </div>
       ),
       segments: arcSegments,

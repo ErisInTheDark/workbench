@@ -16,7 +16,7 @@ function threadGitIdentities() {
   return database.identities.threads;
 }
 
-test("finds one commit owner across summary and member proposal evidence", () => {
+test("finds one commit owner across permanent history and live proposal evidence", () => {
   const commit = "a".repeat(40);
   const proposal = {
     proposalId: "proposal", status: "committed" as const,
@@ -48,6 +48,18 @@ test("finds one commit owner across summary and member proposal evidence", () =>
     [{ gitArc: arc, threadId: "thread-one" }],
     "c".repeat(40),
   ), { kind: "missing" });
+  assert.deepEqual(findCommitThreadId([{
+    gitArc: null,
+    gitCommits: [{
+      commitSha: "c".repeat(40),
+      description: "",
+      historyIndex: 0,
+      rootId: "root",
+      sourceProposalId: "durable",
+      title: "durable commit",
+    }],
+    threadId: "thread-three",
+  }], "c".repeat(40)), { kind: "found", threadId: "thread-three" });
 });
 
 test("preserves thread Git selection and commit responses behind the daemon boundary", async () => {

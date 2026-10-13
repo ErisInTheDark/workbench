@@ -801,17 +801,22 @@ export default class WorkbenchGitCheckpointController {
     });
   }
 
-  async pruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput): Promise<GitArcRetentionResult> {
+  async pruneThreadHistory({
+    cwd, durableProposalIds, harness: rawHarness, threadId,
+  }: ControllerInput & { durableProposalIds?: string[] }): Promise<GitArcRetentionResult> {
     return await GitObjectReadSession.run(() => new GitArcRetentionController(this.resolveThreadIdentity).pruneThread({
       cwd,
+      durableProposalIds: durableProposalIds ?? [],
       harness: normalizeHarness(rawHarness),
       threadId,
     }));
   }
 
-  async canPruneThreadHistory({ cwd, harness: rawHarness, threadId }: ControllerInput) {
+  async canPruneThreadHistory({
+    cwd, durableProposalIds, harness: rawHarness, threadId,
+  }: ControllerInput & { durableProposalIds?: string[] }) {
     return await GitObjectReadSession.run(() => new GitArcRetentionController(this.resolveThreadIdentity).canPruneThread({
-      cwd, harness: normalizeHarness(rawHarness), threadId,
+      cwd, durableProposalIds: durableProposalIds ?? [], harness: normalizeHarness(rawHarness), threadId,
     }));
   }
 

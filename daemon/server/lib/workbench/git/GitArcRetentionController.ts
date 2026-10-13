@@ -9,8 +9,6 @@ import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
   checkpointNamespace,
   legacyCheckpointNamespace,
-  legacyProposalNamespace,
-  proposalNamespace,
   type GitArcHarness,
 } from "workbench-shared/workbench/git/git-arc-storage";
 import {
@@ -33,20 +31,25 @@ export default class GitArcRetentionController {
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
   ) {}
 
-  async canPruneThread({ cwd, harness, threadId }: { cwd: string; harness: GitArcHarness; threadId: string }) {
+  async canPruneThread({
+    cwd, durableProposalIds, harness, threadId,
+  }: { cwd: string; durableProposalIds: readonly string[]; harness: GitArcHarness; threadId: string }) {
     const repository = await WorkbenchGitRepository.tryOpen(cwd);
     if (!repository) return true;
     const registry = new GitArcRegistry(repository, this.resolveThreadIdentity);
     const entry = await registry.find({ harness, threadId });
-    return !await this.hasActionableState(repository, harness, threadId, entry);
+    return !await this.hasActionableState(repository, harness, threadId, entry)
+      && await this.hasDurableCommitCoverage(repository, harness, threadId, durableProposalIds);
   }
 
   async pruneThread({
     cwd,
+    durableProposalIds,
     harness,
     threadId,
   }: {
     cwd: string;
+    durableProposalIds: readonly string[];
     harness: GitArcHarness;
     threadId: string;
   }): Promise<GitArcRetentionResult> {
@@ -59,34 +62,39 @@ export default class GitArcRetentionController {
     if (await this.hasActionableState(repository, harness, threadId, entry)) {
       throw new Error("Git arc history cannot expire while the thread owns actionable work.");
     }
+    if (!await this.hasDurableCommitCoverage(repository, harness, threadId, durableProposalIds)) {
+      throw new Error("Git arc history cannot expire before every accepted commit has durable thread ownership.");
+    }
     const prefixes = [...new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
       threadNamespace(checkpointNamespace(harness, storageId)),
       threadNamespace(legacyCheckpointNamespace(storageId)),
     ]))];
     // Only the thread's own namespaces; Git matches each prefix up to a slash, never a longer thread id.
     const refs = await repository.listRefsWithValues(...prefixes);
-    const committedIds = new Set((await new GitCheckpointStore(repository, this.resolveThreadIdentity)
-      .readCommittedProposalHistory(harness, threadId)).map(({ proposalId }) => proposalId));
-    const proposalPrefixes = new Set(gitArcThreadStorageIds(identity).flatMap(storageId => [
-      proposalNamespace(harness, storageId),
-      legacyProposalNamespace(storageId),
-    ]));
-    const retained = new Set(refs.filter(({ ref }) => {
-      const separator = ref.lastIndexOf("/");
-      return proposalPrefixes.has(ref.slice(0, separator)) && committedIds.has(ref.slice(separator + 1));
-    }).map(({ ref }) => ref));
     const registryMutation = await registry.prepareRelease(
       { harness, threadId },
       entry ? { expectedCheckpointCommit: entry.checkpointCommit } : undefined,
     );
     await repository.updateRefs(
       registryMutation?.updates ?? [],
-      refs.filter(({ ref }) => !retained.has(ref)).map(({ ref, value }) => ({ oldValue: value, ref })),
+      refs.map(({ ref, value }) => ({ oldValue: value, ref })),
     );
     return {
-      prunedRefCount: refs.length - retained.size,
+      prunedRefCount: refs.length,
       registryEntryRemoved: Boolean(registryMutation?.updates.length),
     };
+  }
+
+  private async hasDurableCommitCoverage(
+    repository: WorkbenchGitRepository,
+    harness: GitArcHarness,
+    threadId: string,
+    durableProposalIds: readonly string[],
+  ) {
+    const durable = new Set(durableProposalIds);
+    const committed = await new GitCheckpointStore(repository, this.resolveThreadIdentity)
+      .readCommittedProposalHistory(harness, threadId);
+    return committed.every(({ proposalId }) => durable.has(proposalId));
   }
 
   private async hasActionableState(

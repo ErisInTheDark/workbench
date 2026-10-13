@@ -47,6 +47,7 @@ import { defineThreadDomainSchema } from "../lib/workbench/database/schema/threa
 import { defineSidebarLayoutSchema } from "../lib/workbench/database/schema/sidebar-layout-schema.ts";
 import { defineThreadQuestionnaireSchema } from "../lib/workbench/database/schema/thread-questionnaire-schema.ts";
 import { defineThreadGitObservationSchema } from "../lib/workbench/database/schema/thread-git-observation-schema.ts";
+import { threadGitCommitSchemaHistory } from "../lib/workbench/database/schema/thread-git-commit-schema.ts";
 import { gitArcProposalDiffSchemaHistory } from "../lib/workbench/database/schema/git-arc-proposal-diff-schema.ts";
 import { instructionTombstoneSchemaHistory } from "../lib/workbench/database/schema/instruction-tombstone-schema.ts";
 import type { CurrentTableDefinition } from "workbench-shared/database/schema/schema-definition";
@@ -130,6 +131,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       defineSidebarLayoutSchema(schemaVersion).history,
       defineThreadQuestionnaireSchema(schemaVersion).history,
       defineThreadGitObservationSchema(schemaVersion).history,
+      threadGitCommitSchemaHistory,
       gitArcProposalDiffSchemaHistory,
       instructionTombstoneSchemaHistory,
       localCapabilitySchemaHistory,

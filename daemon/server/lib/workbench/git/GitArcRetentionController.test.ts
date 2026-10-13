@@ -129,13 +129,20 @@ test("expired plan-only thread cleanup removes its refs without touching another
   );
   await repository.updateRef(committedProposalRef, committedProposalCommit);
 
-  const result = await controller.pruneThreadHistory({
+  assert.equal(await controller.canPruneThreadHistory({
     cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), false);
+  await assert.rejects(controller.pruneThreadHistory({
+    cwd: fixture.root, harness: "codex", threadId: canonicalThreadId,
+  }), /durable thread ownership/i);
+
+  const result = await controller.pruneThreadHistory({
+    cwd: fixture.root, durableProposalIds: [committedProposalId], harness: "codex", threadId: canonicalThreadId,
   });
 
-  assert.equal(result.prunedRefCount, ownerRefsBefore.length + 1);
+  assert.equal(result.prunedRefCount, ownerRefsBefore.length + 2);
   assert.equal(result.registryEntryRemoved, true);
-  assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${nativeThreadId}`), [committedProposalRef]);
+  assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${nativeThreadId}`), []);
   assert.deepEqual(await repository.listRefs(`refs/worktree/agents/codex/${canonicalThreadId}`), []);
   assert.equal(await repository.readRef(unrelatedRef), active.checkpointCommit);
   assert.equal(await registry.find({ harness: "codex", threadId: nativeThreadId }), null);

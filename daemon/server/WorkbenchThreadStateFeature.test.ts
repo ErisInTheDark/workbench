@@ -1388,7 +1388,18 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     intentName: "settle projection",
     phase: resolved ? "resolved" as const : "active" as const,
     proposals: resolved
-      ? [{ proposalId: "proposal-two", status: "committed" as const }]
+      ? [{
+        proposalId: "proposal-two",
+        rootId: "root",
+        status: "committed" as const,
+        summary: {
+          changes: null,
+          committedSha: "f".repeat(40),
+          description: "accepted description",
+          mode: "commit" as const,
+          title: "accepted title",
+        },
+      }]
       : [{ proposalId: "proposal-one", status: "proposed" as const }],
     threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one"),
     updatedAt: resolved ? "2026-08-23T00:01:00.000Z" : activeClaim.updatedAt,
@@ -1471,9 +1482,31 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   assert.ok(thread && thread.entryKind === "thread");
   assert.deepEqual(thread.gitArc, {
     checkpointCommit: "b".repeat(40), claimedPaths: [], intentDescription: "", intentName: "settle projection",
-    phase: "resolved", proposals: [{ proposalId: "proposal-two", status: "committed" }], stashedPaths: [], updatedAt: "2026-08-23T00:01:00.000Z",
+    phase: "resolved",
+    proposals: [{
+      proposalId: "proposal-two",
+      rootId: "root",
+      status: "committed",
+      summary: {
+        changes: null,
+        committedSha: "f".repeat(40),
+        description: "accepted description",
+        mode: "commit",
+        title: "accepted title",
+      },
+    }],
+    stashedPaths: [],
+    updatedAt: "2026-08-23T00:01:00.000Z",
   });
   assert.equal(thread.gitArcPlan, null);
+  assert.deepEqual(thread.gitCommits, [{
+    commitSha: "f".repeat(40),
+    description: "accepted description",
+    historyIndex: 0,
+    rootId: "root",
+    sourceProposalId: "proposal-two",
+    title: "accepted title",
+  }]);
   await feature.dispose();
   await temporary.dispose();
 });

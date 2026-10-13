@@ -645,6 +645,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     const observations = {
       ...(record.gitArc === undefined ? {} : { gitArc: record.gitArc }),
       ...(record.gitArcPlan === undefined ? {} : { gitArcPlan: record.gitArcPlan }),
+      ...(record.gitCommits === undefined ? {} : { gitCommits: record.gitCommits }),
     };
     // Live observations carry Git-derived facts the startup cache never stores; compare only the persisted subset.
     if (!isDeepStrictEqual(this.git.read(threadId), this.git.project(observations))) this.git.replace(threadId, observations);

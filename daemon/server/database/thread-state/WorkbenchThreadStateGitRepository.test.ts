@@ -126,6 +126,74 @@ test("stashed Git observations preserve retained paths without restoring live cl
   }
 });
 
+test("accepted commit history survives arc replacement and amends in place", () => {
+  const { database, repository, threadId } = fixture();
+  try {
+    const accepted = {
+      commitSha: "c".repeat(40),
+      description: "first description",
+      historyIndex: 0,
+      rootId: "root-a",
+      sourceProposalId: "accepted-proposal",
+      title: "first title",
+    };
+    repository.replace(threadId, { gitArc: null, gitCommits: [accepted] });
+    repository.replace(threadId, { gitArc: null });
+    assert.deepEqual(repository.read(threadId), { gitArc: null, gitCommits: [accepted] });
+
+    const amended = {
+      ...accepted,
+      commitSha: "d".repeat(40),
+      description: "amended description",
+      historyIndex: 99,
+      title: "amended title",
+    };
+    repository.replace(threadId, { gitArc: null, gitCommits: [amended] });
+    assert.deepEqual(repository.read(threadId), {
+      gitArc: null,
+      gitCommits: [{ ...amended, historyIndex: 0 }],
+    });
+    assert.equal((database.prepare(`
+      SELECT COUNT(*) AS count FROM workbench_thread_git_commits WHERE thread_id = ?
+    `).get(threadId) as { count: number }).count, 1);
+  } finally {
+    database.close();
+  }
+});
+
+test("committed live proposals promote into permanent history before arc replacement", () => {
+  const { database, repository, threadId } = fixture();
+  try {
+    const value = observations();
+    const arc = value.gitArc!;
+    const proposed = arc.proposals[0]!;
+    repository.replace(threadId, {
+      gitArc: {
+        ...arc,
+        proposals: [{
+          ...proposed,
+          status: "committed",
+          summary: { ...proposed.summary!, committedSha: "e".repeat(40) },
+        }],
+      },
+    });
+    repository.replace(threadId, { gitArc: null });
+    assert.deepEqual(repository.read(threadId), {
+      gitArc: null,
+      gitCommits: [{
+        commitSha: "e".repeat(40),
+        description: "keep details",
+        historyIndex: 0,
+        rootId: "root-b",
+        sourceProposalId: "second",
+        title: "second proposal",
+      }],
+    });
+  } finally {
+    database.close();
+  }
+});
+
 test("failed Git cache replacement restores both observations and the caller transaction can roll it back", () => {
   const { database, repository, threadId } = fixture();
   try {

@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
  * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit history, grouped under persisted disclosures with stack-ordered commit all backed by observed summaries.
  */
 "use client";
@@ -8,7 +9,12 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
-import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcProposalState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchGitArcLifecycleState,
+  WorkbenchGitArcProposalState,
+  WorkbenchHarnessId,
+  WorkbenchThreadGitCommit,
+} from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
@@ -19,6 +25,7 @@ import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredPropos
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import Disclosure from "../../ui/Disclosure";
+import { ThreadReadonlyCommitCard } from "./ThreadCheckpointCommitCard";
 
 function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -29,6 +36,24 @@ function formatProposalCounts(committed: number, proposed: number) {
   if (!committed) return plural(proposed, "commit proposal");
   if (!proposed) return plural(committed, "commit");
   return `${plural(committed, "commit")}, ${plural(proposed, "proposal")}`;
+}
+
+export function getThreadAcceptedGitHistory(
+  proposals: readonly WorkbenchGitArcProposalState[],
+  history: readonly WorkbenchThreadGitCommit[],
+) {
+  const liveCommitKeys = new Set(proposals.flatMap(({ rootId, status, summary }) => (
+    status === "committed" && rootId && summary?.committedSha ? [`${rootId}\0${summary.committedSha}`] : []
+  )));
+  const historicalCommits = history
+    .filter(({ commitSha, rootId }) => !liveCommitKeys.has(`${rootId}\0${commitSha}`))
+    .slice().sort((left, right) => left.historyIndex - right.historyIndex
+      || left.rootId.localeCompare(right.rootId)
+      || left.sourceProposalId.localeCompare(right.sourceProposalId));
+  return {
+    acceptedCount: proposals.filter(({ status }) => status === "committed").length + historicalCommits.length,
+    historicalCommits,
+  };
 }
 
 /** Group disclosures (stack layers, accepted commits) share one row line, summary and recessed well. */
@@ -83,6 +108,7 @@ export default function ThreadGitArcProposalList({
   commitActions,
   cwd,
   harness,
+  history = [],
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -96,6 +122,7 @@ export default function ThreadGitArcProposalList({
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
+  history?: readonly WorkbenchThreadGitCommit[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -123,6 +150,7 @@ export default function ThreadGitArcProposalList({
   // Commit all walks the stack bottom-up, then unsealed work built on top of it.
   const proposedIds = [...layerGroups.flatMap(({ pendingIds }) => pendingIds), ...pendingIdsOf(unsealedProposals)];
   const acceptedProposals = unsealedProposals.filter(({ status }) => status === "committed");
+  const { acceptedCount, historicalCommits } = getThreadAcceptedGitHistory(proposals, history);
   const trailingProposals = acceptedProposals.length
     ? unsealedProposals.filter(({ status }) => status !== "committed")
     : unsealedProposals;
@@ -166,14 +194,14 @@ export default function ThreadGitArcProposalList({
     }
   };
 
-  const lone = proposals.length === 1 && proposedIds.length === 1 ? proposals[0]!.summary ?? null : null;
+  const lone = proposals.length === 1 && proposedIds.length === 1 && !historicalCommits.length ? proposals[0]!.summary ?? null : null;
   const summary = (
     <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
       <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
-        <GitArcProposalIcon className="shrink-0" size={14} />
+        {proposedIds.length ? <GitArcProposalIcon className="shrink-0" size={14} /> : <CheckCheckIcon className="shrink-0" size={14} />}
         {lone
           ? <span className="min-w-0 truncate font-medium text-text">{lone.title}</span>
-          : formatProposalCounts(proposals.length - proposedIds.length, proposedIds.length)}
+          : formatProposalCounts(acceptedCount, proposedIds.length)}
         {lone?.changes ? <span className="ml-1.5 inline-flex shrink-0"><ThreadGitArcChangeTotals changes={lone.changes} /></span> : null}
       </span>
       {showCommitAll || committing ? (
@@ -215,7 +243,7 @@ export default function ThreadGitArcProposalList({
   );
   const anchors = [
     // Unmounted anchors just park their cards, so a long accepted history costs nothing until opened.
-    ...(acceptedProposals.length ? [(
+    ...(acceptedProposals.length || historicalCommits.length ? [(
       <Disclosure
         {...groupDisclosureProps}
         data-thread-git-arc-accepted-group="true"
@@ -225,11 +253,31 @@ export default function ThreadGitArcProposalList({
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             <span className="font-medium text-text">Accepted</span>
-            <span className="text-fg/muted">{plural(acceptedProposals.length, "commit")}</span>
+            <span className="text-fg/muted">{plural(acceptedProposals.length + historicalCommits.length, "commit")}</span>
           </span>
         )}
       >
         {acceptedProposals.map(({ proposalId }) => anchor(proposalId))}
+        {historicalCommits.map(commit => (
+          <div
+            className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
+            data-thread-git-commit={commit.commitSha}
+            key={`${commit.rootId}:${commit.sourceProposalId}`}
+          >
+            <ThreadReadonlyCommitCard
+              sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
+              state={{
+                status: "summary",
+                summary: {
+                  changes: null,
+                  committedSha: commit.commitSha,
+                  description: commit.description,
+                  title: commit.title,
+                },
+              }}
+            />
+          </div>
+        ))}
       </Disclosure>
     )] : []),
     ...layerGroups.map((group) => {

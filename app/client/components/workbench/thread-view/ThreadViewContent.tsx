@@ -38,7 +38,13 @@ import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workben
 import { ThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
 import { deriveThreadItemApprovals, ThreadItemApprovalsContext } from "../../../workbench/thread/thread-item-approvals";
 import ThreadItemActionsContext, { type ThreadItemActions } from "./ThreadItemActionsContext";
-import type { WorkbenchGitArcLifecycleState, WorkbenchGitArcPlanState, WorkbenchThreadLifecycle, WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchGitArcLifecycleState,
+  WorkbenchGitArcPlanState,
+  WorkbenchThreadGitCommit,
+  WorkbenchThreadLifecycle,
+  WorkbenchThreadRouteTarget as WorkbenchThreadTarget,
+} from "workbench-shared/workbench/thread/thread-state";
 import {
   filterSubagentsByParentThreadId,
   getSubagentHarness,
@@ -447,10 +453,12 @@ export default memo(function ThreadViewContent ({
   const activeGitArcSelection = useMemo<{
     gitArc: WorkbenchGitArcLifecycleState | null;
     gitArcPlan: WorkbenchGitArcPlanState | null;
+    gitCommits: WorkbenchThreadGitCommit[];
     lifecycle: WorkbenchThreadLifecycle;
   } | null>(() => activeSidebarEntry ? {
     gitArc: activeSidebarEntry.gitArc ?? null,
     gitArcPlan: activeSidebarEntry.gitArcPlan ?? null,
+    gitCommits: activeSidebarEntry.gitCommits ?? [],
     lifecycle: activeSidebarEntry.lifecycle,
   } : null, [activeSidebarEntry]);
   const activeProfileSlot = useMemo(() => activeThread
@@ -1197,13 +1205,14 @@ export default memo(function ThreadViewContent ({
           <ThreadStatusArea
             addressedFeedback={active.head?.addressedFeedback ?? []}
             // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
-            gitArc={!isDraftThreadView && activeThread.cwd && gitArcWork ? {
+            gitArc={!isDraftThreadView && activeThread.cwd && (gitArcWork || activeGitArcSelection?.gitCommits.length) ? {
               claim: gitArcWork,
               commitActions: checkpointCommitActions,
               cwd: activeThread.cwd,
               harness: activeThread.harness,
               running: liveTurn !== null,
             } : null}
+            gitCommits={activeGitArcSelection?.gitCommits ?? []}
             harness={activeThread.harness}
             key={activeThread.id}
             live={liveActivityView}

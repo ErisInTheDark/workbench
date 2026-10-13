@@ -86,6 +86,8 @@ const databaseReleases = Object.freeze({
   execRoots: release(76, "94edfd3cb0a08668eef7d37f76e8e1390cd8a3dd620ca513dd16b883266d1abb"),
   rateLimitAccounts: release(77, "08addd0e891244523c75ca353b017cacb85d2f421e04ff46ceaeea6c21cff15d"),
   threadErrors: release(78, "c901dabdb1d433c72f87616ee93d777cfcc319fafa2f6e267256235fca903448"),
+  threadGitCommits: release(79, "ac0e7a80d8078d9a1c3b7b4e2d91b788f4f621738580035ae7f10b09996628f6"),
+  threadGitCommitBackfill: release(80, "11235a0e9fae2fc8c7b8fc897289d697b8ddb1b0da3093c7b59a5518d10b008f"),
 });
 
 export default databaseReleases;

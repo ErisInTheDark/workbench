@@ -12,7 +12,7 @@ import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbenc
 import WorkbenchClientStateController, { type WorkbenchClientStateSnapshot } from "../../../workbench/state/WorkbenchClientStateController";
 import { WorkbenchClientStateContext } from "../workbench-client-state-context";
 import ThreadCheckpointCommitActions, { type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
-import ThreadGitArcProposalList from "./ThreadGitArcProposalList";
+import ThreadGitArcProposalList, { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
 
 const stored = (proposalId: string): ThreadCheckpointStoredProposal => ({
   description: "",
@@ -44,7 +44,19 @@ function clientState(open: boolean) {
 }
 
 /** Bulk summaries stand in for cards that a collapsed header never lets load, so readiness is real. */
-function renderList(open: boolean, proposalIds: readonly string[], status: "committed" | "proposed" = "proposed") {
+function renderList(
+  open: boolean,
+  proposalIds: readonly string[],
+  status: "committed" | "proposed" = "proposed",
+  history: Array<{
+    commitSha: string;
+    description: string;
+    historyIndex: number;
+    rootId: string;
+    sourceProposalId: string;
+    title: string;
+  }> = [],
+) {
   const commitActions = new ThreadCheckpointCommitActions();
   commitActions.setStored(status === "proposed" ? proposalIds.map(stored) : [], () => {});
   return renderToStaticMarkup(createElement(WorkbenchClientStateContext.Provider, { value: clientState(open) },
@@ -53,6 +65,7 @@ function renderList(open: boolean, proposalIds: readonly string[], status: "comm
       commitActions,
       cwd: "/repo",
       harness: "opencode",
+      history,
       proposals: proposalIds.map(proposalId => ({ proposalId, status })),
       stackLayers: [],
       threadId: "thread",
@@ -87,4 +100,44 @@ test("accepted-only history renders its accepted disclosure without commit all",
   assert.match(html, /data-thread-git-arc-accepted-group="true"/u);
   assert.match(html, /Accepted/u);
   assert.equal(commitAllTag(html), null);
+});
+
+test("durable accepted history renders without proposals", () => {
+  const html = renderList(true, [], "committed", [{
+    commitSha: "a".repeat(40),
+    description: "survives arc cleanup",
+    historyIndex: 0,
+    rootId: "root",
+    sourceProposalId: "accepted",
+    title: "durable commit",
+  }]);
+  assert.match(html, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(html, /1 commit/u);
+  assert.equal(commitAllTag(html), null);
+});
+
+test("live accepted proposals win over duplicate durable commits", () => {
+  const duplicate = {
+    commitSha: "a".repeat(40),
+    description: "durable copy",
+    historyIndex: 0,
+    rootId: "root",
+    sourceProposalId: "proposal",
+    title: "durable copy",
+  };
+  const distinct = { ...duplicate, commitSha: "b".repeat(40), historyIndex: 1, sourceProposalId: "other" };
+  const result = getThreadAcceptedGitHistory([{
+    proposalId: "proposal",
+    rootId: "root",
+    status: "committed",
+    summary: {
+      changes: null,
+      committedSha: duplicate.commitSha,
+      description: "live copy",
+      mode: "commit",
+      title: "live copy",
+    },
+  }], [duplicate, distinct]);
+  assert.equal(result.acceptedCount, 2);
+  assert.deepEqual(result.historicalCommits, [distinct]);
 });

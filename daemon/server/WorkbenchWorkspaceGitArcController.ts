@@ -364,7 +364,11 @@ export default class WorkbenchWorkspaceGitArcController {
 
   async pruneThreadHistories(
     project: AgentEndpointProjectResolution,
-    identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: string }>,
+    identities: ReadonlyArray<{
+      durableProposalIds?: Array<{ proposalIds: string[]; rootId: string }>;
+      harness: WorkbenchHarness;
+      threadId: string;
+    }>,
   ): Promise<GitArcRetentionResult & { deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: string }> }> {
     const members = await this.resolveRepoMembers(project);
     const result = {
@@ -375,9 +379,23 @@ export default class WorkbenchWorkspaceGitArcController {
       try {
         const values = await this.runMembers(
           members,
-          async (member) => await this.local.pruneThreadHistory({ cwd: member.repoRoot, ...identity }),
+          async (member) => await this.local.pruneThreadHistory({
+            cwd: member.repoRoot,
+            durableProposalIds: (identity.durableProposalIds ?? [])
+              .filter(({ rootId }) => member.roots.some(root => root.id === rootId))
+              .flatMap(({ proposalIds }) => proposalIds),
+            harness: identity.harness,
+            threadId: identity.threadId,
+          }),
           async (member) => {
-            if (!await this.local.canPruneThreadHistory({ cwd: member.repoRoot, ...identity })) {
+            if (!await this.local.canPruneThreadHistory({
+              cwd: member.repoRoot,
+              durableProposalIds: (identity.durableProposalIds ?? [])
+                .filter(({ rootId }) => member.roots.some(root => root.id === rootId))
+                .flatMap(({ proposalIds }) => proposalIds),
+              harness: identity.harness,
+              threadId: identity.threadId,
+            })) {
               throw new WorkspaceGitArcRetentionDeferredError();
             }
           },

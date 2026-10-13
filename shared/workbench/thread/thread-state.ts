@@ -28,7 +28,7 @@
  * - WorkbenchComposerProfileSlotSchema: strict target slot contract.
  * - WorkbenchComposerSettingsSchema/WorkbenchComposerProfileSelectionSchema and state types: re-export composer profile contracts.
  * - WorkbenchComposerProfileSlotInputSchema: unresolved thread references accepted at profile RPC ingress.
- * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
+ * - WorkbenchThreadDraftSchema/WorkbenchThreadLifecycleSchema/WorkbenchGitArcPlanStateSchema/WorkbenchThreadGitCommitSchema/WorkbenchDurableQuestionnaireSchema/WorkbenchQuestionnaireHistoryEntrySchema/WorkbenchThreadSidebarEntrySchema: strict wire and storage contracts.
  * - WorkbenchThreadSidebarSnapshotSchema/WorkbenchProjectThreadSidebarsSchema: current project and grouped sidebar facts.
  * - WorkbenchHomeThreadDisplayOrderSnapshotSchema: revisioned home-owned cross-project priority order.
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
@@ -293,6 +293,16 @@ const WorkbenchGitArcProposalStateSchema = z.object({
 }).strict();
 export type WorkbenchGitArcProposalState = z.infer<typeof WorkbenchGitArcProposalStateSchema>;
 
+export const WorkbenchThreadGitCommitSchema = z.object({
+  commitSha: z.string().regex(/^[a-f0-9]{40,64}$/u),
+  description: z.string(),
+  historyIndex: z.number().int().nonnegative(),
+  rootId: z.string().min(1),
+  sourceProposalId: z.string().min(1),
+  title: z.string(),
+}).strict();
+export type WorkbenchThreadGitCommit = z.infer<typeof WorkbenchThreadGitCommitSchema>;
+
 /** Own sealed stack layers, bottom first; proposals listed here render inside their layer. Absent means none. */
 const WorkbenchGitArcStackLayersSchema = z.array(z.object({
   layerId: z.string().min(1),
@@ -490,6 +500,7 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   entryKind: z.literal("thread"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
+  gitCommits: z.array(WorkbenchThreadGitCommitSchema).optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
@@ -508,6 +519,7 @@ const SubagentEntryBaseSchema = SidebarCommonSchema.extend({
   entryKind: z.literal("subagent"),
   gitArc: WorkbenchGitArcLifecycleStateSchema.nullable().optional(),
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
+  gitCommits: z.array(WorkbenchThreadGitCommitSchema).optional(),
   identity: ThreadIdentitySchema,
   lifecycle: WorkbenchThreadLifecycleSchema,
   name: z.string().trim().min(1),

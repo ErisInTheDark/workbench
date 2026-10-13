@@ -66,6 +66,7 @@ import {
   type WorkbenchThreadDraft,
   type WorkbenchGitArcLifecycleState,
   type WorkbenchGitArcPlanState,
+  type WorkbenchThreadGitCommit,
   type WorkbenchHarnessId,
   type WorkbenchThreadSidebarEntry,
   type WorkbenchThreadSidebarSnapshot,
@@ -171,7 +172,14 @@ export interface WorkbenchThreadStateControllerOptions {
   log?: (message: string) => void;
   publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
-  pruneExpiredGitState?: (projectId: ProjectId, identities: Array<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }>) => Promise<ReadonlyArray<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }> | void>;
+  pruneExpiredGitState?: (
+    projectId: ProjectId,
+    identities: Array<{
+      durableProposalIds?: Array<{ proposalIds: string[]; rootId: string }>;
+      harness: WorkbenchHarnessId;
+      threadId: WorkbenchThreadId;
+    }>,
+  ) => Promise<ReadonlyArray<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }> | void>;
   renameThread?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, title: string) => Promise<string>;
   interruptQuestionnaire?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) => Promise<boolean>;
   reconcileProject: (
@@ -541,10 +549,23 @@ export default class WorkbenchThreadStateController {
     return [...state.entries.entries()].flatMap(([key, entry]) => {
       if (entry.entryKind === "draft") return [];
       const resolvedAt = this.gitRetentionEpoch(entry);
+      const commitsByRoot = new Map<string, string[]>();
+      for (const commit of entry.gitCommits ?? []) {
+        const proposalIds = commitsByRoot.get(commit.rootId) ?? [];
+        proposalIds.push(commit.sourceProposalId);
+        commitsByRoot.set(commit.rootId, proposalIds);
+      }
       return resolvedAt !== null
         && resolvedAt < cutoff
         && (entry.gitHistoryCleanedAt === null || entry.gitHistoryCleanedAt < resolvedAt)
-        ? [{ identity: entry.identity, key, resolvedAt }]
+        ? [{
+          ...(commitsByRoot.size ? {
+            durableProposalIds: [...commitsByRoot].map(([rootId, proposalIds]) => ({ proposalIds, rootId })),
+          } : {}),
+          identity: entry.identity,
+          key,
+          resolvedAt,
+        }]
         : [];
     });
   }
@@ -1698,7 +1719,10 @@ export default class WorkbenchThreadStateController {
         const expiredRecords = this.expiredGitRecords(state);
         if (expiredRecords.length && this.options.pruneExpiredGitState) {
           try {
-            const deferred = await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ identity }) => identity));
+            const deferred = await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ durableProposalIds, identity }) => ({
+              ...identity,
+              ...(durableProposalIds ? { durableProposalIds } : {}),
+            })));
             const deferredKeys = new Set((Array.isArray(deferred) ? deferred : []).map(({ harness, threadId }) => `${harness}:${threadId}`));
             const gitHistoryCleanedAt = this.now();
             const cleanedKeys: string[] = [];
@@ -1817,6 +1841,7 @@ export default class WorkbenchThreadStateController {
           activityAt: existing.activityAt,
           ...(parsed.data.gitArc === undefined && existing.gitArc !== undefined ? { gitArc: existing.gitArc } : {}),
           ...(parsed.data.gitArcPlan === undefined && existing.gitArcPlan !== undefined ? { gitArcPlan: existing.gitArcPlan } : {}),
+          ...(parsed.data.gitCommits === undefined && existing.gitCommits !== undefined ? { gitCommits: existing.gitCommits } : {}),
         }
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
@@ -1881,25 +1906,13 @@ export default class WorkbenchThreadStateController {
     for (const [key, entry] of state.entries) {
       if (entry.entryKind === "draft") continue;
       const observedGitArc = arcs.get(key) ?? null;
-      const committed = entry.gitArc?.proposals.filter(({ status }) => status === "committed") ?? [];
-      const gitArc = observedGitArc ?? (
-        entry.gitHistoryCleanedAt !== null && entry.gitArc && committed.length
-          ? {
-            checkpointCommit: entry.gitArc.checkpointCommit,
-            claimedPaths: [],
-            intentDescription: entry.gitArc.intentDescription,
-            intentName: entry.gitArc.intentName,
-            phase: "resolved" as const,
-            proposals: committed,
-            updatedAt: entry.gitArc.updatedAt,
-          }
-          : null
-      );
+      const gitCommits = this.mergeGitCommits(entry.gitCommits ?? [], observedGitArc ?? entry.gitArc ?? null);
       const next = parseWorkbenchThreadStateEntry({
         ...entry,
-        gitArc,
+        gitArc: observedGitArc,
         gitArcPlan: plans.get(key) ?? null,
-        lifecycle: gitArcPreventsThreadSettlement(gitArc) && entry.lifecycle.settled
+        gitCommits,
+        lifecycle: gitArcPreventsThreadSettlement(observedGitArc) && entry.lifecycle.settled
           ? { ...entry.lifecycle, settled: false as const }
           : entry.lifecycle,
       });
@@ -1908,6 +1921,31 @@ export default class WorkbenchThreadStateController {
       changed = true;
     }
     return changed;
+  }
+
+  private mergeGitCommits(
+    history: readonly WorkbenchThreadGitCommit[],
+    arc: WorkbenchGitArcLifecycleState | null,
+  ): WorkbenchThreadGitCommit[] {
+    const commits = new Map(history.map(commit => [`${commit.rootId}\0${commit.sourceProposalId}`, commit]));
+    let nextIndex = history.reduce((maximum, commit) => Math.max(maximum, commit.historyIndex + 1), 0);
+    for (const proposal of arc?.proposals ?? []) {
+      const summary = proposal.summary;
+      if (proposal.status !== "committed" || !proposal.rootId || !summary?.committedSha) continue;
+      const key = `${proposal.rootId}\0${proposal.proposalId}`;
+      const previous = commits.get(key);
+      commits.set(key, {
+        commitSha: summary.committedSha,
+        description: summary.description,
+        historyIndex: previous?.historyIndex ?? nextIndex++,
+        rootId: proposal.rootId,
+        sourceProposalId: proposal.proposalId,
+        title: summary.title,
+      });
+    }
+    return [...commits.values()].sort((left, right) => left.historyIndex - right.historyIndex
+      || left.rootId.localeCompare(right.rootId)
+      || left.sourceProposalId.localeCompare(right.sourceProposalId));
   }
 
   private enqueue<TValue>(key: string, operation: () => Promise<TValue>) {

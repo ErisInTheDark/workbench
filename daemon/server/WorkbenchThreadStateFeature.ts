@@ -83,7 +83,11 @@ export interface WorkbenchThreadStateFeatureContext {
     listActiveClaims(cwd: string): Promise<WorkbenchGitArcActiveClaim[]>;
     listLifecycleStates?(cwd: string): Promise<Array<GitArcLifecycleState>>;
     listPlanStates?(cwd: string): Promise<Array<GitArcPlanState>>;
-    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
+    pruneThreadHistories?(cwd: string, identities: ReadonlyArray<{
+      durableProposalIds?: Array<{ proposalIds: string[]; rootId: string }>;
+      harness: WorkbenchHarness;
+      threadId: WorkbenchThreadId;
+    }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   /** Whether the thread still holds required follow-up todos, which keep it from settling. */

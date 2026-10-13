@@ -9,7 +9,7 @@
 import type http from "node:http";
 import { ThreadReferenceSchema, type WorkbenchThreadId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState, WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
 
 import WorkbenchThreadGit from "./lib/workbench/git/WorkbenchThreadGit";
 import type {
@@ -42,6 +42,7 @@ export type CommitThreadLookup =
 
 interface CommitThreadRecord {
   gitArc?: WorkbenchGitArcLifecycleState | null;
+  gitCommits?: readonly WorkbenchThreadGitCommit[];
   threadId: string;
 }
 
@@ -132,9 +133,11 @@ function readPaths(value: unknown) {
 export function findCommitThreadId(records: readonly CommitThreadRecord[], commitSha: string): CommitThreadLookup {
   const owners = new Set<string>();
   for (const record of records) {
-    if (!record.gitArc) continue;
-    for (const arc of [record.gitArc, ...record.gitArc.members ?? []]) {
-      if (arc.proposals.some(proposal => proposal.summary?.committedSha === commitSha)) owners.add(record.threadId);
+    if (record.gitCommits?.some(commit => commit.commitSha === commitSha)) owners.add(record.threadId);
+    if (record.gitArc) {
+      for (const arc of [record.gitArc, ...record.gitArc.members ?? []]) {
+        if (arc.proposals.some(proposal => proposal.summary?.committedSha === commitSha)) owners.add(record.threadId);
+      }
     }
   }
   const threadIds = [...owners].sort((left, right) => left.localeCompare(right));
@@ -215,6 +218,7 @@ export default class WorkbenchThreadGitFeature {
           const document = await selectionStore.readThreadStateProject(projectId);
           const match = findCommitThreadId(document.records.map(record => ({
             gitArc: record.gitArc,
+            gitCommits: record.gitCommits,
             threadId: record.identity.threadId,
           })), resolvedCommit.commit);
           if (match.kind === "missing") throw new Error(`No Workbench thread owns commit ${resolvedCommit.commit}.`);

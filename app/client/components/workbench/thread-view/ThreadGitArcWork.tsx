@@ -13,7 +13,11 @@ import {
   GitArcFailureException,
   type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
-import type { WorkbenchGitArcLifecycleState, WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import type {
+  WorkbenchGitArcLifecycleState,
+  WorkbenchHarnessId,
+  WorkbenchThreadGitCommit,
+} from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import PrimaryButton from "../../ui/PrimaryButton";
 import Disclosure from "../../ui/Disclosure";
@@ -37,10 +41,11 @@ export type ThreadGitArcWorkClaim = Omit<WorkbenchGitArcLifecycleState, "phase">
 };
 
 export interface ThreadGitArcWorkProps {
-  claim: ThreadGitArcWorkClaim;
+  claim: ThreadGitArcWorkClaim | null;
   commitActions: ThreadCheckpointCommitActions;
   cwd: string;
   harness: WorkbenchHarnessId;
+  history?: readonly WorkbenchThreadGitCommit[];
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -55,6 +60,7 @@ export default function ThreadGitArcWork ({
   commitActions,
   cwd,
   harness,
+  history = [],
   projectFilePaths,
   projectId,
   projectRootPath,
@@ -63,16 +69,16 @@ export default function ThreadGitArcWork ({
   workspaceRoots,
 }: ThreadGitArcWorkProps) {
   const daemon = useWorkbenchDaemonClient();
-  const phase = claim.phase ?? (claim.claimedPaths.length ? "active" : "resolved");
-  const visibleProposals = claim.proposals.filter(({ status }) => status === "proposed" || status === "committed");
+  const phase = claim?.phase ?? (claim?.claimedPaths.length ? "active" : "resolved");
+  const visibleProposals = claim?.proposals.filter(({ status }) => status === "proposed" || status === "committed") ?? [];
   const isShiftPressed = useNonTextInputShiftKey();
   const [activeAction, setActiveAction] = useState<ClaimAction | null>(null);
   const [conflictedPaths, setConflictedPaths] = useState<string[]>([]);
   const [actionFailure, setActionFailure] = useState<GitArcFailure | null>(null);
-  const memberRefs = claim.members?.filter(member => member.claimedPaths.length)
+  const memberRefs = claim?.members?.filter(member => member.claimedPaths.length)
     .map(({ checkpointCommit, rootId }) => ({ ref: checkpointCommit, rootId })) ?? [];
-  const stashWouldReplace = Boolean(claim.stashedPaths?.length);
-  const comparesClaim = !running && phase === "active" && claim.claimedPaths.length > 0;
+  const stashWouldReplace = Boolean(claim?.stashedPaths?.length);
+  const comparesClaim = !running && phase === "active" && Boolean(claim?.claimedPaths.length);
   // The thread store owns the comparison; without an observing thread nothing can say whether reverting is safe.
   const claimChanges = useThreadGitArcClaimChanges(comparesClaim);
   const comparison = claimChanges?.state ?? null;
@@ -84,7 +90,7 @@ export default function ThreadGitArcWork ({
   const failure = actionFailure ?? (comparison?.status === "failed" ? comparison.failure : null);
 
   const runAction = async (action: ClaimAction) => {
-    if (activeAction) return;
+    if (!claim || activeAction) return;
     setActiveAction(action);
     setActionFailure(null);
     try {
@@ -139,25 +145,26 @@ export default function ThreadGitArcWork ({
   };
 
   const sections = [
-    ...(claim.claimedPaths.length ? [{ phase: "active" as const, paths: claim.claimedPaths }] : []),
-    ...(claim.stashedPaths?.length ? [{ phase: "stashed" as const, paths: claim.stashedPaths }] : []),
+    ...(claim?.claimedPaths.length ? [{ phase: "active" as const, paths: claim.claimedPaths }] : []),
+    ...(claim?.stashedPaths?.length ? [{ phase: "stashed" as const, paths: claim.stashedPaths }] : []),
   ];
-  if (!visibleProposals.length && !sections.length) return null;
+  if (!visibleProposals.length && !history.length && !sections.length) return null;
   const showCombinedAction = activeAction === "restoreAndUnclaim" || (activeAction === null && isShiftPressed);
 
   return (
     <section className="w-full" data-thread-git-arc-work="true">
-      {visibleProposals.length ? (
+      {visibleProposals.length || history.length ? (
         <ThreadGitArcProposalList
-          acceptance={claim.acceptance ?? null}
+          acceptance={claim?.acceptance ?? null}
           commitActions={commitActions}
           cwd={cwd}
           harness={harness}
+          history={history}
           projectFilePaths={projectFilePaths}
           projectId={projectId}
           projectRootPath={projectRootPath}
           proposals={visibleProposals}
-          stackLayers={claim.stackLayers ?? []}
+          stackLayers={claim?.stackLayers ?? []}
           threadId={threadId}
           workspaceRoots={workspaceRoots}
         />
@@ -166,11 +173,11 @@ export default function ThreadGitArcWork ({
         <div
           key={sectionPhase}
           className={`
-            ${visibleProposals.length || index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
+            ${visibleProposals.length || history.length || index ? "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]" : ""}
             px-3 py-2
           `}
           data-thread-git-arc-resolution="true"
-          data-thread-git-arc-resolution-separator={visibleProposals.length ? "true" : undefined}
+          data-thread-git-arc-resolution-separator={visibleProposals.length || history.length ? "true" : undefined}
         >
           <Disclosure
             contentClassName="mt-1 pl-1"

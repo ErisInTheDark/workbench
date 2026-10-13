@@ -1342,24 +1342,39 @@ test("a caller stash in another root blocks the whole source stash transfer", as
 test("workspace retention defers a whole thread before pruning any repository member", async () => {
   const project = createWorkspace("C:/repo/api", "C:/repo/web");
   const pruned: string[] = [];
+  const durableByRepository: Array<{ cwd: string; proposalIds: string[] }> = [];
   const controller = new WorkbenchWorkspaceGitArcController({
     canPruneThreadHistory: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }) => (
       harness !== "codex" || threadId !== "deferred" || cwd.endsWith("api")
     ),
-    pruneThreadHistory: async ({ cwd, harness, threadId }: { cwd: string; harness: string; threadId: string }) => {
+    pruneThreadHistory: async ({
+      cwd, durableProposalIds, harness, threadId,
+    }: { cwd: string; durableProposalIds: string[]; harness: string; threadId: string }) => {
       pruned.push(`${cwd}:${harness}:${threadId}`);
+      if (threadId === "eligible") durableByRepository.push({ cwd, proposalIds: durableProposalIds });
       return { prunedRefCount: 1, registryEntryRemoved: true };
     },
   } as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async root => root);
   const result = await controller.pruneThreadHistories(project, [
     { harness: "codex", threadId: "deferred" },
-    { harness: "codex", threadId: "eligible" },
+    {
+      durableProposalIds: [
+        { proposalIds: ["api-proposal"], rootId: "api" },
+        { proposalIds: ["web-proposal"], rootId: "web" },
+      ],
+      harness: "codex",
+      threadId: "eligible",
+    },
     { harness: "opencode", threadId: "deferred" },
   ]);
   assert.deepEqual(result.deferredIdentities, [{ harness: "codex", threadId: "deferred" }]);
   assert.deepEqual(pruned, [
     "C:/repo/api:codex:eligible", "C:/repo/web:codex:eligible",
     "C:/repo/api:opencode:deferred", "C:/repo/web:opencode:deferred",
+  ]);
+  assert.deepEqual(durableByRepository, [
+    { cwd: "C:/repo/api", proposalIds: ["api-proposal"] },
+    { cwd: "C:/repo/web", proposalIds: ["web-proposal"] },
   ]);
   assert.equal(result.prunedRefCount, 4);
 });
