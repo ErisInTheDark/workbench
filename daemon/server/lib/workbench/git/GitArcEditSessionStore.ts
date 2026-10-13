@@ -90,7 +90,7 @@ export default class GitArcEditSessionStore {
 
   /** Point the ref at a prepared session only while it still names `expectedCommit` (null when none may exist). */
   async publish(identity: Identity, session: GitArcEditSession, expectedCommit: string | null) {
-    await this.repository.updateRef(await this.ref(identity), session.commit, expectedCommit ?? "0".repeat(40));
+    await this.repository.updateRef(await this.ref(identity), session.commit, expectedCommit ?? null);
     return session;
   }
 

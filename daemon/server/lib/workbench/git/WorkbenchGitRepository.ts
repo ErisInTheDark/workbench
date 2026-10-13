@@ -106,7 +106,7 @@ export interface GitCommitPathChange {
 
 export interface GitRefUpdate {
   newValue: string;
-  oldValue?: string;
+  oldValue?: string | null;
   ref: string;
 }
 
@@ -546,9 +546,14 @@ export default class WorkbenchGitRepository {
     return object.contents;
   }
 
-  async updateRef(ref: string, newValue: string, oldValue?: string) {
+  private async zeroObjectId() {
+    return "0".repeat(await this.objects.objectIdLength());
+  }
+
+  async updateRef(ref: string, newValue: string, oldValue?: string | null) {
+    const expected = oldValue === null ? await this.zeroObjectId() : oldValue;
     try {
-      await this.run(["update-ref", ref, newValue, ...(oldValue !== undefined ? [oldValue] : [])]);
+      await this.run(["update-ref", ref, newValue, ...(expected !== undefined ? [expected] : [])]);
     } finally {
       GitObjectReadSession.forget(this.refMemoPrefix());
     }
@@ -573,9 +578,14 @@ export default class WorkbenchGitRepository {
     const generationValue = advancesGeneration
       ? await this.writeBlob(`workbench-git-state-generation-v1 ${randomUUID()}\n`)
       : null;
+    const expectsMissing = updates.some(({ oldValue }) => oldValue === null)
+      || options.expectedStateGeneration === null;
+    const missingObjectId = expectsMissing ? await this.zeroObjectId() : undefined;
+    const encodeExpected = (value: string | null | undefined) => value === null ? missingObjectId! : value;
     const lines = ["start"];
     for (const update of updates) {
-      lines.push(`update ${update.ref} ${update.newValue}${update.oldValue !== undefined ? ` ${update.oldValue}` : ""}`);
+      const oldValue = encodeExpected(update.oldValue);
+      lines.push(`update ${update.ref} ${update.newValue}${oldValue !== undefined ? ` ${oldValue}` : ""}`);
     }
     for (const deletion of deletes) {
       lines.push(`delete ${deletion.ref}${deletion.oldValue !== undefined ? ` ${deletion.oldValue}` : ""}`);
@@ -583,7 +593,7 @@ export default class WorkbenchGitRepository {
     if (generationValue) {
       const expected = options.expectedStateGeneration === undefined
         ? ""
-        : ` ${options.expectedStateGeneration ?? "0".repeat(40)}`;
+        : ` ${encodeExpected(options.expectedStateGeneration)}`;
       lines.push(`update ${GIT_STATE_GENERATION_REF} ${generationValue}${expected}`);
     }
     lines.push("prepare", "commit", "");

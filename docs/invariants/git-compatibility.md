@@ -1,0 +1,3 @@
+- Support every Git object format and ref backend admitted by the installed Git version; derive object-id widths from the repository and use Git plumbing instead of storage-layout assumptions.
+- Represent ref transaction intent semantically inside Workbench. Only the Git repository boundary may encode zero object IDs or other backend protocol sentinels.
+- Cover ref creation and replacement through real Git transactions across supported object-format and ref-backend combinations. Skip a combination only when the installed Git does not provide it.

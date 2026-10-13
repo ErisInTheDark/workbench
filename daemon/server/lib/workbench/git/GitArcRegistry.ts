@@ -303,12 +303,12 @@ export default class GitArcRegistry {
     const removed: Array<{ oldValue: string; ref: string }> = [];
     for (const update of updates) {
       if (update.oldValue === undefined) throw new Error("Cannot compensate an unguarded Git ref update.");
-      if (/^0+$/u.test(update.oldValue)) removed.push({ ref: update.ref, oldValue: update.newValue });
+      if (update.oldValue === null) removed.push({ ref: update.ref, oldValue: update.newValue });
       else restored.push({ ref: update.ref, newValue: update.oldValue, oldValue: update.newValue });
     }
     for (const deletion of deletes) {
       if (!deletion.oldValue) throw new Error("Cannot compensate an unguarded Git ref deletion.");
-      restored.push({ ref: deletion.ref, newValue: deletion.oldValue, oldValue: "0".repeat(40) });
+      restored.push({ ref: deletion.ref, newValue: deletion.oldValue, oldValue: null });
     }
     await repository.updateRefs(restored, removed);
   }
@@ -420,7 +420,7 @@ export default class GitArcRegistry {
       if (collisions.length) throw new GitArcCollisionError(collisions);
     }
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
-    const updates: GitRefUpdate[] = [{ ref: REGISTRY_REF, newValue: nextBlob, oldValue: blob ?? "0".repeat(40) }];
+    const updates: GitRefUpdate[] = [{ ref: REGISTRY_REF, newValue: nextBlob, oldValue: blob }];
     for (const change of changes) {
       const previous = change.current ? getGitArcLiveClaimPaths(change.current) : [];
       if (change.current && previous.length && (!change.next || !getGitArcLiveClaimPaths(change.next).length)) {
@@ -485,7 +485,7 @@ export default class GitArcRegistry {
     } satisfies GitArcRegistryState;
     const nextBlob = await this.repository.writeBlob(`${JSON.stringify({ entries, version: 1 } satisfies GitArcRegistryState)}\n`);
     return await this.prepareMutation(nextState,
-      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
+      { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF },
       current, nextEntry, options?.claimLossSnapshot);
   }
 
@@ -579,7 +579,7 @@ export default class GitArcRegistry {
     } satisfies GitArcRegistryState;
     return await this.prepareMutation(
       nextState,
-      { newValue: nextBlob, oldValue: blob ?? "0".repeat(40), ref: REGISTRY_REF },
+      { newValue: nextBlob, oldValue: blob, ref: REGISTRY_REF },
       current,
       nextEntry,
       options?.claimLossSnapshot,

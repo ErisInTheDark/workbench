@@ -57,7 +57,7 @@ class RacingGitRepository extends WorkbenchGitRepository {
       this.raced = true;
       await super.updateRefs([{
         newValue: await this.currentHead(),
-        oldValue: "0".repeat(40),
+        oldValue: null,
         ref: this.competingRef,
       }]);
     }

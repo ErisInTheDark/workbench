@@ -176,7 +176,7 @@ export default class GitArcHistoryRewriter {
       if (nextRef === entry.ref) updates.push({ newValue: next, oldValue: entry.value, ref: entry.ref });
       else {
         deletes.push({ oldValue: entry.value, ref: entry.ref });
-        updates.push({ newValue: next, oldValue: "0".repeat(40), ref: nextRef });
+        updates.push({ newValue: next, oldValue: null, ref: nextRef });
       }
     };
     // Dependency order in one pass (Kahn): a checkpoint waits for every pending checkpoint its parent or message names,
@@ -298,7 +298,7 @@ export default class GitArcHistoryRewriter {
       if (nextRef === entry.ref) updates.push({ newValue: blob, oldValue: entry.value, ref: entry.ref });
       else {
         deletes.push({ oldValue: entry.value, ref: entry.ref });
-        updates.push({ newValue: blob, oldValue: "0".repeat(40), ref: nextRef });
+        updates.push({ newValue: blob, oldValue: null, ref: nextRef });
       }
     }
 
@@ -328,7 +328,7 @@ export default class GitArcHistoryRewriter {
     const nextMap = Object.fromEntries(Object.entries(priorMap).map(([oldCommit, current]) => [oldCommit, commits.get(current) ?? current]));
     for (const [oldCommit, next] of commits) if (oldCommit !== next) nextMap[oldCommit] = next;
     const mapBlob = await this.repository.writeBlob(`${JSON.stringify(nextMap)}\n`);
-    updates.push({ newValue: mapBlob, oldValue: priorMapBlob ?? "0".repeat(40), ref: COMMIT_REWRITE_MAP_REF });
+    updates.push({ newValue: mapBlob, oldValue: priorMapBlob, ref: COMMIT_REWRITE_MAP_REF });
     return { commits, deletes, updates, warnings };
   }
 }

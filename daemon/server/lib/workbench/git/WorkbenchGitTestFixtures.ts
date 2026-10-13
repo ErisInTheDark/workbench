@@ -211,8 +211,8 @@ export const HISTORY_GLOBAL_REMAP_READY_FIXTURE = {
     };
     const outcomeBlob = await repository.writeBlob(`${JSON.stringify(outcome)}\n`);
     await repository.updateRefs([
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: proposalRef },
-      { newValue: outcomeBlob, oldValue: "0".repeat(40), ref: previousOutcomeRef },
+      { newValue: proposalCommit, oldValue: null, ref: proposalRef },
+      { newValue: outcomeBlob, oldValue: null, ref: previousOutcomeRef },
     ]);
     const checkpointPlan = await controller.createPlan({
       cwd: repositoryRoot,

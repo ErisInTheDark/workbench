@@ -56,7 +56,7 @@ export default class GitArcClaimLossStore {
     });
     const commit = await this.repository.createCommitFromTree(boundary.tree, boundary.head, JSON.stringify(metadata));
     const ref = this.ref({ ...identity, threadId: (await this.identity(identity)).threadId });
-    return { newValue: commit, oldValue: await this.repository.readRef(ref) ?? "0".repeat(40), ref };
+    return { newValue: commit, oldValue: await this.repository.readRef(ref), ref };
   }
 
   async read(identity: Identity) {
@@ -99,7 +99,7 @@ export default class GitArcClaimLossStore {
     if (await this.repository.readRef(ref)) throw new Error("The caller's saved-stash address is already occupied.");
     return {
       snapshot,
-      updates: [{ ref, oldValue: "0".repeat(40), newValue: snapshot.commit }] satisfies GitRefUpdate[],
+      updates: [{ ref, oldValue: null, newValue: snapshot.commit }] satisfies GitRefUpdate[],
       deletions,
     };
   }

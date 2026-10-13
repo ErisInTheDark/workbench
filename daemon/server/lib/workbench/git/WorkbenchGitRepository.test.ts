@@ -1,18 +1,106 @@
 /*
- * No production exports. Tests cover atomic index/ref publication, object framing, combined file changes, direct worktree dirt and large path/ref selections.
+ * No production exports. Tests cover atomic index/ref publication, object/ref-format compatibility, object framing, combined file changes, direct worktree dirt and large path/ref selections.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
+import { promisify } from "node:util";
 
-import GitTestFixtureCache from "./GitTestFixtureCache";
+import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
+import GitArcHistoryRewriter, { COMMIT_REWRITE_MAP_REF } from "./GitArcHistoryRewriter";
 import GitObjectReadSession from "./GitObjectReadSession";
+import GitTestFixtureCache from "./GitTestFixtureCache";
+import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository, { GIT_STATE_GENERATION_REF } from "./WorkbenchGitRepository";
 import parseGitFileChangeOutput from "./git-file-change-output";
 import { THREAD_GIT_BASE_FIXTURE, UNBORN_FIXTURE } from "./WorkbenchGitTestFixtures";
 
+const execFileAsync = promisify(execFile);
 const fixtureCache = new GitTestFixtureCache();
+const repositoryFormats = [
+  { object: "sha1", refs: "files" },
+  { object: "sha1", refs: "reftable" },
+  { object: "sha256", refs: "files" },
+  { object: "sha256", refs: "reftable" },
+] as const;
+
+async function git(cwd: string, args: string[]) {
+  return (await execFileAsync("git", args, { cwd, encoding: "utf8", windowsHide: true })).stdout;
+}
+
+async function initialiseRepository(
+  context: TestContext,
+  objectFormat: typeof repositoryFormats[number]["object"],
+  refFormat: typeof repositoryFormats[number]["refs"],
+) {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-git-format-");
+  context.after(async () => await temporary.dispose());
+  const root = path.join(temporary.path, "repo");
+  try {
+    await git(temporary.path, [
+      "init", "-q", "-b", "main",
+      `--object-format=${objectFormat}`,
+      `--ref-format=${refFormat}`,
+      root,
+    ]);
+  } catch (error) {
+    if (refFormat === "reftable" && error instanceof Error && /ref-format|reftable/iu.test(error.message)) {
+      context.skip("installed Git does not support the reftable ref backend");
+      return null;
+    }
+    throw error;
+  }
+  await git(root, ["config", "user.name", "Workbench Fixture"]);
+  await git(root, ["config", "user.email", "fixture@workbench.invalid"]);
+  await fs.writeFile(path.join(root, "tracked.txt"), "base\n", "utf8");
+  await git(root, ["add", "tracked.txt"]);
+  await git(root, ["commit", "--quiet", "-m", "base"]);
+  return root;
+}
+
+test("Git arc ref publication supports admitted object formats and ref backends", async context => {
+  for (const format of repositoryFormats) await context.test(`${format.object} with ${format.refs}`, async context => {
+    const root = await initialiseRepository(context, format.object, format.refs);
+    if (!root) return;
+
+    const controller = new WorkbenchGitCheckpointController();
+    const threadId = `${format.object}-${format.refs}`;
+    await controller.createAndStartPlan({
+      cwd: root,
+      intentName: "format compatibility",
+      paths: ["tracked.txt"],
+      threadId,
+    });
+    await fs.writeFile(path.join(root, "tracked.txt"), "proposed\n", "utf8");
+    await controller.createProposal({
+      cwd: root,
+      description: "",
+      paths: ["tracked.txt"],
+      threadId,
+      title: "change tracked",
+    });
+
+    const repository = await WorkbenchGitRepository.open(root);
+    const previous = await repository.currentHead();
+    const replacement = await repository.createCommitFromTree(
+      await repository.resolveTree(previous),
+      [],
+      "replacement root",
+    );
+    const rewrite = await new GitArcHistoryRewriter(repository).prepare(new Map([[previous, replacement]]));
+    await repository.updateRefs(rewrite.updates, rewrite.deletes);
+
+    const expectedLength = format.object === "sha1" ? 40 : 64;
+    const refs = await repository.listRefsWithValues("refs/worktree");
+    assert.ok(refs.some(({ ref }) => ref.includes("/checkpoints/")));
+    assert.ok(refs.some(({ ref }) => ref.includes("/checkpoint-proposals/")));
+    assert.ok(await repository.readRef(COMMIT_REWRITE_MAP_REF));
+    assert.ok(refs.every(({ value }) => value.length === expectedLength));
+    await git(root, ["fsck", "--strict"]);
+  });
+});
 
 test("object-only three-way merges return text markers without disturbing Git operation state", async (context) => {
   const fixture = await fixtureCache.copy(THREAD_GIT_BASE_FIXTURE);
@@ -86,7 +174,7 @@ test("unborn snapshots preserve staged and untracked files without creating bran
   await assert.rejects(repository.publishRefsAfterIndexNormalization({
     indexCommit: competing,
     paths: ["staged.txt"],
-    updates: [{ ref: branch, newValue: competing, oldValue: "0".repeat(initial.length) }],
+    updates: [{ ref: branch, newValue: competing, oldValue: null }],
   }), /reference|exists/u);
   assert.equal(await repository.currentHead(), initial);
   assert.equal(await repository.writeIndexTree(), index);
@@ -371,21 +459,20 @@ test("every ref transaction advances generation even when ref values repeat", as
   context.after(fixture.dispose);
   const repository = await WorkbenchGitRepository.open(fixture.root);
   const head = await repository.currentHead();
-  const missing = "0".repeat(40);
   const firstRef = "refs/worktree/workbench/generation-first";
   const secondRef = "refs/worktree/workbench/generation-second";
   const blockedRef = "refs/worktree/workbench/generation-blocked";
 
-  await repository.updateRefs([{ newValue: head, oldValue: missing, ref: firstRef }]);
+  await repository.updateRefs([{ newValue: head, oldValue: null, ref: firstRef }]);
   const firstGeneration = await repository.readRef(GIT_STATE_GENERATION_REF);
   assert.ok(firstGeneration);
-  await repository.updateRefs([{ newValue: head, oldValue: missing, ref: secondRef }]);
+  await repository.updateRefs([{ newValue: head, oldValue: null, ref: secondRef }]);
   const secondGeneration = await repository.readRef(GIT_STATE_GENERATION_REF);
   assert.ok(secondGeneration);
   assert.notEqual(secondGeneration, firstGeneration);
 
   await assert.rejects(repository.updateRefs(
-    [{ newValue: head, oldValue: missing, ref: blockedRef }],
+    [{ newValue: head, oldValue: null, ref: blockedRef }],
     [],
     { expectedStateGeneration: firstGeneration },
   ), /state-generation/u);

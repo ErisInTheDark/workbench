@@ -210,7 +210,7 @@ export default class WorkbenchWorkingTreeRepository {
       const ref = await this.git.symbolicHead() ?? "HEAD";
       await verify();
       await this.git.publishRefsAfterIndexNormalization({
-        indexCommit: commit, paths, updates: [{ ref, newValue: commit, oldValue: snapshot.head ?? "0".repeat(commit.length) }],
+        indexCommit: commit, paths, updates: [{ ref, newValue: commit, oldValue: snapshot.head }],
       });
       return { ...result, commit, message: "Changes committed." };
     }

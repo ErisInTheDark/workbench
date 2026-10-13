@@ -581,7 +581,7 @@ export default class WorkbenchGitCheckpointController {
       version: 1,
     }, this.resolveThreadIdentity);
     const publish = async () => await repository.updateRefs([
-      { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
+      { newValue: checkpointCommit, oldValue: null, ref: checkpointRef },
       outcomeUpdate,
       ...registryMutation.updates,
     ]);

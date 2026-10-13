@@ -70,7 +70,7 @@ async function checkAtomicLoss(prepared: ClaimLossFixture) {
   assert.equal(await repository.readRef(ref), null);
   assert.equal(await store.read(identity), null);
   const corrupt = await repository.createCommitFromTree(boundary.tree, boundary.head, "invalid metadata");
-  await repository.updateRefs([{ ref, oldValue: "0".repeat(40), newValue: corrupt }]);
+  await repository.updateRefs([{ ref, oldValue: null, newValue: corrupt }]);
   await assert.rejects(store.read(identity));
   const wrongParent = await repository.createCommitFromTree(boundary.tree, boundary.head, JSON.stringify({ version: 1, paths: ["one.txt"], head: null }));
   await repository.updateRefs([{ ref, oldValue: corrupt, newValue: wrongParent }]);

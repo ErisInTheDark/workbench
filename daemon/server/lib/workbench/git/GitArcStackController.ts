@@ -280,7 +280,7 @@ export default class GitArcStackController {
         await this.repository.readCommit(current.tipCommit),
       );
       const nextRef = stored.checkpointRef.replace(/-[a-f0-9]{7,64}$/iu, `-${next.slice(0, 8)}`);
-      updates.push({ newValue: next, oldValue: "0".repeat(40), ref: nextRef });
+      updates.push({ newValue: next, oldValue: null, ref: nextRef });
       deletes.push({ oldValue: current.tipCommit, ref: stored.checkpointRef });
       replacedRefs.push(stored.checkpointRef, nextRef);
       commits.set(current.tipCommit, next);

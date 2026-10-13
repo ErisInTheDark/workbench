@@ -223,7 +223,7 @@ export default class GitCheckpointStore {
     const previous = await this.repository.readRef(ref);
     const normalized = normalizeArcOutcome(outcome);
     const blob = await this.repository.writeBlob(`${JSON.stringify(normalized)}\n`);
-    return { newValue: blob, oldValue: previous ?? "0".repeat(40), ref };
+    return { newValue: blob, oldValue: previous, ref };
   }
 
   async readProposalSummaries(harness: GitArcHarness, threadId: string, proposalIds: string[]) {
@@ -306,7 +306,7 @@ export default class GitCheckpointStore {
     return {
       checkpointCommit,
       checkpointRef,
-      update: { newValue: checkpointCommit, oldValue: "0".repeat(40), ref: checkpointRef },
+      update: { newValue: checkpointCommit, oldValue: null, ref: checkpointRef },
     };
   }
 

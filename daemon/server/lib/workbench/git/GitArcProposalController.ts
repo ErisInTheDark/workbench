@@ -916,7 +916,7 @@ export default class GitArcProposalController {
       threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
+      { newValue: proposalCommit, oldValue: null, ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
     ]);
     return {
@@ -1020,7 +1020,7 @@ export default class GitArcProposalController {
       ...rewrite.updates,
       ...registryMutation.updates,
       { newValue: supersededCommit, oldValue: target.proposalCommit, ref: target.proposalRef },
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: replacement.proposalRef },
+      { newValue: proposalCommit, oldValue: null, ref: replacement.proposalRef },
     ], [...(stackRevision?.deletes ?? []), ...rewrite.deletes]);
     return {
       baseCommit: metadata.baseCommit,
@@ -1271,7 +1271,7 @@ export default class GitArcProposalController {
       }),
     }, active.checkpointCommit);
     await repository.updateRefs([
-      { newValue: proposalCommit, oldValue: "0".repeat(40), ref: await store.proposalRefName(harness, threadId, proposalId) },
+      { newValue: proposalCommit, oldValue: null, ref: await store.proposalRefName(harness, threadId, proposalId) },
       ...registryMutation.updates,
       ...retiredRevivalTarget ? [retiredRevivalTarget] : [],
     ]);
@@ -1465,7 +1465,7 @@ export default class GitArcProposalController {
           } satisfies ArcOutcome)}\n`);
           updates.push({
             newValue: outcomeBlob,
-            oldValue: nextOutcomeRef === oldOutcomeRef ? oldOutcomeValue ?? "0".repeat(40) : "0".repeat(40),
+            oldValue: nextOutcomeRef === oldOutcomeRef ? oldOutcomeValue : null,
             ref: nextOutcomeRef,
           });
           replaceRefs.push(nextOutcomeRef);
@@ -1718,7 +1718,7 @@ export default class GitArcProposalController {
           } satisfies ArcOutcome)}\n`);
           updates.push({
             newValue: outcomeBlob,
-            oldValue: oldOutcomeRef === nextOutcomeRef ? oldOutcome ?? "0".repeat(40) : "0".repeat(40),
+            oldValue: oldOutcomeRef === nextOutcomeRef ? oldOutcome : null,
             ref: nextOutcomeRef,
           });
           replaceRefs.push(oldOutcomeRef, nextOutcomeRef);
@@ -1802,7 +1802,7 @@ export default class GitArcProposalController {
         indexCommit: committedSha,
         paths: proposal.metadata.livePaths,
         updates: [
-          { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit ?? "0".repeat(committedSha.length), ref: headRef ?? "HEAD" },
+          { newValue: committedSha, oldValue: proposal.metadata.liveBaseCommit, ref: headRef ?? "HEAD" },
           { newValue: stateCommit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef },
           outcomeUpdate,
           ...transition.updates,
