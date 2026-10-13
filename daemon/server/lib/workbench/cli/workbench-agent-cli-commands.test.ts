@@ -490,6 +490,18 @@ test("transcript CLI accepts Workbench ids directly and restricts managed caller
   assert.deepEqual(parsed.request.body?.threads, ["wb-thread"]);
   assert.deepEqual(parsed.request.body?.queries, ["100%_literal"]);
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read", "--thread", "wb-thread"], context)).kind, "request");
+  const providerRead = await parseWorkbenchAgentCliCommand([
+    "transcript", "read", "--thread", "wb-thread", "--turn", "turn-id", "--provider",
+  ], context);
+  assert.equal(providerRead.kind, "request");
+  if (providerRead.kind === "request") assert.equal(providerRead.request.body?.provider, true);
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "transcript", "show", "--thread", "wb-thread", "--turn", "turn-id", "--item", "item-id", "--provider",
+  ], context)).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read", "--thread", "wb-thread", "--provider"], context)).kind, "error");
+  assert.equal((await parseWorkbenchAgentCliCommand([
+    "transcript", "search", "--thread", "wb-thread", "--query", "x", "--provider",
+  ], context)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read"], context)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x"], { ...context, cwd: "C:/elsewhere" })).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "projects"], { ...context, cwd: "C:/elsewhere", callerThreadId: null })).kind, "request");

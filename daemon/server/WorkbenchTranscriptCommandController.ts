@@ -4,10 +4,16 @@
  */
 import path from "node:path";
 import { z } from "zod";
-import { TranscriptQuerySchema, TranscriptQueryError, type TranscriptQuery, type TranscriptQueryPage } from "./database/transcript/transcript-query-contract";
+import {
+  TranscriptCommandQuerySchema,
+  TranscriptQueryError,
+  type TranscriptQuery,
+  type TranscriptQueryPage,
+} from "./database/transcript/transcript-query-contract";
 import { renderTranscriptPage, transcriptPageOutput } from "./transcript-command-markdown";
 
 interface Options {
+  materializeTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
   projectRoot: string;
   read(query: TranscriptQuery): Promise<TranscriptQueryPage>;
 }
@@ -15,11 +21,11 @@ interface Options {
 export default class WorkbenchTranscriptCommandController {
   constructor(private readonly options: Options) {}
   async execute(input: object, signal: AbortSignal) {
-    const parsed = TranscriptQuerySchema.safeExtend({
+    const parsed = TranscriptCommandQuerySchema.safeExtend({
       cwd: z.string().min(1).max(4096), callerThreadId: z.string().min(1).max(4096).nullable(),
     }).safeParse(input);
     if (!parsed.success) return new Response(parsed.error.issues.map(issue => issue.message).join("\n").slice(0, 2000), { status: 400 });
-    const { cwd, callerThreadId, ...query } = parsed.data;
+    const { cwd, callerThreadId, provider, ...query } = parsed.data;
     const normalized = (value: string) => {
       const resolved = path.resolve(value);
       return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -29,6 +35,10 @@ export default class WorkbenchTranscriptCommandController {
     }
     try {
       signal.throwIfAborted();
+      if (provider) {
+        await this.options.materializeTurn(query.threads[0]!, query.turn!, signal);
+        signal.throwIfAborted();
+      }
       const page = await this.options.read(query);
       signal.throwIfAborted();
       while (query.action === "search" && page.rows.length < query.limit && page.nextCursor) {

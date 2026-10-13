@@ -94,10 +94,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       record: async (entry) => await stats.recordFeedback(entry),
       read: async (request) => await stats.readFeedback(request),
     });
-    const transcriptCommands = new WorkbenchTranscriptCommandController({
-      projectRoot: context.legacyMigrationProjectRoot,
-      read: async (query) => await database.queryTranscript(query),
-    });
     const questionnaires = build.get("questionnaires");
     const messages = build.get("messages");
     const subagents = build.get("subagents");
@@ -129,10 +125,15 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       const identity = await harnesses.resolveThreadIdentity({ threadId: ThreadReferenceSchema.parse(threadId) });
       const turn = turnId && identity ? await threadIdentity.resolveTurn({ threadId: identity.threadId, turnId: TurnReferenceSchema.parse(turnId) }) : null;
       const binding = turn?.native ?? identity?.bindings[0];
-      if (!identity || !binding || (turnId && !turn)) throw new Error("Thread Recall has no matching provider execution.");
+      if (!identity || !binding || (turnId && !turn)) throw new Error("No matching provider execution.");
       await provider(binding.harness).threads.history.materialize(identity.threadId, turn?.turnId ?? null, signal);
       signal.throwIfAborted();
     };
+    const transcriptCommands = new WorkbenchTranscriptCommandController({
+      materializeTurn: async (threadId, turnId, signal) => await materializeTurn(threadId, turnId, signal),
+      projectRoot: context.legacyMigrationProjectRoot,
+      read: async (query) => await database.queryTranscript(query),
+    });
     const threadRecall = new WorkbenchThreadRecallController({
       materializeTurn,
       readTranscript: async (request) => await transcript.read(request),

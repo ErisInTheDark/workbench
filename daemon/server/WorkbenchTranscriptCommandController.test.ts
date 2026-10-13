@@ -11,10 +11,13 @@ const coverage = { threads: 1, turns: 2, materializedTurns: 1, items: 201 };
 const query = TranscriptQuerySchema.parse({ action: "search", queries: ["needle"], threads: ["wb-id"], json: true });
 const input = { ...query, cwd: "C:/workbench", callerThreadId: "caller" };
 const empty: TranscriptQueryPage = { coverage, rows: [], scanned: 200, nextCursor: "next" };
+const noMaterialize = async () => {};
 
 test("transcript command blocks managed outside-root callers before database reads but permits ordinary users", async () => {
   let reads = 0;
-  const controller = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async () => { reads++; return { ...empty, nextCursor: null }; } });
+  const controller = new WorkbenchTranscriptCommandController({
+    materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async () => { reads++; return { ...empty, nextCursor: null }; },
+  });
   assert.equal((await controller.execute({ ...input, cwd: "C:/other" }, new AbortController().signal)).status, 403);
   assert.equal(reads, 0);
   assert.equal((await controller.execute({ ...input, cwd: "C:/other", callerThreadId: null }, new AbortController().signal)).status, 200);
@@ -24,7 +27,7 @@ test("transcript command blocks managed outside-root callers before database rea
 test("search fills a result page across empty batches without ignoring cancellation", async () => {
   let reads = 0;
   const signal = new AbortController();
-  const controller = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async request => {
+  const controller = new WorkbenchTranscriptCommandController({ materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async request => {
     reads++;
     if (reads === 1) return empty;
     assert.equal(request.cursor, "next");
@@ -43,7 +46,7 @@ test("search fills a result page across empty batches without ignoring cancellat
   assert.equal(reads, 2);
 
   reads = 0;
-  const cancelled = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async () => {
+  const cancelled = new WorkbenchTranscriptCommandController({ materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async () => {
     reads++; signal.abort(new Error("cancelled")); return empty;
   } });
   await assert.rejects(cancelled.execute(input, signal.signal), /cancelled/u);
@@ -51,7 +54,9 @@ test("search fills a result page across empty batches without ignoring cancellat
 });
 
 test("invalid queries and stale cursors propagate as bounded failures, not empty success", async () => {
-  const controller = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async () => { throw new TranscriptQueryError("stale cursor"); } });
+  const controller = new WorkbenchTranscriptCommandController({
+    materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async () => { throw new TranscriptQueryError("stale cursor"); },
+  });
   assert.equal((await controller.execute({ ...input, limit: -1 }, new AbortController().signal)).status, 400);
   const response = await controller.execute(input, new AbortController().signal);
   assert.equal(response.status, 400);
@@ -66,7 +71,7 @@ test("text rendering abbreviates matching caller directories without changing da
     { path: ["exitCode"], value: 0 },
     { path: ["success"], value: false },
   ];
-  const controller = new WorkbenchTranscriptCommandController({ projectRoot: "C:/workbench", read: async () => ({
+  const controller = new WorkbenchTranscriptCommandController({ materializeTurn: noMaterialize, projectRoot: "C:/workbench", read: async () => ({
     coverage, nextCursor: null, scanned: 1,
     rows: [{
       id: "item", kind: "commandExecution", threadId: "wb-id", turnId: "turn", projectId: "project",
@@ -86,4 +91,25 @@ test("text rendering abbreviates matching caller directories without changing da
     const data = await dataResponse.json() as ReturnType<typeof transcriptPageOutput>;
     assert.deepEqual(data.rows[0]?.fields, fields);
   }
+});
+
+test("explicit provider recovery materializes the demanded turn before reading SQLite", async () => {
+  const events: string[] = [];
+  const controller = new WorkbenchTranscriptCommandController({
+    materializeTurn: async (threadId, turnId) => { events.push(`materialize:${threadId}:${turnId}`); },
+    projectRoot: "C:/workbench",
+    read: async () => {
+      events.push("read");
+      return { ...empty, nextCursor: null };
+    },
+  });
+  const response = await controller.execute({
+    ...input,
+    action: "read",
+    provider: true,
+    queries: [],
+    turn: "turn-id",
+  }, new AbortController().signal);
+  assert.equal(response.status, 200);
+  assert.deepEqual(events, ["materialize:wb-id:turn-id", "read"]);
 });

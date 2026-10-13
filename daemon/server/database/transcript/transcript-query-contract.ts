@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - TranscriptQuerySchema/TranscriptQuery: validate the stored-history command vocabulary.
+ * - TranscriptCommandQuerySchema/TranscriptCommandQuery: add explicit exact-turn provider recovery to CLI queries.
  * - TranscriptField/TranscriptQueryRow/TranscriptQueryPage: bounded display records shared by worker and CLI.
  * - TranscriptQueryError: expected invalid query or stale-reference failure.
  */
@@ -45,6 +46,19 @@ export const TranscriptQuerySchema = z.object({
   if (query.turn && !query.threads.length) fail("--turn requires --thread.");
 });
 export type TranscriptQuery = z.output<typeof TranscriptQuerySchema>;
+
+export const TranscriptCommandQuerySchema = TranscriptQuerySchema.safeExtend({
+  provider: z.boolean().default(false),
+}).superRefine((query, context) => {
+  if (!query.provider) return;
+  if (!["read", "search", "show"].includes(query.action)) {
+    context.addIssue({ code: "custom", message: "--provider is only valid for read, search and show." });
+  }
+  if (query.threads.length !== 1 || query.turn === null) {
+    context.addIssue({ code: "custom", message: "--provider requires exactly one --thread and one --turn." });
+  }
+});
+export type TranscriptCommandQuery = z.output<typeof TranscriptCommandQuerySchema>;
 
 export interface TranscriptField {
   path: (string | number)[];

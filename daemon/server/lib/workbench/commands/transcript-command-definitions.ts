@@ -2,7 +2,10 @@
  * Exports:
  * - WORKBENCH_TRANSCRIPT_COMMANDS: CLI-only stored-history discovery, search and reading.
  */
-import { TranscriptQuerySchema, type TranscriptQuery } from "../../../database/transcript/transcript-query-contract";
+import {
+  TranscriptCommandQuerySchema,
+  type TranscriptCommandQuery,
+} from "../../../database/transcript/transcript-query-contract";
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
@@ -34,18 +37,23 @@ function booleanValue(flags: WorkbenchAgentCommandFlags, name: string) {
   return value === "true";
 }
 
-function parse(action: TranscriptQuery["action"], args: string[]) {
+function parse(action: TranscriptCommandQuery["action"], args: string[]) {
   const itemAction = ["search", "read", "stats"].includes(action);
   const matching = action === "search" || action === "threads";
+  const providerRecovery = ["search", "read", "show"].includes(action);
   const flags = new WorkbenchAgentCommandFlags(args, {
-    values: [...commonValues, ...(itemAction ? itemValues : []), ...(action === "turns" ? ["--turn"] : []),
+    values: [...commonValues, ...(itemAction ? itemValues : []), ...(["turns", "show"].includes(action) ? ["--turn"] : []),
       ...(["read", "turns", "search"].includes(action) ? ["--direction"] : []),
       ...(action === "show" ? ["--item"] : []), ...(action === "read" ? ["--around", "--context"] : [])],
     repeatable: ["--thread", ...(itemAction ? ["--kind"] : []), ...(matching ? ["--query", "--exclude"] : [])],
-    boolean: ["--json", ...(["search", "read", "show"].includes(action) ? ["--opaque"] : []), ...(matching ? ["--any", "--case-sensitive"] : [])],
+    boolean: [
+      "--json",
+      ...(providerRecovery ? ["--opaque", "--provider"] : []),
+      ...(matching ? ["--any", "--case-sensitive"] : []),
+    ],
     leadingDashValues: ["--query", "--exclude"],
   });
-  return TranscriptQuerySchema.parse({
+  return TranscriptCommandQuerySchema.parse({
     action, threads: flags.repeated("--thread"), project: flags.optional("--project"), harness: flags.optional("--harness"),
     turn: flags.optional("--turn"), kinds: flags.repeated("--kind"), phase: flags.optional("--phase"),
     tool: flags.optional("--tool"), file: flags.optional("--file"), since: timestamp(flags.optional("--since")), until: timestamp(flags.optional("--until")),
@@ -55,6 +63,7 @@ function parse(action: TranscriptQuery["action"], args: string[]) {
     around: flags.optional("--around"), context: flags.optionalNonNegativeInteger("--context") ?? 5,
     limit: flags.optionalNonNegativeInteger("--limit") ?? 20, direction: flags.optional("--direction") ?? "older",
     cursor: flags.optional("--cursor"), json: flags.has("--json"),
+    provider: flags.has("--provider"),
   });
 }
 
@@ -66,7 +75,7 @@ export const WORKBENCH_TRANSCRIPT_COMMANDS = descriptors.map(({ action, descript
   managedThreadRootOnly: true,
   words: ["transcript", action],
   usage: `wb transcript ${action}${["read", "show", "turns"].includes(action) ? " --thread <wb-id>" : " [--thread <wb-id>...]"}${action === "search" ? " --query <text>" : ""}${action === "show" ? " --item <id>" : ""} [options]`,
-  inputSchema: TranscriptQuerySchema,
+  inputSchema: TranscriptCommandQuerySchema,
   parseCliArgs: args => parse(action, args),
   buildRequest(input, { callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/internal/transcript", { ...input, action, callerThreadId, cwd });
