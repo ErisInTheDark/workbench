@@ -96,6 +96,16 @@ const modePanelTransitionClassName = `[transition:
   display var(--sticky-composer-motion-duration) allow-discrete
 ]`;
 
+const actionClusterClassName = `
+  col-start-1 row-start-1 min-w-0 invisible opacity-0
+  [transition:
+    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    visibility 0s linear var(--sticky-composer-motion-duration)
+  ]
+  data-[active=true]:(visible opacity-100 [transition: opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)])
+  motion-reduce:transition-none
+`;
+
 const stickyComposerContentClassName = `
   [scrollbar-color: rgb(from var(--fg) r g b / 0) transparent]
   [transition: scrollbar-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
@@ -234,6 +244,7 @@ export default function ThreadComposer ({
   const error = localError || editing.error || composerProfileSnapshot.error;
   const [isComposing, setIsComposing] = useState(false);
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
+  const [questionnaireSubmitTarget, setQuestionnaireSubmitTarget] = useState<HTMLDivElement | null>(null);
   const isLaunchingDraft = thread.isDraft && turns.length > 0;
   const isSending = editing.isSubmitting;
   const value = isSending || isLaunchingDraft ? "" : editing.draft.text;
@@ -636,7 +647,6 @@ export default function ThreadComposer ({
   const collapsedAttachmentPreviews = attachments.slice(0, 3);
   const hiddenAttachmentCount = Math.max(0, attachments.length - collapsedAttachmentPreviews.length);
   const effectiveSurface = stickyMode ? "bare" : surface;
-  const showComposerControlRow = !showQuestionnairePanel;
   const hasNormalComposerSupplementalContent = attachments.length > 0 || Boolean(helperText);
   const activeComposerMode = showQuestionnairePanel ? "questionnaire" : "composer";
   const isComposerPanelActive = activeComposerMode === "composer";
@@ -669,12 +679,11 @@ export default function ThreadComposer ({
                 <ThreadUserInputRequest
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   contentClassName={stickyMode ? stickyComposerContentClassName : undefined}
-                  actions={stopButton}
                   draft={threadQuestionnaireDraft}
                   highlightSources={highlightSources}
                   knownSkills={knownSkills}
-                  leadingActions={questionnaireToggleButton}
                   spellCheck={composerSpellCheck}
+                  submitTarget={questionnaireSubmitTarget}
                   onDraftChange={questionnaire.save}
                   onDraftClear={questionnaire.clear}
                   projectRootPath={projectRootPath}
@@ -784,88 +793,96 @@ export default function ThreadComposer ({
                   </div>
                 ) : null}
               </div>
-              {showComposerControlRow ? (
-                <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
-                  <div className="flex min-w-0 shrink items-center gap-2">
-                    {questionnaireToggleButton}
-                    {controlNotice}
-                  </div>
-                  <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-                    {showsThreadControls ? (
-                    !hasEffectiveProfile && profileSlot && !composerProfileController.hasSelection(profileSlot) && !composerProfileSnapshot.error ? (
+            </div>
+          </div>
+          <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
+            <div className="flex min-w-0 shrink items-center gap-2">
+              {questionnaireToggleButton}
+              {isComposerPanelActive ? controlNotice : null}
+            </div>
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+              <div className="grid min-w-0 flex-1 grid-cols-[minmax(0, 1fr)]">
+                <div
+                  aria-hidden={!isComposerPanelActive}
+                  className={`${actionClusterClassName} flex min-w-0 items-center justify-end gap-2`}
+                  data-active={isComposerPanelActive ? "true" : "false"}
+                  inert={!isComposerPanelActive}
+                >
+                  {!showsThreadControls ? null
+                    : !hasEffectiveProfile && profileSlot && !composerProfileController.hasSelection(profileSlot) && !composerProfileSnapshot.error ? (
                       <div
                         role="status"
                         aria-label="Loading composer profile"
                         className="workbench-skeleton h-9 w-48 max-w-full rounded-full"
                       />
-                    ) :
-                    <ThreadComposerRibbon
-                      targetControl={targetControl}
-                      key={`${projectId}:${thread.id}`}
-                      modelId={thread.model}
-                      agentControl={<ThreadAgentQuickPicker
-                        agents={availableAgents}
-                        label={agentButtonLabel}
-                        selectedAgentPath={currentComposerSettings.agentPath}
-                        onOpen={() => {
-                          profileEditor.close();
-                          void loadAvailableAgents();
+                    ) : (
+                      <ThreadComposerRibbon
+                        targetControl={targetControl}
+                        key={`${projectId}:${thread.id}`}
+                        modelId={thread.model}
+                        agentControl={<ThreadAgentQuickPicker
+                          agents={availableAgents}
+                          label={agentButtonLabel}
+                          selectedAgentPath={currentComposerSettings.agentPath}
+                          onOpen={() => {
+                            profileEditor.close();
+                            void loadAvailableAgents();
+                          }}
+                          onEdit={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
+                          onSelect={(agentPath, agentSource) => applyDirectSettingsChange(
+                            { ...currentComposerSettings, agentPath, agentSource },
+                            () => onThreadAgentChange(thread.id, agentPath),
+                          )}
+                        />}
+                        currentReasoningEffort={currentReasoningEffort ?? "default"}
+                        isFastModeEnabled={isFastModeEnabled}
+                        modelControl={<WorkbenchModelQuickPicker
+                          allowedHarnesses={allowedHarnesses}
+                          harness={currentComposerSettings.harness}
+                          modelName={modelButtonLabel}
+                          providerLabel={formatHarnessLabel(currentComposerSettings.harness)}
+                          modelId={currentComposerSettings.model}
+                          threadId={thread.id}
+                          onOpen={() => {
+                            profileEditor.close();
+                            void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness, true)));
+                          }}
+                          onSelect={({ harness, model }) => selectQuickModel(harness, model)}
+                        />}
+                        profileControl={profileSlot ? <ThreadProfileQuickPicker
+                          slot={profileSlot}
+                          fallbackSettings={currentComposerSettings}
+                          agents={availableAgents}
+                          models={availableModels}
+                          label={profileButtonLabel}
+                          selectedLabel={selectedProfile ? profileButtonLabel : null}
+                          onOpen={profileEditor.close}
+                          onEdit={(trigger, ribbon) => {
+                            setEditorAnchor({ trigger, ribbon });
+                            profileEditor.open("profile");
+                            void composerProfileController.refreshProfiles();
+                          }}
+                        /> : null}
+                        selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
+                        showsFastModeControl={showsFastModeControl}
+                        showsReasoningEffortControl={showsReasoningEffortControl}
+                        onFastModeToggle={() => {
+                          const serviceTier = isFastModeEnabled ? null : "fast";
+                          applyDirectSettingsChange(
+                            { ...currentComposerSettings, serviceTier },
+                            () => onThreadServiceTierChange(thread.id, serviceTier),
+                          );
                         }}
-                        onEdit={(trigger, ribbon) => openProfileEditor("agent", trigger, ribbon)}
-                        onSelect={(agentPath, agentSource) => applyDirectSettingsChange(
-                          { ...currentComposerSettings, agentPath, agentSource },
-                          () => onThreadAgentChange(thread.id, agentPath),
-                        )}
-                      />}
-                      currentReasoningEffort={currentReasoningEffort ?? "default"}
-                      isFastModeEnabled={isFastModeEnabled}
-                      modelControl={<WorkbenchModelQuickPicker
-                        allowedHarnesses={allowedHarnesses}
-                        harness={currentComposerSettings.harness}
-                        modelName={modelButtonLabel}
-                        providerLabel={formatHarnessLabel(currentComposerSettings.harness)}
-                        modelId={currentComposerSettings.model}
-                        threadId={thread.id}
-                        onOpen={() => {
-                          profileEditor.close();
-                          void Promise.all(allowedHarnesses.map(harness => loadAvailableModels(harness, true)));
-                        }}
-                        onSelect={({ harness, model }) => selectQuickModel(harness, model)}
-                      />}
-                      profileControl={profileSlot ? <ThreadProfileQuickPicker
-                        slot={profileSlot}
-                        fallbackSettings={currentComposerSettings}
-                        agents={availableAgents}
-                        models={availableModels}
-                        label={profileButtonLabel}
-                        selectedLabel={selectedProfile ? profileButtonLabel : null}
-                        onOpen={profileEditor.close}
-                        onEdit={(trigger, ribbon) => {
-                          setEditorAnchor({ trigger, ribbon });
-                          profileEditor.open("profile");
-                          void composerProfileController.refreshProfiles();
-                        }}
-                      /> : null}
-                      selectedProfileLabel={selectedProfile ? profileButtonLabel : null}
-                      showsFastModeControl={showsFastModeControl}
-                      showsReasoningEffortControl={showsReasoningEffortControl}
-                      onFastModeToggle={() => {
-                        const serviceTier = isFastModeEnabled ? null : "fast";
-                        applyDirectSettingsChange(
-                          { ...currentComposerSettings, serviceTier },
-                          () => onThreadServiceTierChange(thread.id, serviceTier),
-                        );
-                      }}
-                      onReasoningEffortChange={changeReasoningEffort}
-                      supportedReasoningEfforts={supportedReasoningEfforts}
-                      context={modelOptionForControls?.contextWindow ? {
-                        ...modelOptionForControls.contextWindow,
-                        value: currentComposerSettings.contextWindowTokens ?? modelOptionForControls.contextWindow.defaultTokens,
-                      } : null}
-                      onContextChange={(contextWindowTokens) => applyDirectSettingsChange({ ...currentComposerSettings, contextWindowTokens }, () => {})}
-                    />
-                    ) : null}
-                    <div className="flex shrink-0 items-center gap-2">
+                        onReasoningEffortChange={changeReasoningEffort}
+                        supportedReasoningEfforts={supportedReasoningEfforts}
+                        context={modelOptionForControls?.contextWindow ? {
+                          ...modelOptionForControls.contextWindow,
+                          value: currentComposerSettings.contextWindowTokens ?? modelOptionForControls.contextWindow.defaultTokens,
+                        } : null}
+                        onContextChange={(contextWindowTokens) => applyDirectSettingsChange({ ...currentComposerSettings, contextWindowTokens }, () => {})}
+                      />
+                    )}
+                  <div className="flex shrink-0 items-center gap-2">
                     {leadingActions}
                     <PrimaryButton
                       type="submit"
@@ -891,11 +908,19 @@ export default function ThreadComposer ({
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}
-                    {stopButton}
-                    </div>
                   </div>
                 </div>
-              ) : null}
+                {visiblePendingUserInputRequest ? (
+                  <div
+                    ref={setQuestionnaireSubmitTarget}
+                    aria-hidden={!isQuestionnairePanelActive}
+                    className={`${actionClusterClassName} flex items-center justify-end gap-2`}
+                    data-active={isQuestionnairePanelActive ? "true" : "false"}
+                    inert={!isQuestionnairePanelActive}
+                  />
+                ) : null}
+              </div>
+              {stopButton}
             </div>
           </div>
         </div>

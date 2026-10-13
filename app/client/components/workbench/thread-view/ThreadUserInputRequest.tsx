@@ -6,6 +6,7 @@
 "use client";
 
 import { useMemo, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type {
@@ -81,13 +82,10 @@ function isSingleChoiceQuestion (
 }
 
 type InteractiveThreadUserInputRequestProps = {
-  actions?: ReactNode;
   draft: WorkbenchQuestionnaireDraft | null;
   highlightSources?: InlineMentionHighlightSources;
   knownSkills?: WorkbenchSkillSummary[];
-  leadingActions?: ReactNode;
   mode: "live";
-  onActionsHoverChange?: (hovered: boolean) => void;
   onDraftChange: (update: DraftUpdate<WorkbenchQuestionnaireDraft>) => Promise<WorkbenchQuestionnaireDraft> | WorkbenchQuestionnaireDraft;
   onDraftClear: () => Promise<void> | void;
   onSubmit: (
@@ -100,6 +98,8 @@ type InteractiveThreadUserInputRequestProps = {
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   request: WorkbenchUserInputRequest;
   spellCheck: boolean;
+  /** Host action row that receives the full layout's submit control instead of an inline row. */
+  submitTarget?: HTMLElement | null;
 };
 
 type HistoryThreadUserInputRequestProps = {
@@ -677,20 +677,10 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         ) : null}
       </div>
 
-      {interactiveProps && (!compact || interactiveProps.leadingActions || interactiveProps.actions) ? (
-        <div
-          className="thread-user-input-request-actions flex flex-wrap items-center justify-between gap-3"
-          onPointerEnter={() => interactiveProps.onActionsHoverChange?.(true)}
-          onPointerLeave={() => interactiveProps.onActionsHoverChange?.(false)}
-        >
-          <div className="flex items-center gap-2">
-            {interactiveProps?.leadingActions}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            {!compact && !useQuickResponseLayout ? renderSubmitButton() : null}
-            {interactiveProps?.actions}
-          </div>
-        </div>
+      {interactiveProps && !compact && !useQuickResponseLayout ? (
+        interactiveProps.submitTarget
+          ? createPortal(renderSubmitButton(), interactiveProps.submitTarget)
+          : <div className="flex justify-end">{renderSubmitButton()}</div>
       ) : null}
 
       {interactiveProps && error ? (
