@@ -137,6 +137,7 @@ export default function ThreadComposer ({
   sendLabel = "Send",
   surface = "card",
   stickyMode = false,
+  bottomUi,
   leadingActions,
   trailingActions,
   threadComposerDraft,
@@ -182,6 +183,7 @@ export default function ThreadComposer ({
   sendLabel?: string;
   surface?: "bare" | "card";
   stickyMode?: boolean;
+  bottomUi?: StickyComposerSurface.BottomUi;
   leadingActions?: ReactNode;
   trailingActions?: ReactNode;
   threadComposerDraft: WorkbenchComposerInputDraft | null;
@@ -904,6 +906,7 @@ export default function ThreadComposer ({
   );
   const composerContent = stickyMode ? (
     <StickyComposerSurface
+      bottomUi={bottomUi}
       collapseLabel="Collapse composer"
       collapsed={isStickyComposerCollapsed}
       collapsedAccessory={collapsedAttachmentPreviews.length ? (

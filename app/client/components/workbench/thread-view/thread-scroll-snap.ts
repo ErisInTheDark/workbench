@@ -6,8 +6,8 @@
  * - ThreadScrollProximity: whether the viewport is inside its stronger bottom snap zone.
  * - resolveThreadScrollDirection: change direction only for user-owned scroll movement.
  * - resolveThreadTouchScrollDirection: translate finger travel into viewport direction.
- * - resolveThreadScrollProximity: classify remaining distance from the normal-flow bottom.
- * - isThreadScrollAtEnd: identify the normal-flow bottom boundary.
+ * - resolveThreadScrollProximity: classify remaining distance from the registered end.
+ * - isThreadScrollAtEnd: identify the end boundary including optional sticky clearance.
  * - didThreadScrollReattach: distinguish a bottom return from remaining attached.
  */
 
@@ -18,6 +18,7 @@ export interface ThreadScrollMetrics {
   readonly clientHeight: number;
   readonly scrollHeight: number;
   readonly scrollTop: number;
+  readonly endOffsetPx?: number;
 }
 
 export function getInitialThreadScrollTop(hasEndTarget: boolean, scrollHeight: number) {
@@ -26,8 +27,8 @@ export function getInitialThreadScrollTop(hasEndTarget: boolean, scrollHeight: n
 
 const THREAD_SCROLL_END_TOLERANCE_PX = 1;
 
-function getMaximumScrollTop(metrics: ThreadScrollMetrics) {
-  return Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+function getEndScrollTop(metrics: ThreadScrollMetrics) {
+  return Math.max(0, metrics.scrollHeight - metrics.clientHeight - (metrics.endOffsetPx ?? 0));
 }
 
 export function resolveThreadScrollDirection(
@@ -62,7 +63,7 @@ export function isThreadScrollAtEnd(
   metrics: ThreadScrollMetrics,
   tolerancePx = THREAD_SCROLL_END_TOLERANCE_PX,
 ) {
-  return getMaximumScrollTop(metrics) - metrics.scrollTop <= tolerancePx;
+  return getEndScrollTop(metrics) - metrics.scrollTop <= tolerancePx;
 }
 
 export function didThreadScrollReattach(wasAtEnd: boolean, metrics: ThreadScrollMetrics) {

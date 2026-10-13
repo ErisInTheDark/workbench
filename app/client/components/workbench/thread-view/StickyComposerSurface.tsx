@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default StickyComposerSurface: render one sticky host with geometry-owned stuck state and flow reservation.
+ * - default StickyComposerSurface: own independent composer and optional bottom-ui sticky layers with flow reserves.
+ * - StickyComposerSurface.BottomUi: surrounding thread chrome and its existing bottom spacing.
  */
 "use client";
 
@@ -66,7 +67,7 @@ const collapsedClassName = `
   motion-reduce:(animate-none transition-none)
 `;
 
-export default function StickyComposerSurface({
+function StickyComposerSurface({
   children,
   collapseLabel,
   collapsed,
@@ -76,6 +77,7 @@ export default function StickyComposerSurface({
   collapsedPreviewKind,
   getViewport,
   onCollapsedChange,
+  bottomUi,
 }: {
   children: ReactNode;
   collapseLabel: string;
@@ -86,10 +88,14 @@ export default function StickyComposerSurface({
   collapsedPreviewKind?: string;
   getViewport?: () => HTMLDivElement | null;
   onCollapsedChange(collapsed: boolean): void;
+  bottomUi?: StickyComposerSurface.BottomUi;
 }) {
   const flowReserverRef = useRef<HTMLDivElement>(null);
   const originMarkerRef = useRef<HTMLSpanElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const bottomReserveRef = useRef<HTMLDivElement>(null);
+  const hasBottomUi = Boolean(bottomUi);
   const threadScrollViewport = useThreadScrollViewportContext();
   const expand = () => onCollapsedChange(false);
   const handleCollapsedKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -100,6 +106,7 @@ export default function StickyComposerSurface({
   };
   const collapseControlLabel = collapsed ? collapsedLabel : collapseLabel;
 
+  // Child layout effects run before the ancestor viewport ref is attached.
   useEffect(() => {
     const flowReserver = flowReserverRef.current;
     const originMarker = originMarkerRef.current;
@@ -108,18 +115,32 @@ export default function StickyComposerSurface({
     if (!flowReserver || !originMarker || !shell || !viewport) return;
 
     const syncFlowReserver = () => {
+      const bottom = bottomRef.current;
+      const bottomReserve = bottomReserveRef.current;
+      const docked = Boolean(bottom
+        && viewport.dataset.threadScrollDirection !== "up"
+        && viewport.dataset.threadScrollProximity === "near");
+      if (bottom) bottom.dataset.docked = String(docked);
       const shellStyle = getComputedStyle(shell);
       const marginBlockEnd = Number.parseFloat(shellStyle.marginBottom);
       const shellRect = shell.getBoundingClientRect();
-      const stuck = shellRect.bottom + marginBlockEnd
+      const stuck = !docked && shellRect.bottom + (bottom ? 0 : marginBlockEnd)
         < flowReserver.getBoundingClientRect().bottom - 0.5;
       const stuckValue = stuck ? "true" : "false";
       if (shell.dataset.stickyStuck !== stuckValue) {
         shell.dataset.stickyStuck = stuckValue;
       }
-      if (stuck) return;
-      const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
-      flowReserver.style.height = `${shellRect.height + marginBlockStart + marginBlockEnd}px`;
+      if (!stuck) {
+        const marginBlockStart = Number.parseFloat(shellStyle.marginTop);
+        flowReserver.style.height = `${shellRect.height + marginBlockStart + (bottom ? 0 : marginBlockEnd)}px`;
+      }
+      if (bottom && bottomReserve) {
+        const rect = bottom.getBoundingClientRect();
+        const footer = rect.bottom - flowReserver.getBoundingClientRect().bottom;
+        shell.style.marginBottom = `${footer}px`;
+        shell.style.bottom = docked ? `${footer}px` : "";
+        bottomReserve.style.height = `calc(${rect.height}px + 1rem)`;
+      }
     };
     syncFlowReserver();
 
@@ -131,21 +152,53 @@ export default function StickyComposerSurface({
     const resizeObserver = new ResizeObserver(syncFlowReserver);
     intersectionObserver.observe(originMarker);
     resizeObserver.observe(shell);
+    if (bottomRef.current) resizeObserver.observe(bottomRef.current);
+    const attributes = new MutationObserver(syncFlowReserver);
+    attributes.observe(viewport, { attributes: true, attributeFilter: ["data-thread-scroll-direction", "data-thread-scroll-proximity"] });
     viewport.addEventListener("scroll", syncFlowReserver, { passive: true });
     return () => {
       intersectionObserver.disconnect();
       resizeObserver.disconnect();
+      attributes.disconnect();
       viewport.removeEventListener("scroll", syncFlowReserver);
       flowReserver.style.height = "";
+      shell.style.marginBottom = "";
+      shell.style.bottom = "";
       delete shell.dataset.stickyStuck;
     };
-  }, [getViewport, threadScrollViewport]);
+  }, [hasBottomUi, getViewport, threadScrollViewport]);
+
+  const reserve = (
+    <div
+      ref={flowReserverRef}
+      aria-hidden="true"
+      className="pointer-events-none relative col-start-1 row-start-2 h-0 w-full shrink-0 self-end"
+    >
+      <span ref={originMarkerRef} className="absolute bottom-0 h-px w-full" />
+    </div>
+  );
 
   return (
     <>
+      {bottomUi ? <>
+        <div ref={bottomReserveRef} aria-hidden="true" className="pointer-events-none col-start-1 row-start-2" />
+        <div
+          ref={bottomRef}
+          data-thread-bottom-ui="true"
+          className={`relative col-start-1 row-start-2 min-w-0 self-end data-[docked=true]:sticky bottom-0 ${bottomUi.paddingClassName}`}
+        >
+          {bottomUi.before}
+          {reserve}
+          {bottomUi.after}
+        </div>
+      </> : null}
       <div
         ref={shellRef}
-        className="sticky bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-20 col-start-1 row-start-2 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80 [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)] coarse-touch:bottom-0"
+        className={`
+          sticky bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] z-20 col-start-1 mt-6 min-w-0 shrink-0 self-end rounded-[1.15rem] bg-canvas/80
+          [--fg-bg:var(--app-bg-solid)] [--sticky-composer-motion-duration:220ms] [--sticky-composer-motion-ease:cubic-bezier(0.16,1,0.3,1)] coarse-touch:bottom-0
+          ${bottomUi ? "row-start-1 row-span-2" : "row-start-2"}
+        `}
       >
         <div
           className={stickySurfaceClassName}
@@ -186,16 +239,17 @@ export default function StickyComposerSurface({
           </div>
         </div>
       </div>
-      <div
-        ref={flowReserverRef}
-        aria-hidden="true"
-        className="pointer-events-none relative col-start-1 row-start-2 h-0 w-full shrink-0 self-end"
-      >
-        <span
-          ref={originMarkerRef}
-          className="absolute bottom-0 h-px w-full"
-        />
-      </div>
+      {!bottomUi ? reserve : null}
     </>
   );
 }
+
+namespace StickyComposerSurface {
+  export interface BottomUi {
+    before: ReactNode;
+    after: ReactNode;
+    paddingClassName: string;
+  }
+}
+
+export default StickyComposerSurface;

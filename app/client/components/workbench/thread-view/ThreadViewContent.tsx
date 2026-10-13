@@ -962,9 +962,12 @@ export default memo(function ThreadViewContent ({
   ) : null;
   const approvalNotice = approvalMode === "auto" && approvalReviewer.ready === false && approvalModeSettings
     ? <ApprovalReviewerSetupNotice onOpenSettings={approvalModeSettings.onOpenSettings} /> : null;
-  const composer = activeThread ? (
+  const bottomPaddingClassName = mobileFullBleed
+    ? "pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]"
+    : contained ? "pb-8" : "pb-16";
+  const renderComposer = (bottomBefore?: ReactNode) => activeThread ? (
     <ThreadComposer
-      autoFocusOnEntry={isFocused && entryMotionOwnerRef.current.initialThreadId === activeThreadId}
+      autoFocusOnEntry={isFocused && entryMotionOwnerRef.current?.initialThreadId === activeThreadId}
       onDraftSessionChange={onDraftSessionChange}
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
@@ -990,6 +993,11 @@ export default memo(function ThreadViewContent ({
       workspaceRoots={workspaceFileLinkRoots}
       rateLimits={rateLimits}
       stickyMode={!showDraftComposer}
+      bottomUi={!showDraftComposer ? {
+        before: bottomBefore,
+        after: composerStatus,
+        paddingClassName: bottomPaddingClassName,
+      } : undefined}
       threadComposerDraft={activeThread.isDraft
         ? threadComposerDraft
         : threadComposerDraftsByThreadId[activeThread.id] ?? null}
@@ -1085,8 +1093,9 @@ export default memo(function ThreadViewContent ({
             "mx-auto min-h-full w-full min-w-0 max-w-content overflow-x-clip md:overflow-x-visible",
             showDraftComposer
               ? "flex flex-col"
-              : "grid grid-cols-1 grid-rows-[1fr auto auto]",
-            mobileFullBleed ? "px-5 pb-[min(0.75rem,var(--workbench-safe-area-bottom,0px))]" : contained ? "pb-8" : "pb-16",
+              : "grid grid-cols-1 grid-rows-[1fr auto]",
+            mobileFullBleed && "px-5",
+            showDraftComposer && bottomPaddingClassName,
           )}
           onClick={handleThreadViewClick}
           style={{ fontSize: `${fontSizeRem}rem` }}
@@ -1174,6 +1183,18 @@ export default memo(function ThreadViewContent ({
           )}
           </>}
         </div>
+        </div>
+        {activeThread ? (
+          <div className={showDraftComposer
+            ? joinClasses("flex w-full flex-1 items-center", contained && "py-4")
+            : "contents"}>
+            <div className={showDraftComposer ? "w-full" : "contents"}>
+              {showDraftComposer ? <header className="pb-4">
+                <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+                  Create new thread
+                </h2>
+              </header> : null}
+              {renderComposer(<>
         {activeThread && transcriptCanRender && !isMessageBoardOpen && (liveActivityView || !isDraftThreadView) ? (
           <ThreadStatusArea
             addressedFeedback={active.head?.addressedFeedback ?? []}
@@ -1222,24 +1243,7 @@ export default memo(function ThreadViewContent ({
         {agentTabs ? (
           <div className="mt-6">{agentTabs}</div>
         ) : null}
-          </div>
-        {activeThread ? (
-          <div className={showDraftComposer ? joinClasses(
-            "flex w-full flex-1 items-center",
-            contained ? "py-4" : null,
-          ) : "contents"}>
-            <div className={showDraftComposer ? "w-full" : "contents"}>
-            {showDraftComposer ? <header className="pb-4">
-              <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
-                Create new thread
-              </h2>
-            </header> : null}
-            {composer}
-            {!showDraftComposer && composerStatus ? (
-              <div className="col-start-1 row-start-3">
-                {composerStatus}
-              </div>
-            ) : null}
+              </>)}
             </div>
           </div>
         ) : null}
@@ -1249,6 +1253,7 @@ export default memo(function ThreadViewContent ({
           aria-hidden="true"
           className={joinClasses(
             "h-px w-full shrink-0",
+            !showDraftComposer && "relative bottom-4",
             initialThreadContentReady && "[scroll-margin-block-start:var(--thread-scroll-snap-distance)] snap-end",
           )}
           data-thread-scroll-end={initialThreadContentReady ? "true" : undefined}

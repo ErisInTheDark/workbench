@@ -63,3 +63,13 @@ test("bottom reattachment requires reaching the end after leaving it", () => {
   assert.equal(didThreadScrollReattach(true, end), false);
   assert.equal(didThreadScrollReattach(false, { ...end, scrollTop: 800 }), false);
 });
+
+test("an inset end target attaches without reaching the physical scroll limit", () => {
+  const end = { scrollTop: 884, scrollHeight: 1000, clientHeight: 100, endOffsetPx: 16 };
+  assert.equal(isThreadScrollAtEnd(end), true);
+  assert.equal(resolveThreadScrollProximity(end), "near");
+  assert.equal(didThreadScrollReattach(false, end), true);
+  assert.equal(isThreadScrollAtEnd({ ...end, scrollTop: 882 }), false);
+  assert.equal(isThreadScrollAtEnd({ ...end, scrollTop: 900 }), true);
+  assert.equal(isThreadScrollAtEnd({ ...end, endOffsetPx: 0 }), false);
+});

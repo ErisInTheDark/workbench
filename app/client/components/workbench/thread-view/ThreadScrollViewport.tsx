@@ -68,11 +68,15 @@ function assignRef<T> (ref: ForwardedRef<T>, value: T | null) {
   if (ref) ref.current = value;
 }
 
-function readScrollMetrics (viewport: HTMLDivElement): ThreadScrollMetrics {
+function readScrollMetrics (viewport: HTMLDivElement, endTarget: HTMLElement | null): ThreadScrollMetrics {
   return {
     clientHeight: viewport.clientHeight,
     scrollHeight: viewport.scrollHeight,
     scrollTop: viewport.scrollTop,
+    endOffsetPx: endTarget
+      ? Math.max(0, viewport.scrollHeight - viewport.scrollTop
+        - (endTarget.getBoundingClientRect().bottom - viewport.getBoundingClientRect().top))
+      : 0,
   };
 }
 
@@ -133,7 +137,7 @@ function ActiveThreadScrollViewport ({
   const visibility = useRef<ThreadViewportVisibilityController | null>(null);
   const progressiveWindowStartsRef = useRef(new Map<string, string>());
   const syncScrollProximity = useCallback((viewport: HTMLDivElement): ThreadScrollProximity => {
-    const metrics = readScrollMetrics(viewport);
+    const metrics = readScrollMetrics(viewport, endTargetRef.current);
     const reattached = didThreadScrollReattach(wasAtEndRef.current, metrics);
     wasAtEndRef.current = isThreadScrollAtEnd(metrics);
     const proximity = resolveThreadScrollProximity(metrics);
@@ -200,7 +204,10 @@ function ActiveThreadScrollViewport ({
       viewport.scrollHeight,
     );
     if (scrollTop === null) return;
-    viewport.scrollTop = scrollTop;
+    viewport.scrollTop = endTarget
+      ? viewport.scrollTop + endTarget.getBoundingClientRect().bottom
+        - viewport.getBoundingClientRect().top - viewport.clientHeight
+      : scrollTop;
     previousScrollTopRef.current = viewport.scrollTop;
     syncScrollProximity(viewport);
   }, [initialEndPlacement, syncScrollProximity]);
