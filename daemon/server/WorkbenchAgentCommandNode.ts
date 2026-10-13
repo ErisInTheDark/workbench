@@ -309,7 +309,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       getReloadScopeCatalog: () => reloadDirt.getCatalog(),
       resolveCaller: async (threadId, cwd, harness) => {
         const { identity, binding } = await nativeTarget(threadId, cwd, harness);
-        return { threadId: identity.threadId, nativeThreadId: binding.nativeThreadId, harness: WorkbenchHarnessSchema.parse(binding.harness) };
+        const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
+        return {
+          threadId: identity.threadId,
+          nativeThreadId: binding.nativeThreadId,
+          harness: WorkbenchHarnessSchema.parse(binding.harness),
+          subagent: entry?.entryKind === "subagent",
+        };
       },
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
       requestManagedThread: async (request) => request.method?.startsWith("workbench/thread/")

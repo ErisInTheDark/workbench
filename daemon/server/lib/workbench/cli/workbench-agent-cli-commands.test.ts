@@ -28,6 +28,7 @@ import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-recei
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 const execFileAsync = promisify(execFile);
 const hookWorkbenchThreadId = "00000000-0000-4000-8000-000000000101";
@@ -325,6 +326,62 @@ test("canonical command descriptors are immutable and unique", () => {
   assert.equal(Object.isFrozen(descriptors[0]), true);
   assert.equal(Object.isFrozen(descriptors[0]?.words), true);
   assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
+});
+
+test("CLI help and dispatch enforce every command audience", async () => {
+  const commands = new Map(listWorkbenchAgentCommands().map(definition => [definition.words.join("_"), definition]));
+  const childContext = { callerHarness: "codex", callerThreadId: "child", cwd: "C:/workspace", subagent: true };
+  const argumentsByTool = new Map<string, string[]>([
+    ["git_arc_propose", ["--title", "change files"]],
+    ["subagent_create", [
+      "--profile", "profile", "--name", "mira", "--title", "inspect", "--message", "inspect",
+      "--user-visible-simple-version", "Inspect the requested area.",
+    ]],
+    ["subagent_list", []],
+    ["subagent_profiles", []],
+    ["subagent_settle", ["--id", "child"]],
+    ["subagent_stop", ["--id", "child"]],
+    ["subagent_wait", ["--id", "child"]],
+    ["task_get", []],
+    ["task_set", ["--title", "change title"]],
+  ]);
+  assert.deepEqual([...WORKBENCH_PARENT_ONLY_TOOLS].sort(), [...argumentsByTool.keys()].sort());
+  for (const tool of WORKBENCH_PARENT_ONLY_TOOLS) {
+    const definition = commands.get(tool)!;
+    const direct = await parseWorkbenchAgentCliCommand([...definition.words, ...argumentsByTool.get(tool)!], childContext);
+    assert.equal(direct.kind, "error", `${tool} should reject direct child invocation`);
+    if (direct.kind === "error") assert.match(direct.error, /Unsupported wb command/u);
+    const help = await parseWorkbenchAgentCliCommand([...definition.words, "--help"], childContext);
+    assert.equal(help.kind, "help");
+    if (help.kind === "help") assert.doesNotMatch(help.help, new RegExp(definition.usage.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+  }
+  const allowedChildCommands = new Map<string, string[]>([
+    ["message", ["--parent", "--message", "progress", "--user-visible-simple-version", "Shared progress."]],
+    ["message_wait", ["--thread", "parent"]],
+    ["subagent_dequeue", ["builds"]],
+    ["subagent_message", ["--parent", "--message", "progress", "--user-visible-simple-version", "Shared progress."]],
+    ["subagent_queue", ["builds", "--description", "run tests"]],
+  ]);
+  for (const [tool, args] of allowedChildCommands) {
+    const definition = commands.get(tool)!;
+    const direct = await parseWorkbenchAgentCliCommand([...definition.words, ...args], childContext);
+    assert.equal(direct.kind, "request", `${tool} should remain directly available to children`);
+  }
+
+  const wrongProvider = [
+    await parseWorkbenchAgentCliCommand(["rm", "claimed.txt"], { callerHarness: "codex", callerThreadId: "thread", cwd: "C:/workspace" }),
+    await parseWorkbenchAgentCliCommand(["thread", "compact", "--summary", "handoff"], { callerHarness: "claude", callerThreadId: "thread", cwd: "C:/workspace" }),
+  ];
+  for (const parsed of wrongProvider) {
+    assert.equal(parsed.kind, "error");
+    if (parsed.kind === "error") assert.match(parsed.error, /Unsupported wb command/u);
+  }
+  assert.equal((await parseWorkbenchAgentCliCommand(
+    ["rm", "claimed.txt"], { callerHarness: "claude", callerThreadId: "thread", cwd: "C:/workspace" },
+  )).kind, "request");
+  assert.equal((await parseWorkbenchAgentCliCommand(
+    ["thread", "compact", "--summary", "handoff"], { callerHarness: "opencode", callerThreadId: "thread", cwd: "C:/workspace" },
+  )).kind, "request");
 });
 
 test("cross-project feedback reads need the wb channel and are documented only at the Workbench root", async () => {

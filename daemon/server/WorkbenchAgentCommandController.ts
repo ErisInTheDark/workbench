@@ -27,7 +27,12 @@ interface WorkbenchAgentDirectPort {
   executeMessageWaitRequest?: (body: object, signal: AbortSignal, lifetimeSignal?: AbortSignal) => Promise<Response>;
   executeSubagentQueueRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeSkillRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
-  resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{ threadId: WorkbenchThreadId; nativeThreadId: NativeThreadId; harness: WorkbenchHarness }>;
+  resolveCaller?: (threadId: string, cwd: string, harness: string) => Promise<{
+    threadId: WorkbenchThreadId;
+    nativeThreadId: NativeThreadId;
+    harness: WorkbenchHarness;
+    subagent?: boolean;
+  }>;
   patchClaims?: (harness: string, input: { raw: string; callerThreadId: string | null }, signal: AbortSignal) => Promise<string>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
   executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -263,6 +268,7 @@ export default class WorkbenchAgentCommandController {
         cwd,
         reloadCatalog: this.direct.getReloadScopeCatalog?.() ?? [],
         projectRoot: this.direct.workbenchProjectRoot ?? null,
+        subagent: caller?.subagent ?? false,
         virtualRepos: this.direct.virtualReposAvailable?.() ?? false,
         workbenchOrigin,
       });

@@ -20,12 +20,14 @@ import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/dae
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
 import {
   getWorkbenchAgentCommandToolName,
-  isWorkbenchAgentCommandVisibleTo,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import { listWorkbenchInstructionTools, type WorkbenchInstructionTool } from "./lib/workbench/instructions/instruction-tool-reference";
-import { isWorkbenchToolVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
+import {
+  isWorkbenchCommandVisibleTo,
+  isWorkbenchToolVisibleTo,
+} from "workbench-shared/workbench/commands/workbench-tool-audience";
 import type { WorkbenchProviderCaller } from "./provider-execution";
 import {
   getWorkbenchShellAggregatedOutput,
@@ -237,9 +239,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const visible = new Map<string, WorkbenchAgentCommandDefinition>();
     for (const definition of this.listCommands()) {
       const name = getWorkbenchAgentCommandToolName(definition);
-      if (!isWorkbenchToolVisibleTo(name, scope.subagent)) continue;
+      if (!isWorkbenchCommandVisibleTo(name, {
+        harness: scope.provider,
+        harnesses: definition.harnesses,
+        subagent: scope.subagent,
+      })) continue;
       if (definition.hideFromMcp || (definition.managedThreadRootOnly && !scope.projectLocal)
-        || !isWorkbenchAgentCommandVisibleTo(definition, scope.provider)) continue;
+      ) continue;
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);
       visible.set(name, definition);

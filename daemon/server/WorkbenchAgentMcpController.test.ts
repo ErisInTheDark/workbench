@@ -10,7 +10,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
-import { isWorkbenchAgentCommandVisibleTo, type WorkbenchAgentCommandRequest } from "./lib/workbench/commands/workbench-agent-command-definition";
+import {
+  getWorkbenchAgentCommandToolName,
+  type WorkbenchAgentCommandRequest,
+} from "./lib/workbench/commands/workbench-agent-command-definition";
 import WorkbenchAgentMcpController, { type WorkbenchAgentMcpControllerOptions } from "./WorkbenchAgentMcpController";
 import CodexToolsController from "./CodexToolsController";
 import CodexShellController from "./CodexShellController";
@@ -21,7 +24,23 @@ import { WORKBENCH_SHELL_SANDBOX_CAPABILITY } from "./CodexShellController";
 import { parseGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import {
+  isWorkbenchCommandVisibleTo,
+  WORKBENCH_PARENT_ONLY_TOOLS,
+} from "workbench-shared/workbench/commands/workbench-tool-audience";
 import type { WorkbenchPreparedShell, WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "./provider-execution";
+
+const EXPECTED_PARENT_ONLY_TOOLS = [
+  "git_arc_propose",
+  "subagent_create",
+  "subagent_list",
+  "subagent_profiles",
+  "subagent_settle",
+  "subagent_stop",
+  "subagent_wait",
+  "task_get",
+  "task_set",
+] as const;
 
 /** A prepared shell whose run is opaque to the MCP layer; the injected `executeShell` supplies its result. */
 function preparedShell(cwd: string): WorkbenchPreparedShell {
@@ -478,10 +497,19 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter((definition) => (
-      !definition.hideFromMcp && !definition.managedThreadRootOnly && isWorkbenchAgentCommandVisibleTo(definition, "codex")
+      !definition.hideFromMcp && !definition.managedThreadRootOnly
+      && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(definition), {
+        harness: "codex",
+        harnesses: definition.harnesses,
+        subagent: false,
+      })
     ));
     const hiddenFromCodex = new Set(listWorkbenchAgentCommands(reloadCatalog, "agent")
-      .filter((definition) => !isWorkbenchAgentCommandVisibleTo(definition, "codex"))
+      .filter((definition) => !isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(definition), {
+        harness: "codex",
+        harnesses: definition.harnesses,
+        subagent: false,
+      }))
       .map((definition) => definition.words.join("_")));
     assert.equal(inventory.tools.length, eligible.length + 1);
     assert.ok(client.getServerCapabilities()?.experimental?.[WORKBENCH_SHELL_SANDBOX_CAPABILITY]);
@@ -766,7 +794,8 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   }
 });
 
-test("child catalogues omit proposals while parent catalogues retain them", async () => {
+test("child catalogues omit every parent-only tool while retaining child coordination", async () => {
+  assert.deepEqual([...WORKBENCH_PARENT_ONLY_TOOLS].sort(), [...EXPECTED_PARENT_ONLY_TOOLS].sort());
   const controller = codexController({
     executeCommand: async () => Response.json({}),
     daemonOrigin: "http://127.0.0.1:4500",
@@ -780,16 +809,22 @@ test("child catalogues omit proposals while parent catalogues retain them", asyn
   childUrl.searchParams.set("subagent", "true");
   const child = await connectClient(childUrl);
   try {
-    assert.ok((await parent.listTools()).tools.some(tool => tool.name === "git_arc_propose"));
-    assert.equal((await child.listTools()).tools.some(tool => tool.name === "git_arc_propose"), false);
-    assert.ok((await child.listTools()).tools.some(tool => tool.name === "git_arc_claims"));
+    const parentTools = new Set((await parent.listTools()).tools.map(({ name }) => name));
+    const childTools = new Set((await child.listTools()).tools.map(({ name }) => name));
+    for (const tool of EXPECTED_PARENT_ONLY_TOOLS) {
+      assert.equal(parentTools.has(tool), true, `${tool} should remain available to parents`);
+      assert.equal(childTools.has(tool), false, `${tool} should be absent for children`);
+    }
+    for (const tool of ["git_arc_claims", "message", "message_wait", "subagent_dequeue", "subagent_message", "subagent_queue"]) {
+      assert.equal(childTools.has(tool), true, `${tool} should remain available to children`);
+    }
   } finally {
     await Promise.all([parent.close(), child.close()]);
     await server.close();
   }
 });
 
-test("a stale proposal tool cannot dispatch for a canonical child caller", async () => {
+test("stale parent-only tools cannot dispatch for a canonical child caller", async () => {
   let dispatches = 0;
   const controller = codexController({
     ...{ isSubagentCaller: async () => true },
@@ -800,10 +835,26 @@ test("a stale proposal tool cannot dispatch for a canonical child caller", async
   const server = await startController(controller);
   const client = await connectClient(server.url);
   try {
-    const result = await client.callTool({
-      name: "git_arc_propose", arguments: { title: "change files" }, _meta: { threadId: "child" },
-    });
-    assert.equal(result.isError, true);
+    const argumentsByTool: Record<(typeof EXPECTED_PARENT_ONLY_TOOLS)[number], Record<string, unknown>> = {
+      git_arc_propose: { title: "change files" },
+      subagent_create: {
+        message: "inspect", name: "mira", profileId: "profile", title: "inspect",
+        userVisibleSimpleVersion: "Inspect the requested area.",
+      },
+      subagent_list: {},
+      subagent_profiles: {},
+      subagent_settle: { threadIds: ["child"] },
+      subagent_stop: { threadIds: ["child"] },
+      subagent_wait: { threadIds: ["child"] },
+      task_get: {},
+      task_set: { title: "change title" },
+    };
+    for (const name of EXPECTED_PARENT_ONLY_TOOLS) {
+      const result = await client.callTool({
+        name, arguments: argumentsByTool[name], _meta: { threadId: "child" },
+      });
+      assert.equal(result.isError, true, `${name} should reject a canonical child caller`);
+    }
     assert.equal(dispatches, 0);
   } finally {
     await client.close();

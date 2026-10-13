@@ -560,6 +560,61 @@ test("dispatches native subagent commands directly without waiting on Next fetch
   }
 });
 
+test("CLI audience follows canonical child identity before dispatch", async () => {
+  const dispatched: string[] = [];
+  const controller = new WorkbenchAgentCommandController(
+    "http://127.0.0.1:4500",
+    {
+      ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+      resolveCaller: async threadId => ({
+        harness: "codex",
+        nativeThreadId: NativeThreadIdSchema.parse(`native-${threadId}`),
+        subagent: threadId === "child",
+        threadId: WorkbenchThreadIdSchema.parse(threadId),
+      } as never),
+      executeGitArcRequest: async () => {
+        dispatched.push("git");
+        return Response.json({ proposalId: "proposal" });
+      },
+      requestManagedThread: async request => {
+        dispatched.push(String(request.method));
+        return { id: request.id ?? null, result: {} };
+      },
+    },
+    async () => { throw new Error("unexpected internal fetch"); },
+    undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }),
+  );
+  const server = await startController(controller);
+  try {
+    const run = async (threadId: string, args: string[]) => {
+      const body = new URLSearchParams(agentCommandBody(args));
+      body.set("callerThreadId", threadId);
+      body.set("callerHarness", "codex");
+      return await fetch(`${server.origin}/daemon/agent-command`, {
+        body,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      });
+    };
+    for (const args of [
+      ["git", "arc", "propose", "--title", "child proposal"],
+      ["task", "get"],
+      ["subagent", "list"],
+    ]) {
+      const response = await run("child", args);
+      assert.equal(response.status, 400);
+      assert.match(await response.text(), /Unsupported wb command/u);
+    }
+    assert.deepEqual(dispatched, []);
+
+    const parent = await run("parent", ["git", "arc", "propose", "--title", "parent proposal"]);
+    assert.equal(parent.status, 200);
+    assert.deepEqual(dispatched, ["git"]);
+  } finally {
+    await server.close();
+  }
+});
+
 test("skill command returns its daemon-owned plain text without an envelope", async () => {
   const controller = new WorkbenchAgentCommandController(
     "http://127.0.0.1:4500",

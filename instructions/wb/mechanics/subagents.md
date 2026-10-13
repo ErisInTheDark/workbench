@@ -1,4 +1,4 @@
-<docs tools="subagent_create subagent_list subagent_profiles subagent_stop subagent_settle subagent_wait subagent_queue subagent_dequeue">
+<docs tools="subagent_create subagent_list subagent_profiles subagent_stop subagent_settle subagent_wait">
 ## Subagents
 
 Subagents require **Feature Activation**. 
@@ -37,23 +37,6 @@ Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do 
 DO NOT USE <tool id="message_wait" /> TO WAIT FOR SUBAGENTS; IT MISSES SUBAGENT EVENTS.
 </docs>
 
-<docs tools="subagent_queue subagent_dequeue">
-### queues
-
-Use queues instead of messages to order contended work (builds, test suites, shared files).
-
-<docs tools="subagent_queue">
-- Declare with <tool id="subagent_queue" /> `{ queue }` (also shows status); give children the exact name and what work needs it. You may join too; children reference you as `parent`.
-</docs>
-<docs tools="subagent_dequeue">
-- Holds last until <tool id="subagent_dequeue" />. A holder's turn end, task completion or block pauses the queue; resolve by messaging the child or kicking with <tool id="subagent_dequeue" /> `{ queue, name }`. Your own inactivity freezes all your queues.
-</docs>
-<docs tools="subagent_queue">
-- Reorder with <tool id="subagent_queue" /> `{ queue, name, after | before }`.
-</docs>
-- Queues order agents, not processes: never queue work a process lock already serializes.
-</docs>
-
 ### notes
 
 <docs tools="subagent_create">
@@ -64,4 +47,16 @@ Use queues instead of messages to order contended work (builds, test suites, sha
 - A thread may operate only on direct children it owns. Sideways (except sibling messages) and grandchild access fails closed.
 - Do not blindly trust subagent output. The parent owns verification and scope control.
 - When orchestrating reviews, prevent infinite review loops and scope creep. The parent owns the acceptance threshold.
+</docs>
+
+<docs tools="subagent_queue subagent_dequeue">
+## subagent queues
+
+Use queues instead of messages to order contended work.
+
+- A parent declares or inspects a queue with <tool id="subagent_queue" />. A child joins or resumes with its assigned description.
+- `after` and `before` place the caller. Only a parent may move another named member.
+- <tool id="subagent_dequeue" /> releases the caller's hold. Only a parent may remove another named member.
+- Holds last until dequeue. Queue work pauses if its holder becomes inactive.
+- Queues order agents, not processes.
 </docs>

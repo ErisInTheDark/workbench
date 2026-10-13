@@ -13,11 +13,12 @@ import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-comma
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
 import {
-  isWorkbenchAgentCommandVisibleTo,
+  getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
   type WorkbenchAgentCommandRequest,
   type WorkbenchAgentCommandResponseKind,
 } from "../commands/workbench-agent-command-definition";
+import { isWorkbenchCommandVisibleTo } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 export type WorkbenchAgentCliRequest = WorkbenchAgentCommandRequest;
 export type WorkbenchAgentCliResponseKind = WorkbenchAgentCommandResponseKind;
@@ -334,6 +335,7 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin = process.env.WORKBENCH_ORIGIN?.trim() || null,
     reloadCatalog = [],
     projectRoot = null,
+    subagent = false,
     virtualRepos = false,
   }: {
     callerHarness?: string;
@@ -342,6 +344,8 @@ export async function parseWorkbenchAgentCliCommand(
     workbenchOrigin?: string | null;
     reloadCatalog?: readonly DaemonReloadScopeDescriptor[];
     projectRoot?: string | null;
+    /** Whether the canonical managed caller is a subagent. */
+    subagent?: boolean;
     /** Whether the selected daemon detected its virtual repository runtime. */
     virtualRepos?: boolean;
   } = {},
@@ -353,15 +357,19 @@ export async function parseWorkbenchAgentCliCommand(
       : resolvedCwd === path.resolve(projectRoot)
   );
   const commands = listWorkbenchAgentCommands(reloadCatalog, "cli", { virtualRepos }).filter((command) => (
-    !command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot
+    (!command.managedThreadRootOnly || callerThreadId === null || isWorkbenchRoot)
+    && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(command), {
+      harness: callerHarness,
+      harnesses: command.harnesses,
+      subagent,
+    })
   ));
   const isLegacyCheckpointCommand = (argv[0] === "git" && argv[1] === "checkpoint") || argv[0] === "checkpoint";
   if (isLegacyCheckpointCommand) return { help: LEGACY_CHECKPOINT_MIGRATION_GUIDE, kind: "help" };
   const workbenchArgs = argsBeforeTrailingSeparator(argv);
   if (!argv.length || workbenchArgs.includes("--help") || argv[0] === "help") {
     const group = matchHelpGroup(helpPath(workbenchArgs));
-    const visible = commands.filter((command) => isWorkbenchAgentCommandVisibleTo(command, callerHarness));
-    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), visible, reloadCatalog, isWorkbenchRoot) : renderRootHelp(visible, isWorkbenchRoot), kind: "help" };
+    return { help: group ? renderGroupHelp(group, argv.includes("--unsafe"), commands, reloadCatalog, isWorkbenchRoot) : renderRootHelp(commands, isWorkbenchRoot), kind: "help" };
   }
   const matched = commands.flatMap((definition) => (
     [definition.words, ...(definition.aliases ?? [])].map((words) => ({ definition, words }))

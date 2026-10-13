@@ -8,7 +8,6 @@
  * - WorkbenchLocalCapability: a local capability setting a command can require.
  * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
- * - isWorkbenchAgentCommandVisibleTo: whether a provider sees a command in MCP registration and CLI help.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
  * - createWorkbenchAgentMcpRuntimeReloadInterruption: private reload re-entry signal.
  * - isWorkbenchAgentMcpRuntimeReloadInterruption: recognise cross-generation reload re-entry.
@@ -190,10 +189,6 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
 
 export function getWorkbenchAgentCommandToolName(definition: Pick<WorkbenchAgentCommandDefinition, "words">) {
   return definition.words.join("_");
-}
-
-export function isWorkbenchAgentCommandVisibleTo(definition: Pick<WorkbenchAgentCommandDefinition, "harnesses">, harness: string) {
-  return !definition.harnesses || definition.harnesses.includes(harness);
 }
 
 export function postWorkbenchAgentCommand(

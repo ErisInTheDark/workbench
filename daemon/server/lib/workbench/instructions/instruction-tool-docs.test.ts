@@ -93,3 +93,27 @@ test("repository instructions render without selector warnings for root and suba
   }
   assert.deepEqual(warnings, []);
 });
+
+test("subagent instructions retain coordination without parent-only lifecycle guidance", async () => {
+  const source = (await readWorkbenchInstructionSources(instructionRoot))
+    .find(({ relativePath }) => relativePath === "wb/mechanics/subagents.md");
+  assert.ok(source);
+  const visible = catalogue.filter(({ id }) => isWorkbenchToolVisibleTo(id, true));
+  const output = filterWorkbenchInstructionContent(source.content, {
+    facts: { workspace: new Set(["project"]) },
+    field: source.relativePath,
+    harness: "codex",
+    model: null,
+    onWarning: () => {},
+    resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, "codex", visible),
+    servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
+    shell: "pwsh",
+  });
+  assert.match(output, /subagent queues/iu);
+  assert.match(output, /subagent_queue/u);
+  assert.match(output, /subagent_dequeue/u);
+  assert.doesNotMatch(output, /managing subagents|lists unsettled direct children|creates and starts a direct child|parent owns verification/iu);
+  for (const tool of ["subagent_create", "subagent_list", "subagent_profiles", "subagent_settle", "subagent_stop", "subagent_wait"]) {
+    assert.doesNotMatch(output, new RegExp(tool, "u"));
+  }
+});
