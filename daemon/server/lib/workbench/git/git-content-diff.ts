@@ -2,14 +2,11 @@
  * Exports:
  * - diffGitContents: compare captured text without mutating repository state.
  */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
-
-const execute = promisify(execFile);
+import { gitProcesses, GitProcessError } from "./GitProcessHost";
 
 export async function diffGitContents(before: string, after: string, options: {
   signal?: AbortSignal;
@@ -27,20 +24,16 @@ export async function diffGitContents(before: string, after: string, options: {
     ]);
     options.signal?.throwIfAborted();
     try {
-      const result = await execute("git", ["-c", "core.autocrlf=false", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color",
-        "--", "before", "after"], {
-        cwd: directory, windowsHide: true, signal: options.signal, maxBuffer: 32 * 1024 * 1024,
-        encoding: "utf8",
+      const result = await gitProcesses.run({
+        args: ["-c", "core.autocrlf=false", "diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color", "--", "before", "after"],
+        cwd: directory, maxBuffer: 32 * 1024 * 1024, ...(options.signal ? { signal: options.signal } : {}),
       });
       if (result.stderr.trim()) throw new Error("Git content comparison reported diagnostic output.");
-      return result.stdout;
+      return result.stdout.toString("utf8");
     } catch (error) {
       // --no-index returns 1 for an ordinary difference, not an execution failure.
-      if (!options.signal?.aborted && error instanceof Error && "code" in error && error.code === 1
-        && "stdout" in error && typeof error.stdout === "string") {
-        if ("stderr" in error && typeof error.stderr === "string" && error.stderr.trim()) {
-          throw new Error("Git content comparison reported diagnostic output.", { cause: error });
-        }
+      if (!options.signal?.aborted && error instanceof GitProcessError && error.code === 1) {
+        if (error.stderr.trim()) throw new Error("Git content comparison reported diagnostic output.", { cause: error });
         return error.stdout;
       }
       throw error;

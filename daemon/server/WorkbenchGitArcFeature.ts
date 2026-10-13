@@ -9,6 +9,7 @@
 import type http from "node:http";
 
 import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "./lib/workbench/git/WorkbenchGitCheckpointController";
+import GitObjectReadSession from "./lib/workbench/git/GitObjectReadSession";
 import GitClaimHistoryReader from "./lib/workbench/git/GitClaimHistoryReader";
 import { GitArcAcceptedProposalsError } from "./lib/workbench/git/GitArcProposalController";
 import {
@@ -174,6 +175,12 @@ export default class WorkbenchGitArcFeature {
   private readonly disposal = new AbortController();
   private readonly workspaceController: WorkbenchWorkspaceGitArcController;
   private readonly pendingCardReads = new Map<string, Promise<Response>>();
+  /** Proposal reads waiting for this turn's shared read lease, by worktree. */
+  private readonly proposalReadBatches = new Map<string, Array<{
+    read: () => Promise<Response>;
+    resolve: (response: Response) => void;
+    reject: (error: unknown) => void;
+  }>>();
   /** Running batched acceptances by owner: process-local facts overlaid on the observed lifecycle. */
   private readonly acceptances = new Map<string, GitArcAcceptance>();
   private readonly claimMutations = new GitArcClaimMutations();
@@ -431,8 +438,10 @@ export default class WorkbenchGitArcFeature {
                       await this.observeLocalClaimSnapshot(project, effectiveRequest.harness, effectiveRequest.threadId);
                     }
                   })
-                  : await (this.options.transitions.read ?? this.options.transitions.run)
-                    .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined));
+                  : effectiveRequest.action === "proposalState"
+                    ? await this.readProposalInBatch(project.cwd, async () => await this.dispatch(effectiveRequest))
+                    : await (this.options.transitions.read ?? this.options.transitions.run)
+                      .call(this.options.transitions, project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined));
             // Mirroring copies an immutable view tree into an ignored folder, so it runs after the Git gate is released.
             if (response.ok && effectiveRequest.action === "arcTree" && effectiveRequest.into) {
               const { into, paths } = effectiveRequest;
@@ -684,6 +693,42 @@ export default class WorkbenchGitArcFeature {
     for (const key of this.pendingCardReads.keys()) {
       if (key.startsWith(prefix)) this.pendingCardReads.delete(key);
     }
+    // Reads requested after a mutation must queue behind it, never join a batch formed before it.
+    this.flushProposalReads(cwd);
+  }
+
+  /**
+   * Proposal card reads arriving in the same turn share one read lease and one object-read scope, so their repository,
+   * registry, stack and object reads are done once instead of once per card.
+   */
+  private readProposalInBatch(cwd: string, read: () => Promise<Response>) {
+    return new Promise<Response>((resolve, reject) => {
+      let batch = this.proposalReadBatches.get(cwd);
+      if (!batch) {
+        batch = [];
+        this.proposalReadBatches.set(cwd, batch);
+        setImmediate(() => this.flushProposalReads(cwd));
+      }
+      batch.push({ read, resolve, reject });
+    });
+  }
+
+  private flushProposalReads(cwd: string) {
+    const batch = this.proposalReadBatches.get(cwd);
+    if (!batch) return;
+    this.proposalReadBatches.delete(cwd);
+    const lease = this.options.transitions.read ?? this.options.transitions.run;
+    void lease.call(this.options.transitions, cwd, async () => await GitObjectReadSession.run(async () => {
+      await Promise.all(batch.map(async ({ read, resolve, reject }) => {
+        try {
+          resolve(await read());
+        } catch (error) {
+          reject(error);
+        }
+      }));
+    })).catch((error: unknown) => {
+      for (const { reject } of batch) reject(error);
+    });
   }
 
   /**

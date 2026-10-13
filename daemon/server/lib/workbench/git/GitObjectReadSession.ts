@@ -8,8 +8,9 @@
  * detached runs queue-owned work in a fresh scope independent of the request that started it.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { gitProcesses } from "./GitProcessHost";
 
 export type GitObjectReadResult = {
   objectId: string;
@@ -18,7 +19,14 @@ export type GitObjectReadResult = {
   contents: Buffer | null;
 } | null;
 
-export type GitObjectReadProcess = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "once" | "kill">;
+export interface GitObjectReadProcess {
+  readonly stdin: Writable;
+  readonly stdout: Readable;
+  readonly stderr: Readable;
+  once(event: "close", listener: (code: number | null) => void): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  kill(): unknown;
+}
 type Request = {
   expression: string;
   mode: "contents" | "info";
@@ -31,9 +39,7 @@ type State = { kind: "open" | "closing" | "closed" } | { kind: "failed"; error: 
 const scopes = new AsyncLocalStorage<Scope>();
 
 function startGit(root: string): GitObjectReadProcess {
-  return spawn("git", ["cat-file", "--batch-command"], {
-    cwd: root, env: process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
-  });
+  return gitProcesses.open({ args: ["cat-file", "--batch-command"], cwd: root });
 }
 
 /** A scope several separate steps of one long operation re-enter; its owner closes it once. */

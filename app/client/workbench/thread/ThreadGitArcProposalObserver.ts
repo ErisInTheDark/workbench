@@ -50,7 +50,7 @@ export default class ThreadGitArcProposalObserver {
   private observationKey: string | null = null;
   private refreshKey: string | null = null;
   /** Last observed lifecycle facts, so a change re-reads only what it affects. */
-  private lifecycle: { checkpoint: string; rows: Map<string, string> } | null = null;
+  private lifecycle: { accepting: boolean; checkpoint: string; rows: Map<string, string> } | null = null;
   /** The newest read per observation key; older reads resolve into nothing. */
   private readonly reads = new Map<string, number>();
   private readSequence = 0;
@@ -95,6 +95,7 @@ export default class ThreadGitArcProposalObserver {
     }
     const key = [cwd, entry.identity.harness, entry.identity.threadId].join("\0");
     const lifecycle = {
+      accepting: Boolean(entry.gitArc?.acceptance),
       checkpoint: entry.gitArc?.checkpointCommit ?? "",
       rows: new Map(proposals.map(({ proposalId, rootId, status }) => [proposalId, `${rootId ?? ""}\0${status}`])),
     };
@@ -114,12 +115,15 @@ export default class ThreadGitArcProposalObserver {
     const changed = previousLifecycle !== null && (previousLifecycle.checkpoint !== lifecycle.checkpoint
       || previousLifecycle.rows.size !== lifecycle.rows.size
       || [...lifecycle.rows].some(([proposalId, row]) => previousLifecycle.rows.get(proposalId) !== row));
-    if (changed) {
-      // While an acceptance runs, only rows it changed are re-read; HEAD-dependent text elsewhere refreshes once it ends.
-      const affected = entry.gitArc?.acceptance
-        ? [...this.demands].filter(([, { proposalId }]) => previousLifecycle.rows.get(proposalId) !== lifecycle.rows.get(proposalId))
-          .map(([observationKey]) => observationKey)
-        : [...this.demands.keys()];
+    if (changed || (previousLifecycle?.accepting && !lifecycle.accepting)) {
+      // HEAD-dependent text can change for every card only when the checkpoint moves or an acceptance ends; otherwise
+      // (including while an acceptance runs) only cards whose own lifecycle row changed are re-read.
+      const everyCard = previousLifecycle!.checkpoint !== lifecycle.checkpoint && !lifecycle.accepting
+        || (previousLifecycle!.accepting && !lifecycle.accepting);
+      const affected = everyCard
+        ? [...this.demands.keys()]
+        : [...this.demands].filter(([, { proposalId }]) => previousLifecycle!.rows.get(proposalId) !== lifecycle.rows.get(proposalId))
+          .map(([observationKey]) => observationKey);
       this.refresh(affected, true, read);
     }
     for (const [observationKey] of this.demands) {

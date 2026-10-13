@@ -9,7 +9,7 @@ import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDire
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { getGitChanges, readGitProjectMetadata, resolveGitDirectory } from "./git";
+import { getGitChanges, readGitConfigValue, readGitProjectMetadata, readRegisteredGitWorktrees, resolveGitDirectory } from "./git";
 
 const execute = promisify(execFile);
 const readerPath = path.join(__dirname, "git.ts");
@@ -118,6 +118,34 @@ test("linked worktrees reject malformed common repository configuration", async 
     await fs.writeFile(path.join(main, ".git", "config"), "[invalid");
     await assert.rejects(readGitProjectMetadata(linked));
   } finally { await temporary.dispose(); }
+});
+
+test("worktree and config reads match git without spawning it", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-worktree-files-");
+  const root = temporary.path;
+  const main = path.join(root, "main");
+  try {
+    await execute("git", ["init", "-q", main], { windowsHide: true });
+    await execute("git", ["-C", main, "-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"], { windowsHide: true });
+    for (const name of ["one", "two"]) {
+      await execute("git", ["-C", main, "worktree", "add", "--detach", path.join(root, name)], { windowsHide: true });
+    }
+    const { stdout } = await execute("git", ["-C", main, "worktree", "list", "--porcelain", "-z"], { windowsHide: true });
+    const expected = stdout.split("\0").filter(item => item.startsWith("worktree ")).map(item => path.resolve(item.slice(9)));
+    for (const checkout of [main, path.join(root, "two")]) {
+      assert.deepEqual((await readRegisteredGitWorktrees(checkout)).sort(), expected.sort());
+    }
+  } finally { await temporary.dispose(); }
+
+  const config = [
+    "[core]", "\tbare = false", "; comment", "[remote \"origin\"]", "\turl = first", "[Remote \"origin\"]",
+    "\turl = \"quoted value\" # trailing", "\tfetch = +refs/heads/*:refs/remotes/origin/* \\", "\t  continued",
+    "[remote.upstream]", "\turl = other",
+  ].join("\n");
+  assert.equal(readGitConfigValue(config, "remote", "origin", "url"), "quoted value", "the last value wins");
+  assert.equal(readGitConfigValue(config, "remote", "upstream", "url"), "other");
+  assert.equal(readGitConfigValue(config, "remote", "missing", "url"), null);
+  assert.throws(() => readGitConfigValue("[core]\n\tthis is not config", "core", null, "bare"), /malformed/u);
 });
 
 test("linked worktrees share repository origin identity without trusting the worktree config", async () => {

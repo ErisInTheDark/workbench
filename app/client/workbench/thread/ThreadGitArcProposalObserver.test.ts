@@ -53,3 +53,33 @@ test("a read variant is observed beside the plain read, with its own inclusions,
   assert.equal(reads[2]!.includeNewer, false);
   assert.deepEqual(Object.keys(observer.proposals), ["p"]);
 });
+
+test("a sibling proposal's change re-reads only its card until the checkpoint moves", async () => {
+  const reads: string[] = [];
+  const observer = new ThreadGitArcProposalObserver({
+    read: async (input) => {
+      reads.push(input.proposalId);
+      return { proposalId: input.proposalId } as never;
+    },
+    changed: () => {},
+    isLive: () => true,
+  });
+  const withProposals = (checkpoint: string, proposals: Array<{ proposalId: string; status: string }>) => {
+    const value = entry(checkpoint);
+    return { ...value, gitArc: { ...value!.gitArc!, proposals } } as Entry;
+  };
+  observer.demand("p");
+  observer.demand("q");
+  observer.sync(withProposals("a", [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "proposed" }]), "/repo");
+  await settle();
+  reads.length = 0;
+
+  observer.sync(withProposals("a", [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "committed" }]), "/repo");
+  await settle();
+  assert.deepEqual(reads, ["q"]);
+
+  reads.length = 0;
+  observer.sync(withProposals("b", [{ proposalId: "p", status: "proposed" }, { proposalId: "q", status: "committed" }]), "/repo");
+  await settle();
+  assert.deepEqual(reads.sort(), ["p", "q"]);
+});

@@ -14,22 +14,20 @@
  * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, checkoutTreeTransition) first clear
  * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
  */
-import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import GitIndexLock from "./GitIndexLock";
 import GitObjectReadSession from "./GitObjectReadSession";
 import GitObjectWriter from "./GitObjectWriter";
+import { gitProcesses, GitProcessError } from "./GitProcessHost";
 import GitTreeObjects, { type GitTreeEdit } from "./GitTreeObjects";
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
 
-const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
 export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generation";
@@ -262,15 +260,9 @@ export default class WorkbenchGitRepository {
     env: NodeJS.ProcessEnv = process.env,
     signal?: AbortSignal,
   ) {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd,
-      encoding: "utf8",
-      env: withoutOptionalLocks(env),
-      maxBuffer: GIT_MAX_BUFFER,
-      signal,
-      windowsHide: true,
+    return await gitProcesses.runText({
+      args, cwd, env: withoutOptionalLocks(env), maxBuffer: GIT_MAX_BUFFER, ...(signal ? { signal } : {}),
     });
-    return stdout;
   }
 
   readonly root: string;
@@ -294,27 +286,16 @@ export default class WorkbenchGitRepository {
     acceptedExitCodes: readonly number[],
     signal?: AbortSignal,
   ) {
-    return await new Promise<{ exitCode: number; stdout: string }>((resolve, reject) => {
-      const child = spawn("git", args, {
-        cwd: this.root,
-        env: withoutOptionalLocks(env),
-        signal,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
+    try {
+      const { stdout } = await gitProcesses.run({
+        args, cwd: this.root, env: withoutOptionalLocks(env), input, ...(signal ? { signal } : {}),
       });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => { stdout += chunk; });
-      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-      child.once("error", reject);
-      child.once("close", (code) => {
-        if (code !== null && acceptedExitCodes.includes(code)) resolve({ exitCode: code, stdout });
-        else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
-      });
-      child.stdin.end(input);
-    });
+      return { exitCode: 0, stdout: stdout.toString("utf8") };
+    } catch (error) {
+      if (!(error instanceof GitProcessError) || typeof error.code !== "number") throw error;
+      if (acceptedExitCodes.includes(error.code)) return { exitCode: error.code, stdout: error.stdout };
+      throw new Error(error.stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${error.code}.`);
+    }
   }
 
   async runWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {
@@ -322,25 +303,12 @@ export default class WorkbenchGitRepository {
   }
 
   async runBufferWithInput(args: string[], input: string, env: NodeJS.ProcessEnv = process.env) {
-    return await new Promise<Buffer>((resolve, reject) => {
-      const child = spawn("git", args, {
-        cwd: this.root,
-        env: withoutOptionalLocks(env),
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-      const stdout: Buffer[] = [];
-      let stderr = "";
-      child.stdout.on("data", (chunk: Buffer) => { stdout.push(chunk); });
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-      child.once("error", reject);
-      child.once("close", (code) => {
-        if (code === 0) resolve(Buffer.concat(stdout));
-        else reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${code}.`));
-      });
-      child.stdin.end(input);
-    });
+    try {
+      return (await gitProcesses.run({ args, cwd: this.root, env: withoutOptionalLocks(env), input })).stdout;
+    } catch (error) {
+      if (!(error instanceof GitProcessError) || typeof error.code !== "number") throw error;
+      throw new Error(error.stderr.trim() || `git ${args[0] ?? "command"} failed with exit code ${error.code}.`);
+    }
   }
 
   async succeeds(args: string[]) {

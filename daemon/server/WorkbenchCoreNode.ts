@@ -1055,6 +1055,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     );
   },
   description: "Reload core Workbench state, Git, project, harness, and supervisor code.",
+  // Git subprocesses spawn from this worker so process creation never blocks the daemon event loop.
+  entries: [path.join(__dirname, "lib", "workbench", "git", "git-process-worker-bootstrap.mjs")],
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
   requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery"],

@@ -6,19 +6,18 @@
  * - isGitTrackedFile: report whether Git tracks a project-relative path in its index.
  * - resolveGitDirectory: resolve ordinary and file-backed Git metadata directories.
  * - isLinkedGitWorktree: distinguish shared worktree metadata from independent Git directories.
- * - readRegisteredGitWorktrees: list concrete worktrees registered by one repository.
- * - readGitProjectMetadata: read local origin identity and worktree classification without network access.
+ * - readRegisteredGitWorktrees: list concrete worktrees registered by one repository, from Git's metadata files.
+ * - readGitProjectMetadata: read local origin identity and worktree classification without network access or a subprocess.
+ * - readGitConfigValue: read one value from Git config text the way `git config --no-includes --get` does.
  * - initGitRepository: create an empty Git repository in an existing folder.
  */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 
 import type { ChangeSummary } from "workbench-shared/types";
+import { gitProcesses } from "./workbench/git/GitProcessHost";
 
-const execFileAsync = promisify(execFile);
 const ignoredNames = new Set([".git", ".codex", ".vscode", ".workbench", "node_modules", ".next"]);
 const notGitRepositoryMessage = "fatal: not a git repository";
 
@@ -56,14 +55,14 @@ function countLines(contents: string) {
 }
 
 async function runGit(rootDir: string, args: string[], signal?: AbortSignal) {
-  return execFileAsync("git", args, {
+  const { stdout, stderr } = await gitProcesses.run({
+    args,
     cwd: rootDir,
-    encoding: "utf8",
     env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
     maxBuffer: 4 * 1024 * 1024,
-    windowsHide: true,
-    signal,
+    ...(signal ? { signal } : {}),
   });
+  return { stdout: stdout.toString("utf8"), stderr };
 }
 
 export async function initGitRepository(rootDir: string) {
@@ -125,11 +124,99 @@ async function commonGitDirectory(gitDirectory: string) {
   return await fs.realpath(path.resolve(gitDirectory, relative));
 }
 
+async function readOptionalFile(filePath: string) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
+/**
+ * Reads registered worktrees from Git's own metadata files, the same set `git worktree list` prints, without a
+ * subprocess. Layouts it cannot read directly (bare or separated main Git directories) fall back to Git itself.
+ */
 export async function readRegisteredGitWorktrees(rootDir: string, signal?: AbortSignal): Promise<string[]> {
-  const { stdout } = await runGit(rootDir, ["worktree", "list", "--porcelain", "-z"], signal);
-  return stdout.split("\0")
-    .filter(item => item.startsWith("worktree "))
-    .map(item => path.resolve(item.slice("worktree ".length)));
+  signal?.throwIfAborted();
+  const gitDirectory = await resolveGitDirectory(rootDir);
+  const shared = gitDirectory ? await commonGitDirectory(gitDirectory) : null;
+  const config = shared ? await readOptionalFile(path.join(shared, "config")) : null;
+  if (!shared || path.basename(shared).toLowerCase() !== ".git" || config === null
+    || readGitConfigValue(config, "core", null, "bare") === "true" || readGitConfigValue(config, "core", null, "worktree") !== null) {
+    const { stdout } = await runGit(rootDir, ["worktree", "list", "--porcelain", "-z"], signal);
+    return stdout.split("\0")
+      .filter(item => item.startsWith("worktree "))
+      .map(item => path.resolve(item.slice("worktree ".length)));
+  }
+  const worktrees = [path.dirname(shared)];
+  let names: string[];
+  try {
+    names = await fs.readdir(path.join(shared, "worktrees"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return worktrees;
+    throw error;
+  }
+  for (const name of names.sort()) {
+    const marker = (await readOptionalFile(path.join(shared, "worktrees", name, "gitdir")))?.trim();
+    if (marker) worktrees.push(path.dirname(path.resolve(shared, "worktrees", name, marker)));
+  }
+  return worktrees;
+}
+
+/** One value from Git config text with `--no-includes` semantics; the last assignment wins, like `git config --get`. */
+export function readGitConfigValue(text: string, section: string, subsection: string | null, key: string) {
+  let inSection = false;
+  let sectionSeen = false;
+  let value: string | null = null;
+  const lines = text.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    let line = lines[index]!.trimStart();
+    const header = /^\[\s*([A-Za-z0-9.-]+)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\]/u.exec(line);
+    if (header) {
+      const [name, dotted] = header[1]!.split(/\.(.*)/u);
+      const headerSubsection = header[2] !== undefined ? header[2].replace(/\\(.)/gu, "$1") : dotted?.toLowerCase() ?? null;
+      inSection = name!.toLowerCase() === section.toLowerCase() && headerSubsection === subsection;
+      sectionSeen = true;
+      line = line.slice(header[0].length).trimStart();
+    }
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const assignment = /^([A-Za-z][A-Za-z0-9-]*)\s*(=\s*(.*))?$/u.exec(line);
+    // Git itself refuses malformed files rather than guessing; identity derived from one must fail too.
+    if (!assignment || !sectionSeen) throw new Error(`Git config is malformed at line ${index + 1}.`);
+    let raw = assignment[3] ?? null;
+    while (raw !== null && /(^|[^\\])(\\\\)*\\$/u.test(raw) && index + 1 < lines.length) raw = raw.slice(0, -1) + lines[++index]!;
+    if (!inSection || assignment[1]!.toLowerCase() !== key.toLowerCase()) continue;
+    value = raw === null ? "true" : parseGitConfigText(raw);
+  }
+  return value;
+}
+
+function parseGitConfigText(raw: string) {
+  let value = "";
+  let quoted = false;
+  let pendingSpace = "";
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index]!;
+    if (character === "\\") {
+      const next = raw[++index];
+      const escaped = next === "n" ? "\n" : next === "t" ? "\t" : next === "b" ? "\b" : next ?? "";
+      value += pendingSpace + escaped;
+      pendingSpace = "";
+    } else if (character === "\"") {
+      value += pendingSpace;
+      pendingSpace = "";
+      quoted = !quoted;
+    } else if (!quoted && (character === "#" || character === ";")) {
+      break;
+    } else if (!quoted && /\s/u.test(character)) {
+      if (value) pendingSpace += character;
+    } else {
+      value += pendingSpace + character;
+      pendingSpace = "";
+    }
+  }
+  return value;
 }
 
 export async function isLinkedGitWorktree(rootDir: string) {
@@ -147,15 +234,10 @@ export async function readGitProjectMetadata(rootDir: string, signal?: AbortSign
   if (gitDirectory === null) return null;
   const sharedDirectory = await commonGitDirectory(gitDirectory);
   const linkedWorktree = await hasSharedGitDirectory(gitDirectory);
-  const configPath = path.join(sharedDirectory, "config");
-  let origin: string;
-  try {
-    origin = (await runGit(rootDir, ["config", "--file", configPath, "--no-includes", "--get", "remote.origin.url"], signal)).stdout.trim();
-  } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { stderr?: string };
-    if (String(failure.code) === "1" && !failure.stderr?.trim()) return { origin: null, linkedWorktree, commonGitDirectory: sharedDirectory };
-    throw error;
-  }
+  const config = await readOptionalFile(path.join(sharedDirectory, "config"));
+  signal?.throwIfAborted();
+  let origin = config === null ? null : readGitConfigValue(config, "remote", "origin", "url")?.trim() ?? null;
+  if (origin === null) return { origin: null, linkedWorktree, commonGitDirectory: sharedDirectory };
   if (!origin) throw new Error("Git origin is empty.");
   if (!origin.includes("://") && origin.includes("::")) {
     throw new Error("Git origin uses an unsupported remote helper.");

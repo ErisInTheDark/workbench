@@ -5,10 +5,8 @@
  * - WorkbenchThreadGitAmendRequest: raw amend targets, message, selection and identity rewrites.
  * - default WorkbenchThreadGit: execute Git against database-owned thread selections.
  */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import { isPathWithinRoot, normalizeRelativePath } from "../../project";
 import { readRegisteredGitWorktrees } from "../../git";
@@ -16,8 +14,8 @@ import type WorkbenchDatabaseController from "../../../database/WorkbenchDatabas
 import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory";
 import WorkbenchGitHistoryRewriter, { type WorkbenchGitIdentityOverride } from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
+import { gitProcesses } from "./GitProcessHost";
 
-const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 
 interface WorkbenchThreadGitOptions {
@@ -67,14 +65,7 @@ function toLiteralPathspec(filePath: string) {
 
 async function runGit(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
   try {
-    const { stdout } = await execFileAsync("git", args, {
-      cwd,
-      encoding: "utf8",
-      env,
-      maxBuffer: GIT_MAX_BUFFER,
-      windowsHide: true,
-    });
-    return stdout;
+    return await gitProcesses.runText({ args, cwd, env, maxBuffer: GIT_MAX_BUFFER });
   } catch (error) {
     const stderr = error instanceof Error && "stderr" in error && typeof error.stderr === "string"
       ? error.stderr.trim()

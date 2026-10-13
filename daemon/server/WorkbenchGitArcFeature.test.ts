@@ -538,6 +538,47 @@ test("exact concurrent proposal and claim card reads share one transition operat
   }
 });
 
+test("different proposal cards read in one turn share one read lease, and a mutation closes the batch", async () => {
+  const leases: string[] = [];
+  const coordinator = new WorkbenchThreadTransitionCoordinator();
+  const feature = new WorkbenchGitArcFeature({
+    identities: gitFixtureIdentities(),
+    getThreadCreatedAt: async () => 1,
+    getThreadClaimContext: async () => null,
+    refreshThreadGitArcState: async () => undefined,
+    resolveProjectFromCwd: async () => ({ cwd: "C:/Git/Project", project: { id: fixtureIdentitySchemas.ProjectIdSchema.parse("project") } }),
+    transitions: {
+      read: async (key, operation) => { leases.push("read"); return await coordinator.read(key, operation); },
+      run: async (key, operation) => { leases.push("write"); return await coordinator.run(key, operation); },
+    },
+  });
+  const dispatched: string[] = [];
+  Object.defineProperty(feature, "dispatch", {
+    value: async (request: { action: string; proposalId: string }) => {
+      dispatched.push(`${request.action}:${request.proposalId}`);
+      return Response.json({ proposalId: request.proposalId });
+    },
+  });
+  const read = (proposalId: string) => feature.executeRequest({
+    action: "proposalState", cwd: "C:/Git/Project", harness: "codex", includeNewer: false, proposalId, threadId: "thread-one",
+  });
+
+  const responses = await Promise.all(["one", "two", "three"].map(read));
+  assert.deepEqual(await Promise.all(responses.map(async response => await response.json())),
+    [{ proposalId: "one" }, { proposalId: "two" }, { proposalId: "three" }]);
+  assert.deepEqual(leases, ["read"]);
+
+  leases.length = 0;
+  dispatched.length = 0;
+  const before = read("one");
+  const mutation = feature.executeRequest({
+    action: "proposalRescind", cwd: "C:/Git/Project", harness: "codex", proposalId: "two", threadId: "thread-one",
+  });
+  const after = read("three");
+  await Promise.all([before, mutation, after]);
+  assert.deepEqual(dispatched, ["proposalState:one", "proposalRescind:two", "proposalState:three"]);
+});
+
 test("a Git arc mutation fences later card reads from an older shared result", async () => {
   const coordinator = new WorkbenchThreadTransitionCoordinator();
   const transitionActions: string[] = [];

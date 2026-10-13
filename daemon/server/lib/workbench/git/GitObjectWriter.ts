@@ -4,7 +4,6 @@
  * - GitCommitActorOverrides: optional author/committer fields applied over Git's default identity.
  * - formatGitRawDate: Git's raw date form with the local offset, e.g. `1759633402 +1300`.
  */
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,8 +11,8 @@ import { promisify } from "node:util";
 import zlib from "node:zlib";
 
 import GitObjectReadSession from "./GitObjectReadSession";
+import { gitProcesses } from "./GitProcessHost";
 
-const execFileAsync = promisify(execFile);
 const deflate = promisify(zlib.deflate);
 
 type ObjectFormat = "sha1" | "sha256";
@@ -65,9 +64,7 @@ export default class GitObjectWriter {
     let facts = repositoryFacts.get(this.root);
     if (!facts) {
       facts = (async () => {
-        const { stdout } = await execFileAsync("git", ["rev-parse", "--git-path", "objects", "--show-object-format"], {
-          cwd: this.root, encoding: "utf8", windowsHide: true,
-        });
+        const stdout = await gitProcesses.runText({ args: ["rev-parse", "--git-path", "objects", "--show-object-format"], cwd: this.root });
         const [objects = "", format = ""] = stdout.split(/\r?\n/u).map(line => line.trim());
         if (!objects || (format !== "sha1" && format !== "sha256")) throw new Error(`Unsupported Git object store (${format || "unknown format"}).`);
         return { format, objectsDirectory: path.resolve(this.root, objects) } satisfies RepositoryFacts;
@@ -146,7 +143,7 @@ export default class GitObjectWriter {
     return await GitObjectReadSession.memo(`git-var:${this.root}`, async (): Promise<DefaultIdentity | null> => {
       let stdout: string;
       try {
-        ({ stdout } = await execFileAsync("git", ["var", "-l"], { cwd: this.root, encoding: "utf8", windowsHide: true }));
+        stdout = await gitProcesses.runText({ args: ["var", "-l"], cwd: this.root });
       } catch (error) {
         // Expected when Git cannot determine an identity (a nonzero exit); commit-tree then reports that failure itself.
         if (error && typeof error === "object" && "code" in error && typeof error.code === "number") return null;
