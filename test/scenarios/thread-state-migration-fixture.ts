@@ -56,6 +56,10 @@ export async function captureThreadStateMigrationSource(sourceDatabasePath: stri
 }
 
 const quote = (name: string) => `"${name.replaceAll("\"", "\"\"")}"`;
+/** The scenario rediscovers real roots: catalogue metadata refreshes and new rows appear, but retained identities must survive. */
+const DISCOVERY_CATALOGUE_IDENTITIES: Readonly<Record<string, readonly string[]>> = {
+  workbench_projects: ["id"],
+};
 const DAY_MS = 86_400_000;
 
 function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
@@ -268,7 +272,8 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
         for (const table of retained) {
           const existing = new Set((database.prepare(`PRAGMA source.table_info(${quote(table.name)})`).all() as Array<{ name: string }>)
             .map(column => column.name));
-          const columns = Object.keys(table.columns).filter(column => existing.has(column));
+          const identity = DISCOVERY_CATALOGUE_IDENTITIES[table.name];
+          const columns = Object.keys(table.columns).filter(column => existing.has(column) && (!identity || identity.includes(column)));
           const remapped = new Set(tableForeignKeys(table).filter(key => key.target.table === "workbench_projects")
             .flatMap(key => key.columns));
           if (table.name === "workbench_projects") remapped.add("id");
@@ -301,9 +306,10 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
               (SELECT count(*) FROM (SELECT * FROM after EXCEPT SELECT * FROM before)) AS added,
               (SELECT count(*) FROM before) AS beforeCount, (SELECT count(*) FROM after) AS afterCount
           `).get() as { missing: number; added: number; beforeCount: number; afterCount: number };
-          assert.deepEqual({ missing: result.missing, added: result.added }, { missing: 0, added: 0 },
+          const openWorld = Boolean(identity) || table.name === "workbench_project_aliases";
+          assert.deepEqual({ missing: result.missing, added: openWorld ? 0 : result.added }, { missing: 0, added: 0 },
             `${table.name} must retain every current relational fact`);
-          if (table.name !== "workbench_project_aliases") {
+          if (!openWorld) {
             assert.equal(result.afterCount, result.beforeCount, `${table.name} must retain its row count`);
           }
           verified += 1;

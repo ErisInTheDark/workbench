@@ -132,9 +132,10 @@ test("forward database migration preserves data and the real app can use it", {
     assert.notEqual(project.id, clone.id, "Matching remotes must not merge concrete execution owners");
     const local = catalog.find(entry => path.resolve(entry.rootPath) === localPath);
     assert.ok(local, "A single folder without a remote must be discovered");
+    // Discovery reindexing can hold the live daemon's writer for minutes; seed only while no daemon owns the file.
+    await runtime.stop();
     const transcript = await seedLifecycleTranscript(runtime.project, serverDatabase, project.id);
-
-    await runtime.startApp();
+    await runtime.start();
 
     const verifyApp = async (label: string) => {
       return await runtime.phase(label, async signal => {
