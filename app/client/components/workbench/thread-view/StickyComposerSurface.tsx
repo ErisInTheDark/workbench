@@ -17,26 +17,28 @@ function isInteractiveTarget(currentTarget: HTMLElement, target: EventTarget | n
 }
 
 const stickySurfaceClassName = `
-  group/composer relative grid rounded-[1.15rem] bg-fg/4 backdrop-blur-[8px] p-3
+  group/composer relative grid rounded-[1.15rem] border border-transparent bg-fg/4 backdrop-blur-[8px] p-3
   [transition:
     border-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
     padding var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
   ]
-  stuck:(border border-fg-alpha/20 [animation: sticky-composer-enter var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease) both])
+  stuck:(border-fg-alpha/20 [animation: sticky-composer-enter var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease) both])
   data-[collapsed=true]:stuck:[padding-bottom: calc(0.75rem + min(0.75rem, var(--workbench-safe-area-bottom, 0px)))]
   coarse-touch:stuck:([margin-inline: calc(0px - var(--thread-scroll-inline-padding, 0px))] rounded-b-none)
   motion-reduce:(transition-none stuck:animate-none)
 `;
 
 const expandedClassName = `
-  grid col-start-1 row-start-1 grid-cols-[minmax(0, 1fr)] gap-3 opacity-100
+  grid col-start-1 row-start-1 grid-cols-[0rem minmax(0, 1fr)] gap-y-3 gap-x-0 opacity-100
   transform-[translateY(0) scale(1)]
   [transition:
     opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
+    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    grid-template-columns var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    column-gap var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)
   ]
   [transition-behavior: allow-discrete]
-  stuck:grid-cols-[auto minmax(0, 1fr)]
+  stuck:(grid-cols-[2.25rem minmax(0, 1fr)] gap-x-3)
   group-data-[collapsed=true]/composer:stuck:(
     absolute inset-3 overflow-clip invisible opacity-0 pointer-events-none
     transform-[translateY(-0.25rem) scale(0.985)]
@@ -47,6 +49,16 @@ const expandedClassName = `
     ]
   )
   motion-reduce:(animate-none transition-none group-data-[collapsed=true]/composer:stuck:transition-none)
+`;
+
+const chevronColumnClassName = `
+  min-w-0 overflow-clip [overflow-clip-margin: 0.25rem] invisible opacity-0
+  [transition:
+    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
+    visibility 0s linear var(--sticky-composer-motion-duration)
+  ]
+  stuck:(visible opacity-100 [transition: opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)])
+  motion-reduce:transition-none
 `;
 
 const collapsedClassName = `
@@ -221,7 +233,7 @@ function StickyComposerSurface({
           data-collapsed={collapsed ? "true" : "false"}
         >
           <div className={expandedClassName}>
-            <div className="hidden stuck:block">
+            <div className={chevronColumnClassName}>
               <button
                 aria-expanded={!collapsed}
                 aria-label={collapseControlLabel}

@@ -97,12 +97,15 @@ const modePanelTransitionClassName = `[transition:
 ]`;
 
 const stickyComposerContentClassName = `
+  [scrollbar-color: rgb(from var(--fg) r g b / 0) transparent]
+  [transition: scrollbar-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
   stuck:(
     [max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem))]
     overflow-y-auto overscroll-contain
     [padding-bottom: min(0.75rem, var(--workbench-safe-area-bottom, 0px))]
-    pr-[0.15rem] [scrollbar-gutter: stable]
+    pr-[0.15rem] [scrollbar-gutter: stable] [scrollbar-color: inherit]
   )
+  motion-reduce:transition-none
 `;
 
 export default function ThreadComposer ({
@@ -693,82 +696,83 @@ export default function ThreadComposer ({
             ) : null}
             <div
               aria-hidden={!isComposerPanelActive}
-              className={`${modePanelClassName} ${modePanelTransitionClassName} ${stickyMode ? stickyComposerContentClassName : ""}`}
+              className={`${modePanelClassName} ${modePanelTransitionClassName}`}
               data-active={isComposerPanelActive ? "true" : "false"}
               inert={!isComposerPanelActive}
             >
-              <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
-              <ComposerReferencePills
-                className="mb-2 px-1"
-                onRemove={(reference) => {
-                  if (reference.kind === "todo") {
-                    onTodoDeselect?.(reference.id);
-                    return;
-                  }
-                  const key = composerReferenceKey(reference);
-                  editing.session.edit((draft) => ({
-                    ...draft, references: (draft.references ?? []).filter(item => composerReferenceKey(item) !== key),
-                  }));
-                }}
-                references={references}
-              />
-              <PlaintextEditable
-                ref={composerInputRef}
-                id={`thread-composer:${thread.id}`}
-                ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
-                className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}
-                disabled={isInputDisabled}
-                placeholder={composerPlaceholder}
-                highlights={composerOverlayHighlights}
-                mentionSources={highlightSources}
-                mentionSuggestionsPlacement="above"
-                spellCheck={composerSpellCheck}
-                value={value}
-                onChange={(nextValue) => {
-                  editing.session.edit((draft) => ({ ...draft, text: nextValue }));
-                  if (error) {
-                    setError("");
-                  }
-                }}
-                onCompositionStart={() => {
-                  setIsComposing(true);
-                }}
-                onCompositionEnd={() => {
-                  setIsComposing(false);
-                }}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-              />
-              {hasNormalComposerSupplementalContent ? (
-                <div className="mt-3 space-y-3">
-                  {attachments.length ? (
-                    <div className="flex flex-wrap gap-3 px-1">
-                      {attachments.map((attachment, index) => (
-                        <div key={attachment.id} className="relative h-24 w-24">
-                          <ThreadLightboxImage
-                            alt={`Attached image ${index + 1}`}
-                            buttonClassName="h-full w-full rounded-[0.95rem]"
-                            imageClassName="h-full w-full object-cover"
-                            src={attachment.url}
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Remove attached image ${index + 1}`}
-                            title="Remove attached image"
-                            className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                            onClick={() => {
-                              editing.session.edit((draft) => ({
-                                ...draft,
-                                attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
-                              }));
-                            }}
-                          >
-                            <XIcon size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
+              <div className={stickyMode ? stickyComposerContentClassName : undefined}>
+                <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
+                <ComposerReferencePills
+                  className="mb-2 px-1"
+                  onRemove={(reference) => {
+                    if (reference.kind === "todo") {
+                      onTodoDeselect?.(reference.id);
+                      return;
+                    }
+                    const key = composerReferenceKey(reference);
+                    editing.session.edit((draft) => ({
+                      ...draft, references: (draft.references ?? []).filter(item => composerReferenceKey(item) !== key),
+                    }));
+                  }}
+                  references={references}
+                />
+                <PlaintextEditable
+                  ref={composerInputRef}
+                  id={`thread-composer:${thread.id}`}
+                  ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
+                  className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}
+                  disabled={isInputDisabled}
+                  placeholder={composerPlaceholder}
+                  highlights={composerOverlayHighlights}
+                  mentionSources={highlightSources}
+                  mentionSuggestionsPlacement="above"
+                  spellCheck={composerSpellCheck}
+                  value={value}
+                  onChange={(nextValue) => {
+                    editing.session.edit((draft) => ({ ...draft, text: nextValue }));
+                    if (error) {
+                      setError("");
+                    }
+                  }}
+                  onCompositionStart={() => {
+                    setIsComposing(true);
+                  }}
+                  onCompositionEnd={() => {
+                    setIsComposing(false);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
+                />
+                {hasNormalComposerSupplementalContent ? (
+                  <div className="mt-3 space-y-3">
+                    {attachments.length ? (
+                      <div className="flex flex-wrap gap-3 px-1">
+                        {attachments.map((attachment, index) => (
+                          <div key={attachment.id} className="relative h-24 w-24">
+                            <ThreadLightboxImage
+                              alt={`Attached image ${index + 1}`}
+                              buttonClassName="h-full w-full rounded-[0.95rem]"
+                              imageClassName="h-full w-full object-cover"
+                              src={attachment.url}
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Remove attached image ${index + 1}`}
+                              title="Remove attached image"
+                              className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+                              onClick={() => {
+                                editing.session.edit((draft) => ({
+                                  ...draft,
+                                  attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
+                                }));
+                              }}
+                            >
+                              <XIcon size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                     {helperText ? (
                       <p className={joinClasses(
                         attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",
@@ -777,8 +781,9 @@ export default function ThreadComposer ({
                         {helperText}
                       </p>
                     ) : null}
-                </div>
-              ) : null}
+                  </div>
+                ) : null}
+              </div>
               {showComposerControlRow ? (
                 <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
                   <div className="flex min-w-0 shrink items-center gap-2">
