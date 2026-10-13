@@ -63,7 +63,28 @@ function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
   try {
     database.pragma("foreign_keys = ON");
     database.transaction(() => {
+      // Sources at or after bounded payload retention already own these tables and earlier expiries.
       database.exec(`
+        CREATE TABLE IF NOT EXISTS thread_item_payload_retention(
+          item_id INTEGER PRIMARY KEY,
+          expired_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS thread_turn_payload_retention(
+          turn_id TEXT PRIMARY KEY,
+          expired_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS thread_tool_daily_aggregates(
+          project_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          day INTEGER NOT NULL,
+          tool_name TEXT NOT NULL,
+          call_count INTEGER NOT NULL,
+          failure_count INTEGER NOT NULL,
+          PRIMARY KEY(project_id, thread_id, day, tool_name)
+        );
+        CREATE TEMP TABLE oracle_previously_retained(item_id INTEGER PRIMARY KEY);
+        INSERT INTO oracle_previously_retained SELECT item_id FROM thread_item_payload_retention;
+
         CREATE TEMP TABLE oracle_result_items(item_id INTEGER PRIMARY KEY);
         INSERT INTO oracle_result_items
         SELECT item.id
@@ -73,7 +94,8 @@ function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
         LEFT JOIN thread_callable_mcp_results mcp ON mcp.item_id = item.id
         LEFT JOIN thread_callable_dynamic_content dynamic ON dynamic.item_id = item.id
         LEFT JOIN thread_item_tool_outputs output ON output.item_id = item.id
-        WHERE item.created_at < ${retentionRunAt - DAY_MS} AND (
+        WHERE item.id NOT IN (SELECT item_id FROM oracle_previously_retained)
+          AND item.created_at < ${retentionRunAt - DAY_MS} AND (
           (process.output_text IS NOT NULL AND process.state NOT IN ('queued', 'inProgress'))
           OR (mcp.item_id IS NOT NULL AND callable.state IN ('completed', 'failed'))
           OR (dynamic.item_id IS NOT NULL AND callable.state IN ('completed', 'failed'))
@@ -84,30 +106,14 @@ function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
         INSERT INTO oracle_expired_turns
         SELECT turn.id FROM thread_turns turn
         JOIN workbench_thread_retention retention ON retention.thread_id = turn.thread_id
-        WHERE retention.settled_at < ${retentionRunAt - 3 * DAY_MS};
+        WHERE retention.settled_at < ${retentionRunAt - 3 * DAY_MS}
+          AND turn.id NOT IN (SELECT turn_id FROM thread_turn_payload_retention);
 
-        CREATE TABLE thread_item_payload_retention(
-          item_id INTEGER PRIMARY KEY,
-          expired_at INTEGER NOT NULL
-        );
         INSERT INTO thread_item_payload_retention
         SELECT item_id, ${retentionRunAt} FROM oracle_result_items;
-        CREATE TABLE thread_turn_payload_retention(
-          turn_id TEXT PRIMARY KEY,
-          expired_at INTEGER NOT NULL
-        );
         INSERT INTO thread_turn_payload_retention
         SELECT turn_id, ${retentionRunAt} FROM oracle_expired_turns;
 
-        CREATE TABLE thread_tool_daily_aggregates(
-          project_id TEXT NOT NULL,
-          thread_id TEXT NOT NULL,
-          day INTEGER NOT NULL,
-          tool_name TEXT NOT NULL,
-          call_count INTEGER NOT NULL,
-          failure_count INTEGER NOT NULL,
-          PRIMARY KEY(project_id, thread_id, day, tool_name)
-        );
         INSERT INTO thread_tool_daily_aggregates
         SELECT thread.project_id, item.thread_id, CAST(item.created_at / ${DAY_MS} AS INTEGER),
           callable.tool_name, COUNT(*), SUM(callable.state = 'failed')
@@ -116,11 +122,15 @@ function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
         JOIN thread_operation_callable_tool_sources callable ON callable.item_id = item.id
         WHERE callable.server_name IN ('wb', 'wbex')
           AND callable.state IN ('completed', 'failed')
+          AND item.id NOT IN (SELECT item_id FROM oracle_previously_retained)
           AND (
             item.id IN (SELECT item_id FROM oracle_result_items)
             OR item.turn_id IN (SELECT turn_id FROM oracle_expired_turns)
           )
-        GROUP BY thread.project_id, item.thread_id, CAST(item.created_at / ${DAY_MS} AS INTEGER), callable.tool_name;
+        GROUP BY thread.project_id, item.thread_id, CAST(item.created_at / ${DAY_MS} AS INTEGER), callable.tool_name
+        ON CONFLICT(project_id, thread_id, day, tool_name) DO UPDATE SET
+          call_count = call_count + excluded.call_count,
+          failure_count = failure_count + excluded.failure_count;
 
         UPDATE thread_operation_process_sources SET output_text = NULL
         WHERE item_id IN (SELECT item_id FROM oracle_result_items);
