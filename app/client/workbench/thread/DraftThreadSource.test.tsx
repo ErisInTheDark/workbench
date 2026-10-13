@@ -8,11 +8,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DraftIdSchema } from "workbench-shared/workbench/identity";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 import { getWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import createDraftThreadSource from "./DraftThreadSource";
 import ThreadStore from "./ThreadStore";
 import { getLiveThreadActivity } from "../../components/workbench/thread-view/thread-live-activity";
-import { ThreadTurnDetails } from "../../components/workbench/thread-view/thread-view-items";
+import ThreadTranscriptProjection from "../../components/workbench/thread-view/ThreadTranscriptProjection";
+
+function renderProjection(projection: WorkbenchTranscriptProjection) {
+  return renderToStaticMarkup(createElement(ThreadTranscriptProjection, {
+    projection, liveTurnId: projection.turns[0]?.id ?? null,
+    canLoadPreviousTurn: false, historySentinelRef: null,
+    knownSkills: [], projectFilePaths: [], projectId: projection.thread.projectId,
+    projectRootPath: projection.thread.projectRoot,
+    presentationSource: { kind: "sqlite", sourceKey: projection.thread.id },
+    relatedThreadsById: {}, subagents: [], workspaceRoots: [],
+  }));
+}
 
 function fixture(id = "draft") {
   const draftId = DraftIdSchema.parse(id);
@@ -24,6 +36,7 @@ function fixture(id = "draft") {
   };
   const listeners = new Set<() => void>();
   const store = new ThreadStore("project", { kind: "draft", draftId }, publish => createDraftThreadSource({
+    projectId: "project",
     draftId,
     readDraft: () => draft,
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -62,7 +75,8 @@ test("submission immediately renders the initial input and connecting activity b
   assert.deepEqual(message.content, input);
   assert.deepEqual(getWorkbenchInputState(message), { kind: "optimistic", placement: "initial", status: "pending" });
   assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn })?.title, "Connecting");
-  const html = renderToStaticMarkup(createElement(ThreadTurnDetails, { threadId: store.threadId, turn }));
+  assert.equal(pending.transcript.status, "ready");
+  const html = renderProjection(pending.transcript.projection);
   assert.ok(html.includes("launch preview words"), "the shared renderer can show the submitted input");
   assert.equal(await store.actions.submitDraft(input, async () => { submissions++; return true; }), false);
   assert.equal(submissions, 1);
@@ -70,9 +84,48 @@ test("submission immediately renders the initial input and connecting activity b
   assert.equal(await sending, true);
   const accepted = store.getSlice("turns").turns[0]!;
   assert.equal(accepted.items[0]!.id, message.id, "acceptance retains the same message");
-  assert.deepEqual(getWorkbenchInputState(accepted.items[0]!), { kind: "optimistic", placement: "initial", status: "sent" });
+  assert.equal(getWorkbenchInputState(accepted.items[0]!), null, "accepted input no longer has a pending halo");
+  assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn: accepted })?.title, "Thinking");
   assert.equal(await store.actions.submitDraft(input, async () => { submissions++; return true; }), false);
   assert.equal(submissions, 1, "an accepted draft cannot launch again");
+});
+
+test("the pending draft supplies the same renderable projection shape as a real thread", async context => {
+  const { store } = fixture();
+  context.after(() => store.dispose());
+  const admission = Promise.withResolvers<boolean>();
+  const sending = store.actions.submitDraft(input, () => admission.promise);
+  try {
+    const state = store.getSlice("turns").transcript;
+    assert.equal(state.status, "ready");
+    assert.equal(state.projection.thread.id, store.threadId);
+    assert.deepEqual(state.projection.display.segments.flatMap(segment => segment.items),
+      store.getSlice("turns").turns.flatMap(turn => turn.items));
+    assert.equal(state.projection.hasPreviousTurns, false);
+  } finally {
+    admission.resolve(true);
+    await sending;
+  }
+});
+
+test("provider acceptance clears pending decoration before draft cleanup completes", async context => {
+  const { store } = fixture();
+  context.after(() => store.dispose());
+  const cleanup = Promise.withResolvers<boolean>();
+  let accept = () => {};
+  const sending = store.actions.submitDraft(input, accepted => {
+    accept = accepted;
+    return cleanup.promise;
+  });
+  try {
+    accept();
+    const turn = store.getSlice("turns").turns[0]!;
+    assert.equal(getWorkbenchInputState(turn.items[0]!), null);
+    assert.equal(getLiveThreadActivity({ pendingUserInputRequest: null, turn })?.title, "Thinking");
+  } finally {
+    cleanup.resolve(true);
+    await sending;
+  }
 });
 
 test("leaving, reopening, and draft updates retain one pending launch without affecting another draft", async context => {

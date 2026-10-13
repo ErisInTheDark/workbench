@@ -39,18 +39,20 @@ function isThreadActive (thread: ThreadHead) {
 
 export default function ThreadContextStatus ({
   lifecycle,
+  launching = false,
   onCompactThread,
   snoozed = false,
   thread,
 }: {
   lifecycle?: WorkbenchThreadLifecycle;
+  launching?: boolean;
   onCompactThread: () => Promise<void>;
   snoozed?: boolean;
   thread: ThreadHead;
 }) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [error, setError] = useState("");
-  if (thread.isDraft) return null;
+  if (thread.isDraft && !launching) return null;
   const tokenUsage = thread.tokenUsage;
   const contextTokens = tokenUsage?.last.inputTokens ?? null;
   const contextWindow = tokenUsage?.modelContextWindow ?? null;
@@ -63,12 +65,12 @@ export default function ThreadContextStatus ({
   const contextStatusTitle = usedPercent !== null && contextTokens !== null && contextWindow !== null && remainingTokens !== null
     ? formatContextStatusTitle({ contextTokens, contextWindow, remainingTokens })
     : undefined;
-  const canCompact = !thread.isDraft;
+  const canCompact = !thread.isDraft || launching;
   const inactiveByWorkbenchState = lifecycle?.kind === "stopped"
     || (lifecycle?.kind === "needsAttention"
       && (lifecycle.reason === "noActiveTurn" || lifecycle.reason === "interrupted" || lifecycle.reason === "agentBlocked"
         || (snoozed && lifecycle.reason === "pendingInput")));
-  const active = isThreadActive(thread) && !inactiveByWorkbenchState;
+  const active = launching || isThreadActive(thread) && !inactiveByWorkbenchState;
   const compactDisabled = isCompacting || active;
   const compactTitle = active
     ? "Compact is unavailable while the thread is active"

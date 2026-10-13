@@ -159,7 +159,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const owners = new Map<string, QueryHandle<"threadOwner">>();
   const renderers = new Map<DaemonId, ThreadClient>();
   const warmedOpenCodeSources = new Map<DaemonId, number>();
-  const localDraftLocations = new Map<string, ProjectLocationReference>();
+  const localThreadLocations = new Map<string, ProjectLocationReference>();
   const fileDrafts = new Map<string, ReturnType<typeof FileDraftStore>>();
   const panels = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   const factListeners = new Set<() => void>();
@@ -185,11 +185,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   };
   const locationForThread = (id: string) => {
     const value = owners.get(id)?.getSnapshot().value?.data;
-    if (value) return value.phase === "current" ? value.location : null;
+    if (value && value.phase !== "pending") return value.phase === "current" ? value.location : null;
     const matches = visibleRows()?.members.filter(member =>
       member.ref.kind === "thread" && member.ref.identity.threadId === id) ?? [];
     const first = matches[0]?.location;
-    return first && matches.every(member => sameLocation(member.location, first)) ? first : null;
+    return first && matches.every(member => sameLocation(member.location, first))
+      ? first : localThreadLocations.get(id) ?? null;
   };
   const threadProject = (location: ProjectLocationReference | null | undefined): WorkbenchThreadProject | undefined => {
     const current = folder(location);
@@ -258,7 +259,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   }
 
   function rendererForThread(id: string) {
-    const location = locationForThread(id) ?? localDraftLocations.get(id);
+    const location = locationForThread(id);
     return location ? renderers.get(location.daemonId) ?? threadClient : threadClient;
   }
 
@@ -552,7 +553,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (route.view === "thread" && (route.threadTarget?.kind === "new" || route.threadTarget?.kind === "draft")) {
       const target = route.threadTarget;
       const location = draftLocation ?? route.logical?.browseLocation ?? route.logical?.location
-        ?? (target.kind === "draft" ? presentation.draft(target.draftId)?.target ?? localDraftLocations.get(target.draftId) : null);
+        ?? (target.kind === "draft" ? presentation.draft(target.draftId)?.target ?? localThreadLocations.get(target.draftId) : null);
       if (location) warmOpenCode(location);
     }
     const { main, archivedMembers } = listedMembers();
@@ -628,7 +629,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     if (!project) throw new Error("The draft folder's metadata is not available yet.");
     const renderer = options.select === false ? rendererFor(location) : selectRenderer(location);
     const draft = renderer.createThread(harness, options.threadId, { ...options, project });
-    localDraftLocations.set(draft.id, location);
+    localThreadLocations.set(draft.id, location);
     if (options.select !== false) draftLocation = location;
     emit();
     return draft;
@@ -756,7 +757,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         return { ok: false, error: "The draft address does not match its saved folder." };
       }
       const current = threadClient.getSnapshot().currentThread;
-      const sameDraft = current?.isDraft && sameLocation(localDraftLocations.get(current.id), location)
+      const sameDraft = current?.isDraft && sameLocation(localThreadLocations.get(current.id), location)
         && (target.kind === "draft" ? current.id === target.draftId : draftRoute?.threadTarget?.kind === "new");
       const draft = sameDraft ? current : createDraft(location,
         saved?.selection.settings.harness ?? defaultProviderKey,
@@ -825,6 +826,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       if (!saved) throw new Error("Save this draft before starting it.");
       const route = navigation.getSnapshot().route;
       const launched = await workspace.launchDraft(saved.id, saved.revision, options);
+      localThreadLocations.set(launched.threadId, saved.target);
       // The applied identity comes from the launch: a saved snapshot can predate the linked profile's provider.
       const harness = launched.harness ?? saved.selection.settings.harness;
       try {
@@ -932,7 +934,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     },
   };
 
-  const draftLocationFor = (id: string) => presentation.draft(id)?.target ?? localDraftLocations.get(id) ?? null;
+  const draftLocationFor = (id: string) => presentation.draft(id)?.target ?? localThreadLocations.get(id) ?? null;
   const launchContextFor = (location: ProjectLocationReference): ViewContext | null => {
     const project = threadProject(location);
     const renderer = renderers.get(location.daemonId);
@@ -978,7 +980,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     getThreadStore: (projectId, target) => {
       const id = target.kind === "draft" ? target.draftId
         : target.kind === "subagent" ? target.parentThreadId : target.threadId;
-      const location = locationForThread(id) ?? localDraftLocations.get(id);
+      const location = locationForThread(id);
       return rendererForThread(id).getThreadStore(location?.projectId ?? projectId, target);
     },
     threadOwnerFor,

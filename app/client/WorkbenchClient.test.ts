@@ -664,8 +664,12 @@ test("accepted draft launch settles without a thread read and cannot steal a new
   const { socket, client, draft } = await openRetainedDraft(context);
   const launched: Array<{ id: string; harness: string }> = [];
   const offset = socket.sent.length;
+  const launchContexts: Array<ReturnType<typeof client.threadContextFor>> = [];
   const sending = client.controls.sendThreadMessage(draft, [], {
-    onThreadLaunched: identity => launched.push(identity),
+    onThreadLaunched: identity => {
+      launchContexts.push(client.threadContextFor(identity.id));
+      launched.push(identity);
+    },
   });
   const request = await socket.request("workspace/draft/launch", offset);
   await client.controls.applyRoute(createHomeRoute());
@@ -673,6 +677,8 @@ test("accepted draft launch settles without a thread read and cannot steal a new
   socket.reply(request, { threadId });
   assert.equal(await sending, null);
   assert.deepEqual(launched, [{ id: threadId, harness: "codex" }]);
+  assert.equal(launchContexts[0]?.daemonId, daemonId, "launch context exists before owner observations");
+  assert.equal(launchContexts[0]?.project.id, location.projectId);
   assert.equal(client.navigation.getSnapshot().route.view, "home");
   assert.equal(socket.sent.slice(offset).some(item => item.method === "workspace/command"
     && (item.params.method === "thread/page/read" || item.params.method === "thread/reconcile")), false);

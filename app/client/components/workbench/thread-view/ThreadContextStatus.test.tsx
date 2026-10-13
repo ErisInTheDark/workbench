@@ -8,7 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { ThreadPayload } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
-import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import ThreadContextStatus from "./ThreadContextStatus";
 
 const thread: ThreadPayload = {
@@ -47,6 +47,15 @@ test("missing context usage stays silent without hiding compact", () => {
   const markup = render();
   assert.doesNotMatch(markup, /context.*unavailable/i);
   assert.match(markup, /aria-label="Compact is unavailable while the thread is active"/u);
+});
+
+test("launching drafts retain the compact control without allowing a draft operation", () => {
+  const draft: ThreadPayload = { ...thread, isDraft: true, id: DraftIdSchema.parse("draft"), status: "idle" };
+  const markup = renderToStaticMarkup(createElement(ThreadContextStatus, {
+    thread: draft, launching: true, onCompactThread: async () => {},
+  }));
+  assert.match(markup, /<button\b[^>]*disabled=""/u);
+  assert.equal(render(undefined, false, draft), "", "ordinary drafts still omit thread-only controls");
 });
 
 test("measured context usage remains visible", () => {

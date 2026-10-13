@@ -1214,12 +1214,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? {
         ...submittedOptions,
         onThreadLaunched: (materializedThread) => {
-          const projectId = submittedRoute.threadOwnerProjectId || submittedRoute.projectId || explorer.currentProjectId;
-          const submittedThreadKey = `${projectId}:${thread.harness}:${thread.id}`;
-          const materializedThreadKey = `${projectId}:${materializedThread.harness}:${materializedThread.id}`;
           threadViewInstanceKeysByThreadIdRef.current.set(
-            materializedThreadKey,
-            threadViewInstanceKeysByThreadIdRef.current.get(submittedThreadKey) ?? thread.id,
+            materializedThread.id,
+            threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id,
           );
           replaceCurrentDraftThreadRoute(materializedThread);
           options?.onThreadLaunched?.(materializedThread);
@@ -1530,15 +1527,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         ? createPinnedThreadRoute(route.projectId, route.threadOwnerProjectId, effectiveThreadTarget)
         : createThreadRoute(activeProjectId, effectiveThreadTarget)
     : route;
-  const getThreadViewInstanceKey = (thread: ThreadPayload) => (
-    threadViewInstanceKeysByThreadIdRef.current.get(`${activeProjectId}:${thread.harness}:${thread.id}`) ?? thread.id
-  );
+  const getThreadViewInstanceKey = (threadId: string) => threadViewInstanceKeysByThreadIdRef.current.get(threadId) ?? threadId;
   const isThreadOwnedByEffectiveRoute = (thread: ThreadPayload | null) => Boolean(
     showThreadView
     && thread
     && (
       isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, thread.id, thread.isDraft)
-      || isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, getThreadViewInstanceKey(thread), getThreadViewInstanceKey(thread) !== thread.id)
+      || isWorkbenchRouteOwnerOfThread(effectiveThreadRoute, getThreadViewInstanceKey(thread.id), getThreadViewInstanceKey(thread.id) !== thread.id)
     )
   );
   const documentThreadForThreadView = showThreadView
@@ -1577,7 +1572,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     || effectiveThreadTarget?.kind === "provider" || effectiveThreadTarget?.kind === "subagent");
   const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
   const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
-  const threadViewInstanceKey = threadForThreadView ? getThreadViewInstanceKey(threadForThreadView) : effectiveThreadId;
+  const threadViewInstanceKey = getThreadViewInstanceKey(threadForThreadView?.id ?? effectiveThreadId);
   const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
     : effectiveSelectedThreadId;
@@ -2379,7 +2374,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 enabled={isDirectThreadSurface}
                 onScrollIntent={handleThreadScrollIntent}
                 onTouchActivityChange={handleThreadTouchActivity}
-                resetKey={`${threadSurfaceKey}:${selectedThreadIdForView || activeThreadId}`}
+                resetKey={`${threadSurfaceKey}:${getThreadViewInstanceKey(selectedThreadIdForView || activeThreadId)}`}
               >
               <WorkbenchMobileShellHeader
                 className={`
@@ -2741,6 +2736,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (
                   <WorkbenchWorkspace
                     controller={workspaceController}
+                    getPanelViewKey={target => target.kind === "thread"
+                      && (target.target.kind === "draft" || target.target.kind === "provider")
+                      ? `thread:${getThreadViewInstanceKey(getWorkbenchThreadTargetRootId(target.target))}`
+                      : undefined}
                     onFocusPanel={() => { }}
                     onLayoutChange={updateMainLayout}
                     onPanelDrop={handleMainLayoutPanelDrop}
@@ -2904,6 +2903,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                 ? mosaicDraftThreadsById[target.target.draftId] ?? null
                                 : null}
                             threadId={getWorkbenchThreadTargetRootId(target.target)}
+                            viewInstanceKey={getThreadViewInstanceKey(getWorkbenchThreadTargetRootId(target.target))}
                           />
                         );
                       }

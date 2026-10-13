@@ -163,7 +163,7 @@ export default function ThreadComposer ({
   onSendMessage: (
     threadId: string,
     input: UserInput[],
-    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact">,
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched">,
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
@@ -234,9 +234,10 @@ export default function ThreadComposer ({
   const error = localError || editing.error || composerProfileSnapshot.error;
   const [isComposing, setIsComposing] = useState(false);
   const [isQuestionnaireVisible, setIsQuestionnaireVisible] = useState(Boolean(pendingUserInputRequest));
+  const isLaunchingDraft = thread.isDraft && turns.length > 0;
   const isSending = editing.isSubmitting;
-  const value = isSending ? "" : editing.draft.text;
-  const attachments = isSending ? [] : editing.draft.attachments;
+  const value = isSending || isLaunchingDraft ? "" : editing.draft.text;
+  const attachments = isSending || isLaunchingDraft ? [] : editing.draft.attachments;
   const [isRecoveringInterruptedTurn, setIsRecoveringInterruptedTurn] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isStickyComposerCollapsed, setIsStickyComposerCollapsed] = useState(false);
@@ -256,7 +257,7 @@ export default function ThreadComposer ({
   const isActiveThread = isThreadStatusActive(thread.status);
   const hasEffectiveProfile = !profileSlot || Boolean(resolvedComposerSettings?.model);
   const canRecoverInterruptedTurn = isWorkbenchThreadRecoveryEligible(threadState, threadLifecycle, hasPendingUserInputRequest, controlsMode);
-  const isInputDisabled = isSending || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
+  const isInputDisabled = isSending || isLaunchingDraft || isRecoveringInterruptedTurn || isAttaching || isThreadStateBroken;
   useLayoutEffect(() => {
     if (autoFocusOnEntry && !isInputDisabled && !showQuestionnairePanel
       && !isStickyComposerCollapsed && !isMobileTextInputEnvironment()) {
@@ -275,7 +276,7 @@ export default function ThreadComposer ({
     });
     composerInputRef.current?.focus();
   }, [composerTarget.kind, projectId]);
-  const draftReferences = isSending ? [] : editing.draft.references ?? [];
+  const draftReferences = isSending || isLaunchingDraft ? [] : editing.draft.references ?? [];
   // Selected todos join only thread messages; drafts keep their own durable references.
   const todoReferences = useMemo(() => thread.isDraft ? [] : (selectedTodos ?? []).map(workbenchThreadTodoReference),
     [selectedTodos, thread.isDraft]);
@@ -309,7 +310,7 @@ export default function ThreadComposer ({
     preferStop: isShiftPressed,
     snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
   });
-  const isStopDisabled = stopControlState.disabled;
+  const isStopDisabled = isLaunchingDraft || stopControlState.disabled;
   const isMobileTextInput = useMobileTextInputEnvironment();
   const helperText = isProviderUnavailable
       ? `Provider ${thread.harness} is not installed. Saved input is retained.`
@@ -443,9 +444,10 @@ export default function ThreadComposer ({
 
     const activatedSkillPaths = getActivatedWorkbenchSkillPaths(composerHighlights);
     setError("");
-    const send = () => onSendMessage(thread.id, input, {
+    const send = (onThreadLaunched?: WorkbenchSendThreadMessageOptions["onThreadLaunched"]) => onSendMessage(thread.id, input, {
       ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
       ...(!thread.isDraft && isShiftPressed ? { skipAutoCompact: true } : {}),
+      onThreadLaunched,
     });
     if (!thread.isDraft) {
       await editing.session.submitAccepted(async () => {
@@ -456,13 +458,13 @@ export default function ThreadComposer ({
     }
     await threadController.actions.submitDraft(
       createThreadComposerMessageInput(trimmedValue, attachments, references),
-      () => editing.session.submit(async (submitted, options) => {
+      accept => editing.session.submit(async (submitted, options) => {
         return await runThreadComposerSubmission({
           clearDurableDraft: () => onThreadComposerDraftClear(projectId, thread.id, composerTarget),
           preserveDurableDraft: async () => {
             await onThreadComposerDraftChange(projectId, thread.id, () => submitted, "submission", composerTarget, options.detached);
           },
-          send,
+          send: () => send(accept),
           showError: setError,
         });
       }),
@@ -869,7 +871,7 @@ export default function ThreadComposer ({
                       shape="circle"
                       aria-label={sendButtonLabel}
                       title={sendButtonLabel}
-                      pendingHalo={isSending || isAttaching}
+                      pendingHalo={isSending && !isLaunchingDraft || isAttaching}
                     >
                       <SendHorizontalIcon size={20} />
                       {willAutoCompactOnSend ? (

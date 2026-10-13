@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadSteerState: delivery state a steer bubble shows; null for delivered or ordinary input.
- * - default ThreadSteerDecoration: wrap a message bubble surface in the pending halo or the undelivered glow.
+ * - default ThreadSteerDecoration: overlay a size-stable pending halo or wrap an undelivered glow around a message bubble.
  */
 "use client";
 
@@ -24,20 +24,6 @@ export default function ThreadSteerDecoration({
   className?: string;
   state: ThreadSteerState;
 }) {
-  if (state === "pending") {
-    return (
-      <div className="relative isolate overflow-hidden rounded-[1.4rem]">
-        <WorkbenchSpinningBorder radius="1.4rem" />
-        <div className={`
-          relative z-10 rounded-[1.4rem] border-[3px] border-transparent px-4 py-3 [clip-path:padding-box]
-          bg-[color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))] [--fg-bg:color-mix(in_srgb,var(--text)_6%,var(--app-bg-solid))]
-          ${className}
-        `}>
-          {children}
-        </div>
-      </div>
-    );
-  }
   if (state === "unsent") {
     return (
       <div className="relative isolate overflow-hidden rounded-[1.4rem] px-0.5 py-0.5">
@@ -59,5 +45,10 @@ export default function ThreadSteerDecoration({
       </div>
     );
   }
-  return <div className={`rounded-[1.15rem] px-4 py-3 ${surfaceClassName} ${className}`}>{children}</div>;
+  return <div className="relative isolate rounded-[1.15rem]">
+    {state === "pending" ? <WorkbenchSpinningBorder radius="1.15rem" /> : null}
+    <div className={`rounded-[1.15rem] px-4 py-3 ${surfaceClassName} ${className}`}>
+      {children}
+    </div>
+  </div>;
 }

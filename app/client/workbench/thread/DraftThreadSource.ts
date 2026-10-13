@@ -7,11 +7,13 @@ import type { ThreadPayload, WorkbenchControls, WorkbenchHarness } from "workben
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { DraftId } from "workbench-shared/workbench/identity";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
-import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { planCanonicalTranscriptDisplay } from "workbench-shared/workbench/transcript/thread-transcript-display-planner";
 import { EMPTY_THREAD_STORE_STATE, type ThreadHead, type ThreadStoreSource, type ThreadStoreState } from "./ThreadStore";
 import { createOptimisticItem } from "./thread-optimistic-items";
 
 export interface DraftThreadSourcePorts {
+  projectId: string;
   draftId: DraftId;
   readDraft: () => ThreadPayload | null;
   subscribe: (listener: () => void) => () => void;
@@ -32,6 +34,22 @@ function headOf(draft: ThreadPayload): ThreadHead {
 
 const unsupported = (action: string) => () => Promise.reject(new Error(`A draft cannot ${action} before it is launched.`));
 
+function projectLaunch(draft: ThreadPayload, turn: Turn, projectId: string): WorkbenchTranscriptProjection {
+  return {
+    thread: {
+      id: draft.id, projectId, projectRoot: draft.cwd, cwd: draft.cwd, title: draft.name ?? "",
+      createdAt: draft.createdAt, updatedAt: draft.updatedAt, activityAt: draft.updatedAt,
+    },
+    turns: [{ ...turn, turnIndex: 0, itemTimeline: [] }],
+    turnHistory: [], hasPreviousTurns: false,
+    approvalEntries: [], browseResultEntries: [], questionnaireEntries: [], steerEntries: [],
+    display: planCanonicalTranscriptDisplay({
+      turns: [{ turnId: turn.id, turnIndex: 0 }], items: [],
+      virtualTail: turn.items.map(payload => ({ turnId: turn.id, payload })),
+    }),
+  };
+}
+
 export default function createDraftThreadSource(
   ports: DraftThreadSourcePorts,
   publish: (next: Partial<ThreadStoreState>) => void,
@@ -47,12 +65,15 @@ export default function createDraftThreadSource(
       summary: {
         ...EMPTY_THREAD_STORE_STATE.summary,
         status: draft ? "ready" : "loading",
-        head: draft ? headOf(draft) : null,
+        head: draft ? { ...headOf(draft), status: launchTurn ? "active" : draft.status } : null,
         rateLimits: draft ? ports.readRateLimits(draft.harness) : null,
         draftDocument: draft,
       },
       turns: {
         ...EMPTY_THREAD_STORE_STATE.turns,
+        transcript: draft && launchTurn
+          ? { status: "ready", threadId: draft.id, projection: projectLaunch(draft, launchTurn, ports.projectId) }
+          : EMPTY_THREAD_STORE_STATE.turns.transcript,
         turns: launchTurn ? [launchTurn] : EMPTY_THREAD_STORE_STATE.turns.turns,
         liveTurnId: launchTurn?.id ?? null,
       },
@@ -77,16 +98,19 @@ export default function createDraftThreadSource(
         };
         sync();
         let accepted = false;
-        try {
-          accepted = await submit();
-          if (accepted && !disposed) {
+        const accept = () => {
+          if (accepted) return;
+          accepted = true;
+          if (!disposed && launchTurn) {
             launchTurn = {
               ...launchTurn,
-              items: [withWorkbenchInputState(item, {
-                kind: "optimistic", placement: "initial", status: "sent",
-              })],
+              items: [{ type: item.type, id: item.id, clientId: item.clientId, content: item.content }],
             };
+            sync();
           }
+        };
+        try {
+          if (await submit(accept)) accept();
           return accepted;
         } finally {
           if (!accepted) launchTurn = null;

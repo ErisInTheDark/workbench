@@ -116,6 +116,9 @@ export default function WorkbenchThreadPanel ({
     : null;
 
   const effectiveFontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number((threadViewProps.fontSizeRem + (zoomPreview ?? panelZoomDelta) * 0.08).toFixed(2))));
+  const rootViewKey = threadViewProps.viewInstanceKey ?? threadId;
+  const selectedViewKey = threadViewProps.selectedThreadId && threadViewProps.selectedThreadId !== threadId
+    ? threadViewProps.selectedThreadId : rootViewKey;
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
@@ -195,7 +198,7 @@ export default function WorkbenchThreadPanel ({
           ref={scrollViewportRef}
           className="absolute inset-0 px-5 md:px-6"
           contentClassName="flex flex-col"
-          resetKey={`${thread?.harness ?? "thread"}:${threadViewProps.selectedThreadId ?? thread?.id ?? threadId}`}
+          resetKey={`${rootViewKey}:${selectedViewKey}`}
         >
           {(threadViewProps.threadTarget?.kind === "provider"
             || threadViewProps.threadTarget?.kind === "subagent"

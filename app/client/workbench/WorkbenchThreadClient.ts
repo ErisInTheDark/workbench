@@ -393,6 +393,7 @@ function WorkbenchThreadClient(
     if (!store) {
       store = new ThreadStore(projectId, target, publish => target.kind === "draft"
         ? createDraftThreadSource({
+          projectId,
           draftId: target.draftId,
           readDraft: () => drafts.getDocumentByThreadId(target.draftId),
           subscribe,

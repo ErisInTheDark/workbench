@@ -1,7 +1,6 @@
 /*
  * Exports:
  * - default WorkbenchMainLayoutView: render a recursive desktop split layout with panel drop targets.
- * - Local helpers: resolve panel placement and render the isolated live drop preview.
  */
 "use client";
 
@@ -30,6 +29,7 @@ type WorkbenchDropPreview = WorkbenchMainLayoutDrop & {
 };
 
 interface WorkbenchMainLayoutViewProps {
+  getPanelViewKey?: (target: WorkbenchPanelTarget) => string | undefined;
   layout: WorkbenchMainLayoutState;
   onFocusPanel: (panelId: string) => void;
   onLayoutChange: (layout: WorkbenchMainLayoutState) => void;
@@ -170,6 +170,7 @@ function WorkbenchDropPreviewOverlay() {
 }
 
 export default function WorkbenchMainLayoutView ({
+  getPanelViewKey,
   layout,
   onFocusPanel,
   onLayoutChange,
@@ -260,7 +261,7 @@ export default function WorkbenchMainLayoutView ({
         dropTargetId={WORKBENCH_MAIN_PANEL_DROP_TARGET_ID}
         enabled={(payload) => (payload.type === "panel-target" || payload.type === "thread-row" || payload.type === "new-thread")
           && !(payload.type === "panel-target" && payload.sourcePanelId === node.id)}
-        key={node.id}
+        key={getPanelViewKey?.(node.target) ?? node.id}
         onDrop={(payload, point) => {
           if (payload.type !== "panel-target" && payload.type !== "thread-row" && payload.type !== "new-thread") return;
           const drop = getDropFromPoint(point.x, point.y, payload);

@@ -57,7 +57,7 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import WorkbenchApprovalModeMenu, { ApprovalReviewerSetupNotice, useApprovalReviewerReady } from "../WorkbenchApprovalModeMenu";
 import previousTurnLoadReducer from "./previous-turn-load-state";
 import ThreadHistoryPagingController, { type HistoryPagingOptions } from "./ThreadHistoryPagingController";
-import { ThreadTurnDetails, ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
+import { ThreadTurnLoadFailure, ThreadTurnLoadingSkeleton } from "./thread-view-items";
 import getThreadGitArcProposalPresentation, { getThreadGitArcWork } from "./thread-git-arc-presentation";
 import { ThreadStoreGitArcObservationProvider } from "./ThreadGitArcObservationContext";
 import ThreadAgentTabs from "./ThreadAgentTabs";
@@ -388,8 +388,7 @@ export default memo(function ThreadViewContent ({
   const relatedThreadsById = rootThread.relatedHeads;
   const activeThread = active.head;
   const usesSqlTranscript = Boolean(activeThread && !activeThread.isDraft);
-  const activeTranscriptSource = usesSqlTranscript
-    && activeThread
+  const activeTranscriptSource = activeThread
     && "threadId" in transcriptSource
     && transcriptSource.threadId === activeThread.id
     ? transcriptSource
@@ -405,6 +404,8 @@ export default memo(function ThreadViewContent ({
     controller: ThreadEntryMotionController;
     workedRunController: ThreadWorkedRunController;
     key: string;
+    initialThreadId: string;
+    threadId: string;
     seeded: boolean;
     admitted: WorkbenchTranscriptProjection["turns"] | null;
   } | null>(null);
@@ -412,17 +413,22 @@ export default memo(function ThreadViewContent ({
   // Seeded from the rendered projection: the provider-item turns omit generic and interaction items.
   const motionTurns = activeTranscriptProjection?.turns ?? null;
   const motionIdentities = (turns: NonNullable<typeof motionTurns>) => turns.flatMap(turn => turn.items.flatMap(getProjectedEntryMotionIdentities));
+  const isLaunchHandoff = entryMotionOwnerRef.current?.key === entryMotionOwnerKey
+    && entryMotionOwnerRef.current.threadId !== activeThreadId;
   if (entryMotionOwnerRef.current?.key !== entryMotionOwnerKey) {
     entryMotionOwnerRef.current = {
       controller: new ThreadEntryMotionController(motionTurns ? motionIdentities(motionTurns) : undefined),
       workedRunController: new ThreadWorkedRunController(),
       key: entryMotionOwnerKey,
+      initialThreadId: activeThreadId,
+      threadId: activeThreadId,
       seeded: Boolean(motionTurns),
       admitted: null,
     };
-  } else if (!entryMotionOwnerRef.current.seeded && motionTurns) {
+  } else if (motionTurns && (!entryMotionOwnerRef.current.seeded || isLaunchHandoff)) {
     entryMotionOwnerRef.current.controller.seed(motionIdentities(motionTurns));
     entryMotionOwnerRef.current.seeded = true;
+    entryMotionOwnerRef.current.threadId = activeThreadId;
   } else if (motionTurns && entryMotionOwnerRef.current.admitted !== motionTurns) {
     entryMotionOwnerRef.current.controller.admit(motionIdentities(motionTurns));
   }
@@ -792,7 +798,7 @@ export default memo(function ThreadViewContent ({
   const handleSendMessage = useCallback(async (
     _threadId: string,
     input: UserInput[],
-    options?: { activatedSkillPaths?: string[] },
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched">,
   ) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
@@ -924,6 +930,7 @@ export default memo(function ThreadViewContent ({
       rateLimits={rateLimits}
       trailingContent={(
         <ThreadContextStatus
+          launching={isLaunchingDraft}
           lifecycle={activeSidebarEntry?.lifecycle}
           onCompactThread={handleCompactThread}
           snoozed={activeThreadSnoozed}
@@ -957,9 +964,9 @@ export default memo(function ThreadViewContent ({
     ? <ApprovalReviewerSetupNotice onOpenSettings={approvalModeSettings.onOpenSettings} /> : null;
   const composer = activeThread ? (
     <ThreadComposer
-      autoFocusOnEntry={isFocused}
+      autoFocusOnEntry={isFocused && entryMotionOwnerRef.current.initialThreadId === activeThreadId}
       onDraftSessionChange={onDraftSessionChange}
-      targetControl={approvalModeControl ?? (isDraftThreadView ? draftTargetControl : null)}
+      targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
       header={fileIndexError}
       key={`${projectId}:${activeThread.id}`}
@@ -982,7 +989,7 @@ export default memo(function ThreadViewContent ({
       profileSlot={activeProfileSlot!}
       workspaceRoots={workspaceFileLinkRoots}
       rateLimits={rateLimits}
-      stickyMode={!isDraftThreadView}
+      stickyMode={!showDraftComposer}
       threadComposerDraft={activeThread.isDraft
         ? threadComposerDraft
         : threadComposerDraftsByThreadId[activeThread.id] ?? null}
@@ -994,7 +1001,7 @@ export default memo(function ThreadViewContent ({
       onTodoDeselect={id => todoSelection.deselect([id])}
       onTodosSent={todoSelection.deselect}
     >
-      {isDraftThreadView ? (
+      {showDraftComposer ? (
         <ThreadRateLimits
           harness={resolvedActiveThread?.harness ?? activeThread.harness}
           leadingContent={draftLeadingContent}
@@ -1084,24 +1091,6 @@ export default memo(function ThreadViewContent ({
           onClick={handleThreadViewClick}
           style={{ fontSize: `${fontSizeRem}rem` }}
         >
-        {isDraftThreadView ? (
-          <div className={isLaunchingDraft ? "hidden" : "contents"}>
-            <div className={joinClasses(
-              "flex w-full flex-1 items-center",
-              contained ? "py-4" : null,
-            )}>
-              <div className="w-full">
-                <header className="pb-4">
-                  <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
-                    Create new thread
-                  </h2>
-                </header>
-                {composer}
-              </div>
-            </div>
-          </div>
-        ) : null}
-
         <div
           hidden={showDraftComposer}
           data-thread-transcript="true"
@@ -1134,7 +1123,7 @@ export default memo(function ThreadViewContent ({
             ) : null
           ) : null}
           {activeThread ? (
-            usesSqlTranscript ? (
+            usesSqlTranscript || isLaunchingDraft ? (
               activeTranscriptProjection ? (
                 <>
                   {activeTranscriptSource?.status === "failed" ? (
@@ -1177,20 +1166,7 @@ export default memo(function ThreadViewContent ({
                   <ThreadLoadingSkeleton contained />
                 )
               )
-            ) : isLaunchingDraft ? loadedTurns.map(turn => (
-              <ThreadTurnDetails
-                key={turn.id}
-                threadId={activeThread.id}
-                threadCwdPath={activeThread.cwd}
-                turn={turn}
-                inlineMentionSources={inlineMentionSources}
-                knownSkills={workbenchSkills}
-                projectFilePaths={projectFilePaths}
-                projectId={projectId}
-                projectRootPath={projectRootPath}
-                workspaceRoots={workspaceFileLinkRoots}
-              />
-            )) : null
+            ) : null
           ) : (
             <div className="border-t border-[color-mix(in srgb, var(--text) 10%, transparent)] py-4">
               <p className="m-0 text-[0.92em] leading-[1.6] text-fg/muted">Loading subagent thread...</p>
@@ -1247,15 +1223,25 @@ export default memo(function ThreadViewContent ({
           <div className="mt-6">{agentTabs}</div>
         ) : null}
           </div>
-        {activeThread && !isDraftThreadView ? (
-          <>
+        {activeThread ? (
+          <div className={showDraftComposer ? joinClasses(
+            "flex w-full flex-1 items-center",
+            contained ? "py-4" : null,
+          ) : "contents"}>
+            <div className={showDraftComposer ? "w-full" : "contents"}>
+            {showDraftComposer ? <header className="pb-4">
+              <h2 className="m-0 text-[1.55em] font-semibold leading-[1.1] tracking-tight text-text">
+                Create new thread
+              </h2>
+            </header> : null}
             {composer}
-            {composerStatus ? (
+            {!showDraftComposer && composerStatus ? (
               <div className="col-start-1 row-start-3">
                 {composerStatus}
               </div>
             ) : null}
-          </>
+            </div>
+          </div>
         ) : null}
         </div>
         <div

@@ -127,8 +127,8 @@ export type ThreadSliceName = keyof ThreadStoreState;
 
 export interface ThreadStoreActions {
   send(input: UserInput[], options?: WorkbenchSendThreadMessageOptions): Promise<void>;
-  /** Present a draft's first input while its existing save and launch operation runs. */
-  submitDraft(input: UserInput[], submit: () => Promise<boolean>): Promise<boolean>;
+  /** Present first input; acceptance updates its decoration independently of draft cleanup. */
+  submitDraft(input: UserInput[], submit: (accept: () => void) => Promise<boolean>): Promise<boolean>;
   stop(): Promise<void>;
   compact(): Promise<void>;
   resendSteer(itemId: string): Promise<void>;
