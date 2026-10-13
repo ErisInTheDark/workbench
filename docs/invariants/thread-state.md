@@ -2,7 +2,7 @@
 - Stop is only ever requested by user or parent agent. Interrupt is everything else.
 - Snoozed and provider-active are mutually exclusive. Questionnaire snooze interrupts before snoozing and retains the question; stop dismisses it, clears snooze, and marks stopped. Repair active+snoozed to active+awake.
 - Accepted provider intent wakes the thread, drops any held questionnaire, and marks the accepted turn working.
-- An agent-message steer is delivered input on the live turn; it never drops that turn's questionnaire.
+- ID-addressed agent messages wait behind the target's pending questionnaire. Relationship-addressed parent messages may settle a child questionnaire.
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.
 - Settled and archived are placement, not status. Preserve lifecycle presentation.
 - Unpinned settled sidebar threads archive 14 days after the later of their last thread item or settling, including existing records.

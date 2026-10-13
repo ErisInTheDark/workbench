@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_MESSAGE_COMMANDS: attributed message sending, sender-filtered long waits, and legacy send compatibility.
+ * - WORKBENCH_MESSAGE_COMMANDS: attributed message sending and sender-filtered long waits.
  */
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -30,47 +30,38 @@ function requireCallerThreadId(callerThreadId: string | null) {
   return callerThreadId;
 }
 
-function messageCommand(legacy: boolean) {
-  return defineWorkbenchAgentCommand({
-    description: legacy
-      ? "Legacy compatibility for messaging a direct child or parent."
-      : "Message one Workbench thread, steering an active turn or starting an idle one.",
-    helpGroups: legacy ? [] : ["message"],
-    hideFromRootHelp: legacy || undefined,
-    words: legacy ? ["subagent", "message"] : ["message"],
-    usage: legacy
-      ? "wb subagent message (--id <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>"
-      : "wb message (--thread <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>",
-    inputSchema: messageInputSchema,
-    parseCliArgs(args) {
-      const threadFlag = legacy ? "--id" : "--thread";
-      const flags = new WorkbenchAgentCommandFlags(args, {
-        boolean: ["--parent"],
-        values: [threadFlag, "--name", "--message", "--user-visible-simple-version"],
-      });
-      return {
-        message: flags.required("--message"),
-        name: flags.optional("--name") ?? undefined,
-        parent: flags.has("--parent") || undefined,
-        threadId: flags.optional(threadFlag) ?? undefined,
-        userVisibleSimpleVersion: flags.required("--user-visible-simple-version"),
-      };
-    },
-    buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
-      return postWorkbenchAgentCommand(legacy ? "/api/subagents" : "/api/message", {
-        ...(legacy ? { action: "message" } : {}),
-        callerThreadId: requireCallerThreadId(callerThreadId),
-        cwd,
-        message: input.message,
-        ...(input.name ? { name: input.name } : {}),
-        ...(input.parent ? { parent: true } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        userVisibleSimpleVersion: input.userVisibleSimpleVersion,
-        ...(workbenchOrigin ? { workbenchOrigin } : {}),
-      });
-    },
-  });
-}
+const message = defineWorkbenchAgentCommand({
+  description: "Message one Workbench thread, steering an active turn or starting an idle one.",
+  helpGroups: ["message"],
+  words: ["message"],
+  usage: "wb message (--thread <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>",
+  inputSchema: messageInputSchema,
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, {
+      boolean: ["--parent"],
+      values: ["--thread", "--name", "--message", "--user-visible-simple-version"],
+    });
+    return {
+      message: flags.required("--message"),
+      name: flags.optional("--name") ?? undefined,
+      parent: flags.has("--parent") || undefined,
+      threadId: flags.optional("--thread") ?? undefined,
+      userVisibleSimpleVersion: flags.required("--user-visible-simple-version"),
+    };
+  },
+  buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
+    return postWorkbenchAgentCommand("/api/message", {
+      callerThreadId: requireCallerThreadId(callerThreadId),
+      cwd,
+      message: input.message,
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.parent ? { parent: true } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      userVisibleSimpleVersion: input.userVisibleSimpleVersion,
+      ...(workbenchOrigin ? { workbenchOrigin } : {}),
+    });
+  },
+});
 
 const wait = defineWorkbenchAgentCommand({
   description: "Wait for the first new message from any selected thread ID or subagent name. Workbench Long Wait; user steers interrupt it.",
@@ -97,4 +88,4 @@ const wait = defineWorkbenchAgentCommand({
   },
 });
 
-export const WORKBENCH_MESSAGE_COMMANDS = [messageCommand(false), wait, messageCommand(true)] as const;
+export const WORKBENCH_MESSAGE_COMMANDS = [message, wait] as const;

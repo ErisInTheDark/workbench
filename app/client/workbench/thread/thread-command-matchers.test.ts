@@ -204,8 +204,7 @@ function representativeMcpArguments(name: WorkbenchCommandPresentationName) {
     case "subagent_wait":
     case "subagent_stop":
     case "subagent_settle": return { names: ["Lumi"] };
-    case "message":
-    case "subagent_message": return { message: "continue", parent: true };
+    case "message": return { message: "continue", parent: true };
     case "subagent_create": return {
       message: "inspect",
       name: "Lumi",
@@ -470,7 +469,6 @@ test("specialized typed wb MCP calls share CLI claims without duplicate summarie
     ['wb task set --title "Render typed wb tools"', "task_set", { title: "Render typed wb tools" }],
     ["wb subagent wait --name Lumi --name Nova", "subagent_wait", { names: ["Lumi", "Nova"] }],
     ['wb message --thread review-target --message "progress"', "message", { message: "progress", threadId: "review-target" }],
-    ['wb subagent message --parent --message "progress"', "subagent_message", { message: "progress", parent: true }],
     ["wb git arc wait", "git_arc_wait", {}],
     ["wb git arc release --disown", "git_arc_release", { disown: true }],
     ["wb git arc stash", "git_arc_stash", {}],
@@ -602,9 +600,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
   const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "task_blocked" });
-  const subagentRoute = getWorkbenchMcpCommandRoute({ argumentsValue: { message: "progress", parent: true }, server: "wbex", tool: "subagent_message" });
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
-  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(subagentRoute, true), false);
 });
 
 test("Thread Recall CLI and MCP routes preserve the same useful intent", () => {
@@ -820,10 +816,6 @@ test("Workbench message and subagent commands use distinct semantic parsers", ()
     targets: [{ kind: "id", value: "child-thread" }],
     title: null,
   });
-  assert.deepEqual(parseWorkbenchMessageCommand('wb.cmd subagent message --id "child thread" --message continue'), {
-    message: "continue",
-    target: { kind: "thread", value: "child thread" },
-  });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent stop --id='child-thread'"), {
     action: "stop",
     message: null,
@@ -840,10 +832,6 @@ test("Workbench message and subagent commands use distinct semantic parsers", ()
     targets: [{ kind: "id", value: "child-thread" }],
     title: null,
   });
-  assert.deepEqual(parseWorkbenchMessageCommand('wb subagent message --message "Use the safer `route`" --id child-thread'), {
-    message: "Use the safer `route`",
-    target: { kind: "thread", value: "child-thread" },
-  });
   assert.deepEqual(parseWorkbenchSubagentCommand("wb subagent profiles"), {
     action: "profiles",
     message: null,
@@ -852,15 +840,10 @@ test("Workbench message and subagent commands use distinct semantic parsers", ()
     targets: [],
     title: null,
   });
-  assert.deepEqual(parseWorkbenchMessageCommand('wb subagent message --parent --message "Progress note"'), {
-    message: "Progress note",
-    target: { kind: "parent", value: null },
-  });
   assert.deepEqual(parseWorkbenchMessageCommand('wb message --thread "review target" --message "Progress note"'), {
     message: "Progress note",
     target: { kind: "thread", value: "review target" },
   });
-  assert.equal(parseWorkbenchSubagentCommand('wb subagent message --parent --message "Progress note"'), null);
   assert.equal(parseWorkbenchSubagentCommand("wb thread recall --thread child-thread"), null);
 
   const display = getThreadCommandDisplay({
@@ -878,14 +861,6 @@ test("Workbench message and subagent commands use distinct semantic parsers", ()
     projectRootPath: PROJECT_ROOT,
   });
   assert.equal(multiplexedDisplay.claimedBy, "workbench-cli.subagent");
-
-  const parentMessageDisplay = getThreadCommandDisplay({
-    command: 'wb subagent message --parent --message "Progress note"',
-    commandActions: [],
-    cwd: PROJECT_ROOT,
-    projectRootPath: PROJECT_ROOT,
-  });
-  assert.equal(parentMessageDisplay.claimedBy, "workbench-cli.message");
 
 });
 

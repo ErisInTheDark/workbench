@@ -97,7 +97,7 @@ test("canonical history does not initialise the native bridge", async (t) => {
   assert.deepEqual(failures, []);
 });
 
-test("legacy Codex subagent messages use the reloadable message owner", async () => {
+test("Codex subagent requests use the reloadable subagent owner", async () => {
   const routed: string[] = [];
   const parent = {
     appServer: { send() {} },
@@ -105,9 +105,6 @@ test("legacy Codex subagent messages use the reloadable message owner", async ()
   };
   const registrations = {
     codexAppServer: parent,
-    messages: {
-      send: async () => { routed.push("messages"); },
-    },
     projectCatalog: {
       resolveAgentEndpointProjectFromCwd: async () => ({
         cwd: "C:/repo",
@@ -135,19 +132,13 @@ test("legacy Codex subagent messages use the reloadable message owner", async ()
   });
   const bridge = instance.registrations.codexBridge!;
   try {
-    const message = await bridge.handleBridgeRequest({
-      id: 1,
-      method: "workbench/subagent/message",
-      params: { callerThreadId: "reviewer", cwd: "C:/repo", message: "review feedback", threadId: "target" },
-    });
     const list = await bridge.handleBridgeRequest({
-      id: 2,
+      id: 1,
       method: "workbench/subagent/list",
       params: { callerThreadId: "reviewer", cwd: "C:/repo" },
     });
-    assert.equal(message?.error, undefined);
     assert.equal(list?.error, undefined);
-    assert.deepEqual(routed, ["messages", "subagents"]);
+    assert.deepEqual(routed, ["subagents"]);
   } finally {
     await instance.dispose();
     await bridge.disposeImmediately();

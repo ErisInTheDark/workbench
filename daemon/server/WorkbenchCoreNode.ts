@@ -530,6 +530,7 @@ function createWorkbenchCoreFeature(
       resolvePendingQuestionnaire: (input, deliver) => (
         requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
       ),
+      subscribe: listener => requireThreadState().controller.subscribe(listener),
     },
   }, messageWaitHandoff);
   threadState = new WorkbenchThreadStateFeature({

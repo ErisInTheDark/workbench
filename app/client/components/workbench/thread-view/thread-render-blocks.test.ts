@@ -181,10 +181,10 @@ function mcpWait(id: string, names: string[], status: "completed" | "inProgress"
   return { ...mcp(id, "subagent_wait", { names }), status } as ThreadItem;
 }
 function mcpMessage(id: string, name: string, message = id): ThreadItem {
-  return mcp(id, "subagent_message", { message, name });
+  return mcp(id, "message", { message, name });
 }
 function cliMessage(id: string, name: string, message = id): CommandItem {
-  return command(id, `wb subagent message --name ${name} --message ${message}`);
+  return command(id, `wb message --name ${name} --message ${message}`);
 }
 const blockShape = (block: ReturnType<typeof buildRenderableBlocks>[number]) => [
   block.kind === "agentMessageSequence" ? `agent:${block.state}` : block.kind,
@@ -333,7 +333,7 @@ test("CLI message and wait sequences qualify without reviving failed outgoing me
     ["commandSequence", ["failed"]], ["agent:delivered", ["incoming"]],
   ]);
   assert.deepEqual(buildRenderableBlocks([
-    mcp("missing-message", "subagent_message", { name: "Iris" }),
+    mcp("missing-message", "message", { name: "Iris" }),
     note("incoming", "Iris"),
   ]).map(blockShape), [
     ["item", ["missing-message"]], ["agent:delivered", ["incoming"]],
@@ -416,10 +416,9 @@ test("MCP task actions and outgoing thread messages remain boundaries", () => {
     mcp("title", "task_set", { title: "new" }),
     mcp("status", "task_completed", {}),
     mcp("global-message", "message", { threadId: "review-target", message: "hello" }),
-    mcp("message", "subagent_message", { name: "luna", message: "hello" }),
     command("after"),
   ]);
-  assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, false, true]);
+  assert.deepEqual(result.map(row => row.eligible), [true, false, false, false, true]);
 });
 
 test("already-matching task title sets stay in canonical items but leave no render block", () => {
@@ -506,7 +505,6 @@ test("subagent creation and incoming native messages cannot enter worked groups"
   const items: ThreadItem[] = [
     command("create-cli", 'wb subagent create --profile luna --name luna --title task --message hello'),
     command("global-message-cli", 'wb message --thread review-target --message hello'),
-    command("message-cli", 'wb subagent message --name luna --message hello'),
     mcp("create-mcp", "subagent_create", { profileId: "luna", name: "luna", title: "task", message: "hello" }),
     { id: "incoming", type: "functionCallOutput", namespace: "workbench", name: "agent_message", output: "incomplete message envelope" },
   ];

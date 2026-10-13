@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchMessageCommand/parseWorkbenchMessageCommand: parse canonical and legacy global thread messages.
+ * - WorkbenchMessageCommand/parseWorkbenchMessageCommand: parse global thread messages.
  * - WorkbenchSubagentCommand/WorkbenchSubagentCommandTarget/parseWorkbenchSubagentCommand: parse semantic subagent actions, create metadata, and ordered id/name targets.
  * - WorkbenchSubagentQueueCheckCommand/parseWorkbenchSubagentQueueCheckCommand: parse an exact read-only queue check.
  * - WorkbenchTaskTitleCommand/parseWorkbenchTaskTitleCommand/isWorkbenchTaskTitleSetMatcherClaim: parse task title actions and identify standalone title-set displays.
@@ -268,12 +268,11 @@ export function parseWorkbenchSubagentQueueCheckCommand(
 
 function parseSingleWorkbenchMessageCommand(command: string): WorkbenchMessageCommand | null {
   const normalized = command.trim();
-  const legacy = /^wb(?:\.cmd)?\s+subagent\s+message\b/iu.test(normalized);
-  if (!legacy && !/^wb(?:\.cmd)?\s+message\b/iu.test(normalized)) return null;
+  if (!/^wb(?:\.cmd)?\s+message\b/iu.test(normalized)) return null;
   const message = readFlagValue(normalized, "message");
   if (!message) return null;
   const name = readFlagValue(normalized, "name");
-  const threadId = readFlagValue(normalized, legacy ? "id" : "thread");
+  const threadId = readFlagValue(normalized, "thread");
   const parent = hasBooleanFlag(normalized, "parent");
   if ([Boolean(name), Boolean(threadId), parent].filter(Boolean).length !== 1) return null;
   return {

@@ -518,7 +518,6 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_project"), true);
     assert.equal(inventory.tools.some(({ name }) => name === "tokens_instructions"), false);
     assert.equal(inventory.tools.some(({ name }) => name === "message"), true);
-    assert.equal(inventory.tools.some(({ name }) => name === "subagent_message"), true);
     const projectInventory = await projectClient.listTools();
     assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
     const instructionTools = controller.listInstructionTools();
@@ -815,7 +814,7 @@ test("child catalogues omit every parent-only tool while retaining child coordin
       assert.equal(parentTools.has(tool), true, `${tool} should remain available to parents`);
       assert.equal(childTools.has(tool), false, `${tool} should be absent for children`);
     }
-    for (const tool of ["git_arc_claims", "message", "message_wait", "subagent_dequeue", "subagent_message", "subagent_queue"]) {
+    for (const tool of ["git_arc_claims", "message", "message_wait", "subagent_dequeue", "subagent_queue"]) {
       assert.equal(childTools.has(tool), true, `${tool} should remain available to children`);
     }
   } finally {

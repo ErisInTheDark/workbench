@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and thread-state ports.
- * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits and their undelivered mail, questionnaire settlement, and reload drain.
+ * - WorkbenchThreadMessageControllerOptions: provider, identity, project, relationship and observable thread-state ports.
+ * - default WorkbenchThreadMessageController: own message admission, Workbench notices, sender lookup, message waits and their undelivered mail, questionnaire admission and settlement, and reload drain.
  */
 import type {
   WorkbenchHarness,
@@ -51,6 +51,7 @@ export interface WorkbenchThreadMessageControllerOptions {
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
     resolvePendingQuestionnaire: WorkbenchQuestionnaireResponseStatePort["resolvePendingQuestionnaire"];
+    subscribe(listener: (projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void): () => void;
   };
 }
 
@@ -64,6 +65,7 @@ function buildSubagentPromptContext(name: string, workbenchOrigin: string | unde
 
 export default class WorkbenchThreadMessageController {
   private active = true;
+  private readonly drain = new AbortController();
   private readonly requests = new Set<Promise<void>>();
   private readonly waits: WorkbenchMessageWaitController;
 
@@ -98,6 +100,7 @@ export default class WorkbenchThreadMessageController {
 
   beginRuntimeDrain() {
     this.active = false;
+    this.drain.abort(new Error("Thread message controller is draining for runtime reload."));
   }
 
   async dispose() {
@@ -209,6 +212,68 @@ export default class WorkbenchThreadMessageController {
     }
   }
 
+  private async waitForQuestionnaireClear(
+    projectId: ProjectId,
+    harness: WorkbenchHarness,
+    threadId: WorkbenchThreadId,
+  ) {
+    const signal = this.drain.signal;
+    await new Promise<void>((resolve, reject) => {
+      let abortListening = false;
+      let checkAgain = true;
+      let checking = false;
+      let finished = false;
+      let unsubscribe = () => {};
+      const finish = (error?: Error) => {
+        if (finished) return;
+        finished = true;
+        unsubscribe();
+        if (abortListening) signal.removeEventListener("abort", onAbort);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onAbort = () => finish(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Thread message controller is draining for runtime reload."),
+      );
+      const check = async () => {
+        checkAgain = true;
+        if (checking) return;
+        checking = true;
+        try {
+          while (checkAgain && !finished) {
+            checkAgain = false;
+            const entry = await this.options.threadState.getEntry(projectId, harness, threadId);
+            if (!entry || entry.entryKind === "draft" || !entry.pendingQuestionnaire) {
+              finish();
+            } else if (!abortListening) {
+              abortListening = true;
+              signal.addEventListener("abort", onAbort, { once: true });
+              if (signal.aborted) onAbort();
+            }
+          }
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error("Failed to read the target questionnaire."));
+        } finally {
+          checking = false;
+        }
+      };
+      unsubscribe = this.options.threadState.subscribe((changedProjectId, entry) => {
+        if (
+          changedProjectId === projectId
+          && entry.entryKind !== "draft"
+          && entry.identity.harness === harness
+          && entry.identity.threadId === threadId
+        ) {
+          checkAgain = true;
+          void check();
+        }
+      });
+      void check();
+    });
+  }
+
   private async sendOwned(request: WorkbenchThreadMessageRequest) {
     const requestedProject = await this.options.resolveProjectFromCwd(request.cwd, { endpointName: "Workbench message" });
     const caller = await this.resolveThread(request.callerThreadId, "Workbench message caller", requestedProject.project);
@@ -221,8 +286,13 @@ export default class WorkbenchThreadMessageController {
       : (await this.options.listSubagents(target.projectId)).subagents;
     const targetRelationship = targetRelationships.find(record => record.threadId === target.threadId) ?? null;
     await this.assertUnlocked(target.projectId, targetRelationship);
+    if (request.threadId) {
+      await this.waitForQuestionnaireClear(target.projectId, target.harness, target.threadId);
+    }
 
-    const directChild = targetRelationship?.parentThreadId === caller.threadId ? targetRelationship : null;
+    const directChild = !request.threadId && targetRelationship?.parentThreadId === caller.threadId
+      ? targetRelationship
+      : null;
     const callerRelationship = relationships.find(record => record.threadId === caller.threadId) ?? null;
     const directParent = callerRelationship?.parentThreadId === target.threadId ? callerRelationship : null;
     const senderName = directChild

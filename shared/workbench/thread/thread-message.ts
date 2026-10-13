@@ -10,7 +10,6 @@ import { ThreadReferenceSchema } from "../identity";
 const requiredText = z.string().trim().min(1);
 
 export const WorkbenchThreadMessageRequestSchema = z.object({
-  action: z.literal("message").optional(),
   callerThreadId: ThreadReferenceSchema,
   cwd: requiredText,
   message: requiredText,

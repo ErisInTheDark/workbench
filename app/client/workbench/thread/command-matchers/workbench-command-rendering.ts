@@ -68,7 +68,6 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "subagent_settle",
   "subagent_queue",
   "subagent_dequeue",
-  "subagent_message",
   "task_get",
   "task_set",
   "task_completed",
@@ -696,7 +695,7 @@ export function getWorkbenchCommandRoute(
   const args = asRecord(argumentsValue) ?? {};
   const gitArc = renderGitArc(name, args);
   if (gitArc) return gitArc;
-  if (name === "message" || name === "subagent_message") return renderMessage(args);
+  if (name === "message") return renderMessage(args);
   if (name.startsWith("subagent_")) return renderSubagent(name, args);
   if (name.startsWith("browse_")) return renderBrowse(name, args);
   switch (name) {

@@ -81,7 +81,6 @@ const UNCONFIGURED_DIRECT_PORT: WorkbenchAgentDirectPort = {
 const SUBAGENT_ACTION_METHODS = {
   create: "workbench/subagent/create",
   list: "workbench/subagent/list",
-  message: "workbench/subagent/message",
   profiles: "workbench/subagent/profiles",
   settle: "workbench/subagent/settle",
   stop: "workbench/subagent/stop",
