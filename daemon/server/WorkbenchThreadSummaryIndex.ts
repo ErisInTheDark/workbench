@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadSummaryIndexPorts: thread ownership, project snapshots and live-fact seeds the index reads.
- * - default WorkbenchThreadSummaryIndex: own every read thread's canonical summary (lean row plus live facts) located in its owner project, announcing each thread whose summary changed.
+ * - default WorkbenchThreadSummaryIndex: batch concurrent reads by project and own canonical thread summaries and their change announcements.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { ProjectId } from "workbench-shared/workbench/identity";
@@ -30,6 +30,8 @@ export default class WorkbenchThreadSummaryIndex {
   private readonly facts = new Map<string, ThreadSummaryFacts>();
   /** One located summary object per thread until it changes, so unchanged summaries diff as identical. */
   private readonly summaries = new Map<string, LocatedThreadSummary>();
+  private readonly reads = new Map<string, Promise<LocatedThreadSummary | null>>();
+  private readonly projectReads = new Map<ProjectId, Promise<ReadonlyMap<string, ThreadEntry>>>();
   private readonly listeners = new Set<(threadId: string) => void>();
   private readonly stop: () => void;
   private readonly seeded: Promise<void>;
@@ -73,19 +75,53 @@ export default class WorkbenchThreadSummaryIndex {
     return located;
   }
 
-  /** Reads the thread's owner project once; null for a thread this daemon does not hold. */
-  async read(threadId: string): Promise<LocatedThreadSummary | null> {
-    await this.seeded;
+  /** Concurrent readers share thread resolution and one indexed snapshot per project. */
+  read(threadId: string): Promise<LocatedThreadSummary | null> {
+    if (this.disposed) return Promise.resolve(null);
     const known = this.peek(threadId);
-    if (known || this.disposed) return known;
+    if (known) return Promise.resolve(known);
+    const pending = this.reads.get(threadId);
+    if (pending) return pending;
+    const read = this.readUncached(threadId);
+    this.reads.set(threadId, read);
+    const release = () => { this.reads.delete(threadId); };
+    void read.then(release, release);
+    return read;
+  }
+
+  private async readUncached(threadId: string): Promise<LocatedThreadSummary | null> {
+    await this.seeded;
+    if (this.disposed) return null;
+    const known = this.peek(threadId);
+    if (known) return known;
     const projectId = this.owners.get(threadId) ?? await this.ports.resolveProject(threadId);
     if (!projectId || this.disposed) return null;
-    const snapshot = this.ports.peekProject(projectId) ?? await this.ports.readProject(projectId);
+    const entries = await this.readProjectEntries(projectId);
     if (this.disposed) return null;
     this.owners.set(threadId, projectId);
-    const entry = findThread(snapshot, threadId);
+    const entry = entries.get(threadId);
     if (entry) this.entries.set(threadId, entry);
     return this.peek(threadId);
+  }
+
+  private readProjectEntries(projectId: ProjectId): Promise<ReadonlyMap<string, ThreadEntry>> {
+    const pending = this.projectReads.get(projectId);
+    if (pending) return pending;
+    // Even cached snapshots project the whole project; let same-turn readers join before taking one.
+    const read = Promise.resolve().then(async () => {
+      const entries = new Map<string, ThreadEntry>();
+      if (this.disposed) return entries;
+      const snapshot = this.ports.peekProject(projectId) ?? await this.ports.readProject(projectId);
+      if (this.disposed) return entries;
+      for (const entry of snapshot.entries) {
+        if (entry.entryKind !== "draft") entries.set(entry.identity.threadId, entry);
+      }
+      return entries;
+    });
+    this.projectReads.set(projectId, read);
+    const release = () => { this.projectReads.delete(projectId); };
+    void read.then(release, release);
+    return read;
   }
 
   setCompacting(threadId: string, compacting: boolean) {
@@ -103,6 +139,8 @@ export default class WorkbenchThreadSummaryIndex {
   dispose() {
     this.disposed = true;
     this.stop();
+    this.reads.clear();
+    this.projectReads.clear();
     this.listeners.clear();
   }
 

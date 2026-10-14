@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WORKBENCH_EVENT_STREAM_ACK_METHOD } from "workbench-shared/workbench/websocket-stream";
+import { z } from "zod";
+import { describeObservationDelta, diffObservationValue, observationDeltaSubjects, observationShape } from "workbench-shared/workbench/workspace/observation-patch";
 import WorkbenchWebSocketEventLog from "./WorkbenchWebSocketEventLog";
 
 function fixture() {
@@ -185,14 +187,20 @@ test("everything one thread did in a window logs as one line while subject-less 
 
 test("workspace observations group changing thread subjects into one bounded window", () => {
   const { logger, lines, advance } = fixture();
-  const summary = (subject: string, field: string) => ({
-    subjects: [subject], fields: [field], kind: "threadSummaries", group: "workspace:threadSummaries",
-  });
-  logger.record("out", "workbench", "workspace/delta", 300, "threadSummaries", summary("c6c7f1bd", "activityAt"));
-  logger.record("out", "workbench", "workspace/delta", 400, "threadSummaries", summary("5f6e4475", "lifecycle"));
+  const record = (id: string, bytes: number) => {
+    const delta = diffObservationValue({ summaries: {} }, { summaries: { [id]: { title: "private title" } } }, {
+      fields: { summaries: observationShape.record(z.object({ title: z.string() })) },
+    })!;
+    logger.record("out", "workbench", "workspace/delta", bytes, `threadSummaries ${describeObservationDelta(delta)}`, {
+      ...observationDeltaSubjects(delta), kind: "threadSummaries", group: "workspace:threadSummaries",
+    });
+  };
+  record("c6c7f1bd-961b-4832-9d6e-0cbbb147f59d", 300);
+  record("5f6e4475-1234-4000-8000-000000000000", 400);
+  assert.equal(lines.length, 0);
   advance(2_000);
   assert.equal(lines.length, 1);
-  assert.match(lines[0]!, /c6c7f1bd, 5f6e4475: threadSummaries \[activityAt, lifecycle\]/);
+  assert.match(lines[0]!, /c6c7f1bd, 5f6e4475: threadSummaries \[set\]/);
   assert.match(lines[0]!, /count: 2, out: 700B/);
   logger.dispose();
 });

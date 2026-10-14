@@ -329,8 +329,17 @@ function collectSubjects(delta: ObservationDelta, subjects: Set<string>, fields:
   let found = false;
   // Composite keys (`daemon/project/harness:thread`) name their most specific id last.
   const subject = (key: string) => [...key.matchAll(SUBJECT_IDS)].at(-1)?.[0].slice(0, 8) ?? null;
-  for (const field of Object.keys(delta.set ?? {})) if (field !== "revision") fields.add(field);
-  for (const field of delta.unset ?? []) fields.add(`-${field}`);
+  const changedField = (field: string, operation: "set" | "removed") => {
+    const id = subject(field);
+    if (id) {
+      subjects.add(id);
+      fields.add(operation);
+      found = true;
+    } else if (operation === "removed") fields.add(`-${field}`);
+    else if (field !== "revision") fields.add(field);
+  };
+  for (const field of Object.keys(delta.set ?? {})) changedField(field, "set");
+  for (const field of delta.unset ?? []) changedField(field, "removed");
   for (const [name, nested] of Object.entries(delta.objects ?? {})) {
     const id = subject(name);
     if (id) {

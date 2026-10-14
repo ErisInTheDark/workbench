@@ -122,3 +122,21 @@ test("subjects name the deepest thread a delta touches, with the fields changed 
     key: `ad0de42c-aae0-482e-b423-a704ee9d6824/${project}/${thread}`, delta: { objects: { entry: { set: { activityAt: 1 } } } },
   }] } } } } }), { subjects: ["c6c7f1bd"], fields: ["activityAt"] }, "a composite row key names its thread, not its daemon");
 });
+
+test("record arrivals, replacements and removals identify subjects without reading payload values", () => {
+  const id = "c6c7f1bd-961b-4832-9d6e-0cbbb147f59d";
+  const secret = "5f6e4475-1234-4000-8000-000000000000";
+  const item = z.object({ title: z.string() }).nullable();
+  for (const field of ["summaries", "data"]) {
+    const shape: ObservationShape = { fields: { [field]: observationShape.record(item) } };
+    const empty = { [field]: {} };
+    const present = { [field]: { [id]: { title: secret } } };
+    const absent = { [field]: { [id]: null } };
+    for (const [before, after] of [[empty, present], [present, absent], [absent, present]]) {
+      const delta = diffObservationValue(before!, after!, shape)!;
+      assert.deepEqual(observationDeltaSubjects(delta), { subjects: ["c6c7f1bd"], fields: ["set"] });
+    }
+    assert.deepEqual(observationDeltaSubjects(diffObservationValue(present, empty, shape)!),
+      { subjects: ["c6c7f1bd"], fields: ["removed"] });
+  }
+});

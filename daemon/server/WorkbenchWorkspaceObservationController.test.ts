@@ -12,6 +12,7 @@ import { daemonObservationShape } from "workbench-shared/workbench/workspace/wor
 import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
 import { createThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
+import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 
 type Client = { id: string };
 type Owners = ConstructorParameters<typeof WorkbenchWorkspaceObservationController<Client>>[0];
@@ -236,6 +237,80 @@ test("a thread summary batch reads unknown threads, retargets as deltas, and fol
   assert.throws(() => f.owner.retarget("connection", {
     subscriptionId: rows.subscriptionId, generation: rows.generation, query: { kind: "projectThreads", projectIds: [b] },
   }), /Only thread summary batches/u);
+});
+
+function indexedSummaries(context: TestContext) {
+  const entries = Array.from({ length: 20 }, (_, index) => thread(index)).map(entry => {
+    if (entry.entryKind !== "thread") throw new Error("Expected thread fixture.");
+    return entry;
+  });
+  const firstIds = entries.slice(0, -1).map(entry => ThreadReferenceSchema.parse(entry.identity.threadId));
+  const otherId = ThreadReferenceSchema.parse(entries.at(-1)!.identity.threadId);
+  const held = Promise.withResolvers<WorkbenchThreadSidebarSnapshot>();
+  const entered = Promise.withResolvers<void>();
+  const reads: ProjectId[] = [];
+  let queue = Promise.resolve();
+  const index = new WorkbenchThreadSummaryIndex({
+    resolveProject: async id => id === otherId ? b : a,
+    peekProject: () => null,
+    readProject: projectId => {
+      reads.push(projectId);
+      if (projectId === b) return Promise.resolve({ ...sidebar(b), entries: entries.slice(-1) });
+      const read = queue.then(() => { entered.resolve(); return held.promise; });
+      queue = read.then(() => {});
+      return read;
+    },
+    subscribeProjects: () => () => {},
+    readRequiredTodoCounts: async () => new Map(),
+    readAddressedFeedbackCounts: async () => new Map(),
+    warn: message => { throw new Error(message); },
+  });
+  context.after(() => index.dispose());
+  const f = fixture(context, { summaries: index });
+  return { ...f, index, firstIds, otherId, reads, entered,
+    finish: () => { held.resolve({ ...sidebar(a), entries: entries.slice(0, -1) }); } };
+}
+
+test("real summary reads publish one cold project batch while another project remains independent", async context => {
+  const f = indexedSummaries(context);
+  const opened = f.observe({ kind: "threadSummaries", threadIds: [...f.firstIds, f.otherId] });
+  await f.entered.promise;
+  const partial = await f.wait(value => value.kind === "threadSummaries" && Boolean(value.summaries[f.otherId]));
+  assert.equal(partial.phase, "pending");
+  f.finish();
+  const complete = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.phase === "current");
+  assert.ok(complete.kind === "threadSummaries");
+  assert.deepEqual(new Set(Object.keys(complete.summaries)), new Set([...f.firstIds, f.otherId]));
+  assert.equal(f.updates.length, 2, "each independently ready project publishes its summaries together");
+  assert.deepEqual(f.reads, [a, b]);
+  let applied = opened;
+  for (const update of f.updates) {
+    assert.ok(update.change);
+    applied = { ...applyObservationDelta(applied, update.change.delta, daemonObservationShape("threadSummaries")),
+      revision: update.value.revision } as DaemonWorkspaceObservation;
+  }
+  assert.deepEqual(applied, complete);
+});
+
+test("retargeting or disconnecting during a real summary read never restores departed threads", async context => {
+  const f = indexedSummaries(context);
+  const opened = f.observe({ kind: "threadSummaries", threadIds: f.firstIds });
+  const departed = f.observe({ kind: "threadSummaries", threadIds: f.firstIds }, randomUUID(), 1, "departed");
+  await f.entered.promise;
+  f.owner.retarget("connection", {
+    subscriptionId: opened.subscriptionId, generation: opened.generation,
+    query: { kind: "threadSummaries", threadIds: [f.otherId] },
+  });
+  const retargeted = await f.wait(value => value.subscriptionId === opened.subscriptionId && value.phase === "current");
+  f.owner.disconnect("departed");
+  const retainedRead = f.index.read(f.firstIds[0]!);
+  f.finish();
+  await retainedRead;
+  await Promise.resolve();
+  assert.ok(retargeted.kind === "threadSummaries");
+  assert.deepEqual(Object.keys(retargeted.summaries), [f.otherId]);
+  assert.equal(f.updates.some(update => update.value.subscriptionId === departed.subscriptionId), false);
+  assert.equal(f.updates.at(-1)?.value, retargeted);
 });
 
 test("one held project read does not block a different caller's selected project", async context => {
