@@ -589,6 +589,44 @@ test("provider notification observation returns the persisted lifecycle result",
   await temporary.dispose();
 });
 
+test("settlement succeeds when the thread's project worktree is gone", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-settle-missing-worktree-");
+  const storageRoot = temporary.path;
+  const database = createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]);
+  const entry: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1,
+    entryKind: "thread",
+    identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    title: "Thread one",
+  };
+  database.admitRecord({ ...storedRecordDefaults, ...entry, providerObserved: true });
+  const feature = createFeature({
+    database,
+    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    harnesses: createHarnesses(async (_harness, request) => ({ id: request.id ?? null, result: { data: [], nextCursor: null } })),
+    listSubagents: async () => ({ subagents: [] }),
+    // The project folder is gone, so its worktree cannot be resolved.
+    resolveProjectById: async () => { throw new Error("Project is missing a .git marker."); },
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: fixtureIdentityValues.ProjectId.project, rootPath: storageRoot } }),
+    transitions: { run: async (_key, operation) => await operation() },
+  });
+  await feature.controller.readProject(fixtureIdentityValues.ProjectId.project);
+  await feature.controller.ensureProviderEntry(fixtureIdentityValues.ProjectId.project, entry);
+  const settled = await feature.controller.handleRequest("observer", {
+    identity: entry.identity, method: "workbench/thread-state/settle", projectId: fixtureIdentityValues.ProjectId.project,
+  });
+  assert.equal("result" in settled ? (settled.result as { accepted?: boolean }).accepted : false, true);
+  const [record] = await database.readThreadStateRecords({
+    selection: "threads", projectId: fixtureIdentityValues.ProjectId.project, threadIds: [entry.identity.threadId],
+  });
+  assert.equal(record?.lifecycle.settled, true);
+  await feature.dispose();
+  await temporary.dispose();
+});
+
 test("provider turn-start mapping normalizes the provider start time", () => {
   assert.deepEqual(mapProviderTurnStartedNotification({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn", startedAt: 1_723_456_789 } } }), {
     startedAt: 1_723_456_789_000, threadId: "thread",

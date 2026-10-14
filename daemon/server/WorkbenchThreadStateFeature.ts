@@ -233,6 +233,7 @@ export default class WorkbenchThreadStateFeature {
         return projectGitArcPlan(state ?? undefined);
       },
       hasGitArcBlockingSettlement: async (projectId, harness, threadId) => {
+        if (!this.projectWorktreeAvailable(projectId)) return false;
         const project = await context.resolveProjectById(projectId);
         if (context.gitArcs.blocksThreadSettlement) {
           return await context.gitArcs.blocksThreadSettlement(project.rootPath, harness, threadId);
@@ -244,6 +245,7 @@ export default class WorkbenchThreadStateFeature {
       },
       ...(context.hasRequiredTodos ? { hasRequiredTodos: (threadId: WorkbenchThreadId) => context.hasRequiredTodos!(threadId) } : {}),
       runGitArcReadTransition: async (projectId, operation) => {
+        if (!this.projectWorktreeAvailable(projectId)) return await operation();
         const project = await context.resolveProjectById(projectId);
         const read = context.transitions.read ?? context.transitions.run;
         return await read.call(context.transitions, project.rootPath, operation);
@@ -473,6 +475,14 @@ export default class WorkbenchThreadStateFeature {
       throw new Error("Project ownership has not been admitted.");
     }
     return id;
+  }
+
+  /**
+   * Settlement reads live Git state under the worktree, so it needs a discovered worktree. A project whose folder is
+   * gone leaves the discovered catalogue; with no worktree there is no live claim or stash to block settlement.
+   */
+  private projectWorktreeAvailable(projectId: ProjectId) {
+    return this.context.getProjectCatalog().data.some(project => project.id === projectId);
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadPayload, selection: WorkbenchComposerProfileTargetSelection) {
