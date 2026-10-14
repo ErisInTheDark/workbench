@@ -7,7 +7,7 @@ import WorkbenchTranscriptCommandController from "./WorkbenchTranscriptCommandCo
 import { TranscriptQuerySchema, TranscriptQueryError, type TranscriptQueryPage } from "./database/transcript/transcript-query-contract";
 import type { transcriptPageOutput } from "./transcript-command-markdown";
 
-const coverage = { threads: 1, turns: 2, materializedTurns: 1, items: 201 };
+const coverage = { threads: 1, turns: 2, materializedTurns: 1, expiredTurns: 0, items: 201 };
 const query = TranscriptQuerySchema.parse({ action: "search", queries: ["needle"], threads: ["wb-id"], json: true });
 const input = { ...query, cwd: "C:/workbench", callerThreadId: "caller" };
 const empty: TranscriptQueryPage = { coverage, rows: [], scanned: 200, nextCursor: "next" };

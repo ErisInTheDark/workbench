@@ -81,12 +81,15 @@ function fixture() {
 test("stored transcript queries isolate wb ids, include archived bodies and report incomplete storage without writing", () => {
   const { db, read } = fixture();
   try {
+    db.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES ('wb-two-turn', 5)").run();
     db.pragma("query_only = ON");
     const page = read({ threads: ["wb-one"] });
     assert.equal(page.rows.length, 1);
     assert.equal(page.rows[0]?.threadId, "wb-one");
     assert.equal(page.coverage.materializedTurns, 1);
+    assert.equal(page.coverage.expiredTurns, 0);
     assert.equal(read({ threads: ["wb-two"] }).coverage.materializedTurns, 0);
+    assert.equal(read({ threads: ["wb-two"] }).coverage.expiredTurns, 1);
     assert.equal(read({ threads: ["wb-one"], project: testProjectIds.other }).rows.length, 0);
     assert.throws(() => read({ threads: ["native-0"] }), /thread/i);
     assert.equal(read({ queries: ["éCLAIR"] }).rows.length, 1);

@@ -87,7 +87,8 @@ export interface TranscriptQueryRow {
 
 export interface TranscriptQueryPage {
   rows: TranscriptQueryRow[];
-  coverage: { threads: number; turns: number; materializedTurns: number; items: number };
+  /** `expiredTurns`: turns whose payload retention removed; only an explicit provider recovery brings one back. */
+  coverage: { threads: number; turns: number; materializedTurns: number; expiredTurns: number; items: number };
   nextCursor: string | null;
   scanned: number;
 }

@@ -127,6 +127,8 @@ export default class WorkbenchTranscriptQueryRepository {
       SELECT (SELECT COUNT(*) FROM selected) AS threads,
       (SELECT COUNT(*) FROM thread_turns WHERE thread_id IN (SELECT id FROM selected)) AS turns,
       (SELECT COUNT(*) FROM thread_turn_materializations WHERE thread_id IN (SELECT id FROM selected)) AS materializedTurns,
+      (SELECT COUNT(*) FROM thread_turn_payload_retention r JOIN thread_turns t ON t.id = r.turn_id
+        WHERE t.thread_id IN (SELECT id FROM selected)) AS expiredTurns,
       (SELECT COUNT(*) FROM thread_items WHERE thread_id IN (SELECT id FROM selected)) AS items`).get(bindings) as TranscriptQueryPage["coverage"];
   }
 

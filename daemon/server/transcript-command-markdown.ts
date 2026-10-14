@@ -116,6 +116,10 @@ export function renderTranscriptPage(query: TranscriptQuery, page: TranscriptQue
   if (page.coverage.materializedTurns < page.coverage.turns) {
     lines.push(`incomplete storage: ${page.coverage.materializedTurns}/${page.coverage.turns} turns materialised`);
   }
+  if (page.coverage.expiredTurns) {
+    lines.push(`expired storage: ${page.coverage.expiredTurns}/${page.coverage.turns} turn payloads removed by retention; `
+      + "--provider with exactly one --thread and --turn recovers that turn until the next retention run");
+  }
   if (!page.rows.length) lines.push("no matches");
   for (const row of output.rows) {
     const item = row.turnId !== null && row.kind !== "turn";
