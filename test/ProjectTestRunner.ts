@@ -140,14 +140,20 @@ export default class ProjectTestRunner {
       try {
         if (this.testConcurrency === 1) return await this.runTestFiles(files, this.testConcurrency, environment);
         const { gitFiles, nestedGitFiles, ordinaryFiles } = partitionWorkbenchGitTestFiles(files);
-        const groups = [
+        const gitGroups = [
           ...(nestedGitFiles.length ? [{ concurrency: Math.min(NESTED_GIT_TEST_CONCURRENCY, this.testConcurrency), files: nestedGitFiles }] : []),
           ...(gitFiles.length ? [{ concurrency: Math.min(GIT_TEST_CONCURRENCY, this.testConcurrency), files: gitFiles }] : []),
-          ...(ordinaryFiles.length ? [{ concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles }] : []),
         ];
-        const settled = await Promise.allSettled(groups.map(async ({ concurrency, files: groupFiles }) => (
+        const run = async ({ concurrency, files: groupFiles }: { concurrency: number; files: readonly string[] }) => (
           await this.runTestFiles(groupFiles, concurrency, environment)
-        )));
+        );
+        // Git suites spawn real processes against real worktrees; sharing CPU with the ordinary pool starves them past the per-test cap.
+        const settled = await Promise.allSettled(gitGroups.map(run));
+        if (ordinaryFiles.length) {
+          settled.push(...await Promise.allSettled([run({
+            concurrency: Math.min(ORDINARY_TEST_CONCURRENCY, this.testConcurrency), files: ordinaryFiles,
+          })]));
+        }
         const rejected = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
         if (rejected) throw rejected.reason;
         const results = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);

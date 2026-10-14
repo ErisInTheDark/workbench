@@ -1,7 +1,7 @@
 /*
  * WORKBENCH_DATABASE_TABLE_NAMES: exact current Workbench database table inventory.
  * WORKBENCH_DATABASE_SCHEMA_VERSION: current global SQLite schema version.
- * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade.
+ * installWorkbenchDatabaseSchema: install latest or an explicit historical target transactionally, never downgrade; an empty database receives the final DDL directly.
  * coreTables: current core table map.
  * CoreSchemaRows: current core selected-row registry.
  * codexSandboxNetworkTables: current Codex sandbox network table map.
@@ -170,7 +170,38 @@ export function validateWorkbenchDatabaseReleases() {
   assertSchemaReleaseManifest(workbenchDatabaseSchema, databaseReleases, "daemon");
 }
 
+/** Final DDL of one full history replay, or null when that replay seeds rows the DDL alone cannot reproduce. */
+let currentSchemaDefinition: readonly string[] | null | undefined;
+
+function readCurrentSchemaDefinition(database: Database.Database) {
+  if (currentSchemaDefinition !== undefined) return currentSchemaDefinition;
+  // The caller's connection class builds the template, so importing this schema never loads the native driver.
+  const template = new (database.constructor as new (filename: string) => Database.Database)(":memory:");
+  try {
+    applyWorkbenchDatabaseSchema(template, workbenchDatabaseSchema);
+    const objects = template.prepare(`
+      SELECT type, name, sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid
+    `).all() as Array<{ type: string; name: string; sql: string }>;
+    const seeded = objects.some(object => object.type === "table"
+      && template.prepare(`SELECT 1 FROM "${object.name.replaceAll("\"", "\"\"")}" LIMIT 1`).get());
+    currentSchemaDefinition = seeded ? null : Object.freeze(objects.map(object => object.sql));
+  } finally { template.close(); }
+  return currentSchemaDefinition;
+}
+
 export function installWorkbenchDatabaseSchema(database: Database.Database, options: { targetVersion?: number } = {}) {
   validateWorkbenchDatabaseReleases();
-  applyWorkbenchDatabaseSchema(database, workbenchDatabaseSchema, options);
+  const fresh = (options.targetVersion ?? workbenchDatabaseSchema.currentVersion) === workbenchDatabaseSchema.currentVersion
+    && database.pragma("user_version", { simple: true }) === 0
+    && !database.prepare("SELECT 1 FROM sqlite_schema LIMIT 1").get();
+  const definition = fresh ? readCurrentSchemaDefinition(database) : null;
+  if (!definition) {
+    applyWorkbenchDatabaseSchema(database, workbenchDatabaseSchema, options);
+    return;
+  }
+  // An empty database ends exactly where a full replay does, without replaying every release.
+  database.transaction(() => {
+    database.exec(definition.map(statement => `${statement};`).join("\n"));
+    database.pragma(`user_version = ${workbenchDatabaseSchema.currentVersion}`);
+  })();
 }

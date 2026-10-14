@@ -3,8 +3,26 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import Database from "better-sqlite3";
-import { installWorkbenchDatabaseSchema } from "./workbench-database-schema.ts";
+import { installWorkbenchDatabaseSchema, workbenchDatabaseSchema } from "./workbench-database-schema.ts";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
+import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/schema-history";
+
+test("an empty database installs exactly the schema a full history replay produces", () => {
+  const installed = new Database(":memory:");
+  const replayed = new Database(":memory:");
+  try {
+    installWorkbenchDatabaseSchema(installed);
+    applyWorkbenchDatabaseSchema(replayed, workbenchDatabaseSchema);
+    const schema = (database: Database.Database) => ({
+      objects: database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").all(),
+      version: database.pragma("user_version", { simple: true }),
+    });
+    assert.deepEqual(schema(installed), schema(replayed));
+  } finally {
+    installed.close();
+    replayed.close();
+  }
+});
 
 function insertProfile(database: Database.Database, id: string, harness: string) {
   database.prepare(`

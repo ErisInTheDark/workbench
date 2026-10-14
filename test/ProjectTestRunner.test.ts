@@ -159,6 +159,8 @@ test("batches selected files by isolation group while preserving failure and cle
   const invocations: string[][] = [];
   const budgets: number[] = [];
   const argumentsByChild = new Map<ChildProcess, string[]>();
+  let settledGitBatches = 0;
+  const isOrdinary = (args: readonly string[]) => args.some(argument => argument.endsWith("first.test.ts"));
   const runner = new ProjectTestRunner(root, {
     report: () => {}, testConcurrency: 2,
     acquireTestRun: async () => ({
@@ -170,6 +172,7 @@ test("batches selected files by isolation group while preserving failure and cle
     spawnProcess: (_command, args) => {
       const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null }) as ChildProcess;
       const invocation = [...args];
+      if (isOrdinary(invocation)) assert.equal(settledGitBatches, 2, "the ordinary pool must not share CPU with git batches");
       invocations.push(invocation);
       argumentsByChild.set(child, invocation);
       return child;
@@ -177,7 +180,10 @@ test("batches selected files by isolation group while preserving failure and cle
     ownProcess: async (child, _group, budget) => {
       budgets.push(budget);
       const args = argumentsByChild.get(child)!;
-      return { exitCode: args.some(argument => argument.endsWith("first.test.ts")) ? 1 : 0, signal: null };
+      if (isOrdinary(args)) return { exitCode: 1, signal: null };
+      await new Promise(resolve => setImmediate(resolve));
+      settledGitBatches += 1;
+      return { exitCode: 0, signal: null };
     },
   });
   try {
