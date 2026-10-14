@@ -236,7 +236,7 @@ export default function Tooltip({
       setPosition({
         ...getTooltipPosition({
           placement,
-          tooltipHeight: measured.height,
+          tooltipHeight: panel.scrollHeight + measured.height - panel.clientHeight,
           tooltipWidth: measured.width,
           triggerRect: trigger.getBoundingClientRect(),
           ...viewport(),
