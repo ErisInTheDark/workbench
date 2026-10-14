@@ -168,6 +168,24 @@ function fixture({
   return owner;
 }
 
+test("history demands queue as explicit, and only an explicit reconcile re-reads the session log", async () => {
+  const owner = fixture({ usage: [] });
+  const demands: unknown[] = [];
+  Object.assign(Reflect.get(owner, "options") as object, { reconciliation: {
+    reconcile: async (input: unknown) => { demands.push(input); return { turnIds: [], exhausted: true }; },
+  } });
+  const signal = new AbortController().signal;
+  await owner.history.materialize(threadId, turnId, signal);
+  assert.deepEqual(demands, [{ threadId, target: { mode: "exact", turnId }, refresh: false, explicit: true }]);
+  let recovered = 0;
+  Object.assign(owner, { recoverFromSessionLog: async () => { recovered += 1; return turnId; } });
+  const exact = { threadId, target: { mode: "exact" as const, turnId }, gapIds: [] };
+  await owner.reconcile(exact, signal);
+  assert.equal(recovered, 0, "routine windows keep Claude history sqlite-only");
+  assert.deepEqual(await owner.reconcile({ ...exact, explicit: true }, signal), { turnIds: [turnId], exhausted: true });
+  assert.equal(recovered, 1);
+});
+
 test("manual Claude compaction targets the shared marker when the provider boundary arrives", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();

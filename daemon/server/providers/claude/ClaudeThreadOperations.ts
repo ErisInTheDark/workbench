@@ -11,7 +11,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import {
-    NativeThreadIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
+    NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, ThreadReferenceSchema, WorkbenchItemIdSchema,
     WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
     type WorkbenchThreadId, type WorkbenchTurnId,
 } from "workbench-shared/workbench/identity";
@@ -54,6 +54,8 @@ import type ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import type { ClaudeTranscriptTurnState } from "./ClaudeTranscriptAdapter";
 import { CLAUDE_COMMENTARY_SERVER_NAME, createClaudeCommentaryServer } from "./claude-commentary-tool";
 import ClaudeUsageHydrator from "./ClaudeUsageHydrator";
+import ClaudeSessionLog from "./claude-session-log";
+import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
 
 export interface ClaudeTurnHandoff {
   turn: ClaudeLiveTurnSnapshot;
@@ -78,6 +80,8 @@ export interface ClaudeThreadOperationsOptions {
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
   reader: WorkbenchTranscriptReader;
+  /** Explicit history demands queue through the shared owner, like every provider's. */
+  reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   state: WorkbenchThreadStateFeature;
   transcript: ClaudeTranscriptAdapter;
   signal: AbortSignal;
@@ -101,10 +105,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   private readonly completedTurns = new Map<WorkbenchThreadId, { turnId: WorkbenchTurnId; context: WorkbenchMessageContext | undefined }>();
   private readonly pending = new Set<Promise<void>>();
   private readonly usageHydrator: ClaudeUsageHydrator;
+  private readonly sessionLog: ClaudeSessionLog;
 
   constructor(private readonly options: ClaudeThreadOperationsOptions) {
+    this.sessionLog = new ClaudeSessionLog(options.claudeDataRoot ?? ClaudeConfigView.dataRoot());
     this.usageHydrator = new ClaudeUsageHydrator({
-      dataRoot: options.claudeDataRoot ?? ClaudeConfigView.dataRoot(),
+      log: this.sessionLog,
       signal: options.signal,
       readThread: async threadId => {
         const identity = await this.identity(threadId);
@@ -264,9 +270,11 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   };
 
   readonly history = {
-    materialize: async (threadId: string, _turnId: string | null, signal: AbortSignal) => {
+    materialize: async (threadId: string, turnId: string | null, signal: AbortSignal) => {
       signal.throwIfAborted();
-      await this.read(threadId);
+      await this.options.reconciliation.reconcile({
+        threadId, target: turnId ? { mode: "exact", turnId } : { mode: "latest" }, refresh: false, explicit: true,
+      }, signal);
     },
   };
 
@@ -636,14 +644,49 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     await this.read(threadId);
   }
 
+  /** Claude history is recorded live; only an explicit demand re-reads a settled turn from its session log. */
   async reconcile(input: Parameters<WorkbenchProviderThreads["reconcile"]>[0], signal: AbortSignal) {
     signal.throwIfAborted();
+    if (input.explicit && input.target.mode !== "previous") {
+      const turnId = await this.recoverFromSessionLog(input.threadId, input.target, input.gapIds, signal);
+      return { turnIds: [turnId], exhausted: true };
+    }
     const thread = await this.read(input.threadId);
     const target = input.target;
     const turn = target.mode === "latest" ? thread.turns.at(-1)
       : target.mode === "exact" ? thread.turns.find(value => value.id === target.turnId)
         : thread.turns.findLast(value => value.id !== target.beforeTurnId);
     return { turnIds: turn ? [turn.id] : [], exhausted: true };
+  }
+
+  private async recoverFromSessionLog(
+    threadId: string,
+    target: Exclude<Parameters<WorkbenchProviderThreads["reconcile"]>[0]["target"], { mode: "previous" }>,
+    gapIds: readonly string[],
+    signal: AbortSignal,
+  ) {
+    const identity = await this.identity(threadId);
+    const turns = (await this.options.reader.catalog(identity.threadId))?.turns
+      .filter(turn => turn.harness_id === "claude").sort((left, right) => left.turn_index - right.turn_index) ?? [];
+    const index = target.mode === "latest" ? turns.length - 1
+      : turns.findIndex(turn => turn.id === target.turnId || turn.native_turn_id === target.turnId);
+    const turn = turns[index];
+    if (!turn?.native_turn_id || turn.started_at === null) throw new Error("Claude recovery has no recorded native turn.");
+    if (turn.state === "admitted" || turn.state === "inProgress" || this.live.get(identity.threadId)?.turnId === turn.id) {
+      throw new Error("Claude recovery needs a settled turn.");
+    }
+    const file = await this.sessionLog.locate(turn.native_thread_id);
+    if (!file) throw new Error("Claude session log for this thread is unavailable.");
+    const next = turns.slice(index + 1).find(candidate => candidate.native_thread_id === turn.native_thread_id && candidate.started_at !== null);
+    const records = await this.sessionLog.read(file, { from: turn.started_at, until: next?.started_at ?? Number.POSITIVE_INFINITY }, signal);
+    signal.throwIfAborted();
+    await this.options.transcript.recoverTurn({
+      kind: "turn", threadId: identity.threadId, turnId: WorkbenchTurnIdSchema.parse(turn.id), turnIndex: turn.turn_index,
+      harnessId: "claude", nativeLocation: turn.native_location, nativeThreadId: NativeThreadIdSchema.parse(turn.native_thread_id),
+      nativeTurnId: NativeTurnIdSchema.parse(turn.native_turn_id), state: turn.state, createdAt: turn.created_at,
+      startedAt: turn.started_at, endedAt: turn.ended_at, durationMs: turn.duration_ms,
+    }, records, { gapIds, explicit: true });
+    return turn.id;
   }
 
   private async identity(threadId: string) {

@@ -8,6 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import ClaudeUsageHydrator, { type ClaudeUsageHydratorOptions } from "./ClaudeUsageHydrator";
+import ClaudeSessionLog from "./claude-session-log";
 
 const threadId = WorkbenchThreadIdSchema.parse("00000000-0000-4000-8000-000000000001");
 const sessionId = "00000000-0000-4000-8000-0000000000aa";
@@ -34,7 +35,7 @@ async function fixture(t: test.TestContext, lines: string[] | null) {
   const recorded: Array<[string, number]> = [];
   let reads = 0;
   const options: ClaudeUsageHydratorOptions = {
-    dataRoot,
+    log: new ClaudeSessionLog(dataRoot),
     signal: new AbortController().signal,
     readThread: async () => {
       reads += 1;
@@ -42,7 +43,7 @@ async function fixture(t: test.TestContext, lines: string[] | null) {
     },
     record: async (_thread, usage) => { recorded.push([usage.turnId, usage.cumulative.inputTokens]); },
   };
-  return { options, recorded, reads: () => reads };
+  return { dataRoot, options, recorded, reads: () => reads };
 }
 
 test("every turn gets usage from the session log, including a turn that never reached its result", async (t) => {
@@ -58,7 +59,7 @@ test("a thread without a session log is unavailable and records nothing", async 
 });
 
 test("a burst of triggers during a read costs one follow-up read that sees the newest log", async (t) => {
-  const { options, recorded, reads } = await fixture(t, [call("a", T0 + 10, 5)]);
+  const { dataRoot, options, recorded, reads } = await fixture(t, [call("a", T0 + 10, 5)]);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const readThread = options.readThread;
@@ -71,7 +72,7 @@ test("a burst of triggers during a read costs one follow-up read that sees the n
   });
   const first = hydrator.hydrate(threadId);
   const burst = [hydrator.hydrate(threadId), hydrator.hydrate(threadId)];
-  const file = path.join(options.dataRoot, "projects", "C--repo", `${sessionId}.jsonl`);
+  const file = path.join(dataRoot, "projects", "C--repo", `${sessionId}.jsonl`);
   await fs.appendFile(file, `\n${call("b", T0 + 20, 7)}`);
   release();
   assert.deepEqual(await Promise.all([first, ...burst]), ["completed", "completed", "completed"]);

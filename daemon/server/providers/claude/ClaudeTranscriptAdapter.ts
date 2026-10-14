@@ -2,7 +2,7 @@
  * Exports:
  * - claudeTokenBreakdown: convert one Claude usage record into Workbench token accounting.
  * - ClaudeTranscriptTurnState: plain in-flight transcript state of one live turn, handed across bridge reloads.
- * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, expose which turns this daemon still owns, and report compaction start and end to Workbench.
+ * - default ClaudeTranscriptAdapter: admit Claude session, turn, streamed item, live exact commentary-tool message, native tool (with effective Edit/Write diffs and claim denials), steer, screenshot steer, context and billing usage to canonical history, recover a settled turn from its session log, expose which turns this daemon still owns, and report compaction start and end to Workbench.
  */
 import path from "node:path";
 import type {
@@ -29,8 +29,9 @@ import type { ClaudeFileChangeMetadata } from "workbench-shared/workbench/provid
 import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "../../WorkbenchTranscriptIdentityController";
 import type { DaemonTranscriptRegistration } from "../../daemon-runtime-objects";
-import type { WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptItemLifecycle } from "../../database/transcript/workbench-transcript-types";
 import { CLAUDE_COMMENTARY_TOOL_NAME, readStreamedCommentaryText } from "./claude-commentary-tool";
+import type { ClaudeSessionLogRecord } from "./claude-session-log";
 
 interface TurnScope {
   threadId: WorkbenchThreadId;
@@ -480,6 +481,107 @@ export default class ClaudeTranscriptAdapter {
       appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
     }, startedAt, "workbench");
     return { ...input, itemId, sourceId, parentId: sourceId, startedAt };
+  }
+
+  /**
+   * Re-admit one settled turn from its native session log lines as a complete provider scope. References match
+   * the live ones where the log carries them, so surviving identities are reused. The log keeps no thinking text,
+   * pasted images or claim-denial markers, so those are not recovered.
+   */
+  async recoverTurn(turn: Extract<WorkbenchTranscriptAtomicObservation, { kind: "turn" }>, records: readonly ClaudeSessionLogRecord[], recovery: { gapIds: readonly string[]; explicit?: true }) {
+    const entries = new Map<string, { item: ThreadItem; observedAt: number }>();
+    const tools = new Map<string, { reference: string; mcp: boolean }>();
+    let prompted = false;
+    for (const { line, uuid, occurredAt } of records) {
+      const message = record(line.message);
+      const content = message?.content;
+      if (line.type === "user") {
+        if (line.isMeta === true) continue;
+        if (typeof line.promptSource === "string") {
+          const text = typeof content === "string" ? content
+            : Array.isArray(content) ? content.flatMap(part => record(part)?.type === "text" ? [String(record(part)!.text ?? "")] : []).join("\n") : "";
+          const reference = prompted ? `user:${uuid}` : `user:${turn.nativeTurnId ?? uuid}`;
+          prompted = true;
+          entries.set(reference, { observedAt: occurredAt, item: {
+            type: "userMessage", id: reference, clientId: null, content: [{ type: "text", text, text_elements: [] }],
+          } });
+          continue;
+        }
+        for (const block of Array.isArray(content) ? content : []) {
+          const result = record(block);
+          if (result?.type !== "tool_result" || typeof result.tool_use_id !== "string") continue;
+          const tool = tools.get(result.tool_use_id);
+          const pending = tool && entries.get(tool.reference);
+          if (!tool || !pending) continue;
+          const failed = result.is_error === true;
+          const parts = typeof result.content === "string" ? [{ type: "text", text: result.content }]
+            : Array.isArray(result.content) ? result.content.flatMap(part => record(part)?.type === "text" ? [{ type: "text", text: String(record(part)!.text ?? "") }] : []) : [];
+          const text = parts.map(part => part.text).join("\n");
+          const item = pending.item;
+          if (item.type === "mcpToolCall") {
+            pending.item = { ...item, status: failed ? "failed" : "completed", result: { content: parts, structuredContent: null, _meta: null } };
+          } else if (item.type === "dynamicToolCall") {
+            const fileChange = failed ? null : claudeFileChange(item.tool, item.arguments as ProviderToolMetadata, line.toolUseResult);
+            pending.item = {
+              ...item, status: failed ? "failed" : "completed", contentItems: text ? [{ type: "inputText", text }] : null,
+              success: !failed, ...(fileChange ? { metadata: { fileChange } satisfies ClaudeFileChangeMetadata } : {}),
+            };
+          }
+        }
+        continue;
+      }
+      const blockIndex = typeof line.apiBlockIndex === "number" ? line.apiBlockIndex : null;
+      for (const [index, value] of (Array.isArray(content) ? content : []).entries()) {
+        const block = record(value);
+        if (!block) continue;
+        const position = blockIndex ?? index;
+        const native = typeof message?.id === "string" ? `assistant:${message.id}:${position}` : `assistant:${uuid}:${block.type}:${index}`;
+        if (block.type === "text" && typeof block.text === "string" && block.text) {
+          entries.set(native, { observedAt: occurredAt, item: blockItem("text", block.text) });
+        } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+          entries.set(native, { observedAt: occurredAt, item: blockItem("thinking", block.thinking) });
+        } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+          const reference = `tool:${block.id}`;
+          if (block.name === CLAUDE_COMMENTARY_TOOL_NAME) {
+            const text = record(block.input)?.text;
+            if (typeof text === "string") entries.set(reference, { observedAt: occurredAt, item: blockItem("commentary", text) });
+            continue;
+          }
+          const mcp = block.name.startsWith("mcp__wb__");
+          const args = ProviderToolMetadataSchema.parse(block.input ?? {});
+          tools.set(block.id, { reference, mcp });
+          entries.set(reference, { observedAt: occurredAt, item: mcp ? {
+            type: "mcpToolCall", id: reference, server: "wb", tool: block.name.slice("mcp__wb__".length),
+            arguments: args, status: "inProgress", toolCallGroupId: reference,
+            appContext: null, pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
+          } : {
+            type: "dynamicToolCall", id: block.id, namespace: "claude", tool: block.name,
+            arguments: args, status: "inProgress", contentItems: null, success: null, durationMs: null,
+          } });
+        }
+      }
+    }
+    // A recovered turn is settled; a call whose result never reached the log ended with it.
+    for (const entry of entries.values()) {
+      if ((entry.item.type === "dynamicToolCall" || entry.item.type === "mcpToolCall") && entry.item.status === "inProgress") {
+        entry.item = { ...entry.item, status: "failed" } as ThreadItem;
+      }
+    }
+    const references = [...entries.keys()];
+    const identities = references.length ? await this.owners.items.admit(references.map(reference => ({
+      threadId: turn.threadId, sources: [{ turnId: turn.turnId, kind: "stable" as const, reference }],
+    }))) : [];
+    const items = references.map((reference, index) => {
+      const { item, observedAt } = entries.get(reference)!;
+      const itemId = identities[index]!.itemId;
+      return {
+        kind: "item" as const, threadId: turn.threadId, turnId: turn.turnId, publicItemId: itemId,
+        item: { ...item, id: itemId }, lifecycle: "completed" as const, observedAt,
+      };
+    });
+    await this.owners.transcript.record([{
+      kind: "providerTurnScope", threadId: turn.threadId, completeTurnIds: [turn.turnId], observations: [turn, ...items],
+    }], { source: "provider", recovery });
   }
 
   async finishToolTranscript(reference: WorkbenchToolTranscriptReference, result: ProviderToolResult) {

@@ -1,7 +1,13 @@
-/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo), exact live commentary-tool messages, native file-tool evidence, and compaction reports. */
+/* No production exports. Tests protect Claude streamed text admission (live deltas once, one durable body, no echo), exact live commentary-tool messages, native file-tool evidence, session-log turn recovery, and compaction reports. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import Database from "better-sqlite3";
+import { NativeThreadIdSchema, NativeTurnIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { installWorkbenchDatabaseSchema } from "../../database/workbench-database-schema";
+import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTranscriptRepository";
+import WorkbenchTranscriptIdentityRepository from "../../database/transcript/WorkbenchTranscriptIdentityRepository";
 import { isAgentScreenshotSteerUserMessage } from "workbench-shared/workbench/thread/thread-steer-markers";
 import ClaudeTranscriptAdapter from "./ClaudeTranscriptAdapter";
 import { CLAUDE_COMMENTARY_TOOL_NAME } from "./claude-commentary-tool";
@@ -217,6 +223,53 @@ test("settling a turn completes a block that was cut off mid-stream with the tex
   const last = items().at(-1);
   assert.equal(last?.lifecycle, "completed");
   assert.deepEqual(last?.item?.content, ["par"]);
+});
+
+test("an explicit recovery rebuilds a retention-expired turn from its session log lines", async () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchTranscriptRepository(database);
+  const identities = new WorkbenchTranscriptIdentityRepository(database);
+  const nativeThreadId = NativeThreadIdSchema.parse("session");
+  const turn = {
+    kind: "turn" as const, threadId, turnId, turnIndex: 0, harnessId: "claude", nativeLocation: "C:/repo",
+    nativeThreadId, nativeTurnId: NativeTurnIdSchema.parse(turnId), state: "completed" as const,
+    createdAt: 1, startedAt: 1, endedAt: 9, durationMs: 8,
+  };
+  const adapter = new ClaudeTranscriptAdapter({
+    threads: {} as never,
+    items: { admit: async (requests: Parameters<typeof identities.admit>[0][]) => requests.map(request => identities.admit(request)) },
+    transcript: {
+      record: async (observations: Parameters<typeof repository.settle>[0], context: { recovery?: { explicit?: true } }) =>
+        repository.settle(observations, context.recovery?.explicit ? "explicitRecovery" : "replay"),
+    },
+  } as never);
+  const line = (type: string, uuid: string, fields: object) => ({ type: type as "user" | "assistant", uuid, occurredAt: 2, line: { type, uuid, ...fields } });
+  const records = [
+    line("user", "prompt", { promptSource: "sdk", message: { role: "user", content: "fix it" } }),
+    line("assistant", "a1", { apiBlockIndex: 0, message: { id: "msg", content: [{ type: "thinking", thinking: "" }] } }),
+    line("assistant", "a2", { apiBlockIndex: 1, message: { id: "msg", content: [{ type: "text", text: "on it" }] } }),
+    line("assistant", "a3", { apiBlockIndex: 2, message: { id: "msg", content: [{ type: "tool_use", id: "bash", name: "Bash", input: { command: "pwd" } }] } }),
+    line("assistant", "a4", { apiBlockIndex: 3, message: { id: "msg", content: [{ type: "tool_use", id: "rg", name: "mcp__wb__rg", input: { args: ["x"] } }] } }),
+    line("user", "r1", { message: { content: [{ type: "tool_result", tool_use_id: "bash", content: "C:/repo" }] } }),
+    line("user", "meta", { isMeta: true, message: { content: [{ type: "text", text: "hidden context" }] } }),
+  ];
+  try {
+    repository.settle([{
+      kind: "thread", threadId, projectId: testProjectIds.project, projectRoot: "C:/repo", title: "t", createdAt: 1, updatedAt: 1, activityAt: 1,
+    }, turn]);
+    database.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES (?, 5)").run(turnId);
+    await adapter.recoverTurn(turn, records, { gapIds: [], explicit: true });
+    const snapshot = repository.read({ threadId, turnIds: [turnId], turnLimit: 1 });
+    assert.ok(snapshot);
+    const projected = projectWorkbenchTranscript(snapshot);
+    assert.ok(projected.success);
+    assert.deepEqual(projected.data.turns[0]!.items.map(item => [item.type, "status" in item ? item.status : null]), [
+      ["userMessage", null], ["agentMessage", null], ["dynamicToolCall", "completed"], ["mcpToolCall", "failed"],
+    ], "empty thinking and meta context are skipped; a call without a logged result ended with its turn");
+    assert.equal(database.prepare("SELECT count(*) FROM thread_turn_payload_retention").pluck().get(), 0);
+  } finally { database.close(); }
 });
 
 const compactionStatus = (value: object) => ({ type: "system", subtype: "status", status: null, ...value }) as never;
