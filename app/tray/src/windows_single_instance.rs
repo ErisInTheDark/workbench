@@ -2,60 +2,63 @@
  * Exports:
  * - init: build the Windows tray singleton plugin with bounded secondary activation and owner takeover.
  */
-use std::time::{Duration, Instant};
+#[cfg(any(windows, test))]
+mod activation {
+    use std::time::{Duration, Instant};
 
-const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const SECONDARY_ACTIVATION_DEADLINE: Duration = Duration::from_secs(5);
+    const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    const SECONDARY_ACTIVATION_DEADLINE: Duration = Duration::from_secs(5);
 
-#[derive(Debug, PartialEq)]
-enum LaunchRole {
-    Primary,
-    Secondary,
-}
+    #[derive(Debug, PartialEq)]
+    pub(super) enum LaunchRole {
+        Primary,
+        Secondary,
+    }
 
-#[derive(Debug, PartialEq)]
-enum OwnershipWait {
-    Acquired,
-    Pending,
-}
+    #[derive(Debug, PartialEq)]
+    pub(super) enum OwnershipWait {
+        Acquired,
+        Pending,
+    }
 
-fn timeout_milliseconds(duration: Duration) -> u32 {
-    duration.as_millis().clamp(1, u32::MAX as u128) as u32
-}
+    fn timeout_milliseconds(duration: Duration) -> u32 {
+        duration.as_millis().clamp(1, u32::MAX as u128) as u32
+    }
 
-fn settle_existing_instance<T: Copy>(
-    mut find_receiver: impl FnMut() -> Option<T>,
-    mut notify_receiver: impl FnMut(T, u32) -> Result<(), String>,
-    mut wait_for_ownership: impl FnMut(u32) -> Result<OwnershipWait, String>,
-    mut now: impl FnMut() -> Instant,
-) -> Result<LaunchRole, String> {
-    let deadline = now() + SECONDARY_ACTIVATION_DEADLINE;
-    loop {
-        let remaining = deadline.saturating_duration_since(now());
-        if remaining.is_zero() {
-            return Err(
-                "Existing Workbench tray did not accept activation within five seconds.".into(),
-            );
-        }
-        if let Some(receiver) = find_receiver() {
-            return match notify_receiver(receiver, timeout_milliseconds(remaining)) {
-                Ok(()) => Ok(LaunchRole::Secondary),
-                Err(delivery_error) => match wait_for_ownership(0)? {
-                    OwnershipWait::Acquired => Ok(LaunchRole::Primary),
-                    OwnershipWait::Pending => Err(delivery_error),
-                },
-            };
-        }
-        let wait = remaining.min(RECEIVER_POLL_INTERVAL);
-        if wait_for_ownership(timeout_milliseconds(wait))? == OwnershipWait::Acquired {
-            return Ok(LaunchRole::Primary);
+    pub(super) fn settle_existing_instance<T: Copy>(
+        mut find_receiver: impl FnMut() -> Option<T>,
+        mut notify_receiver: impl FnMut(T, u32) -> Result<(), String>,
+        mut wait_for_ownership: impl FnMut(u32) -> Result<OwnershipWait, String>,
+        mut now: impl FnMut() -> Instant,
+    ) -> Result<LaunchRole, String> {
+        let deadline = now() + SECONDARY_ACTIVATION_DEADLINE;
+        loop {
+            let remaining = deadline.saturating_duration_since(now());
+            if remaining.is_zero() {
+                return Err(
+                    "Existing Workbench tray did not accept activation within five seconds.".into(),
+                );
+            }
+            if let Some(receiver) = find_receiver() {
+                return match notify_receiver(receiver, timeout_milliseconds(remaining)) {
+                    Ok(()) => Ok(LaunchRole::Secondary),
+                    Err(delivery_error) => match wait_for_ownership(0)? {
+                        OwnershipWait::Acquired => Ok(LaunchRole::Primary),
+                        OwnershipWait::Pending => Err(delivery_error),
+                    },
+                };
+            }
+            let wait = remaining.min(RECEIVER_POLL_INTERVAL);
+            if wait_for_ownership(timeout_milliseconds(wait))? == OwnershipWait::Acquired {
+                return Ok(LaunchRole::Primary);
+            }
         }
     }
 }
 
 #[cfg(windows)]
 mod platform {
-    use super::{settle_existing_instance, LaunchRole, OwnershipWait};
+    use super::activation::{settle_existing_instance, LaunchRole, OwnershipWait};
     use std::{io, ptr};
     use tauri::{
         plugin::{self, TauriPlugin},
@@ -349,7 +352,7 @@ pub fn init<
 
 #[cfg(test)]
 mod tests {
-    use super::{settle_existing_instance, LaunchRole, OwnershipWait};
+    use super::activation::{settle_existing_instance, LaunchRole, OwnershipWait};
     use std::{
         cell::Cell,
         time::{Duration, Instant},
