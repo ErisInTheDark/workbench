@@ -56,9 +56,17 @@ export async function captureThreadStateMigrationSource(sourceDatabasePath: stri
 }
 
 const quote = (name: string) => `"${name.replaceAll("\"", "\"\"")}"`;
-/** The scenario rediscovers real roots: catalogue metadata refreshes and new rows appear, but retained identities must survive. */
-const DISCOVERY_CATALOGUE_IDENTITIES: Readonly<Record<string, readonly string[]>> = {
+/**
+ * The real app refreshes these at startup: rediscovered project catalogue metadata, the stats model-attribution
+ * cache (restamped on every repair), usage imports discovered from live provider history and its own executor's
+ * command roots. Their rows may change or appear, but retained identities must survive.
+ */
+const REFRESHED_TABLE_IDENTITIES: Readonly<Record<string, readonly string[]>> = {
   workbench_projects: ["id"],
+  workbench_project_roots: ["project_id", "root_id"],
+  thread_usage_model_attributions: ["turn_id"],
+  thread_usage_imports: ["project_id", "harness_id", "provider_thread_id"],
+  workbench_exec_roots: ["process_id"],
 };
 const DAY_MS = 86_400_000;
 
@@ -84,6 +92,10 @@ function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
     database.pragma("foreign_keys = ON");
     database.transaction(() => {
       applyCaptureGapAnchorOracle(database);
+      // Every captured command root belongs to an executor generation the scenario daemon reaps at startup.
+      if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'workbench_exec_roots'").get()) {
+        database.exec("DELETE FROM workbench_exec_roots");
+      }
       // Sources at or after bounded payload retention already own these tables and earlier expiries.
       database.exec(`
         CREATE TABLE IF NOT EXISTS thread_item_payload_retention(
@@ -289,7 +301,7 @@ export async function verifyThreadStateMigrationSource(source: Awaited<ReturnTyp
         for (const table of retained) {
           const existing = new Set((database.prepare(`PRAGMA source.table_info(${quote(table.name)})`).all() as Array<{ name: string }>)
             .map(column => column.name));
-          const identity = DISCOVERY_CATALOGUE_IDENTITIES[table.name];
+          const identity = REFRESHED_TABLE_IDENTITIES[table.name];
           const columns = Object.keys(table.columns).filter(column => existing.has(column) && (!identity || identity.includes(column)));
           const remapped = new Set(tableForeignKeys(table).filter(key => key.target.table === "workbench_projects")
             .flatMap(key => key.columns));
