@@ -1,5 +1,5 @@
 /*
- * No production exports. Regression wards protect large literal path sets and read-only worktree change detection.
+ * No production exports. Regression wards protect large literal path sets, bounded transient Git recovery, and read-only worktree change detection.
  */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
@@ -12,6 +12,77 @@ import WorkbenchTemporaryDirectory from "../WorkbenchTemporaryDirectory.ts";
 import ReloadDirtSnapshotRepository from "./ReloadDirtSnapshotRepository.ts";
 
 const run = promisify(execFile);
+
+async function createGitReadFailureShim(
+  directory: string,
+  actualGitPath: string,
+  mode: "once" | "twice",
+) {
+  const firstFailure = path.join(directory, "first-failure");
+  const secondFailure = path.join(directory, "second-failure");
+  const shimPath = path.join(directory, "git-read-failure-shim.mjs");
+  await fs.writeFile(shimPath, [
+    "import { spawnSync } from 'node:child_process';",
+    "import fs from 'node:fs';",
+    `const actualGitPath = ${JSON.stringify(actualGitPath)};`,
+    `const firstFailure = ${JSON.stringify(firstFailure)};`,
+    `const secondFailure = ${JSON.stringify(secondFailure)};`,
+    `const mode = ${JSON.stringify(mode)};`,
+    "const args = process.argv.slice(2);",
+    "if (args[0] === '--literal-pathspecs' && args[1] === 'diff') {",
+    "  if (!fs.existsSync(firstFailure)) { fs.writeFileSync(firstFailure, ''); process.exit(1); }",
+    "  if (mode === 'twice' && !fs.existsSync(secondFailure)) { fs.writeFileSync(secondFailure, ''); process.exit(1); }",
+    "}",
+    "const result = spawnSync(actualGitPath, args, { env: process.env, stdio: 'inherit' });",
+    "if (result.error) throw result.error;",
+    "process.exit(result.status ?? 1);",
+  ].join("\n"));
+  return { argumentPrefix: [shimPath], executable: process.execPath, firstFailure, secondFailure };
+}
+
+async function gitExecutablePath() {
+  const locator = process.platform === "win32" ? "where.exe" : "which";
+  const executable = (await run(locator, ["git"])).stdout.split(/\r?\n/u).find(Boolean);
+  if (!executable) throw new Error("Git executable was not found.");
+  return executable;
+}
+
+async function createChangedRepository(context: test.TestContext) {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-git-retry-");
+  const repoRoot = temporary.path;
+  context.after(async () => {
+    await temporary.dispose();
+  });
+  const gitPath = await gitExecutablePath();
+  const git = async (...args: string[]) => await run(gitPath, args, { cwd: repoRoot });
+  await git("init");
+  await git("config", "user.email", "workbench@example.invalid");
+  await git("config", "user.name", "Workbench test");
+  await fs.writeFile(path.join(repoRoot, "source.ts"), "before\n");
+  await git("add", ".");
+  await git("commit", "-m", "baseline");
+  await fs.writeFile(path.join(repoRoot, "source.ts"), "after\n");
+  return { gitPath, repoRoot, temporary };
+}
+
+test("silent transient Git reads retry once", async (context) => {
+  const { gitPath, repoRoot, temporary } = await createChangedRepository(context);
+  const shim = await createGitReadFailureShim(temporary.path, gitPath, "once");
+
+  const repository = new ReloadDirtSnapshotRepository(repoRoot, shim.executable, shim.argumentPrefix);
+  assert.deepEqual(await repository.listWorktreeChangedPaths("HEAD", ["source.ts"]), ["source.ts"]);
+  await fs.access(shim.firstFailure);
+});
+
+test("silent persistent Git reads stop after one retry", async (context) => {
+  const { gitPath, repoRoot, temporary } = await createChangedRepository(context);
+  const shim = await createGitReadFailureShim(temporary.path, gitPath, "twice");
+
+  const repository = new ReloadDirtSnapshotRepository(repoRoot, shim.executable, shim.argumentPrefix);
+  await assert.rejects(repository.listWorktreeChangedPaths("HEAD", ["source.ts"]));
+  await fs.access(shim.firstFailure);
+  await fs.access(shim.secondFailure);
+});
 
 test("scoped reload checks do not open unrelated worktree files", { skip: process.platform !== "win32" }, async (context) => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-reload-read-boundary-");

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transferred pending state, stale-refresh cancellation, watcher coalescing, Git-backed partial baselines, deletion, and external dirt.
+ * No production exports. Tests protect transferred pending state, stale-refresh cancellation, completed-scope cleanup, watcher coalescing, Git-backed partial baselines, deletion, and external dirt.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -42,9 +42,11 @@ function sourceState(descriptors: readonly ReloadDirtSourceDescriptor[] = [descr
 
 class ControlledRepository implements ReloadDirtSnapshotRepositoryPort {
   blockedSignal: AbortSignal | undefined;
+  changedPaths: string[] = [];
   refUpdates = 0;
   worktreeReads = 0;
   private blockedRead: { changes: Promise<string[]>; start(): void } | null = null;
+  private worktreeReadError: Error | null = null;
 
   blockNextWorktreeRead() {
     const started = deferred<void>();
@@ -53,11 +55,20 @@ class ControlledRepository implements ReloadDirtSnapshotRepositoryPort {
     return { release: changes.resolve, started: started.promise };
   }
 
+  failNextWorktreeRead(error: Error) {
+    this.worktreeReadError = error;
+  }
+
   async createCommitFromTree() { return "snapshot-commit"; }
   async listWorktreeChangedPaths(_base: string, _paths: string[], signal?: AbortSignal) {
     this.worktreeReads += 1;
+    if (this.worktreeReadError) {
+      const error = this.worktreeReadError;
+      this.worktreeReadError = null;
+      throw error;
+    }
     const blocked = this.blockedRead;
-    if (!blocked) return [];
+    if (!blocked) return this.changedPaths;
     this.blockedRead = null;
     this.blockedSignal = signal;
     blocked.start();
@@ -221,6 +232,71 @@ test("a user reload aborts stale reconciliation and rejects its late result", as
   blocked.release(["app/core.ts"]);
   await assert.rejects(staleRefresh, (error) => error === staleSignal.reason);
   assert.deepEqual(controller.getSnapshot(), { dirtyScopes: [], error: null, pendingScopes: [] });
+  await controller.dispose();
+});
+
+test("completed reloads drop applied Git dirt before a failed reconciliation", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-completed-reload-dirt-");
+  context.after(async () => {
+    await temporary.dispose();
+  });
+  const repository = new ControlledRepository();
+  const other = {
+    ...descriptor,
+    description: "Other",
+    paths: ["app/other.ts"],
+    scope: "client:other",
+  };
+  const external = {
+    ...descriptor,
+    description: "External",
+    paths: [],
+    scope: "client:external",
+  };
+  const descriptors = [descriptor, other, external];
+  const marker = ".workbench/reset";
+  await fs.mkdir(path.dirname(path.join(temporary.path, marker)), { recursive: true });
+  await fs.writeFile(path.join(temporary.path, marker), "reset\n");
+  const controller = new ReloadDirtController({
+    externalDirtSources: [{ path: marker, scope: external.scope }],
+    getSourceState: () => ({ dependantClosure: scopes => [...scopes], descriptors }),
+    repoRoot: temporary.path,
+    repository,
+    snapshotRef: "refs/worktree/workbench/test-reload-snapshot",
+    watchSource: (() => ({ close: () => {}, on: () => {} })) as never,
+  }, {
+    ...transferredState(),
+    baselines: new Map(descriptors.map(({ scope }) => [scope, "base-snapshot"])),
+    descriptors: new Map(descriptors.map(current => [current.scope, current])),
+  });
+  repository.changedPaths = ["app/core.ts", "app/other.ts"];
+  await controller.refresh();
+  assert.deepEqual(
+    controller.getSnapshot().dirtyScopes.map(({ scope }) => scope),
+    ["client:core", "client:other", "client:external"],
+  );
+
+  repository.failNextWorktreeRead(new Error("transient comparison failure"));
+  await controller.completeReload(["client:core", "client:external"]);
+
+  assert.deepEqual(controller.getSnapshot(), {
+    dirtyScopes: [
+      {
+        dependantScopes: [],
+        description: "Other",
+        destructive: false,
+        scope: "client:other",
+      },
+      {
+        dependantScopes: [],
+        description: "External",
+        destructive: false,
+        scope: "client:external",
+      },
+    ],
+    error: "transient comparison failure",
+    pendingScopes: [],
+  });
   await controller.dispose();
 });
 

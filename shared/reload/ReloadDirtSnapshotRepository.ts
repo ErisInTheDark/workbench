@@ -34,6 +34,19 @@ function hasExitCode(error: unknown, code: number) {
     && error.code === code;
 }
 
+function isSilentGitReadFailure(error: unknown) {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && typeof error.code === "number"
+    && "stderr" in error
+    && typeof error.stderr === "string"
+    && !error.stderr.trim()
+    && (!("signal" in error) || error.signal === null),
+  );
+}
+
 function pathBatches(paths: readonly string[]) {
   const batches: string[][] = [];
   let batch: string[] = [];
@@ -65,7 +78,11 @@ export interface ReloadDirtSnapshotRepositoryPort {
 export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotRepositoryPort {
   readonly root: string;
 
-  constructor(repoRoot: string) {
+  constructor(
+    repoRoot: string,
+    private readonly gitExecutable = "git",
+    private readonly gitArgumentPrefix: readonly string[] = [],
+  ) {
     this.root = path.resolve(repoRoot);
   }
 
@@ -84,8 +101,8 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
       const changed = new Set<string>();
       for (const batch of batches) {
         const [tracked, untracked] = await Promise.all([
-          this.run(["--literal-pathspecs", "diff", "--name-only", "-z", "--no-renames", "--", ...batch], env, signal),
-          this.run(["--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", ...batch], env, signal),
+          this.runRead(["--literal-pathspecs", "diff", "--name-only", "-z", "--no-renames", "--", ...batch], env, signal),
+          this.runRead(["--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", ...batch], env, signal),
         ]);
         for (const sourcePath of [...parseNullPaths(tracked), ...parseNullPaths(untracked)]) changed.add(sourcePath);
       }
@@ -94,7 +111,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   async listWorktreePaths(signal?: AbortSignal) {
-    return parseNullPaths(await this.run([
+    return parseNullPaths(await this.runRead([
       "ls-files", "-z", "--cached", "--others", "--exclude-standard",
     ], process.env, signal)).sort((left, right) => left.localeCompare(right));
   }
@@ -122,7 +139,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
   }
 
   private async run(args: string[], env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal) {
-    const { stdout } = await execFileAsync("git", args, {
+    const { stdout } = await execFileAsync(this.gitExecutable, [...this.gitArgumentPrefix, ...args], {
       cwd: this.root,
       encoding: "utf8",
       env,
@@ -133,6 +150,16 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     return stdout;
   }
 
+  private async runRead(args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal) {
+    try {
+      return await this.run(args, env, signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!isSilentGitReadFailure(error)) throw error;
+      return await this.run(args, env, signal);
+    }
+  }
+
   private async runWithInput(
     args: string[],
     input: string,
@@ -140,7 +167,7 @@ export default class ReloadDirtSnapshotRepository implements ReloadDirtSnapshotR
     signal?: AbortSignal,
   ) {
     return await new Promise<string>((resolve, reject) => {
-      const child = spawn("git", args, {
+      const child = spawn(this.gitExecutable, [...this.gitArgumentPrefix, ...args], {
         cwd: this.root,
         env,
         signal,

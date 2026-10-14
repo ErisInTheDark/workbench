@@ -201,6 +201,12 @@ export default class ReloadDirtController {
       state.snapshotCommit = snapshotCommit;
       state.pendingScopes = [];
       state.error = null;
+      const externalDirtScopes = new Set((this.options.externalDirtSources ?? []).map(({ scope }) => scope));
+      this.publish({
+        dirtyScopes: this.snapshot.dirtyScopes.filter(({ scope }) => !applied.has(scope) || externalDirtScopes.has(scope)),
+        error: null,
+        pendingScopes: [],
+      });
       this.connectSourceObserver();
       await this.refreshNow();
     });
