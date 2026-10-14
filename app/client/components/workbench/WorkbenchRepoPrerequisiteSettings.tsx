@@ -10,12 +10,11 @@ import type { VirtualRepoAvailability } from "workbench-shared/workbench/repo/vi
 import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
 import IconButton from "../ui/IconButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
+import WorkbenchSettingsStatusRow, { type WorkbenchSettingsStatusTone } from "./WorkbenchSettingsStatusRow";
 
 const WINFSP_DOWNLOAD_URL = "https://winfsp.dev/rel/";
 
-type Tone = "ready" | "action" | "failed" | "pending";
-
-function present (availability: VirtualRepoAvailability): { tone: Tone; status: string; detail: string } {
+function present (availability: VirtualRepoAvailability): { tone: WorkbenchSettingsStatusTone; status: string; detail: string } {
   switch (availability.status) {
     case "available":
       return { tone: "ready", status: "Ready", detail: "Agents can use wb git repo to read remote repositories as read-only folders." };
@@ -35,13 +34,6 @@ function present (availability: VirtualRepoAvailability): { tone: Tone; status: 
       return { tone: "failed", status: "Check failed", detail: "Prerequisites could not be checked. Recheck, or see the daemon log." };
   }
 }
-
-const toneClassName: Record<Tone, string> = {
-  ready: "text-success",
-  action: "text-[color:var(--attention)]",
-  failed: "text-danger",
-  pending: "text-fg/muted",
-};
 
 export default function WorkbenchRepoPrerequisiteSettings ({ daemon }: { daemon: WorkbenchDaemonClient }) {
   const [availability, setAvailability] = useState<VirtualRepoAvailability | null>(null);
@@ -71,29 +63,14 @@ export default function WorkbenchRepoPrerequisiteSettings ({ daemon }: { daemon:
   const view = availability ? present(availability)
     : { tone: "pending" as const, status: "Checking", detail: "Checking this daemon's prerequisites..." };
   const showWinFsp = availability?.status === "missing" && availability.requirement === "winfsp";
-  return <div className="py-1">
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[0.95rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-2.5">
-      <div className="min-w-0 flex-1 basis-60">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="text-[0.86em] font-medium leading-[1.5] text-text">Virtual repositories</span>
-          <span role="status" className={`inline-flex items-center gap-1.5 text-[0.76em] leading-[1.5] ${toneClassName[view.tone]}`}>
-            <span aria-hidden="true" className={`size-1.5 rounded-full bg-current ${view.tone === "pending" ? "motion-safe:animate-pulse" : ""}`} />
-            {view.status}
-          </span>
-        </div>
-        <p className="m-0 mt-0.5 text-[0.78em] leading-[1.55] text-fg/muted">{view.detail}</p>
-        {error ? <p role="alert" className="m-0 mt-0.5 text-[0.78em] leading-[1.55] text-danger">{error}</p> : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        {showWinFsp ? <WorkbenchLinkButton href={WINFSP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
-          Download WinFsp<ExternalLinkIcon aria-hidden="true" className="size-4" />
-        </WorkbenchLinkButton> : null}
-        <IconButton display="hover-border" size="small"
-          label={checking ? "Checking prerequisites" : "Recheck prerequisites"}
-          disabled={checking} aria-busy={checking} onClick={check}>
-          <RefreshCwIcon className={`size-4 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} />
-        </IconButton>
-      </div>
-    </div>
-  </div>;
+  return <WorkbenchSettingsStatusRow label="Virtual repositories" tone={view.tone} status={view.status} detail={view.detail} error={error}>
+    {showWinFsp ? <WorkbenchLinkButton href={WINFSP_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+      Download WinFsp<ExternalLinkIcon aria-hidden="true" className="size-4" />
+    </WorkbenchLinkButton> : null}
+    <IconButton display="hover-border" size="small"
+      label={checking ? "Checking prerequisites" : "Recheck prerequisites"}
+      disabled={checking} aria-busy={checking} onClick={check}>
+      <RefreshCwIcon className={`size-4 ${checking ? "animate-spin motion-reduce:animate-none" : ""}`} />
+    </IconButton>
+  </WorkbenchSettingsStatusRow>;
 }

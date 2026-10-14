@@ -3,7 +3,7 @@
  * - IsolatedWorkbenchOptions: select external identities, live child output and injectable readiness deadlines.
  * - IsolatedWorkbenchProcessEvent: typed child output or structured daemon diagnostics.
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
- * - default IsolatedWorkbench: boot current source with private storage and own its socket/process cleanup.
+ * - default IsolatedWorkbench: boot current source with private storage, install provider runtimes, and own its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
  * - CLAUDE_NATIVE_INSTRUCTION_SENTINEL: catch native CLAUDE.md leakage into managed prompts.
  * - WORKBENCH_INSTRUCTION_SENTINEL: prove managed project instructions reach provider models.
@@ -36,6 +36,7 @@ import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "../../shared
 import WorkbenchTranscriptClient from "../../app/client/workbench/database/transcript/WorkbenchTranscriptClient";
 import { workbenchTranscriptNotifications } from "../../shared/workbench/database/transcript/workbench-transcript-contract";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
+import type { ProviderRuntimeKey } from "../../shared/workbench/provider/provider-runtime";
 import { WorkbenchDaemonReadySchema, type WorkbenchDaemonEndpoint } from "../../shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient";
 import { readDaemonEndpoint } from "../../shared/process/workbench-daemon-endpoint";
@@ -394,6 +395,17 @@ export default class IsolatedWorkbench {
     });
   }
 
+  /** Installs provider runtimes through the same daemon request the Settings Install button sends. */
+  async installProviderRuntimes(providers: readonly ProviderRuntimeKey[]) {
+    return await this.phase("provider runtime install", async signal => {
+      for (const provider of providers) {
+        const snapshot = await this.withSignal(this.daemon.providerRuntimes.install(provider), signal);
+        const status = snapshot.data.find(entry => entry.provider === provider);
+        assert.equal(status?.state, "ready", `${provider} runtime install failed: ${status?.error ?? "no status"}`);
+      }
+    });
+  }
+
   async stopDaemon() {
     assert.ok(this.child, "Scenario daemon must be running");
     const code = await this.child.stop(false);
@@ -611,6 +623,11 @@ stream_max_retries = 0
       CLAUDE_CONFIG_DIR: path.join(this.root, "claude"),
       ...(this.claudeModelEndpoint ? { WORKBENCH_CLAUDE_FAKE_ENDPOINT: this.claudeModelEndpoint } : {}),
       HOME: path.join(this.root, "user"), USERPROFILE: path.join(this.root, "user"),
+      // Provider runtime installs keep the real npm cache and registry config, so repeat runs don't redownload.
+      npm_config_cache: process.env.npm_config_cache ?? (process.platform === "win32"
+        ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "npm-cache")
+        : path.join(os.homedir(), ".npm")),
+      npm_config_userconfig: process.env.npm_config_userconfig ?? path.join(os.homedir(), ".npmrc"),
       WORKBENCH_DATA_ROOT: this.dataRootPath,
       WORKBENCH_PROJECTS_ROOT: path.dirname(this.project),
       WORKBENCH_STARTUP_DIAGNOSTICS: "1",

@@ -2,7 +2,9 @@
  * Exports:
  * - default ClaudeBridgeNode: own reloadable Claude turn logic, managed prompt and activated-skill builds, input-time agent context, lifecycle publication, native edit claim gating, model configuration probes, and canonical transcript adapter while preserving the parent harness's live processes.
  */
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import ReloadableNode from "../../ReloadableNode";
+import { resolveProviderRuntime } from "../provider-runtimes";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import WorkbenchServerSettings from "../../lib/workbench/settings/WorkbenchServerSettings";
@@ -28,7 +30,9 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const inherited = (build.handoffState as ClaudeBridgeHandoff | undefined)?.turns ?? [];
     const settings = new WorkbenchServerSettings(build.get("database"));
     // Turn launches resolve default windows here; the provider definition reads the same probes for model choices.
-    const configuration = new ClaudeConfigurationController();
+    // Resolved per launch, so an install from Settings applies to the very next turn or probe.
+    const resolveExecutable = () => resolveProviderRuntime(context.dataRootPath, "claude").executable;
+    const configuration = new ClaudeConfigurationController(query, resolveExecutable);
     const promptContext = async (input: ClaudeInstructionInput & { activatedSkillPaths?: readonly string[] }) => {
       const project = await build.get("projectCatalog").resolveProjectById(input.projectId);
       return {
@@ -60,6 +64,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       state: build.get("threadState"),
       transcript,
       signal: lifetime.signal,
+      resolveExecutable,
       defaultContextWindow: model => configuration.defaultContextWindow(model),
       buildInstructions: async input => {
         const instructions = await buildWorkbenchManagedThreadInstructions(

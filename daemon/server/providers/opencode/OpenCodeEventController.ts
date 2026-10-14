@@ -372,7 +372,9 @@ export default class OpenCodeEventController {
           reference: event.type === "session.compaction.failed" ? event.data.inputID ?? null : null,
         });
         await this.options.threads.syncNative(sessionID);
-        this.options.threads.observeCompaction(sessionID, event.type === "session.compaction.ended" ? "completed" : "failed");
+        if (event.type === "session.compaction.ended") this.options.threads.observeCompaction(sessionID, "completed");
+        else this.options.threads.observeCompaction(sessionID, "failed", undefined,
+          `${event.data.error.type}${event.data.error.status ? ` ${event.data.error.status}` : ""}: ${event.data.error.message}`);
         return;
       }
       case "session.execution.succeeded":

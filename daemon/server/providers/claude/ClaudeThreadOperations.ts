@@ -39,7 +39,7 @@ import type WorkbenchThreadIdentityController from "../../WorkbenchThreadIdentit
 import type WorkbenchThreadStateFeature from "../../WorkbenchThreadStateFeature";
 import type WorkbenchTranscriptReader from "../../WorkbenchTranscriptReader";
 import { createClaudeSessionHooks } from "./claude-session-hooks";
-import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
+import { claudeEnvironment } from "./claude-process-options";
 import {
     appendClaudePrompt, claudeImageBlock, claudePromptContent, prefixClaudePrompt, type ClaudePromptContent,
 } from "./claude-prompt-content";
@@ -71,7 +71,8 @@ export interface ClaudeThreadOperationsOptions {
   sessions: ClaudeSessionHost;
   /** Request-scoped compaction query factory; live turns launch through `sessions`. */
   createQuery?: typeof query;
-  resolveExecutable?: () => string;
+  /** Workbench-installed Claude Code executable; throws when it isn't installed. */
+  resolveExecutable: () => string;
   identities: WorkbenchThreadIdentityController;
   projects: WorkbenchProjectCatalogController;
   questionnaires: WorkbenchQuestionnaireController;
@@ -398,7 +399,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const sdkContent = workingStatusInPrompt
       ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, promptContent) : promptContent;
     const { model } = instructionInput;
-    const executable = this.options.resolveExecutable?.() ?? claudeExecutable();
+    const executable = this.options.resolveExecutable();
     const usage = (await this.options.transcript.readContextUsage(identity.threadId))?.tokenUsage ?? null;
     // Earlier turns a reload killed never settled their usage; the log still has their calls.
     if (nativeHistoryExists) this.refreshUsage(identity.threadId);
@@ -574,7 +575,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
         prompt: "/compact",
         options: {
           cwd: binding.nativeLocation, resume: binding.nativeThreadId,
-          pathToClaudeCodeExecutable: this.options.resolveExecutable?.() ?? claudeExecutable(),
+          pathToClaudeCodeExecutable: this.options.resolveExecutable(),
           env: claudeEnvironment(fakeEndpoint, view?.env, contextWindow),
           settingSources: [],
           skills: [],

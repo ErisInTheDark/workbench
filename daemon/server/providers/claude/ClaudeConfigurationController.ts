@@ -3,13 +3,13 @@
  * - claudeAccountLimits: map Claude plan usage windows and the signed-in account into the shared account-limit contract.
  * - default ClaudeConfigurationController: read Claude Code model choices, context window bounds and defaults, and plan usage through idle control queries.
  */
-import { query, type AccountInfo, type ModelInfo, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type query, type AccountInfo, type ModelInfo, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import providerAccountFingerprint from "../provider-account-fingerprint";
 import type { WorkbenchModelContextCapability } from "workbench-shared/types";
 import type { WorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import type { WorkbenchAccountLimits, WorkbenchRateLimitWindow } from "workbench-shared/workbench/provider/provider-account";
 import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
-import { claudeEnvironment, claudeExecutable } from "./claude-process-options";
+import { claudeEnvironment } from "./claude-process-options";
 
 type ClaudeUsage = Awaited<ReturnType<Query["usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET"]>>;
 type ClaudeUsageWindow = { utilization: number | null; resets_at: string | null } | null | undefined;
@@ -97,8 +97,8 @@ export default class ClaudeConfigurationController {
   private disposed = false;
 
   constructor(
-    private readonly createQuery: typeof query = query,
-    private readonly resolveExecutable: () => string = claudeExecutable,
+    private readonly createQuery: typeof query,
+    private readonly resolveExecutable: () => string,
     private readonly warn: (message: string) => void = message => console.warn("[claude]", message),
   ) {}
 

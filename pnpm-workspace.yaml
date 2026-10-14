@@ -21,6 +21,16 @@ minimumReleaseAgeExclude:
   - "@github/copilot-*"
   - "@anthropic-ai/*"
   - "@openai/codex"
+# Workbench installs Claude Code on demand under its data root; the SDK's bundled binary is never used.
+ignoredOptionalDependencies:
+  - "@anthropic-ai/claude-agent-sdk-darwin-arm64"
+  - "@anthropic-ai/claude-agent-sdk-darwin-x64"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64-musl"
+  - "@anthropic-ai/claude-agent-sdk-linux-x64"
+  - "@anthropic-ai/claude-agent-sdk-linux-x64-musl"
+  - "@anthropic-ai/claude-agent-sdk-win32-arm64"
+  - "@anthropic-ai/claude-agent-sdk-win32-x64"
 trustPolicyExclude:
   - "@smithy/core@3.33.0"
   - "pino@9.14.0"

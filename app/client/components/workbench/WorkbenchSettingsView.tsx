@@ -21,6 +21,7 @@ import WorkbenchNetworkSettings from "./WorkbenchNetworkSettings";
 import { OptionCard } from "../ui/OptionCards";
 import WorkbenchProjectDiscoverySettings from "./WorkbenchProjectDiscoverySettings";
 import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
+import WorkbenchProviderRuntimeSettings from "./WorkbenchProviderRuntimeSettings";
 import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentModeSetting";
 import WorkbenchRepoPrerequisiteSettings from "./WorkbenchRepoPrerequisiteSettings";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
@@ -42,6 +43,7 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
     { id: "settings-environment", label: "Environment" },
   ] },
   { id: "agents", label: "Agents", sections: [
+    { id: "settings-providers", label: "Providers" },
     { id: "settings-agent-network", label: "Network access" },
     { id: "settings-capabilities", label: "Capabilities" },
     { id: "settings-auto-approve", label: "Auto-approve" },
@@ -243,6 +245,11 @@ export default function WorkbenchSettingsView({
           </FormSection> : null}
         </> : null}
         {page === "agents" ? <>
+          <FormSection id="settings-providers" title="Providers">
+            {daemonControl}
+            {daemon ? <WorkbenchProviderRuntimeSettings key={`providers-${daemonId}`} daemon={daemon} />
+              : <p role="status" className="text-sm text-fg/muted">No daemon available.</p>}
+          </FormSection>
           <FormSection id="settings-agent-network" title="Network access">
             {daemonControl}
             {logicalProject ? folderControl : null}

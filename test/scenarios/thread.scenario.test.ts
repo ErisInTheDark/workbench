@@ -39,7 +39,6 @@ type ProviderScenario = {
   verifySearch: (items: ProjectedItems) => void;
   verifyBinding?: (database: Database.Database, projectId: string, id: string) => void;
   verifyCapabilities?: () => Promise<void>;
-  verifySnoozedTurnSettled?: (turnId: string) => Promise<void>;
   verifySteerDelivery?: (threadId: string, proof: string, releasedAt: number) => Promise<void>;
   verifyNativeDeletion?: (id: string) => Promise<void>;
   verifyLegacyFiles?: () => Promise<void>;
@@ -52,24 +51,18 @@ const selectedProviders = selectedSelection
   ? (["codex", "opencode", "claude"] as const).filter(provider => selectedSelection[provider])
   : [];
 
-function assertFirstTurnPending(events: IsolatedWorkbench["events"], turnId: string, durableState?: string) {
+/** Thread-scoped provider events never reach clients, so the durable transcript state is the only terminal evidence. */
+function assertFirstTurnPending(durableState?: string) {
   if (durableState && durableState !== "inProgress") {
     throw new Error(`Codex first turn ${durableState} before first-turn checkpoint completed.`);
-  }
-  const terminal = events.find(event => event.method === "turn/completed"
-    && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
-  if (terminal) {
-    throw new Error(`Codex first turn ${terminal.status} before first-turn checkpoint completed: ${terminal.error?.message.slice(0, 300) ?? "no provider error"}`);
   }
 }
 
 test("first-turn proof wait rejects a terminal turn instead of hanging", () => {
-  const turn = (id: string, status: Turn["status"]) => ({ id, status, error: null }) as Turn;
-  const event = (value: Turn) => ({ method: "turn/completed", params: { turn: value } });
-  assertFirstTurnPending([event(turn("other", "failed"))], "target");
-  assert.throws(() => assertFirstTurnPending([event(turn("target", "failed"))], "target"), /failed/u);
-  assert.throws(() => assertFirstTurnPending([event(turn("target", "completed"))], "target"), /completed/u);
-  assert.throws(() => assertFirstTurnPending([], "target", "failed"), /failed/u);
+  assertFirstTurnPending();
+  assertFirstTurnPending("inProgress");
+  assert.throws(() => assertFirstTurnPending("failed"), /failed/u);
+  assert.throws(() => assertFirstTurnPending("completed"), /completed/u);
 });
 
 function passphrase() {
@@ -272,7 +265,7 @@ async function verifyCodexFirstTurn(
     controller.select({ thread: { ...thread, turns: [firstTurn] } });
     await runtime.waitForFact(async () => {
       const snapshot = await runtime.transcripts.read({ threadId, turnLimit: 10 });
-      assertFirstTurnPending(runtime.events, turnId, snapshot?.turns.find(turn => turn.id === turnId)?.state);
+      assertFirstTurnPending(snapshot?.turns.find(turn => turn.id === turnId)?.state);
       healthy();
       return current()?.turns.flatMap(turn => turn.items).some(item =>
         item.type === "mcpToolCall" && item.tool === "shell" && item.status === "inProgress") ?? false;
@@ -280,8 +273,7 @@ async function verifyCodexFirstTurn(
     const beforeSwitch = current()!.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "agentMessage").map(item => ({ id: item.id, text: item.text }));
     assert.ok(beforeSwitch.some(item => item.text.includes(prefixProof)), "Commentary must arrive before the held command");
-    assert.ok(!runtime.events.some(event => event.method === "turn/completed"
-      && (event.params?.turn as Turn | undefined)?.id === turnId), "Resubscribe must occur during the live turn");
+    assertFirstTurnPending((await runtime.transcripts.read({ threadId, turnLimit: 10 }))?.turns.find(turn => turn.id === turnId)?.state);
     const previousResets = observed.resets;
     const replacementSubscription = once(subscriptions, "settled", { signal });
     controller.select(null);
@@ -289,7 +281,7 @@ async function verifyCodexFirstTurn(
     await replacementSubscription;
     await runtime.waitForFact(async () => {
       const snapshot = await runtime.transcripts.read({ threadId, turnLimit: 10 });
-      assertFirstTurnPending(runtime.events, turnId, snapshot?.turns.find(turn => turn.id === turnId)?.state);
+      assertFirstTurnPending(snapshot?.turns.find(turn => turn.id === turnId)?.state);
       healthy();
       return observed.resets > previousResets && current() !== null;
     }, Boolean, signal);
@@ -306,9 +298,6 @@ async function verifyCodexFirstTurn(
       signal,
     );
     assert.equal(completed?.turns.find(turn => turn.id === turnId)?.state, "completed", "First turn must complete");
-    assert.ok(runtime.events.some(event => event.method === "turn/completed"
-      && (event.params?.turn as Turn | undefined)?.id === turnId), "First turn completion must be notified");
-    assert.ok(runtime.events.some(event => event.method === "item/agentMessage/delta"));
     await runtime.until(() => {
       healthy();
       return Boolean(current()?.turns.some(turn => turn.id === turnId && turn.status === "completed"));
@@ -436,6 +425,12 @@ test("selected providers complete the shared thread boundary journey in one clon
   let runtime: IsolatedWorkbench;
   try {
     runtime = await IsolatedWorkbench.create(source, t.signal, {
+      // Daemon warnings and errors stream live, so a journey that stalls until the runner budget still shows why.
+      processEvent: event => {
+        if (event.kind === "output" && event.source === "daemon" && event.stream === "stderr") {
+          process.stderr.write(event.text.split(/\r?\n/u).filter(Boolean).map(line => `[daemon] ${line}\n`).join(""));
+        }
+      },
       codexIdentity: selectedSelection.codex === "paid",
       ...(fakeModels.codex ? { codexModelEndpoint: fakeModels.codex.baseUrl } : {}),
       ...(fakeModels.claude ? { claudeModelEndpoint: fakeModels.claude.baseUrl } : {}),
@@ -553,15 +548,6 @@ test("selected providers complete the shared thread boundary journey in one clon
             && content.text.includes(PROVIDER_SEARCH_PROOF))),
         "OpenCode must complete WB search and preserve its result");
       },
-      verifySnoozedTurnSettled: async turnId => {
-        await runtime.waitForFact(async () => {
-          const terminal = runtime.events.find(event => event.method === "turn/completed"
-            && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
-          if (!terminal) return false;
-          assert.equal(terminal.status, "interrupted", "Snoozed OpenCode turn must settle before another turn starts");
-          return true;
-        }, Boolean, scenarioSignal);
-      },
       verifyNativeDeletion: async (id: string) => {
         const privateDatabase = new Database(path.join(runtime.root, "data", "opencode", "opencode.db"), {
           readonly: true, fileMustExist: true,
@@ -597,15 +583,6 @@ test("selected providers complete the shared thread boundary journey in one clon
           Boolean, scenarioSignal);
         assert.ok(delivered?.resolvedAt && delivered.resolvedAt >= releasedAt,
           "A Claude steer must stay pending until Claude folds it in after the held tool");
-      },
-      verifySnoozedTurnSettled: async turnId => {
-        await runtime.waitForFact(async () => {
-          const terminal = runtime.events.find(event => event.method === "turn/completed"
-            && (event.params?.turn as Turn | undefined)?.id === turnId)?.params?.turn as Turn | undefined;
-          if (!terminal) return false;
-          assert.equal(terminal.status, "interrupted", "Claude must publish the snoozed turn's settlement");
-          return true;
-        }, Boolean, scenarioSignal);
       },
       verifyNativeDeletion: async id => {
         const root = path.join(runtime.root, "claude", "projects");
@@ -651,6 +628,8 @@ test("selected providers complete the shared thread boundary journey in one clon
     const firstTurn = thread.turns.at(-1);
     assert.ok(firstTurn, "App draft launch must admit the first provider turn");
     const owner = new ProviderThreadJourney(runtime, provider, project.id, threadId, scenarioSignal);
+    // Live journey markers, so a step that stalls until the runner budget is identifiable from the output.
+    const step = (label: string) => runtime.markPhase(`${provider}: ${label}`);
     const subscribe = () => owner.subscribe();
     const waitForFact = <T>(read: () => Promise<T>, ready: (value: T) => boolean) =>
       owner.waitForFact(read, ready);
@@ -742,10 +721,13 @@ test("selected providers complete the shared thread boundary journey in one clon
     fakeModel?.forgetInterruptedTool();
     assert.ok((await readRetainedQuestions()).some(question => question.requestKey === heldQuestion.requestKey));
 
+    step("waiting for first cold reopen");
     await coordinator.reopen(0);
+    step("verifying reopened first turn");
     await verifyFirstTurnReopened?.();
     await runtime.projectThreads(project.id);
     await subscribe();
+    step("waiting for the retained held question");
     const retainedQuestions = await waitForFact(
       readRetainedQuestions,
       value => value.some(question => question.request.questions.some(entry => entry.id === "held-answer")),
@@ -757,6 +739,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     if (fakeModel && provider !== "codex") {
       fakeModel.expectNextPromptText(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, "<wb:questionnaire-response>");
     }
+    step("answering the retained held question");
     assert.equal((await answer(
       retainedQuestion,
       "held-answer",
@@ -767,15 +750,17 @@ test("selected providers complete the shared thread boundary journey in one clon
     const heldEntry = heldHistory.data.find(entry => entry.requestKey === heldQuestion.requestKey);
     assert.ok(heldEntry && heldEntry.turnId !== activeTurn
       && heldEntry.response.answers["held-answer"]?.answers.includes(heldProof));
+    step("waiting for the continued turn's dismiss question");
     const dismissQuestion = await pending("dismiss-preserved");
     const continuedProjection = await durable();
     assert.ok(JSON.stringify(continuedProjection).includes(heldProof));
     const continuedTurnId = dismissQuestion.turnId;
     assert.ok(continuedTurnId, "The retained question must identify its owning turn");
     assert.equal(continuedTurnId, heldEntry.turnId);
+    step("snoozing the dismiss question");
     await runtime.daemon.threads.interrupt({ threadId, requestKey: dismissQuestion.requestKey });
     const beforeDismiss = await waitTurn(continuedTurnId, "interrupted");
-    await providerRegistry[provider].verifySnoozedTurnSettled?.(continuedTurnId);
+    step("dismissing the preserved question");
     fakeModel?.forgetInterruptedTool();
     await runtime.daemon.threads.stop({ threadId, intent: "stop", requestKey: dismissQuestion.requestKey });
     await waitForFact(durable, value => value.turns.every(turn => turn.status !== "inProgress"));
@@ -784,7 +769,11 @@ test("selected providers complete the shared thread boundary journey in one clon
     assert.deepEqual((await durable()).turns.map(turn => ({ id: turn.id, status: turn.status })),
       beforeDismiss.turns.map(turn => ({ id: turn.id, status: turn.status })),
       "Dismissing a preserved question must not create or interrupt a turn");
+    // A retained question keeps the thread waiting on user input, so the provider can only report idle once it's dismissed.
+    step("waiting for the provider to settle the snoozed turn");
+    await owner.waitProviderIdle();
 
+    step("running the stopped turn");
     if (fakeModel) fakeModel.enqueue(journey.fake.stop(stopProof));
     const stoppedTurn = await submit(journey.stop(stopProof));
     await waitHeldTool(stoppedTurn, stopProof);
@@ -792,17 +781,15 @@ test("selected providers complete the shared thread boundary journey in one clon
     await journeyGate.release(stopProof);
     await waitTurn(stoppedTurn, "interrupted");
     fakeModel?.forgetInterruptedTool();
+    step("waiting for second cold reopen");
     await coordinator.reopen(1);
+    step("compacting");
     await runtime.projectThreads(project.id);
     await subscribe();
     const beforeCompact = await durable();
     const priorCompactions = new Set(beforeCompact.turns.flatMap(turn => turn.items)
       .filter(item => item.type === "contextCompaction").map(item => item.id));
-    // OpenCode resumes the model after summarising; keep that response ahead of the final turn's script.
-    if (fakeModel) fakeModel.enqueue([
-      { text: `Summary ${prefixProof}` },
-      ...(provider === "opencode" ? [{ text: `Continuing after compaction ${prefixProof}` }] : []),
-    ]);
+    if (fakeModel) fakeModel.enqueue([{ text: `Summary ${prefixProof}` }]);
     console.log(`[${provider} live] requesting compaction`);
     await runtime.daemon.threads.compact({ threadId });
     await waitForFact(durable, value => {
@@ -819,6 +806,8 @@ test("selected providers complete the shared thread boundary journey in one clon
     );
 
     console.log(`[${provider} live] compaction recorded at ${new Date().toISOString()}`);
+    // A leftover scripted response would answer the final turn's first request instead of its own script.
+    assert.equal(fakeModel?.queuedActions ?? 0, 0, "Compaction must consume exactly its scripted summary");
     const finalProof = passphrase();
     if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title));
     const finalTurn = await submit(journey.final(prefixProof, finalProof));
@@ -875,7 +864,9 @@ test("selected providers complete the shared thread boundary journey in one clon
       "The provider text stream must reach the shared live projection");
     await owner.unsubscribe();
 
+    step("waiting for third cold reopen");
     await coordinator.reopen(2);
+    step("verifying the final reopened state");
     const reopened = await runtime.transcripts.read({ threadId, turnLimit: 20 });
     assert.ok(reopened, "The transcript must survive a cold WB reopen");
     const reopenedProjection = projectWorkbenchTranscript(reopened);
@@ -951,6 +942,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     await runtime.start(activeProfiles, prefixProof);
     checkpoints = new SharedRuntimeCheckpoints(runtime, activeProfiles, prefixProof, selectedProviders.length);
     console.log(`[thread live] isolated runtime started for ${selectedProviders.join(", ")}`);
+    await runtime.installProviderRuntimes(selectedProviders.filter((provider): provider is Exclude<Provider, "codex"> => provider !== "codex"));
     await runtime.request("project/discovery-settings/update", { paths: [path.dirname(runtime.project)] });
     const catalog = await runtime.waitForProjects([runtime.project]);
     const found = catalog.find(entry => path.resolve(entry.rootPath) === runtime.project);

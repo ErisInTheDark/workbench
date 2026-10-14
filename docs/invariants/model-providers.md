@@ -1,1 +1,2 @@
-- Prefer provider integrations that reuse the user's existing installation, preferences, credentials, sessions, and other provider-owned state so Workbench and native clients stay synchronized.
+- Prefer provider integrations that reuse the user's existing preferences, credentials, sessions, and other provider-owned state so Workbench and native clients stay synchronized.
+- Provider executables are pinned to the checkout's SDK versions, never resolved from PATH: Codex ships as a checkout dependency; Claude Code and OpenCode are optional provider runtimes the user installs from Settings.

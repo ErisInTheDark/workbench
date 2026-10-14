@@ -193,6 +193,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "local-capabilities/read": { params: object; result: WorkbenchLocalCapabilitySettingsResponse };
   "installation/update/pull": { params: object; result: import("../installation-update").InstallationPullResult };
   "installation/update/failure/dismiss": { params: object; result: { ok: true } };
+  "provider/runtime/read": { params: object; result: import("../provider/provider-runtime").ProviderRuntimesSnapshot };
+  "provider/runtime/install": { params: import("../provider/provider-runtime").ProviderRuntimeInstallRequest; result: import("../provider/provider-runtime").ProviderRuntimesSnapshot };
   "thread-auto-compact/read": { params: object; result: { settings: ThreadAutoCompactSettings } };
   "thread-auto-compact/update": { params: { settings: Partial<ThreadAutoCompactSettings> }; result: { settings: ThreadAutoCompactSettings } };
   "local-capabilities/update": { params: WorkbenchLocalCapabilitySettingsUpdateRequest; result: WorkbenchLocalCapabilitySettingsResponse };

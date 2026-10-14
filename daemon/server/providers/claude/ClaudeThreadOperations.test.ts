@@ -1,4 +1,4 @@
-/* Exports: none. Protect Claude admission, context, continuation, compaction admission, thread interruption and turn liveness. */
+/* Exports: none. Protect Claude admission, missing-runtime rejection, context, continuation, compaction admission, thread interruption and turn liveness. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -7,6 +7,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptNotification } from "workbench-shared/workbench/provider/provider-observation";
 import { isWorkbenchUnfinishedTurnInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import { ProviderRuntimeMissingError } from "../provider-runtimes";
 import ClaudeSessionHost from "./ClaudeSessionHost";
 import ClaudeThreadOperations, { type ClaudeThreadOperationsOptions } from "./ClaudeThreadOperations";
 
@@ -40,9 +41,10 @@ function messageText(content: unknown) {
 
 function fixture({
   failNative = false, failUsage = false, usage, contextWindowTokens, launches = [], windows = [], defaults = [],
-  captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [],
+  captured, hold, subagentName, interrupt, compactQuery, signal, compactionReports = [], missingRuntime = false,
 }: {
   failNative?: boolean;
+  missingRuntime?: boolean;
   failUsage?: boolean;
   usage: string[];
   contextWindowTokens?: number;
@@ -110,7 +112,10 @@ function fixture({
     sessions,
     createQuery: compactQuery,
     signal: signal ?? new AbortController().signal,
-    resolveExecutable: () => "fake-claude",
+    resolveExecutable: () => {
+      if (missingRuntime) throw new ProviderRuntimeMissingError("Claude Code", "2.1.284");
+      return "fake-claude";
+    },
     observe: async () => undefined,
     broadcast: (notification: WorkbenchTranscriptNotification) => {
       if (notification.method === "thread/tokenUsage/updated") windows.push(notification.params.tokenUsage.modelContextWindow);
@@ -256,6 +261,16 @@ test("Claude records accepted model use and treats recency failure as a warning,
   assert.match(warned.warning ?? "", /history unavailable/u);
   await assert.rejects(fixture({ usage, failNative: true }).submit(input), /native start failed/u);
   assert.deepEqual(usage, ["sonnet", "sonnet"]);
+});
+
+test("a missing Claude runtime rejects the turn with the Settings pointer before launching", async () => {
+  const launches: (string | undefined)[] = [];
+  const owner = fixture({ usage: [], launches, missingRuntime: true });
+  try {
+    await assert.rejects(owner.submit({ threadId, clientMessageId: "missing", intent: "newTurn",
+      input: [{ type: "text", text: "hello", text_elements: [] }] }), /Settings › Agents › Providers/u);
+    assert.deepEqual(launches, []);
+  } finally { await owner.dispose(); }
 });
 
 test("Claude child turns carry canonical audience into their prompt and MCP catalogue", async () => {

@@ -10,6 +10,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
+import { resolveProviderRuntime } from "../provider-runtimes";
 
 export type WorkbenchOpenCodeClient = OpenCodeClient;
 type OpenCodeModelCatalog = {
@@ -23,6 +24,8 @@ export interface OpenCodeServiceControllerOptions {
   prepareServiceDirectory?: (directory: string) => Promise<void>;
   createClient?: (endpoint: Endpoint) => WorkbenchOpenCodeClient;
   environment?: NodeJS.ProcessEnv;
+  /** Workbench-installed OpenCode executable and version; throws when it isn't installed. */
+  resolveRuntime?: (dataRoot: string) => { executable: string; version: string };
   pluginSource?: string;
   warn?: (message: string) => void;
 }
@@ -134,12 +137,13 @@ export default class OpenCodeServiceController {
   private stopping: Promise<void> | null = null;
   private lifetime = new AbortController();
   private disposed = false;
+  private readonly dataRoot: string;
   private readonly serviceStateHome: string;
   private readonly serviceFile: string;
   private readonly modelCatalogs = new Map<string, Promise<OpenCodeModelCatalog>>();
 
   constructor(private readonly options: OpenCodeServiceControllerOptions = {}) {
-    const dataRoot = resolveWorkbenchDataRoot({ environment: options.environment ?? process.env });
+    const dataRoot = this.dataRoot = resolveWorkbenchDataRoot({ environment: options.environment ?? process.env });
     this.serviceStateHome = path.join(dataRoot, "daemon", "providers", "opencode", "state");
     this.serviceFile = path.join(this.serviceStateHome, "opencode", "service.json");
   }
@@ -212,6 +216,8 @@ export default class OpenCodeServiceController {
 
   private async create() {
     const lifetime = this.lifetime;
+    // Fails before any service work when the runtime isn't installed, so the user sees the Settings pointer.
+    const runtime = (this.options.resolveRuntime ?? (dataRoot => resolveProviderRuntime(dataRoot, "opencode")))(this.dataRoot);
     const [{ OpenCode }, { Service }] = await Promise.all([
       import("@opencode/client"),
       import("@opencode/client/service"),
@@ -224,13 +230,14 @@ export default class OpenCodeServiceController {
     );
     try {
       const endpoint = await (this.options.ensureService ?? Service.ensure)({
-        command: ["opencode", "serve", "--service", "--port", "0"],
+        command: [runtime.executable, "serve", "--service", "--port", "0"],
         env: serviceEnvironment(this.options.environment ?? process.env, pluginSource, this.serviceStateHome),
         file: this.serviceFile,
         onStart: () => {
           this.active = true;
         },
-        version: version => version.startsWith("2."),
+        // A service started by another OpenCode build is replaced by the pinned one.
+        version: version => version === runtime.version,
       });
       this.active = true;
       const createClient = this.options.createClient ?? ((value: Endpoint) => OpenCode.make({

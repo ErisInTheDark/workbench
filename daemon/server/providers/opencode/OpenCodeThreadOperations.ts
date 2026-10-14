@@ -691,10 +691,11 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     });
   }
 
-  observeCompaction(sessionID: string, phase: "started" | "completed" | "failed", reference?: string) {
+  /** `failure` is OpenCode's own reason for a failed compaction, so the caller sees why instead of a bare failure. */
+  observeCompaction(sessionID: string, phase: "started" | "completed" | "failed", reference?: string, failure?: string) {
     if (phase === "started") return this.compactionCompletion.started(sessionID, reference ?? sessionID);
     if (phase === "completed") this.compactionCompletion.completed(sessionID);
-    else this.compactionCompletion.failed(sessionID, new Error("OpenCode compaction failed."));
+    else this.compactionCompletion.failed(sessionID, new Error(failure ? `OpenCode compaction failed: ${failure.slice(0, 500)}` : "OpenCode compaction failed."));
     return null;
   }
 

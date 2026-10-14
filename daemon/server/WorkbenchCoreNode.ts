@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations.
+ * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import path from "node:path";
@@ -18,6 +18,7 @@ import BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
 import CodexBridgeNode from "./CodexBridgeNode";
 import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
 import ClaudeBridgeNode from "./providers/claude/ClaudeBridgeNode";
+import ProviderRuntimeNode from "./providers/ProviderRuntimeNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type {
   DaemonDatabaseRegistration,
@@ -1052,7 +1053,7 @@ function createWorkbenchCoreFeature(
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, import("./daemon-runtime-objects").DaemonProviderNotification>()({
   access: "agent",
-  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchInstallationUpdateNode, WorkbenchWebSocketNode],
+  children: [WorkbenchTopologyNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, ProviderRuntimeNode, WorkbenchBrowseNode, WorkbenchVoiceNode, WorkbenchInstallationUpdateNode, WorkbenchWebSocketNode],
   create: (context, { get, run, lease, handoffState, isReplacing, mode }) => {
     const reloadState = handoffState as WorkbenchCoreReloadState | undefined;
     return createWorkbenchCoreFeature(

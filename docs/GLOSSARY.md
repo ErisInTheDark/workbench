@@ -33,6 +33,7 @@
 | approval mode | Per-thread daemon-project policy for outside-sandbox requests: approvals on, skip approvals, or auto-approve via the selected reviewer; stored beside the profile selection |
 | codex app-server | Codex's harness. |
 | provider | A harness integrated by Workbench, such as Codex, OpenCode or Copilot. Provider and harness are interchangeable here; Workbench is the enclosing harness. |
+| provider runtime | Workbench-installed Claude Code or OpenCode executable pinned to the checkout's SDK version, under the data root; installed from Settings › Agents › Providers. |
 | app | Sometimes "app server"; not the Codex harness. App server owns SPA serving, app-local state, cross-daemon workspace subscriptions and routing. Daemons own local data and execution; browser owns rendering and interaction. |
 | Git transition | A worktree-keyed shared-read/exclusive-write lease that coordinates Git arc and thread-state decisions across reload generations |
 | active claim | A thread’s current editable file ownership. It may overlap the thread’s baseline claims. |

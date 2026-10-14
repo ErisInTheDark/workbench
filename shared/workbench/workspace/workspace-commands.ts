@@ -118,6 +118,8 @@ export const workspaceCommandRoutes = {
   "local-capabilities/update": "installation",
   "installation/update/pull": "installation",
   "installation/update/failure/dismiss": "installation",
+  "provider/runtime/read": "installation",
+  "provider/runtime/install": "installation",
   "thread-auto-compact/read": "installation",
   "thread-auto-compact/update": "installation",
   "native/file/link-roots": "folder",

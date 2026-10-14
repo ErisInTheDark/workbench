@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - SharedRuntimeCheckpoints: reopen one clone only after every selected provider reaches each checkpoint.
- * - default ProviderThreadJourney: own one provider thread's transcript, questionnaire, tool-gate and turn evidence.
+ * - default ProviderThreadJourney: own one provider thread's transcript, questionnaire, tool-gate, turn and provider-status evidence.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkbenchComposerProfile, WorkbenchPendingUserInputRequest } from "../../shared/types";
 import type { TranscriptTextUpdate } from "../../shared/workbench/transcript/thread-transcript-stream";
 import { projectWorkbenchTranscript } from "../../shared/workbench/transcript/workbench-transcript-projection";
+import { isThreadStatusActive } from "../../shared/workbench/thread/thread-runtime-state";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 
 export class SharedRuntimeCheckpoints {
@@ -141,6 +142,22 @@ export default class ProviderThreadJourney {
       }
       return turn?.status === status;
     });
+  }
+
+  /**
+   * Thread-scoped provider events never reach clients, so a provider's own settlement is read from its thread status:
+   * the durable turn can read interrupted while the provider still reports the turn active.
+   */
+  async waitProviderIdle() {
+    let reported: string | null = null;
+    return await this.waitForFact(
+      async () => (await this.runtime.daemon.threads.page({ threadId: this.threadId, cursor: null })).thread,
+      thread => {
+        const status = JSON.stringify(thread.status);
+        if (status !== reported) this.runtime.markPhase(`${this.provider}: provider status ${(reported = status).slice(0, 200)}`);
+        return !isThreadStatusActive(thread.status);
+      },
+    );
   }
 
   async readRetainedQuestions() {

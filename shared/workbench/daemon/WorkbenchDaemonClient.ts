@@ -46,6 +46,7 @@ import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thr
 import { workbenchThreadActions } from "../thread/thread-actions.ts";
 import { WorkbenchModelOptionSchema } from "../provider/provider-model.ts";
 import { WorkbenchAccountLimitsSchema } from "../provider/provider-account.ts";
+import { ProviderRuntimesSnapshotSchema, type ProviderRuntimeKey } from "../provider/provider-runtime.ts";
 import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
 import {
   WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
@@ -84,6 +85,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
   switch (switched) {
     case "installation/update/pull": return InstallationPullResultSchema;
     case "installation/update/failure/dismiss": return z.object({ ok: z.literal(true) }).strict();
+    case "provider/runtime/read":
+    case "provider/runtime/install": return ProviderRuntimesSnapshotSchema;
     case "voice/configuration/read": return VoiceConfigurationSchema;
     case "voice/agents": return z.object({ data: z.array(z.object({
       name: z.string(), path: z.string(), description: z.string(), source: z.literal("library"), sourceLabel: z.string(),
@@ -179,6 +182,11 @@ class WorkbenchDaemonClient {
   readonly installationUpdate = {
     pull: () => this.request("installation/update/pull", {}),
     dismissFailure: () => this.request("installation/update/failure/dismiss", {}),
+  };
+
+  readonly providerRuntimes = {
+    read: () => this.request("provider/runtime/read", {}),
+    install: (provider: ProviderRuntimeKey) => this.request("provider/runtime/install", { provider }),
   };
 
   readonly voice = {

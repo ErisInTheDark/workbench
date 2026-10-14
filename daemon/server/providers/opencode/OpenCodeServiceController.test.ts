@@ -5,6 +5,8 @@ import test from "node:test";
 import type { EnsureOptions } from "@opencode/client/service";
 import OpenCodeServiceController from "./OpenCodeServiceController";
 
+const testRuntime = () => ({ executable: "/runtime/bin/opencode", version: "2.0.9" });
+
 const modelApi = {
   list: async () => ({ data: [{ id: "ready" }] }),
   default: async () => ({ data: null }),
@@ -12,7 +14,7 @@ const modelApi = {
 
 test("a failed stop retains service ownership for the next cleanup attempt", async () => {
   let stops = 0;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => {},
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
@@ -35,7 +37,7 @@ test("overlapping suspension and disposal share the same service stop", async ()
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const released = new Promise<void>(resolve => { release = resolve; });
   let stops = 0;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => {},
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
@@ -70,7 +72,7 @@ test("coalesces acquisition through the dedicated Workbench OpenCode service", a
   };
   const endpoint = { url: "http://127.0.0.1:4096" };
   const dataRoot = path.resolve("workbench-opencode-service-test");
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     environment: {
       WORKBENCH_DATA_ROOT: dataRoot,
       XDG_DATA_HOME: "user-data",
@@ -102,7 +104,7 @@ test("coalesces acquisition through the dedicated Workbench OpenCode service", a
   assert.equal(second, client);
   assert.equal(ensures, 1);
   assert.equal(creates, 1);
-  assert.deepEqual(ensureOptions?.command, ["opencode", "serve", "--service", "--port", "0"]);
+  assert.deepEqual(ensureOptions?.command, ["/runtime/bin/opencode", "serve", "--service", "--port", "0"]);
   assert.equal(
     ensureOptions?.file,
     path.join(dataRoot, "daemon", "providers", "opencode", "state", "opencode", "service.json"),
@@ -126,14 +128,29 @@ test("coalesces acquisition through the dedicated Workbench OpenCode service", a
   assert.ok(ensureOptions?.env?.WORKBENCH_DATA_ROOT);
   assert.equal(typeof ensureOptions?.version, "function");
   if (typeof ensureOptions?.version === "function") {
+    // Only the pinned build may keep serving; any other running version gets replaced.
     assert.equal(ensureOptions.version("2.0.9"), true);
-    assert.equal(ensureOptions.version("3.0.0"), false);
+    assert.equal(ensureOptions.version("2.0.8"), false);
   }
 
   await controller.dispose();
   await controller.dispose();
   assert.equal(stops, 1);
   await assert.rejects(controller.acquire(), /has been disposed/u);
+});
+
+test("a missing OpenCode runtime fails acquisition without starting a service", async () => {
+  let ensures = 0;
+  const controller = new OpenCodeServiceController({
+    resolveRuntime: () => { throw new Error("OpenCode 2.0.9 isn't installed on this daemon."); },
+    prepareServiceDirectory: async () => {},
+    ensureService: async () => { ensures++; return { url: "http://127.0.0.1:4096" }; },
+    stopService: async () => {},
+  });
+  try {
+    await assert.rejects(controller.acquire(), /isn't installed/u);
+    assert.equal(ensures, 0);
+  } finally { await controller.dispose(); }
 });
 
 test("allows failed dedicated-service acquisition to be retried", async () => {
@@ -144,7 +161,7 @@ test("allows failed dedicated-service acquisition to be retried", async () => {
       list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
     },
   };
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => {
       if (++attempts === 1) throw new Error("service failed");
@@ -170,7 +187,7 @@ test("suspends active service ownership for replacement and remains resumable un
       list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }),
     },
   }));
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => {
       ensures++;
@@ -207,7 +224,7 @@ test("coalesces model catalogues by directory and invalidates provider changes",
       default: async () => ({ data: null }),
     },
   };
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => client as never,
@@ -237,7 +254,7 @@ test("service acquisition warms models before a picker asks, and an empty warm r
       default: async () => ({ data: null }),
     },
   };
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => client as never,
@@ -255,7 +272,7 @@ test("service acquisition warms models before a picker asks, and an empty warm r
 test("a failed background model warmup warns without losing the live service or a later read", async () => {
   const warning = Promise.withResolvers<string>();
   let lists = 0;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
@@ -282,7 +299,7 @@ test("a failed background model warmup warns without losing the live service or 
 test("stops a dedicated service that fails after its process starts", async () => {
   let stops = 0;
   const dataRoot = path.resolve("workbench-opencode-failed-start-test");
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     environment: {
       WORKBENCH_DATA_ROOT: dataRoot,
     },
@@ -306,7 +323,7 @@ test("stops a dedicated service that fails after its process starts", async () =
 
 test("preserves existing inline OpenCode config while adding the companion", async () => {
   let ensureOptions: EnsureOptions | undefined;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     environment: {
       OPENCODE_CONFIG_CONTENT: JSON.stringify({
@@ -339,7 +356,7 @@ test("preserves existing inline OpenCode config while adding the companion", asy
 });
 
 test("stops a dedicated service that did not load the Workbench companion", async () => {
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
     createClient: () => ({
@@ -363,7 +380,7 @@ test("stops a dedicated service that did not load the Workbench companion", asyn
 
 test("waits for configured companion readiness instead of sampling plugin state once", async () => {
   let reads = 0;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     pluginSource: "file:///workbench-plugin.ts",
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
@@ -402,7 +419,7 @@ test("waits for configured companion readiness instead of sampling plugin state 
 test("warns when companion configuration inspection fails but plugin readiness recovers", async () => {
   const warnings: string[] = [];
   let reads = 0;
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     pluginSource: "file:///workbench-plugin.ts",
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => ({ url: "http://127.0.0.1:4096" }),
@@ -441,7 +458,7 @@ test("aborts acquisition and disposes without waiting for service discovery", as
   const pending = new Promise<{ url: string }>(resolve => {
     settle = resolve;
   });
-  const controller = new OpenCodeServiceController({
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,
     ensureService: async () => await pending,
     createClient: () => ({

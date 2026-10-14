@@ -72,6 +72,7 @@ import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError, WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { ProviderRuntimeInstallRequestSchema } from "workbench-shared/workbench/provider/provider-runtime";
 import { z } from "zod";
 import { WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { WorkbenchThreadHistoryPendingError, WORKBENCH_THREAD_HISTORY_PENDING } from "workbench-shared/workbench/provider/provider-thread";
@@ -80,6 +81,8 @@ export interface WorkbenchBrowseSessionPort {
   controlSession(params: object): Promise<object>;
   listSessions(params: object): Promise<object>;
 }
+
+type ProviderRuntimePort = Pick<import("./providers/ProviderRuntimeController").default, "read" | "install">;
 
 /** Typed daemon methods this controller's switch owns; voice and repo runtime stay with the socket controller. */
 type DaemonRequestMethod = Exclude<
@@ -90,6 +93,7 @@ type DaemonRequestMethod = Exclude<
 // Typed so adding a method to WorkbenchDaemonRequestMap fails typecheck until it is accepted here.
 const REQUEST_METHODS = {
   "installation/update/pull": true, "installation/update/failure/dismiss": true,
+  "provider/runtime/read": true, "provider/runtime/install": true,
   "project/tree/refresh": true, "project/entry/create": true, "project/file/delete": true,
   "git/working-tree/read": true, "git/working-tree/diff": true,
   "git/working-tree/preview": true, "git/working-tree/mutate": true,
@@ -241,7 +245,10 @@ export default class WorkbenchDaemonRequestController {
   private browse: WorkbenchBrowseSessionPort | null = null;
   private readonly installationUpdateRegistrations = new Set<Pick<import("./WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">>();
 
+  private readonly providerRuntimeRegistrations = new Set<ProviderRuntimePort>();
+
   private get installationUpdate() { return [...this.installationUpdateRegistrations].at(-1) ?? null; }
+  private get providerRuntimes() { return [...this.providerRuntimeRegistrations].at(-1) ?? null; }
 
   constructor(private readonly owners: {
     autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
@@ -277,6 +284,10 @@ export default class WorkbenchDaemonRequestController {
   registerInstallationUpdate(port: Pick<import("./WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">) {
     this.installationUpdateRegistrations.add(port);
     return () => { this.installationUpdateRegistrations.delete(port); };
+  }
+  registerProviderRuntimes(port: ProviderRuntimePort) {
+    this.providerRuntimeRegistrations.add(port);
+    return () => { this.providerRuntimeRegistrations.delete(port); };
   }
 
   private async resolveProfileSlot(slot: ReturnType<typeof WorkbenchComposerProfileSlotInputSchema.parse>): Promise<WorkbenchComposerProfileSlot> {
@@ -485,6 +496,17 @@ export default class WorkbenchDaemonRequestController {
           if (!this.installationUpdate) throw new Error("Installation updates are unavailable.");
           result = await this.installationUpdate.dismissFailure();
           break;
+        case "provider/runtime/read":
+          if (!this.providerRuntimes) throw new Error("Provider runtimes are unavailable.");
+          result = await this.providerRuntimes.read();
+          break;
+        case "provider/runtime/install": {
+          const parsed = ProviderRuntimeInstallRequestSchema.safeParse(params);
+          if (!parsed.success) throw new InvalidParamsError("A known provider is required for runtime installs.");
+          if (!this.providerRuntimes) throw new Error("Provider runtimes are unavailable.");
+          result = await this.providerRuntimes.install(parsed.data.provider);
+          break;
+        }
         case "project/catalog/read": result = await this.owners.projects.readCatalog(); break;
         case "project/file-index/read": {
           const request = WorkbenchProjectFileIndexRequestSchema.safeParse(params);

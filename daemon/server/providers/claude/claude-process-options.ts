@@ -1,24 +1,7 @@
 /*
  * Exports:
- * - claudeExecutable: resolve the installed Claude Code executable.
  * - claudeEnvironment: default eager tool-input streaming, disable account connectors and CLI context attachments, apply an optional config view and selected context window, and isolate fake-model traffic.
  */
-import { existsSync } from "node:fs";
-import path from "node:path";
-
-export function claudeExecutable() {
-  const candidates = process.platform === "win32" ? ["claude.exe", "claude.cmd"] : ["claude"];
-  const explicit = process.env.CLAUDE_CODE_EXECUTABLE;
-  if (explicit && path.isAbsolute(explicit) && existsSync(explicit)) return explicit;
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
-    for (const candidate of candidates) {
-      const resolved = path.join(directory, candidate);
-      if (existsSync(resolved)) return resolved;
-    }
-  }
-  throw new Error("Claude Code executable was not found on PATH.");
-}
-
 export function claudeEnvironment(
   endpoint?: string, view?: NodeJS.ProcessEnv, contextWindowTokens: number | null = null,
 ): NodeJS.ProcessEnv {

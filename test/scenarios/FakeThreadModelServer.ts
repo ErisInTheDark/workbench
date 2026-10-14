@@ -55,6 +55,20 @@ async function readRequest(request: IncomingMessage): Promise<ModelRequest> {
   return value as ModelRequest;
 }
 
+/**
+ * OpenCode rejects a compaction summary unless it repeats the section headings of the template its request carries,
+ * so scripted text answering such a request is placed under every heading.
+ */
+function fillSummaryTemplate(body: ModelRequest, action: FakeThreadAction): FakeThreadAction {
+  if (action.text === undefined || action.tool) return action;
+  const last = body.messages?.at(-1)?.content;
+  const prompt = typeof last === "string" ? last : JSON.stringify(last ?? "");
+  const template = /<template>([\s\S]*?)<\/template>/u.exec(prompt)?.[1];
+  if (!template) return action;
+  const headings = template.split(/\r?\n|\\n/u).filter(line => /^#{2,3} /u.test(line.trim())).map(line => line.trim());
+  return headings.length ? { ...action, text: headings.map(heading => `${heading}\n- ${action.text}`).join("\n\n") } : action;
+}
+
 export default class FakeThreadModelServer {
   private readonly actions: FakeThreadAction[] = [];
   private pendingResult: PendingResult | null = null;
@@ -68,6 +82,8 @@ export default class FakeThreadModelServer {
   private constructor(private readonly server: Server, readonly baseUrl: string) {}
 
   get lastFailure() { return this.failure; }
+  /** Scripted responses no request has consumed yet. */
+  get queuedActions() { return this.actions.length; }
 
   /** Resolve when a held response has streamed its reasoning and is waiting open. */
   async nextHeld(signal: AbortSignal) {
@@ -138,11 +154,18 @@ export default class FakeThreadModelServer {
       response.end();
       return;
     }
+    // Claude Code sizes resumed sessions before sampling; any plausible count lets it continue.
+    if (request.method === "POST" && route === "/v1/messages/count_tokens") {
+      const body = await readRequest(request);
+      response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": "application/json" });
+      response.end(JSON.stringify({ input_tokens: Math.ceil(JSON.stringify(body).length / 4) }));
+      return;
+    }
     const provider: ProviderWire = route === "/v1/responses" ? "codex"
       : route === "/v1/chat/completions" ? "opencode"
         : route === "/v1/messages" ? "claude"
           : route.startsWith("/v1beta/models/") && route.endsWith(":streamGenerateContent") ? "gemini"
-            : (() => { throw new Error("Unsupported fake model route."); })();
+            : (() => { throw new Error(`Unsupported fake model route: ${request.method ?? "?"} ${route.slice(0, 120)}.`); })();
     if (request.method !== "POST") throw new Error("Fake model accepts POST only.");
     const body = await readRequest(request);
     if (this.forbiddenPromptText && JSON.stringify(body).includes(this.forbiddenPromptText)) {
@@ -227,7 +250,7 @@ export default class FakeThreadModelServer {
     if (provider === "codex") {
       await this.codexResponse(response, action, matches[0], callId);
     } else if (provider === "opencode") {
-      this.openCodeResponse(response, action, matches[0], callId);
+      this.openCodeResponse(response, fillSummaryTemplate(body, action), matches[0], callId);
     } else if (provider === "claude") {
       this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, matches[0], callId);
     } else {
