@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
-import WorkbenchPowerShell from "../../package/WorkbenchPowerShell.mjs";
+import WorkbenchPowerShell from "./WorkbenchPowerShell.mjs";
 import { resolveDataRoot, readJournal, writeJournal, isRepairPending, journalPath } from "./update-journal.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));

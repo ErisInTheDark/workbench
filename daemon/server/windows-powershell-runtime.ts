@@ -5,7 +5,7 @@
  */
 import { access } from "node:fs/promises";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
-import { managedPowerShellExecutable } from "../../package/WorkbenchPowerShell.mjs";
+import { managedPowerShellExecutable } from "../../shared/windows-powershell-runtime.mjs";
 
 export function workbenchPowerShellExecutable(dataRoot = resolveWorkbenchDataRoot()) {
   return managedPowerShellExecutable(dataRoot);

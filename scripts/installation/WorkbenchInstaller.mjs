@@ -7,7 +7,7 @@ import path from "node:path";
 import WorkbenchInstallPrompt from "../../package/WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
-import WorkbenchPowerShell from "../../package/WorkbenchPowerShell.mjs";
+import WorkbenchPowerShell from "./WorkbenchPowerShell.mjs";
 
 export default class WorkbenchInstaller {
   constructor({
@@ -31,7 +31,7 @@ export default class WorkbenchInstaller {
   }
 
   async prepare() {
-    this.write("Installing pinned runtime...\n");
+    this.write("Installing private PowerShell and pinned runtime...\n");
     await this.powerShell.ensure();
     await this.toolchain.ensure();
     await this.toolchain.run(["env", "install"], { cwd: this.root });

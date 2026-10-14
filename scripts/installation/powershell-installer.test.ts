@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import installPowerShell from "./powershell-installer.mjs";
 
 test("a verified archive is expanded through inbox PowerShell and temporary files are removed", async context => {

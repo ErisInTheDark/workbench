@@ -9,14 +9,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { WORKBENCH_POWERSHELL_VERSION } from "../../shared/windows-powershell-runtime.mjs";
 
 export const POWERSHELL_RELEASES = Object.freeze({
   x64: {
-    version: "7.6.6",
+    version: WORKBENCH_POWERSHELL_VERSION,
     sha256: "02fe458be20493fbdf43f61ea20610b811ee6c738ab1676c61b9cfcd1a33c860",
   },
   arm64: {
-    version: "7.6.6",
+    version: WORKBENCH_POWERSHELL_VERSION,
     sha256: "bbde9dda31d148415eccb5fbe1638e6400a144187b006e5b3fd8ec2f39d781be",
   },
 });

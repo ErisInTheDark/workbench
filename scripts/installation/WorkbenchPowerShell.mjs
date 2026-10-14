@@ -1,25 +1,21 @@
 /*
  * Exports:
- * - WORKBENCH_POWERSHELL_VERSION: pinned managed PowerShell release.
- * - managedPowerShellExecutable: deterministic managed pwsh.exe path for daemon launchers.
  * - WorkbenchPowerShell (default): own verified Windows PowerShell provisioning, receipt and repair.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
-import resolveWorkbenchDataRoot from "./workbench-data-root.mjs";
+import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
+import resolveWorkbenchDataRoot from "../../package/workbench-data-root.mjs";
+import {
+  managedPowerShellExecutable,
+  WORKBENCH_POWERSHELL_VERSION,
+} from "../../shared/windows-powershell-runtime.mjs";
 import installPowerShell, { POWERSHELL_RELEASES } from "./powershell-installer.mjs";
-
-export const WORKBENCH_POWERSHELL_VERSION = POWERSHELL_RELEASES.x64.version;
 
 function managedReleaseExecutable(dataRoot, release, arch) {
   return path.join(path.resolve(dataRoot), "toolchain", "powershell", release, arch, "pwsh.exe");
-}
-
-export function managedPowerShellExecutable(dataRoot, arch = process.arch) {
-  return managedReleaseExecutable(dataRoot, WORKBENCH_POWERSHELL_VERSION, arch);
 }
 
 export default class WorkbenchPowerShell {

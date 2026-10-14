@@ -348,8 +348,9 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
     "scripts/installation/update-journal.mjs",
     "package/WorkbenchBootstrapCommand.mjs",
     "package/WorkbenchToolchain.mjs",
-    "package/WorkbenchPowerShell.mjs",
-    "package/powershell-installer.mjs",
+    "scripts/installation/WorkbenchPowerShell.mjs",
+    "scripts/installation/powershell-installer.mjs",
+    "shared/windows-powershell-runtime.mjs",
     "package/vite-plus-installer.mjs",
     "package/workbench-data-root.mjs",
   ]) {

@@ -5,8 +5,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
-import WorkbenchPowerShell, { WORKBENCH_POWERSHELL_VERSION } from "./WorkbenchPowerShell.mjs";
+import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
+import { WORKBENCH_POWERSHELL_VERSION } from "../../shared/windows-powershell-runtime.mjs";
+import WorkbenchPowerShell from "./WorkbenchPowerShell.mjs";
 
 async function fixture(context: test.TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-powershell-");
