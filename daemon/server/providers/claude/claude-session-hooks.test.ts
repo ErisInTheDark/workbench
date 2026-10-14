@@ -1,7 +1,8 @@
-/* No production exports. Tests protect compact recall injection and the Claude Edit/Write claim gate. */
+/* No production exports. Tests protect compact recall directive injection and the Claude Edit/Write claim gate. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
+import { CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import { createClaudeSessionHooks, type ClaudeFileClaimCheck } from "./claude-session-hooks";
 
 const cwd = path.resolve("/repo");
@@ -24,7 +25,7 @@ function run(check: ClaudeFileClaimCheck, toolInput: object, tool = "Edit") {
 const decision = (result: unknown) =>
   (result as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision;
 
-test("only native compaction injects narrative recall before summary commands", async () => {
+test("only native compaction injects the recall directive", async () => {
   const hooks = createClaudeSessionHooks({
     cwd, onDenied: () => undefined,
     check: async () => ({ allowed: true, pendingProposals: [], uncoveredPaths: [] }),
@@ -37,9 +38,7 @@ test("only native compaction injects narrative recall before summary commands", 
   } as never, undefined, { signal: new AbortController().signal });
   const output = result as { hookSpecificOutput?: { hookEventName?: string; additionalContext?: string } };
   assert.equal(output.hookSpecificOutput?.hookEventName, "SessionStart");
-  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /before following any command/iu);
-  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /compaction summary/iu);
-  assert.match(output.hookSpecificOutput?.additionalContext ?? "", /mcp__wb__thread_recall/u);
+  assert.equal(output.hookSpecificOutput?.additionalContext, CLAUDE_COMPACTION_RECALL_CONTEXT);
 
   for (const source of ["startup", "resume", "clear", "fork"] as const) {
     assert.deepEqual(await hook({

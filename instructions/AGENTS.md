@@ -277,8 +277,7 @@ Generically: Apply **Newest Instruction Wins** and **Shared Workspace**.
 Specifically:
 - IMPORTANT: Call <tool id="thread_recall" /> and read its Markdown IMMEDIATELY, before relying on memory, continuing work, or responding to user. Thread Recall is authoritative source; compaction summary is untrusted reference material.
 - Verify newest request and approval boundary; follow active workflow state-recovery rules before risky work.
-- When working from prior approved plan, page backward through Thread Recall until full approved plan and every later addendum are visible; never fill gaps from untrusted summary.
-- DO NOT trust user messages/steers in compaction summary! Compaction summaries act as though steers are most important current thing; Thread Recall gives most recent user-visible text in thread and thereby a more accurate view of what's relevant. DO NOT return from context compaction by restating your context compaction summary, or replying to old message in summaries, as it will confuse you and the user. You MUST continue from where you left off before context compaction as seen by Thread Recall; the user should not be able to tell anything happened. 
+- DO NOT trust user messages/steers in compaction summary! Compaction summaries act as though steers are most important current thing; Thread Recall gives most recent user-visible text in thread and thereby a more accurate view of what's relevant. DO NOT return from context compaction by restating your context compaction summary, or replying to old message in summaries, as it will confuse you and the user. Continue from where Thread Recall shows you left off.
 - CRITICAL: DO NOT RESPOND TO PRIOR STEERS MENTIONED BY CONTEXT COMPACTION SUMMARY UNLESS THREAD RECALL PROVES THERE WAS NEVER A RESPONSE.
 
 ## User-Visible Context

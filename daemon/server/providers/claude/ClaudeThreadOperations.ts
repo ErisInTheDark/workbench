@@ -25,6 +25,7 @@ import type {
 } from "workbench-shared/workbench/provider/provider-observation";
 import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { awaitsClaudeCompactionRecall, CLAUDE_COMPACTION_RECALL_CONTEXT } from "./claude-compaction-recall";
 import {
     createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
     isWorkbenchQuestionnaireResponsePart,
@@ -377,7 +378,8 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       return { kind: "steered" as const, turnId: runtime.turnId };
     }
     if (runtime) throw new Error("Claude turn is already active.");
-    const nativeHistoryExists = Boolean((await this.read(identity.threadId)).turns.at(-1));
+    const thread = await this.read(identity.threadId);
+    const nativeHistoryExists = Boolean(thread.turns.at(-1));
     if (nativeHistoryExists && !await getSessionInfo(binding.nativeThreadId, { dir: binding.nativeLocation })) {
       throw new Error("Claude native session history is unavailable for continuation.");
     }
@@ -396,8 +398,12 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       || hasQuestionnaireResponse;
     const managedPrompt = workingStatusInPrompt
       ? `${instructions}\n\n${WORKBENCH_THREAD_WORKING_STATUS_MESSAGE}` : instructions;
-    const sdkContent = workingStatusInPrompt
-      ? prefixClaudePrompt(WORKBENCH_THREAD_WORKING_STATUS_MESSAGE, promptContent) : promptContent;
+    // Workbench compacts in its own `/compact` query, whose SessionStart hook output never reaches this turn.
+    const promptPrefix = [
+      ...(workingStatusInPrompt ? [WORKBENCH_THREAD_WORKING_STATUS_MESSAGE] : []),
+      ...(awaitsClaudeCompactionRecall(thread) ? [CLAUDE_COMPACTION_RECALL_CONTEXT] : []),
+    ].join("\n\n");
+    const sdkContent = promptPrefix ? prefixClaudePrompt(promptPrefix, promptContent) : promptContent;
     const { model } = instructionInput;
     const executable = this.options.resolveExecutable();
     const usage = (await this.options.transcript.readContextUsage(identity.threadId))?.tokenUsage ?? null;
