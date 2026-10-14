@@ -26,7 +26,9 @@ function fixture() {
     activityAt: 0, contextTokens: 200_000,
   };
   let active = false;
+  let waitingOnInput = false;
   let nativeActive = false;
+  const status = () => active ? "active" : waitingOnInput ? "active:waitingOnUserInput" : "idle";
   let latest: Turn | null = { id: "turn", status: "interrupted" } as Turn;
   let compact = async () => { calls.push("compact"); };
   const calls: string[] = [];
@@ -43,7 +45,7 @@ function fixture() {
     readEvidence: async () => evidence,
     readRuntime: async () => ({
       latestTurn: latest,
-      status: active ? "active" : "idle",
+      status: status(),
       turnLive: active || nativeActive,
     }),
     publish: (_target, willAutoCompact) => {
@@ -63,7 +65,7 @@ function fixture() {
     warn: () => {},
   });
   const provider = { threads: {
-    read: async () => ({ status: active ? "active" : "idle" }) as ThreadPayload,
+    read: async () => ({ status: status() }) as ThreadPayload,
     latestTurn: async () => latest,
     isTurnLive: async () => active || nativeActive,
     compact: async () => compact(),
@@ -77,6 +79,7 @@ function fixture() {
     evidence: (next: ThreadAutoCompactEvidence | null) => { evidence = next; },
     active: () => { active = true; },
     inactive: () => { active = false; },
+    waitingOnInput: () => { waitingOnInput = true; },
     nativeActive: () => { nativeActive = true; },
     latest: (status: Turn["status"] | null) => { latest = status === null ? null : { id: "turn", status } as Turn; },
     compact: (next: () => Promise<void>) => { compact = next; },
@@ -92,6 +95,23 @@ test("inactive completed, failed and interrupted turns compact at both exact thr
     assert.deepEqual(f.calls, ["compact", "admit"]);
     await f.owner.dispose();
   }
+});
+
+test("a held questionnaire compacts before its answer, while a live one stays ineligible", async () => {
+  const held = fixture();
+  held.waitingOnInput();
+  assert.equal(await held.owner.observe({ harness: "claude", threadId: "thread" }), true);
+  assert.equal(await held.owner.run("thread", held.provider, held.admit), "started");
+  assert.deepEqual(held.calls, ["compact", "admit"]);
+  await held.owner.dispose();
+
+  const live = fixture();
+  live.waitingOnInput();
+  live.nativeActive();
+  assert.equal(await live.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  await live.owner.run("thread", live.provider, live.admit);
+  assert.deepEqual(live.calls, ["admit"]);
+  await live.owner.dispose();
 });
 
 test("observed thread publishes when its daemon-owned idle deadline becomes due", async () => {

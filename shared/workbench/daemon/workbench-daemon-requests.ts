@@ -90,6 +90,7 @@ export interface WorkbenchQuestionnaireRespondRequest {
   projectId: string;
   requestKey: string;
   response: WorkbenchUserInputResponse;
+  skipAutoCompact?: boolean;
   supplementalInput?: UserInput[];
   threadId: string;
   turnId?: string | null;

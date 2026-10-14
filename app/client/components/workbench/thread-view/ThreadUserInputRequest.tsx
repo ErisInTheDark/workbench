@@ -12,6 +12,7 @@ import type { UserInput } from "workbench-shared/workbench/thread/workbench-thre
 import type {
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
+  WorkbenchSubmitUserInputRequestOptions,
   WorkbenchThreadComposerAttachmentDraft,
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
@@ -43,6 +44,8 @@ import ThreadCommandDisplay from "./ThreadCommandDisplay";
 import { renderThreadInlineMarkdown } from "./thread-markdown-render";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
+import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
+import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -90,8 +93,7 @@ type InteractiveThreadUserInputRequestProps = {
   onDraftClear: () => Promise<void> | void;
   onSubmit: (
     response: WorkbenchUserInputResponse,
-    supplementalInput?: UserInput[],
-    activatedSkillPaths?: string[],
+    options: Pick<WorkbenchSubmitUserInputRequestOptions, "activatedSkillPaths" | "skipAutoCompact" | "supplementalInput">,
   ) => Promise<void>;
   presentation?: "compact" | "full";
   projectRootPath?: string;
@@ -100,6 +102,8 @@ type InteractiveThreadUserInputRequestProps = {
   spellCheck: boolean;
   /** Host action row that receives the full layout's submit control instead of an inline row. */
   submitTarget?: HTMLElement | null;
+  /** The thread compacts before an answer that starts a turn; shift-submitting skips it. */
+  willAutoCompact?: boolean;
 };
 
 type HistoryThreadUserInputRequestProps = {
@@ -254,6 +258,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   const [localError, setError] = useState("");
   const error = localError || editing.error;
   const { isSubmitting, isAttaching } = editing;
+  const isShiftPressed = useNonTextInputShiftKey({ allowWhileTextInputFocused: true });
+  const willAutoCompactOnSubmit = Boolean(interactiveProps?.willAutoCompact) && !isShiftPressed;
   const hasCustomResponseContent = Object.values(customValues).some((value) => value.trim())
     || attachments.length > 0;
   const useQuickResponseLayout = Boolean(
@@ -290,11 +296,11 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       : [];
     setError("");
     await editing.session.submitAccepted(async () => {
-      await interactiveProps.onSubmit(
-        response,
-        supplementalInput.length ? supplementalInput : undefined,
-        activatedSkillPaths.length ? activatedSkillPaths : undefined,
-      );
+      await interactiveProps.onSubmit(response, {
+        ...(supplementalInput.length ? { supplementalInput } : {}),
+        ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+        ...(isShiftPressed ? { skipAutoCompact: true } : {}),
+      });
     }, interactiveProps.onDraftClear);
   };
 
@@ -355,6 +361,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
     event.preventDefault();
     void handleSubmit();
   };
+  const submitLabel = isSubmitting ? "Submitting..." : isAttaching ? "Attaching..."
+    : autoCompactSendLabel("Submit", willAutoCompactOnSubmit);
   const renderSubmitButton = () => (
     <PrimaryButton
       type="button"
@@ -365,11 +373,12 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       disabled={isSubmitting || isAttaching}
       className="justify-self-end"
       shape="circle"
-      aria-label={isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
-      title={isSubmitting ? "Submitting..." : isAttaching ? "Attaching..." : "Submit"}
+      aria-label={submitLabel}
+      title={submitLabel}
       pendingHalo={isSubmitting || isAttaching}
     >
       <SendHorizontalIcon size={20} />
+      {willAutoCompactOnSubmit && !isSubmitting && !isAttaching ? <AutoCompactSendBadge /> : null}
     </PrimaryButton>
   );
 

@@ -47,7 +47,8 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { CompactIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
+import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
+import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -320,9 +321,7 @@ export default function ThreadComposer ({
       ? "Attaching..."
       : isThreadStateBroken
         ? "Unavailable"
-        : willAutoCompactOnSend
-          ? `${sendLabel} (compacts context first)`
-          : sendLabel;
+        : autoCompactSendLabel(sendLabel, willAutoCompactOnSend);
   useEffect(() => {
     onDraftSessionChange?.(editing.session);
     return () => onDraftSessionChange?.(null);
@@ -703,15 +702,12 @@ export default function ThreadComposer ({
                   request={visiblePendingUserInputRequest.request}
                   workspaceRoots={workspaceRoots}
                   mode="live"
-                  onSubmit={async (response, supplementalInput, activatedSkillPaths) => {
-                    await questionnaire.submit(
-                      response,
-                      {
-                        ...buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest),
-                        ...(activatedSkillPaths?.length ? { activatedSkillPaths } : {}),
-                        ...(supplementalInput?.length ? { supplementalInput } : {}),
-                      },
-                    );
+                  willAutoCompact={Boolean(thread.willAutoCompact)}
+                  onSubmit={async (response, options) => {
+                    await questionnaire.submit(response, {
+                      ...buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest),
+                      ...options,
+                    });
                   }}
                 />
               </div>
@@ -906,18 +902,7 @@ export default function ThreadComposer ({
                       pendingHalo={isSending && !isLaunchingDraft || isAttaching}
                     >
                       <SendHorizontalIcon size={20} />
-                      {willAutoCompactOnSend ? (
-                        <span
-                          aria-hidden="true"
-                          className="
-                            absolute -right-2.5 -bottom-2.5 inline-flex size-3.5 items-center justify-center rounded-full
-                            bg-[color:var(--text)] text-[color:var(--app-bg-solid)]
-                            ring-2 ring-[color:var(--app-bg-solid)]
-                          "
-                        >
-                          <CompactIcon size={12} />
-                        </span>
-                      ) : null}
+                      {willAutoCompactOnSend ? <AutoCompactSendBadge /> : null}
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}

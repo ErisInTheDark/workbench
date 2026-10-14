@@ -2,14 +2,14 @@
  * Exports:
  * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy.
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy, including held questionnaire answers.
  */
 import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
-import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
+import { hasThreadActiveFlag, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 export interface ThreadAutoCompactEvidence {
@@ -156,9 +156,11 @@ export default class WorkbenchThreadAutoCompactController {
       ? await this.readProviderRuntime(threadId, provider)
       : target ? await this.ports.readRuntime(target) : null;
     signal.throwIfAborted();
+    // A held questionnaire keeps the thread waiting on input after its turn ended; only a live turn blocks compaction.
+    const settled = runtime && (!isThreadStatusActive(runtime.status) || hasThreadActiveFlag(runtime.status, "waitingOnUserInput"));
     return {
       dueAt,
-      willAutoCompact: Boolean(runtime?.latestTurn && !isThreadStatusActive(runtime.status) && !runtime.turnLive),
+      willAutoCompact: Boolean(runtime?.latestTurn && settled && !runtime.turnLive),
     };
   }
 

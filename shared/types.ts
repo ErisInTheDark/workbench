@@ -1116,6 +1116,8 @@ export interface WorkbenchUserInputResponse {
 
 export interface WorkbenchSubmitUserInputRequestOptions {
   activatedSkillPaths?: string[];
+  /** A held answer that starts a turn skips due auto-compaction, like a shift-sent message. */
+  skipAutoCompact?: boolean;
   turnId?: string | null;
   insertAfterItemId?: string | null;
   insertAfterItemIndex?: number | null;

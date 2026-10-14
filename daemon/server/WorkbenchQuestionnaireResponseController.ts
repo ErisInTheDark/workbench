@@ -236,6 +236,7 @@ export default class WorkbenchQuestionnaireResponseController {
       threadId: input.threadId,
       input: turnInput,
       ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
+      ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
     });
     await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(turnInput, { activatedSkillPaths }));
     return {

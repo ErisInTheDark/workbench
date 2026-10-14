@@ -7,7 +7,6 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
-import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
 import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { useMemo, useState } from "react";
@@ -147,11 +146,10 @@ export default function WorkbenchThreadTooltipDetails({
                 mode="live"
                 onDraftChange={questionnaire.save}
                 onDraftClear={questionnaire.clear}
-                onSubmit={async (response, supplementalInput?: UserInput[]) => {
-                  await questionnaire.submit(response, {
-                    ...(supplementalInput?.length ? { supplementalInput } : {}),
-                  });
+                onSubmit={async (response, options) => {
+                  await questionnaire.submit(response, options);
                 }}
+                willAutoCompact={Boolean(questionnaire.thread.head?.willAutoCompact)}
                 presentation="compact"
                 projectRootPath={projectRootPath}
                 request={pendingRequest.request}

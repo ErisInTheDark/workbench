@@ -208,6 +208,7 @@ function questionnaireRespondRequest(params: Record<string, unknown>): Workbench
     projectId: requiredString(params, "projectId"),
     requestKey: requiredString(params, "requestKey"),
     response: questionnaireResponse(params.response),
+    skipAutoCompact: params.skipAutoCompact === true,
     supplementalInput: optionalUserInput(params, "supplementalInput"),
     threadId: requiredString(params, "threadId"),
     turnId: params.turnId == null ? null : requiredString(params, "turnId"),

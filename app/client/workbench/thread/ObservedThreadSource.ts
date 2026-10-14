@@ -359,6 +359,7 @@ export default function createObservedThreadSource(
           projectId: ProjectIdSchema.parse(ports.projectId),
           requestKey: durable.requestKey,
           response,
+          ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
           ...(supplementalInput.length ? { supplementalInput } : {}),
           threadId,
           turnId: options.turnId ?? durable.turnId,
