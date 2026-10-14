@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
+import { readWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { TranscriptQueryError, type TranscriptField, type TranscriptQuery, type TranscriptQueryPage, type TranscriptQueryRow } from "./transcript-query-contract.ts";
 import { transcriptQueryFieldsSql, transcriptQueryKindSql } from "./transcript-query-fields.ts";
 import WorkbenchTranscriptRepository from "./WorkbenchTranscriptRepository.ts";
@@ -49,6 +50,7 @@ export default class WorkbenchTranscriptQueryRepository {
   constructor(private readonly database: Database.Database) {
     // SQLite's built-in lower() only folds ASCII. Keep literal matching Unicode-aware.
     database.function("wb_transcript_fold", { deterministic: true }, (value: string) => value.toLowerCase());
+    database.function("wb_transcript_agent_message", { deterministic: true }, (value: string) => readWorkbenchAgentMessageText(value) ? 1 : 0);
   }
 
   read(query: TranscriptQuery): TranscriptQueryPage {
@@ -225,10 +227,7 @@ export default class WorkbenchTranscriptQueryRepository {
       if (selected.length === query.limit) break;
     }
     const projected = this.projected(selected, query);
-    const rows = selected.map(row => {
-      const item = projected.get(row.id)!;
-      return entry({ ...row, kind: item.kind }, previewTranscriptFields(item.fields));
-    });
+    const rows = selected.map(row => entry(row, previewTranscriptFields(projected.get(row.id)!)));
     const consumed = last ? batch.findIndex(row => row.id === last.id) + 1 : 0;
     const more = consumed < candidates.length;
     if (query.action === "read" && descending) rows.reverse();
@@ -253,7 +252,7 @@ export default class WorkbenchTranscriptQueryRepository {
   }
 
   private projected(rows: ItemRow[], query: TranscriptQuery) {
-    const result = new Map<number, { kind: string; fields: TranscriptField[] }>();
+    const result = new Map<number, TranscriptField[]>();
     const repository = new WorkbenchTranscriptRepository(this.database);
     for (const threadId of new Set(rows.map(row => row.threadId))) {
       const projection = repository.readStoredItems(threadId, rows.filter(row => row.threadId === threadId).map(row => row.id));
@@ -261,7 +260,7 @@ export default class WorkbenchTranscriptQueryRepository {
         throw new Error(`Stored transcript projection failed: ${projection.issues.map(issue => `${issue.code} in ${issue.table}`).join(", ").slice(0, 500)}`);
       }
       for (const { root, item } of projection.data) {
-        result.set(root.id, { kind: item.type, fields: transcriptItemFields(item, query.opaque) });
+        result.set(root.id, transcriptItemFields(item, query.opaque));
       }
     }
     return result;
@@ -269,12 +268,12 @@ export default class WorkbenchTranscriptQueryRepository {
 
   private show(query: TranscriptQuery, cursor: Cursor, coverage: TranscriptQueryPage["coverage"]): TranscriptQueryPage {
     const row = this.locate(query, query.item!);
-    const item = this.projected([row], query).get(row.id)!;
-    const revision = digest(JSON.stringify(item));
+    const fields = this.projected([row], query).get(row.id)!;
+    const revision = digest(JSON.stringify(fields));
     if (cursor.revision && cursor.revision !== revision) throw new TranscriptQueryError("Item changed since this expansion cursor. Read the item again.");
-    const expanded = expandTranscriptFields(item.fields, cursor.field ?? 0, cursor.fieldOffset);
+    const expanded = expandTranscriptFields(fields, cursor.field ?? 0, cursor.fieldOffset);
     const nextCursor = expanded.next
       ? encode({ ...cursor, field: expanded.next.index, fieldOffset: expanded.next.offset, revision }) : null;
-    return { rows: [entry({ ...row, kind: item.kind }, expanded.fields)], coverage, scanned: 1, nextCursor };
+    return { rows: [entry(row, expanded.fields)], coverage, scanned: 1, nextCursor };
   }
 }

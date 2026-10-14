@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - transcriptQueryFields: canonical field registry shared by matching and expansion.
- * - transcriptQueryKindSql: map stored item discriminators to CLI kinds.
+ * - transcriptQueryKindSql: map stored item discriminators and agent-message envelopes to CLI kinds.
  * - transcriptQueryFieldsSql: join registered fields to a bounded candidate CTE.
  */
 
@@ -49,11 +49,18 @@ export const transcriptQueryFields: readonly QueryFieldSource[] = [
   { name: "unknown", table: "thread_item_unknown", columns: ["native_type", "safe_json"], opaque: true },
 ];
 
+/** Requires the `wb_transcript_agent_message(text)` SQL function registered by the query repository. */
 export const transcriptQueryKindSql = `CASE i.type
-  WHEN 'userMessage' THEN CASE WHEN u.input_kind = 'steer' THEN 'user-steer' ELSE 'user-message' END
+  WHEN 'userMessage' THEN CASE
+    WHEN EXISTS (SELECT 1 FROM thread_user_message_parts mp
+      WHERE mp.item_id = i.id AND mp.part_type = 'text' AND wb_transcript_agent_message(mp.text)) THEN 'agent-message'
+    WHEN u.input_kind = 'steer' THEN 'user-steer' ELSE 'user-message' END
   WHEN 'assistantMessage' THEN 'assistant-message'
   WHEN 'operation' THEN CASE WHEN p.item_id IS NOT NULL THEN 'process' WHEN t.tool_kind = 'collaboration' THEN 'collaboration' ELSE 'tool' END
-  WHEN 'functionCallOutput' THEN 'tool-output'
+  WHEN 'functionCallOutput' THEN CASE
+    WHEN EXISTS (SELECT 1 FROM thread_item_tool_outputs o
+      WHERE o.item_id = i.id AND o.namespace = 'workbench' AND o.name = 'agent_message') THEN 'agent-message'
+    ELSE 'tool-output' END
   WHEN 'fileChange' THEN 'file-change'
   WHEN 'webSearch' THEN 'web-search'
   WHEN 'contextCompaction' THEN 'compaction'

@@ -9,6 +9,7 @@ import path from "node:path";
 import { createGitArcFailureFromError, formatGitArcFailureReceipt } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { WorkbenchCommandArgumentError } from "../commands/workbench-agent-command-arguments";
+import { TRANSCRIPT_QUERY_KINDS } from "../../../database/transcript/transcript-query-contract";
 
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
@@ -111,7 +112,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Start with a Workbench thread id: wb transcript search --thread <wb-id> --query <text>",
       "Read directly: wb transcript read --thread <wb-id>. Inspect turns: wb transcript turns --thread <wb-id>.",
       "Context: wb transcript read --thread <wb-id> --around <item-id> --context 5.",
-      "Read/search show canonical item data with trimmed text. Expand: wb transcript show --thread <wb-id> --item <item-id>.",
+      "Read/search show canonical item data with trimmed text, headed by its --kind. Expand: wb transcript show --thread <wb-id> --item <item-id>.",
       "Show preserves full values across continuation pages. Text output omits empty preview fields; matching cwd displays as '.'.",
       "SQLite only by default. Add --provider with exactly one --thread and --turn to materialise that turn before read/search/show.",
       "Provider recovery reuses the thread's native execution; it does not import arbitrary native files or sweep whole histories.",
@@ -120,7 +121,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Common: --project <id> --harness <provider-key> --archived <true|false> --settled <true|false>.",
       "Time: --since/--until <UTC-date|ISO-with-timezone|epoch-ms>, inclusive. Thread lists use activity time; items use creation time.",
       "Search/read/stats: --turn <id> --kind <kind>... --phase <commentary|finalAnswer|unknown> --tool <exact-name> --file <path-substring>.",
-      "Kinds: user-message, user-steer, assistant-message, plan, reasoning, process, tool, collaboration, tool-output, file-change, web-search, questionnaire, approval, compaction, unknown.",
+      `Kinds: ${TRANSCRIPT_QUERY_KINDS.join(", ")}.`,
       "Search/thread-title matching: --query <literal>... (all terms per item), --any (any term), --exclude <literal>..., --case-sensitive.",
       "Search/read/show: --opaque includes canonical opaque fields, never binary assets or provider-native evidence.",
       "Read/turns/search: --direction <older|newer>. Read pages render chronologically; older starts at the end, newer at the start.",

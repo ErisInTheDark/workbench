@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { test } from "node:test";
 import Database from "better-sqlite3";
+import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchTranscriptQueryRepository from "./WorkbenchTranscriptQueryRepository";
 import { TranscriptQuerySchema, type TranscriptQuery } from "./transcript-query-contract";
@@ -18,7 +19,7 @@ test("read exposes canonical item data rather than database field snippets", () 
   try {
     db.pragma("query_only = ON");
     const page = read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", limit: 1 });
-    assert.equal(page.rows[0]?.kind, "agentMessage");
+    assert.equal(page.rows[0]?.kind, "assistant-message");
     assert.ok(page.rows[0]?.fields.some(field => field.value === "commentary"));
     const stored = db.prepare<[], { text: string }>("SELECT text FROM thread_item_assistant_messages WHERE item_id = 1").get()!;
     assert.ok(page.rows[0]?.fields.some(field => field.value === stored.text));
@@ -221,6 +222,30 @@ test("multipart tool results and patches match once per item, with explicit opaq
     db.prepare(`INSERT INTO thread_item_unknown(item_id, native_type, safe_json) VALUES (12, 'extension', '{"text":"opaque-marker"}')`).run();
     assert.equal(read({ queries: ["opaque-marker"] }).rows.length, 0);
     assert.equal(read({ queries: ["opaque-marker"], opaque: true }).rows.length, 1);
+  } finally { db.close(); }
+});
+
+test("agent messages share one kind across text-envelope and tool-output delivery routes", () => {
+  const { db, read, addRoot } = fixture();
+  try {
+    const envelope = createWorkbenchAgentMessageText({ message: "relay", senderName: "Fern", senderThreadId: "wb-two" });
+    const userMessage = (id: number, inputKind: "initial" | "steer", text: string) => {
+      addRoot(id, "wb-one", `user-${id}`, "userMessage");
+      db.prepare("INSERT INTO thread_item_user_messages(item_id, delivery_state, input_kind) VALUES (?, 'delivered', ?)").run(id, inputKind);
+      db.prepare("INSERT INTO thread_user_message_parts(item_id, part_index, part_type, text) VALUES (?, 0, 'text', ?)").run(id, text);
+    };
+    userMessage(10, "steer", envelope);
+    userMessage(11, "initial", envelope);
+    userMessage(12, "steer", "relay from the user");
+    addRoot(13, "wb-one", "agent-output", "functionCallOutput");
+    db.prepare(`INSERT INTO thread_item_tool_outputs(item_id, name, namespace, body_kind, body_text)
+      VALUES (13, 'agent_message', 'workbench', 'text', ?)`).run(envelope);
+    const kinds = (kind: TranscriptQuery["kinds"][number]) => read({ action: "read", queries: [], threads: ["wb-one"], direction: "newer", kinds: [kind] })
+      .rows.map(row => [row.id, row.kind]);
+    assert.deepEqual(kinds("agent-message"), [10, 11, 13].map(id => [itemPublicId(id), "agent-message"]));
+    assert.deepEqual(kinds("user-steer"), [[itemPublicId(12), "user-steer"]]);
+    assert.deepEqual(kinds("user-message"), []);
+    assert.deepEqual(kinds("tool-output"), []);
   } finally { db.close(); }
 });
 

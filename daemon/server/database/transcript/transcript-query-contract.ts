@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - TRANSCRIPT_QUERY_KINDS: item kinds shared by --kind filters, stats counts and item headers.
  * - TranscriptQuerySchema/TranscriptQuery: validate the stored-history command vocabulary.
  * - TranscriptCommandQuerySchema/TranscriptCommandQuery: add explicit exact-turn provider recovery to CLI queries.
  * - TranscriptField/TranscriptQueryRow/TranscriptQueryPage: bounded display records shared by worker and CLI.
@@ -9,13 +10,17 @@ import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 
 const text = z.string().min(1).max(4096);
+export const TRANSCRIPT_QUERY_KINDS = [
+  "user-message", "user-steer", "agent-message", "assistant-message", "plan", "reasoning", "process", "tool", "collaboration",
+  "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown",
+] as const;
 export const TranscriptQuerySchema = z.object({
   action: z.enum(["projects", "threads", "turns", "search", "read", "show", "stats"]),
   threads: z.array(text).max(50).default([]),
   project: text.nullable().default(null),
   harness: ProviderKeySchema.nullable().default(null),
   turn: text.nullable().default(null),
-  kinds: z.array(z.enum(["user-message", "user-steer", "assistant-message", "plan", "reasoning", "process", "tool", "collaboration", "tool-output", "file-change", "web-search", "questionnaire", "approval", "compaction", "unknown"])).default([]),
+  kinds: z.array(z.enum(TRANSCRIPT_QUERY_KINDS)).default([]),
   phase: z.enum(["commentary", "finalAnswer", "unknown"]).nullable().default(null),
   tool: text.nullable().default(null),
   file: text.nullable().default(null),
