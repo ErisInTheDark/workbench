@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.direnv/
 *.pem
 *.key
 *.p12
