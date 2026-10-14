@@ -444,6 +444,29 @@ checkpointTest("stash releases claims and conflict-safe unstash restores editabl
   assert.equal(await controller.hasLiveClaimsAtRepoRoot({ cwd: repoRoot, threadId: state.threadId }), true);
 });
 
+checkpointTest("activating successor work keeps unsealed pending proposals reviewable and committable", 6, async (bundle) => {
+  const { root: repoRoot, state } = branchFixture(bundle, "successor");
+  const owner = { cwd: repoRoot, threadId: state.threadId };
+  const pendingIds = async () => (await controller.readStatus(owner)).pending.map(item => item.proposalId);
+  await write(repoRoot, "selected.txt", "pending before successor\n");
+  const proposal = await controller.createProposal({ ...owner, description: "", title: "keep pending work" });
+
+  const plan = await controller.createPlan({ ...owner, intentName: "successor work", paths: ["selected.txt", "unrelated.txt"] });
+  await controller.startArc({ ...owner, checkpointCommit: plan.checkpointCommit });
+  assert.deepEqual(await pendingIds(), [proposal.proposalId], "starting a successor plan keeps the pending proposal");
+
+  await controller.createAndStartPlan({ ...owner, intentName: "another successor", paths: ["selected.txt"] });
+  assert.deepEqual(await pendingIds(), [proposal.proposalId], "plan start keeps the pending proposal");
+
+  await controller.commitProposal({
+    ...owner, proposalId: proposal.proposalId, title: "keep pending work", description: "", includeNewer: false,
+  });
+  const status = await controller.readStatus(owner);
+  assert.deepEqual(status.pending, []);
+  assert.deepEqual(status.accepted.map(item => item.proposalId), [proposal.proposalId]);
+  assert.equal(await git(repoRoot, ["show", "HEAD:selected.txt"]), "pending before successor\n");
+});
+
 checkpointTest("stash preserves a pending plan while releasing its retained claims", 9, async (bundle) => {
   const { root: repoRoot, state } = branchFixture(bundle, "stashPlan");
   await write(repoRoot, "selected.txt", "pending work\n");

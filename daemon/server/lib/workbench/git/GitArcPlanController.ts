@@ -197,11 +197,20 @@ function presentation(entry: GitArcRegistryEntry) {
   };
 }
 
-function activationProposalIds(
+/** Successor work keeps a pending stack whole, otherwise only live (pending or unavailable) proposals; resolved ids drop. */
+async function activationProposalIds(
+  store: GitCheckpointStore,
+  harness: GitArcHarness,
+  threadId: string,
   current: GitArcRegistryEntry | null,
   retainedArc = current ? presentation(current) : null,
 ) {
-  return current?.stackTip ? retainedArc?.proposalIds ?? [] : [];
+  const ids = retainedArc?.proposalIds ?? [];
+  if (current?.stackTip || !ids.length) return ids;
+  const live = new Set((await store.readProposalSummaries(harness, threadId, ids))
+    .filter(({ status }) => status === "proposed" || status === "unavailable")
+    .map(({ proposalId }) => proposalId));
+  return ids.filter(id => live.has(id));
 }
 
 function requirePlanMetadata(metadata: CheckpointMetadata | null) {
@@ -403,7 +412,7 @@ export default class GitArcPlanController {
       intentName: plan.metadata.intentName ?? "Unnamed arc",
       phase: "active",
       proposalId: null,
-      proposalIds: activationProposalIds(current, retainedArc),
+      proposalIds: await activationProposalIds(store, harness, input.threadId, current, retainedArc),
       retainedArc: undefined,
       ...(successor ? { savedStash: successor.savedStash } : {}),
       threadId: input.threadId,
@@ -474,7 +483,7 @@ export default class GitArcPlanController {
         intentName: metadata.intentName ?? "Unnamed arc",
         phase: "active",
         proposalId: null,
-        proposalIds: activationProposalIds(current),
+        proposalIds: await activationProposalIds(store, harness, input.threadId, current),
         retainedArc: undefined,
         threadId: input.threadId,
       });
@@ -554,7 +563,7 @@ export default class GitArcPlanController {
       intentName: metadata.intentName ?? "Unnamed arc",
       phase: "active",
       proposalId: null,
-      proposalIds: activationProposalIds(current),
+      proposalIds: await activationProposalIds(store, harness, input.threadId, current),
       retainedArc: undefined,
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);

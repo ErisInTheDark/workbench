@@ -21,7 +21,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
     message: "base",
   }],
   name: "checkpoint-shared-states-v5",
-  revision: 6,
+  revision: 7,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const threadId = "thread-one";
@@ -70,6 +70,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
     const cleanRelease = await fork("c", repositoryRoot);
     const stash = await fork("s", repositoryRoot);
     const stashPlan = await fork("sp", repositoryRoot);
+    const successor = await fork("sc", repositoryRoot);
 
     await planAndStart(repositoryRoot, newerThreadId, ["deleted.txt"], "Include newer proposal work");
     await planAndStart(repositoryRoot, cleanThreadId, ["literal[1].txt"], "Expire a clean proposal");
@@ -123,7 +124,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
     const incompatibleProposal = await propose(rebase.root, cleanThreadId, "Incompatible history", ["literal[1].txt"]);
     const replacementProposal = await propose(rebase.root, replacementThreadId, "Commit replacement-safe work");
 
-    const branches = [restore, planning, additions, cleanRelease, stash, stashPlan, manual, releaseRestore, frozen, rebase];
+    const branches = [restore, planning, additions, cleanRelease, stash, stashPlan, successor, manual, releaseRestore, frozen, rebase];
     for (const branch of branches) await runGit(["fsck", "--strict"], { cwd: branch.root });
     return {
       additions: {
@@ -158,6 +159,7 @@ export const CHECKPOINT_OPERATIONS_FIXTURE = {
       restore: { root: restore.relativeRoot, checkpointCommit: plan.checkpointCommit },
       stash: { root: stash.relativeRoot, threadId },
       stashPlan: { root: stashPlan.relativeRoot, threadId },
+      successor: { root: successor.relativeRoot, threadId },
     };
   },
 } satisfies GitTestFixtureSpec<object>;
