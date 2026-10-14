@@ -4,6 +4,15 @@
 an agentic ide about the human
 
 ## how 2 use
+
+you need to install these yourself first:
+1. [git](https://git-scm.com/)
+2. node, through whatever you like. [vite+](https://viteplus.dev/) recommended
+
+optional:
+1. [tailscale](https://tailscale.com/), if you want to connect to workbench agents on other devices
+
+and then workbench itself is just:
 ```bash
 # install & open
 npx @inthedark/wb
@@ -11,12 +20,6 @@ npx @inthedark/wb
 # set up daemon on another device
 npx @inthedark/wb connect
 ```
-
-start with node 22.13.0 or newer, npm (or `pnpm dlx @inthedark/wb`), git, and bash. windows needs git bash.
-
-workbench reuses an existing vite+ installation or installs a private, pinned copy in its OS data directory (`WORKBENCH_DATA_ROOT` overrides it). vite+ installs the checkout's pinned node and pnpm without changing your shell setup or default development tools. the workbench library (`~/.workbench`) is not toolchain storage.
-
-the package manager that launched setup registers `wb` in its existing global bin directory, which must be writable and on `PATH`. workbench checks that before cloning. dependencies and the frontend are still built through vite+, and `wb repair` reuses the recorded toolchain even when `vp` is not on `PATH`.
 
 ## features
 
@@ -54,7 +57,9 @@ note: have tried to keep dependencies minimal for the most part
 `/package` — the entrypoint/installer, what actually gets published to npm  
 `/daemon/host` — wake service  
 `/daemon/server` — workbench harness  
-`/daemon/voice` - vtt service (rust)  
+`/daemon/voice` — vtt service (rust)  
+`/daemon/repo` — vfs service (go)
+`/integration` — integrations in third party software
 `/instructions` — instructions for agents, copied into the user's `~/.workbench` folder whenever read  
 `/app/server` — server for frontend app  
 `/app/client` — frontend SPA  
@@ -62,5 +67,5 @@ note: have tried to keep dependencies minimal for the most part
 `/shared` — shared stuff between the projects  
 `/shared/network/native` — tailscale integration (go)  
 `/test` — test runner  
-`/scripts` - checkout installation, repair, build, and maintenance commands (`install.mjs` starts setup, `installation/` owns its implementation)  
+`/scripts` — stuff used by package scripts plus anything i didn't notice an agent left behind :3  
 `/docs` — help agents find things and not break them without eating all their tokens
