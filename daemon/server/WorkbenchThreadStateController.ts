@@ -11,6 +11,12 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
+
+/** Thread-state queue keys live beside Git transition keys in the shared lock manager. */
+function threadStateLockKey(key: string) {
+  return `thread-state\0${key}`;
+}
 
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
@@ -191,6 +197,8 @@ export interface WorkbenchThreadStateControllerOptions {
   resolveGitArc: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcLifecycleState | LegacyGitArcClaim | null>;
   resolveGitArcPlan: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<WorkbenchGitArcPlanState | null>;
   runGitArcReadTransition: <TValue>(projectId: ProjectId, operation: () => Promise<TValue>) => Promise<TValue>;
+  /** The process lock manager, so thread-state queues and Git transition leases share one deadlock-free graph. */
+  locks?: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
   threadStateStore: WorkbenchThreadStatePersistence;
 }
 
@@ -264,6 +272,7 @@ export default class WorkbenchThreadStateController {
   private readonly pinnedLayout: WorkbenchPinnedThreadLayoutStore;
   private readonly projects = new Map<ProjectId, ProjectState>();
   private readonly operationQueues = new Map<string, Promise<unknown>>();
+  private readonly locks: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
   private readonly persistenceWrites = new Set<Promise<void>>();
   private readonly retiredError = new Error("Thread-state controller is retired.");
   private readonly reconciliationPromises = new Set<Promise<void>>();
@@ -422,6 +431,7 @@ export default class WorkbenchThreadStateController {
       writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
     };
     this.options = { ...options, threadStateStore: ownedPersistence };
+    this.locks = options.locks ?? new WorkbenchThreadTransitionCoordinator();
     this.now = options.now ?? Date.now;
     this.archives = new WorkbenchThreadArchiveController({
       now: this.now,
@@ -673,7 +683,7 @@ export default class WorkbenchThreadStateController {
   private readComposerProfile(slot: WorkbenchComposerProfileSlot, refresh: boolean) {
     slot = { ...slot, projectId: this.canonicalProjectId(slot.projectId) };
     const key = `${slot.projectId}:profiles`;
-    const pending = this.operationQueues.get(key);
+    const pending = this.previousOperation(key);
     return this.enqueue(key, async () => {
       await pending;
       return await this.resolveComposerProfileTarget(await this.getProject(slot.projectId), slot, refresh);
@@ -691,7 +701,7 @@ export default class WorkbenchThreadStateController {
   prepareComposerProfileTarget(slot: WorkbenchComposerProfileSlot) {
     slot = { ...slot, projectId: this.canonicalProjectId(slot.projectId) };
     const key = `${slot.projectId}:profiles`;
-    const pending = this.operationQueues.get(key);
+    const pending = this.previousOperation(key);
     return this.enqueue(key, async () => {
       await pending;
       const state = await this.getProject(slot.projectId);
@@ -710,7 +720,7 @@ export default class WorkbenchThreadStateController {
     refresh = true,
   ): Promise<{ accepted: boolean; result: Result; profilePersistenceError: string | null }> {
     const key = `${slot.projectId}:profiles`;
-    const pending = this.operationQueues.get(key);
+    const pending = this.previousOperation(key);
     return this.enqueue(key, async () => {
       await pending;
       signal.throwIfAborted();
@@ -1948,14 +1958,19 @@ export default class WorkbenchThreadStateController {
       || left.sourceProposalId.localeCompare(right.sourceProposalId));
   }
 
+  /** Serializes by key through the shared lock manager; a flow already inside the key reenters instead of queueing behind itself. */
   private enqueue<TValue>(key: string, operation: () => Promise<TValue>) {
-    const previous = this.operationQueues.get(key) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(() => {
+    const next = this.locks.exclusive(threadStateLockKey(key), async () => {
       this.assertActive();
-      return operation();
+      return await operation();
     });
     this.operationQueues.set(key, next);
     return next.finally(() => { if (this.operationQueues.get(key) === next) this.operationQueues.delete(key); });
+  }
+
+  /** The key's latest queued operation, unless this flow is inside it, where awaiting it would wait on itself. */
+  private previousOperation(key: string) {
+    return this.locks.holds(threadStateLockKey(key)) ? undefined : this.operationQueues.get(key);
   }
 
   private async mutatePriority(

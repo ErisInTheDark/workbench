@@ -102,6 +102,8 @@ export interface WorkbenchThreadStateFeatureContext {
   resolveProjectFromCwd(cwd: string, options?: { endpointName?: string }): Promise<ProjectResolution>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read">>;
+  /** The process lock manager the Git transitions use, shared by thread-state queues. */
+  locks?: Pick<WorkbenchThreadTransitionCoordinator, "exclusive" | "holds">;
 }
 
 function asRecord(value: unknown) {
@@ -186,6 +188,7 @@ export default class WorkbenchThreadStateFeature {
 
   constructor(private readonly context: WorkbenchThreadStateFeatureContext) {
     this.controller = new WorkbenchThreadStateController({
+      ...(context.locks ? { locks: context.locks } : {}),
       resolveProjectId: projectId => this.canonicalProjectId(projectId),
       readComposerProfiles: context.readComposerProfiles,
       recordComposerProfileUsage: context.recordComposerProfileUsage,

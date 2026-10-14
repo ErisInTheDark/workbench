@@ -567,6 +567,7 @@ function createWorkbenchCoreFeature(
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     transitions: worktreeGitTransitions,
+    locks: context.threadTransitions,
     pruneThreadVis: threadIds => vis.prune(threadIds),
   });
   const threadStateController = threadState.controller;

@@ -28,7 +28,8 @@ type Options = {
   schedule?: (check: () => void) => () => void;
   watch?: (changed: () => void) => (() => void) | Promise<() => void>;
   observe?: (changed: () => void) => Promise<() => void>;
-  git?: (args: string[]) => Promise<GitResult>;
+  /** Runs one git command; `signal` aborts it when the controller is disposed. */
+  git?: (args: string[], signal: AbortSignal) => Promise<GitResult>;
 };
 
 function message(error: unknown) {
@@ -51,19 +52,22 @@ export default class WorkbenchInstallationUpdateController {
   private background: Promise<void> | null = null;
   private pendingCheck: boolean | null = null;
   private fetchFailure: string | null = null;
+  /** Aborted on dispose, so a hung fetch can never hold a reload open. */
+  private readonly lifetime = new AbortController();
 
   constructor(private readonly options: Options) {
     this.journalPath = path.join(options.dataRoot ?? resolveWorkbenchDataRoot(), ...INSTALLATION_REPAIR_JOURNAL_SEGMENTS);
     this.integration = new WorkbenchGitIntegration(new WorkbenchGitRepository(options.repoRoot));
-    this.git = options.git ?? (args => new Promise((resolve, reject) => {
+    const git = options.git ?? ((args: string[], signal: AbortSignal) => new Promise<GitResult>((resolve, reject) => {
       execFile("git", args, {
         cwd: options.repoRoot, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
-        maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+        maxBuffer: 16 * 1024 * 1024, windowsHide: true, signal,
       }, (error, stdout, stderr) => {
         if (error && typeof error.code !== "number") { reject(error); return; }
         resolve({ code: error ? Number(error.code) : 0, stdout, stderr });
       });
     }));
+    this.git = args => git(args, this.lifetime.signal);
   }
 
   read() { return this.value; }
@@ -82,6 +86,7 @@ export default class WorkbenchInstallationUpdateController {
 
   async dispose() {
     this.closed = true;
+    this.lifetime.abort(new Error("Installation update checks were disposed."));
     this.stopSchedule?.();
     this.stopWatch?.();
     this.listeners.clear();

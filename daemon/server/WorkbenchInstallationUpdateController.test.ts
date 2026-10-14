@@ -262,6 +262,29 @@ test("start owns one injected schedule and watcher and disposal stops both", asy
   assert.equal(schedules, 1);
 });
 
+test("disposal aborts a fetch that would never finish on its own", async t => {
+  const f = await fixture(t);
+  const fetching = Promise.withResolvers<void>();
+  const controller = new WorkbenchInstallationUpdateController({
+    repoRoot: f.local, dataRoot: path.join(f.temporary.path, "data"), transitions: f.transitions,
+    projectId: async () => null, warn: () => undefined,
+    schedule: () => () => undefined, watch: () => () => undefined,
+    git: async (args, signal) => {
+      if (args[0] === "fetch") {
+        fetching.resolve();
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      const result = await execute("git", args, { cwd: f.local, windowsHide: true });
+      return { code: 0, stdout: result.stdout, stderr: result.stderr };
+    },
+  });
+  controller.start();
+  await fetching.promise;
+  await controller.dispose();
+});
+
 test("bursts coalesce without losing a scheduled fetch behind an active check", async t => {
   const f = await fixture(t);
   let tick!: () => void, changed!: () => void, release!: () => void, entered!: () => void, readAgain!: () => void;
