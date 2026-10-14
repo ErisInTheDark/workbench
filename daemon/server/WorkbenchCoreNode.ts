@@ -708,7 +708,7 @@ function createWorkbenchCoreFeature(
   const transcriptReconciliation = new WorkbenchTranscriptReconciliationController({
     identities: threadIdentity,
     transcripts: transcriptReader,
-    readGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
+    readRecoveryGaps: threadId => transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId)),
     subscribeSettled: listener => transcript.subscribeSettled(listener),
     recover: async (input, signal) => {
       const key = installedProviderKeys.find(key => key === input.harness);

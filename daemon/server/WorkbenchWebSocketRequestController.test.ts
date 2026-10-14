@@ -62,6 +62,7 @@ function createController(options: {
   reload?: WorkbenchWebSocketRequestControllerOptions["reload"];
   stats?: WorkbenchWebSocketRequestControllerOptions["stats"];
   transcript?: WorkbenchWebSocketRequestControllerOptions["transcript"];
+  transcriptReconciliation?: WorkbenchWebSocketRequestControllerOptions["transcriptReconciliation"];
   materialize?: (threadId: string, turnIds: string[]) => Promise<void>;
   voice?: WorkbenchWebSocketRequestControllerOptions["voice"];
 }) {
@@ -94,6 +95,7 @@ function createController(options: {
       subscribe: async () => undefined,
       unsubscribe: () => undefined,
     },
+    transcriptReconciliation: options.transcriptReconciliation,
     writeLine: (line) => { lines.push(line); },
   });
   return { controller, lines };
@@ -207,6 +209,24 @@ test(`tool previews are ${optedIn ? "delivered" : "withheld"} across subscriptio
   } finally { controller.dispose(); }
 });
 }
+
+test("opening a transcript heals its thread's capture gaps, but restoring a subscription after reload does not", async () => {
+  const healed: string[] = [];
+  const { controller } = createController({
+    clock: new FakeClock(),
+    transcript: { read: async () => null, subscribe: async () => undefined, unsubscribe: () => undefined },
+    transcriptReconciliation: { healCaptureGaps: async threadId => { healed.push(threadId); } },
+  });
+  const client = createClient((_data, callback) => { callback?.(); });
+  try {
+    await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", 1, {
+      params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion: 4 },
+    }), false);
+    controller.detachForReload();
+    await controller.resumeAfterFailedReload();
+    assert.deepEqual(healed, ["thread"]);
+  } finally { controller.dispose(); }
+});
 
 for (const protocolVersion of [2, 3] as const) {
 test(`rollback restores transcript protocol ${protocolVersion} without reviving old publication callbacks`, async () => {

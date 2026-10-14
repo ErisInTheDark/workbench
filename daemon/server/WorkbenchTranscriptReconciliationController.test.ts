@@ -21,7 +21,7 @@ test("duplicate demands share one window while independent windows wait without 
   let calls = 0;
   const owner = new WorkbenchTranscriptReconciliationController({
     ...identityPorts(),
-    readGapIds: async () => [],
+    readRecoveryGaps: async () => [],
     recover: async () => {
       calls++;
       entered.resolve();
@@ -50,7 +50,7 @@ test("refresh arriving during native recovery gets a successor with a fresh gap 
   let gaps = ["before"];
   const owner = new WorkbenchTranscriptReconciliationController({
     ...identityPorts(),
-    readGapIds: async () => [...gaps],
+    readRecoveryGaps: async () => gaps.map(id => ({ id, turnIds: [] })),
     recover: async input => {
       snapshots.push(input.gapIds);
       if (snapshots.length === 1) { entered.resolve(); await release.promise; }
@@ -74,7 +74,7 @@ test("failed windows retain useful bounded diagnostics and do not strand queued 
   const warnings: string[] = [];
   const owner = new WorkbenchTranscriptReconciliationController({
     ...identityPorts(),
-    readGapIds: async () => [],
+    readRecoveryGaps: async () => [],
     recover: async input => {
       if (input.threadId === "failed") throw new Error("retained boundary omitted\nBearer private-credential " + "x".repeat(2_000));
       return { turnIds: ["saved"], exhausted: true };
@@ -99,7 +99,7 @@ test("retirement aborts active native work, rejects queued demands and drains th
   let calls = 0;
   const owner = new WorkbenchTranscriptReconciliationController({
     ...identityPorts(),
-    readGapIds: async () => [],
+    readRecoveryGaps: async () => [],
     recover: async (_input, signal) => {
       calls++;
       signal.addEventListener("abort", () => aborted.resolve(), { once: true });
@@ -124,7 +124,7 @@ test("a window reports changed only when a transcript commit for its own thread 
   const listeners = new Set<(threadIds: readonly string[]) => void>();
   let commit: readonly string[] = [];
   const owner = new WorkbenchTranscriptReconciliationController({
-    ...identityPorts(), readGapIds: async () => [],
+    ...identityPorts(), readRecoveryGaps: async () => [],
     subscribeSettled: listener => { listeners.add(listener); return () => listeners.delete(listener); },
     recover: async () => {
       for (const listener of listeners) listener(commit);
@@ -143,6 +143,41 @@ test("a window reports changed only when a transcript commit for its own thread 
   assert.equal(listeners.size, 0);
 });
 
+test("opening a thread re-reads each open-gap anchor once, and a failing re-read never rejects healing", async () => {
+  const turns = ["anchored", "failing"].map((id, index) => ({
+    id, thread_id: "thread", identity_origin: "workbench" as const,
+    turn_index: index, harness_id: "codex", native_location: "/repo", native_thread_id: "native",
+    native_turn_id: `native-${id}`, state: "completed" as const, created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  }));
+  const recovered: string[] = [];
+  const settled = Promise.withResolvers<void>();
+  const warnings: string[] = [];
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(turns),
+    readRecoveryGaps: async () => [
+      { id: "first", turnIds: ["anchored", "failing"] },
+      { id: "second", turnIds: ["anchored"] },
+    ],
+    recover: async input => {
+      assert.ok(input.target.mode === "exact");
+      recovered.push(input.target.turnId);
+      if (recovered.length === 2) settled.resolve();
+      if (input.target.turnId === "failing") throw new Error("rollout unavailable");
+      return { turnIds: [input.target.turnId], exhausted: false };
+    },
+    warn: message => warnings.push(message),
+  });
+  try {
+    await owner.healCaptureGaps("thread");
+    await settled.promise;
+    await owner.healCaptureGaps("thread");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(recovered.sort(), ["anchored", "failing"], "each anchored turn is re-read once per lifetime");
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /exact failed: rollout unavailable/);
+  } finally { await owner.dispose(); }
+});
+
 test("previous recovery follows the preceding turn's native provenance across provider boundaries", async () => {
   const turns = ["codex", "opencode", "opencode"].map((harness, index) => ({
     id: `turn-${index}`, thread_id: "thread", identity_origin: "workbench" as const,
@@ -151,7 +186,7 @@ test("previous recovery follows the preceding turn's native provenance across pr
   }));
   const recovered: Array<Parameters<WorkbenchTranscriptReconciliationOptions["recover"]>[0]> = [];
   const owner = new WorkbenchTranscriptReconciliationController({
-    ...identityPorts(turns), readGapIds: async () => [],
+    ...identityPorts(turns), readRecoveryGaps: async () => [],
     recover: async input => { recovered.push(input); return { turnIds: [], exhausted: false }; },
     warn: assert.fail,
   });

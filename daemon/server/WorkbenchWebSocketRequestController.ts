@@ -179,6 +179,8 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   threadState: Pick<WorkbenchThreadStateController, "handleRequest">;
   transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">
     & Partial<Pick<DaemonTranscriptRegistration, "prefetch">>;
+  /** Opening a thread re-reads its capture-gap anchors in the background; the healed body arrives through the subscription. */
+  transcriptReconciliation?: Pick<import("./WorkbenchTranscriptReconciliationController").default, "healCaptureGaps">;
   writeLine?: (line: string) => void;
 }
 
@@ -242,6 +244,7 @@ export default class WorkbenchWebSocketRequestController {
   private readonly stream: WorkbenchWebSocketStreamController;
   private readonly threadState: WorkbenchWebSocketRequestControllerOptions["threadState"];
   private readonly transcript: WorkbenchWebSocketRequestControllerOptions["transcript"];
+  private readonly transcriptReconciliation: WorkbenchWebSocketRequestControllerOptions["transcriptReconciliation"];
   private readonly transcriptSubscriptions = new Map<string, WorkbenchWebSocketTranscriptSubscriptionState>();
   private readonly transcriptCapabilitiesAnnounced = new WeakSet<BridgeClient>();
   private readonly statsObservers = new Map<string, { client: BridgeClient; connectionId: string }>();
@@ -276,9 +279,11 @@ export default class WorkbenchWebSocketRequestController {
     stats,
     threadState,
     transcript,
+    transcriptReconciliation,
     workspace,
     writeLine = (line) => process.stdout.write(`${line}\n`),
   }: WorkbenchWebSocketRequestControllerOptions) {
+    this.transcriptReconciliation = transcriptReconciliation;
     this.voice = voice;
     this.repo = repo;
     this.cancel = cancel;
@@ -922,6 +927,7 @@ export default class WorkbenchWebSocketRequestController {
       turnIds: request.params.turnIds,
       turnLimit: request.params.turnLimit,
     });
+    void this.transcriptReconciliation?.healCaptureGaps(request.params.threadId);
     return { subscribed: true };
   }
 

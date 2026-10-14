@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptReconciliationOptions: canonical resolution, storage and native recovery ports.
- * - default WorkbenchTranscriptReconciliationController: own explicit demanded transcript recovery and report whether each window changed its thread.
+ * - default WorkbenchTranscriptReconciliationController: own explicit demanded transcript recovery, report whether each window changed its thread, and heal capture-gap anchors once per lifetime.
  */
 import type { WorkbenchThreadReconcile, WorkbenchThreadReconcileResult } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -11,7 +11,8 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 export interface WorkbenchTranscriptReconciliationOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve">;
   transcripts: Pick<WorkbenchTranscriptReader, "catalog">;
-  readGapIds(threadId: string): Promise<string[]>;
+  /** Open capture gaps of a canonical thread, with the anchor turns no window has re-read yet. */
+  readRecoveryGaps(threadId: string): Promise<ReadonlyArray<{ id: string; turnIds: readonly string[] }>>;
   /** Threads each transcript commit changed; lets a window report whether it changed anything. */
   subscribeSettled?(listener: (threadIds: readonly string[]) => void): () => void;
   recover(input: WorkbenchThreadReconcile & { harness: string; gapIds: string[] }, signal: AbortSignal): Promise<WorkbenchThreadReconcileResult>;
@@ -27,6 +28,14 @@ type Job = {
   changed?: boolean;
 };
 
+/** One redacted, single-line, bounded failure message. */
+function boundedMessage(error: unknown) {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]")
+    .replace(/\b(api[_-]?key|authorization|secret|token)(\s*[:=]\s*)[^\s,;]+/giu, "$1$2[redacted]")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
+}
+
 function sameWindow(left: Target, right: Target) {
   if (left.threadId !== right.threadId || left.harness !== right.harness || left.target.mode !== right.target.mode) return false;
   if (left.target.mode === "exact" && right.target.mode === "exact") return left.target.turnId === right.target.turnId;
@@ -40,6 +49,8 @@ export default class WorkbenchTranscriptReconciliationController {
   private active: Job | null = null;
   private draining: Promise<void> | null = null;
   private readonly stopSettled: () => void;
+  /** `${gapId}:${turnId}` anchors already queued for healing; an unrecoverable turn warns once, not on every visit. */
+  private readonly healedAnchors = new Set<string>();
 
   constructor(private readonly options: WorkbenchTranscriptReconciliationOptions) {
     this.stopSettled = options.subscribeSettled?.(threadIds => {
@@ -54,8 +65,40 @@ export default class WorkbenchTranscriptReconciliationController {
     this.controller.signal.throwIfAborted();
     signal?.throwIfAborted();
     if (!target) return { turnIds: [], exhausted: true };
+    return this.enqueue(target, signal);
+  }
+
+  /**
+   * Queue one exact re-read for each open-gap anchor of the thread not healed yet. Never rejects: queued windows warn
+   * through the drain, and every earlier failure warns here.
+   */
+  async healCaptureGaps(threadId: string) {
+    try {
+      this.controller.signal.throwIfAborted();
+      const identity = await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      if (!identity) return;
+      const turnIds = new Set<string>();
+      for (const gap of await this.options.readRecoveryGaps(identity.threadId)) {
+        for (const turnId of gap.turnIds) {
+          const key = `${gap.id}:${turnId}`;
+          if (this.healedAnchors.has(key)) continue;
+          this.healedAnchors.add(key);
+          turnIds.add(turnId);
+        }
+      }
+      for (const turnId of turnIds) {
+        this.controller.signal.throwIfAborted();
+        const target = await this.resolveTarget({ threadId: identity.threadId, target: { mode: "exact", turnId }, refresh: false });
+        if (target) void this.enqueue(target).catch(() => undefined);
+      }
+    } catch (error) {
+      if (!this.controller.signal.aborted) this.options.warn(`[transcript-reconciliation] capture-gap healing failed: ${boundedMessage(error)}`);
+    }
+  }
+
+  private enqueue(target: Target, signal?: AbortSignal) {
     const existing = this.queue.find(job => sameWindow(job.target, target))
-      ?? (!input.refresh && this.active && sameWindow(this.active.target, target) ? this.active : null);
+      ?? (!target.refresh && this.active && sameWindow(this.active.target, target) ? this.active : null);
     if (existing) return this.wait(existing, signal);
     const job: Job = { target, controller: new AbortController(), result: Promise.withResolvers<WorkbenchThreadReconcileResult>() };
     this.queue.push(job);
@@ -115,7 +158,7 @@ export default class WorkbenchTranscriptReconciliationController {
         const signal = AbortSignal.any([this.controller.signal, job.controller.signal]);
         try {
           signal.throwIfAborted();
-          const gapIds = await this.options.readGapIds(job.target.threadId);
+          const gapIds = (await this.options.readRecoveryGaps(job.target.threadId)).map(gap => gap.id);
           signal.throwIfAborted();
           job.changed = false;
           const result = await this.options.recover({ ...job.target, gapIds }, signal);
@@ -125,11 +168,7 @@ export default class WorkbenchTranscriptReconciliationController {
         } catch (error) {
           if (!signal.aborted) {
             const safe = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 160);
-            const message = (error instanceof Error ? error.message : String(error))
-              .replace(/\b(Bearer\s+)[^\s,;]+/giu, "$1[redacted]")
-              .replace(/\b(api[_-]?key|authorization|secret|token)(\s*[:=]\s*)[^\s,;]+/giu, "$1$2[redacted]")
-              .replace(/[\u0000-\u001f\u007f-\u009f]/gu, "?").slice(0, 500);
-            this.options.warn(`[transcript-reconciliation] ${safe(job.target.harness)} ${safe(job.target.threadId)} ${job.target.target.mode} failed: ${message}`);
+            this.options.warn(`[transcript-reconciliation] ${safe(job.target.harness)} ${safe(job.target.threadId)} ${job.target.target.mode} failed: ${boundedMessage(error)}`);
           }
           job.result.reject(error);
         } finally {
