@@ -1,11 +1,11 @@
 /*
  * No exports. Protect the git process host: bounded concurrency, execFile-compatible failures, abort kills, streaming
- * relays, worker loss, and a real worker round trip.
+ * relays, worker loss, a real worker round trip, and real commands finishing while another process holds their pipes.
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
-import type { Worker } from "node:worker_threads";
+import { SHARE_ENV, Worker } from "node:worker_threads";
 import GitProcessHost, { GitProcessError, type GitProcessWorkerEvent, type GitProcessWorkerRequest } from "./GitProcessHost";
 
 class FakeWorker extends EventEmitter {
@@ -105,6 +105,31 @@ test("a real worker runs git and streams cat-file", async () => {
     child.stdin.end();
     await closed;
   } finally {
+    await git.dispose();
+  }
+});
+
+test("commands finish from their exit when another process keeps their output pipe open", { timeout: 20_000 }, async () => {
+  // A backgrounded sleep inherits stdout like a handle leaked into a concurrently spawned process; it prints its pid.
+  const hold = ["-c", "alias.hold=!sleep 600 & p=$!; cat /proc/$p/winpid 2>/dev/null || echo $p", "hold"];
+  const holders: number[] = [];
+  const git = new GitProcessHost({
+    createWorker: () => {
+      const worker = new Worker(new URL("./git-process-worker-bootstrap.mjs", import.meta.url), { env: SHARE_ENV, stderr: true });
+      worker.stderr.resume();
+      return worker;
+    },
+  });
+  try {
+    holders.push(Number((await git.runText({ args: hold, cwd: process.cwd() })).trim()));
+    const child = git.open({ args: hold, cwd: process.cwd() });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    const code = await new Promise(resolve => child.once("close", resolve));
+    holders.push(Number(output.trim()));
+    assert.equal(code, 0);
+  } finally {
+    for (const pid of holders) if (pid > 0) try { process.kill(pid); } catch { /* already gone */ }
     await git.dispose();
   }
 });

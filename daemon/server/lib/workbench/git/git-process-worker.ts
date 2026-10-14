@@ -1,6 +1,7 @@
 /*
  * No exports. Worker-thread side of GitProcessHost: spawns git, relays its output, and kills it on request, so process
- * creation (synchronous CreateProcess on Windows) never runs on the daemon event loop.
+ * creation (synchronous CreateProcess on Windows) never runs on the daemon event loop. Children finish from their exit
+ * once their output goes quiet, since another process can inherit a pipe handle and hold it open indefinitely.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parentPort } from "node:worker_threads";
@@ -10,6 +11,31 @@ const port = parentPort;
 if (!port) throw new Error("git-process-worker must run inside a worker thread.");
 
 const children = new Map<number, ChildProcessWithoutNullStreams>();
+
+/** Quiet time after exit before stdio counts as drained; the dead writer's remaining output is already in the pipe. */
+const EXITED_PIPE_QUIET_MS = 1_000;
+
+/**
+ * `close` waits for stdio EOF, which never comes while a process spawned concurrently on another thread holds an
+ * inherited pipe handle. Ending the streams after a quiet exit lets `close` fire with the real exit code.
+ */
+function settleAfterExit(child: ChildProcessWithoutNullStreams, args: readonly string[]) {
+  let timer: NodeJS.Timeout | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      console.warn(`[git-process-worker] git ${args.join(" ").slice(0, 200)} exited but its output pipes stayed open (another process holds them); finishing from its exit.`);
+      child.stdout.destroy();
+      child.stderr.destroy();
+    }, EXITED_PIPE_QUIET_MS);
+  };
+  child.once("exit", () => {
+    arm();
+    child.stdout.on("data", arm);
+    child.stderr.on("data", arm);
+  });
+  child.once("close", () => clearTimeout(timer));
+}
 
 function post(event: GitProcessWorkerEvent, transfer: ArrayBuffer[] = []) {
   port!.postMessage(event, transfer);
@@ -44,6 +70,7 @@ function start(request: Extract<GitProcessWorkerRequest, { kind: "run" | "open" 
     return;
   }
   children.set(request.id, child);
+  settleAfterExit(child, request.args);
   if (request.kind === "run") {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
