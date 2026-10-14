@@ -97,7 +97,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
-    branchPositions?: Pick<WorkbenchBranchPositionController, "observe">;
+    branchPositions?: Pick<WorkbenchBranchPositionController, "observe" | "observeCommits">;
     accountLimits?: Pick<WorkbenchAccountLimitsController, "observe">;
     vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
@@ -203,6 +203,21 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         const opened = handle;
         observation.stopTree = () => opened.release();
         this.update(observation, { kind: "branchPosition", ...opened.read() });
+        break;
+      }
+      case "branchCommits": {
+        const positions = this.owners.branchPositions;
+        if (!positions) {
+          this.update(observation, { kind: "branchCommits", phase: "unavailable", failure: "Commit previews are unavailable.", data: null });
+          break;
+        }
+        let handle: ReturnType<typeof positions.observeCommits> | null = null;
+        handle = positions.observeCommits(request.query.projectId, request.query, () => {
+          if (handle) this.update(observation, { kind: "branchCommits", ...handle.read() });
+        });
+        const opened = handle;
+        observation.stopTree = () => opened.release();
+        this.update(observation, { kind: "branchCommits", ...opened.read() });
         break;
       }
       case "threadVis": {
@@ -378,6 +393,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null, runtime: {} };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "branchPosition": return { ...envelope, kind: "branchPosition", phase: "pending", failure: null, position: null };
+      case "branchCommits": return { ...envelope, kind: "branchCommits", phase: "pending", failure: null, data: null };
       case "accountLimits": return { ...envelope, kind: "accountLimits", phase: "pending", failure: null, limits: null };
       case "stats": return { ...envelope, kind: "stats", phase: "pending", failure: null, refinement: "pending", data: null };
       case "threadVis": return { ...envelope, kind: "threadVis", phase: "pending", failure: null, data: null };

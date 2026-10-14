@@ -29,7 +29,7 @@ async function repository(root: string) {
     await git("commit", "-m", file);
     return git("rev-parse", "HEAD");
   };
-  return { git, commit, transport: new WorkbenchGitPeerTransport(new WorkbenchGitRepository(root)) };
+  return { root, git, commit, transport: new WorkbenchGitPeerTransport(new WorkbenchGitRepository(root)) };
 }
 
 /** Sender and receiver share one base commit, as two clones of one project do. */
@@ -94,4 +94,34 @@ test("positions count commits each side lacks against the peer's tracking ref", 
   const position = await f.receiver.transport.position([senderAddress]);
   assert.equal(position.branch, "main");
   assert.deepEqual(position.peers.map(({ ahead, behind }) => ({ ahead, behind })), [{ ahead: 1, behind: 2 }]);
+});
+
+test("commit previews show only transferable history in either direction and expand beyond three", async t => {
+  const f = await fixture(t);
+  const incoming = [];
+  for (const name of ["one", "two", "three", "four", "five"]) incoming.push(await f.sender.commit(`${name}.txt`));
+  const outgoing = await f.receiver.commit("local.txt");
+  await f.transfer();
+  await fs.writeFile(path.join(f.receiver.root, "dirty.txt"), "keep me");
+  const before = await f.receiver.git("status", "--porcelain");
+  const request = { peer: senderAddress, branch: "main", action: "pull" as const, all: false };
+  const preview = await f.receiver.transport.commits(request);
+  assert.equal(preview.total, 5);
+  assert.deepEqual(preview.commits.map(commit => commit.commit), incoming.slice(-3).reverse());
+  const full = await f.receiver.transport.commits({ ...request, all: true });
+  assert.deepEqual(full.commits.map(commit => commit.commit), [...incoming].reverse());
+  assert.equal(full.commits[0]?.subject, "five.txt");
+  const send = await f.receiver.transport.commits({ ...request, action: "send" });
+  assert.deepEqual(send.commits.map(commit => commit.commit), [outgoing]);
+  assert.equal(await f.receiver.git("rev-parse", "HEAD"), outgoing);
+  assert.equal(await f.receiver.git("status", "--porcelain"), before);
+});
+
+test("commit previews reject a changed branch or missing tracking history instead of showing an empty list", async t => {
+  const f = await fixture(t);
+  const request = { peer: senderAddress, branch: "main", action: "pull" as const, all: false };
+  await assert.rejects(f.receiver.transport.commits(request), /fetched/u);
+  await f.transfer();
+  await f.receiver.git("checkout", "-b", "other");
+  await assert.rejects(f.receiver.transport.commits(request), /branch/u);
 });

@@ -21,6 +21,20 @@ const entry = (activityAt: number, extra: object = {}) => ({
   lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
 });
 const location = { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" };
+
+test("peer commit updates preserve unchanged rows at both observation hops", () => {
+  for (const kind of ["branchCommits", "gitPeerCommits"] as const) {
+    const shape = kind === "branchCommits" ? daemonObservationShape(kind) : workspaceObservationShape(kind);
+    const first = { kind, subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+      data: { branch: "main", head: "a".repeat(40), tip: "b".repeat(40), total: 1,
+        commits: [{ commit: "b".repeat(40), subject: "unchanged" }] } };
+    const next = { ...first, revision: 2, data: { ...first.data, tip: "c".repeat(40), total: 2,
+      commits: [{ commit: "c".repeat(40), subject: "new" }, ...first.data.commits] } };
+    const delta = diffObservationValue(first, next, shape)!;
+    assert.ok(!JSON.stringify(delta).includes("unchanged"));
+    assert.deepEqual(applyObservationDelta(first, delta, shape), next);
+  }
+});
 const member = (activityAt: number) => ({
   key: `observed/${location.daemonId}/${location.projectId}/codex:${threadId}`, homeKey: null, logicalProjectId: null,
   location, hostname: "host", rootPath: "C:/project", title: "thread", activityAt,

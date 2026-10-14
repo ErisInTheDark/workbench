@@ -628,6 +628,7 @@ export default class WorkbenchWorkspaceRequestController {
         break;
       }
       case "accountLimits":
+      case "gitPeerCommits":
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
       case "workingTreeSummary": {
@@ -723,6 +724,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "gitPeers": return { ...base, kind: "gitPeers", data: null };
+      case "gitPeerCommits": return { ...base, kind: "gitPeerCommits", data: null };
       case "accountLimits": return { ...base, kind: "accountLimits", data: null };
       case "stats": return { ...base, kind: "stats", refinement: "pending", data: null };
       case "threadVis": return { ...base, kind: "threadVis", data: null };
@@ -848,6 +850,24 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "gitPeers", ...interest.gitPeers?.read()
           ?? { phase: "unavailable", failure: "Peer sync is unavailable.", data: null } });
         return;
+      case "gitPeerCommits": {
+        const source = this.options.sources.get(query.location.daemonId);
+        const key = source ? JSON.stringify(query) : null;
+        if (interest.thread?.key !== key) {
+          interest.thread?.observation.release();
+          interest.thread = source && key ? {
+            key, observation: source.observe({
+              kind: "branchCommits", projectId: query.location.projectId, peer: query.peer,
+              branch: query.branch, action: query.action, all: query.all,
+            }, () => this.refresh(interest)),
+          } : null;
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        this.update(interest, { kind: "gitPeerCommits",
+          phase: fact?.phase ?? "unavailable", failure: fact?.failure ?? (source ? null : "Device unavailable."),
+          data: fact?.value?.kind === "branchCommits" ? fact.value.data : null });
+        return;
+      }
       case "stats": this.projectStats(interest); return;
       case "threadVis":
       case "visSnapshot": this.relayThreadVis(interest); return;

@@ -7,14 +7,15 @@ import type { GitPeerAddress, GitPeerSyncMode } from "workbench-shared/workbench
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { useGitPeerState } from "../../../workbench/git/WorkbenchGitPeerState";
 import { readGlobalWorkbenchSettings, readLogicalProjectWorkbenchSettings, resolveWorkbenchSettings } from "../../../workbench/state/workbench-settings";
-import IconButton from "../../ui/IconButton";
 import PrimaryButton from "../../ui/PrimaryButton";
+import Tooltip from "../../ui/Tooltip";
 import { useWorkbenchContextMenu } from "../WorkbenchContextMenuContext";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
-import { MoreVerticalIcon } from "../workbench-icons";
+import { GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
+import WorkbenchGitPeerTooltip from "./WorkbenchGitPeerTooltip";
 
 const unsubscribe = () => () => undefined;
 
@@ -46,9 +47,7 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
   const disabled = !available || !state || !peer || peer.state !== "current" || snapshot.busy !== null;
   const verb = action === "pull" ? "Pull" : "Send";
   const count = peer ? action === "pull" ? peer.behind : peer.ahead : 0;
-  const description = (mode: GitPeerSyncMode) => mode === "merge"
-    ? "Preserve both histories; merge on the receiving device only if needed."
-    : "Rebase unpublished incoming commits on the sending device, then fast-forward the receiver.";
+  const Icon = selected === "merge" ? GitMergeIcon : GitRebaseIcon;
   const transfer = (mode: GitPeerSyncMode) => {
     if (!disabled && state && peer) void state.transfer(action, peer, mode);
   };
@@ -64,15 +63,20 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
       })),
     } });
   };
-  return <span className="inline-flex shrink-0 items-center gap-0.5">
-    <PrimaryButton shape="compact" className={className} disabled={disabled} pendingHalo={busy}
-      title={!available ? "Reload the app database to enable sync preferences."
-        : `${verb} ${peer?.hostname ?? ""}: ${peer?.rootPath ?? ""}. ${description(selected)} Hold Shift for ${shift ? defaultMode : alternate}.`}
-      onContextMenu={openMenu}
-      onClick={event => transfer(event.shiftKey ? alternate : defaultMode)}>
-      {verb}{showCount ? ` ${count}` : ""} · {selected}{showHostname && peer ? ` · ${peer.hostname}` : ""}
-    </PrimaryButton>
-    <IconButton label={`${verb} mode`} size="compact" display="hover-border" disabled={disabled}
-      onClick={openMenu}><MoreVerticalIcon size={14} /></IconButton>
-  </span>;
+  return <Tooltip placement="top" interactive content={<WorkbenchGitPeerTooltip
+    key={`${location.daemonId}/${location.projectId}/${address.daemonId}/${address.projectId}/${snapshot.data?.branch}/${action}`}
+    location={location} peer={address} hostname={peer?.hostname ?? "peer"} branch={snapshot.data?.branch ?? null}
+    action={action} mode={selected} unavailable={!available
+      ? preferences.schemaVersion < appStateReleases.gitPeerSyncMode.version ? "App database reload needed" : "Loading project"
+      : peer?.state !== "current" ? "Device unavailable" : null}
+  />}>
+      <span className="inline-flex shrink-0">
+        <PrimaryButton shape="compact" className={className} disabled={disabled} pendingHalo={busy}
+          onContextMenu={openMenu}
+          onClick={event => transfer(event.shiftKey ? alternate : defaultMode)}>
+          <Icon size={14} className="mr-1.5 shrink-0" />
+          {verb}{showCount ? ` ${count}` : ""} · {selected}{showHostname && peer ? ` · ${peer.hostname}` : ""}
+        </PrimaryButton>
+      </span>
+    </Tooltip>;
 }

@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchBranchPositionController: own observed checkouts' branch positions against peer tracking refs,
- *   recounted whenever the checkout's refs move.
+ * - default WorkbenchBranchPositionController: own demanded branch positions and peer commit previews, refreshed by one checkout ref watcher.
  * - WorkbenchBranchPositionFact: one observation's freshness, failure and position.
  */
 import path from "node:path";
-import type { GitBranchPosition, GitPeerAddress } from "workbench-shared/workbench/git/git-peer-contracts";
+import type { GitBranchPosition, GitPeerAddress, GitPeerCommitsRequest } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import watchGitRefs from "./lib/workbench/git/git-ref-watch";
 import WorkbenchGitPeerTransport from "./lib/workbench/git/WorkbenchGitPeerTransport";
@@ -18,9 +17,7 @@ export interface WorkbenchBranchPositionFact {
 }
 
 interface Reader {
-  peers: readonly GitPeerAddress[];
-  fact: WorkbenchBranchPositionFact;
-  listener: () => void;
+  read(): Promise<void>;
   running: boolean;
   dirty: boolean;
 }
@@ -47,6 +44,18 @@ export default class WorkbenchBranchPositionController {
   }) {}
 
   observe(projectId: string, peers: readonly GitPeerAddress[], listener: () => void) {
+    const handle = this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).position(peers), listener);
+    return { read: (): WorkbenchBranchPositionFact => {
+      const { data, ...fact } = handle.read();
+      return { ...fact, position: data };
+    }, release: handle.release };
+  }
+
+  observeCommits(projectId: string, request: GitPeerCommitsRequest, listener: () => void) {
+    return this.observeValue(projectId, repository => new WorkbenchGitPeerTransport(repository).commits(request), listener);
+  }
+
+  private observeValue<Value>(projectId: string, load: (repository: WorkbenchGitRepository) => Promise<Value>, listener: () => void) {
     if (this.closed) throw new Error("Branch positions are reloading.");
     let checkout = this.checkouts.get(projectId);
     if (!checkout) {
@@ -64,13 +73,31 @@ export default class WorkbenchBranchPositionController {
         else stop();
       }).catch(error => this.options.warn(`Branch position watcher unavailable: ${message(error)}`));
     }
-    const reader: Reader = { peers, listener, running: false, dirty: false,
-      fact: { phase: "pending", failure: null, position: null } };
-    checkout.readers.add(reader);
     const owner = checkout;
+    type Fact = { phase: WorkspaceSourcePhase; failure: string | null; data: Value | null };
+    let fact: Fact = { phase: "pending", failure: null, data: null };
+    const reader: Reader = { running: false, dirty: false, read: async () => {
+      let next: Fact;
+      try {
+        const repository = await owner.repository;
+        if (!owner.readers.has(reader)) return;
+        next = repository
+          ? { phase: "current", failure: null, data: await load(repository) }
+          : { phase: "unavailable", failure: "This folder is not a Git checkout.", data: null };
+      } catch (error) {
+        const failure = message(error);
+        this.options.warn(`Branch history failed: ${failure}`);
+        next = { phase: fact.data ? "stale" : "failed", failure, data: fact.data };
+      }
+      if (!owner.readers.has(reader)) return;
+      fact = next;
+      try { listener(); }
+      catch (error) { this.options.warn(`Branch history observer failed: ${message(error)}`); }
+    } };
+    checkout.readers.add(reader);
     this.read(owner, reader);
     return {
-      read: () => reader.fact,
+      read: () => fact,
       release: () => {
         if (!owner.readers.delete(reader) || owner.readers.size) return;
         owner.stopWatch?.();
@@ -93,28 +120,14 @@ export default class WorkbenchBranchPositionController {
     return root ? await WorkbenchGitRepository.tryOpen(root) : null;
   }
 
-  /** One count at a time per reader; ref moves during a count rerun it once it lands. */
+  /** Ref moves during a read coalesce into one subsequent read. */
   private read(checkout: Checkout, reader: Reader) {
     if (reader.running) { reader.dirty = true; return; }
     reader.running = true;
     void (async () => {
       try { do {
         reader.dirty = false;
-        let next: WorkbenchBranchPositionFact;
-        try {
-          const repository = await checkout.repository;
-          next = repository
-            ? { phase: "current", failure: null, position: await new WorkbenchGitPeerTransport(repository).position(reader.peers) }
-            : { phase: "unavailable", failure: "This folder is not a Git checkout.", position: null };
-        } catch (error) {
-          const failure = message(error);
-          this.options.warn(`Branch position failed: ${failure}`);
-          next = { phase: reader.fact.position ? "stale" : "failed", failure, position: reader.fact.position };
-        }
-        if (!checkout.readers.has(reader)) return;
-        reader.fact = next;
-        try { reader.listener(); }
-        catch (error) { this.options.warn(`Branch position observer failed: ${message(error)}`); }
+        await reader.read();
       } while (reader.dirty && checkout.readers.has(reader)); }
       finally { reader.running = false; }
     })();

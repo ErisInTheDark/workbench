@@ -2,6 +2,8 @@
  * Exports:
  * - GitBranchNameSchema: a branch name safe to place under `refs/heads/` and peer tracking refs.
  * - GitPeerAddressSchema/GitPeerAddress: one folder on another daemon sharing a folder's logical project.
+ * - GitPeerCommitsRequestSchema/GitPeerCommitsRequest: directional preview or full-history demand.
+ * - GitPeerCommitSchema/GitPeerCommitsSchema/GitPeerCommits: transferable commit subjects from captured branch tips.
  * - GitBranchPositionSchema/GitBranchPosition: a checkout's branch, HEAD and counts against each requested peer's tracking ref.
  * - GitPeerStatusSchema/GitPeerStatus, WorkspaceGitPeersSchema/WorkspaceGitPeers: the app's peer rows for one folder.
  * - GitPeerTransferSchema/GitPeerTransfer: a browser Pull or Send between a folder and one peer.
@@ -34,6 +36,23 @@ export const GitBranchNameSchema = z.string().min(1).max(255)
 
 export const GitPeerAddressSchema = z.object({ daemonId: DaemonIdSchema, projectId: ProjectIdSchema }).strict();
 export type GitPeerAddress = z.infer<typeof GitPeerAddressSchema>;
+
+export const GitPeerCommitsRequestSchema = z.object({
+  peer: GitPeerAddressSchema,
+  branch: GitBranchNameSchema,
+  action: z.enum(["pull", "send"]),
+  all: z.boolean(),
+}).strict();
+export type GitPeerCommitsRequest = z.infer<typeof GitPeerCommitsRequestSchema>;
+export const GitPeerCommitSchema = z.object({ commit: sha, subject: z.string() }).strict();
+export const GitPeerCommitsSchema = z.object({
+  branch: GitBranchNameSchema,
+  head: sha.nullable(),
+  tip: sha,
+  total: count,
+  commits: z.array(GitPeerCommitSchema),
+}).strict();
+export type GitPeerCommits = z.infer<typeof GitPeerCommitsSchema>;
 
 export const GitBranchPositionSchema = z.object({
   /** Null while HEAD is detached. */

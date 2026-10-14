@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchGitPeerTransport: one checkout's side of a peer transfer: list held commits, stream a bundle of a
- *   branch's new commits, receive a bundle into the peer's tracking ref, read that ref, and measure the branch against peers.
+ *   branch's new commits, receive a bundle into the peer's tracking ref, and read directional counts and commit previews.
  * - GitPeerMissingBranchError: the sender has no branch of the requested name.
  */
 import { spawn } from "node:child_process";
@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { GitBranchPosition, GitPeerAddress } from "workbench-shared/workbench/git/git-peer-contracts";
+import type { GitBranchPosition, GitPeerAddress, GitPeerCommits, GitPeerCommitsRequest } from "workbench-shared/workbench/git/git-peer-contracts";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 export class GitPeerMissingBranchError extends Error {}
@@ -121,6 +121,29 @@ export default class WorkbenchGitPeerTransport {
   private async head() {
     try { return (await this.repository.run(["rev-parse", "-q", "--verify", "HEAD^{commit}"])).trim() || null; }
     catch { return null; }
+  }
+
+  async commits(request: GitPeerCommitsRequest): Promise<GitPeerCommits> {
+    await this.validBranch(request.branch);
+    const branch = (await this.repository.run(["symbolic-ref", "-q", "HEAD"])).trim();
+    if (branch !== `refs/heads/${request.branch}`) throw new Error("The selected branch changed.");
+    const head = await this.head();
+    const tip = await this.trackingTip(request.peer, request.branch);
+    if (!tip) throw new Error("The peer's branch has not been fetched yet.");
+    const include = request.action === "pull" ? tip : head;
+    const exclude = request.action === "pull" ? head : tip;
+    if (!include) return { branch: request.branch, head, tip, total: 0, commits: [] };
+    const range = [include, ...exclude ? ["--not", exclude] : [], "--"];
+    const total = Number((await this.repository.run(["rev-list", "--count", ...range])).trim());
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("Invalid peer commit count.");
+    const output = await this.repository.run(["log", "--date-order", "--format=%H%x00%s", "-z",
+      ...request.all ? [] : ["-3"], ...range]);
+    const fields = output.split("\0");
+    const commits: GitPeerCommits["commits"] = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      commits.push({ commit: fields[index]!, subject: fields[index + 1]! });
+    }
+    return { branch: request.branch, head, tip, total, commits };
   }
 
   async position(peers: readonly GitPeerAddress[]): Promise<GitBranchPosition> {

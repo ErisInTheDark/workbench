@@ -7,6 +7,7 @@ import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workb
 import { useGitPeerState, type WorkbenchGitPeerOutcome } from "../../../workbench/git/WorkbenchGitPeerState";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import PrimaryButton from "../../ui/PrimaryButton";
+import Tooltip from "../../ui/Tooltip";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListLabelClassName } from "../workbench-class-names";
 import { BotIcon, GitArcCleanClaimIcon, GitArcDirtyClaimIcon, GitGraphIcon } from "../workbench-icons";
 import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclosure";
@@ -44,23 +45,34 @@ function GitPeerRows ({ location, onAskAgent }: {
       const key = `${peer.daemonId}/${peer.projectId}`;
       const outcome = snapshot.outcome && `${snapshot.outcome.peer.daemonId}/${snapshot.outcome.peer.projectId}` === key
         ? snapshot.outcome : null;
-      if (!outcome && peer.state === "unsupported") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
-        Update Workbench on {peer.hostname} to sync
-      </p>;
-      if (!outcome && peer.state === "failed") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
-        Can't read {peer.hostname}
-      </p>;
+      if (!outcome && peer.state === "unsupported") return <Tooltip key={key} interactive content={peer.failure} enabled={Boolean(peer.failure)}>
+        <p className={`${PEER_ROW} m-0 text-fg/muted`}>
+          Update Workbench on {peer.hostname} to sync
+        </p>
+      </Tooltip>;
+      if (!outcome && peer.state === "failed") return <Tooltip key={key} interactive content={peer.failure} enabled={Boolean(peer.failure)}>
+        <p className={`${PEER_ROW} m-0 text-fg/muted`}>
+          Can't read {peer.hostname}
+        </p>
+      </Tooltip>;
       if (!outcome && (peer.state !== "current" || !peer.behind && snapshot.busy?.peerKey !== key)) return null;
       return <div key={key} className="space-y-1">
-        <div className={PEER_ROW} title={peer.rootPath}>
-          <span className="min-w-0 flex-1 truncate text-text">
-            {snapshot.busy?.peerKey === key ? `Syncing with ${peer.hostname}...`
-              : peer.state !== "current" ? `${peer.hostname} unavailable` : `${peer.behind} new on ${peer.hostname}`}
-          </span>
+        <div className={PEER_ROW}>
+          <Tooltip interactive content={<span className="break-all">{peer.rootPath}</span>}>
+            <span className="min-w-0 flex-1 truncate text-text">
+              {snapshot.busy?.peerKey === key ? `Syncing with ${peer.hostname}...`
+                : peer.state !== "current" ? `${peer.hostname} unavailable` : `${peer.behind} new on ${peer.hostname}`}
+            </span>
+          </Tooltip>
           <WorkbenchGitPeerTransferButton className={BUTTON} location={location} peer={peer} action="pull" />
         </div>
-        {outcome ? <div className={`${PEER_ROW} flex-wrap`} title={outcome.conflicts.join("\n") || undefined}>
-          <span className="min-w-0 flex-1 text-text" role="status">{outcome.reason}</span>
+        {outcome ? <div className={`${PEER_ROW} flex-wrap`}>
+          <Tooltip interactive enabled={outcome.conflicts.length > 0} content={<div className="max-w-80 space-y-1">
+            <div className="font-medium">Conflicting files</div>
+            {outcome.conflicts.map(path => <div key={path} className="break-all">{path}</div>)}
+          </div>}>
+            <span className="min-w-0 flex-1 text-text" role="status">{outcome.reason}</span>
+          </Tooltip>
           {outcome.progress !== "complete" ? <PrimaryButton className={BUTTON} shape="compact" tone="attention"
             onClick={() => onAskAgent(location.projectId, [{ kind: "updateIssue", text: blockedPrompt(outcome, branch) }])}>
             <BotIcon className="mr-1" size={14} />Ask agent

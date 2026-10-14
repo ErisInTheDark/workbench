@@ -212,6 +212,33 @@ function state(revision: number): WorkbenchClientStateResponse {
     } };
 }
 
+test("peer previews route first-three and full-history demand to the selected checkout and release both", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const peer = { daemonId: DaemonIdSchema.parse(randomUUID()), projectId: ProjectIdSchema.parse("peer") };
+  const location = { daemonId, projectId: ProjectIdSchema.parse("selected") };
+  const observed: object[] = [];
+  let released = 0;
+  const source = { id: daemonId, observe: (query: object) => {
+    observed.push(query);
+    return { getSnapshot: () => ({ phase: "failed", failure: "Older daemon", value: null }),
+      release: () => { released++; } };
+  } };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
+  for (const all of [false, true]) {
+    const subscriptionId = randomUUID();
+    const value = f.owner.observe({ subscriptionId, generation: 1,
+      query: { kind: "gitPeerCommits", location, peer, branch: "main", action: "pull", all } });
+    assert.equal(value.phase, "failed");
+    assert.equal(value.failure, "Older daemon");
+    assert.equal(value.kind, "gitPeerCommits");
+    f.owner.release({ subscriptionId, generation: 1 });
+  }
+  assert.deepEqual(observed, [false, true].map(all => ({
+    kind: "branchCommits", projectId: location.projectId, peer, branch: "main", action: "pull", all,
+  })));
+  assert.equal(released, 2);
+});
+
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
 async function fixture(
   context: TestContext,
