@@ -29,6 +29,27 @@ type ClaimChangeRequest =
   | { kind: "add"; paths: string[] }
   | { kind: "claims"; changes: GitArcClaimChanges };
 
+function claimSetDifference(left: readonly string[], right: readonly string[]) {
+  const rightPaths = new Set(right);
+  return [...new Set(left.filter(path => !rightPaths.has(path)))];
+}
+
+function formatClaimSetDifference(paths: readonly string[]) {
+  const shown = paths.slice(0, 10);
+  return `${shown.join(", ")}${paths.length > shown.length ? ` (+${paths.length - shown.length} more)` : ""}`;
+}
+
+function assertMatchingClaimSets(registryPaths: readonly string[], checkpointPaths: readonly string[]) {
+  const registryOnly = claimSetDifference(registryPaths, checkpointPaths);
+  const checkpointOnly = claimSetDifference(checkpointPaths, registryPaths);
+  if (!registryOnly.length && !checkpointOnly.length) return;
+  throw new Error(
+    "The active Git arc registry does not match its checkpoint claim set. "
+    + `registry-only: ${formatClaimSetDifference(registryOnly) || "(none)"}; `
+    + `checkpoint-only: ${formatClaimSetDifference(checkpointOnly) || "(none)"}.`,
+  );
+}
+
 export default class GitArcLifecycleController {
   private readonly proposals: GitArcProposalController;
 
@@ -119,10 +140,7 @@ export default class GitArcLifecycleController {
     const ownership = await ownershipController.project(current);
     const existing = ownership.activeClaims;
     const guards = ownership.guardClaims;
-    if (current.phase !== "resolved" && (
-      guards.length !== metadata.scopePaths.length
-      || guards.some((candidate, index) => candidate !== metadata.scopePaths[index])
-    )) throw new Error("The active Git arc registry does not match its checkpoint claim set.");
+    if (current.phase !== "resolved") assertMatchingClaimSets(guards, metadata.scopePaths);
     const additions = await partitionIgnoredGitArcPaths(repository, changes?.addPaths ?? []);
     const adoptions = await partitionIgnoredGitArcPaths(repository, changes?.adoptPaths ?? []);
     const removePaths = changes?.removePaths?.length ? repository.normalizePaths(changes.removePaths) : [];

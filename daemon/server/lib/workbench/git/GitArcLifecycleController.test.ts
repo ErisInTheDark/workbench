@@ -59,6 +59,31 @@ test("continuing an arc stored with a folder claim converts it to file claims", 
   assert.deepEqual((await controller.continueArc(identity)).scopePaths, ["src/one.test.ts"], "the converted arc stays consistent");
 });
 
+test("continuation reports real registry and checkpoint claim differences", async (context) => {
+  const fixture = await new GitTestFixtureCache().copyFresh(SRC_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const controller = new WorkbenchGitCheckpointController();
+  const lifecycle = new GitArcLifecycleController();
+  const registry = new GitArcRegistry(repository);
+  const identity = { cwd: fixture.root, harness: "codex" as const, threadId: "mismatch-owner" };
+  await controller.createAndStartPlan({ ...identity, intentName: "own source", paths: ["src/one.test.ts"] });
+  const current = await registry.find(identity);
+  assert.ok(current);
+  await registry.set({
+    ...current,
+    activeClaimedPaths: ["other.ts"],
+    claimedPaths: ["other.ts"],
+  }, current.checkpointCommit);
+
+  await assert.rejects(lifecycle.continue(identity), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /registry-only: other\.ts/u);
+    assert.match(error.message, /checkpoint-only: src\/one\.test\.ts/u);
+    return true;
+  });
+});
+
 test("strict addition reads only ownership before rejecting overlap and preserves claim mutation safeguards", async (context) => {
   const fixture = await new GitTestFixtureCache().copy(SRC_ARC_READY_FIXTURE);
   context.after(fixture.dispose);

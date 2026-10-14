@@ -13,9 +13,21 @@ import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
 
 const fixtures = new GitTestFixtureCache();
+const ORDERING_FIXTURE = {
+  commits: [{
+    files: {
+      "README.md": "read me\n",
+      "one.txt": "one\n",
+      "two.txt": "two\n",
+    },
+    message: "base",
+  }],
+  name: "claim-transfer-ordering",
+};
 type AdoptionOwner = WorkbenchGitCheckpointController & {
   adoptArc(input: {
     cwd: string;
+    selectedPaths?: string[];
     threadId: string;
     source: { harness: "codex"; threadId: string };
     transferStash?: boolean;
@@ -47,6 +59,31 @@ test("whole-source adoption keeps caller claims, pending proposals and source di
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths ?? [], []);
   assert.equal(await fs.readFile(path.join(cwd, "two.txt"), "utf8"), "child change\n");
   assert.ok((await controller.compare({ cwd, threadId: "parent" })).changes.some(change => change.path === "two.txt"));
+});
+
+test("adoption followed by continuation ignores claim serialisation order", async context => {
+  const fixture = await fixtures.copyFresh(ORDERING_FIXTURE);
+  context.after(() => fixture.dispose());
+  const cwd = fixture.root;
+  const controller = new WorkbenchGitCheckpointController() as AdoptionOwner;
+  await start(controller, cwd, "parent", ["one.txt"]);
+  await start(controller, cwd, "child", ["README.md"]);
+
+  await controller.adoptArc({
+    cwd,
+    selectedPaths: ["README.md"],
+    source: { harness: "codex", threadId: "child" },
+    threadId: "parent",
+  });
+
+  assert.equal((await controller.continueArc({ cwd, threadId: "parent" })).unchanged, true);
+  const extended = await controller.editArcClaims({
+    addPaths: ["two.txt"],
+    cwd,
+    inherit: true,
+    threadId: "parent",
+  });
+  assert.deepEqual(extended.addedClaims, ["two.txt"]);
 });
 
 test("adopted stash coexists with caller claims and restores without losing caller changes", async context => {
