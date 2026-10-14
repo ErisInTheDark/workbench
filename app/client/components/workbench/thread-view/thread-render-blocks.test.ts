@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and CLI calls with dedicated rows staying visible and ungrouped unless a label names them.
+ * No exports. Tests protect hidden control transport, final row counting, conversation boundaries across CLI and MCP, hidden turn-end replies, and dedicated CLI row visibility.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -7,7 +7,11 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { withWorkbenchInputState } from "workbench-shared/workbench/thread/thread-input-item";
 import { createWorkbenchAgentMessageOutput, createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
 import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/thread/thread-activated-skills";
-import { createWorkbenchQuestionnaireResponseInput } from "workbench-shared/workbench/thread/thread-recovery-message";
+import {
+  createWorkbenchQuestionnaireResponseInput,
+  createWorkbenchThreadRecoveryInput,
+  createWorkbenchUnfinishedTurnInput,
+} from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
   buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
@@ -45,7 +49,7 @@ function steer(id: string, status: "pending" | "sent" | "failed" | "interrupted"
 }
 const rows = (items: ThreadItem[]) => buildRenderableBlocks(items).flatMap(block => getWorkedBlockRows(block));
 
-test("questionnaire and skill transport with no display input creates no render block", () => {
+test("hidden Workbench transport creates no render block without hiding ordinary tag mentions", () => {
   const activated = createWorkbenchActivatedSkillsInput('<skill filename="example">Follow the workflow.</skill>');
   const questionnaireResponse = createWorkbenchQuestionnaireResponseInput({
     answers: { route: { answers: ["/auto"] } },
@@ -59,12 +63,20 @@ test("questionnaire and skill transport with no display input creates no render 
 
   assert.deepEqual(buildRenderableBlocks([transport]), []);
   assert.deepEqual(buildRenderableBlocks([{ ...transport, content: [] }]), []);
+  for (const [id, content] of [
+    ["resume", createWorkbenchThreadRecoveryInput()],
+    ["unfinished", createWorkbenchUnfinishedTurnInput()],
+  ] as const) {
+    assert.deepEqual(buildRenderableBlocks([{ ...transport, content, id }]), [], id);
+  }
   assert.deepEqual(
     buildRenderableBlocks([{ ...transport, content: [...transport.content, { text: "visible", text_elements: [], type: "text" }] }])
       .flatMap(getRenderableBlockItems)
       .map(({ id }) => id),
     [transport.id],
   );
+  const mention = user("show `<wb:resume />` literally");
+  assert.deepEqual(buildRenderableBlocks([mention]).flatMap(getRenderableBlockItems).map(({ id }) => id), [mention.id]);
 });
 
 test("native file attempts share file sequences without merging identities or crossing narrative", () => {

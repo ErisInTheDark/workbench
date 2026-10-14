@@ -1,12 +1,15 @@
 /*
  * Exports:
- * - unwrapWorkbenchSteerDisplayText/unwrapWorkbenchSteerDisplayInput: remove every registered UI-visible Workbench steer wrapper while preserving transport text. Keywords: steer, display, unwrap, registry.
+ * - unwrapWorkbenchSteerDisplayText/unwrapWorkbenchSteerDisplayInput: remove hidden Workbench control input and unwrap UI-visible steer envelopes.
  */
 
 import type { UserInput } from "./workbench-thread-items.ts";
 import { stripWorkbenchActivatedSkillsInput } from "./thread-activated-skills.ts";
 import { WORKBENCH_AGENT_MESSAGE_TAG_WRAPPER } from "./thread-agent-message.ts";
-import { stripWorkbenchQuestionnaireResponseInput } from "./thread-recovery-message.ts";
+import {
+  isWorkbenchThreadRecoveryInput,
+  stripWorkbenchQuestionnaireResponseInput,
+} from "./thread-recovery-message.ts";
 import { WORKBENCH_APPROVAL_NOTE_TAG_WRAPPER } from "./thread-user-input-requests.ts";
 
 interface WorkbenchSteerDisplayWrapper {
@@ -26,7 +29,9 @@ export function unwrapWorkbenchSteerDisplayText(value: string) {
 }
 
 export function unwrapWorkbenchSteerDisplayInput(input: readonly UserInput[]): UserInput[] {
-  return stripWorkbenchQuestionnaireResponseInput(stripWorkbenchActivatedSkillsInput(input)).map((item) => {
+  const displayInput = stripWorkbenchQuestionnaireResponseInput(stripWorkbenchActivatedSkillsInput(input));
+  if (isWorkbenchThreadRecoveryInput(displayInput)) return [];
+  return displayInput.map((item) => {
     if (item.type !== "text") return item;
     const text = unwrapWorkbenchSteerDisplayText(item.text);
     return text === item.text ? item : { ...item, text, text_elements: [] };
