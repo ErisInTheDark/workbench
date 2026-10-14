@@ -232,7 +232,7 @@ function renderHomeThreads({
         createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
           actions,
           activeDragPayload,
-          createProject: projects[0]!,
+          createTarget: { location: null, project: projects[0]! },
           folderSidebars: folderSidebars(projectThreadSidebars, displayOrder),
           currentTarget: null,
           onCreateThread: () => undefined,

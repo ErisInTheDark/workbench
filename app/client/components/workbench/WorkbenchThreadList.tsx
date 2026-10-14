@@ -17,6 +17,7 @@ import {
   ProjectIdSchema, ProjectThreadDisplayKeySchema, type FolderId, type ProjectThreadDisplayKey,
 } from "workbench-shared/workbench/identity";
 import { createHomeThreadRoute, createLogicalThreadRoute, isWorkbenchThreadTargetSelected } from "workbench-shared/workbench/navigation/workbench-route";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type {
   WorkspaceThreadPlacement, WorkspaceThreadPlacementItem,
 } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -177,7 +178,7 @@ export default function WorkbenchThreadList ({
   attachedDaemonId = null,
   canCreateThread,
   controls,
-  createProject = null,
+  createTarget = null,
   createThreadLabel = "Create new thread",
   currentTarget,
   folderSidebars,
@@ -201,7 +202,10 @@ export default function WorkbenchThreadList ({
   attachedDaemonId?: string | null;
   canCreateThread?: boolean;
   controls?: WorkbenchControls | null;
-  createProject?: WorkbenchProjectOption | WorkbenchLogicalProject | null;
+  createTarget?: {
+    location: ProjectLocationReference | null;
+    project: WorkbenchProjectOption | WorkbenchLogicalProject;
+  } | null;
   createThreadLabel?: string;
   currentTarget: WorkbenchThreadTarget | null;
   /** Folder-sidebar lists (no app presentation) are built from these sidebars; logical lists read the listing. */
@@ -219,7 +223,10 @@ export default function WorkbenchThreadList ({
     target: WorkbenchThreadTarget,
     reference: WorkbenchThreadAddressedFeedback,
   ) => Promise<void>;
-  onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
+  onCreateThread: (ownerProjectId: string, options?: {
+    folderId?: FolderId;
+    location?: ProjectLocationReference;
+  }) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
   onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
@@ -469,7 +476,7 @@ export default function WorkbenchThreadList ({
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();
-          onCreateThread(item.projectId, item.folder.folderId);
+          onCreateThread(item.projectId, { folderId: item.folder.folderId });
         }}
         onPointerDown={(event) => event.stopPropagation()}
       >
@@ -584,12 +591,12 @@ export default function WorkbenchThreadList ({
   );
 
   const resolvedCreateProject =
-    createProject ?? projectsById.get(selectedOwnerProjectId) ?? null;
+    createTarget?.project ?? projectsById.get(selectedOwnerProjectId) ?? null;
   const canCreate = canCreateThread ?? Boolean(client.mounted && (!client.mounted.presentationClient
     || resolvedCreateProject && "matchKey" in resolvedCreateProject
     && resolvedCreateProject.locations.some(location => location.project)));
-  const createLocation = resolvedCreateProject && "matchKey" in resolvedCreateProject
-    ? resolvedCreateProject.locations.find(location => location.project)?.target ?? null : null;
+  const createLocation = createTarget?.location ?? (resolvedCreateProject && "matchKey" in resolvedCreateProject
+    ? resolvedCreateProject.locations.find(location => location.project)?.target ?? null : null);
   const createProjectId = createLocation?.projectId ?? resolvedCreateProject?.id ?? "";
   const blankThreadSelected = resolvedCreateProject?.id === selectedOwnerProjectId
     && isWorkbenchThreadTargetSelected({ kind: "new" }, currentTarget);
@@ -608,7 +615,7 @@ export default function WorkbenchThreadList ({
         onClick={(event) => {
           if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
           event.preventDefault();
-          onCreateThread(createProjectId);
+          onCreateThread(createProjectId, createLocation ? { location: createLocation } : undefined);
         }}
         onPointerDown={(event) => {
           event.stopPropagation();

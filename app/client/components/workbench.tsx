@@ -1418,15 +1418,24 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
   const showFullBleedMainView = showMosaicView;
-  const createThreadFromSidebar = useCallback((ownerProjectId: string, folderId?: FolderId) => {
+  const createThreadFromSidebar = useCallback((ownerProjectId: string, options?: {
+    folderId?: FolderId;
+    location?: ProjectLocationReference;
+  }) => {
     if (showMosaicView || !controls) return;
-    const target = folderId ? { folderId, kind: "new" as const } : { kind: "new" as const };
+    const target = options?.folderId
+      ? { folderId: options.folderId, kind: "new" as const }
+      : { kind: "new" as const };
     if (workbenchClient.mounted?.presentationClient) {
       if (!logicalProjects?.length) {
         setSelectionError("Project identities are not ready yet.");
         return;
       }
-      const selected = route.logical?.projectId
+      const selected = options?.location
+        ? logicalProjects.find(project => project.locations.some(location =>
+          location.target.daemonId === options.location?.daemonId
+          && location.target.projectId === options.location.projectId))
+        : route.logical?.projectId
         ? logicalProjects.find(project => project.id === route.logical?.projectId)
         : logicalProjects.find(project => project.id === ownerProjectId)
           ?? logicalProjects.find(project => project.locations.some(location =>
@@ -1436,11 +1445,12 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             location.target.projectId === ownerProjectId))
           ?? selectedLogicalProjects[0];
       if (selected) {
-        const location = route.logical?.projectId === selected.id ? route.logical.location
+        const location = options?.location
+          ?? (route.logical?.projectId === selected.id ? route.logical.location
             ?? selected.locations.find(item => item.project)?.target
             ?? selected.locations[0]?.target ?? null
           : selected.locations.find(item => item.project)?.target
-            ?? selected.locations[0]?.target ?? null;
+            ?? selected.locations[0]?.target ?? null);
         if (!location) {
           setSelectionError("No daemon folder for this project is available.");
           return;

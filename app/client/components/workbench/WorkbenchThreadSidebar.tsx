@@ -21,7 +21,7 @@ import WorkbenchThreadList from "./WorkbenchThreadList";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import { useThreads } from "./use-threads";
 import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActions";
-import { resolveSidebarCreateProject } from "./workbench-sidebar-create-project";
+import { resolveSidebarCreateTarget } from "./workbench-sidebar-create-project";
 
 function findRow(
   logicalProject: WorkbenchLogicalProject,
@@ -65,7 +65,10 @@ interface WorkbenchThreadSidebarProps {
     reference: WorkbenchThreadAddressedFeedback,
   ) => Promise<void>;
   onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
-  onCreateThread: (ownerProjectId: string, folderId?: FolderId) => void;
+  onCreateThread: (ownerProjectId: string, options?: {
+    folderId?: FolderId;
+    location?: ProjectLocationReference;
+  }) => void;
   onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: ProjectId | "";
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
@@ -109,8 +112,9 @@ export default memo(function WorkbenchThreadSidebar({
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
   const ownerProjectId = logicalProject?.id ?? projectId;
   const selection = selectedProjectIds ?? (ownerProjectId ? [ownerProjectId] : []);
-  const createProject = resolveSidebarCreateProject({
-    createProjectId, logicalProject, logicalProjects, projects, selectedOwnerProjectId, selectedProjectIds: selection,
+  const createTarget = resolveSidebarCreateTarget({
+    createProjectId, logicalProject, logicalProjects, presentation, projects, selectedOwnerProjectId,
+    selectedProjectIds: selection,
   });
 
   const errorText = useThreads.sidebarErrors(selection);
@@ -140,7 +144,7 @@ export default memo(function WorkbenchThreadSidebar({
             ? Boolean(client.mounted && (selectedLocation || logicalProject.locations.some(location => location.project)))
             : undefined,
           controls,
-          createProject,
+          createTarget,
           currentTarget,
           // Logical lists without one selected project use the list's owner-qualified row hrefs.
           getThreadHref: logicalProject ? (target) => {
