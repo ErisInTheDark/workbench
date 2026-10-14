@@ -24,7 +24,6 @@ import { createReloadableNodeModuleLoader } from "./reloadable-node-loader";
 import ReloadableNodeHost from "./ReloadableNodeHost";
 import type { WorkbenchHardReloadNotification } from "./WorkbenchDaemonReloadController";
 import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
-import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
@@ -81,7 +80,6 @@ const reportDiagnostic = (diagnostic: DaemonDiagnosticMessage["diagnostic"]) => 
 };
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
-const threadTransitionCoordinator = new WorkbenchThreadTransitionCoordinator();
 let featureHost: ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
 function createFeatureHost(endpoint: WorkbenchDaemonEndpoint) {
   return new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>(
@@ -295,7 +293,6 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonPr
       },
       label,
     ),
-    threadTransitions: threadTransitionCoordinator,
   };
 }
 

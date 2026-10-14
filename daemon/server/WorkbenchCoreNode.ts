@@ -128,6 +128,7 @@ function createWorkbenchCoreFeature(
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
+  threadTransitions: DaemonRuntimeObjects["threadTransitions"],
   /** A fresh daemon process: no turn a previous process left running is owned here unless its provider says so. */
   coldStart: boolean,
   initialCatalog?: WorkbenchProjectStartup,
@@ -153,7 +154,7 @@ function createWorkbenchCoreFeature(
     readCatalog: () => projectCatalog.readCatalog(),
     readProjectSnapshot: (projectId) => projectSnapshot.readProjectSnapshot(projectId),
   });
-  const worktreeGitTransitions = createWorktreeGitTransitions(context.threadTransitions);
+  const worktreeGitTransitions = createWorktreeGitTransitions(threadTransitions);
   let threadState: WorkbenchThreadStateFeature | null = null;
   /** Compaction and todos are wired before thread state exists; their facts reach the index once it does. */
   let threadSummaries: WorkbenchThreadSummaryIndex | null = null;
@@ -567,7 +568,7 @@ function createWorkbenchCoreFeature(
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
     transitions: worktreeGitTransitions,
-    locks: context.threadTransitions,
+    locks: threadTransitions,
     pruneThreadVis: threadIds => vis.prune(threadIds),
   });
   const threadStateController = threadState.controller;
@@ -1068,6 +1069,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       get("threadIdentity"),
       get("transcriptIdentity"),
       get("turnRecovery"),
+      get("threadTransitions"),
       mode === "initial",
       isReplacing("server:database") ? undefined : reloadState?.projectStartup,
       reloadState?.approvals,
@@ -1080,7 +1082,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   entries: [path.join(__dirname, "lib", "workbench", "git", "git-process-worker-bootstrap.mjs")],
   lifecycle: "atomic",
   provides: WORKBENCH_CORE_FEATURE_KEYS,
-  requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery"],
+  requires: ["database", "commandApprovals", "reloadDirt", "transcript", "threadIdentity", "transcriptIdentity", "turnRecovery", "threadTransitions"],
   safeAll: true,
   scope: "server:core",
 });

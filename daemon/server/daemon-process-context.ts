@@ -8,7 +8,6 @@ import type { WorkbenchBrowseProjectIdResolver, WorkbenchBrowseProjectResolver }
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import type { WorkbenchThreadStateSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchHardReloadOptions } from "./WorkbenchDaemonReloadController";
-import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestController";
@@ -56,5 +55,4 @@ export interface DaemonProcessContext {
   refreshWorkbenchPromptFiles(): Promise<void>;
   reportDiagnostic(diagnostic: DaemonDiagnosticMessage["diagnostic"]): void;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;
-  threadTransitions: WorkbenchThreadTransitionCoordinator;
 }

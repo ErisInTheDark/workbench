@@ -2,6 +2,7 @@
  * Exports:
  * - TransitionLeaseUpgradeError: a flow holding a read lease asked for a write lease on the same key.
  * - TransitionLeaseDeadlockError: waiting for a lease would close a wait cycle among leases.
+ * - TransitionLeaseHandoff: live lock table and flow context passed to the next reload generation (shape changes must stay additive).
  * - TransitionLeaseSnapshot: per-key holders and waiters with kind, age and acquisition site, for diagnostics.
  * - default WorkbenchThreadTransitionCoordinator: deadlock-free, async-context-aware shared reads and exclusive writes by stable keys across reload generations.
  */
@@ -33,6 +34,16 @@ interface LeaseWaiter {
 interface KeyState {
   readonly holders: Set<LeaseScope>;
   readonly queue: LeaseWaiter[];
+}
+
+/**
+ * The live lock table and flow context, handed from one generation to the next. Both are the same objects, never copies:
+ * a retiring generation's holders and waiters keep excluding, releasing and reentering against its successor.
+ */
+export interface TransitionLeaseHandoff {
+  readonly version: 1;
+  readonly states: Map<string, KeyState>;
+  readonly context: AsyncLocalStorage<LeaseScope>;
 }
 
 export interface TransitionLeaseSnapshot {
@@ -74,17 +85,20 @@ function conflicts(left: LeaseKind, right: LeaseKind) {
 }
 
 export default class WorkbenchThreadTransitionCoordinator {
-  private readonly states = new Map<string, KeyState>();
-  private readonly context = new AsyncLocalStorage<LeaseScope>();
+  private readonly states: Map<string, KeyState>;
+  private readonly context: AsyncLocalStorage<LeaseScope>;
   private readonly warn: (message: string) => void;
   private readonly schedule: (callback: () => void, delayMs: number) => () => void;
   private readonly now: () => number;
 
   constructor(options: {
+    initialState?: TransitionLeaseHandoff;
     warn?: (message: string) => void;
     schedule?: (callback: () => void, delayMs: number) => () => void;
     now?: () => number;
   } = {}) {
+    this.states = options.initialState?.states ?? new Map();
+    this.context = options.initialState?.context ?? new AsyncLocalStorage();
     this.warn = options.warn ?? (message => console.warn(`[transition-leases] ${message.slice(0, 4000)}`));
     this.schedule = options.schedule ?? ((callback, delayMs) => {
       const timer = setTimeout(callback, delayMs);
@@ -118,6 +132,11 @@ export default class WorkbenchThreadTransitionCoordinator {
   /** Whether the calling flow already holds the key, so it may reenter without waiting. */
   holds(key: string) {
     return this.heldKind(this.context.getStore() ?? null, key.trim()) !== null;
+  }
+
+  /** The live table for the next generation; this instance keeps serving its retiring dependants until they finish. */
+  detachForReload(): TransitionLeaseHandoff {
+    return { version: 1, states: this.states, context: this.context };
   }
 
   snapshot(): TransitionLeaseSnapshot[] {

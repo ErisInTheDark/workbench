@@ -16,7 +16,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   scope: "server:update", safeAll: true,
   description: "Reload installation update prediction, observation and pull admission.",
   provides: ["installationUpdate"],
-  requires: ["projectCatalog", "projectSnapshot", "daemonRequests", "reloadDirt"],
+  requires: ["projectCatalog", "projectSnapshot", "daemonRequests", "reloadDirt", "threadTransitions"],
   create(context, { get, run }) {
     const catalog = get("projectCatalog");
     const snapshots = get("projectSnapshot");
@@ -25,7 +25,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       .find(project => path.relative(projectRoot, path.resolve(project.rootPath)) === "")?.id ?? null;
     const controller = new WorkbenchInstallationUpdateController({
       repoRoot: projectRoot, dataRoot: context.dataRootPath,
-      transitions: createWorktreeGitTransitions(context.threadTransitions),
+      transitions: createWorktreeGitTransitions(get("threadTransitions")),
       projectId,
       observe: async changed => {
         const id = await projectId();

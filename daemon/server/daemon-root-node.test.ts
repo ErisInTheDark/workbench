@@ -66,7 +66,8 @@ test("the root knows only direct roots and parents declare every dependant", () 
   for (const root of graph.roots) assert.equal(root.requires.length, 0, `${root.scope} requires an absent parent`);
   const { nodes, parents } = flattenParents(graph.roots);
 
-  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:turns"]);
+  assert.deepEqual([...parents.get("server:core")!].sort(), ["server:database", "server:leases", "server:turns"]);
+  assert.equal(parents.get("server:update")!.has("server:leases"), true);
   assert.equal(parents.has("server:cli"), false);
   assert.deepEqual(nodes.get("server:cli")!.provides, []);
   assert.deepEqual(nodes.get("server:cli")!.requires, []);

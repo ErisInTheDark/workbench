@@ -315,6 +315,8 @@ export interface DaemonRuntimeObjects {
   stats: WorkbenchStatsController;
   threadGit: WorkbenchThreadGitFeature;
   threadIdentity: WorkbenchThreadIdentityController;
+  /** Git transition and thread-state lock manager; its live table survives reloads through handoff. */
+  threadTransitions: import("./WorkbenchThreadTransitionCoordinator").default;
   transcriptIdentity: WorkbenchTranscriptIdentityController;
   threadState: WorkbenchThreadStateFeature;
   transcript: DaemonTranscriptRegistration;

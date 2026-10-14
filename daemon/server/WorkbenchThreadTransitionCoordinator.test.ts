@@ -192,6 +192,29 @@ test("a flow reenters a key it holds even when a writer queued in between", asyn
   assert.deepEqual(events.slice(-2), ["nested write", "read under write"]);
 });
 
+test("a reloaded coordinator keeps the retiring generation's leases exclusive and reentrant", async () => {
+  const retiring = new WorkbenchThreadTransitionCoordinator();
+  const held = gate();
+  const inside = gate();
+  const events: string[] = [];
+  let successor!: WorkbenchThreadTransitionCoordinator;
+  const oldWrite = retiring.run("repo", async () => {
+    inside.open();
+    await held.promise;
+    await successor.read("repo", async () => { events.push("old flow reentered through successor"); });
+    events.push("old write done");
+  });
+  await inside.promise;
+  successor = new WorkbenchThreadTransitionCoordinator({ initialState: retiring.detachForReload() });
+  const newRead = successor.read("repo", async () => { events.push("new read"); });
+  await settle();
+  assert.deepEqual(events, [], "The successor must wait for the retiring generation's write");
+  held.open();
+  await Promise.all([oldWrite, newRead]);
+  assert.deepEqual(events, ["old flow reentered through successor", "old write done", "new read"]);
+  assert.deepEqual(successor.snapshot(), []);
+});
+
 test("upgrading a held read to a write fails fast instead of waiting forever", async () => {
   const coordinator = new WorkbenchThreadTransitionCoordinator();
   await assert.rejects(coordinator.read("repo", async () => {

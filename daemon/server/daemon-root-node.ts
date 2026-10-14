@@ -21,6 +21,7 @@ const graph = (() => {
     const graph = defineReloadableNodeGraph<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>([
       WorkbenchAgentCliNode,
       require("./WorkbenchTurnLifecycleNode").default,
+      require("./WorkbenchTransitionLeaseNode").default,
       require("./WorkbenchDatabaseNode").default,
       require("./CodexLifecycleNode").default,
       require("./CodexExecServerNode").default,
