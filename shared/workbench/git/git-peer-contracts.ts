@@ -6,7 +6,7 @@
  * - GitPeerCommitSchema/GitPeerCommitsSchema/GitPeerCommits: transferable commit subjects from captured branch tips.
  * - GitBranchPositionSchema/GitBranchPosition: a checkout's branch, HEAD and counts against each requested peer's tracking ref.
  * - GitPeerStatusSchema/GitPeerStatus, WorkspaceGitPeersSchema/WorkspaceGitPeers: the app's peer rows for one folder.
- * - GitPeerTransferSchema/GitPeerTransfer: a browser Pull or Send between a folder and one peer.
+ * - GitPeerTransferSchema/GitPeerTransfer: a browser Pull or Send, including fast-forward-only intent.
  * - GitPeerSyncModeSchema/GitPeerSyncMode: user-selected merge or sender-side rebase policy.
  * - GitPeerTransferResultSchema/GitPeerTransferResult: complete or device-specific interrupted transfer.
  * - GitPeerIntegrationSnapshotSchema/GitPeerIntegrationSnapshot: inspected receiver and incoming tips with ancestry counts.
@@ -91,13 +91,14 @@ export type WorkspaceGitPeers = z.infer<typeof WorkspaceGitPeersSchema>;
 
 export const GitPeerSyncModeSchema = z.enum(["merge", "rebase"]);
 export type GitPeerSyncMode = z.infer<typeof GitPeerSyncModeSchema>;
+const transferMode = GitPeerSyncModeSchema.or(z.literal("fastForward"));
 
 /** `pull` brings the peer's commits into `location`; `send` has the peer pull from `location`. */
 export const GitPeerTransferSchema = z.object({
   action: z.enum(["pull", "send"]),
   location: ProjectLocationReferenceSchema,
   peer: GitPeerAddressSchema,
-  mode: GitPeerSyncModeSchema,
+  mode: transferMode,
 }).strict();
 export type GitPeerTransfer = z.infer<typeof GitPeerTransferSchema>;
 
@@ -119,7 +120,7 @@ export type GitPeerIntegrationSnapshot = z.infer<typeof GitPeerIntegrationSnapsh
 export const GitPeerTransferResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("current") }).strict(),
   z.object({
-    kind: z.literal("applied"), mode: GitPeerSyncModeSchema, fromSha: sha, toSha: sha,
+    kind: z.literal("applied"), mode: transferMode, fromSha: sha, toSha: sha,
     warnings: z.array(z.string().max(512)),
   }).strict(),
   z.object({

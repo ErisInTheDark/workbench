@@ -8,7 +8,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  GitPeerTransferResultSchema, type GitPeerAddress, type GitPeerStatus, type WorkspaceGitPeers, type GitPeerSyncMode,
+  GitPeerTransferResultSchema, type GitPeerAddress, type GitPeerStatus, type WorkspaceGitPeers, type GitPeerTransfer,
   type GitPeerTransferResult,
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -20,7 +20,7 @@ import type { WorkspaceQueryHandle } from "../app/WorkbenchWorkspaceClient";
 export interface WorkbenchGitPeerOutcome {
   peer: GitPeerStatus;
   action: "pull" | "send";
-  mode: GitPeerSyncMode;
+  mode: GitPeerTransfer["mode"];
   location: GitPeerAddress | null;
   progress: Extract<GitPeerTransferResult, { kind: "blocked" }>["progress"] | "complete";
   reason: string;
@@ -29,7 +29,7 @@ export interface WorkbenchGitPeerOutcome {
 
 export interface WorkbenchGitPeerSnapshot {
   data: WorkspaceGitPeers | null;
-  busy: { peerKey: string; action: "pull" | "send"; mode: GitPeerSyncMode } | null;
+  busy: { peerKey: string; action: "pull" | "send"; mode: GitPeerTransfer["mode"] } | null;
   outcome: WorkbenchGitPeerOutcome | null;
 }
 
@@ -82,7 +82,7 @@ export default class WorkbenchGitPeerState {
     return () => { this.listeners.delete(listener); };
   };
 
-  async transfer(action: "pull" | "send", peer: GitPeerStatus, mode: GitPeerSyncMode) {
+  async transfer(action: "pull" | "send", peer: GitPeerStatus, mode: GitPeerTransfer["mode"]) {
     if (this.snapshot.busy) return;
     this.publish({ ...this.snapshot, busy: { peerKey: peerKey(peer), action, mode }, outcome: null });
     let outcome: WorkbenchGitPeerOutcome | null = null;

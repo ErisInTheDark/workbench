@@ -2,13 +2,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { GitPeerAddress, GitPeerSyncMode } from "workbench-shared/workbench/git/git-peer-contracts";
+import type { GitPeerAddress, GitPeerTransfer } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import Disclosure from "../../ui/Disclosure";
 import { ThreadCommitRow } from "../thread-view/ThreadCheckpointCommitCard";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
-import { GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
+import { GitFastForwardIcon, GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
 
 export default function WorkbenchGitPeerTooltip({ location, peer, hostname, branch, action, mode, unavailable }: {
   location: ProjectLocationReference;
@@ -16,7 +16,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
   hostname: string;
   branch: string | null;
   action: "pull" | "send";
-  mode: GitPeerSyncMode;
+  mode: GitPeerTransfer["mode"];
   unavailable: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -32,7 +32,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
   const full = useWorkspaceObservation(workspace, fullQuery);
   const data = snapshot.value?.data;
   const remaining = full.value?.data;
-  const Icon = mode === "merge" ? GitMergeIcon : GitRebaseIcon;
+  const Icon = mode === "fastForward" ? GitFastForwardIcon : mode === "merge" ? GitMergeIcon : GitRebaseIcon;
   const row = (commit: NonNullable<typeof data>["commits"][number]) => <ThreadCommitRow key={commit.commit}
     summary={{ title: commit.subject, committedSha: commit.commit, changes: null }} />;
   const failure = unavailable ?? (!branch ? "Branch unavailable"
@@ -40,7 +40,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
   return <div className="w-[min(26rem,80vw)]">
     <div className="mb-2 flex items-center gap-2 font-medium">
       <Icon size={16} />
-      <span>{mode === "merge" ? "Merge" : "Rebase"} {action === "pull" ? "from" : "to"} {hostname}</span>
+      <span>{mode === "fastForward" ? "Fast-forward" : mode === "merge" ? "Merge" : "Rebase"} {action === "pull" ? "from" : "to"} {hostname}</span>
     </div>
     {failure ? <p className="m-0 text-fg/muted">{failure}</p>
       : !data ? <div aria-label="Loading commits">

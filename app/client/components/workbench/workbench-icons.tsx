@@ -66,7 +66,7 @@
  * - GitArcCleanClaimIcon/GitArcDirtyClaimIcon: clean and dirty claim glyphs.
  * - GitArcWaitIcon, with SquareXIcon/GitArcConflictIcon: waiting and conflict glyphs.
  * - GitGraphIcon: sidebar Git section graph glyph.
- * - GitMergeIcon/GitRebaseIcon: device sync history modes.
+ * - GitMergeIcon/GitRebaseIcon/GitFastForwardIcon: device sync history modes.
  * - ShieldQuestionIcon/ShieldCheckIcon/ShieldCogCornerIcon/ShieldMinusIcon: tool approval requested, approved, auto-approved and denied glyphs.
  * - ShieldAlertIcon: skip-approvals mode glyph.
  * - ComputerIcon: daemon project glyph.
@@ -139,6 +139,18 @@ export function GitRebaseIcon(props: IconProps) {
     <path d="m16 9.5-3.452 6.347A4 4 0 019.017 18H6.024l3-3" />
     <path d="M18 9v11.997" /><path d="M6 9v3.5" /><path d="m9 21-3-3" />
     <circle cx="18" cy="6" r="3" /><circle cx="6" cy="6" r="3" />
+  </OutlinedIcon>;
+}
+
+export function GitFastForwardIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M14.961 20a4 4 0 01-2.943-1.334L9 16" />
+    <path d="M18 16v1a3 3 0 01-3 3" />
+    <path d="M6 18v3" />
+    <path d="M9 9 6 6" />
+    <path d="M9.007 3 6 6h7.973A4 4 0 0118 10" />
+    <circle cx="18" cy="13" r="3" />
+    <circle cx="6" cy="15" r="3" />
   </OutlinedIcon>;
 }
 

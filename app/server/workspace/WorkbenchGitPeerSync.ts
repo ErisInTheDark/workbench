@@ -124,6 +124,9 @@ export default class WorkbenchGitPeerSync {
       const destination = await this.relay.inspect(receiver, sender, branch);
       if (destination.incoming !== incoming) return blocked("The sending branch changed during inspection; refresh and try again.");
       if (!destination.behind) return { kind: "current" };
+      if (input.mode === "fastForward" && destination.ahead) {
+        return blocked("Branches have diverged; choose merge or rebase.");
+      }
 
       affected = sender;
       const sent = await this.relay.fetch(receiver, sender, branch);

@@ -9,7 +9,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, type DaemonId } from "workbench-shared/workbench/identity";
-import type { GitBranchPosition } from "workbench-shared/workbench/git/git-peer-contracts";
+import { GitPeerTransferSchema, type GitBranchPosition } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { DaemonWorkspaceQuery, WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
 import WorkbenchGitPeerRelay, { GitPeerUnsupportedError, type GitPeerLocation } from "./WorkbenchGitPeerRelay";
 import WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
@@ -148,6 +148,39 @@ async function checkouts(t: test.TestContext) {
   };
   return { roots, git, write, commit, local, incoming, relay, observe };
 }
+
+test("fast-forward pulls refuse divergence without changing either checkout", async t => {
+  const f = await checkouts(t);
+  let integrations = 0;
+  const result = await f.observe({
+    fetch: (...args) => f.relay.fetch(...args),
+    inspect: (...args) => f.relay.inspect(...args),
+    integrate: (...args) => {
+      integrations++;
+      return f.relay.integrate(...args);
+    },
+  }).transfer(GitPeerTransferSchema.parse({
+    action: "pull", location: own, peer, mode: "fastForward",
+  }));
+  assert.equal(result.kind, "blocked");
+  if (result.kind === "blocked") assert.equal(result.progress, "none");
+  assert.equal(integrations, 0);
+  assert.equal(await f.git(desktop, "rev-parse", "HEAD"), f.local);
+  assert.equal(await f.git(server, "rev-parse", "HEAD"), f.incoming);
+});
+
+test("fast-forward pulls advance only the receiver to the existing sender commit", async t => {
+  const f = await checkouts(t);
+  await f.git(server, "fetch", f.roots.get(desktop)!, "main");
+  await f.git(server, "merge", "--no-edit", "FETCH_HEAD");
+  const incoming = await f.git(server, "rev-parse", "HEAD");
+  const result = await f.observe().transfer(GitPeerTransferSchema.parse({
+    action: "pull", location: own, peer, mode: "fastForward",
+  }));
+  assert.equal(result.kind, "applied");
+  assert.equal(await f.git(desktop, "rev-parse", "HEAD"), incoming);
+  assert.equal(await f.git(server, "rev-parse", "HEAD"), incoming);
+});
 
 test("rebase pulls rewrite only the sender and fast-forward the published receiver", async t => {
   const f = await checkouts(t);

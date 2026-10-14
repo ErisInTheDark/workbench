@@ -3,7 +3,7 @@
 
 import { useSyncExternalStore, type MouseEvent } from "react";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
-import type { GitPeerAddress, GitPeerSyncMode } from "workbench-shared/workbench/git/git-peer-contracts";
+import type { GitPeerAddress, GitPeerSyncMode, GitPeerTransfer } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { useGitPeerState } from "../../../workbench/git/WorkbenchGitPeerState";
 import { readGlobalWorkbenchSettings, readLogicalProjectWorkbenchSettings, resolveWorkbenchSettings } from "../../../workbench/state/workbench-settings";
@@ -14,7 +14,7 @@ import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
 import { useWorkbenchClientController } from "../workbench-client-context";
 import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
-import { GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
+import { GitFastForwardIcon, GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
 import WorkbenchGitPeerTooltip from "./WorkbenchGitPeerTooltip";
 
 const unsubscribe = () => () => undefined;
@@ -42,18 +42,19 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
     : global.gitPeerSyncMode;
   const alternate: GitPeerSyncMode = defaultMode === "merge" ? "rebase" : "merge";
   const busy = snapshot.busy?.peerKey === `${address.daemonId}/${address.projectId}` && snapshot.busy.action === action;
-  const selected = busy ? snapshot.busy!.mode : shift ? alternate : defaultMode;
+  const fastForward = action === "pull" && peer?.state === "current" && peer.ahead === 0 && peer.behind > 0;
+  const selected = busy ? snapshot.busy!.mode : fastForward ? "fastForward" : shift ? alternate : defaultMode;
   const available = preferences.schemaVersion >= appStateReleases.gitPeerSyncMode.version && project !== null;
   const disabled = !available || !state || !peer || peer.state !== "current" || snapshot.busy !== null;
   const verb = action === "pull" ? "Pull" : "Send";
   const count = peer ? action === "pull" ? peer.behind : peer.ahead : 0;
-  const Icon = selected === "merge" ? GitMergeIcon : GitRebaseIcon;
-  const transfer = (mode: GitPeerSyncMode) => {
+  const Icon = selected === "fastForward" ? GitFastForwardIcon : selected === "merge" ? GitMergeIcon : GitRebaseIcon;
+  const transfer = (mode: GitPeerTransfer["mode"]) => {
     if (!disabled && state && peer) void state.transfer(action, peer, mode);
   };
   const openMenu = (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
-    if (disabled) return;
+    if (disabled || fastForward) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     menu.openContextMenu({ x: bounds.left, y: bounds.bottom, menu: {
       id: `git-peer-${action}-${address.daemonId}-${address.projectId}`,
@@ -73,9 +74,9 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
       <span className="inline-flex shrink-0">
         <PrimaryButton shape="compact" className={className} disabled={disabled} pendingHalo={busy}
           onContextMenu={openMenu}
-          onClick={event => transfer(event.shiftKey ? alternate : defaultMode)}>
+          onClick={event => transfer(fastForward ? "fastForward" : event.shiftKey ? alternate : defaultMode)}>
           <Icon size={14} className="mr-1.5 shrink-0" />
-          {verb}{showCount ? ` ${count}` : ""} · {selected}{showHostname && peer ? ` · ${peer.hostname}` : ""}
+          {verb}{showCount ? ` ${count}` : ""}{selected !== "fastForward" ? ` · ${selected}` : ""}{showHostname && peer ? ` · ${peer.hostname}` : ""}
         </PrimaryButton>
       </span>
     </Tooltip>;
