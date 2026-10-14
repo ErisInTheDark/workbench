@@ -1,5 +1,5 @@
 - Keep npm bootstrap limited to toolchain provisioning, public CLI registration, and checkout locating/cloning/handoff. Clone current main only for installation; never update existing source implicitly.
-- Incomplete installs never resume. Show the failed checkout in the existing consent prompt; cancel preserves it. Clean only the recorded, safely owned checkout and preserve user changes. Use Vite+ for pinned checkout runtime and dependencies. Register the public CLI through the invoking package manager.
+- Incomplete installs resume after consent: record the location before provisioning, never delete the recorded checkout, reuse it when valid, and default the location prompt to it. Use Vite+ for pinned checkout runtime and dependencies. Register the public CLI through the invoking package manager.
 - Keep managed toolchains and their receipts in the Workbench data root, never the Workbench Library. Installation and repair reuse the recorded executable and directory environment.
 - Provider runtimes install on demand under the data root through the daemon Node's bundled npm, never into the checkout. A runtime is committed only by renaming its verified, marked staging directory into place.
 - Keep native binaries committed. Missing platform artifacts must not prevent repository installation or trigger automatic native builds.

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests installation consent, failed-attempt cleanup and runtime handoff.
+ * No production exports. Tests installation consent, incomplete-install resume and runtime handoff.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -18,11 +18,12 @@ async function fixture(context, options = {}) {
   const checkout = path.join(home, "programs", "wb");
   const calls = [];
   const prompts = [];
+  const locationDefaults = [];
   const output = [];
   const header = { pinned: false };
   const prompt = {
     choose: async question => { prompts.push(question); return "Let's go!"; },
-    location: async () => { prompts.push("location"); return checkout; },
+    location: async (_label, fallback) => { prompts.push("location"); locationDefaults.push(fallback); return checkout; },
     withHeader: async task => {
       header.pinned = true;
       try { return await task(); }
@@ -66,7 +67,15 @@ async function fixture(context, options = {}) {
     },
     registration: { prepare: async () => {}, register: async () => {} },
   });
-  return { bootstrap, home, checkout, calls, prompts, output };
+  return { bootstrap, home, checkout, calls, prompts, locationDefaults, output };
+}
+
+const clones = f => f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length;
+const record = async f => JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8"));
+async function writeRecord(f, phase) {
+  await fs.mkdir(path.join(f.home, ".workbench"), { recursive: true });
+  await fs.writeFile(path.join(f.home, ".workbench", "installation.json"),
+    JSON.stringify({ version: 1, root: f.checkout, phase }));
 }
 
 test("missing Git fails before consent or filesystem changes", async context => {
@@ -207,54 +216,82 @@ test("an unrelated destination is never overwritten", async context => {
   assert.ok(f.calls.every(call => call.args[0] === "--version"));
 });
 
-test("failed setup is cleaned and the next run starts with the ordinary consent prompt", async context => {
+test("failed setup resumes in the recorded checkout after consent without recloning", async context => {
   const f = await fixture(context);
   const original = f.bootstrap.commands.run;
   let fail = true;
   f.bootstrap.commands.run = async (command, args, config) => {
-    if (args.includes("--prepare") && fail) throw new Error("build failed");
-    return original(command, args, config);
-  };
-  await assert.rejects(f.bootstrap.run([]), /build failed/);
-  await assert.rejects(fs.access(f.checkout), { code: "ENOENT" });
-  fail = false;
-  await f.bootstrap.run([]);
-  assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 2);
-  assert.equal(f.prompts.length, 4);
-  assert.equal(f.calls.find(call => call.args.includes("--welcome"))?.config?.interactive, true);
-});
-
-test("a failed record warns in the ordinary prompt and cancellation preserves the checkout", async context => {
-  const f = await fixture(context);
-  await fs.mkdir(path.dirname(f.checkout), { recursive: true });
-  await fs.mkdir(f.checkout);
-  await fs.mkdir(path.join(f.home, ".workbench"));
-  await fs.writeFile(path.join(f.home, ".workbench", "installation.json"),
-    JSON.stringify({ version: 1, root: f.checkout, phase: "cloning" }));
-  f.bootstrap.prompt.choose = async question => {
-    f.prompts.push(question);
-    return "Cancel";
-  };
-  await assert.rejects(f.bootstrap.run([]), { name: "AbortError" });
-  assert.equal(f.prompts.length, 1);
-  assert.ok(f.prompts[0].includes(`Incomplete install attempt at ${f.checkout} will be removed.`));
-  await fs.access(f.checkout);
-  assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 0);
-});
-
-test("a user-edited failed checkout is preserved rather than silently deleted", async context => {
-  const f = await fixture(context);
-  const original = f.bootstrap.commands.run;
-  f.bootstrap.commands.run = async (command, args, config) => {
-    if (args.includes("--prepare")) {
+    if (args.includes("--prepare") && fail) {
       await fs.writeFile(path.join(f.checkout, "user-edit"), "keep");
       throw new Error("build failed");
     }
     return original(command, args, config);
   };
   await assert.rejects(f.bootstrap.run([]), /build failed/);
+  assert.equal((await record(f)).phase, "setup");
+  fail = false;
+  f.prompts.length = 0;
+  f.locationDefaults.length = 0;
+
+  await f.bootstrap.run([]);
+
+  assert.equal(clones(f), 1);
+  assert.ok(f.prompts[0].includes(`Resuming incomplete install at ${f.checkout}.`));
+  assert.deepEqual(f.locationDefaults, [f.checkout]);
   assert.equal(await fs.readFile(path.join(f.checkout, "user-edit"), "utf8"), "keep");
-  assert.equal(JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")).phase, "setup");
+  assert.equal((await record(f)).phase, "ready");
+  assert.equal(f.calls.find(call => call.args.includes("--welcome"))?.config?.interactive, true);
+});
+
+test("a location chosen before provisioning fails becomes the next default", async context => {
+  const f = await fixture(context);
+  let fail = true;
+  f.bootstrap.toolchain.ensure = async () => { if (fail) throw new Error("toolchain failed"); };
+  await assert.rejects(f.bootstrap.run([]), /toolchain failed/);
+  assert.deepEqual(await record(f), { version: 1, root: f.checkout, phase: "cloning" });
+  fail = false;
+  f.locationDefaults.length = 0;
+
+  await f.bootstrap.run([]);
+
+  assert.deepEqual(f.locationDefaults, [f.checkout]);
+  assert.equal(clones(f), 1);
+  assert.equal((await record(f)).phase, "ready");
+});
+
+test("resuming into a missing recorded checkout clones it", async context => {
+  const f = await fixture(context);
+  await writeRecord(f, "setup");
+  await f.bootstrap.run([]);
+  assert.equal(clones(f), 1);
+  assert.equal((await record(f)).phase, "ready");
+});
+
+test("resuming into an unusable nonempty checkout stops and preserves it", async context => {
+  const f = await fixture(context);
+  await writeRecord(f, "cloning");
+  await fs.mkdir(f.checkout, { recursive: true });
+  await fs.writeFile(path.join(f.checkout, "keep"), "partial");
+  await assert.rejects(f.bootstrap.run([]), /empty/i);
+  assert.equal(await fs.readFile(path.join(f.checkout, "keep"), "utf8"), "partial");
+  assert.equal((await record(f)).root, f.checkout);
+  assert.equal(clones(f), 0);
+});
+
+test("cancelling a resume preserves the record and checkout", async context => {
+  const f = await fixture(context);
+  await fs.mkdir(f.checkout, { recursive: true });
+  await writeRecord(f, "cloning");
+  f.bootstrap.prompt.choose = async question => {
+    f.prompts.push(question);
+    return "Cancel";
+  };
+  await assert.rejects(f.bootstrap.run([]), { name: "AbortError" });
+  assert.equal(f.prompts.length, 1);
+  assert.ok(f.prompts[0].includes(`Resuming incomplete install at ${f.checkout}.`));
+  await fs.access(f.checkout);
+  assert.equal((await record(f)).phase, "cloning");
+  assert.equal(clones(f), 0);
 });
 
 test("an abruptly exited installer cannot leave a permanent installation lock", async context => {
@@ -303,7 +340,7 @@ test("an abruptly exited installer cannot leave a permanent installation lock", 
   child.kill();
   await exited;
   await f.bootstrap.run([]);
-  assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 1);
-  assert.match(f.prompts[0], /Incomplete install attempt at/);
-  assert.ok(f.prompts[0].includes(f.checkout));
+  assert.equal(clones(f), 0);
+  assert.ok(f.prompts[0].includes(`Resuming incomplete install at ${f.checkout}.`));
+  assert.equal((await record(f)).phase, "ready");
 });

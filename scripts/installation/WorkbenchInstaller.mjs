@@ -59,7 +59,7 @@ export default class WorkbenchInstaller {
       });
     } catch (error) {
       if (missingPython) {
-        throw new Error("Dependency build needs Python on PATH. Install the required native build tools for this system, then retry the fresh install.", { cause: error });
+        throw new Error("Dependency build needs Python on PATH. Install the required native build tools for this system, then rerun the installer to resume.", { cause: error });
       }
       throw error;
     }

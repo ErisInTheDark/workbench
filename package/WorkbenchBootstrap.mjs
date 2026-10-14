@@ -96,47 +96,6 @@ export default class WorkbenchBootstrap {
     }
   }
 
-  async discardIncomplete(record) {
-    const root = path.resolve(record.root);
-    if (root !== record.root || !["wb", "workbench"].includes(path.basename(root).toLowerCase())) {
-      throw new Error(`Cannot verify failed install destination ${record.root}; it was preserved.`);
-    }
-    let stat;
-    try { stat = await fs.lstat(root); }
-    catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      await fs.unlink(this.registry);
-      return;
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      throw new Error(`Failed install destination ${root} is not an ordinary directory; it was preserved.`);
-    }
-    if (await fs.realpath(root) !== root) {
-      throw new Error(`Failed install destination ${root} resolves elsewhere; it was preserved.`);
-    }
-    if ((await fs.readdir(root)).length) {
-      if (!await this.checkoutExists(root)) {
-        throw new Error(`Failed install destination ${root} is not a complete Workbench checkout; it was preserved.`);
-      }
-      const git = await fs.lstat(path.join(root, ".git")).catch(error => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (!git?.isDirectory() || git.isSymbolicLink()) {
-        throw new Error(`Failed install destination ${root} is not a regular Git clone; it was preserved.`);
-      }
-      let changes = "";
-      await this.commands.run("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
-        cwd: root,
-        output: { write: bytes => { changes += bytes.toString(); } },
-        errorOutput: { write() {} },
-      });
-      if (changes.trim()) throw new Error(`Failed install destination ${root} has changes; it was preserved.`);
-    }
-    await fs.rm(root, { recursive: true });
-    await fs.unlink(this.registry);
-  }
-
   async run(args) {
     const managed = this.environment.WORKBENCH_THREAD_ID || this.environment.CODEX_THREAD_ID;
     const view = args[0] === "view" && (args.length === 1 || args.length === 2 && ["daemon", "app"].includes(args[1]));
@@ -161,7 +120,7 @@ export default class WorkbenchBootstrap {
     await this.requireTool("bash");
     const warning = installed?.phase === "ready"
       ? `\nNote: Previous installation at ${installed.root} no longer exists and will be recreated.`
-      : installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
+      : installed ? `\nResuming incomplete install at ${installed.root}.` : "";
     const choice = await this.prompt.choose(
       `Workbench is not installed. This command will provision a private Vite+ toolchain if needed, clone the repository, run build commands, and register wb through your package manager. Continue?${warning}`,
       ["Let's go!", "Cancel"],
@@ -196,33 +155,25 @@ export default class WorkbenchBootstrap {
       if (latest?.root !== installed?.root || latest?.phase !== installed?.phase) {
         throw new Error("The selected Workbench installation changed while setup was open. Run wb again.");
       }
-      if (latest && latest.phase !== "ready") await this.discardIncomplete(latest);
-      await this.requireEmptyDestination(root);
+      const resume = latest?.root === root && await this.checkoutExists(root);
+      if (!resume) await this.requireEmptyDestination(root);
+      // Recording before provisioning keeps the chosen location as the next default if anything fails.
+      await this.writeInstallation({ version: 1, root, phase: resume ? "setup" : "cloning" });
       await this.registration.prepare();
       await this.toolchain.ensure();
-      let record = { version: 1, root, phase: "cloning" };
-      await this.writeInstallation(record);
       await this.prompt.withHeader(async () => {
-        this.write(`Installing Workbench at ${root}\n`);
-        try {
+        this.write(`${resume ? "Resuming" : "Installing"} Workbench at ${root}\n`);
+        if (!resume) {
           // Install sandboxes substitute a local snapshot; ordinary installs clone the public repository.
           const repository = this.environment.WORKBENCH_INSTALL_REPOSITORY || "https://github.com/ErisInTheDark/workbench.git";
           await this.commands.run("git", ["clone", "--progress", "--branch", "main", "--single-branch", repository, root]);
           if (!await this.checkoutExists(root)) throw new Error("Clone did not produce a Workbench checkout.");
-          record = { ...record, phase: "setup" };
-          await this.writeInstallation(record);
-          await this.commands.run(process.execPath, [path.join(root, "scripts", "install.mjs"), "--prepare"], { cwd: root });
-          await this.registration.register(root);
-        } catch (error) {
-          try { await this.discardIncomplete(record); }
-          catch (cleanupError) {
-            throw new Error(`${error.message} Incomplete checkout was preserved at ${root}: ${cleanupError.message}`, { cause: error });
-          }
-          throw error;
+          await this.writeInstallation({ version: 1, root, phase: "setup" });
         }
+        await this.commands.run(process.execPath, [path.join(root, "scripts", "install.mjs"), "--prepare"], { cwd: root });
+        await this.registration.register(root);
       });
-      record = { ...record, phase: "ready" };
-      await this.writeInstallation(record);
+      await this.writeInstallation({ version: 1, root, phase: "ready" });
     } finally {
       // Closing the connection also releases the OS lock after normal completion;
       // process death releases it without a stale PID or lock-file recovery path.
