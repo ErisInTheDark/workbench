@@ -37,11 +37,12 @@ function response() {
   return new TestResponse() as unknown as import("node:http").ServerResponse;
 }
 
-function createRouter(events: string[], failurePath: string | null = null) {
+function createRouter(events: string[], failurePath: string | null = null, urls: string[] = []) {
   const controller = (label: string) => ({
     handleHttpRequest: async (input: import("node:http").IncomingMessage, output: import("node:http").ServerResponse) => {
       if (input.url === failurePath) throw new Error("controller exploded");
       events.push(label);
+      urls.push(input.url ?? "");
       output.end(label);
     },
   });
@@ -103,6 +104,20 @@ test("turns controller failures into bounded HTTP errors", async () => {
   await router.handleHttpRequest(request("/daemon/agent-command", "POST"), output);
   assert.equal(output.statusCode, 500);
   assert.deepEqual(JSON.parse((output as unknown as TestResponse).body), { error: "controller exploded" });
+});
+
+test("consumes daemon routing identity before dispatch while preserving controller query fields", async () => {
+  const urls: string[] = [];
+  const router = createRouter([], null, urls);
+  const output = response();
+  await router.handleHttpRequest(request(
+    "/daemon/git-peer/receive?projectId=project&branch=main&wb-daemon=11111111-1111-4111-8111-111111111111&tip=abc",
+    "POST",
+  ), output);
+  assert.equal(
+    urls[0],
+    "/daemon/git-peer/receive?projectId=project&branch=main&tip=abc",
+  );
 });
 
 test("rejects LAN requests before invoking daemon controllers", async () => {

@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - ZodSchemaConformance/conformToZodSchema: repair invalid schema nodes from a conformant default while preserving valid siblings and repairable array entries.
+ * - ZodSchemaConformance/conformToZodSchema: repair invalid schema nodes from a conformant default while preserving valid siblings and repairable array entries, distinguishing fallback substitutions from non-lossy repairs.
  */
 import { z } from "zod";
 
 export interface ZodSchemaConformance<TValue> {
   data: TValue;
+  fallbackPaths: PropertyKey[][];
   repairedPaths: PropertyKey[][];
 }
 
@@ -24,8 +25,14 @@ function addRepair(repairedPaths: PropertyKey[][], path: PropertyKey[]) {
   repairedPaths.push(path);
 }
 
-function fallbackValue(fallback: unknown, path: PropertyKey[], repairedPaths: PropertyKey[][]) {
+function fallbackValue(
+  fallback: unknown,
+  path: PropertyKey[],
+  repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
+) {
   addRepair(repairedPaths, path);
+  addRepair(fallbackPaths, path);
   return fallback;
 }
 
@@ -35,11 +42,12 @@ function conformObject(
   fallback: unknown,
   path: PropertyKey[],
   repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
 ) {
-  if (!isRecord(value) || !isRecord(fallback)) return fallbackValue(fallback, path, repairedPaths);
+  if (!isRecord(value) || !isRecord(fallback)) return fallbackValue(fallback, path, repairedPaths, fallbackPaths);
   const candidate: Record<PropertyKey, unknown> = { ...value };
   for (const [key, childSchema] of Object.entries(schema.shape)) {
-    const child = conformInput(classicSchema(childSchema), value[key], fallback[key], [...path, key], repairedPaths);
+    const child = conformInput(classicSchema(childSchema), value[key], fallback[key], [...path, key], repairedPaths, fallbackPaths);
     if (child === undefined && !Object.hasOwn(fallback, key)) delete candidate[key];
     else candidate[key] = child;
   }
@@ -55,7 +63,7 @@ function conformObject(
   }
   return schema.safeParse(candidate).success
     ? candidate
-    : fallbackValue(fallback, path, repairedPaths);
+    : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
 }
 
 function conformArray(
@@ -64,20 +72,23 @@ function conformArray(
   fallback: unknown,
   path: PropertyKey[],
   repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
 ) {
-  if (!Array.isArray(value) || !Array.isArray(fallback)) return fallbackValue(fallback, path, repairedPaths);
+  if (!Array.isArray(value) || !Array.isArray(fallback)) return fallbackValue(fallback, path, repairedPaths, fallbackPaths);
   const elementSchema = classicSchema(schema.element);
   const candidate = value.flatMap((item, index) => {
     if (elementSchema.safeParse(item).success) return [item];
     if (index < fallback.length) {
-      return [conformInput(elementSchema, item, fallback[index], [...path, index], repairedPaths)];
+      return [conformInput(elementSchema, item, fallback[index], [...path, index], repairedPaths, fallbackPaths)];
     }
     // Without a default entry, the entry is its own template: only fallback-free repairs, such as
     // dropping unrecognized keys, can apply. Anything still invalid is dropped.
     const entryRepairs: PropertyKey[][] = [];
-    const repaired = conformInput(elementSchema, item, item, [...path, index], entryRepairs);
+    const entryFallbacks: PropertyKey[][] = [];
+    const repaired = conformInput(elementSchema, item, item, [...path, index], entryRepairs, entryFallbacks);
     if (elementSchema.safeParse(repaired).success) {
       for (const repairedPath of entryRepairs) addRepair(repairedPaths, repairedPath);
+      for (const fallbackPath of entryFallbacks) addRepair(fallbackPaths, fallbackPath);
       return [repaired];
     }
     addRepair(repairedPaths, [...path, index]);
@@ -85,7 +96,7 @@ function conformArray(
   });
   return schema.safeParse(candidate).success
     ? candidate
-    : fallbackValue(fallback, path, repairedPaths);
+    : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
 }
 
 function conformRecord(
@@ -94,8 +105,9 @@ function conformRecord(
   fallback: unknown,
   path: PropertyKey[],
   repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
 ) {
-  if (!isRecord(value) || !isRecord(fallback)) return fallbackValue(fallback, path, repairedPaths);
+  if (!isRecord(value) || !isRecord(fallback)) return fallbackValue(fallback, path, repairedPaths, fallbackPaths);
   const keySchema = classicSchema(schema.keyType);
   const valueSchema = classicSchema(schema.valueType);
   const candidate: Record<PropertyKey, unknown> = { ...value };
@@ -107,7 +119,7 @@ function conformRecord(
     }
     if (valueSchema.safeParse(candidate[key]).success) continue;
     if (Object.hasOwn(fallback, key)) {
-      candidate[key] = conformInput(valueSchema, candidate[key], fallback[key], [...path, key], repairedPaths);
+      candidate[key] = conformInput(valueSchema, candidate[key], fallback[key], [...path, key], repairedPaths, fallbackPaths);
     } else {
       delete candidate[key];
       addRepair(repairedPaths, [...path, key]);
@@ -115,7 +127,7 @@ function conformRecord(
   }
   return schema.safeParse(candidate).success
     ? candidate
-    : fallbackValue(fallback, path, repairedPaths);
+    : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
 }
 
 function conformUnion(
@@ -124,13 +136,14 @@ function conformUnion(
   fallback: unknown,
   path: PropertyKey[],
   repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
 ) {
   const fallbackOption = schema.options.map(classicSchema).find((option) => option.safeParse(fallback).success);
-  if (!fallbackOption) return fallbackValue(fallback, path, repairedPaths);
-  const candidate = conformInput(fallbackOption, value, fallback, path, repairedPaths);
+  if (!fallbackOption) return fallbackValue(fallback, path, repairedPaths, fallbackPaths);
+  const candidate = conformInput(fallbackOption, value, fallback, path, repairedPaths, fallbackPaths);
   return schema.safeParse(candidate).success
     ? candidate
-    : fallbackValue(fallback, path, repairedPaths);
+    : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
 }
 
 function unwrapSchema(schema: ZodSchema): ZodSchema | null {
@@ -154,26 +167,27 @@ function conformInput(
   fallback: unknown,
   path: PropertyKey[],
   repairedPaths: PropertyKey[][],
+  fallbackPaths: PropertyKey[][],
 ): unknown {
   if (schema.safeParse(value).success) return value;
-  if (schema instanceof z.ZodObject) return conformObject(schema, value, fallback, path, repairedPaths);
-  if (schema instanceof z.ZodArray) return conformArray(schema, value, fallback, path, repairedPaths);
-  if (schema instanceof z.ZodRecord) return conformRecord(schema, value, fallback, path, repairedPaths);
-  if (schema instanceof z.ZodUnion) return conformUnion(schema, value, fallback, path, repairedPaths);
+  if (schema instanceof z.ZodObject) return conformObject(schema, value, fallback, path, repairedPaths, fallbackPaths);
+  if (schema instanceof z.ZodArray) return conformArray(schema, value, fallback, path, repairedPaths, fallbackPaths);
+  if (schema instanceof z.ZodRecord) return conformRecord(schema, value, fallback, path, repairedPaths, fallbackPaths);
+  if (schema instanceof z.ZodUnion) return conformUnion(schema, value, fallback, path, repairedPaths, fallbackPaths);
   if (schema instanceof z.ZodPipe) {
-    const candidate = conformInput(classicSchema(schema.in), value, fallback, path, repairedPaths);
+    const candidate = conformInput(classicSchema(schema.in), value, fallback, path, repairedPaths, fallbackPaths);
     return schema.safeParse(candidate).success
       ? candidate
-      : fallbackValue(fallback, path, repairedPaths);
+      : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
   }
   const unwrapped = unwrapSchema(schema);
   if (unwrapped) {
-    const candidate = conformInput(unwrapped, value, fallback, path, repairedPaths);
+    const candidate = conformInput(unwrapped, value, fallback, path, repairedPaths, fallbackPaths);
     return schema.safeParse(candidate).success
       ? candidate
-      : fallbackValue(fallback, path, repairedPaths);
+      : fallbackValue(fallback, path, repairedPaths, fallbackPaths);
   }
-  return fallbackValue(fallback, path, repairedPaths);
+  return fallbackValue(fallback, path, repairedPaths, fallbackPaths);
 }
 
 export function conformToZodSchema<TSchema extends z.ZodType>(
@@ -182,15 +196,17 @@ export function conformToZodSchema<TSchema extends z.ZodType>(
   defaults: z.input<TSchema>,
 ): ZodSchemaConformance<z.output<TSchema>> {
   const parsed = schema.safeParse(value);
-  if (parsed.success) return { data: parsed.data, repairedPaths: [] };
+  if (parsed.success) return { data: parsed.data, fallbackPaths: [], repairedPaths: [] };
 
   const parsedDefaults = schema.safeParse(defaults);
   if (!parsedDefaults.success) throw parsedDefaults.error;
 
   const repairedPaths: PropertyKey[][] = [];
-  const candidate = conformInput(schema, value, defaults, [], repairedPaths);
+  const fallbackPaths: PropertyKey[][] = [];
+  const candidate = conformInput(schema, value, defaults, [], repairedPaths, fallbackPaths);
   const conformed = schema.safeParse(candidate);
-  if (conformed.success) return { data: conformed.data, repairedPaths };
+  if (conformed.success) return { data: conformed.data, fallbackPaths, repairedPaths };
   addRepair(repairedPaths, []);
-  return { data: parsedDefaults.data, repairedPaths };
+  addRepair(fallbackPaths, []);
+  return { data: parsedDefaults.data, fallbackPaths, repairedPaths };
 }

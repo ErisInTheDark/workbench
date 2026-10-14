@@ -110,7 +110,12 @@ export default class WorkbenchDaemonHttpRouter {
 
   async handleHttpRequest(request: http.IncomingMessage, response: http.ServerResponse) {
     if (!await this.admitHttp(request, response)) return;
-    const requestPath = new URL(request.url ?? "/", "http://localhost").pathname;
+    const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    if (requestUrl.searchParams.has("wb-daemon")) {
+      requestUrl.searchParams.delete("wb-daemon");
+      request.url = `${requestUrl.pathname}${requestUrl.search}`;
+    }
+    const requestPath = requestUrl.pathname;
     if (request.method === "GET" && requestPath.startsWith("/daemon/project-icons/")) {
       try {
         await this.options.projectCatalog.handleIconHttpRequest(request, response);

@@ -7,15 +7,31 @@ import type http from "node:http";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import {
-  GIT_PEER_NO_BUNDLE_HEADER, GIT_PEER_ROUTES, GIT_PEER_TIP_HEADER, GitPeerBundleRequestSchema, GitPeerHavesRequestSchema, GitPeerIntegrateRequestSchema,
+  GIT_PEER_NO_BUNDLE_HEADER, GIT_PEER_ROUTES, GIT_PEER_TIP_HEADER, GitBranchNameSchema, GitPeerBundleRequestSchema, GitPeerHavesRequestSchema, GitPeerIntegrateRequestSchema,
   GitPeerReceiveQuerySchema, type GitPeerAddress, type GitPeerIntegrationResult,
 } from "workbench-shared/workbench/git/git-peer-contracts";
+import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import WorkbenchGitIntegration from "./lib/workbench/git/WorkbenchGitIntegration";
 import WorkbenchGitPeerTransport, { GitPeerMissingBranchError } from "./lib/workbench/git/WorkbenchGitPeerTransport";
 import WorkbenchGitRepository from "./lib/workbench/git/WorkbenchGitRepository";
 import type { createWorktreeGitTransitions } from "./worktree-git-transitions";
 
 const MAX_JSON_BYTES = 64 * 1024;
+const INVALID_DAEMON_ID = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000000");
+const INVALID_PROJECT_ID = ProjectIdSchema.parse("__invalid_peer_request__");
+const INVALID_BRANCH = GitBranchNameSchema.parse("__invalid_peer_request__");
+const INVALID_TIP = "0".repeat(40);
+const INVALID_PEER = { daemonId: INVALID_DAEMON_ID, projectId: INVALID_PROJECT_ID };
+const INVALID_HAVES_REQUEST = { projectId: INVALID_PROJECT_ID, peer: INVALID_PEER, branch: INVALID_BRANCH };
+const INVALID_BUNDLE_REQUEST = { projectId: INVALID_PROJECT_ID, branch: INVALID_BRANCH, haves: [] };
+const INVALID_RECEIVE_QUERY = {
+  projectId: INVALID_PROJECT_ID,
+  peerDaemonId: INVALID_DAEMON_ID,
+  peerProjectId: INVALID_PROJECT_ID,
+  branch: INVALID_BRANCH,
+  tip: INVALID_TIP,
+};
 
 class RequestError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -34,10 +50,24 @@ async function readJson(request: http.IncomingMessage) {
   catch { throw new RequestError(400, "Peer request is not JSON."); }
 }
 
-function parse<Schema extends z.ZodType>(schema: Schema, value: unknown): z.infer<Schema> {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) throw new RequestError(400, "Peer request is invalid.");
-  return parsed.data;
+function parse<Schema extends z.ZodType>(
+  schema: Schema,
+  value: unknown,
+  defaults: z.input<Schema>,
+  context: string,
+  warn: (message: string) => void,
+): z.output<Schema> {
+  const conformed = conformToZodSchema(schema, value, defaults);
+  if (conformed.fallbackPaths.length) throw new RequestError(400, "Peer request is invalid.");
+  if (conformed.repairedPaths.length) {
+    const paths = conformed.repairedPaths
+      .slice(0, 10)
+      .map(path => path.map(part => String(part).replace(/[\u0000-\u001f\u007f-\u009f]/gu, "")).join(".") || "<root>")
+      .join(", ")
+      .slice(0, 500);
+    warn(`Conformed ${context} peer request: repairedPaths=${paths}`);
+  }
+  return conformed.data;
 }
 
 function sendJson(response: http.ServerResponse, status: number, payload: object) {
@@ -65,13 +95,15 @@ export default class WorkbenchGitPeerController {
     try {
       switch (url.pathname) {
         case GIT_PEER_ROUTES.haves: {
-          const body = parse(GitPeerHavesRequestSchema, await readJson(request));
+          const body = parse(GitPeerHavesRequestSchema, await readJson(request),
+            INVALID_HAVES_REQUEST, "haves", this.options.warn);
           const transport = await this.transport(body.projectId);
           sendJson(response, 200, { haves: (await transport.haves(body.peer, body.branch)).slice(0, 8) });
           return;
         }
         case GIT_PEER_ROUTES.bundle: {
-          const body = parse(GitPeerBundleRequestSchema, await readJson(request));
+          const body = parse(GitPeerBundleRequestSchema, await readJson(request),
+            INVALID_BUNDLE_REQUEST, "bundle", this.options.warn);
           const transport = await this.transport(body.projectId);
           const { tip, bundle, done } = await transport.bundle(body.branch, body.haves, cancellation.signal);
           if (!bundle) {
@@ -88,7 +120,8 @@ export default class WorkbenchGitPeerController {
           return;
         }
         case GIT_PEER_ROUTES.receive: {
-          const query = parse(GitPeerReceiveQuerySchema, Object.fromEntries(url.searchParams));
+          const query = parse(GitPeerReceiveQuerySchema, Object.fromEntries(url.searchParams),
+            INVALID_RECEIVE_QUERY, "receive", this.options.warn);
           const transport = await this.transport(query.projectId);
           const peer: GitPeerAddress = { daemonId: query.peerDaemonId, projectId: query.peerProjectId };
           const tip = await transport.receive(peer, query.branch, query.tip,
@@ -97,7 +130,8 @@ export default class WorkbenchGitPeerController {
           return;
         }
         case GIT_PEER_ROUTES.integrate: {
-          const body = parse(GitPeerIntegrateRequestSchema, await readJson(request));
+          const body = parse(GitPeerIntegrateRequestSchema, await readJson(request),
+            INVALID_HAVES_REQUEST, "integrate", this.options.warn);
           sendJson(response, 200, await this.integrate(body.projectId, body.peer, body.branch));
           return;
         }

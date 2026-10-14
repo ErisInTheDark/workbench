@@ -36,6 +36,7 @@ test("conformance preserves valid siblings and valid array entries", () => {
     ["tags", 1],
     ["stale"],
   ]);
+  assert.deepEqual(conformed.fallbackPaths, [["nested", "count"]]);
 });
 
 test("array entries beyond the default keep fallback-free repairs and drop only what cannot be repaired", () => {
@@ -49,6 +50,7 @@ test("array entries beyond the default keep fallback-free repairs and drop only 
   }, { rows: [] });
   assert.deepEqual(conformed.data.rows, [{ id: "a", meta: { n: 1 } }, { id: "b", meta: { n: 2 } }]);
   assert.ok(conformed.repairedPaths.some((path) => path.join(".") === "rows.2"), "the unrepairable entry is reported as dropped");
+  assert.deepEqual(conformed.fallbackPaths, []);
 });
 
 test("conformance selects a default union branch and still runs transforms", () => {
@@ -68,6 +70,7 @@ test("conformance selects a default union branch and still runs transforms", () 
 
   assert.deepEqual(conformed.data, { conformed: true, count: 0, kind: "thread", title: "kept" });
   assert.deepEqual(conformed.repairedPaths, [["count"]]);
+  assert.deepEqual(conformed.fallbackPaths, [["count"]]);
 });
 
 test("a cross-field failure falls back at its smallest schema node", () => {
