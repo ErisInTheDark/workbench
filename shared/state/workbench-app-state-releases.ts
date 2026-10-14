@@ -31,6 +31,7 @@ const appStateReleases = Object.freeze({
   threadVisOpen: release(21, "39024869c7066015e21ed070dde900315d729521375b037966bea896658b3d55"),
   composerDraftReferences: release(22, "5695acd99487d62b9d743d13e9a645ba6062c9fcc1203080d6c945366c880118"),
   lastProjectSelection: release(23, "d0f9f271f879577296f03a090e290754fb07ccc59d1c6be69defc6ebc891d1f7"),
+  gitPeerSyncMode: release(24, "cb8714fe1b66e9903487689815161338840f54068e25fef854875ea2decedde5"),
 });
 
 export default appStateReleases;

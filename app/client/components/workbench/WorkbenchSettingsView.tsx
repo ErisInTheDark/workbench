@@ -39,6 +39,7 @@ const pages: { id: Page; label: string; sections: { id: string; label: string }[
   ] },
   { id: "projects", label: "Projects & folders", sections: [
     { id: "settings-files", label: "Files" },
+    { id: "settings-git", label: "Git" },
     { id: "settings-discovery", label: "Discovery" },
     { id: "settings-environment", label: "Environment" },
   ] },
@@ -221,6 +222,10 @@ export default function WorkbenchSettingsView({
         {page === "projects" ? <>
           <FormSection id="settings-files" title="Files">
             <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+          </FormSection>
+          <FormSection id="settings-git" title="Git">
+            <WorkbenchSettingsPreferences keys={["gitPeerSyncMode"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
           </FormSection>
           <FormSection id="settings-discovery" title="Discovery">

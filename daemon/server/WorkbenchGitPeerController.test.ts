@@ -1,4 +1,4 @@
-/* No production exports. Tests protect peer HTTP input conformance, required identity rejection and repair diagnostics. */
+/* Exports: none; tests protect peer HTTP conformance and rejection of unpinned mutations. */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -63,6 +63,15 @@ test("peer HTTP inputs repair additive drift and isolated haves without inventin
   });
   assert.equal(invalidIdentity.status, 400);
   assert.deepEqual(await invalidIdentity.json(), { error: "Peer request is invalid." });
+
+  const unpinned = await post("/daemon/git-peer/integration/apply", {
+    projectId, peer: { daemonId, projectId: peerProjectId }, branch: "main", mode: "merge",
+  });
+  assert.equal(unpinned.status, 400);
+  const oldRoute = await post("/daemon/git-peer/integrate", {
+    projectId, peer: { daemonId, projectId: peerProjectId }, branch: "main",
+  });
+  assert.equal(oldRoute.status, 404);
 
   assert.ok(warnings.some(message => message.includes("futurePeerField") && message.includes("futureRequestField")));
   assert.ok(warnings.some(message => message.includes("haves.1")));

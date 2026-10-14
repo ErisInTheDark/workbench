@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchGitPeerState: one folder's peer rows plus the tab's Pull/Send in flight and last blocked outcome,
+ * - default WorkbenchGitPeerState: one folder's peer rows, captured transfer intent and device-aware outcomes,
  *   shared by every view of that folder.
  * - useGitPeerState: acquire the shared state for a folder and read its snapshot.
  * - WorkbenchGitPeerSnapshot/WorkbenchGitPeerOutcome: what views render.
@@ -8,62 +8,72 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
-  GitPeerIntegrationResultSchema, type GitPeerAddress, type GitPeerStatus, type WorkspaceGitPeers,
+  GitPeerTransferResultSchema, type GitPeerAddress, type GitPeerStatus, type WorkspaceGitPeers, type GitPeerSyncMode,
+  type GitPeerTransferResult,
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
 import type WorkbenchWorkspaceClient from "../app/WorkbenchWorkspaceClient";
 import type { WorkspaceQueryHandle } from "../app/WorkbenchWorkspaceClient";
 
-/** A Pull or Send that did not apply, kept until the peer's counts move. */
+/** Partial/uncertain completion survives passive updates until the next explicit action. */
 export interface WorkbenchGitPeerOutcome {
   peer: GitPeerStatus;
   action: "pull" | "send";
+  mode: GitPeerSyncMode;
+  location: GitPeerAddress | null;
+  progress: Extract<GitPeerTransferResult, { kind: "blocked" }>["progress"] | "complete";
   reason: string;
   conflicts: readonly string[];
-  /** Failures that need an agent rather than a retry. */
-  blocked: boolean;
 }
 
 export interface WorkbenchGitPeerSnapshot {
   data: WorkspaceGitPeers | null;
-  busy: string | null;
+  busy: { peerKey: string; action: "pull" | "send"; mode: GitPeerSyncMode } | null;
   outcome: WorkbenchGitPeerOutcome | null;
 }
 
 const EMPTY: WorkbenchGitPeerSnapshot = { data: null, busy: null, outcome: null };
 const peerKey = (peer: GitPeerAddress) => `${peer.daemonId}/${peer.projectId}`;
-const shared = new WeakMap<WorkbenchWorkspaceClient, Map<string, { state: WorkbenchGitPeerState; holders: number }>>();
+const shared = new WeakMap<WorkbenchWorkspaceClient, Map<string, WorkbenchGitPeerState>>();
 
 export default class WorkbenchGitPeerState {
   private readonly listeners = new Set<() => void>();
-  private readonly observation: WorkspaceQueryHandle<"gitPeers">;
+  private observation: WorkspaceQueryHandle<"gitPeers"> | null = null;
+  private holders = 0;
   private snapshot: WorkbenchGitPeerSnapshot = EMPTY;
 
-  private constructor(private readonly workspace: WorkbenchWorkspaceClient, readonly location: ProjectLocationReference) {
-    this.observation = workspace.observe({ kind: "gitPeers", location }, () => this.changed());
-    this.changed();
-  }
+  private constructor(private readonly workspace: WorkbenchWorkspaceClient, readonly location: ProjectLocationReference,
+    private readonly forget: (state: WorkbenchGitPeerState) => void) {}
 
   static acquire(workspace: WorkbenchWorkspaceClient, location: ProjectLocationReference) {
     const states = shared.get(workspace) ?? new Map();
     shared.set(workspace, states);
     const key = peerKey(location);
-    const entry = states.get(key) ?? { state: new WorkbenchGitPeerState(workspace, location), holders: 0 };
-    states.set(key, entry);
-    entry.holders++;
+    const state = states.get(key) ?? new WorkbenchGitPeerState(workspace, location, retired => {
+      if (states.get(key) === retired) states.delete(key);
+    });
+    states.set(key, state);
+    state.holders++;
+    state.observation ??= workspace.observe({ kind: "gitPeers", location }, () => state.changed());
+    state.changed();
     let released = false;
     return {
-      state: entry.state,
+      state,
       release: () => {
         if (released) return;
         released = true;
-        if (--entry.holders) return;
-        states.delete(key);
-        entry.state.observation.release();
-        entry.state.listeners.clear();
+        state.holders--;
+        state.retire();
       },
     };
+  }
+
+  private retire() {
+    if (this.holders || this.snapshot.busy) return;
+    this.observation?.release();
+    this.observation = null;
+    if (!this.snapshot.outcome || this.snapshot.outcome.progress === "none") this.forget(this);
   }
 
   getSnapshot = () => this.snapshot;
@@ -72,37 +82,45 @@ export default class WorkbenchGitPeerState {
     return () => { this.listeners.delete(listener); };
   };
 
-  async transfer(action: "pull" | "send", peer: GitPeerStatus) {
+  async transfer(action: "pull" | "send", peer: GitPeerStatus, mode: GitPeerSyncMode) {
     if (this.snapshot.busy) return;
-    this.publish({ ...this.snapshot, busy: peerKey(peer), outcome: null });
+    this.publish({ ...this.snapshot, busy: { peerKey: peerKey(peer), action, mode }, outcome: null });
     let outcome: WorkbenchGitPeerOutcome | null = null;
     try {
-      const parsed = GitPeerIntegrationResultSchema.safeParse(await this.workspace.rpc.requestRaw({
+      const conformed = conformToZodSchema(GitPeerTransferResultSchema.nullable(), await this.workspace.rpc.requestRaw({
         method: "workspace/git/peer",
-        params: { action, location: this.location, peer: { daemonId: peer.daemonId, projectId: peer.projectId } },
-      }));
-      if (!parsed.success) {
-        reportClientSchemaError("Rejected peer transfer result", parsed.error);
-        throw new Error("The app returned an invalid peer transfer result.");
+        params: { action, location: this.location, peer: { daemonId: peer.daemonId, projectId: peer.projectId }, mode },
+      }), null);
+      if (conformed.repairedPaths.length) {
+        console.warn(`Conformed peer transfer result: ${conformed.repairedPaths.map(path => path.join(".")).join(", ").slice(0, 512)}`);
       }
-      if (parsed.data.kind === "blocked") {
-        outcome = { peer, action, blocked: true, conflicts: parsed.data.conflicts,
-          reason: parsed.data.reason ?? (parsed.data.conflicts.length ? "Local changes overlap incoming files." : "Integration is blocked.") };
+      const result = conformed.data;
+      if (!result) throw new Error("The app returned an invalid peer transfer result.");
+      if (result.kind === "blocked") {
+        const affected = peerKey(result.location) === peerKey(peer) ? peer.hostname : "Selected folder";
+        const prefix = result.progress === "senderUpdated"
+          ? `${action === "pull" ? peer.hostname : "Selected folder"} updated; transfer still needs finishing. `
+          : result.progress === "uncertain" ? "A device may already have updated; refresh and retry. " : "";
+        outcome = { peer, action, mode, conflicts: result.conflicts, location: result.location,
+          progress: result.progress, reason: `${prefix}${affected}: ${result.reason}` };
+      } else if (result.kind === "applied" && result.warnings.length) {
+        outcome = { peer, action, mode, conflicts: [], location: null, progress: "complete",
+          reason: `Work integrated. ${result.warnings.join(" ")}` };
       }
     } catch (error) {
-      outcome = { peer, action, blocked: false, conflicts: [],
-        reason: error instanceof Error ? error.message : "The transfer failed." };
+      outcome = { peer, action, mode, conflicts: [], location: null, progress: "uncertain",
+        reason: `Transfer interrupted; a device may already have updated. Refresh and retry. ${error instanceof Error ? error.message : ""}` };
     }
     this.publish({ ...this.snapshot, busy: null, outcome });
+    this.retire();
   }
 
   private changed() {
-    const data = this.observation.getSnapshot().value?.data ?? null;
+    const data = this.observation?.getSnapshot().value?.data ?? null;
     const previous = this.snapshot.outcome;
     const current = previous && data?.peers.find(peer => peerKey(peer) === peerKey(previous.peer));
-    // An outcome describes counts that no longer hold once the peer moves.
-    const outcome = previous && current && current.ahead === previous.peer.ahead && current.behind === previous.peer.behind
-      ? previous : null;
+    const outcome = previous && (previous.progress !== "none"
+      || current && current.ahead === previous.peer.ahead && current.behind === previous.peer.behind) ? previous : null;
     this.publish({ ...this.snapshot, data, outcome });
   }
 

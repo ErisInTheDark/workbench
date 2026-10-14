@@ -1,17 +1,17 @@
 /*
  * Exports:
  * - default WorkbenchGitPeerRelay: stream one branch's new commits from a sender folder's daemon into a receiver folder's
- *   tracking ref, joining repeat requests, and ask a daemon to integrate a fetched peer branch.
+ *   tracking ref, joining repeat requests, inspect ancestry and request expected-tip integration.
  * - GitPeerUnsupportedError: a daemon predates peer transfers.
  * - GitPeerLocation: one folder on one daemon.
  */
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import {
   GIT_PEER_NO_BUNDLE_HEADER, GIT_PEER_ROUTES, GIT_PEER_TIP_HEADER, GitPeerHavesResultSchema, GitPeerIntegrationResultSchema,
-  GitPeerReceiveResultSchema, type GitPeerIntegrationResult,
+  GitPeerReceiveResultSchema, GitPeerIntegrationSnapshotSchema, type GitPeerIntegrationResult, type GitPeerApplyOptions,
 } from "workbench-shared/workbench/git/git-peer-contracts";
-import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
-import type { z } from "zod";
+import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
+import { z } from "zod";
 import type WorkbenchDaemonSource from "./WorkbenchDaemonSource";
 
 export interface GitPeerLocation { daemonId: DaemonId; projectId: ProjectId }
@@ -65,10 +65,15 @@ export default class WorkbenchGitPeerRelay {
     return transfer;
   }
 
-  /** Asks `receiver`'s daemon to integrate its already-fetched copy of `sender`'s branch into the checked-out branch. */
-  integrate(receiver: GitPeerLocation, sender: GitPeerLocation, branch: string): Promise<GitPeerIntegrationResult> {
+  inspect(receiver: GitPeerLocation, sender: GitPeerLocation, branch: string) {
+    return this.withSources([receiver], async ([source], signal) => await this.post(source, GIT_PEER_ROUTES.inspect,
+      GitPeerIntegrationSnapshotSchema, { projectId: receiver.projectId, peer: sender, branch }, signal));
+  }
+
+  integrate(receiver: GitPeerLocation, sender: GitPeerLocation, branch: string,
+    options: GitPeerApplyOptions): Promise<GitPeerIntegrationResult> {
     return this.withSources([receiver], async ([source], signal) => await this.post(source, GIT_PEER_ROUTES.integrate,
-      GitPeerIntegrationResultSchema, { projectId: receiver.projectId, peer: sender, branch }, signal));
+      GitPeerIntegrationResultSchema, { projectId: receiver.projectId, peer: sender, branch, ...options }, signal));
   }
 
   dispose() {
@@ -119,7 +124,9 @@ export default class WorkbenchGitPeerRelay {
     if (!response.ok) {
       const text = await response.text();
       let message = text;
-      try { message = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* plain-text failure body */ }
+      try {
+        message = conformToZodSchema(z.object({ error: z.string().optional() }), JSON.parse(text), {}).data.error ?? text;
+      } catch { /* A failed HTTP response may be plain text. */ }
       throw new Error(bounded(`${source.getSnapshot().hostname}: ${message || `peer request failed with ${response.status}`}`));
     }
     return response;
@@ -134,11 +141,11 @@ export default class WorkbenchGitPeerRelay {
   }
 
   private async json<Schema extends z.ZodType>(response: Response, schema: Schema): Promise<z.infer<Schema>> {
-    const parsed = schema.safeParse(await response.json());
-    if (!parsed.success) {
-      reportClientSchemaError("Rejected daemon peer transfer response", parsed.error);
-      throw new Error("The daemon returned an invalid peer transfer response.");
+    const conformed = conformToZodSchema(schema.nullable(), await response.json(), null);
+    if (conformed.repairedPaths.length) {
+      console.warn(bounded(`Conformed daemon peer response: ${conformed.repairedPaths.map(path => path.join(".")).join(", ")}`));
     }
-    return parsed.data;
+    if (conformed.data === null) throw new Error("The daemon returned an invalid peer transfer response.");
+    return conformed.data;
   }
 }

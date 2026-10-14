@@ -1,8 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchGitIntegration: bring an incoming commit into the current branch by fast-forward or rewriter-aware
- *   replay of local first-parent commits, predicted in memory and published atomically with every Workbench ref; also
- *   reports whether local commits may be replayed and publishes merge plans built elsewhere.
+ * - default WorkbenchGitIntegration: prepare fast-forward, merge or protected replay in memory and publish atomically
+ *   with affected Workbench refs; report whether local commits may be replayed.
  * - WorkbenchGitIntegrationPlan: one prepared integration (current, fastForward, replay, merge or blocked) with its counts.
  * - listDirtyPaths: every dirty or untracked worktree path, rename sources included.
  */
@@ -60,7 +59,7 @@ export default class WorkbenchGitIntegration {
   constructor(private readonly repository: WorkbenchGitRepository) {}
 
   /** Reads and writes objects only: worktree, index, HEAD and refs stay untouched. */
-  async prepare(incoming: string): Promise<WorkbenchGitIntegrationPlan> {
+  async prepare(incoming: string, mode: "replay" | "merge" | "fastForward" = "replay"): Promise<WorkbenchGitIntegrationPlan> {
     const repository = this.repository;
     const target = await repository.resolveCommit(incoming);
     const headRef = await repository.symbolicHead();
@@ -78,10 +77,21 @@ export default class WorkbenchGitIntegration {
 
     const dirty = await listDirtyPaths(repository);
     const dirtyOverlaps = dirty.filter(local => incomingPaths.some(remote => overlaps(local, remote)));
-    if (dirtyOverlaps.length) return blocked([...new Set(dirtyOverlaps)]);
+    if (dirtyOverlaps.length) return blocked([...new Set(dirtyOverlaps)], "Uncommitted changes overlap incoming files.");
 
     const generation = await repository.readRef(GIT_STATE_GENERATION_REF);
     if (!ahead) return { ...facts, kind: "fastForward", headRef, oldHead, newHead: target, generation, arcPlan: null };
+    if (mode === "fastForward") return blocked([], "The receiving branch has diverged; refresh and try again.");
+    if (mode === "merge") {
+      const base = (await repository.run(["merge-base", oldHead, target])).trim();
+      const merged = await repository.mergeWorktreeTrees(base, oldHead, target);
+      if (merged.conflictedPaths.length || merged.unsupportedConflictTypes.length) {
+        return blocked(merged.conflictedPaths, "Committed changes conflict and need resolution.");
+      }
+      const newHead = await repository.createCommitFromTree(merged.tree, [oldHead, target],
+        `merge incoming work into ${headRef.slice("refs/heads/".length)}`);
+      return { ...facts, kind: "merge", headRef, oldHead, newHead, generation, arcPlan: null };
+    }
 
     const replayable = await this.replayable(oldHead, target);
     if (replayable.kind === "blocked") return blocked([], replayable.reason);
@@ -91,7 +101,9 @@ export default class WorkbenchGitIntegration {
     let parent = target;
     for (const { commit, metadata } of commits) {
       const merged = await repository.mergeWorktreeTrees(metadata.parents[0]!, parent, commit);
-      if (merged.conflictedPaths.length || merged.unsupportedConflictTypes.length) return blocked(merged.conflictedPaths);
+      if (merged.conflictedPaths.length || merged.unsupportedConflictTypes.length) {
+        return blocked(merged.conflictedPaths, "Replaying local commits conflicts and needs resolution.");
+      }
       parent = await repository.createCommitFromTree(merged.tree, parent, metadata.message, metadata);
       branchCommits.set(commit, parent);
     }

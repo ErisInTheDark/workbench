@@ -258,10 +258,10 @@ function parseState(contents: string): GitArcRegistryState {
         proposalIds,
         retainedArc: storedRetainedArc ? {
           ...storedRetainedArc,
-          intentDescription: entry.retainedArc.intentDescription ?? entry.intentDescription,
-          intentName: entry.retainedArc.intentName ?? entry.intentName,
-          phase: entry.retainedArc.phase ?? "active",
-          proposalIds: entry.retainedArc.proposalIds ?? [],
+          intentDescription: storedRetainedArc.intentDescription ?? entry.intentDescription,
+          intentName: storedRetainedArc.intentName ?? entry.intentName,
+          phase: storedRetainedArc.phase ?? "active",
+          proposalIds: storedRetainedArc.proposalIds ?? [],
         } : null,
       };
     }),

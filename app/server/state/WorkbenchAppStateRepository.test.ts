@@ -58,7 +58,7 @@ test("durable daemon registrations retain old scoped state when the attached dae
   } finally { await repository.close(); }
 });
 
-test("code-detail preferences survive reopening and retain pre-upgrade settings", async context => {
+test("typed global and project preferences survive reopening and retain pre-upgrade settings", async context => {
   const databasePath = await temporaryDatabase(context);
   const old = new Database(databasePath);
   applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 13 });
@@ -77,6 +77,13 @@ test("code-detail preferences survive reopening and retain pre-upgrade settings"
         key: "threadCodeDetails", boolean_value: 0, integer_value: null, text_value: null, deleted: 0, revision,
         enabled: 1, daemon_registration_id: daemon, project_id: "alpha",
       }),
+      insertRow(appStateTables.globalPreferences, {
+        key: "gitPeerSyncMode", boolean_value: null, integer_value: null, text_value: "rebase", deleted: 0, revision,
+      }),
+      insertRow(appStateTables.logicalProjectPreferences, {
+        logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "gitPeerSyncMode",
+        enabled: 1, boolean_value: null, integer_value: null, text_value: "merge", deleted: 0, revision,
+      }),
     ]);
   } finally { await repository.close(); }
   const reopened = new WorkbenchAppStateRepository({ databasePath });
@@ -84,6 +91,12 @@ test("code-detail preferences survive reopening and retain pre-upgrade settings"
   try {
     assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "theme" } }))[0]?.text_value, "winter");
     assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "threadCodeDetails" } }))[0]?.boolean_value, 1);
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "gitPeerSyncMode" } }))[0]?.text_value, "rebase");
+    const syncOverride = reopened.query(selectRows(appStateTables.logicalProjectPreferences, {
+      where: { logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "gitPeerSyncMode" },
+    }))[0];
+    assert.equal(syncOverride?.text_value, "merge");
+    assert.equal(syncOverride?.enabled, 1);
     const project = reopened.query(selectRows(appStateTables.projectPreferences, { where: { key: "threadCodeDetails" } }))[0];
     assert.equal(project?.boolean_value, 0);
     assert.equal(project?.enabled, 1);

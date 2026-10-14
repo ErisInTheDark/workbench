@@ -63,7 +63,7 @@ export default function WorkbenchSettingsPreferences({
     const definition = WORKBENCH_SETTING_DEFINITIONS[key];
     const override = project?.[key];
     const value = override?.enabled ? override.value : global[key];
-    const unavailable = logicalProjectId
+    const unavailable = key === "gitPeerSyncMode" ? state.schemaVersion < appStateReleases.gitPeerSyncMode.version : logicalProjectId
       ? state.schemaVersion < appStateReleases.logicalProjectPreferences.version
       : key === "threadCodeDetails" && state.schemaVersion < appStateReleases.threadCodeDetails.version;
     const resetButton = override?.enabled ? <IconButton

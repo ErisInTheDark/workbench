@@ -13,19 +13,23 @@ import WorkbenchSidebarSectionDisclosure from "../WorkbenchSidebarSectionDisclos
 import { useWorkbenchSidebarPreferences } from "../workbench-sidebar-preferences-context";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
+import WorkbenchGitPeerTransferButton from "./WorkbenchGitPeerTransferButton";
 
 const PEER_ROW = "flex min-h-8 items-center gap-2 pl-2 text-[0.8rem] leading-5";
 const BUTTON = "!shrink-0 [&>span:first-of-type]:!inset-[3px]";
 
-// Agent-facing, so it carries the detail the row leaves out.
 function blockedPrompt(outcome: WorkbenchGitPeerOutcome, branch: string | null) {
   const direction = outcome.action === "pull" ? `Pulling \`${branch ?? "the branch"}\` from ${outcome.peer.hostname} (\`${outcome.peer.rootPath}\`)`
     : `Sending \`${branch ?? "the branch"}\` to ${outcome.peer.hostname} (\`${outcome.peer.rootPath}\`)`;
   const conflicts = outcome.conflicts.length
     ? `\n\nConflicting files:\n\n${outcome.conflicts.map(file => `- \`${file}\``).join("\n")}` : "";
-  const command = `wb git integrate start --from ${outcome.peer.hostname}:${outcome.peer.rootPath}`;
-  const then = outcome.action === "send" ? ` so this folder holds their commits; Send then fast-forwards ${outcome.peer.hostname}` : "";
-  return `${direction} is blocked: ${outcome.reason}${conflicts}\n\nIntegrate their commits here with \`${command}\` (\`wb git --help\` lists the integrate steps)${then}. Preserve local work on both sides.`;
+  const guidance = outcome.mode === "merge"
+    ? "The selected mode preserves both histories. Inspect current ancestry before proposing a merge on the receiving device."
+    : "The selected mode rebases incoming commits on their owning (sending) device, then fast-forwards the receiver. Do not replay published receiving-device commits.";
+  const affected = !outcome.location ? "uncertain; inspect both devices"
+    : outcome.location.daemonId === outcome.peer.daemonId && outcome.location.projectId === outcome.peer.projectId
+      ? `${outcome.peer.hostname}:${outcome.peer.rootPath}` : "the selected folder";
+  return `${direction} using ${outcome.mode} needs attention: ${outcome.reason}${conflicts}\n\nAffected location: ${affected}. ${guidance} Completion state: ${outcome.progress}. Inspect both sides before further integration; preserve local work on both sides. \`wb git --help\` lists manual integration steps.`;
 }
 
 function GitPeerRows ({ location, onAskAgent }: {
@@ -40,25 +44,28 @@ function GitPeerRows ({ location, onAskAgent }: {
       const key = `${peer.daemonId}/${peer.projectId}`;
       const outcome = snapshot.outcome && `${snapshot.outcome.peer.daemonId}/${snapshot.outcome.peer.projectId}` === key
         ? snapshot.outcome : null;
-      if (snapshot.busy === key) return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`}>Syncing with {peer.hostname}...</p>;
-      if (outcome) return <div key={key} className={PEER_ROW} title={outcome.conflicts.join("\n") || undefined}>
-        <span className={`min-w-0 flex-1 truncate ${outcome.blocked ? "text-text" : "text-danger"}`}>{outcome.reason}</span>
-        {outcome.blocked ? <PrimaryButton className={BUTTON} shape="compact" tone="attention"
-          onClick={() => onAskAgent(location.projectId, [{ kind: "updateIssue", text: blockedPrompt(outcome, branch) }])}>
-          <BotIcon className="mr-1" size={14} />Ask agent
-        </PrimaryButton> : null}
-      </div>;
-      if (peer.state === "unsupported") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
+      if (!outcome && peer.state === "unsupported") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
         Update Workbench on {peer.hostname} to sync
       </p>;
-      if (peer.state === "failed") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
+      if (!outcome && peer.state === "failed") return <p key={key} className={`${PEER_ROW} m-0 text-fg/muted`} title={peer.failure ?? undefined}>
         Can't read {peer.hostname}
       </p>;
-      if (peer.state !== "current" || !peer.behind) return null;
-      return <div key={key} className={PEER_ROW} title={peer.rootPath}>
-        <span className="min-w-0 flex-1 truncate text-text">{peer.behind} new on {peer.hostname}</span>
-        <PrimaryButton className={BUTTON} shape="compact" disabled={snapshot.busy !== null}
-          onClick={() => void state.transfer("pull", peer)}>Pull</PrimaryButton>
+      if (!outcome && (peer.state !== "current" || !peer.behind && snapshot.busy?.peerKey !== key)) return null;
+      return <div key={key} className="space-y-1">
+        <div className={PEER_ROW} title={peer.rootPath}>
+          <span className="min-w-0 flex-1 truncate text-text">
+            {snapshot.busy?.peerKey === key ? `Syncing with ${peer.hostname}...`
+              : peer.state !== "current" ? `${peer.hostname} unavailable` : `${peer.behind} new on ${peer.hostname}`}
+          </span>
+          <WorkbenchGitPeerTransferButton className={BUTTON} location={location} peer={peer} action="pull" />
+        </div>
+        {outcome ? <div className={`${PEER_ROW} flex-wrap`} title={outcome.conflicts.join("\n") || undefined}>
+          <span className="min-w-0 flex-1 text-text" role="status">{outcome.reason}</span>
+          {outcome.progress !== "complete" ? <PrimaryButton className={BUTTON} shape="compact" tone="attention"
+            onClick={() => onAskAgent(location.projectId, [{ kind: "updateIssue", text: blockedPrompt(outcome, branch) }])}>
+            <BotIcon className="mr-1" size={14} />Ask agent
+          </PrimaryButton> : null}
+        </div> : null}
       </div>;
     })}
   </>;

@@ -122,6 +122,10 @@ function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
   return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
 }
 
+function normalizeGitPeerSyncMode(value: unknown): WorkbenchGlobalSettings["gitPeerSyncMode"] {
+  return value === "rebase" ? "rebase" : "merge";
+}
+
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
   return {
@@ -130,6 +134,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     editorFontSize: clampEditorFontSize(candidate.editorFontSize),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
     fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
+    gitPeerSyncMode: normalizeGitPeerSyncMode(candidate.gitPeerSyncMode),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
@@ -146,6 +151,8 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
   const defaultValue = createDefaultProjectWorkbenchSettings()[key].value;
 
   switch (key) {
+    case "gitPeerSyncMode":
+      return { enabled, value: normalizeGitPeerSyncMode(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "theme":
       return { enabled, value: normalizeTheme(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontFamily":
@@ -176,6 +183,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
     editorSpellCheck: false,
     fileOpenBehavior: "workbench-or-vscode",
+    gitPeerSyncMode: "merge",
     showUnopenableFiles: false,
     theme: "default",
     threadCodeBlockWrap: false,
@@ -191,6 +199,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
     editorSpellCheck: { enabled: false, value: globalDefaults.editorSpellCheck },
     fileOpenBehavior: { enabled: false, value: globalDefaults.fileOpenBehavior },
+    gitPeerSyncMode: { enabled: false, value: globalDefaults.gitPeerSyncMode },
     showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
     threadCodeBlockWrap: { enabled: false, value: globalDefaults.threadCodeBlockWrap },
@@ -321,6 +330,7 @@ function normalizePreferenceOverrides(candidate: Record<string, unknown>): Workb
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
     fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", candidate.fileOpenBehavior),
+    gitPeerSyncMode: normalizeProjectOverride("gitPeerSyncMode", candidate.gitPeerSyncMode),
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
     threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", candidate.threadCodeBlockWrap),
@@ -473,6 +483,7 @@ export function resolveWorkbenchSettings(
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,
     editorSpellCheck: projectSettings.editorSpellCheck.enabled ? projectSettings.editorSpellCheck.value : globalSettings.editorSpellCheck,
     fileOpenBehavior: projectSettings.fileOpenBehavior.enabled ? projectSettings.fileOpenBehavior.value : globalSettings.fileOpenBehavior,
+    gitPeerSyncMode: projectSettings.gitPeerSyncMode.enabled ? projectSettings.gitPeerSyncMode.value : globalSettings.gitPeerSyncMode,
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,

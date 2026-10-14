@@ -1,14 +1,15 @@
 /*
  * Exports:
  * - default WorkbenchGitPeerController: own this daemon's side of app-relayed peer transfers: held commits, branch bundles,
- *   received bundles and integration of a peer's branch into the checked-out branch.
+ *   received bundles, inspected ancestry and expected-tip integration of a peer's branch.
  */
 import type http from "node:http";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import {
   GIT_PEER_NO_BUNDLE_HEADER, GIT_PEER_ROUTES, GIT_PEER_TIP_HEADER, GitBranchNameSchema, GitPeerBundleRequestSchema, GitPeerHavesRequestSchema, GitPeerIntegrateRequestSchema,
-  GitPeerReceiveQuerySchema, type GitPeerAddress, type GitPeerIntegrationResult,
+  GitPeerReceiveQuerySchema, type GitPeerAddress, type GitPeerIntegrationResult, type GitPeerApplyOptions,
+  type GitPeerIntegrationSnapshot,
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { conformToZodSchema } from "workbench-shared/workbench/zod-schema-conformer";
@@ -131,8 +132,17 @@ export default class WorkbenchGitPeerController {
         }
         case GIT_PEER_ROUTES.integrate: {
           const body = parse(GitPeerIntegrateRequestSchema, await readJson(request),
-            INVALID_HAVES_REQUEST, "integrate", this.options.warn);
-          sendJson(response, 200, await this.integrate(body.projectId, body.peer, body.branch));
+            { ...INVALID_HAVES_REQUEST, expectedHead: INVALID_TIP, incoming: INVALID_TIP, mode: "fastForward" },
+            "integrate", this.options.warn);
+          sendJson(response, 200, await this.integrate(body.projectId, body.peer, body.branch, body));
+          return;
+        }
+        case GIT_PEER_ROUTES.inspect: {
+          const body = parse(GitPeerHavesRequestSchema, await readJson(request),
+            INVALID_HAVES_REQUEST, "inspect integration", this.options.warn);
+          const repository = await this.repository(body.projectId);
+          sendJson(response, 200, await this.options.transitions.run(repository.root,
+            () => this.inspect(repository, body.peer, body.branch)));
           return;
         }
         default:
@@ -160,18 +170,31 @@ export default class WorkbenchGitPeerController {
     return new WorkbenchGitPeerTransport(await this.repository(projectId));
   }
 
-  /** Fast-forward or replay local commits onto the peer's branch, never touching commits any peer or remote holds. */
-  private async integrate(projectId: string, peer: GitPeerAddress, branch: string): Promise<GitPeerIntegrationResult> {
+  private async inspect(repository: WorkbenchGitRepository, peer: GitPeerAddress, branch: string): Promise<GitPeerIntegrationSnapshot> {
+    if (await repository.symbolicHead() !== `refs/heads/${branch}`) {
+      throw new RequestError(409, `This folder no longer has ${branch} checked out.`);
+    }
+    const incoming = await new WorkbenchGitPeerTransport(repository).trackingTip(peer, branch);
+    if (!incoming) throw new RequestError(409, "The peer's branch has not been fetched here yet.");
+    const head = await repository.currentHead();
+    const [ahead, behind] = (await repository.run(["rev-list", "--left-right", "--count", `${head}...${incoming}`]))
+      .trim().split(/\s+/u).map(Number);
+    if (!Number.isSafeInteger(ahead) || !Number.isSafeInteger(behind)) throw new Error("Invalid peer ancestry counts.");
+    return { head, incoming, ahead: ahead!, behind: behind! };
+  }
+
+  private async integrate(projectId: string, peer: GitPeerAddress, branch: string,
+    input: GitPeerApplyOptions): Promise<GitPeerIntegrationResult> {
     const repository = await this.repository(projectId);
+    // Network I/O stays outside the worktree lease; expected tips are checked after it.
+    if (input.mode === "replay" && (await repository.remotes()).length) await repository.fetchRemotes();
     return await this.options.transitions.run(repository.root, async () => {
-      const head = (await repository.run(["symbolic-ref", "-q", "HEAD"]).catch(() => "")).trim();
-      if (head !== `refs/heads/${branch}`) {
-        return { kind: "blocked", reason: `This folder no longer has ${branch} checked out.`, conflicts: [] };
+      const snapshot = await this.inspect(repository, peer, branch);
+      if (snapshot.head !== input.expectedHead || snapshot.incoming !== input.incoming) {
+        return { kind: "blocked", reason: "A branch changed after inspection; refresh and try again.", conflicts: [] };
       }
-      const incoming = await new WorkbenchGitPeerTransport(repository).trackingTip(peer, branch);
-      if (!incoming) throw new RequestError(409, "The peer's branch has not been fetched here yet.");
       const integration = new WorkbenchGitIntegration(repository);
-      const plan = await integration.prepare(incoming);
+      const plan = await integration.prepare(input.incoming, input.mode);
       if (plan.kind === "current") return { kind: "current" };
       if (plan.kind === "blocked") return { kind: "blocked", reason: plan.reason, conflicts: plan.conflicts.slice(0, 50) };
       const applied = await integration.apply(plan);

@@ -8,12 +8,14 @@
  * - WorkbenchSettingDefinition: setting control metadata.
  * - WORKBENCH_SETTING_DEFINITIONS: shared settings controls and search metadata.
  */
+import type { GitPeerSyncMode } from "../git/git-peer-contracts";
+
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
 export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
-  | "editorFontSize" | "fileOpenBehavior"
+  | "editorFontSize" | "fileOpenBehavior" | "gitPeerSyncMode"
   | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails";
 
 export interface WorkbenchGlobalSettings {
@@ -22,6 +24,7 @@ export interface WorkbenchGlobalSettings {
   editorFontSize: number;
   editorSpellCheck: boolean;
   fileOpenBehavior: WorkbenchFileOpenBehavior;
+  gitPeerSyncMode: GitPeerSyncMode;
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
@@ -38,6 +41,14 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
 };
 
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
+  gitPeerSyncMode: {
+    description: "Default for cross-device Pull and Send. Hold Shift to use the other mode for one transfer.",
+    key: "gitPeerSyncMode", label: "Cross-device sync", type: "select",
+    options: [
+      { label: "Merge", value: "merge", description: "Preserve both histories. Divergent work adds a merge commit on the receiving device." },
+      { label: "Rebase", value: "rebase", description: "Rebase unpublished incoming work on its owning device, then fast-forward the receiver. Published work is never rewritten." },
+    ],
+  },
   composerSpellCheck: { description: "Controls spellcheck in thread composers and questionnaire text answers.", key: "composerSpellCheck", label: "Composer spellcheck", type: "boolean" },
   editorFontFamily: {
     description: "Controls the body font used by the rich markdown editor.", key: "editorFontFamily", label: "Editor font", type: "select",

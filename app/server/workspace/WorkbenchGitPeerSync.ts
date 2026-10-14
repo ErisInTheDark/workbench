@@ -3,11 +3,12 @@
  * - default WorkbenchGitPeerSync: own each observed folder's peers (its logical project's other visible folders on other
  *   daemons), fetch a peer's branch whenever its HEAD moves, run Pull and Send between a folder and one peer, and fetch a
  *   named peer for a daemon's agent.
+ * - WorkbenchGitPeersFact: observed peer rows and freshness.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type {
-  GitBranchPosition, GitPeerAddress, GitPeerFetchOutcome, GitPeerFetchQuestion, GitPeerIntegrationResult, GitPeerStatus,
-  GitPeerTransfer, WorkspaceGitPeers,
+  GitBranchPosition, GitPeerAddress, GitPeerFetchOutcome, GitPeerFetchQuestion, GitPeerStatus,
+  GitPeerTransfer, WorkspaceGitPeers, GitPeerTransferResult,
 } from "workbench-shared/workbench/git/git-peer-contracts";
 import type { WorkspaceSourcePhase } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { DaemonId } from "workbench-shared/workbench/identity";
@@ -56,6 +57,7 @@ function bounded(error: unknown) {
 
 export default class WorkbenchGitPeerSync {
   private readonly entries = new Map<string, Entry>();
+  private readonly transfers = new Set<string>();
   private closed = false;
 
   constructor(private readonly options: {
@@ -64,7 +66,7 @@ export default class WorkbenchGitPeerSync {
       subscribe(listener: () => void): () => void;
     };
     workspace: Pick<WorkbenchWorkspaceController, "getSnapshot" | "subscribe">;
-    relay: Pick<WorkbenchGitPeerRelay, "fetch" | "integrate">;
+    relay: Pick<WorkbenchGitPeerRelay, "fetch" | "inspect" | "integrate">;
     warn(message: string): void;
   }) {}
 
@@ -99,17 +101,85 @@ export default class WorkbenchGitPeerSync {
   }
 
   /** Pull brings the peer's commits into the folder; Send has the peer pull from the folder. Both sides learn the result. */
-  async transfer(input: GitPeerTransfer): Promise<GitPeerIntegrationResult> {
+  async transfer(input: GitPeerTransfer): Promise<GitPeerTransferResult> {
+    if (this.closed) throw new Error("Peer sync is reloading.");
     const location = { daemonId: input.location.daemonId, projectId: input.location.projectId };
     const entry = this.entries.get(peerKey(location));
     const branch = entry?.fact.data?.branch;
     if (!entry || !branch) throw new Error("This folder's branch is not known yet.");
     if (!entry.peers.some(peer => peerKey(peer) === peerKey(input.peer))) throw new Error("That folder is not a visible peer of this one.");
     const [receiver, sender] = input.action === "pull" ? [location, input.peer] : [input.peer, location];
-    await this.relay.fetch(sender, receiver, branch);
-    const result = await this.relay.integrate(receiver, sender, branch);
-    if (result.kind === "applied") await this.relay.fetch(receiver, sender, branch);
-    return result;
+    const keys = [peerKey(receiver), peerKey(sender)];
+    if (keys.some(key => this.transfers.has(key))) throw new Error("A transfer involving one of these folders is already running.");
+    for (const key of keys) this.transfers.add(key);
+    let affected = receiver;
+    let progress: Extract<GitPeerTransferResult, { kind: "blocked" }>["progress"] = "none";
+    const warnings: string[] = [];
+    const blocked = (reason: string, conflicts: string[] = []): GitPeerTransferResult =>
+      ({ kind: "blocked", location: affected, progress, reason: [reason, ...warnings].join(" ").slice(0, 1024), conflicts });
+    const checkOpen = () => { if (this.closed) throw new Error("Peer sync reloaded; refresh and retry to finish."); };
+    try {
+      const incoming = await this.relay.fetch(sender, receiver, branch);
+      checkOpen();
+      const destination = await this.relay.inspect(receiver, sender, branch);
+      if (destination.incoming !== incoming) return blocked("The sending branch changed during inspection; refresh and try again.");
+      if (!destination.behind) return { kind: "current" };
+
+      affected = sender;
+      const sent = await this.relay.fetch(receiver, sender, branch);
+      checkOpen();
+      const source = await this.relay.inspect(sender, receiver, branch);
+      if (sent !== destination.head || source.head !== incoming || source.incoming !== sent) {
+        return blocked("A branch changed during inspection; refresh and try again.");
+      }
+
+      let target = incoming;
+      if (input.mode === "rebase" && destination.ahead) {
+        checkOpen();
+        progress = "uncertain";
+        const replay = await this.relay.integrate(sender, receiver, branch, {
+          mode: "replay", expectedHead: source.head, incoming: destination.head,
+        });
+        if (replay.kind === "blocked") {
+          progress = "none";
+          return blocked(replay.reason ?? "Incoming commits cannot be rebased.", replay.conflicts);
+        }
+        if (replay.kind === "current") throw new Error("The sending branch changed unexpectedly; refresh and retry.");
+        progress = "senderUpdated";
+        warnings.push(...replay.warnings);
+        target = replay.toSha;
+        affected = receiver;
+        checkOpen();
+        if (await this.relay.fetch(sender, receiver, branch) !== target) {
+          return blocked("The sender updated, then gained more commits; refresh and retry to finish.");
+        }
+      }
+
+      affected = receiver;
+      checkOpen();
+      const priorProgress = progress;
+      progress = "uncertain";
+      const result = await this.relay.integrate(receiver, sender, branch, {
+        mode: input.mode === "merge" ? "merge" : "fastForward", expectedHead: destination.head, incoming: target,
+      });
+      if (result.kind === "blocked") {
+        progress = priorProgress;
+        return blocked(result.reason ?? "Incoming work needs resolution.", result.conflicts);
+      }
+      if (result.kind === "current") return { kind: "current" };
+      warnings.push(...result.warnings);
+      try {
+        checkOpen();
+        await this.relay.fetch(receiver, sender, branch);
+      } catch (error) {
+        warnings.push(bounded(`Work integrated, but the peer tracking ref could not be refreshed: ${bounded(error)}`));
+      }
+      return { kind: "applied", mode: input.mode, fromSha: destination.head, toSha: result.toSha, warnings };
+    } catch (error) {
+      return blocked(bounded(error));
+    } finally {
+      for (const key of keys) this.transfers.delete(key);
+    }
   }
 
   /** Answers a daemon's agent: fetch the named peer's branch into that daemon's folder and say which peer it was. */

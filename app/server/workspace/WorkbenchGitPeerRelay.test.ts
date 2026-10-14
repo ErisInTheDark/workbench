@@ -58,3 +58,10 @@ test("a daemon without peer routes is reported as needing an update", async () =
   const { instance } = relay(() => new Response(null, { status: 404 }));
   await assert.rejects(instance.fetch(sender, receiver, "main"), GitPeerUnsupportedError);
 });
+
+test("inspection rejects missing ancestry rather than inventing mutation inputs", async t => {
+  const diagnostics = t.mock.method(console, "warn", () => undefined);
+  const { instance } = relay(() => Response.json({ head: tip }));
+  await assert.rejects(instance.inspect(receiver, sender, "main"), /invalid peer transfer response/u);
+  assert.ok(diagnostics.mock.callCount());
+});

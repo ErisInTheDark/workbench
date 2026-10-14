@@ -24,6 +24,23 @@ import {
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 import { LogicalProjectIdSchema } from "workbench-shared/workbench/identity";
 
+test("sync policy inherits, persists per logical project and resets without changing the global default", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  const project = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");
+  const resolve = () => resolveWorkbenchSettings(
+    readGlobalWorkbenchSettings(controller.getSnapshot().records),
+    readLogicalProjectWorkbenchSettings(project, controller.getSnapshot().records),
+  ).gitPeerSyncMode;
+  assert.equal(resolve(), "merge");
+  await writeGlobalWorkbenchSetting(controller, "gitPeerSyncMode", "rebase");
+  assert.equal(resolve(), "rebase");
+  await writeLogicalProjectWorkbenchSetting(controller, project, "gitPeerSyncMode", { enabled: true, value: "merge" });
+  assert.equal(resolve(), "merge");
+  assert.equal(readGlobalWorkbenchSettings(controller.getSnapshot().records).gitPeerSyncMode, "rebase");
+  await writeLogicalProjectWorkbenchSetting(controller, project, "gitPeerSyncMode", { enabled: false, value: "merge" });
+  assert.equal(resolve(), "rebase");
+});
+
 test("one logical project override applies across daemon folders and reset reaches global", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const project = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");

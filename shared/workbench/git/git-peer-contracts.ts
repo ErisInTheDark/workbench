@@ -5,6 +5,10 @@
  * - GitBranchPositionSchema/GitBranchPosition: a checkout's branch, HEAD and counts against each requested peer's tracking ref.
  * - GitPeerStatusSchema/GitPeerStatus, WorkspaceGitPeersSchema/WorkspaceGitPeers: the app's peer rows for one folder.
  * - GitPeerTransferSchema/GitPeerTransfer: a browser Pull or Send between a folder and one peer.
+ * - GitPeerSyncModeSchema/GitPeerSyncMode: user-selected merge or sender-side rebase policy.
+ * - GitPeerTransferResultSchema/GitPeerTransferResult: complete or device-specific interrupted transfer.
+ * - GitPeerIntegrationSnapshotSchema/GitPeerIntegrationSnapshot: inspected receiver and incoming tips with ancestry counts.
+ * - GitPeerApplyOptions: pinned tips and local integration mode for one guarded mutation.
  * - GitPeerIntegrationResultSchema/GitPeerIntegrationResult: what integrating a peer's branch did.
  * - GIT_PEER_ROUTES/GIT_PEER_TIP_HEADER/GIT_PEER_NO_BUNDLE_HEADER: daemon HTTP routes, the header naming a sent branch tip
  *   and the marker for a receive without a bundle.
@@ -66,11 +70,15 @@ export const WorkspaceGitPeersSchema = z.object({
 }).strict();
 export type WorkspaceGitPeers = z.infer<typeof WorkspaceGitPeersSchema>;
 
+export const GitPeerSyncModeSchema = z.enum(["merge", "rebase"]);
+export type GitPeerSyncMode = z.infer<typeof GitPeerSyncModeSchema>;
+
 /** `pull` brings the peer's commits into `location`; `send` has the peer pull from `location`. */
 export const GitPeerTransferSchema = z.object({
   action: z.enum(["pull", "send"]),
   location: ProjectLocationReferenceSchema,
   peer: GitPeerAddressSchema,
+  mode: GitPeerSyncModeSchema,
 }).strict();
 export type GitPeerTransfer = z.infer<typeof GitPeerTransferSchema>;
 
@@ -84,11 +92,31 @@ export const GitPeerIntegrationResultSchema = z.discriminatedUnion("kind", [
 ]);
 export type GitPeerIntegrationResult = z.infer<typeof GitPeerIntegrationResultSchema>;
 
+export const GitPeerIntegrationSnapshotSchema = z.object({
+  head: sha, incoming: sha, ahead: count, behind: count,
+}).strict();
+export type GitPeerIntegrationSnapshot = z.infer<typeof GitPeerIntegrationSnapshotSchema>;
+
+export const GitPeerTransferResultSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("current") }).strict(),
+  z.object({
+    kind: z.literal("applied"), mode: GitPeerSyncModeSchema, fromSha: sha, toSha: sha,
+    warnings: z.array(z.string().max(512)),
+  }).strict(),
+  z.object({
+    kind: z.literal("blocked"), location: GitPeerAddressSchema,
+    progress: z.enum(["none", "senderUpdated", "uncertain"]),
+    reason: z.string().max(1024), conflicts: z.array(z.string()),
+  }).strict(),
+]);
+export type GitPeerTransferResult = z.infer<typeof GitPeerTransferResultSchema>;
+
 export const GIT_PEER_ROUTES = {
   haves: "/daemon/git-peer/haves",
   bundle: "/daemon/git-peer/bundle",
   receive: "/daemon/git-peer/receive",
-  integrate: "/daemon/git-peer/integrate",
+  inspect: "/daemon/git-peer/integration/inspect",
+  integrate: "/daemon/git-peer/integration/apply",
 } as const;
 export const GIT_PEER_TIP_HEADER = "x-workbench-git-tip";
 /** Marks a receive that records a tip the receiver already holds, so no bundle body follows. */
@@ -108,7 +136,12 @@ export const GitPeerReceiveQuerySchema = z.object({
   branch: GitBranchNameSchema, tip: sha,
 }).strict();
 export const GitPeerReceiveResultSchema = z.object({ tip: sha }).strict();
-export const GitPeerIntegrateRequestSchema = GitPeerHavesRequestSchema;
+export const GitPeerIntegrateRequestSchema = GitPeerHavesRequestSchema.extend({
+  expectedHead: sha,
+  incoming: sha,
+  mode: z.enum(["fastForward", "replay", "merge"]),
+}).strict();
+export type GitPeerApplyOptions = Pick<z.infer<typeof GitPeerIntegrateRequestSchema>, "expectedHead" | "incoming" | "mode">;
 
 /**
  * A daemon asks its connected apps to fetch a named peer's branch into one of its folders, for agents that run

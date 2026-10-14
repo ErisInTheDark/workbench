@@ -9,6 +9,7 @@ import WorkbenchTag from "../WorkbenchTag";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { ChevronDownIcon } from "../workbench-icons";
 import { useWorkingTree, useWorkingTreeDaemonId, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
+import WorkbenchGitPeerTransferButton from "./WorkbenchGitPeerTransferButton";
 
 export default function WorkbenchGitRepositoryControl () {
   const state = useWorkingTree();
@@ -44,19 +45,18 @@ export default function WorkbenchGitRepositoryControl () {
 /** Pull and Send for each peer folder on the same branch, shown only while there is something to move. */
 function GitPeerButtons ({ location }: { location: ProjectLocationReference | null }) {
   const { state, snapshot } = useGitPeerState(useWorkbenchWorkspace(), location);
-  const peers = snapshot.data?.peers.filter(peer => peer.state === "current" && (peer.ahead || peer.behind)) ?? [];
-  if (!state || !peers.length) return null;
+  const peers = snapshot.data?.peers.filter(peer => peer.state === "current" && (peer.ahead || peer.behind)
+    || snapshot.outcome?.peer.daemonId === peer.daemonId && snapshot.outcome.peer.projectId === peer.projectId) ?? [];
+  if (!state || !location || !peers.length) return null;
   const named = peers.length > 1;
   return <>{peers.flatMap(peer => {
-    const busy = snapshot.busy === `${peer.daemonId}/${peer.projectId}`;
-    const suffix = named ? ` · ${peer.hostname}` : "";
+    const outcome = snapshot.outcome?.peer.daemonId === peer.daemonId && snapshot.outcome.peer.projectId === peer.projectId
+      ? snapshot.outcome : null;
     return [
-      ...peer.behind ? [<PrimaryButton key={`pull:${peer.daemonId}/${peer.projectId}`} shape="compact" pendingHalo={busy}
-        disabled={snapshot.busy !== null} title={`Pull ${peer.behind} from ${peer.hostname}: ${peer.rootPath}`}
-        onClick={() => void state.transfer("pull", peer)}>Pull {peer.behind}{suffix}</PrimaryButton>] : [],
-      ...peer.ahead ? [<PrimaryButton key={`send:${peer.daemonId}/${peer.projectId}`} shape="compact" pendingHalo={busy}
-        disabled={snapshot.busy !== null} title={`Send ${peer.ahead} to ${peer.hostname}: ${peer.rootPath}`}
-        onClick={() => void state.transfer("send", peer)}>Send {peer.ahead}{suffix}</PrimaryButton>] : [],
+      ...peer.behind || outcome?.action === "pull" ? [<WorkbenchGitPeerTransferButton
+        key={`pull:${peer.daemonId}/${peer.projectId}`} location={location} peer={peer} action="pull" showCount showHostname={named} />] : [],
+      ...peer.ahead || outcome?.action === "send" ? [<WorkbenchGitPeerTransferButton
+        key={`send:${peer.daemonId}/${peer.projectId}`} location={location} peer={peer} action="send" showCount showHostname={named} />] : [],
     ];
-  })}</>;
+  })}{snapshot.outcome ? <span role="status" className="text-sm text-text">{snapshot.outcome.reason}</span> : null}</>;
 }
