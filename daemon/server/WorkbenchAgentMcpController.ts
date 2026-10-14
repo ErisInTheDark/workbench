@@ -64,6 +64,10 @@ const EMPTY_OBJECT_JSON_SCHEMA = { type: "object" as const, properties: {} };
 const STEER_INTERRUPTION_TEXT = "Wait interrupted: a new message arrived for this thread. Read it, then call this tool again if you still need to wait.";
 const MCP_CLIENT_SCOPE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 type WorkbenchAgentMcpRequestId = number | string;
+type WorkbenchAgentMcpRegisteredCommand = {
+  registration: ReturnType<WorkbenchAgentMcpRequestRegistry["register"]>;
+  signal: AbortSignal;
+};
 
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
@@ -310,9 +314,32 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     tools: WorkbenchProviderTools,
   ): Promise<WorkbenchMcpToolStep> {
     const toolName = getWorkbenchAgentCommandToolName(definition);
-    const started = await this.startTranscript(toolName, input, call.meta, clientScope, call.signal, tools);
-    if (started.kind === "failed") return { kind: "result", result: started.result };
-    const prepared = await this.prepareCommand(definition, input, call.meta, clientScope, call.requestId, call.signal, tools);
+    let registered: WorkbenchAgentMcpRegisteredCommand;
+    try {
+      registered = this.registerCommand(definition, clientScope, call.requestId, call.signal);
+    } catch (error) {
+      return { kind: "result", result: this.commandFailure(definition, error, call.signal) };
+    }
+    const started = await this.startTranscript(toolName, input, call.meta, clientScope, registered.signal, tools);
+    if (started.kind === "failed") {
+      registered.registration.unregister();
+      return { kind: "result", result: started.result };
+    }
+    try {
+      if (started.reference) registered.registration.setWorkbenchThreadId(started.reference.threadId);
+    } catch (error) {
+      registered.registration.unregister();
+      const result = this.commandFailure(definition, error, registered.signal);
+      return { kind: "result", result: await this.finishTranscript(tools, started.reference, result) };
+    }
+    if (registered.signal.aborted) {
+      registered.registration.unregister();
+      const result = this.commandFailure(definition, registered.signal.reason, registered.signal);
+      return { kind: "result", result: await this.finishTranscript(tools, started.reference, result) };
+    }
+    const prepared = await this.prepareCommand(
+      definition, input, call.meta, clientScope, call.requestId, registered.signal, tools, registered,
+    );
     if (prepared.kind === "result") {
       prepared.unregister?.();
       return { kind: "result", result: await this.finishTranscript(tools, started.reference, prepared.result) };
@@ -330,6 +357,21 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         unregister: prepared.unregister,
       },
     };
+  }
+
+  private registerCommand(
+    definition: WorkbenchAgentCommandDefinition,
+    clientScope: string,
+    requestId: WorkbenchAgentMcpRequestId,
+    signal: AbortSignal,
+  ): WorkbenchAgentMcpRegisteredCommand {
+    const registration = this.requestRegistry.register(clientScope, requestId, {
+      owner: this.runtimeOwner,
+      policy: definition.mcpRuntimeDrainPolicy,
+      steerInterruptible: definition.mcpSteerInterruptible,
+      toolName: getWorkbenchAgentCommandToolName(definition),
+    });
+    return { registration, signal: AbortSignal.any([signal, registration.signal]) };
   }
 
   async finish(scope: WorkbenchMcpScope, call: WorkbenchMcpDetachedCall, outcome: WorkbenchMcpCallOutcome) {
@@ -578,6 +620,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    registered?: WorkbenchAgentMcpRegisteredCommand,
   ): Promise<
     | { kind: "ready"; request: WorkbenchAgentCommandRequest; signal: AbortSignal; unregister: () => void }
     | { kind: "result"; result: CallToolResult; unregister?: () => void }
@@ -585,14 +628,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     let unregister: (() => void) | undefined;
     try {
       const toolName = getWorkbenchAgentCommandToolName(definition);
-      const registration = this.requestRegistry.register(clientScope, requestId, {
-        owner: this.runtimeOwner,
-        policy: definition.mcpRuntimeDrainPolicy,
-        steerInterruptible: definition.mcpSteerInterruptible,
-        toolName,
-      });
+      const { registration, signal: registeredSignal } = registered
+        ?? this.registerCommand(definition, clientScope, requestId, signal);
       unregister = registration.unregister;
-      signal = AbortSignal.any([signal, registration.signal]);
+      signal = registeredSignal;
       const caller = await tools.caller(ProviderToolMetadataSchema.parse(meta ?? {}), signal, { clientScope });
       if (signal.aborted) throw signal.reason;
       registration.setWorkbenchThreadId(caller.threadId);

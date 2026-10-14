@@ -1,4 +1,4 @@
-/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops, and reload-stable cancellation. */
+/* No production exports. Tests protect isolated identity, generation-scoped drain policy, diagnostics, user shell stops, steer races, and reload-stable cancellation. */
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -171,6 +171,40 @@ test("agent-message interruption excludes message waits but user steers still in
   assert.equal(isWorkbenchAgentMcpSteerInterruption(messageWait.signal.reason), true);
   messageWait.unregister();
   subagentWait.unregister();
+  registry.dispose();
+});
+
+test("steers admitted while wait identity resolves interrupt only matching eligible requests", () => {
+  const registry = new WorkbenchAgentMcpRequestRegistry();
+  const owner = {};
+  const threadId = WorkbenchThreadIdSchema.parse("caller");
+  const otherThreadId = WorkbenchThreadIdSchema.parse("other");
+  assert.equal(registry.interruptThreadWaits(threadId), 0, "an earlier steer cannot poison a future wait");
+  const matching = registry.register("client", "matching", {
+    owner, toolName: "subagent_wait", steerInterruptible: true,
+  });
+  const other = registry.register("client", "other", {
+    owner, toolName: "subagent_wait", steerInterruptible: true,
+  });
+  const excluded = registry.register("client", "excluded", {
+    owner, toolName: "message_wait", steerInterruptible: true,
+  });
+
+  assert.equal(registry.interruptThreadWaits(threadId, "agent message", ["message_wait"]), 0);
+  matching.setWorkbenchThreadId(threadId);
+  other.setWorkbenchThreadId(otherThreadId);
+  excluded.setWorkbenchThreadId(threadId);
+  assert.equal(matching.signal.aborted, true);
+  assert.equal(isWorkbenchAgentMcpSteerInterruption(matching.signal.reason), true);
+  assert.equal(other.signal.aborted, false);
+  assert.equal(excluded.signal.aborted, false);
+
+  const future = registry.register("client", "future", {
+    owner, toolName: "subagent_wait", steerInterruptible: true,
+  });
+  future.setWorkbenchThreadId(threadId);
+  assert.equal(future.signal.aborted, false, "a request registered after an earlier steer stays live");
+  for (const registration of [matching, other, excluded, future]) registration.unregister();
   registry.dispose();
 });
 

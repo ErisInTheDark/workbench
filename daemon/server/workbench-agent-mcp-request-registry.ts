@@ -40,6 +40,7 @@ interface WorkbenchAgentMcpCommandGeneration {
 
 interface WorkbenchAgentMcpRequestEntry {
   controller: AbortController;
+  deferredSteerInterruptions?: Map<WorkbenchThreadId, Error>;
   drainIndependent: boolean;
   owner: WorkbenchAgentMcpRuntimeOwner;
   policy: WorkbenchAgentMcpRuntimeDrainPolicy | null;
@@ -223,7 +224,12 @@ export class WorkbenchAgentMcpRequestRegistry {
         if (entry.workbenchThreadId === workbenchThreadId) return;
         if (entry.workbenchThreadId) throw new Error("Workbench MCP request thread identity cannot change.");
         entry.workbenchThreadId = workbenchThreadId;
-        if (entry.steerInterruptible) this.notifyThreadWaits(workbenchThreadId);
+        const deferredInterruption = entry.deferredSteerInterruptions?.get(workbenchThreadId);
+        entry.deferredSteerInterruptions = undefined;
+        if (deferredInterruption && !entry.controller.signal.aborted) {
+          entry.controller.abort(deferredInterruption);
+        }
+        if (entry.steerInterruptible && !entry.controller.signal.aborted) this.notifyThreadWaits(workbenchThreadId);
       },
       signal: entry.controller.signal,
       unregister: () => {
@@ -469,9 +475,14 @@ export class WorkbenchAgentMcpRequestRegistry {
     let interrupted = 0;
     for (const requests of this.state.requestsByClient.values()) {
       for (const entry of requests.values()) {
-        if (!entry.steerInterruptible || entry.workbenchThreadId !== workbenchThreadId
-          || entry.controller.signal.aborted || excludedToolNames.includes(entry.toolName)) continue;
-        entry.controller.abort(createWorkbenchAgentMcpSteerInterruption(reason));
+        if (!entry.steerInterruptible || entry.controller.signal.aborted || excludedToolNames.includes(entry.toolName)) continue;
+        if (entry.workbenchThreadId && entry.workbenchThreadId !== workbenchThreadId) continue;
+        const interruption = createWorkbenchAgentMcpSteerInterruption(reason);
+        if (!entry.workbenchThreadId) {
+          (entry.deferredSteerInterruptions ??= new Map()).set(workbenchThreadId, interruption);
+          continue;
+        }
+        entry.controller.abort(interruption);
         interrupted += 1;
       }
     }

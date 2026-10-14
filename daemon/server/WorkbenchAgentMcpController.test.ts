@@ -1350,6 +1350,59 @@ test("thread steer interruption ends declared waits but preserves questionnaires
   }
 });
 
+test("a steer during detached wait transcript admission interrupts before command execution", async () => {
+  const transcriptStarted = deferred<void>();
+  const releaseTranscript = deferred<void>();
+  const requestRegistry = new WorkbenchAgentMcpRequestRegistry();
+  const threadId = WorkbenchThreadIdSchema.parse("thread");
+  const recorded: ProviderToolResult[] = [];
+  const reference = {
+    threadId, turnId: "turn", itemId: "item", sourceId: "source", parentId: "parent",
+    tool: "subagent_wait", arguments: {}, startedAt: 1,
+  } as WorkbenchToolTranscriptReference;
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "codex", threadId, cwd: "C:/workspace" }),
+    describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: false }),
+    patchClaims: async () => "",
+    transcript: {
+      start: async () => {
+        transcriptStarted.resolve();
+        await releaseTranscript.promise;
+        return reference;
+      },
+      finish: async (_reference, result) => { recorded.push(result); },
+    },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry,
+    executeCommand: async () => assert.fail("an interrupted wait must not execute"),
+  });
+  const call = controller.call(
+    { clientScope: "client", projectLocal: true, provider: "codex", subagent: false },
+    {
+      arguments: { names: ["momo"] },
+      detachableShell: true,
+      meta: {},
+      name: "subagent_wait",
+      requestId: 1,
+      signal: new AbortController().signal,
+    },
+  );
+  await transcriptStarted.promise;
+  requestRegistry.interruptThreadWaits(threadId);
+  releaseTranscript.resolve();
+
+  const step = await call;
+  assert.equal(step.kind, "result");
+  if (step.kind !== "result") return;
+  assert.equal(step.result.isError, false);
+  assert.deepEqual(step.result.structuredContent, { kind: "interruptedBySteer", version: 1 });
+  assert.deepEqual(recorded, [step.result]);
+  requestRegistry.dispose();
+});
+
 setFlagsFromString("--expose-gc");
 const collectGarbage = runInNewContext("gc") as () => void;
 
