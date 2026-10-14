@@ -180,6 +180,55 @@ test("retention enables incremental reclaim and physically shrinks a historical 
   }
 });
 
+test("writes queued during retention run between retention steps instead of after the whole pass", async (context) => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-yield-");
+  const databasePath = join(temporary.path, "workbench.sqlite3");
+  captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
+  const seeded = new Database(databasePath);
+  seeded.pragma("foreign_keys = ON");
+  installWorkbenchDatabaseSchema(seeded);
+  seeded.prepare("INSERT INTO workbench_projects(id) VALUES (?)").run(testProjectIds.project);
+  seeded.prepare(`
+    INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+    VALUES ('thread', ?, '/repo', 'thread', 1, 1, 1, 1)
+  `).run(testProjectIds.project);
+  for (const digest of ["a", "b", "c"].map(character => character.repeat(64))) {
+    seeded.prepare(`
+      INSERT INTO transcript_assets(digest, mime_type, byte_length, storage_key, created_at)
+      VALUES (?, 'image/png', 1, ?, 1)
+    `).run(digest, `/api/transcript-assets/thread/${digest}.png`);
+    seeded.prepare(`
+      INSERT INTO transcript_asset_addresses(thread_id, address, asset_name, digest)
+      VALUES ('thread', 'thread', ?, ?)
+    `).run(`${digest}.png`, digest);
+  }
+  seeded.close();
+  const settled: string[] = [];
+  let write: Promise<void> | null = null;
+  const controller: WorkbenchDatabaseController = new WorkbenchDatabaseController({
+    databasePath,
+    onDiagnostic: diagnostic => {
+      if (diagnostic.operation !== "retention" || diagnostic.phase !== "pending") return;
+      // Queue the write once the first retention step is already on the writer.
+      setImmediate(() => {
+        write = controller.executeTransaction([insertRow(coreTables.workbenchHarnesses, { id: "mid-retention" })])
+          .then(() => { settled.push("write"); });
+      });
+    },
+  });
+  try {
+    const result = await controller.runRetention({ expiredAt: 10_000_000, resultCutoff: 0, transcriptCutoff: 0 }, 0);
+    settled.push("retention");
+    await write;
+    assert.equal(result.expiredAssets, 3);
+    assert.deepEqual(settled, ["write", "retention"]);
+  } finally {
+    await controller.close();
+    await temporary.dispose();
+  }
+});
+
 test("a database reader opens the migrated database without accepting writes", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-reader-");
   const databasePath = join(temporary.path, "workbench.sqlite3");

@@ -76,7 +76,9 @@ test("orphan collection honours canonical references, shared content, and admiss
       VALUES ('shared', ?, NULL, 'thread', 'test', 0, ?, 10)
     `).run(ownerThreadId, referenced.digest);
 
-    assert.equal(store.collectOrphans(100), 1);
+    const collected = store.listOrphanCandidates(100).filter(digest => store.collectOrphan(digest, 100));
+    assert.deepEqual(collected, [orphan.digest]);
+    assert.equal(store.collectOrphan(referenced.digest, 100), false);
     assert.deepEqual(
       database.prepare("SELECT digest FROM transcript_assets ORDER BY digest").pluck().all(),
       [fresh.digest, referenced.digest].sort(),

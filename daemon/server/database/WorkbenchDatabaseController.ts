@@ -2,7 +2,7 @@
  * WorkbenchDatabaseControllerOptions: construction inputs for the database lifecycle owner.
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
- * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, and the complete database lifecycle.
+ * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle, and step-sliced retention.
  */
 import { Worker } from "node:worker_threads";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
@@ -81,6 +81,11 @@ import {
   formatWorkbenchDatabaseDiagnostic,
   type WorkbenchDatabaseDiagnosticEvent,
 } from "workbench-shared/database/workbench-database-diagnostic";
+
+/** Newly admitted assets may not be referenced yet; collection waits out this grace. */
+const ASSET_ADMISSION_GRACE_MS = 3_600_000;
+/** 1024 pages is about 4 MiB of file movement: short enough to keep each writer step well under a second. */
+const RECLAIMED_PAGES_PER_STEP = 1_024;
 
 export interface WorkbenchDatabaseControllerOptions {
   beforeMigration?(backupPath: string): void;
@@ -616,16 +621,57 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     }
   }
 
+  /**
+   * Runs retention as a sequence of short atomic writer steps so queued writes (and the thread-state reads gated
+   * behind them) interleave instead of waiting out the whole pass. `signal` stops between steps.
+   */
   async runRetention(
-    cutoffs: Extract<WorkbenchDatabaseRequestPayload, { type: "runRetention" }>["cutoffs"],
+    cutoffs: Extract<WorkbenchDatabaseRequestPayload, { type: "expireRetainedPayloads" }>["cutoffs"],
     proposalCacheCutoff: number,
+    signal?: AbortSignal,
   ) {
     await this.start();
-    const response = await this.#request({ type: "runRetention", cutoffs, proposalCacheCutoff });
-    if (response.type !== "retentionResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${response.type}`);
+    const startedAt = performance.now();
+    this.#report({
+      source: "database", operation: "retention", phase: "pending", level: "info",
+      detail: `results before ${cutoffs.resultCutoff}, transcripts before ${cutoffs.transcriptCutoff}`,
+      elapsedMs: null, progress: null,
+    });
+    const step = async (request: WorkbenchDatabaseRequestPayload) => {
+      signal?.throwIfAborted();
+      return await this.#request(request);
+    };
+    const expiry = await step({ type: "expireRetainedPayloads", cutoffs });
+    if (expiry.type !== "retentionExpiry") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${expiry.type}`);
+    const createdBefore = cutoffs.expiredAt - ASSET_ADMISSION_GRACE_MS;
+    const candidates = await step({ type: "listOrphanAssetCandidates", createdBefore });
+    if (candidates.type !== "orphanAssetCandidates") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${candidates.type}`);
+    let expiredAssets = 0;
+    for (const digest of candidates.digests) {
+      const collected = await step({ type: "collectOrphanAsset", digest, createdBefore });
+      if (collected.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${collected.type}`);
+      expiredAssets += collected.result.changes;
     }
-    return response.result;
+    const eviction = await step({ type: "evictProposalCaches", cutoff: proposalCacheCutoff });
+    if (eviction.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${eviction.type}`);
+    let fullCompaction = false;
+    let reclaimedPages = 0;
+    for (;;) {
+      const reclamation = await step({ type: "reclaimDatabasePages", maxPages: RECLAIMED_PAGES_PER_STEP });
+      if (reclamation.type !== "pageReclamation") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${reclamation.type}`);
+      fullCompaction ||= reclamation.fullCompaction;
+      reclaimedPages += reclamation.reclaimedPages;
+      if (!reclamation.remainingFreePages || !reclamation.reclaimedPages) break;
+    }
+    const result = {
+      ...expiry.result, expiredAssets, expiredProposalCaches: eviction.result.changes, fullCompaction, reclaimedPages,
+    };
+    this.#report({
+      source: "database", operation: "retention", phase: "completed", level: "info",
+      detail: `${result.expiredResults} results, ${result.expiredTurns} turns, ${result.expiredAssets} assets, ${result.expiredProposalCaches} proposal caches, ${result.reclaimedPages} pages`,
+      elapsedMs: performance.now() - startedAt, progress: null,
+    });
+    return result;
   }
 
   async readTranscriptProviderCursor(threadId: string, turnId: string) {
@@ -1098,10 +1144,14 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       this.#settle(message);
       return;
     }
-    const line = formatWorkbenchDatabaseDiagnostic(message.diagnostic);
-    if (message.diagnostic.level === "warn") console.warn(line);
+    this.#report(message.diagnostic);
+  }
+
+  #report(diagnostic: WorkbenchDatabaseDiagnosticEvent) {
+    const line = formatWorkbenchDatabaseDiagnostic(diagnostic);
+    if (diagnostic.level === "warn") console.warn(line);
     else console.info(line);
-    this.#onDiagnostic?.(message.diagnostic);
+    this.#onDiagnostic?.(diagnostic);
   }
 
   #fail(error: unknown) {

@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect retention clocks, non-overlap, disposal, and surfaced failures.
+ * No production exports. Tests protect retention clocks, non-overlap, step-boundary disposal, and surfaced failures.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -80,33 +80,40 @@ test("retention starts immediately, uses exact clocks, and never overlaps", asyn
   assert.equal(fake.cleared, true);
 });
 
-test("retention disposal waits for active work and failures surface at the owner", async () => {
-  const active = deferred<{
-    expiredResults: number;
-    expiredTurns: number;
-    expiredAssets: number;
-    expiredProposalCaches: number;
-    fullCompaction: boolean;
-    reclaimedPages: number;
-  }>();
+test("retention disposal stops the active pass at its current step without reporting failure", async () => {
+  const step = deferred<void>();
+  let received: AbortSignal | undefined;
   const database = {
-    runRetention: () => active.promise,
+    async runRetention(_input: unknown, _proposalCacheCutoff: number, signal?: AbortSignal): Promise<never> {
+      received = signal;
+      await step.promise;
+      signal?.throwIfAborted();
+      throw new Error("retention continued after disposal");
+    },
   };
   const fake = createScheduler();
   const controller = new WorkbenchDatabaseRetentionController(database, () => 0, fake.scheduling);
-  controller.start();
+  const messages: string[] = [];
+  const original = console.error;
+  console.error = (message?: unknown) => { messages.push(String(message)); };
+  try {
+    controller.start();
+    let disposed = false;
+    const disposal = controller.dispose().then(() => { disposed = true; });
+    assert.equal(received?.aborted, true);
+    await Promise.resolve();
+    assert.equal(disposed, false);
+    step.resolve();
+    await disposal;
+    assert.equal(disposed, true);
+    assert.equal(fake.cleared, true);
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(messages, []);
+});
 
-  let disposed = false;
-  const disposal = controller.dispose().then(() => { disposed = true; });
-  await Promise.resolve();
-  assert.equal(disposed, false);
-  active.resolve({
-    expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0,
-    fullCompaction: false, reclaimedPages: 0,
-  });
-  await disposal;
-  assert.equal(disposed, true);
-
+test("retention failures surface at the owner", async () => {
   const messages: string[] = [];
   const original = console.error;
   console.error = (message?: unknown) => { messages.push(String(message)); };

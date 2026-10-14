@@ -3,7 +3,7 @@
  * - TranscriptAssetWrite: validated thread reference and image upload.
  * - TranscriptAssetRead: compatibility address and optional expected thread owner.
  * - TranscriptAssetContent: immutable image metadata and bytes.
- * - default WorkbenchTranscriptAssetStore: own atomic immutable content and thread-scoped addresses.
+ * - default WorkbenchTranscriptAssetStore: own atomic immutable content, thread-scoped addresses, and per-digest orphan collection.
  */
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -36,24 +36,14 @@ export interface TranscriptAssetContent {
 const extensions = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" } as const;
 const assetPattern = /^([a-f0-9]{64})\.(png|jpg|webp|gif)$/u;
 
-export default class WorkbenchTranscriptAssetStore {
-  constructor(private readonly database: Database.Database) {}
+const unreferencedAsset = `
+  asset.created_at < @createdBefore
+  AND NOT EXISTS (SELECT 1 FROM transcript_asset_refs ref WHERE ref.asset_digest = asset.digest)
+  AND NOT EXISTS (SELECT 1 FROM thread_browse_entries entry WHERE entry.asset_digest = asset.digest)`;
 
-  collectOrphans(createdBefore: number): number {
-    return this.database.transaction(() => {
-      const candidates = this.database.prepare(`
-      SELECT asset.digest
-      FROM transcript_assets AS asset
-      WHERE asset.created_at < @createdBefore
-        AND NOT EXISTS (
-          SELECT 1 FROM transcript_asset_refs ref
-          WHERE ref.asset_digest = asset.digest
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM thread_browse_entries entry
-          WHERE entry.asset_digest = asset.digest
-        )
-        AND NOT EXISTS (
+/** Addresses alone are not reachability: an addressed asset survives only while its name appears in that thread's payloads. */
+const unaddressedAsset = `
+        NOT EXISTS (
           SELECT 1
           FROM transcript_asset_addresses address
           WHERE address.digest = asset.digest
@@ -114,15 +104,29 @@ export default class WorkbenchTranscriptAssetStore {
                   AND instr(record.payload_json, address.asset_name) > 0
               )
             )
-        )
-      `).all({ createdBefore }) as Array<{ digest: string }>;
-      for (let offset = 0; offset < candidates.length; offset += 500) {
-        const digests = candidates.slice(offset, offset + 500).map(({ digest }) => digest);
-        const placeholders = digests.map(() => "?").join(", ");
-        this.database.prepare(`DELETE FROM transcript_asset_addresses WHERE digest IN (${placeholders})`).run(...digests);
-        this.database.prepare(`DELETE FROM transcript_assets WHERE digest IN (${placeholders})`).run(...digests);
-      }
-      return candidates.length;
+        )`;
+
+export default class WorkbenchTranscriptAssetStore {
+  constructor(private readonly database: Database.Database) {}
+
+  /** Cheap indexed prefilter; `collectOrphan` owns the canonical reachability decision per digest. */
+  listOrphanCandidates(createdBefore: number): string[] {
+    return this.database.prepare(`
+      SELECT asset.digest FROM transcript_assets AS asset WHERE ${unreferencedAsset}
+    `).pluck().all({ createdBefore }) as string[];
+  }
+
+  /** One digest per transaction keeps each writer step short: the address scan costs O(thread payload text). */
+  collectOrphan(digest: string, createdBefore: number): boolean {
+    return this.database.transaction(() => {
+      const unreachable = this.database.prepare(`
+        SELECT 1 FROM transcript_assets AS asset
+        WHERE asset.digest = @digest AND ${unreferencedAsset} AND ${unaddressedAsset}
+      `).get({ digest, createdBefore });
+      if (!unreachable) return false;
+      this.database.prepare("DELETE FROM transcript_asset_addresses WHERE digest = ?").run(digest);
+      this.database.prepare("DELETE FROM transcript_assets WHERE digest = ?").run(digest);
+      return true;
     })();
   }
 

@@ -122,7 +122,8 @@ function proveReadWrite() {
   })();
 }
 
-function reclaimDatabasePages(database: Database.Database) {
+/** Reclaims at most `maxPages` free pages per call so callers can yield the writer between chunks. */
+function reclaimDatabasePages(database: Database.Database, maxPages: number) {
   const pageCount = database.pragma("page_count", { simple: true }) as number;
   const mode = database.pragma("auto_vacuum", { simple: true }) as number;
   let fullCompaction = false;
@@ -142,10 +143,14 @@ function reclaimDatabasePages(database: Database.Database) {
     });
   } else {
     if (mode === 1) database.pragma("auto_vacuum = INCREMENTAL");
-    database.pragma("incremental_vacuum(32768)");
+    database.pragma(`incremental_vacuum(${Math.max(1, Math.trunc(maxPages))})`);
   }
   const retainedPages = database.pragma("page_count", { simple: true }) as number;
-  return { fullCompaction, reclaimedPages: Math.max(0, pageCount - retainedPages) };
+  return {
+    fullCompaction,
+    reclaimedPages: Math.max(0, pageCount - retainedPages),
+    remainingFreePages: database.pragma("freelist_count", { simple: true }) as number,
+  };
 }
 
 function post(response: WorkbenchDatabaseResponse) {
@@ -422,35 +427,30 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     }
     return;
   }
-  if (request.type === "runRetention") {
-    if (!database || !transcriptRetentionRepository || !gitArcProposalDiffRepository) {
-      throw new Error("Database retention repositories are not initialized");
+  if (request.type === "expireRetainedPayloads") {
+    if (!transcriptRetentionRepository) throw new Error("Transcript retention repository is not initialized");
+    post({ id: request.id, type: "retentionExpiry", result: transcriptRetentionRepository.expire(request.cutoffs) });
+    return;
+  }
+  if (request.type === "listOrphanAssetCandidates" || request.type === "collectOrphanAsset") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    const assets = new WorkbenchTranscriptAssetStore(database);
+    if (request.type === "listOrphanAssetCandidates") {
+      post({ id: request.id, type: "orphanAssetCandidates", digests: assets.listOrphanCandidates(request.createdBefore) });
+    } else {
+      const collected = assets.collectOrphan(request.digest, request.createdBefore);
+      post({ id: request.id, type: "mutationResult", result: { changes: collected ? 1 : 0 } });
     }
-    const startedAt = performance.now();
-    postDiagnostic({
-      source: "database", operation: "retention", phase: "pending", level: "info",
-      detail: `results before ${request.cutoffs.resultCutoff}, transcripts before ${request.cutoffs.transcriptCutoff}`,
-      elapsedMs: null, progress: null,
-    });
-    const result = {
-      ...transcriptRetentionRepository.expire(request.cutoffs),
-      expiredAssets: new WorkbenchTranscriptAssetStore(database).collectOrphans(request.cutoffs.expiredAt - 3_600_000),
-      expiredProposalCaches: gitArcProposalDiffRepository.evictOlderThan(request.proposalCacheCutoff),
-    };
-    const compaction = reclaimDatabasePages(database);
-    postDiagnostic({
-      source: "database", operation: "retention", phase: "completed", level: "info",
-      detail: `${result.expiredResults} results, ${result.expiredTurns} turns, ${result.expiredAssets} assets, ${result.expiredProposalCaches} proposal caches, ${compaction.reclaimedPages} pages`,
-      elapsedMs: performance.now() - startedAt, progress: null,
-    });
-    post({
-      id: request.id,
-      type: "retentionResult",
-      result: {
-        ...result,
-        ...compaction,
-      },
-    });
+    return;
+  }
+  if (request.type === "evictProposalCaches") {
+    if (!gitArcProposalDiffRepository) throw new Error("Git arc proposal diff repository is not initialized");
+    post({ id: request.id, type: "mutationResult", result: { changes: gitArcProposalDiffRepository.evictOlderThan(request.cutoff) } });
+    return;
+  }
+  if (request.type === "reclaimDatabasePages") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "pageReclamation", ...reclaimDatabasePages(database, request.maxPages) });
     return;
   }
   if (request.type === "readTranscriptProviderCursor") {

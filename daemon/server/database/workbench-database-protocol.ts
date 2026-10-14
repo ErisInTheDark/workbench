@@ -145,7 +145,11 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "resume"; restoreBackupPath?: string }
   | { type: "getInventory" }
   | { type: "executeTransaction"; statements: readonly WorkbenchDatabaseMutation[] }
-  | { type: "runRetention"; cutoffs: WorkbenchTranscriptRetentionCutoffs; proposalCacheCutoff: number }
+  | { type: "expireRetainedPayloads"; cutoffs: WorkbenchTranscriptRetentionCutoffs }
+  | { type: "listOrphanAssetCandidates"; createdBefore: number }
+  | { type: "collectOrphanAsset"; digest: string; createdBefore: number }
+  | { type: "evictProposalCaches"; cutoff: number }
+  | { type: "reclaimDatabasePages"; maxPages: number }
   | { type: "query"; statement: WorkbenchDatabaseQuery }
   | { type: "readGitArcProposalDiff"; identity: GitArcProposalDiffCacheIdentity }
   | { type: "writeGitArcProposalDiff"; value: GitArcProposalDiffCacheValue; maxBytes: number }
@@ -289,16 +293,9 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "suspended" }
   | { id: number; type: "inventory"; inventory: WorkbenchDatabaseInventory }
   | { id: number; type: "mutationResult"; result: WorkbenchDatabaseMutationResult }
-  | {
-    id: number;
-    type: "retentionResult";
-    result: WorkbenchTranscriptRetentionResult & {
-      expiredAssets: number;
-      expiredProposalCaches: number;
-      fullCompaction: boolean;
-      reclaimedPages: number;
-    };
-  }
+  | { id: number; type: "retentionExpiry"; result: WorkbenchTranscriptRetentionResult }
+  | { id: number; type: "orphanAssetCandidates"; digests: string[] }
+  | { id: number; type: "pageReclamation"; fullCompaction: boolean; reclaimedPages: number; remainingFreePages: number }
   | { id: number; type: "queryResult"; rows: WorkbenchDatabaseRow[] }
   | { id: number; type: "gitArcProposalDiff"; changes: GitCheckpointFileChange[] | null }
   | { id: number; type: "threadIdentity"; identity: WorkbenchThreadIdentityRecord | null }
