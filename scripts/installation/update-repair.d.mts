@@ -1,6 +1,8 @@
 /*
  * Exports:
  * - RepairFiles/RepairOptions: injectable built-in repair boundaries.
+ * - prepareInstallationRuntime: make the managed PowerShell runtime ready without dependency repair.
+ * - preparePulledInstallationRuntime: execute runtime preparation from the freshly pulled checkout.
  * - runRepair: resume repair without loading installed dependencies.
  */
 import type { InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
@@ -41,5 +43,17 @@ export interface RepairOptions {
     ensure(options?: { onOutput?: (text: string) => void }): Promise<object | void>;
     run(args: string[], options: { cwd: string; onOutput?: (text: string) => void }): Promise<void>;
   };
+  powerShell?: {
+    ensure(options?: { onOutput?: (text: string) => void }): Promise<object | void>;
+  };
 }
+export function prepareInstallationRuntime(options?: RepairOptions): Promise<InstallationRepairJournal | null>;
+export function preparePulledInstallationRuntime(root: string, options?: {
+  signal?: AbortSignal;
+  execute?: (command: string, args: string[], options: {
+    cwd: string;
+    windowsHide: boolean;
+    signal?: AbortSignal;
+  }) => Promise<unknown>;
+}): Promise<void>;
 export function runRepair(options?: RepairOptions): Promise<InstallationRepairJournal | null>;

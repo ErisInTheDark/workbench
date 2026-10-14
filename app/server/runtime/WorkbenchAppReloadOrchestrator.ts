@@ -21,6 +21,7 @@ export interface WorkbenchAppReloadOrchestratorPorts {
   isLocalDaemon(daemonId: DaemonId): boolean;
   readControlDaemon(): { dirt: WorkbenchReloadDirtSnapshot | null; update: InstallationUpdate | null };
   pullDaemon(daemonId?: DaemonId, signal?: AbortSignal): Promise<InstallationPullResult>;
+  prepareInstallationRuntime(signal?: AbortSignal): Promise<void>;
   refreshAppDirt(signal?: AbortSignal): Promise<void>;
   reloadDaemon(scopes: string[], daemonId?: DaemonId, signal?: AbortSignal): Promise<void>;
   reloadHost(scopes: string[], signal?: AbortSignal): Promise<void>;
@@ -75,6 +76,7 @@ export default class WorkbenchAppReloadOrchestrator {
     return this.admit(reload ? "pullAndReload" : "pull", async signal => {
       this.phase("pulling");
       const pulled = await this.ports.pullDaemon(daemonId, signal);
+      await this.ports.prepareInstallationRuntime(signal);
       if (!reload) return;
       this.phase("waiting");
       // The daemon pull response guarantees its dirt refresh completed. Refresh the app

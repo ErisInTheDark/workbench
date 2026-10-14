@@ -1,12 +1,16 @@
 /*
  * Exports:
+ * - prepareInstallationRuntime: make the managed PowerShell runtime ready without dependency repair.
+ * - preparePulledInstallationRuntime: execute runtime preparation from the freshly pulled checkout.
  * - runRepair: resume the durable dependency repair before any dependency loads.
  */
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
 import WorkbenchPowerShell from "./WorkbenchPowerShell.mjs";
@@ -248,6 +252,30 @@ export async function runRepair(options = {}) {
     () => repair({ ...options, dataRoot }));
 }
 
+export async function prepareInstallationRuntime(options = {}) {
+  const dataRoot = options.dataRoot ?? resolveDataRoot();
+  const files = options.files ?? fs;
+  const read = options.readJournal ?? (() => readJournal(dataRoot, files));
+  const journal = await read();
+  if (isRepairPending(journal)) return runRepair({ ...options, dataRoot });
+  const commandOutput = { write() {} };
+  const commands = options.commands ?? new WorkbenchBootstrapCommand({ output: commandOutput, errorOutput: commandOutput });
+  const powerShell = options.powerShell ?? new WorkbenchPowerShell({ dataRoot, commands });
+  await powerShell.ensure({ onOutput: text => process.stderr.write(text) });
+  return journal;
+}
+
+export async function preparePulledInstallationRuntime(root, {
+  signal,
+  execute = promisify(execFile),
+} = {}) {
+  const checkout = path.resolve(root);
+  await execute(process.execPath, [
+    path.join(checkout, "scripts", "installation", "update-repair.mjs"),
+    "--runtime",
+  ], { cwd: checkout, windowsHide: true, signal });
+}
+
 async function repair(options) {
   const root = options.root ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const dataRoot = options.dataRoot ?? resolveDataRoot();
@@ -391,7 +419,13 @@ async function main() {
     if (process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim()) {
       throw new Error("Managed threads cannot repair Workbench dependencies. Ask the user to run `wb repair`.");
     }
-    const journal = await runRepair({ force: true });
+    const args = process.argv.slice(2);
+    if (args.length > 1 || args.length === 1 && args[0] !== "--runtime") {
+      throw new Error("Usage: update-repair.mjs [--runtime]");
+    }
+    const journal = args[0] === "--runtime"
+      ? await prepareInstallationRuntime()
+      : await runRepair({ force: true });
     if (journal?.phase === "stranded") throw new Error(`Workbench update repair failed: ${journal.lastError}. Run \`wb repair\` (log: ${journal.logPath}).`);
   } catch (error) {
     process.stderr.write(`${bounded(error)}\n`);

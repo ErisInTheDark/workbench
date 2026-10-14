@@ -20,6 +20,7 @@ function harness(overrides: Partial<WorkbenchAppReloadOrchestratorPorts> = {}) {
     isLocalDaemon: () => true,
     readControlDaemon: () => ({ dirt: null, update: null }),
     pullDaemon: async () => ({ fromSha: "a".repeat(40), toSha: "b".repeat(40), lockfileChanged: false }),
+    prepareInstallationRuntime: async () => { events.push("runtime"); },
     refreshAppDirt: async () => { events.push("refresh"); },
     reloadDaemon: async scopes => { events.push(`daemon:${scopes.join(",")}`); },
     reloadHost: async scopes => { events.push(`host:${scopes.join(",")}`); },
@@ -121,8 +122,25 @@ test("lockfile pull refreshes then installs exclusively with the pre-pull commit
     return harness().ports.admitClient(scopes);
   };
   await owner.admitPull(undefined, true).start();
-  assert.deepEqual(events, ["refresh"]);
+  assert.deepEqual(events, ["runtime", "refresh"]);
   assert.equal(owner.read().phase, "restarting");
+});
+
+test("pull prepares the current checkout runtime even without a reload", async () => {
+  const { owner, events } = harness();
+  await owner.admitPull(undefined, false).start();
+  assert.deepEqual(events, ["runtime"]);
+  assert.equal(owner.read().phase, "idle");
+});
+
+test("runtime preparation failure prevents reload after a successful pull", async () => {
+  const { owner, events } = harness({
+    prepareInstallationRuntime: async () => { events.push("runtime"); throw new Error("runtime unavailable"); },
+  });
+  await owner.admitPull(undefined, true).start();
+  assert.deepEqual(events, ["runtime", "warning:Reload or update failed: runtime unavailable"]);
+  assert.equal(owner.read().phase, "failed");
+  assert.equal(owner.read().error, "runtime unavailable");
 });
 
 test("empty dirt succeeds without a reload admission", async () => {

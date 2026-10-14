@@ -9,7 +9,12 @@ import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirector
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { runRepair as repair, type RepairOptions } from "./update-repair.mjs";
+import {
+  prepareInstallationRuntime,
+  preparePulledInstallationRuntime,
+  runRepair as repair,
+  type RepairOptions,
+} from "./update-repair.mjs";
 import { InstallationRepairJournalSchema, type InstallationRepairJournal } from "../../shared/workbench/installation-update.ts";
 import { isRepairPending, readJournal, resolveDataRoot, writeJournal } from "./update-journal.mjs";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
@@ -135,6 +140,35 @@ test("PowerShell provisioning failure strands repair before dependency or proces
   assert.match(result?.lastError ?? "", /PowerShell download hash mismatch/u);
   assert.equal(toolchainReady, true);
   assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), []);
+});
+
+test("runtime preparation provisions only PowerShell when no dependency repair is pending", async () => {
+  const events: string[] = [];
+  const result = await prepareInstallationRuntime({
+    readJournal: async () => null,
+    powerShell: { ensure: async () => { events.push("powershell"); } },
+    toolchain: {
+      ensure: async () => { assert.fail("runtime preparation cannot provision Vite+"); },
+      run: async () => { assert.fail("runtime preparation cannot install dependencies"); },
+    },
+    stop: async () => { assert.fail("runtime preparation cannot stop processes"); },
+    clean: async () => { assert.fail("runtime preparation cannot clean dependencies"); },
+  });
+  assert.equal(result, null);
+  assert.deepEqual(events, ["powershell"]);
+});
+
+test("post-pull runtime preparation executes the freshly pulled checkout script", async () => {
+  const root = path.resolve("fixture-checkout");
+  const calls: unknown[][] = [];
+  await preparePulledInstallationRuntime(root, {
+    execute: async (...args: unknown[]) => { calls.push(args); },
+  });
+  assert.deepEqual(calls, [[
+    process.execPath,
+    [path.join(root, "scripts", "installation", "update-repair.mjs"), "--runtime"],
+    { cwd: root, windowsHide: true, signal: undefined },
+  ]]);
 });
 
 test("unavailable pinned runtimes fail repair before dependency cleanup or rollback", async () => {

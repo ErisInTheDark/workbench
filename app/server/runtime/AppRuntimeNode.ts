@@ -3,6 +3,7 @@
  * - AppRuntimeNode: own reload dirt, reload execution and the reload-all/pull orchestrator above every replaceable app feature.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
+import { preparePulledInstallationRuntime } from "../../../scripts/installation/update-repair.mjs";
 
 import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
@@ -46,6 +47,8 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         !daemonId && !sources.attached ? null : readDaemonReloadDirt(resolveOperationDaemon(sources, daemonId), signal)),
       pullDaemon: (daemonId, signal) => context.runRuntimeObject("sources", sources =>
         pullDaemonInstallation(resolveOperationDaemon(sources, daemonId), signal)),
+      prepareInstallationRuntime: signal =>
+        preparePulledInstallationRuntime(context.repositoryRootPath, { signal }),
       refreshAppDirt: signal => context.runRuntimeObject("reloadDirt", async owner => { await owner.refresh(signal); }),
       reloadDaemon: (scopes, daemonId, signal) => context.runRuntimeObject("sources", sources =>
         reloadDaemonScopes(resolveOperationDaemon(sources, daemonId), scopes, signal)),
