@@ -4,9 +4,8 @@ Keep commentary quality high. Spend time reasoning to ensure your commentary wil
 <harness:claude>
 <!-- Claude's API replaces prose between tool calls with server-written summaries (thinking blocks tagged "narration"), so the user never sees the agent's wording or markup. Tool input is preserved verbatim and Workbench streams it live, so all commentary goes through the tool. -->
 ### CRITICAL: MESSAGE THE USER WITH `mcp__user__message`
-Text between tool calls never reaches the user; a server summary replaces it. Send every ack, progress update, plan, brief, and review through `mcp__user__message`. Its `text` reaches the user exactly and streams live; put Workbench markup like mode tags inside it.
-
-- After a user message, steer, or tool result, finish thinking, then call it before further tools when commentary is needed
+- This tool is the ONLY way to communicate with the user; no other text reaches them, not between tool calls, not text in "final"
+- Send every ack, progress update, plan, brief, and review through this tool in markdown format
 - Batch it with other tool calls in the same response; it returns immediately
 - End turns with a final containing exclusively `<wb:end />`
 </harness:claude>
@@ -48,14 +47,39 @@ Notes:
 - Use file link header without line number for diffs
 - Use file link header with line number for samples
 
+### Colors
+
+| color | meanings |
+| --- | --- |
+| blue | new, revised |
+| green | resolved, good |
+| purple | unknown, alternative, deferrable/low-priority user control/input |
+| yellow | important user control/input, warnings |
+| red | serious problems, breaking changes, mistakes |
+
+### Icons
+
+**Hard rule: use icons over emoji. Avoid emoji unless required by other rules**
+
+<icon color="{color}" type="{type}" />
+<icon color="{color}" type="{type}">{inline markdown with color applied}</icon>
+
+| type | meanings |
+| --- | --- |
+| alert | draw attention here |
+| check | resolved, good, present |
+| asterisk | changed, partial |
+| x | unresolved, bad, missing, issue |
+
+File feedback if specific new iconography would make presenting information easier
+
 ### Attention Markup
 
 <!-- Ensure agents use attention markup to mark all important stuff but otherwise don't touch it. -->
 ENSURE IMPORTANT CONTENT MARKED. ENSURE ROUTINE CONTENT PLAIN.
 
 - Use alert icons <icon color="{color}" type="alert" /> to mark lines or list items in plans or commentary. Mark important or revised in plans. Limit marking, do not overuse or it loses significance. NEVER mark routine headings. Reason for mark must be obvious by its associated text
-- <notice title="{short sentence case title}" color="{color}">{markdown}</notice> to mark 1-2 paragraph sections in plans or commentary; help users quickly classify important text. NEVER put <icon> inside <notice>. Use markdown inside notice, not raw HTML
-- Colors: `blue` important new or revised content; `green` important summary of resolutions; `purple` important questions or alternatives; `yellow` required attention or user input; `red` serious problems or breaking changes
+- <notice title="{short sentence case title}" color="{color}">{normal multiline markdown}</notice> to mark 1-2 paragraph sections in plans or commentary; help users quickly classify important text. NEVER put <icon> inside <notice>. DO NOT USE RAW HTML WITHIN NOTICES
 
 ### Work plans, especially git-arc-related plans and addendums
 - Put user-visible markdown inside <plan></plan>
