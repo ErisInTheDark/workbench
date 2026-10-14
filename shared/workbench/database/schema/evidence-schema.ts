@@ -5,6 +5,7 @@
  * - threadBrowseEntries: durable Browse facts.
  * - transcriptAssetRefs: thread/item asset references.
  * - transcriptCaptureGaps: pending and resolved recording failures.
+ * - transcriptCaptureGapTurns: turns anchoring each capture gap; reconciling every anchor closes it.
  * - evidenceTables: current evidence table inventory.
  * - EvidenceSchemaRows: selected evidence row types.
  * - evidenceSchemaHistory: sealed evidence histories.
@@ -20,13 +21,16 @@ import {
   integer,
   jsonText,
   literal,
+  primaryKey,
   sql,
   text,
   unique,
   type SelectRow,
   type TableDefinition,
 } from "../../../database/schema/schema-definition.ts";
-import { createIndexes, createTable, defineSubsystemHistory, defineTableHistory, tableVersion } from "../../../database/schema/schema-history.ts";
+import {
+  createIndexes, createTable, defineSubsystemHistory, defineTableHistory, rebuildTable, sqlData, tableVersion,
+} from "../../../database/schema/schema-history.ts";
 
 function initialHistory<Table extends TableDefinition>(table: Table) {
   return defineTableHistory({
@@ -218,8 +222,21 @@ const transcriptCaptureGapsV2 = evolveTable(transcriptCaptureGapsV1, {
     indexes: [index("transcript_capture_gaps_state_thread_idx", [table.state, table.thread_id])],
   }),
 });
+const transcriptCaptureGapsV3 = evolveTable(transcriptCaptureGapsV2, {
+  drop: ["turn_id"],
+  extras: table => ({
+    constraints: [
+      check(sql`
+      (${table.state} = ${literal("open")} AND ${table.closed_at} IS NULL)
+      OR (${table.state} IN (${literal("reconciled")}, ${literal("unrecoverable")}) AND ${table.closed_at} IS NOT NULL)
+    `),
+      unique([table.id, table.thread_id]),
+    ],
+    indexes: [index("transcript_capture_gaps_state_thread_idx", [table.state, table.thread_id])],
+  }),
+});
 const transcriptCaptureGapsHistory = defineTableHistory({
-  current: transcriptCaptureGapsV2,
+  current: transcriptCaptureGapsV3,
   versions: [
     ...initialHistory(transcriptCaptureGapsV1).versions,
     tableVersion({
@@ -227,9 +244,50 @@ const transcriptCaptureGapsHistory = defineTableHistory({
       table: transcriptCaptureGapsV2,
       migration: createIndexes({ from: transcriptCaptureGapsV1, to: transcriptCaptureGapsV2, names: ["transcript_capture_gaps_state_thread_idx"] }),
     }),
+    tableVersion({
+      schemaVersion: databaseReleases.captureGapTurns.version,
+      table: transcriptCaptureGapsV3,
+      migration: [
+        sqlData([
+          `INSERT INTO transcript_capture_gap_turns (gap_id, thread_id, turn_id, reconciled_at)
+          SELECT id, thread_id, turn_id, CASE WHEN state = 'reconciled' THEN closed_at ELSE NULL END
+          FROM transcript_capture_gaps WHERE turn_id IS NOT NULL`,
+          // A turnless open gap has nothing a provider window can re-read, so it could never close.
+          "DELETE FROM transcript_capture_gaps WHERE state = 'open' AND turn_id IS NULL",
+        ]),
+        rebuildTable({ from: transcriptCaptureGapsV2, to: transcriptCaptureGapsV3 }),
+      ],
+    }),
   ],
 });
 export const transcriptCaptureGaps = transcriptCaptureGapsHistory.current;
+
+const transcriptCaptureGapTurnsV1 = defineTable("transcript_capture_gap_turns", {
+  gap_id: text().notNull(),
+  thread_id: text().notNull(),
+  turn_id: text().notNull(),
+  reconciled_at: integer(),
+}, (table) => ({
+  constraints: [
+    primaryKey([table.gap_id, table.turn_id]),
+    foreignKey([table.gap_id, table.thread_id], {
+      table: "transcript_capture_gaps", columns: ["id", "thread_id"], onDelete: "CASCADE",
+    }),
+    foreignKey([table.turn_id, table.thread_id], {
+      table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+    }),
+  ],
+  indexes: [index("transcript_capture_gap_turns_turn_idx", [table.turn_id, table.thread_id])],
+}));
+const transcriptCaptureGapTurnsHistory = defineTableHistory({
+  current: transcriptCaptureGapTurnsV1,
+  versions: [tableVersion({
+    schemaVersion: databaseReleases.captureGapTurns.version,
+    table: transcriptCaptureGapTurnsV1,
+    migration: createTable(transcriptCaptureGapTurnsV1),
+  })],
+});
+export const transcriptCaptureGapTurns = transcriptCaptureGapTurnsHistory.current;
 
 export const evidenceTables = Object.freeze({
   transcriptNativeRecords,
@@ -237,6 +295,7 @@ export const evidenceTables = Object.freeze({
   threadBrowseEntries,
   transcriptAssetRefs,
   transcriptCaptureGaps,
+  transcriptCaptureGapTurns,
 });
 
 export type EvidenceSchemaRows = {
@@ -248,5 +307,7 @@ export const evidenceSchemaHistory = defineSubsystemHistory([
   transcriptAssetsHistory,
   threadBrowseEntriesHistory,
   transcriptAssetRefsHistory,
+  // Anchors are created first so the gap rebuild can move each turn into them.
+  transcriptCaptureGapTurnsHistory,
   transcriptCaptureGapsHistory,
 ]);

@@ -209,7 +209,6 @@ export type CodexStdioBridgeOptions = {
     threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId;
     turnId: import("workbench-shared/workbench/identity").WorkbenchTurnId;
   } | null>;
-  readSqliteRecoveryGapIds?: (threadId: string) => Promise<string[]>;
 };
 
 const UNCONFIGURED_CODEX_INSTRUCTIONS: WorkbenchCodexInstructionPort = {
@@ -626,7 +625,6 @@ export default class CodexStdioBridge {
   private readonly sqliteReader?: CodexStoredTranscriptAdapter;
   private readonly readSqliteProviderCursor?: CodexStdioBridgeOptions["readSqliteProviderCursor"];
   private readonly readSqliteCompactionExecution?: CodexStdioBridgeOptions["readSqliteCompactionExecution"];
-  private readonly readSqliteRecoveryGapIds?: CodexStdioBridgeOptions["readSqliteRecoveryGapIds"];
   private readonly threadPageReads = new CodexThreadPageReadController();
   private readonly readSqliteContextUsage: CodexStdioBridgeOptions["readSqliteContextUsage"];
   private generation = new AbortController();
@@ -677,11 +675,10 @@ export default class CodexStdioBridge {
   private readonly identities: CodexStdioBridgeOptions["identities"];
   private readonly onInitialized: () => void;
 
-  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, waitForAppServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteCompactionExecution, readSqliteRecoveryGapIds }: CodexStdioBridgeOptions) {
+  constructor({ approvals = UNCONFIGURED_WORKBENCH_APPROVALS, appServer, waitForAppServer, handleWorkbenchRequest, initialState, instructions = UNCONFIGURED_CODEX_INSTRUCTIONS, identities, providerObservations: suppliedObservations, onInitialized = () => undefined, onNotification, onTranscriptLiveUpdate, createThread, prepareThreadConfiguration, withThreadAdmission, prepareTurnStart = async () => undefined, prepareInputContext, questionnaires = UNCONFIGURED_WORKBENCH_QUESTIONNAIRES, readSqliteTranscriptMaterializedTurnIds = async () => [], readSqliteContextUsage, recordSqliteTranscript, restartingAppServer = false, resolveProjectFromCwd, transcriptAssets, sqliteReader, readSqliteProviderCursor, readSqliteCompactionExecution }: CodexStdioBridgeOptions) {
     this.sqliteReader = sqliteReader;
     this.readSqliteProviderCursor = readSqliteProviderCursor;
     this.readSqliteCompactionExecution = readSqliteCompactionExecution;
-    this.readSqliteRecoveryGapIds = readSqliteRecoveryGapIds;
     this.onTranscriptLiveUpdate = onTranscriptLiveUpdate;
     this.appServer = appServer;
     this.waitForAppServer = waitForAppServer;
@@ -1084,10 +1081,6 @@ export default class CodexStdioBridge {
     return { thread: response.thread };
   }
 
-  async recoverSqliteTranscriptThread(threadId: string, signal?: AbortSignal) {
-    await this.captureSqliteTranscriptThread(threadId, true, signal);
-  }
-
   async reconcileSqliteTranscriptWindow(input: WorkbenchProviderTranscriptReconcile, callerSignal: AbortSignal) {
     this.assertAcceptingWork();
     const signal = AbortSignal.any([callerSignal, this.generation.signal]);
@@ -1120,7 +1113,7 @@ export default class CodexStdioBridge {
         itemCount: 0, loadState: "unloaded" as const,
       })),
     });
-    const store = this.createThreadWindowStore({ gapIds: input.gapIds, scope: "turns" });
+    const store = this.createThreadWindowStore({ gapIds: input.gapIds });
     const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
       ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "sqliteRecovery",
     }, signal), (threadId, turnId) => this.isCompactionExecution(threadId, turnId));
@@ -1152,10 +1145,6 @@ export default class CodexStdioBridge {
   }
 
   async baselineSqliteTranscriptThread(threadId: string, signal?: AbortSignal) {
-    await this.captureSqliteTranscriptThread(threadId, false, signal);
-  }
-
-  private async captureSqliteTranscriptThread(threadId: string, recoveryBoundary: boolean, signal?: AbortSignal) {
     this.assertAcceptingWork();
     signal?.throwIfAborted();
     const identity = await this.identities?.threads.resolve({ threadId: ThreadReferenceSchema.parse(threadId), harness: "codex" });
@@ -1164,9 +1153,7 @@ export default class CodexStdioBridge {
       throw new Error(`SQLite transcript recovery has no unique admitted Codex binding for thread ${threadId}.`);
     }
     const nativeThreadId = bindings[0]?.nativeThreadId ?? threadId;
-    const gapIds = recoveryBoundary ? await this.readSqliteRecoveryGapIds?.(identity?.threadId ?? threadId) ?? [] : [];
-    const saved = await this.sqliteReader?.catalog(identity?.threadId ?? threadId);
-    log("codex-transcript", `capture recovery started thread=${threadId} boundary=${recoveryBoundary}`);
+    log("codex-transcript", `capture recovery started thread=${threadId}`);
     const response = await this.dispatchManagedProviderRequest({
       method: "thread/read",
       params: { includeTurns: false, threadId: nativeThreadId },
@@ -1200,21 +1187,14 @@ export default class CodexStdioBridge {
     });
     // All full pages have settled. Only compact catalogue metadata remains in memory.
     signal?.throwIfAborted();
-    const covered = new Set(turns.map(turn => turn.id));
-    const wholeThread = (identity?.bindings.length ?? 1) === 1
-      && (saved?.turns.every(turn => turn.harness_id === "codex"
-        && turn.native_thread_id === nativeThreadId && covered.has(turn.native_turn_id ?? "")) ?? true);
     await this.captureTranscript(nativeThreadId, `sqlite-recovery-complete:${threadId}`, async () => {
       const catalog = { ...thread, turns };
       const scope = createCodexTranscriptProviderThreadScopeObservation(catalog, context);
       await this.persistTranscript(() => this.recordTranscript([{
         ...scope, completeTurnIds: turns.map(turn => NativeTurnIdSchema.parse(turn.id)),
-      }], {
-        source: "provider",
-        ...(recoveryBoundary ? { recovery: { gapIds, scope: wholeThread ? "thread" as const : "turns" as const } } : {}),
-      }));
+      }], { source: "provider" }));
     }, { requireSqlite: true });
-    log("codex-transcript", `capture recovery completed thread=${threadId} boundary=${recoveryBoundary} turns=${turns.length}`);
+    log("codex-transcript", `capture recovery completed thread=${threadId} turns=${turns.length}`);
   }
 
   async steerTurnForBrowse(threadId: string, expectedTurnId: string, input: UserInput[]) {

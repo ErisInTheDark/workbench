@@ -123,12 +123,12 @@ test("demanded recovery closes only prefetched complete-turn gaps after successf
   const gaps = new WorkbenchTranscriptCaptureGapController({ database, randomId: () => `gap-${++id}` });
   const owner = new WorkbenchTranscriptController(database, gaps);
   try {
-    await gaps.captureFailure({ threadId, turnId, recoverability: "provider", error: new Error("before") });
-    await gaps.captureFailure({ threadId, turnId: null, recoverability: "provider", error: new Error("unknown scope") });
-    await gaps.captureFailure({ threadId, turnId, recoverability: "unrecoverable", error: new Error("local fact") });
+    await gaps.captureFailure({ threadId, turnIds: [turnId], recoverability: "provider", error: new Error("before") });
+    await gaps.captureFailure({ threadId, turnIds: [], recoverability: "provider", error: new Error("thread-wide read") });
+    await gaps.captureFailure({ threadId, turnIds: [turnId], recoverability: "unrecoverable", error: new Error("local fact") });
     const gapIds = (await owner.readRecoveryGaps(threadId)).map(gap => gap.id);
-    await gaps.captureFailure({ threadId, turnId, recoverability: "provider", error: new Error("during fetch") });
-    const context = { source: "provider" as const, recovery: { gapIds, scope: "turns" as const } };
+    await gaps.captureFailure({ threadId, turnIds: [turnId], recoverability: "provider", error: new Error("during fetch") });
+    const context = { source: "provider" as const, recovery: { gapIds } };
     const updates: TranscriptStreamUpdate[] = [];
     await owner.subscribe({
       id: "recovery-view", request: { threadId, turnLimit: 1 }, publish: () => {},
@@ -150,7 +150,8 @@ test("demanded recovery closes only prefetched complete-turn gaps after successf
     assert.equal((await owner.readRecoveryGaps(threadId)).length, 4);
     await owner.record(complete, context);
     const pending = await owner.readRecoveryGaps(threadId);
-    assert.deepEqual(pending.map(gap => gap.errorText).sort(), ["during fetch", "settlement failed", "unknown scope"]);
+    // The thread-wide failure anchored the latest turn, so re-reading that turn closes it too.
+    assert.deepEqual(pending.map(gap => gap.errorText).sort(), ["during fetch", "settlement failed"]);
     const states = fixture.sqlite.prepare("SELECT state FROM transcript_capture_gaps WHERE state = 'unrecoverable'").all();
     assert.equal(states.length, 1);
     assert.equal(reports.filter(report => report.includes("settlement failed")).length, 1);
@@ -793,7 +794,6 @@ test("durable capture gaps do not block historical imports, subscriptions or liv
       }],
       { recovery: {
         gapIds: (await recovered.readRecoveryGaps(fixtureIdentityValues.WorkbenchThreadId["provider-thread"])).map(gap => gap.id),
-        scope: "turns",
       }, source: "provider" },
     );
     assert.deepEqual(await recovered.pendingRecoveryThreadIds, []);
@@ -852,7 +852,7 @@ test("committed admissions of new thread items notify item-activity listeners un
     await owner.record([message("first", 50)], { source: "provider" });
     // Only live provider items prove their running turn is moving; Workbench records and recovery replays do not.
     await owner.record([message("recorded", 52)], { source: "workbench" });
-    await owner.record([message("replayed", 54)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    await owner.record([message("replayed", 54)], { source: "provider", recovery: { gapIds: [] } });
     assert.deepEqual(received, [
       { activityAt: 40, liveTurnIds: [turnId], projectId: testProjectIds.project, threadId },
       { activityAt: 52, liveTurnIds: [], projectId: testProjectIds.project, threadId },
@@ -881,7 +881,7 @@ test("only live completed context compactions notify compaction listeners", asyn
     await owner.record([compaction("completed", 20)], { source: "provider" });
     assert.deepEqual(received, [{ threadId, turnId, usage: null }]);
     // Recovery replays history; it must not re-send skills for an old compaction.
-    await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    await owner.record([compaction("completed", 30)], { source: "provider", recovery: { gapIds: [] } });
     assert.deepEqual(received, [{ threadId, turnId, usage: null }]);
   } finally {
     owner.dispose();
@@ -938,7 +938,7 @@ test("live running turns notify turn-start listeners and held steers notify stee
   try {
     await owner.record([{ ...turn, state: "inProgress" }], { source: "provider" });
     assert.deepEqual(started, [{ threadId, turnId }]);
-    await owner.record([{ ...turn, state: "inProgress" }], { source: "provider", recovery: { gapIds: [], scope: "thread" } });
+    await owner.record([{ ...turn, state: "inProgress" }], { source: "provider", recovery: { gapIds: [] } });
     await owner.record([heldSteer], { source: "workbench" });
     assert.deepEqual(steers, [{ threadId, turnId }]);
     await owner.record([{ ...turn, state: "completed", endedAt: 7, durationMs: 5 }], { source: "provider" });

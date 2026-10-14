@@ -140,7 +140,7 @@ function observationIdentity(observations: readonly WorkbenchTranscriptObservati
   }
   return {
     threadId: [...threadIds][0]!,
-    turnId: turnIds.size === 1 ? [...turnIds][0]! : null,
+    turnIds: [...turnIds],
   };
 }
 
@@ -250,17 +250,13 @@ function requestsSubscriptionRefresh(
   });
 }
 
-function observedTurnId(
-  observation: WorkbenchTranscriptObservation,
-  turnId: string,
-) {
-  if (observation.kind === "canonicalWindow") {
-    return observation.materializedTurnIds.find(id => id === turnId) ?? null;
-  }
-  if (observation.kind === "providerTurnScope") {
-    return observation.completeTurnIds.find(id => id === turnId) ?? null;
-  }
-  return null;
+/** Turns a provider window re-read completely; only these can reconcile capture-gap anchors. */
+function rereadTurnIds(observations: readonly WorkbenchTranscriptObservation[]) {
+  return [...new Set(observations.flatMap(observation => {
+    if (observation.kind === "canonicalWindow") return observation.materializedTurnIds;
+    if (observation.kind === "providerTurnScope") return observation.completeTurnIds;
+    return [];
+  }))];
 }
 
 export default class WorkbenchTranscriptController {
@@ -350,12 +346,12 @@ export default class WorkbenchTranscriptController {
         throw new Error("SQLite transcript recovery must use provider-owned observations.");
       }
       const selected = context.recovery;
+      const reread = rereadTurnIds(observations);
       const gaps = (await this.#captureGaps.readRecovery(identity.threadId)).filter(gap =>
-        selected.gapIds.includes(gap.id) && (selected.scope === "thread" || (gap.turnId !== null
-          && observations.some(observation => observedTurnId(observation, gap.turnId!) !== null))));
+        selected.gapIds.includes(gap.id) && gap.turnIds.some(turnId => reread.includes(turnId)));
       const recoveryObservations = [
         ...observations,
-        ...gaps.map(gap => this.#captureGaps.createRecoveryObservation(gap, gap.turnId)),
+        ...gaps.map(gap => this.#captureGaps.createRecoveryObservation(gap, reread)),
       ];
       let settlement: WorkbenchTranscriptSettlement;
       try {
@@ -593,13 +589,14 @@ export default class WorkbenchTranscriptController {
     return this.#database.readTranscriptMaterializedTurnIds(threadId, turnIds);
   }
 
+  /** A thread-wide provider read failed; the gap anchors the thread's latest stored turn. */
   captureProviderGap(threadId: string, error: unknown) {
     this.#assertActive();
     return this.#captureGaps.captureFailure({
       error,
       recoverability: "provider",
       threadId,
-      turnId: null,
+      turnIds: [],
     });
   }
 

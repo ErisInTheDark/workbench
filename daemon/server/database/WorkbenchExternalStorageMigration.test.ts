@@ -85,10 +85,11 @@ test("capture-gap import retains owned obligations without reviving orphaned his
     await writeFile(markerPath, marker);
     const warnings = t.mock.method(console, "warn", () => {});
     const migration = new WorkbenchExternalStorageMigration(database, root);
-    database.prepare(`INSERT INTO transcript_capture_gaps(id, thread_id, turn_id, state, reason, opened_at, closed_at, error_text)
-      VALUES ('gap', ?, NULL, 'reconciled', 'sqlite transcript settlement failed', 1, 2, 'failed')`).run(thread.threadId);
+    database.prepare(`INSERT INTO transcript_capture_gaps(id, thread_id, state, reason, opened_at, closed_at, error_text)
+      VALUES ('gap', ?, 'reconciled', 'sqlite transcript settlement failed', 1, 2, 'failed')`).run(thread.threadId);
     await migration.run();
-    assert.deepEqual(database.prepare("SELECT thread_id, state FROM transcript_capture_gaps").all(), [{ thread_id: thread.threadId, state: "open" }]);
+    // The thread has no turn a provider window could re-read, so the retained gap cannot stay open.
+    assert.deepEqual(database.prepare("SELECT thread_id, state FROM transcript_capture_gaps").all(), [{ thread_id: thread.threadId, state: "unrecoverable" }]);
     assert.deepEqual(database.prepare("SELECT id FROM workbench_threads").all(), [{ id: thread.threadId }]);
     assert.equal(await readFile(markerPath, "utf8"), marker);
     assert.equal(warnings.mock.callCount(), 1);

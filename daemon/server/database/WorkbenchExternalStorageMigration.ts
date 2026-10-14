@@ -81,19 +81,29 @@ export default class WorkbenchExternalStorageMigration {
                   return [];
                 }
                 const turn = entry.turnId ? identities.resolveTurn({ threadId: thread.threadId, turnId: entry.turnId }) : null;
+                const anchor = turn?.turnId ?? (this.database.prepare(
+                  "SELECT id FROM thread_turns WHERE thread_id = ? ORDER BY turn_index DESC LIMIT 1",
+                ).get(thread.threadId) as { id: string } | undefined)?.id ?? null;
                 const existing = this.database.prepare("SELECT thread_id FROM transcript_capture_gaps WHERE id = ?")
                   .get(entry.id) as { thread_id: string } | undefined;
                 if (existing && existing.thread_id !== thread.threadId) throw new Error("Capture-gap import changes its thread owner.");
+                // A gap with no turn to re-read can never reconcile.
+                const open = entry.recoverability === "provider" && anchor !== null;
                 // Old recovery committed its DB record before removing the pending marker.
-                return upsertRow(evidenceTables.transcriptCaptureGaps, {
-                  id: entry.id, thread_id: thread.threadId, turn_id: turn?.turnId ?? null,
-                  state: entry.recoverability === "provider" ? "open" : "unrecoverable",
-                  opened_at: entry.openedAt, closed_at: entry.recoverability === "provider" ? null : entry.openedAt,
-                  error_text: entry.errorText.slice(0, 500), reason: "sqlite transcript settlement failed",
-                }, {
-                  conflictColumns: ["id"],
-                  updateColumns: ["turn_id", "state", "opened_at", "closed_at", "error_text", "reason"],
-                });
+                return [
+                  upsertRow(evidenceTables.transcriptCaptureGaps, {
+                    id: entry.id, thread_id: thread.threadId,
+                    state: open ? "open" : "unrecoverable",
+                    opened_at: entry.openedAt, closed_at: open ? null : entry.openedAt,
+                    error_text: entry.errorText.slice(0, 500), reason: "sqlite transcript settlement failed",
+                  }, {
+                    conflictColumns: ["id"],
+                    updateColumns: ["state", "opened_at", "closed_at", "error_text", "reason"],
+                  }),
+                  ...(anchor === null ? [] : [upsertRow(evidenceTables.transcriptCaptureGapTurns, {
+                    gap_id: entry.id, thread_id: thread.threadId, turn_id: anchor, reconciled_at: null,
+                  }, { conflictColumns: ["gap_id", "turn_id"], updateColumns: ["thread_id"] })]),
+                ];
               });
             } });
             continue;

@@ -62,11 +62,28 @@ const DISCOVERY_CATALOGUE_IDENTITIES: Readonly<Record<string, readonly string[]>
 };
 const DAY_MS = 86_400_000;
 
+/** Sources before turn-anchored gaps move each gap turn into an anchor and drop open gaps no window could re-read. */
+function applyCaptureGapAnchorOracle(database: InstanceType<typeof Database>) {
+  const columns = database.prepare("PRAGMA table_info(transcript_capture_gaps)").all() as Array<{ name: string }>;
+  if (!columns.some(column => column.name === "turn_id")) return;
+  database.exec(`
+    CREATE TABLE transcript_capture_gap_turns(
+      gap_id TEXT NOT NULL, thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, reconciled_at INTEGER,
+      PRIMARY KEY(gap_id, turn_id)
+    );
+    INSERT INTO transcript_capture_gap_turns
+    SELECT id, thread_id, turn_id, CASE WHEN state = 'reconciled' THEN closed_at END
+    FROM transcript_capture_gaps WHERE turn_id IS NOT NULL;
+    DELETE FROM transcript_capture_gaps WHERE state = 'open' AND turn_id IS NULL;
+  `);
+}
+
 function applyRetentionOracle(databasePath: string, retentionRunAt: number) {
   const database = new Database(databasePath, { fileMustExist: true });
   try {
     database.pragma("foreign_keys = ON");
     database.transaction(() => {
+      applyCaptureGapAnchorOracle(database);
       // Sources at or after bounded payload retention already own these tables and earlier expiries.
       database.exec(`
         CREATE TABLE IF NOT EXISTS thread_item_payload_retention(

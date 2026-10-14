@@ -3070,43 +3070,47 @@ test("a turn settling with its compaction still open interrupts it, but re-recor
   }
 });
 
-test("capture-gap settlement closes the existing thread-owned failure interval", () => {
+test("capture gaps anchor stored turns, extend once into the next turn, and close only when every anchor is re-read", () => {
   const { database, repository } = createRepository();
+  const turnIds = (...ids: string[]) => ids.map(id => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id));
+  const gap = (gapId: string, threadId: string, ids: readonly string[], closedAt: number | null): WorkbenchTranscriptObservation => ({
+    kind: "captureGap", gapId, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), turnIds: turnIds(...ids),
+    openedAt: 10, errorText: "settlement failed", reason: "sqlite transcript settlement failed",
+    ...(closedAt === null ? { state: "open" as const, closedAt: null } : { state: "reconciled" as const, closedAt }),
+  });
+  const gapState = (gapId: string) => (database.prepare("SELECT state FROM transcript_capture_gaps WHERE id = ?").get(gapId) as { state: string }).state;
+  const anchors = (gapId: string) => database.prepare(
+    "SELECT turn_id, reconciled_at FROM transcript_capture_gap_turns WHERE gap_id = ? ORDER BY turn_id",
+  ).all(gapId);
   try {
     repository.settle([
-      threadObservation(),
-      turnObservation("turn", 0),
-      {
-        closedAt: null,
-        errorText: "settlement failed",
-        gapId: "gap",
-        kind: "captureGap",
-        openedAt: 10,
-        reason: "sqlite transcript settlement failed",
-        state: "open",
-        threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
-        turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
-      },
+      threadObservation(), threadObservation("other"), turnObservation("first", 0), turnObservation("second", 1),
+      gap("named", "thread", ["first", "missing"], null),
+      gap("latest", "thread", [], null),
+      gap("turnless", "other", [], null),
     ]);
+    assert.deepEqual(anchors("named"), [{ turn_id: "first", reconciled_at: null }]);
+    assert.deepEqual(anchors("latest"), [{ turn_id: "second", reconciled_at: null }]);
+    assert.deepEqual([gapState("turnless"), anchors("turnless")], ["unrecoverable", []]);
+
+    repository.settle([turnObservation("third", 2)]);
+    repository.settle([turnObservation("fourth", 3)]);
+    assert.deepEqual(anchors("latest").map(anchor => (anchor as { turn_id: string }).turn_id), ["second", "third"]);
+    assert.deepEqual(anchors("named").map(anchor => (anchor as { turn_id: string }).turn_id), ["first"]);
+
+    repository.settle([gap("latest", "thread", ["second"], 20)]);
+    assert.equal(gapState("latest"), "open");
+    repository.settle([gap("latest", "thread", ["third", "fourth"], 30)]);
+    assert.equal(gapState("latest"), "reconciled");
+    assert.deepEqual(anchors("latest"), [{ turn_id: "second", reconciled_at: 20 }, { turn_id: "third", reconciled_at: 30 }]);
+    assert.throws(() => repository.settle([gap("latest", "thread", ["third"], 40)]), /no longer open/);
+    assert.equal(gapState("named"), "open");
+
+    repository.settle([gap("replayed", "thread", [], null)]);
     repository.settle([{
-      closedAt: 20, errorText: "settlement failed", gapId: "gap", kind: "captureGap",
-      openedAt: 10, reason: "sqlite transcript settlement failed", state: "reconciled",
-      threadId: fixtureIdentityValues.WorkbenchThreadId["thread"],
-      turnId: fixtureIdentityValues.WorkbenchTurnId["turn"],
+      kind: "turnCatalog", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, catalog: [threadObservation(), turnObservation("fifth", 4)],
     }]);
-    assert.deepEqual(
-      database.prepare("SELECT * FROM transcript_capture_gaps WHERE id = ?").get("gap"),
-      {
-        closed_at: 20,
-        error_text: "settlement failed",
-        id: "gap",
-        opened_at: 10,
-        reason: "sqlite transcript settlement failed",
-        state: "reconciled",
-        thread_id: "thread",
-        turn_id: "turn",
-      },
-    );
+    assert.deepEqual(anchors("replayed"), [{ turn_id: "fourth", reconciled_at: null }], "replayed history is not a continuation");
   } finally {
     database.close();
   }

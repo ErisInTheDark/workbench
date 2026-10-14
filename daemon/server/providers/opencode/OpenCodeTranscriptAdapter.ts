@@ -678,7 +678,7 @@ export default class OpenCodeTranscriptAdapter {
       }] : []),
     ] : observations as WorkbenchTranscriptAtomicObservation[], {
       source: "provider",
-      ...(window ? { recovery: { gapIds: window.gapIds, scope: "turns" as const } } : {}),
+      ...(window ? { recovery: { gapIds: window.gapIds } } : {}),
     });
     return {
       ...identity,

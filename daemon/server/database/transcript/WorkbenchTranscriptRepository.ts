@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers, context compaction, usage facts, provider evidence reconciliation, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers, context compaction, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -1227,6 +1227,7 @@ export default class WorkbenchTranscriptRepository {
         conflictColumns: ["id"],
         updateColumns: ["native_turn_id", "state", "started_at", "ended_at", "duration_ms"],
       }));
+      if (!existing && mode === "live") this.#anchorCaptureGapSuccessor(observation.threadId, observation.turnId);
       if (thread.identity_origin === "workbench") {
         this.#identity.admitTurn(observation.threadId, {
           harness: observation.harnessId,
@@ -1412,30 +1413,70 @@ export default class WorkbenchTranscriptRepository {
     }
     if (observation.kind === "captureGap") {
       this.#requiredThread(observation.threadId);
-      if (observation.state === "reconciled") {
-        const gap = this.#one(selectRows(evidenceTables.transcriptCaptureGaps, {
-          where: { id: observation.gapId, thread_id: observation.threadId },
-        }));
-        if (!gap || gap.state !== "open") throw new Error("SQLite transcript capture gap is no longer open.");
-        this.#run(updateRows(evidenceTables.transcriptCaptureGaps, {
-          state: "reconciled", closed_at: observation.closedAt,
-        }, { id: gap.id }));
-        return observation.threadId;
-      }
-      this.#run(insertRow(evidenceTables.transcriptCaptureGaps, {
-        id: observation.gapId,
-        thread_id: observation.threadId,
-        turn_id: observation.turnId,
-        state: observation.state,
-        reason: observation.reason,
-        opened_at: observation.openedAt,
-        closed_at: observation.closedAt,
-        error_text: observation.errorText,
-      }));
+      if (observation.state === "reconciled") this.#reconcileCaptureGap(observation.threadId, observation.gapId, observation.turnIds, observation.closedAt);
+      else this.#openCaptureGap(observation);
       return observation.threadId;
     }
     this.#writeNativeEvidence(observation, canonicalIndex);
     return observation.threadId;
+  }
+
+  /** Every gap is anchored to stored turns a provider window can re-read; a thread with none has nothing to recover. */
+  #openCaptureGap(observation: WorkbenchTranscriptCaptureGapObservation) {
+    const named = observation.turnIds.length
+      ? this.#all(selectRows(coreTables.threadTurns, {
+        where: { thread_id: observation.threadId }, whereIn: { id: [...new Set(observation.turnIds)] },
+      })).map(turn => turn.id)
+      : [];
+    const anchors = named.length ? named : this.#all(selectRows(coreTables.threadTurns, {
+      where: { thread_id: observation.threadId }, orderBy: [{ column: "turn_index", direction: "DESC" }], limit: 1,
+    })).map(turn => turn.id);
+    const closedAt = observation.state === "open" && anchors.length ? null : observation.closedAt ?? observation.openedAt;
+    this.#run(insertRow(evidenceTables.transcriptCaptureGaps, {
+      id: observation.gapId,
+      thread_id: observation.threadId,
+      state: closedAt === null ? "open" : "unrecoverable",
+      reason: observation.reason,
+      opened_at: observation.openedAt,
+      closed_at: closedAt,
+      error_text: observation.errorText,
+    }));
+    for (const turnId of anchors) {
+      this.#run(insertRow(evidenceTables.transcriptCaptureGapTurns, {
+        gap_id: observation.gapId, thread_id: observation.threadId, turn_id: turnId, reconciled_at: null,
+      }));
+    }
+  }
+
+  #reconcileCaptureGap(threadId: WorkbenchThreadId, gapId: string, turnIds: readonly WorkbenchTurnId[], closedAt: number) {
+    const gap = this.#one(selectRows(evidenceTables.transcriptCaptureGaps, { where: { id: gapId, thread_id: threadId } }));
+    if (!gap || gap.state !== "open") throw new Error("SQLite transcript capture gap is no longer open.");
+    const reread = new Set<string>(turnIds);
+    const anchors = this.#all(selectRows(evidenceTables.transcriptCaptureGapTurns, { where: { gap_id: gapId } }));
+    for (const anchor of anchors) {
+      if (anchor.reconciled_at !== null || !reread.has(anchor.turn_id)) continue;
+      this.#run(updateRows(evidenceTables.transcriptCaptureGapTurns, { reconciled_at: closedAt }, { gap_id: gapId, turn_id: anchor.turn_id }));
+    }
+    if (anchors.some(anchor => anchor.reconciled_at === null && !reread.has(anchor.turn_id))) return;
+    this.#run(updateRows(evidenceTables.transcriptCaptureGaps, { state: "reconciled", closed_at: closedAt }, { id: gapId }));
+  }
+
+  /** A gap whose only anchor is the previous turn also covers the live turn the thread continued straight into; replayed history never extends it. */
+  #anchorCaptureGapSuccessor(threadId: WorkbenchThreadId, turnId: WorkbenchTurnId) {
+    const gaps = this.#all(selectRows(evidenceTables.transcriptCaptureGaps, { where: { state: "open", thread_id: threadId } }));
+    if (!gaps.length) return;
+    const [newest, previous] = this.#all(selectRows(coreTables.threadTurns, {
+      where: { thread_id: threadId }, orderBy: [{ column: "turn_index", direction: "DESC" }], limit: 2,
+    }));
+    if (newest?.id !== turnId || !previous) return;
+    const anchors = this.#all(selectRows(evidenceTables.transcriptCaptureGapTurns, { whereIn: { gap_id: gaps.map(gap => gap.id) } }));
+    for (const gap of gaps) {
+      const owned = anchors.filter(anchor => anchor.gap_id === gap.id);
+      if (owned.length !== 1 || owned[0]!.turn_id !== previous.id) continue;
+      this.#run(insertRow(evidenceTables.transcriptCaptureGapTurns, {
+        gap_id: gap.id, thread_id: threadId, turn_id: turnId, reconciled_at: null,
+      }));
+    }
   }
 
   #findItem(

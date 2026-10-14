@@ -23,7 +23,8 @@ import ReloadableNode from "./ReloadableNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
 import ClaudeProviderNode from "./providers/claude/ClaudeProviderNode";
 import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
-import { NativeThreadIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
 import type { ThreadReadResponse } from "workbench-shared/codex/generated/app-server/v2/ThreadReadResponse";
 import { readWorkbenchPromptContext } from "./workbench-prompt-context";
@@ -91,8 +92,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       while (persistence.size) await Promise.allSettled([...persistence]);
     };
     const reportRecoveryFailure = (threadId: string | null, error: unknown) => {
-      logError("codex-transcript", `capture recovery failed${threadId ? ` for ${threadId}` : ""}: ${
-        (error instanceof Error ? error.message : String(error)).slice(0, 500)}`);
+      logError("codex-transcript", `capture recovery failed${threadId ? ` for ${threadId}` : ""}: ${describeErrorCauseChain(error, 500)}`);
     };
     const startRecovery = () => {
       if (recovery) return;
@@ -258,7 +258,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         harnessId: "codex",
         ...input,
       }),
-      readSqliteRecoveryGapIds: async threadId => (await transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId))).map(gap => gap.id),
       readSqliteContextUsage: (threadId) => build.get("database").readThreadContextUsage(
         build.get("threadIdentity").workbenchIdForNative(
           build.get("threadIdentity").knownNativeBinding("codex", NativeThreadIdSchema.parse(threadId)),

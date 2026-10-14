@@ -88,6 +88,7 @@ const databaseReleases = Object.freeze({
   threadErrors: release(78, "c901dabdb1d433c72f87616ee93d777cfcc319fafa2f6e267256235fca903448"),
   threadGitCommits: release(79, "ac0e7a80d8078d9a1c3b7b4e2d91b788f4f621738580035ae7f10b09996628f6"),
   threadGitCommitBackfill: release(80, "11235a0e9fae2fc8c7b8fc897289d697b8ddb1b0da3093c7b59a5518d10b008f"),
+  captureGapTurns: release(81, "9763f6193f8e68707b2a7c241d8320ab1a868d7a2ea87d79e61ed44a77d0a95d"),
 });
 
 export default databaseReleases;

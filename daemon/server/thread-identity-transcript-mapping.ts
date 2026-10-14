@@ -235,7 +235,7 @@ export function mapNativeTranscriptObservation(
     },
     captureGap: (input) => ({
       ...input, threadId: threadId(input.threadId),
-      turnId: input.turnId === null ? null : turnId(input.threadId, input.turnId),
+      turnIds: input.turnIds.map((id) => turnId(input.threadId, id)),
     }),
     canonicalWindow: (input) => ({
       ...input, threadId: threadId(input.threadId), observations: input.observations.map(mapAtomic),

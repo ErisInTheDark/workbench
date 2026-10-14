@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptItemLifecycle: durable lifecycle values shared by item transforms.
  * - WorkbenchTranscriptAtomicObservation: one source-owned semantic transcript or turn-usage fact.
- * - WorkbenchTranscriptCaptureGapObservation: one closed failed-capture interval.
+ * - WorkbenchTranscriptCaptureGapObservation: one turn-anchored failed capture opening, or re-read anchors reconciling it.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary.
  * - WorkbenchTranscriptContextCompactionObservation: one provider report that context compaction started or ended.
  * - WorkbenchTranscriptObservation: ordered transcript input, metadata-only catalogs and restricted usage windows.
@@ -203,7 +203,11 @@ export type WorkbenchTranscriptCaptureGapObservation<ThreadId extends string = W
   openedAt: number;
   reason: string;
   threadId: ThreadId;
-  turnId: TurnId | null;
+  /**
+   * Opening: turns the failed capture named; stored turns among them anchor the gap, else the thread's latest turn does.
+   * Reconciling: turns a provider window just re-read; matching anchors reconcile, and the gap closes once none remain.
+   */
+  turnIds: readonly TurnId[];
 } & ({ state: "open"; closedAt: null } | { state: "reconciled" | "unrecoverable"; closedAt: number });
 
 /**
@@ -266,7 +270,7 @@ export type NativeTranscriptAtomicObservation = WorkbenchTranscriptAtomicObserva
 export type NativeTranscriptObservation = WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>;
 
 export interface WorkbenchTranscriptRecordingContext {
-  recovery?: { gapIds: readonly string[]; scope: "turns" | "thread" };
+  recovery?: { gapIds: readonly string[] };
   source: "compatibility" | "provider" | "workbench";
 }
 
