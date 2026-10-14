@@ -5,6 +5,7 @@
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
  * - default IsolatedWorkbench: boot current source with private storage, install provider runtimes, and own its socket/process cleanup.
  * - removeIsolatedWorkbenchWorkspace: clean one validated stopped workspace.
+ * - stopIsolatedWorkbenchProcesses: retire fixture processes while collecting every stop result.
  * - CLAUDE_NATIVE_INSTRUCTION_SENTINEL: catch native CLAUDE.md leakage into managed prompts.
  * - WORKBENCH_INSTRUCTION_SENTINEL: prove managed project instructions reach provider models.
  */
@@ -46,6 +47,21 @@ import {
   DaemonDiagnosticMessageSchema,
   type DaemonDiagnosticMessage,
 } from "../../shared/http/workbench-daemon-lifecycle";
+
+export async function stopIsolatedWorkbenchProcesses(processes: {
+  app: Pick<IsolatedWorkbenchProcess, "stop"> | null;
+  daemon: Pick<IsolatedWorkbenchProcess, "stop"> | null;
+  host: Pick<IsolatedWorkbenchProcess, "stop"> | null;
+}, force: boolean) {
+  const groups = force ? [[processes.app, processes.daemon, processes.host]]
+    : [[processes.app], [processes.daemon, processes.host]];
+  const results: PromiseSettledResult<void>[] = [];
+  for (const group of groups) {
+    results.push(...await Promise.allSettled(group.filter(process => process !== null)
+      .map(async process => process.stop(force))));
+  }
+  return results;
+}
 
 const NodeWebSocket = createRequire(new URL("../../app/package.json", import.meta.url))("ws") as
   new (url: string, options: { origin: string }) => WebSocket;
@@ -905,8 +921,9 @@ stream_max_retries = 0
     this.client?.dispose();
     this.client = null;
     const children = { app: this.appChild, daemon: this.child };
-    const results = await Promise.allSettled([this.child, this.appChild, this.serviceChild]
-      .filter(process => process !== null).map(process => process.stop(force)));
+    const results = await stopIsolatedWorkbenchProcesses({
+      app: this.appChild, daemon: this.child, host: this.serviceChild,
+    }, force);
     if (this.child?.exited || this.child?.pid === undefined) this.child = null;
     if (this.appChild?.exited || this.appChild?.pid === undefined) {
       this.appChild = null;

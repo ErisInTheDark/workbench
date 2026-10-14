@@ -10,9 +10,49 @@ import { captureTestOutput } from "../capture-test-output.mts";
 import IsolatedWorkbench, {
   IsolatedWorkbenchSignalCleanup,
   removeIsolatedWorkbenchWorkspace,
+  stopIsolatedWorkbenchProcesses,
   type IsolatedWorkbenchProcessEvent,
   type IsolatedWorkbenchOptions,
 } from "./IsolatedWorkbench";
+
+test("graceful scenario shutdown keeps dependencies alive until the app has stopped", async () => {
+  const app = Promise.withResolvers<void>();
+  const stopped: string[] = [];
+  const closing = stopIsolatedWorkbenchProcesses({
+    app: { stop: () => { stopped.push("app"); return app.promise; } },
+    daemon: { stop: async () => { stopped.push("daemon"); } },
+    host: { stop: async () => { stopped.push("host"); } },
+  }, false);
+  try { assert.deepEqual(stopped, ["app"]); }
+  finally { app.resolve(); }
+  assert.ok((await closing).every(result => result.status === "fulfilled"));
+  assert.deepEqual(new Set(stopped), new Set(["app", "daemon", "host"]));
+});
+
+test("failed app retirement still stops dependencies and preserves the failure", async () => {
+  const failure = new Error("app retirement failed");
+  const stopped: string[] = [];
+  const results = await stopIsolatedWorkbenchProcesses({
+    app: { stop: async () => { throw failure; } },
+    daemon: { stop: async () => { stopped.push("daemon"); } },
+    host: { stop: async () => { stopped.push("host"); } },
+  }, false);
+  assert.deepEqual(new Set(stopped), new Set(["daemon", "host"]));
+  assert.deepEqual(results.filter(result => result.status === "rejected").map(result => result.reason), [failure]);
+});
+
+test("forced cleanup retires every process without waiting for the app", async () => {
+  const app = Promise.withResolvers<void>();
+  const stopped: string[] = [];
+  const closing = stopIsolatedWorkbenchProcesses({
+    app: { stop: force => { assert.equal(force, true); stopped.push("app"); return app.promise; } },
+    daemon: { stop: async force => { assert.equal(force, true); stopped.push("daemon"); } },
+    host: { stop: async force => { assert.equal(force, true); stopped.push("host"); } },
+  }, true);
+  try { assert.deepEqual(new Set(stopped), new Set(["app", "daemon", "host"])); }
+  finally { app.resolve(); }
+  assert.ok((await closing).every(result => result.status === "fulfilled"));
+});
 
 async function runtime(
   context: TestContext,
