@@ -1,0 +1,3 @@
+- Keep sending and receiving code synchronized through shared types
+- If sending and receiving versions can differ, prefer resilience over strictness. Accept weird data, conform it into required shape
+- **Hard rule: all parsed json is assumed arbitrary and goes through `conformToZodSchema`**. One bad or unknown entry must drop only itself, never the whole value; do not throw or `safeParse`-and-discard for drift. Report the repaired paths when missing could confuse

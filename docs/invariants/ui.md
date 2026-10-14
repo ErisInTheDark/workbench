@@ -1,0 +1,13 @@
+- Follow existing flush/zen visual language: 
+  - minimal borders/backgrounds (use with intentionality) 
+  - avoid drop shadows
+  - avoid hard corners
+  - no generic browser ui
+  - always use custom scrollbars
+- Support both light and dark color schemes in every visual change
+- Make desktop and mobile behavior deliberate, layouts and sticky controls
+- Prefer browser use validation unless overridden by user instructions
+- Prefer workbench's extra tailwind features (they compose correctly)
+  - nested variant grouping `motion-reduce:(transition-none stuck:(animate-none hover:bg-red-500))`
+  - any whitespace within square brackets [] converts to standard tailwind `_`, allowing multiline `transition`/`transform`/gradients
+- Prefer mockups when tool is available, is not overridden by user instructions, and planned work is a full design instead of exact tweaks

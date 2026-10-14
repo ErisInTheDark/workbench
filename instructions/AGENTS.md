@@ -178,6 +178,7 @@ Use the following **Reasoning Checklist**:
   - multiple layers owning cancel or retry behavior
 - [ ] **Avoid mirror state:** Before adding counters, caches, registries, or other derived lifecycle state, inspect whether existing structures encode same invariant. Prefer deriving from existing owner unless performance, async boundaries, or external protocol constraints make duplicate state necessary. Duplicate state only allowed with explicit invariants and proof drift is impossible or acceptable
 - [ ] **Keep external weirdness at the edge:** Wrap protocols, CLIs, browser APIs, generated clients, subprocesses, and other hostile shapes; must not enter core project code
+- [ ] **Prefer compiler safety:** Do not use `any`, `unknown`, magic numbers, or magic strings unless validated through schemas
 
 **Hard rule: Aggressively propose related refactors when they improve project maintainability.**
 On needed refactor, but TRULY out of scope for current task, state in brief as potential follow-up work; in review repeat suggestion
