@@ -270,11 +270,13 @@ export type NativeTranscriptAtomicObservation = WorkbenchTranscriptAtomicObserva
 export type NativeTranscriptObservation = WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>;
 
 export interface WorkbenchTranscriptRecordingContext {
-  recovery?: { gapIds: readonly string[] };
+  /** `explicit`: a caller demanded these turns by name, so turns expired by retention are recovered too. */
+  recovery?: { gapIds: readonly string[]; explicit?: true };
   source: "compatibility" | "provider" | "workbench";
 }
 
-export type WorkbenchTranscriptSettlementMode = "live" | "replay";
+/** `explicitRecovery` replays like `replay`, and first lifts retention tombstones from the turns its windows re-read. */
+export type WorkbenchTranscriptSettlementMode = "live" | "replay" | "explicitRecovery";
 
 export interface WorkbenchTranscriptCompactionCompletion {
   itemId: WorkbenchItemId;

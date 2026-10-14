@@ -237,8 +237,8 @@ test("recall demands latest or exact canonical turn without dispatch after cance
   await fixture.operations.history.materialize(fixture.threadId, null, cancellation.signal);
   await fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal);
   assert.deepEqual(fixture.demands, [
-    { threadId: fixture.threadId, target: { mode: "latest" }, refresh: false },
-    { threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false },
+    { threadId: fixture.threadId, target: { mode: "latest" }, refresh: false, explicit: true },
+    { threadId: fixture.threadId, target: { mode: "exact", turnId: fixture.turnId }, refresh: false, explicit: true },
   ]);
   cancellation.abort(new Error("recall cancelled"));
   await assert.rejects(fixture.operations.history.materialize(fixture.threadId, fixture.turnId, cancellation.signal), /recall cancelled/);

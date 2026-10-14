@@ -1113,7 +1113,7 @@ export default class CodexStdioBridge {
         itemCount: 0, loadState: "unloaded" as const,
       })),
     });
-    const store = this.createThreadWindowStore({ gapIds: input.gapIds });
+    const store = this.createThreadWindowStore({ gapIds: input.gapIds, ...(input.explicit ? { explicit: true as const } : {}) });
     const loader = new CodexThreadWindowLoader(request => this.dispatchManagedProviderRequest({
       ...request, [WORKBENCH_REQUEST_SOURCE_FIELD]: "sqliteRecovery",
     }, signal), (threadId, turnId) => this.isCompactionExecution(threadId, turnId));

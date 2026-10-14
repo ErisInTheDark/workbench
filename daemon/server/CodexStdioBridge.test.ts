@@ -2400,6 +2400,9 @@ test("demanded Codex reconciliation repairs same-status SQLite bodies without de
     assert.equal(requests.filter(request => request.method === "thread/turns/list"
       && (request.params as { itemsView: string }).itemsView === "full").length, 2);
     assert.ok(contexts.some(context => context.recovery?.gapIds.includes("prefetched")));
+    assert.ok(!contexts.some(context => context.recovery?.explicit), "routine windows never lift retention expiry");
+    await bridge.reconcileSqliteTranscriptWindow({ ...input, explicit: true }, new AbortController().signal);
+    assert.ok(contexts.some(context => context.recovery?.explicit), "an explicit demand records as explicit recovery");
   } finally {
     await bridge.disposeImmediately();
     sql.ports.identities.items.dispose();

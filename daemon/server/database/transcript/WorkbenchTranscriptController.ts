@@ -355,7 +355,7 @@ export default class WorkbenchTranscriptController {
       ];
       let settlement: WorkbenchTranscriptSettlement;
       try {
-        settlement = await this.#recorder.record(recoveryObservations, "replay");
+        settlement = await this.#recorder.record(recoveryObservations, selected.explicit ? "explicitRecovery" : "replay");
       } catch (error) {
         reportSettlementFailure(error, identity.threadId);
         throw await this.#captureGaps.captureFailure({

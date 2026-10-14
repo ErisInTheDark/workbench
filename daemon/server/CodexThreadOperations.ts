@@ -143,7 +143,7 @@ export default class CodexThreadOperations implements WorkbenchProviderThreads {
     materialize: async (threadId, turnId, signal) => {
       signal.throwIfAborted();
       await this.owners.reconciliation.reconcile({
-        threadId, target: turnId ? { mode: "exact", turnId } : { mode: "latest" }, refresh: false,
+        threadId, target: turnId ? { mode: "exact", turnId } : { mode: "latest" }, refresh: false, explicit: true,
       }, signal);
     },
   };

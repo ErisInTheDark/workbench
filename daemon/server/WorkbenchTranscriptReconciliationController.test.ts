@@ -178,6 +178,36 @@ test("opening a thread re-reads each open-gap anchor once, and a failing re-read
   } finally { await owner.dispose(); }
 });
 
+test("an explicit demand never rides along with a routine window for the same turn", async () => {
+  const turns = [{
+    id: "turn", thread_id: "thread", identity_origin: "workbench" as const, turn_index: 0, harness_id: "codex",
+    native_location: "/repo", native_thread_id: "native", native_turn_id: "native-turn", state: "completed" as const,
+    created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  }];
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const explicit: Array<true | undefined> = [];
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(turns), readRecoveryGaps: async () => [],
+    recover: async input => {
+      explicit.push(input.explicit);
+      entered.resolve();
+      await release.promise;
+      return { turnIds: ["turn"], exhausted: false };
+    },
+    warn: assert.fail,
+  });
+  try {
+    const exact = { threadId: "thread", target: { mode: "exact" as const, turnId: "turn" }, refresh: false };
+    const routine = owner.reconcile(exact);
+    await entered.promise;
+    const demanded = owner.reconcile({ ...exact, explicit: true });
+    release.resolve();
+    await Promise.all([routine, demanded]);
+    assert.deepEqual(explicit, [undefined, true]);
+  } finally { await owner.dispose(); }
+});
+
 test("previous recovery follows the preceding turn's native provenance across provider boundaries", async () => {
   const turns = ["codex", "opencode", "opencode"].map((harness, index) => ({
     id: `turn-${index}`, thread_id: "thread", identity_origin: "workbench" as const,

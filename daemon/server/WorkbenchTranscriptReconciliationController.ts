@@ -37,7 +37,8 @@ function boundedMessage(error: unknown) {
 }
 
 function sameWindow(left: Target, right: Target) {
-  if (left.threadId !== right.threadId || left.harness !== right.harness || left.target.mode !== right.target.mode) return false;
+  if (left.threadId !== right.threadId || left.harness !== right.harness || left.target.mode !== right.target.mode
+    || left.explicit !== right.explicit) return false;
   if (left.target.mode === "exact" && right.target.mode === "exact") return left.target.turnId === right.target.turnId;
   if (left.target.mode === "previous" && right.target.mode === "previous") return left.target.beforeTurnId === right.target.beforeTurnId;
   return true;

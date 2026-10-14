@@ -82,6 +82,7 @@ import { planTranscriptItemAdmissions } from "./transcript-item-admission.ts";
 import type {
   WorkbenchTranscriptAtomicObservation,
   WorkbenchTranscriptCaptureGapObservation,
+  WorkbenchTranscriptSettlementMode,
   WorkbenchTranscriptContextCompactionObservation,
   WorkbenchTranscriptCompactionCompletion,
   WorkbenchTranscriptContextSnapshot,
@@ -282,7 +283,7 @@ export default class WorkbenchTranscriptRepository {
 
   settle(
     observations: readonly WorkbenchTranscriptObservation[],
-    settlementMode: "live" | "replay" = "live",
+    settlementMode: WorkbenchTranscriptSettlementMode = "live",
   ): WorkbenchTranscriptSettlement {
     const changedThreadIds = new Set<string>();
     const affected: SettlementChanges = {
@@ -292,6 +293,7 @@ export default class WorkbenchTranscriptRepository {
     try {
       this.#settlementChanges = affected;
       return this.#database.transaction(() => {
+        if (settlementMode === "explicitRecovery") this.#reviveExpiredTurns(observations);
         for (const observation of observations) {
           const threadId = observation.kind === "canonicalWindow"
             ? this.#settleCanonicalWindow(observation)
@@ -1421,6 +1423,21 @@ export default class WorkbenchTranscriptRepository {
     return observation.threadId;
   }
 
+  /**
+   * An explicitly demanded re-read may recreate a retention-expired turn; the next retention run expires it again,
+   * since its thread is still settled. Only turns the batch's windows re-read completely are revived.
+   */
+  #reviveExpiredTurns(observations: readonly WorkbenchTranscriptObservation[]) {
+    for (const observation of observations) {
+      if (observation.kind !== "providerTurnScope" && observation.kind !== "canonicalWindow") continue;
+      const turnIds = observation.kind === "providerTurnScope" ? observation.completeTurnIds : observation.materializedTurnIds;
+      for (const turnId of turnIds) {
+        const turn = this.#one(selectRows(coreTables.threadTurns, { where: { id: turnId, thread_id: observation.threadId } }));
+        if (turn) this.#run(deleteRows(threadPayloadRetentionTables.turnPayloadRetention, { turn_id: turn.id }));
+      }
+    }
+  }
+
   /** Every gap is anchored to stored turns a provider window can re-read; a thread with none has nothing to recover. */
   #openCaptureGap(observation: WorkbenchTranscriptCaptureGapObservation) {
     const named = observation.turnIds.length
@@ -1511,7 +1528,7 @@ export default class WorkbenchTranscriptRepository {
    */
   #settleContextCompaction(
     observation: WorkbenchTranscriptContextCompactionObservation,
-    settlementMode: "live" | "replay",
+    settlementMode: WorkbenchTranscriptSettlementMode,
   ) {
     const threadId = WorkbenchThreadIdSchema.parse(observation.threadId);
     const turnId = WorkbenchTurnIdSchema.parse(observation.turnId);

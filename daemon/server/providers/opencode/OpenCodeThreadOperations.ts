@@ -192,7 +192,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   readonly history = {
     materialize: async (threadId: string, turnId: string | null, signal: AbortSignal) => {
       signal.throwIfAborted();
-      await this.demand(threadId, turnId ? { mode: "exact", turnId } : { mode: "latest" }, false, signal);
+      await this.options.reconciliation.reconcile({
+        threadId, target: turnId ? { mode: "exact", turnId } : { mode: "latest" }, refresh: false, explicit: true,
+      }, signal);
     },
   };
 
@@ -769,7 +771,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const recorded = await this.syncSession(session, window.messages, {
         canCommit: () => execution.intentVersion === intentVersion && execution.eventSequence === eventSequence,
         keepLatestTurnOpen: target.mode === "latest" && Boolean(active[native.nativeThreadId]),
-        window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor },
+        window: { ...window, latest: target.mode === "latest", gapIds: input.gapIds, successor, ...(input.explicit ? { explicit: true as const } : {}) },
       });
       return { turnIds: recorded.latestTurnId ? [recorded.latestTurnId] : [], exhausted: window.previousCursor === null };
     } catch (error) {

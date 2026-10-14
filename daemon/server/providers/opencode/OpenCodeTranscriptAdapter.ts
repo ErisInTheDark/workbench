@@ -457,7 +457,10 @@ export default class OpenCodeTranscriptAdapter {
       canCommit?: (latestTurnId: WorkbenchTurnId | null) => boolean;
       keepLatestTurnOpen?: boolean;
       settleUsage?: boolean;
-      window?: { previousCursor: string | null; gapIds: readonly string[]; latest: boolean; successor?: WorkbenchTurnIdentityMetadata };
+      window?: {
+        previousCursor: string | null; gapIds: readonly string[]; latest: boolean;
+        successor?: WorkbenchTurnIdentityMetadata; explicit?: true;
+      };
     } = {},
   ) {
     const nativeThreadId = NativeThreadIdSchema.parse(session.id);
@@ -678,7 +681,7 @@ export default class OpenCodeTranscriptAdapter {
       }] : []),
     ] : observations as WorkbenchTranscriptAtomicObservation[], {
       source: "provider",
-      ...(window ? { recovery: { gapIds: window.gapIds } } : {}),
+      ...(window ? { recovery: { gapIds: window.gapIds, ...(window.explicit ? { explicit: true as const } : {}) } } : {}),
     });
     return {
       ...identity,

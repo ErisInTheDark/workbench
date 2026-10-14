@@ -14,7 +14,7 @@
 - Keep provider-native evidence separate from Workbench items.
 - Provider-native evidence does not render or order history.
 - Expire completed result bodies one day after item creation. Keep invocation, outcome, timing, error, exit, and item identity facts plus an expiry tombstone.
-- Expire a settled generation's item graph and provider-native payloads three days after settlement. Keep turn identity and a turn tombstone; provider replay cannot recreate expired payload.
+- Expire a settled generation's item graph and provider-native payloads three days after settlement. Keep turn identity and a turn tombstone; only an explicit single-turn recovery recreates expired payload, until the next retention run.
 - Aggregate expired `wb`/`wbex` call and failure facts before deletion. Count each removed call once.
 - Collect only canonically unreachable transcript assets older than the one-hour admission grace. Addresses alone are not reachability.
 - Treat command presentation as derived and replaceable.

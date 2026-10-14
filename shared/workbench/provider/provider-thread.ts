@@ -54,6 +54,8 @@ export interface WorkbenchProviderTranscriptReconcile {
   threadId: string;
   target: WorkbenchThreadReconciliationTarget;
   gapIds: string[];
+  /** Record the window as an explicit recovery, which may recreate retention-expired turns. */
+  explicit?: true;
 }
 /** How a provider admitted an agent message: as a new turn, or steered into the live one. */
 export interface WorkbenchAgentMessageAdmission {

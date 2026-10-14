@@ -59,6 +59,8 @@ export type WorkbenchThreadReconcile = {
   threadId: string;
   target: WorkbenchThreadReconciliationTarget;
   refresh: boolean;
+  /** Daemon-internal: a caller demanded this window by name, so retention-expired turns are recovered too. */
+  explicit?: true;
 };
 export const WorkbenchThreadReconcileResultSchema = z.object({
   turnIds: z.array(z.string()),

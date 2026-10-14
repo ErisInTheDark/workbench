@@ -3116,6 +3116,26 @@ test("capture gaps anchor stored turns, extend once into the next turn, and clos
   }
 });
 
+test("only an explicit recovery recreates a retention-expired turn", () => {
+  const { database, repository } = createRepository();
+  const replayed: WorkbenchTranscriptAtomicObservation = {
+    kind: "item", threadId: fixtureIdentityValues.WorkbenchThreadId.thread, turnId: fixtureIdentityValues.WorkbenchTurnId.turn,
+    lifecycle: "completed", observedAt: 4,
+    item: { id: "native-message", type: "agentMessage", text: "recovered", phase: "commentary", memoryCitation: null, delivery: null, questions: null },
+  };
+  const window = providerTurnScope([threadObservation(), turnObservation("turn", 0), replayed], ["turn"]);
+  const items = () => database.prepare("SELECT count(*) FROM thread_items WHERE turn_id = 'turn'").pluck().get();
+  const tombstones = () => database.prepare("SELECT count(*) FROM thread_turn_payload_retention WHERE turn_id = 'turn'").pluck().get();
+  try {
+    repository.settle([threadObservation(), turnObservation("turn", 0)]);
+    database.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES ('turn', 5)").run();
+    repository.settle([window], "replay");
+    assert.deepEqual([items(), tombstones()], [0, 1], "routine replays keep retention expiry");
+    repository.settle([window], "explicitRecovery");
+    assert.deepEqual([items(), tombstones()], [1, 0]);
+  } finally { database.close(); }
+});
+
 test("settlement reports item activity only for newly admitted thread items", () => {
   const { database, repository } = createRepository();
   const message = (id: string, observedAt: number, text = id): Extract<WorkbenchTranscriptAtomicObservation, { kind: "item" }> => ({
