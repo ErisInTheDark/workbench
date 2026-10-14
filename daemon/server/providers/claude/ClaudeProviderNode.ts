@@ -7,15 +7,17 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import CodexShellController from "../../CodexShellController";
 import ClaudeToolsController from "./ClaudeToolsController";
+import { requireWorkbenchPowerShellExecutable } from "../../windows-powershell-runtime";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
-  create: (_context, { get }) => {
+  create: (context, { get }) => {
     const threads = get("claudeThreadOperations");
     const shell = new CodexShellController({
       executor: get("codexExecutor"),
       sandboxAcl: get("codexSandboxAcl"),
+      powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
       readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
     });
     const tools = new ClaudeToolsController({

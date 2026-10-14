@@ -75,6 +75,13 @@ for (const toolchain of ["existing", "missing"] as const) test(`a sandboxed inst
   const selection = JSON.parse(await fs.readFile(path.join(sandbox.dataRoot, "installation", "toolchain.json"), "utf8"));
   assert.equal(selection.kind, toolchain === "existing" ? "external" : "managed");
   assert.equal(selection.environment.VP_HOME, sandbox.vpHome);
+  if (process.platform === "win32") {
+    const powerShell = JSON.parse(await fs.readFile(path.join(sandbox.dataRoot, "installation", "powershell.json"), "utf8"));
+    assert.equal(powerShell.ready, true);
+    assert.equal((await sandbox.run(powerShell.executable, [
+      "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()",
+    ])).trim(), powerShell.release);
+  }
   const freshEnvironment = { ...sandbox.environment };
   delete freshEnvironment.VP_HOME;
   freshEnvironment.PATH = freshEnvironment.PATH.split(path.delimiter).filter(directory => directory !== sandbox.vpBin).join(path.delimiter);

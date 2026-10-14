@@ -61,6 +61,7 @@ test("carries sandbox permissions and the requested shell directly through Windo
     } }),
     executor: unusedExecutor,
     platform: "win32",
+    powerShellExecutable: async () => "C:\\workbench\\powershell\\pwsh.exe",
   });
 
   const prepared = await controller.prepare({
@@ -86,7 +87,7 @@ test("carries sandbox permissions and the requested shell directly through Windo
   assert.equal(execution.windowsSandboxLevel, "elevated");
   assert.equal(execution.windowsSandboxPrivateDesktop, true);
   assert.deepEqual(execution.command, [
-    "pwsh",
+    "C:\\workbench\\powershell\\pwsh.exe",
     "-NoProfile",
     "-Command",
     "Get-Content 'quoted file.txt'",
@@ -210,6 +211,7 @@ test("admitted non-Codex calls use their own WB identity and only admitted permi
     executor: unusedExecutor,
     readConfiguration: async () => ({ config: { windows: { sandbox: "elevated" } } }),
     platform: "win32",
+    powerShellExecutable: async () => "C:\\workbench\\powershell\\pwsh.exe",
   });
   const input = {
     caller: { harness: "opencode", threadId: WorkbenchThreadIdSchema.parse("other"), cwd: process.cwd() },
@@ -222,6 +224,14 @@ test("admitted non-Codex calls use their own WB identity and only admitted permi
   assert.deepEqual(restricted.env, { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: "other", WORKBENCH_HARNESS: "opencode" });
   assert.ok(approved.kind === "approved");
   assert.equal(approved.request.caller.threadId, "other");
+  const powerShell = sandboxed(await controller.prepareAdmitted({
+    ...input, command: ["pwsh", "-Command", "Get-Date"],
+  }, new AbortController().signal));
+  assert.deepEqual(powerShell.command, ["C:\\workbench\\powershell\\pwsh.exe", "-Command", "Get-Date"]);
+  const windowsPowerShell = sandboxed(await controller.prepareAdmitted({
+    ...input, command: ["powershell.exe", "-Command", "Get-Date"],
+  }, new AbortController().signal));
+  assert.deepEqual(windowsPowerShell.command, ["powershell.exe", "-Command", "Get-Date"]);
 });
 
 test("commands marked expensive on every route are prepared for a machine-wide slot; others never wait", async () => {

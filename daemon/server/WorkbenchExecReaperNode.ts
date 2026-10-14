@@ -11,6 +11,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import WorkbenchExecRootStore from "./database/exec/WorkbenchExecRootStore";
 import WorkbenchExecReaper from "./exec/WorkbenchExecReaper";
 import { logError } from "./process-helpers";
+import { requireWorkbenchPowerShellExecutable } from "./windows-powershell-runtime";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -23,6 +24,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executor: processes.executor,
       store: new WorkbenchExecRootStore(get("database")),
       runSandboxed: processes.runSandboxed,
+      powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
       root,
       log,
     }) : null;

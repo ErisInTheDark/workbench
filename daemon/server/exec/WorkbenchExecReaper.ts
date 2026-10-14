@@ -19,6 +19,7 @@ export interface WorkbenchExecReaperOptions {
   /** Existing directory the reap script runs in. */
   root: string;
   platform?: NodeJS.Platform;
+  powerShellExecutable?(): Promise<string>;
   log(message: string): void;
 }
 
@@ -57,8 +58,9 @@ export default class WorkbenchExecReaper {
     });
     const stale = await store.takeStale(executor.generation);
     if (!stale.length || (this.options.platform ?? process.platform) !== "win32") return;
+    const powerShellExecutable = await (this.options.powerShellExecutable ?? (async () => "pwsh"))();
     const result = await this.options.runSandboxed(
-      ["pwsh", "-NoProfile", "-NonInteractive", "-Command", buildExecReapScript(stale)], this.options.root, this.lifetime.signal,
+      [powerShellExecutable, "-NoProfile", "-NonInteractive", "-Command", buildExecReapScript(stale)], this.options.root, this.lifetime.signal,
     );
     const reaped = result.stdout.split(/\r?\n/u).filter(line => line.startsWith("reaped ")).length;
     if (result.code !== 0) this.options.log(`Reaping ${stale.length} leftover command(s) exited with ${result.code}.`);

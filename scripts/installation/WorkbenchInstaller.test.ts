@@ -16,6 +16,7 @@ function fixture(answers = [], tailscale = false, nodeVersion = process.versions
     root,
     nodeVersion,
     commands,
+    powerShell: { ensure: async () => { calls.push({ command: "powershell-runtime", args: [], config: {} }); } },
     toolchain: {
       ensure: async () => {},
       run: (args, config) => commands.run("vp", args, config),
@@ -32,6 +33,7 @@ test("repository handoff installs the runtime and relaunches under pinned Node",
   const f = fixture();
   await f.setup.prepare();
   assert.deepEqual(f.calls.map(({ command, args }) => [command, ...args]), [
+    ["powershell-runtime"],
     ["vp", "env", "install"],
     ["vp", "node", path.join(f.root, "scripts", "install.mjs"), "--prepare-pinned"],
   ]);

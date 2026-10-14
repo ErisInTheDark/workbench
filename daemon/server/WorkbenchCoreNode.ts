@@ -53,6 +53,7 @@ import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
 import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import WorkbenchVisController from "./vis/WorkbenchVisController";
+import { requireWorkbenchPowerShellExecutable } from "./windows-powershell-runtime";
 import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
@@ -330,6 +331,7 @@ function createWorkbenchCoreFeature(
       return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
     },
     scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
+    powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
     // This file lives at daemon/server in the Workbench checkout the kit vis context builds from.
     workbenchRoot: path.resolve(import.meta.dirname, "..", ".."),
     browse: new WorkbenchVisBrowse({

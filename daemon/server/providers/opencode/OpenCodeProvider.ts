@@ -9,6 +9,7 @@ import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 import OpenCodeToolsController from "./OpenCodeToolsController";
 import CodexShellController from "../../CodexShellController";
+import { requireWorkbenchPowerShellExecutable } from "../../windows-powershell-runtime";
 import type { OpenCodeGoQuota } from "./opencode-workbench-rpc";
 import { openCodeWorkbenchRpc } from "./opencode-workbench-rpc";
 import type OpenCodeServiceController from "./OpenCodeServiceController";
@@ -73,13 +74,14 @@ export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [],
-  create: (_context, { get }) => {
+  create: (context, { get }) => {
     const service = get("openCodeService");
     const modelCatalog = get("openCodeModelCatalog");
     const threads = get("openCodeThreadOperations");
     const shell = new CodexShellController({
       executor: get("codexExecutor"),
       sandboxAcl: get("codexSandboxAcl"),
+      powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
       readConfiguration: cwd => get("codexThreadOperations").requestNative("config/read", { cwd, includeLayers: false }),
     });
     const tools = new OpenCodeToolsController({

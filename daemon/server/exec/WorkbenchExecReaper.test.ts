@@ -18,6 +18,7 @@ function fixture(stale: ExecRootRecord[]) {
       takeStale: async current => { assert.equal(current, "now"); return stale; },
     },
     runSandboxed: async command => { runs.push(command); return { code: 0, stdout: "reaped 10\n" }; },
+    powerShellExecutable: async () => "C:\\workbench\\powershell\\pwsh.exe",
     root: "C:/data", platform: "win32", log: line => logs.push(line),
   });
   return { reaper, writes, runs, logs, emit: (event: CodexExecRootEvent) => listener?.(event), listening: () => listener !== null };
@@ -27,7 +28,7 @@ test("earlier generations' roots are reaped through the sandbox and this generat
   const f = fixture([{ processId: "a", generation: "old", pid: 10, startedAt: "133" }]);
   await f.reaper.start();
   assert.equal(f.runs.length, 1);
-  assert.deepEqual(f.runs[0]!.slice(0, 4), ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]);
+  assert.deepEqual(f.runs[0]!.slice(0, 4), ["C:\\workbench\\powershell\\pwsh.exe", "-NoProfile", "-NonInteractive", "-Command"]);
   assert.match(f.runs[0]![4]!, /@\{ Id = 10; Start = '133' \}/u);
   assert.deepEqual(f.logs, ["Stopped 1 command(s) left running by an earlier executor."]);
   f.emit({ kind: "root", processId: "b", pid: 20, startedAt: "5" });

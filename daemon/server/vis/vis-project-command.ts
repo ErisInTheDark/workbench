@@ -45,10 +45,16 @@ export class VisRenderRuns {
  * Runs through the user's login shell, as `wb shell` does, so tool shims on PATH resolve. Every argument is
  * single-quoted, so nothing in it is interpreted, and a failing producer fails the whole pipeline.
  */
-export function visShellCommand(argv: readonly string[], runId: string, platform: NodeJS.Platform = process.platform, shell = process.env.SHELL) {
+export function visShellCommand(
+  argv: readonly string[],
+  runId: string,
+  platform: NodeJS.Platform = process.platform,
+  shell = process.env.SHELL,
+  powerShellExecutable = "pwsh",
+) {
   if (platform === "win32") {
     const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
-    return ["pwsh", "-Command",
+    return [powerShellExecutable, "-Command",
       `$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; & ${argv.map(quote).join(" ")} | wb vis render --run ${quote(runId)}`];
   }
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -104,6 +110,7 @@ interface ProjectCommandInput {
   run: VisCommandRunner;
   runs: VisRenderRuns;
   signal: AbortSignal;
+  powerShellExecutable?(): Promise<string>;
 }
 
 async function runProjectCommand(kind: "css" | "build", input: ProjectCommandInput) {
@@ -116,7 +123,13 @@ async function runProjectCommand(kind: "css" | "build", input: ProjectCommandInp
       await mkdir(path.dirname(input.scratchPath), { recursive: true });
       await writeFile(input.scratchPath, expanded.input, "utf8");
     }
-    const result = await input.run({ command: visShellCommand(expanded.command, render.runId), cwd: input.context.rootPath }, input.signal);
+    const powerShellExecutable = process.platform === "win32"
+      ? await (input.powerShellExecutable ?? (async () => "pwsh"))()
+      : undefined;
+    const result = await input.run({
+      command: visShellCommand(expanded.command, render.runId, process.platform, process.env.SHELL, powerShellExecutable),
+      cwd: input.context.rootPath,
+    }, input.signal);
     const label = kind === "css" ? "CSS" : "build";
     if (result.exitCode !== 0) throw new Error(`The ${label} command exited with code ${result.exitCode}.\n${bounded(result.stderr || result.stdout)}`);
     const content = render.take();

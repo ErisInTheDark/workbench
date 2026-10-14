@@ -2,7 +2,7 @@
  * Exports:
  * - WORKBENCH_SHELL_SANDBOX_CAPABILITY/WORKBENCH_SHELL_TOOL_DESCRIPTION: advertise the MCP-only sandbox metadata and behavior contract.
  * - prepareWorkbenchShellExecution: translate escalating shell input into one admitted host-shell command.
- * - CodexShellControllerOptions: inject Codex configuration, sandbox ACL repair and host environment.
+ * - CodexShellControllerOptions: inject Codex configuration, sandbox ACL repair, host environment and managed pwsh.
  * - default CodexShellController: prepare host-shell commands for the Codex thread's exact sandbox state; the exec node runs them.
  */
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -83,6 +83,7 @@ export interface CodexShellControllerOptions {
   readConfiguration(cwd: string): Promise<unknown>;
   platform?: NodeJS.Platform;
   shellEnvironment?: NodeJS.ProcessEnv;
+  powerShellExecutable?(): Promise<string>;
 }
 
 function readSandboxState(meta: Record<string, unknown> | undefined) {
@@ -112,10 +113,16 @@ function readPosixShell(executable: string): WorkbenchShell {
   }
 }
 
-function hostShellCommand(command: string, login: boolean, platform: NodeJS.Platform, environment: NodeJS.ProcessEnv) {
+function hostShellCommand(
+  command: string,
+  login: boolean,
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv,
+  powerShellExecutable = "pwsh",
+) {
   if (platform === "win32") {
     return {
-      command: ["pwsh", ...(login ? [] : ["-NoProfile"]), "-Command", command],
+      command: [powerShellExecutable, ...(login ? [] : ["-NoProfile"]), "-Command", command],
       shell: "pwsh" as const,
     };
   }
@@ -166,11 +173,15 @@ export default class CodexShellController {
     const sandboxState = readSandboxState(meta);
     const sandboxCwd = fileURLToPath(sandboxState.sandboxCwd);
     const commandCwd = request.workdir ? path.resolve(sandboxCwd, request.workdir) : sandboxCwd;
+    const powerShellExecutable = this.platform === "win32"
+      ? await (this.options.powerShellExecutable ?? (async () => "pwsh"))()
+      : undefined;
     const shellCommand = hostShellCommand(
       request.command,
       request.login ?? true,
       this.platform,
       this.shellEnvironment,
+      powerShellExecutable,
     );
     // An external profile describes someone else's sandbox, not this process.
     const permissions: CodexExecPermission = sandboxState.permissionProfile.type === "external" ? {
@@ -227,6 +238,10 @@ export default class CodexShellController {
   async prepareAdmitted(request: WorkbenchAdmittedExecution, signal: AbortSignal): Promise<WorkbenchShellRun> {
     const label = request.command.join(" ");
     const expensive = request.expensive === true;
+    const command = this.platform === "win32"
+      && /^pwsh(?:\.exe)?$/iu.test(path.basename(request.command[0] ?? ""))
+      ? [await (this.options.powerShellExecutable ?? (async () => "pwsh"))(), ...request.command.slice(1)]
+      : request.command;
     if (request.permissions.mode !== "approved-unrestricted") this.options.sandboxAcl?.checkInBackground(request.cwd, this.runSandboxed);
     const configuration = await this.configuration(request.cwd);
     signal.throwIfAborted();
@@ -255,7 +270,7 @@ export default class CodexShellController {
     return {
       kind: "sandboxed", label, expensive,
       request: {
-        ...configuration, command: request.command, cwd: request.cwd, permissions,
+        ...configuration, command, cwd: request.cwd, permissions,
         workspaceRoots: [request.caller.cwd], timeoutMs: request.timeoutMs,
         env: { CODEX_THREAD_ID: "", WORKBENCH_THREAD_ID: request.caller.threadId, WORKBENCH_HARNESS: request.caller.harness },
       },

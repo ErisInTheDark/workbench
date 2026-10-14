@@ -19,6 +19,7 @@ const toSha = "b".repeat(40);
 
 function runRepair(options: RepairOptions) {
   return repair({
+    powerShell: { ensure: async () => {} },
     toolchain: {
       ensure: async () => {},
       run: (args, config) => args[0] === "env" ? Promise.resolve() : options.commands!.run("vp", args, config),
@@ -117,6 +118,23 @@ test("toolchain failure strands repair before stopping, cleanup or rollback", as
   assert.match(result?.lastError ?? "", /Recorded Vite/u);
   assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), []);
   assert.equal(result?.failure, null, "a toolchain failure is not a rolled-back dependency update");
+});
+
+test("PowerShell provisioning failure strands repair before dependency or process changes", async () => {
+  const f = fixture();
+  let toolchainReady = false;
+  const result = await runRepair({
+    ...f.options,
+    powerShell: { ensure: async () => { throw new Error("PowerShell download hash mismatch"); } },
+    toolchain: {
+      ensure: async () => { toolchainReady = true; },
+      run: async () => { assert.fail("PowerShell must be ready before dependencies"); },
+    },
+  });
+  assert.equal(result?.phase, "stranded");
+  assert.match(result?.lastError ?? "", /PowerShell download hash mismatch/u);
+  assert.equal(toolchainReady, true);
+  assert.deepEqual(f.events.filter(e => /^(stop|clean|vp |git )/u.test(e)), []);
 });
 
 test("unavailable pinned runtimes fail repair before dependency cleanup or rollback", async () => {
@@ -330,6 +348,8 @@ test("all process bootstraps retry a stranded repair and end on one clear failur
     "scripts/installation/update-journal.mjs",
     "package/WorkbenchBootstrapCommand.mjs",
     "package/WorkbenchToolchain.mjs",
+    "package/WorkbenchPowerShell.mjs",
+    "package/powershell-installer.mjs",
     "package/vite-plus-installer.mjs",
     "package/workbench-data-root.mjs",
   ]) {

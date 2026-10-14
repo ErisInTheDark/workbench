@@ -1,15 +1,23 @@
 /*
- * Exports:
- * - tests: provider registration is exercised through graph tests rather than source-shape assertions.
+ * No production exports. Tests provider registration through graph behaviour rather than source shape.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import providerRegistrations from "workbench-shared/workbench/provider/provider-registrations";
 import OpenCodeProvider, { openCodeAccountLimits, openCodeModelOption } from "./OpenCodeProvider";
 import type { CodexExecRequest } from "../../codex-exec-protocol";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import { workbenchPowerShellExecutable } from "../../windows-powershell-runtime";
 
-test("provider execution preserves configured sandbox policy and admitted boundaries", async () => {
+test("provider execution preserves configured sandbox policy and admitted boundaries", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-opencode-powershell-");
+  context.after(() => temporary.dispose());
+  const powerShell = workbenchPowerShellExecutable(temporary.path);
+  await fs.mkdir(path.dirname(powerShell), { recursive: true });
+  await fs.writeFile(powerShell, "fixture");
   const configurationReads: object[] = [];
   const registrations = {
     openCodeService: {},
@@ -22,7 +30,7 @@ test("provider execution preserves configured sandbox policy and admitted bounda
         shell_environment_policy: { inherit: "core" } } };
     } },
   };
-  const instance = await OpenCodeProvider.create({} as never, {
+  const instance = await OpenCodeProvider.create({ dataRootPath: temporary.path } as never, {
     get: (key: keyof typeof registrations) => registrations[key],
   } as never);
   const run = await instance.registrations!.openCodeProvider!.tools!.prepareExecution!({
@@ -37,6 +45,7 @@ test("provider execution preserves configured sandbox policy and admitted bounda
   assert.equal(request.windowsSandboxPrivateDesktop, false);
   assert.equal(request.envPolicy?.inherit, "core");
   assert.ok(request.permissions.type === "managed" && request.permissions.network === "restricted");
+  assert.equal(request.command[0], powerShell);
 });
 
 test("installs OpenCode under its graph provider registration", () => {

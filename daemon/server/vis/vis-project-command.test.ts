@@ -4,7 +4,11 @@ import { test } from "node:test";
 import { VisRenderRuns, visShellCommand } from "./vis-project-command";
 
 test("arguments are quoted so shell syntax inside them is never interpreted, and output pipes into wb vis render", () => {
-  const [, , windows] = visShellCommand(["node", "a b.mjs", "it's;$(x)"], "run-1", "win32");
+  const windowsCommand = visShellCommand(
+    ["node", "a b.mjs", "it's;$(x)"], "run-1", "win32", undefined, "C:\\workbench\\powershell\\pwsh.exe",
+  );
+  assert.equal(windowsCommand[0], "C:\\workbench\\powershell\\pwsh.exe");
+  const [, , windows] = windowsCommand;
   assert.ok(windows!.endsWith("& 'node' 'a b.mjs' 'it''s;$(x)' | wb vis render --run 'run-1'"));
   assert.deepEqual(visShellCommand(["node", "it's;$(x)"], "run-1", "linux", "/bin/zsh"),
     ["/bin/zsh", "-lc", "set -o pipefail; 'node' 'it'\\''s;$(x)' | wb vis render --run 'run-1'"]);

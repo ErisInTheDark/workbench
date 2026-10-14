@@ -23,7 +23,7 @@ const windows = process.platform === "win32";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PRETEND_DISPATCH = path.join(projectRoot, "test", "install", "pretend-dispatch.mjs");
 // Commands that would reach the real host, or the real installation, if left on PATH.
-const HOST_COMMANDS = ["wb", "vp"];
+const HOST_COMMANDS = ["wb", "vp", "pwsh"];
 // Inherited variables that would point sandboxed tools back at host state or the calling agent.
 const HOST_VARIABLES = [/^npm_/iu, /^pnpm_/iu, /^VP_/iu, /^PNPM_HOME$/iu, /^NODE_OPTIONS$/iu, /^TSX_/iu,
   /^WORKBENCH_/iu, /^CODEX_/iu, /^CLAUDE_/iu];

@@ -7,12 +7,14 @@ import path from "node:path";
 import WorkbenchInstallPrompt from "../../package/WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "../../package/WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "../../package/WorkbenchToolchain.mjs";
+import WorkbenchPowerShell from "../../package/WorkbenchPowerShell.mjs";
 
 export default class WorkbenchInstaller {
   constructor({
     root,
     commands = new WorkbenchBootstrapCommand(),
     toolchain = new WorkbenchToolchain({ commands }),
+    powerShell = new WorkbenchPowerShell({ commands }),
     prompt = new WorkbenchInstallPrompt(),
     detectTailscale,
     nodeVersion = process.versions.node,
@@ -21,6 +23,7 @@ export default class WorkbenchInstaller {
     this.root = root;
     this.commands = commands;
     this.toolchain = toolchain;
+    this.powerShell = powerShell;
     this.prompt = prompt;
     this.detectTailscale = detectTailscale ?? (() => this.hasTailscale());
     this.nodeVersion = nodeVersion;
@@ -29,6 +32,7 @@ export default class WorkbenchInstaller {
 
   async prepare() {
     this.write("Installing pinned runtime...\n");
+    await this.powerShell.ensure();
     await this.toolchain.ensure();
     await this.toolchain.run(["env", "install"], { cwd: this.root });
     await this.toolchain.runNode(this.root, path.join(this.root, "scripts", "install.mjs"), ["--prepare-pinned"], {

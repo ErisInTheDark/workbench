@@ -11,11 +11,12 @@ import CodexShellController from "./CodexShellController";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
 import WorkbenchExecReaperNode from "./WorkbenchExecReaperNode";
+import { requireWorkbenchPowerShellExecutable } from "./windows-powershell-runtime";
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
   children: [CodexProvider, WorkbenchAgentCommandNode, WorkbenchExecReaperNode],
-  create: (_context, { get }) => {
+  create: (context, { get }) => {
     const threads = get("codexThreadOperations");
     const sandboxAcl = get("codexSandboxAcl");
     const executor = get("codexExecutor");
@@ -30,6 +31,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       shell: new CodexShellController({
         executor,
         sandboxAcl,
+        powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
         readConfiguration: cwd => threads.requestNative("config/read", { cwd, includeLayers: false }),
       }),
     });

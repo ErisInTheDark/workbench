@@ -103,6 +103,16 @@ test("missing vp is provisioned after consent instead of rejected as a prerequis
   assert.equal(JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")).phase, "ready");
 });
 
+test("Windows consent names the private PowerShell runtime while other platforms do not", async context => {
+  const windows = await fixture(context, { platform: "win32" });
+  await windows.bootstrap.run([]);
+  assert.match(windows.prompts[0], /private Vite\+ and PowerShell 7 toolchains/u);
+
+  const linux = await fixture(context, { platform: "linux" });
+  await linux.bootstrap.run([]);
+  assert.doesNotMatch(linux.prompts[0], /PowerShell/u);
+});
+
 test("registration retains the original environment and follows checkout preparation", async context => {
   const f = await fixture(context);
   const events = [];

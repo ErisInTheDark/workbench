@@ -19,6 +19,7 @@ export default class WorkbenchBootstrap {
     home = os.homedir(),
     packageRoot = path.dirname(fileURLToPath(import.meta.url)),
     environment = process.env,
+    platform = process.platform,
     prompt = new WorkbenchInstallPrompt(),
     commands = new WorkbenchBootstrapCommand({ environment }),
     toolchain = new WorkbenchToolchain({ home, environment, commands }),
@@ -28,6 +29,7 @@ export default class WorkbenchBootstrap {
     this.home = home;
     this.packageRoot = packageRoot;
     this.environment = environment;
+    this.platform = platform;
     this.prompt = prompt;
     this.commands = commands;
     this.toolchain = toolchain;
@@ -161,7 +163,7 @@ export default class WorkbenchBootstrap {
       ? `\nNote: Previous installation at ${installed.root} no longer exists and will be recreated.`
       : installed ? `\nNote: Incomplete install attempt at ${installed.root} will be removed.` : "";
     const choice = await this.prompt.choose(
-      `Workbench is not installed. This command will provision a private Vite+ toolchain if needed, clone the repository, run build commands, and register wb through your package manager. Continue?${warning}`,
+      `Workbench is not installed. This command will provision private Vite+${this.platform === "win32" ? " and PowerShell 7" : ""} toolchains if needed, clone the repository, run build commands, and register wb through your package manager. Continue?${warning}`,
       ["Let's go!", "Cancel"],
     );
     if (choice !== "Let's go!") throw new DOMException("Setup cancelled.", "AbortError");

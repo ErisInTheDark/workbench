@@ -34,6 +34,8 @@ export interface WorkbenchVisControllerOptions {
   scratchDirectory: string;
   /** Workbench's checkout, where the kit context's commands run. */
   workbenchRoot: string;
+  /** Resolves the verified absolute pwsh.exe path used for Windows project commands. */
+  powerShellExecutable?(): Promise<string>;
   /** Each session's headless browser, opened with it and stopped when it ends. */
   browse?: Pick<WorkbenchVisBrowse, "end" | "inspect" | "open">;
   /** Calls `onChange` whenever the file may have changed; returns a stop function. */
@@ -350,6 +352,7 @@ export default class WorkbenchVisController {
   async #render(stored: ThreadVisStoredSession, file: string, rootPath: string, context: VisBuildContext, signal: AbortSignal): Promise<Rendered> {
     const command = {
       file, context, signal, run: this.#options.runCommand(stored), runs: this.#runs,
+      powerShellExecutable: this.#options.powerShellExecutable,
       scratchPath: path.join(this.#options.scratchDirectory, `${stored.sessionId}-${randomUUID()}`),
     };
     if (isComponent(file)) {
