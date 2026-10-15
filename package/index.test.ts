@@ -198,3 +198,17 @@ test("undefined target entries are missing, not existing values that block popul
   await config({ path: file, processEnv, optional: ["OPTIONAL", "ABSENT"] });
   assert.deepEqual(processEnv, { GOOD: "value", OPTIONAL: "", ABSENT: "" });
 });
+
+test("default fallback emits no warnings for failed lookups or invalid store definitions", async t => {
+  const warnings: string[] = [];
+  t.mock.method(process, "emitWarning", (message: string) => { warnings.push(message); });
+  const runner = { async run() { return { ok: false as const, reason: "missing-command" }; } };
+  for (const definitions of ["wb: missing-command {key}", "invalid"]) {
+    const file = await envFile(t, `WB_STORES=${definitions}\nKEY=\${wb:key}\nPLAIN=value\n`);
+    const processEnv: Record<string, string> = {};
+    const { parsed } = await config({ path: file, processEnv, runner });
+    assert.equal(parsed.KEY, "${wb:key}");
+    assert.equal(processEnv.PLAIN, "value");
+  }
+  assert.deepEqual(warnings, []);
+});

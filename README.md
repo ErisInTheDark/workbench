@@ -69,3 +69,45 @@ note: have tried to keep dependencies minimal for the most part
 `/test` — test runner  
 `/scripts` — stuff used by package scripts plus anything i didn't notice an agent left behind :3  
 `/docs` — help agents find things and not break them without eating all their tokens
+
+## .env secrets
+
+workbench's npm package `@inthedark/wb` can be used as a dotenv replacement. its `config` is async, so await it before reading your env vars:
+
+```js
+import { config } from "@inthedark/wb";
+
+await config();
+```
+
+the following syntax in your .env file can be used to load data from workbench's private store:
+
+```dotenv
+API_KEY=${wb:API_KEY}
+```
+
+configure secrets in workbench at settings > projects & folders > environment > store. select the folder you want to configure.
+
+the env loader by default silently acts like dotenv would for loading the .env if workbench is not installed, so it's safe to use in teams where some devs are using other stuff. references it can't resolve stay as literal text. existing env vars still take precedence. pass a `warn` callback to opt into lookup warnings.
+
+you can choose what happens when values are missing:
+
+```js
+await config({ required: ["DATABASE_URL"] }); // all others optional
+await config({ optional: ["ANALYTICS_KEY"] }); // all others required
+```
+
+use one list or the other. missing optional vars become empty strings, including the whole value if a store reference fails. missing required vars throw one error listing all their names before changing the environment. explicitly empty values are valid. "all others" means vars in your .env files.
+
+you can use wb's env loader to load from other clis too, not just wb store:
+
+```dotenv
+WB_STORES="wb: wb store get {key}; other: my-secret-cli get {key}"
+API_KEY=${other:API_KEY}
+```
+
+replace `my-secret-cli get {key}` with your cli's command. `{key}` is substituted into its arguments, and stdout becomes the value. commands run without a shell.
+
+### security note
+
+wb's env secret storage is not built for maximum security. it's built to prevent agents accidentally obtaining secrets. values use aes-256-gcm with a key derived from the device identity, username and project location, not a separate password, so this isn't protection against hostile code running as you.

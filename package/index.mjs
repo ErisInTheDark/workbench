@@ -13,10 +13,6 @@ import {
   parseStoreDefinitions,
 } from "./store-definitions.mjs";
 
-function warnDefault(message) {
-  process.emitWarning(message, "WorkbenchStoreWarning");
-}
-
 function stripTerminalLineEnding(value) {
   return value.endsWith("\r\n") ? value.slice(0, -2) : value.endsWith("\n") ? value.slice(0, -1) : value;
 }
@@ -109,7 +105,7 @@ export async function config({
   override = false,
   processEnv = process.env,
   signal,
-  warn = warnDefault,
+  warn = () => {},
   runner = new StoreCommandRunner(),
   required,
   optional,

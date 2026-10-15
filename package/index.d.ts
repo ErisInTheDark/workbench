@@ -13,7 +13,7 @@ export type WorkbenchConfigOptions = {
   processEnv?: Record<string, string | undefined>;
   /** Aborting kills running store commands and rejects. */
   signal?: AbortSignal;
-  /** Receives bounded messages that never contain command output. Defaults to `process.emitWarning`. */
+  /** Opt into bounded lookup warnings that never contain command output. Silent by default. */
   warn?: (message: string) => void;
 } & ({
   /** Only these names are required; all other dotenv variables are optional. Empty values count as supplied. */
