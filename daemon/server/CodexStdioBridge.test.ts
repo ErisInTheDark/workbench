@@ -30,6 +30,7 @@ import CodexStoredTranscriptAdapter from "./CodexStoredTranscriptAdapter";
 import type { CodexApprovalPort } from "./CodexApprovalAdapter";
 import type { WorkbenchApprovalOpenResult } from "./WorkbenchApprovalController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
+import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import type { CodexThreadWindowStore } from "./CodexThreadWindowLoader";
 import type { WorkbenchTranscriptObservation, WorkbenchTranscriptRecordingContext } from "./database/transcript/workbench-transcript-types";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
@@ -2361,6 +2362,58 @@ async function recordingFixture(nativeLocation = "C:/repo", existingTurn = false
     },
   };
 }
+
+test("opening a metadata-only Codex thread recovers latest and older content into SQLite", async () => {
+  const sql = await recordingFixture();
+  const fullReads: string[] = [];
+  let bridge!: InstanceType<typeof CodexStdioBridge>;
+  bridge = new CodexStdioBridge({
+    ...sql.ports,
+    appServer: { send(request: JsonRpcRequest) {
+      const params = request.params as { cursor?: string; itemsView?: string };
+      const id = params.cursor === "older" ? "old" : "new";
+      const thread = bridgeThread([{
+        type: "agentMessage", id: `${id}-message`, text: `${id} content`, phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null,
+      }]);
+      const turn = { ...thread.turns[0]!, id, status: "completed", startedAt: id === "old" ? 1 : 2, completedAt: 3 };
+      if (request.method === "thread/turns/list" && params.itemsView === "full") fullReads.push(id);
+      const result = request.method === "thread/read" ? { thread: { ...thread, turns: [] } }
+        : { data: [params.itemsView === "full" ? turn : { ...turn, items: [], itemsView: "notLoaded" }],
+          nextCursor: id === "new" ? "older" : null };
+      queueMicrotask(() => void bridge.handleUpstreamMessage({ id: request.id, result }));
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+  });
+  const recovery = new WorkbenchTranscriptReconciliationController({
+    identities: sql.ports.identities.threads,
+    transcripts: sql.ports.sqliteReader,
+    isThreadObserved: () => true,
+    readPreviousCursor: sql.ports.readSqliteProviderCursor,
+    readMaterializedTurnIds: sql.ports.readSqliteTranscriptMaterializedTurnIds,
+    readRecoveryGaps: async () => [],
+    recover: (input, signal) => bridge.reconcileSqliteTranscriptWindow(input, signal),
+    warn: assert.fail,
+  });
+  try {
+    const before = await sql.ports.sqliteReader.catalog("thread");
+    assert.deepEqual(before?.turns, []);
+    assert.deepEqual(before?.expiredTurnPayloads, []);
+    await recovery.recoverObservedThread("thread");
+    assert.deepEqual(fullReads, ["new", "old"]);
+    assert.deepEqual(sql.project().projection.turns.flatMap(turn => turn.items)
+      .filter(item => item.type === "agentMessage").map(item => item.text), ["old content", "new content"]);
+    await recovery.recoverObservedThread("thread");
+    assert.deepEqual(fullReads, ["new", "old"], "reopening intact history must not reread provider bodies");
+  } finally {
+    await recovery.dispose();
+    await bridge.disposeImmediately();
+    sql.ports.identities.items.dispose();
+    sql.ports.identities.threads.dispose();
+    sql.database.close();
+  }
+});
 
 test("demanded Codex reconciliation repairs same-status SQLite bodies without deleting omitted facts", async () => {
   const sql = await recordingFixture();

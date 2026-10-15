@@ -5,15 +5,74 @@ import WorkbenchTranscriptReconciliationController, { type WorkbenchTranscriptRe
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
-function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts" | "isThreadObserved"> {
+function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts" | "isThreadObserved" | "readPreviousCursor" | "readMaterializedTurnIds"> {
   return {
     isThreadObserved: () => true,
+    readPreviousCursor: async () => null,
+    readMaterializedTurnIds: async (_threadId, turnIds) => turns.filter(turn => turnIds.includes(turn.id)).map(turn => turn.id),
     identities: { resolve: async input => ({
       threadId: WorkbenchThreadIdSchema.parse(input.threadId), projectId: ProjectIdSchema.parse("project"), projectRoot: "/repo",
       bindings: [{ harness: "opencode", nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("native"), pending: false, turnIndex: 2 }],
     }) },
     transcripts: { catalog: async () => ({ turns } as WorkbenchTranscriptSnapshot) },
   };
+}
+
+test("empty history bootstraps once, pauses on close, and resumes older pages on reopen", async () => {
+  const turns: WorkbenchTranscriptSnapshot["turns"] = [];
+  const targets: string[] = [];
+  let observed = true;
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(turns),
+    isThreadObserved: () => observed,
+    readPreviousCursor: async (_threadId, turnId) => turnId === "new" ? "older" : null,
+    readRecoveryGaps: async () => [],
+    recover: async input => {
+      targets.push(input.target.mode);
+      assert.equal(input.explicit, true);
+      const latest = input.target.mode === "latest";
+      if (latest) observed = false;
+      const id = latest ? "new" : "old";
+      turns.unshift({
+        id, thread_id: "thread", identity_origin: "workbench", turn_index: latest ? 0 : -1,
+        harness_id: "opencode", native_location: "/repo", native_thread_id: "native", native_turn_id: id,
+        state: "completed", created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+      });
+      return { turnIds: [id], exhausted: !latest };
+    },
+    warn: assert.fail,
+  });
+  try {
+    await Promise.all([owner.recoverObservedThread("thread"), owner.recoverObservedThread("thread")]);
+    assert.deepEqual(targets, ["latest"]);
+    observed = true;
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(targets, ["latest", "previous"]);
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(targets, ["latest", "previous"]);
+  } finally { await owner.dispose(); }
+});
+
+for (const outcome of ["empty", "stalled", "failed"] as const) {
+test(`empty-history recovery stops on ${outcome} provider results`, async () => {
+  let calls = 0;
+  const warnings: string[] = [];
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...identityPorts(),
+    readRecoveryGaps: async () => [],
+    recover: async () => {
+      calls++;
+      if (outcome === "failed") throw new Error("provider unavailable");
+      return { turnIds: outcome === "stalled" ? ["not-admitted"] : [], exhausted: outcome === "empty" };
+    },
+    warn: message => warnings.push(message),
+  });
+  try {
+    await owner.recoverObservedThread("thread");
+    assert.equal(calls, 1);
+    assert.equal(warnings.length, outcome === "empty" ? 0 : 1);
+  } finally { await owner.dispose(); }
+});
 }
 
 test("opening coalesces expired-turn recovery, newest first, stopping after the last observer leaves", async () => {

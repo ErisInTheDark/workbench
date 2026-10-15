@@ -711,6 +711,8 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
     transcripts: transcriptReader,
     isThreadObserved: threadId => transcript.isThreadObserved(threadId),
+    readPreviousCursor: (threadId, turnId) => database.readTranscriptProviderCursor!(threadId, turnId),
+    readMaterializedTurnIds: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
     readRecoveryGaps: threadId => transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId)),
     subscribeSettled: listener => transcript.subscribeSettled(listener),
     recover: async (input, signal) => {

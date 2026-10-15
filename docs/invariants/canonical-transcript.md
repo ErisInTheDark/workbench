@@ -22,6 +22,6 @@
 - Rematching cannot replace the source operation or durable subsystem facts.
 - Provider omission is not transcript deletion. Remove an admitted item only from positive same-fact identity evidence, never because a reread omits it.
 - Reading admitted transcript history must not depend on provider refresh or recovery succeeding.
-- Reconcile providers separately from SQLite reads, one named turn at a time. Opening a thread recovers expired turns while observed and queues open capture-gap anchors; never sweep other historical bodies. Acknowledge only capture gaps covered by completed recovery.
+- Reconcile providers separately from SQLite reads, one turn at a time. Opening recovers missing or expired turns, bootstraps empty local history, and follows known older-page cursors while observed. Never reread intact history. Acknowledge only capture gaps covered by completed recovery.
 - Transcript subscription bootstrap never reads inside provider ingest order. Opening views buffer settlements instead.
 Compaction is a Workbench item lifecycle, never a conversation turn. Manual and automatic compaction share admission and completion; native execution identity is evidence only.

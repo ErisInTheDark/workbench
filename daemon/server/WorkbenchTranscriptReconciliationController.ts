@@ -12,6 +12,8 @@ export interface WorkbenchTranscriptReconciliationOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve">;
   transcripts: Pick<WorkbenchTranscriptReader, "catalog">;
   isThreadObserved(threadId: string): boolean;
+  readPreviousCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
+  readMaterializedTurnIds(threadId: string, turnIds: readonly string[]): Promise<string[]>;
   /** Open capture gaps of a canonical thread, with the anchor turns no window has re-read yet. */
   readRecoveryGaps(threadId: string): Promise<ReadonlyArray<{ id: string; turnIds: readonly string[] }>>;
   /** Threads each transcript commit changed; lets a window report whether it changed anything. */
@@ -80,7 +82,7 @@ export default class WorkbenchTranscriptReconciliationController {
       if (!identity || !this.options.isThreadObserved(identity.threadId)) return;
       const existing = this.observedRecoveries.get(identity.threadId);
       if (existing) return await existing;
-      const task = this.recoverExpiredTurns(identity.threadId)
+      const task = this.recoverObservedHistory(identity.threadId)
         .finally(() => { this.observedRecoveries.delete(identity.threadId); });
       this.observedRecoveries.set(identity.threadId, task);
       await task;
@@ -89,7 +91,7 @@ export default class WorkbenchTranscriptReconciliationController {
     }
   }
 
-  private async recoverExpiredTurns(threadId: string) {
+  private async recoverObservedHistory(threadId: string) {
     const catalog = await this.options.transcripts.catalog(threadId);
     const expired = new Set(catalog?.expiredTurnPayloads?.map(payload => payload.turnId));
     for (const turn of (catalog?.turns ?? []).toReversed()) {
@@ -107,6 +109,53 @@ export default class WorkbenchTranscriptReconciliationController {
       if (result && !result.turnIds.includes(turn.id)) {
         this.options.warn(`[transcript-reconciliation] provider did not recover expired turn: ${boundedMessage(turn.id)}`);
       }
+    }
+    await this.recoverMissingHistory(threadId);
+  }
+
+  private async recoverMissingHistory(threadId: string) {
+    let catalog = await this.options.transcripts.catalog(threadId);
+    while (this.options.isThreadObserved(threadId)) {
+      this.controller.signal.throwIfAborted();
+      const before = catalog?.turns[0];
+      const materialized = new Set(await this.options.readMaterializedTurnIds(threadId, catalog?.turns.map(turn => turn.id) ?? []));
+      const missing = catalog?.turns.findLast(turn => !materialized.has(turn.id));
+      let target: Target | null;
+      if (missing) {
+        if (!missing.native_turn_id) {
+          this.options.warn(`[transcript-reconciliation] missing turn has no provider recovery identity: ${boundedMessage(missing.id)}`);
+          return;
+        }
+        target = {
+          threadId, harness: missing.harness_id, target: { mode: "exact", turnId: missing.id },
+          refresh: false, explicit: true,
+        };
+      } else if (before) {
+        if (!before.native_turn_id || typeof await this.options.readPreviousCursor(threadId, before.id) !== "string") return;
+        target = {
+          threadId, harness: before.harness_id, target: { mode: "previous", beforeTurnId: before.id },
+          refresh: false, explicit: true,
+        };
+      } else {
+        target = await this.resolveTarget({ threadId, target: { mode: "latest" }, refresh: false, explicit: true });
+      }
+      if (!target) return;
+      const result = await this.enqueue(target, undefined, true).catch(() => null);
+      if (!result || !this.options.isThreadObserved(threadId)) return;
+      catalog = await this.options.transcripts.catalog(threadId);
+      if (missing) {
+        if ((await this.options.readMaterializedTurnIds(threadId, [missing.id])).includes(missing.id)) continue;
+        this.options.warn(`[transcript-reconciliation] provider did not materialise requested turn: ${boundedMessage(missing.id)}`);
+        return;
+      }
+      const oldest = catalog?.turns[0];
+      if (!oldest || oldest.id === before?.id) {
+        if (!result.exhausted || result.turnIds.length) {
+          this.options.warn(`[transcript-reconciliation] provider made no stored history progress: ${boundedMessage(threadId)}`);
+        }
+        return;
+      }
+      if (result.exhausted) return;
     }
   }
 
