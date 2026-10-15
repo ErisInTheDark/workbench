@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect the human-only store command boundary.
+ * No exports. Tests protect request-scoped managed store reads and human-only writes.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -36,14 +36,18 @@ test("managed agents need deliberate access for reads and can never write", asyn
     { ...human, callerThreadId: "thread-1" },
   )).kind, "error");
   process.env[dangerousAccess] = "1";
-  const get = await parseWorkbenchAgentCliCommand(
+  assert.equal((await parseWorkbenchAgentCliCommand(
     ["store", "get", "API_KEY"],
     { ...human, callerThreadId: "thread-1" },
+  )).kind, "error");
+  const get = await parseWorkbenchAgentCliCommand(
+    ["store", "get", "API_KEY"],
+    { ...human, callerThreadId: "thread-1", allowStoreRead: true },
   );
   assert.deepEqual(get.kind === "request" && get.request.body, { action: "get", cwd: "C:/project", key: "API_KEY" });
   assert.equal((await parseWorkbenchAgentCliCommand(
     ["store", "set", "API_KEY", "v"],
-    { ...human, callerThreadId: "thread-1" },
+    { ...human, callerThreadId: "thread-1", allowStoreRead: true },
   )).kind, "error");
 });
 

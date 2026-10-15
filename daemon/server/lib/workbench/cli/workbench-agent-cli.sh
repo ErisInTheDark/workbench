@@ -105,6 +105,7 @@ curl_args=(
   --data-urlencode "callerThreadId=${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
   --data-urlencode "callerHarness=${WORKBENCH_HARNESS:-codex}"
   --data-urlencode "workbenchOrigin=$WORKBENCH_ORIGIN"
+  --data-urlencode "dangerouslyAccessEnvVars=${DANGEROUSLY_ACCESS_ENV_VARS:-}"
 )
 if [[ "$#" -eq 0 && "${WORKBENCH_APPLY_PATCH_CLAIM_HOOK:-}" == "1" ]]; then
   curl_args+=(--data-urlencode "arg=__hook" --data-urlencode "arg=apply-patch-claim")

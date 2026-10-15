@@ -8,8 +8,6 @@ import { ProjectStoreKeySchema } from "workbench-shared/workbench/project/projec
 
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
-const DANGEROUS_ACCESS = "DANGEROUSLY_ACCESS_ENV_VARS";
-
 export const WorkbenchStoreCommandRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("get"), cwd: z.string().trim().min(1), key: ProjectStoreKeySchema }).strict(),
   z.object({ action: z.literal("set"), cwd: z.string().trim().min(1), key: ProjectStoreKeySchema, value: z.string() }).strict(),
@@ -20,8 +18,8 @@ function requireHuman(callerThreadId: string | null) {
   if (callerThreadId) throw new Error("wb store is not available to Workbench-managed agents.");
 }
 
-function requireReadAccess(callerThreadId: string | null) {
-  if (callerThreadId && process.env[DANGEROUS_ACCESS] !== "1") {
+function requireReadAccess(callerThreadId: string | null, allowStoreRead: boolean | undefined) {
+  if (callerThreadId && allowStoreRead !== true) {
     throw new Error("wb store is not available to Workbench-managed agents.");
   }
 }
@@ -44,8 +42,8 @@ const get = defineWorkbenchAgentCommand({
     if (key === undefined || extra.length) throw new Error("wb store get requires exactly one key.");
     return { key };
   },
-  buildRequest({ key }, { callerThreadId, cwd }) {
-    requireReadAccess(callerThreadId);
+  buildRequest({ key }, { callerThreadId, cwd, allowStoreRead }) {
+    requireReadAccess(callerThreadId, allowStoreRead);
     return postWorkbenchAgentCommand("/internal/store", { action: "get", cwd, key });
   },
 });

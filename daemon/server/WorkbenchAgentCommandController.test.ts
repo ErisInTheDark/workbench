@@ -1,13 +1,15 @@
 /*
  * Exports:
- * - No production exports; tests cover direct dispatch, claim identity, reload dirt, response adaptation and caller cancellation.
+ * - No production exports; tests cover direct dispatch, caller-scoped store access, claim identity, reload dirt, response adaptation and cancellation.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
@@ -95,6 +97,69 @@ function createBrowsePort(executeBrowseRequest: (body: Buffer, signal: AbortSign
     getReloadScopeCatalog: () => reloadCatalog,
   };
 }
+
+test("shell store access crosses HTTP per request rather than inheriting daemon permissions", async t => {
+  const temporary = await WorkbenchTemporaryDirectory.create("store-cli-access-");
+  t.after(() => temporary.dispose());
+  const flag = "DANGEROUSLY_ACCESS_ENV_VARS";
+  const saved = process.env[flag];
+  t.after(() => {
+    if (saved === undefined) delete process.env[flag];
+    else process.env[flag] = saved;
+  });
+  const calls: object[] = [];
+  const controller = new WorkbenchAgentCommandController("http://127.0.0.1:4500", {
+    ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
+    executeProjectStoreRequest: async body => {
+      calls.push(body);
+      return new Response("fixture-value\n");
+    },
+  }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
+  const server = await startController(controller);
+  t.after(server.close);
+  const shell = path.join(import.meta.dirname, "lib/workbench/cli/workbench-agent-cli.sh");
+  for (const scenario of [
+    { daemon: "", child: "1", action: "get", allowed: true },
+    { daemon: "", child: "", action: "get", allowed: false },
+    { daemon: "", child: "true", action: "get", allowed: false },
+    { daemon: "1", child: "", action: "get", allowed: false },
+    { daemon: "", child: "1", action: "set", allowed: false },
+  ]) {
+    await t.test(JSON.stringify(scenario), async () => {
+      process.env[flag] = scenario.daemon;
+      const previousCalls = calls.length;
+      const result = promisify(execFile)("bash", [
+        shell, "store", scenario.action, "API_KEY", ...(scenario.action === "set" ? ["replacement"] : []),
+      ], {
+        cwd: temporary.path,
+        env: {
+          ...process.env,
+          [flag]: scenario.child,
+          WORKBENCH_THREAD_ID: "managed-fixture",
+          WORKBENCH_CWD_REDIRECTED: "1",
+          WORKBENCH_DAEMON_ORIGIN_RESOLVER: "",
+          WORKBENCH_ORIGIN: server.origin,
+        },
+      });
+      if (scenario.allowed) {
+        const output = await result;
+        assert.equal(output.stdout, "fixture-value\n");
+        assert.equal(output.stderr, "");
+        assert.equal(calls.length, previousCalls + 1);
+        assert.equal(Reflect.get(calls.at(-1)!, "action"), "get");
+        assert.equal(Reflect.get(calls.at(-1)!, "key"), "API_KEY");
+      } else {
+        await assert.rejects(result, error => {
+          const failure = error as Error & { stdout: string; stderr: string };
+          assert.equal(failure.stdout, "");
+          assert.match(failure.stderr, /not available to Workbench-managed agents/);
+          return true;
+        });
+        assert.equal(calls.length, previousCalls);
+      }
+    });
+  }
+});
 
 test("native file claim ingress dispatches the exact OpenCode request without trusting form ownership", async t => {
   const requests: object[] = [];

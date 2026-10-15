@@ -314,6 +314,7 @@ let server: http.Server;
 let temporaryDirectoryPath = "";
 let temporaryDirectoryOwner: WorkbenchTemporaryDirectory | null = null;
 let temporaryDataRootPath = "";
+let publishedEndpoint: WorkbenchDaemonEndpoint;
 let reloadStatusReadCount = 0;
 
 test("canonical command descriptors are immutable and unique", () => {
@@ -531,6 +532,11 @@ test("parses Markdown toc requests and exposes focused help", async () => {
 
 before(async () => {
   server = http.createServer((request, response) => {
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(publishedEndpoint));
+      return;
+    }
     if (request.url === "/daemon/agent-command") {
       void agentCommandController.handleHttpRequest(request, response);
       return;
@@ -595,12 +601,13 @@ before(async () => {
   temporaryDirectoryOwner = await WorkbenchTemporaryDirectory.create("workbench-agent-cli-test-");
   temporaryDirectoryPath = temporaryDirectoryOwner.path;
   temporaryDataRootPath = path.join(temporaryDirectoryPath, "data");
-  await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
+  publishedEndpoint = {
     version: 1,
     instanceId: randomUUID(),
     pid: process.pid,
     origin,
-  });
+  };
+  await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), publishedEndpoint);
 });
 
 after(async () => {
@@ -1740,12 +1747,7 @@ test("generated and root launchers follow endpoint publication instead of inheri
     assert.deepEqual(rotatedRequests, ["/daemon/agent-command", "/daemon/agent-command"]);
   } finally {
     await new Promise<void>((resolve, reject) => rotatedServer.close((error) => error ? reject(error) : resolve()));
-    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
-      version: 1,
-      instanceId: randomUUID(),
-      pid: process.pid,
-      origin,
-    });
+    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), publishedEndpoint);
   }
 });
 

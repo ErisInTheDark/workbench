@@ -67,6 +67,8 @@ export interface WorkbenchAgentCommandRequest {
 }
 
 export interface WorkbenchAgentCommandContext {
+  /** Caller explicitly opted into store reads for this invocation, never daemon-global permission. */
+  allowStoreRead?: boolean;
   callerHarness: string;
   callerThreadId: string | null;
   cwd: string;

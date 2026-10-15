@@ -52,7 +52,7 @@ interface WorkbenchAgentDirectPort {
   acceptVisRender?: (runId: string, content: string) => boolean;
   executeFeedbackStats?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeFileRemoval?: (body: object, signal: AbortSignal) => Promise<Response>;
-  /** Human-only project store access; command parsing already rejected managed callers. */
+  /** Command parsing admits human access and explicitly opted-in managed reads. */
   executeProjectStoreRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Warms a virtual repository; the owner rejects calls from catalogues listed before the runtime disappeared. */
   executeRepoWarm?: (body: object, signal: AbortSignal) => Promise<Response>;
@@ -262,6 +262,7 @@ export default class WorkbenchAgentCommandController {
       }
       const caller = callerThreadId && this.direct.resolveCaller ? await this.direct.resolveCaller(callerThreadId, cwd, callerHarness) : null;
       const parsed = await parseWorkbenchAgentCliCommand(argv, {
+        allowStoreRead: form.get("dangerouslyAccessEnvVars") === "1",
         callerHarness: caller?.harness ?? callerHarness,
         callerThreadId: caller?.threadId ?? callerThreadId,
         cwd,

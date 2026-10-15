@@ -340,6 +340,7 @@ export async function parseWorkbenchAgentCliCommand(
     projectRoot = null,
     subagent = false,
     virtualRepos = false,
+    allowStoreRead = false,
   }: {
     callerHarness?: string;
     callerThreadId?: string | null;
@@ -351,6 +352,7 @@ export async function parseWorkbenchAgentCliCommand(
     subagent?: boolean;
     /** Whether the selected daemon detected its virtual repository runtime. */
     virtualRepos?: boolean;
+    allowStoreRead?: boolean;
   } = {},
 ): Promise<WorkbenchAgentCliParseResult> {
   const resolvedCwd = path.resolve(cwd);
@@ -391,7 +393,7 @@ export async function parseWorkbenchAgentCliCommand(
   try {
     return {
       kind: "request",
-      request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), { callerHarness, callerThreadId, cwd, workbenchOrigin }),
+      request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), { callerHarness, callerThreadId, cwd, workbenchOrigin, allowStoreRead }),
     };
   } catch (error) {
     if (matched.words[0] === "git" && (matched.words[1] === "arc" || matched.words[1] === "plan")) {
