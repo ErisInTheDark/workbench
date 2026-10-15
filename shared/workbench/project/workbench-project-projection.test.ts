@@ -278,8 +278,8 @@ test("launch suggestion follows the latest used target inside one logical projec
     })),
     defaults: [{ target: firstTarget, revision: 5,
       selection: {} as PresentationSnapshot["defaults"][number]["selection"] }],
-    drafts: [{ target: secondTarget, logicalProjectId: remoteId, revision: 10,
-      phase: "accepted" } as PresentationSnapshot["drafts"][number]],
+    drafts: [],
+    recentLaunches: [{ target: secondTarget, logicalProjectId: remoteId, revision: 10 }],
     folders: [], members: [], divergences: [], sourceMappings: [],
   };
   const project = projectLogicalProjects(snapshot, new Map([
@@ -308,22 +308,15 @@ test("selected launch target ignores newer accepted threads outside the selected
       { target: secondTarget, logicalProjectId: localId, identityKey: "local://C:/local", name: "local", rootPath: "C:/local" },
     ],
     defaults: [],
+    recentLaunches: [
+      { logicalProjectId: remoteId, target: firstTarget, revision: 10 },
+      { logicalProjectId: localId, target: secondTarget, revision: 12 },
+      { logicalProjectId: localId, target: unavailableTarget, revision: 16 },
+    ],
     drafts: [
-      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000011"), logicalProjectId: remoteId,
-        target: firstTarget, prompt: "", updatedAt: 1, revision: 10, phase: "accepted",
-        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "first", attachments: [],
-        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
-      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000012"), logicalProjectId: localId,
-        target: secondTarget, prompt: "", updatedAt: 2, revision: 12, phase: "accepted",
-        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "second", attachments: [],
-        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
       { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000013"), logicalProjectId: remoteId,
         target: firstTarget, prompt: "", updatedAt: 3, revision: 14, phase: "unsent",
         pinned: false, snoozed: false, launchId: null, acceptedThreadId: null, attachments: [],
-        selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
-      { id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000014"), logicalProjectId: localId,
-        target: unavailableTarget, prompt: "", updatedAt: 4, revision: 16, phase: "accepted",
-        pinned: false, snoozed: false, launchId: null, acceptedThreadId: "unavailable", attachments: [],
         selection: {} as PresentationSnapshot["drafts"][number]["selection"] },
     ],
     folders: [], members: [], divergences: [], sourceMappings: [],
@@ -341,7 +334,7 @@ test("selected launch target ignores newer accepted threads outside the selected
     project: projects.find(project => project.id === localId),
     location: secondTarget,
   });
-  assert.deepEqual(preferredSelectedLaunchTarget(projects, [remoteId, localId], { ...snapshot, drafts: [] }), {
+  assert.deepEqual(preferredSelectedLaunchTarget(projects, [remoteId, localId], { ...snapshot, recentLaunches: [] }), {
     project: projects.find(project => project.id === remoteId),
     location: firstTarget,
   });

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
- * - default WorkbenchPresentationRepository: own relational project, draft, layout, hidden-folder and import transactions.
+ * - default WorkbenchPresentationRepository: own project, draft, layout and import transactions, projecting compact launch history.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -126,6 +126,12 @@ export default class WorkbenchPresentationRepository {
       .all() as PresentationRows["defaults"][];
     const drafts = db.prepare("SELECT * FROM presentation_drafts WHERE phase IN ('unsent', 'submitting') ORDER BY updated_at DESC, id")
       .all() as DraftRow[];
+    const recentLaunches = db.prepare(`
+      SELECT logical_project_id, daemon_id, project_id, MAX(revision) AS revision
+      FROM presentation_drafts WHERE phase = 'accepted'
+      GROUP BY logical_project_id, daemon_id, project_id
+      ORDER BY revision DESC, logical_project_id, daemon_id, project_id
+    `).all() as Array<Pick<DraftRow, "logical_project_id" | "daemon_id" | "project_id" | "revision">>;
     const attachments = db.prepare("SELECT draft_id, id, media_type, content_hash FROM presentation_draft_attachments ORDER BY draft_id, id")
       .all() as Array<Pick<PresentationRows["attachments"], "draft_id" | "id" | "media_type" | "content_hash">>;
     const references = this.readReferences();
@@ -151,6 +157,11 @@ export default class WorkbenchPresentationRepository {
       defaults: defaults.map(row => ({
         target: { daemonId: row.daemon_id, projectId: row.project_id },
         selection: this.selection(row.selection_json), revision: row.revision,
+      })),
+      recentLaunches: recentLaunches.map(row => ({
+        logicalProjectId: row.logical_project_id,
+        target: { daemonId: row.daemon_id, projectId: row.project_id },
+        revision: row.revision,
       })),
       drafts: drafts.map(row => ({
         id: row.id, logicalProjectId: row.logical_project_id,

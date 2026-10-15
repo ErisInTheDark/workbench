@@ -3,7 +3,7 @@
  * - PresentationDraftReferenceSchema/PresentationDraftReference: a composer reference a new-thread draft keeps.
  * - PresentationDraftInputSchema/PresentationDraftInput: app-owned unsent content and one concrete target.
  * - PresentationMutationSchema/PresentationMutation: revision-checked presentation intents, incl. hiding project folders.
- * - PresentationSnapshotSchema/PresentationSnapshot: combined app state incl. hidden folders, never a daemon execution response.
+ * - PresentationSnapshotSchema/PresentationSnapshot: app drafts, layout, hidden folders and compact accepted-launch history.
  * - WorkbenchPresentationRevisionEventSchema: compact app presentation change notice.
  * - WorkbenchPresentationImportStatusSchema/WorkbenchPresentationImportStatus: bounded server import progress.
  */
@@ -89,6 +89,11 @@ export const PresentationSnapshotSchema = z.object({
     selection: WorkbenchComposerProfileSelectionSchema,
     revision,
   }).strict()),
+  recentLaunches: z.array(z.object({
+    logicalProjectId: LogicalProjectIdSchema,
+    target: ProjectLocationReferenceSchema,
+    revision,
+  }).strict()).optional(),
   drafts: z.array(draft),
   folders: z.array(folder),
   members: z.array(member),

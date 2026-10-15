@@ -228,6 +228,43 @@ test("draft references persist, survive reference-blind saves, and leave with th
   }
 });
 
+test("launch history publishes only the latest accepted receipt per folder across reopen", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-launch-history-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  context.after(async () => { await repository.close(); await temporary.dispose(); });
+  await repository.start();
+  repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+  repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/repo") });
+  const logicalProjectId = repository.read().projects[0]!.id;
+  const launch = (daemonId: typeof first) => {
+    const id = crypto.randomUUID();
+    const saved = repository.mutate({ kind: "putDraft", expectedRevision: null, draft: {
+      id, logicalProjectId, target: { daemonId, projectId }, prompt: "private prompt", selection, updatedAt: 1,
+    } }).drafts.find(draft => draft.id === id)!;
+    const before = repository.read().recentLaunches;
+    const launchId = crypto.randomUUID();
+    const reserved = repository.mutate({ kind: "reserveLaunch", draftId: id, expectedRevision: saved.revision, launchId, selection });
+    assert.deepEqual(reserved.recentLaunches, before, "submitting is not a successful creation");
+    const accepted = repository.mutate({ kind: "completeLaunch", draftId: id, launchId, threadId: crypto.randomUUID() });
+    assert.ok(!accepted.drafts.some(draft => draft.id === id), "accepted prompts stay out of the live draft list");
+    return { logicalProjectId, target: { daemonId, projectId }, revision: accepted.revision };
+  };
+  assert.deepEqual(repository.read().recentLaunches, []);
+  launch(first);
+  const laptop = launch(second);
+  const desktop = launch(first);
+  const expected = [desktop, laptop];
+  assert.deepEqual(repository.read().recentLaunches, expected);
+  const unsent = repository.mutate({ kind: "putDraft", expectedRevision: null, draft: {
+    id: crypto.randomUUID(), logicalProjectId, target: { daemonId: second, projectId },
+    prompt: "not launched", selection, updatedAt: 9,
+  } });
+  assert.deepEqual(unsent.recentLaunches, expected, "autosaves cannot change creation recency");
+  await repository.close();
+  await repository.start();
+  assert.deepEqual(repository.read().recentLaunches, expected);
+});
+
 test("new-folder draft placement is atomic and autosaves cannot restore an obsolete folder choice", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-draft-folder-");
   const root = temporary.path;

@@ -306,6 +306,8 @@ export function preferredLogicalLaunchLocation(
   const registered = (target: ProjectLocationReference) => project.locations.some(location =>
     location.target.daemonId === target.daemonId && location.target.projectId === target.projectId);
   const latest = [
+    ...(presentation.recentLaunches ?? []).filter(item => item.logicalProjectId === project.id
+      && registered(item.target)),
     ...presentation.defaults.filter(item => registered(item.target)),
     ...presentation.drafts.filter(item => item.logicalProjectId === project.id
       && item.phase !== "deleted" && item.phase !== "importing"
@@ -321,20 +323,21 @@ export function preferredLogicalLaunchLocation(
 export function preferredSelectedLaunchTarget(
   projects: readonly WorkbenchLogicalProject[],
   selectedProjectIds: readonly string[],
-  presentation: PresentationSnapshot,
+  presentation: Pick<PresentationSnapshot, "recentLaunches"> | null | undefined,
 ) {
   const selectedProjects = selectedProjectIds.flatMap(id => {
     const project = projects.find(candidate => candidate.id === id);
     return project ? [project] : [];
   });
   const selectedProjectsById = new Map(selectedProjects.map(project => [project.id, project]));
-  const accepted = presentation.drafts
-    .filter(draft => draft.phase === "accepted")
-    .sort((left, right) => right.revision - left.revision || right.id.localeCompare(left.id));
-  for (const draft of accepted) {
-    const project = selectedProjectsById.get(draft.logicalProjectId);
+  const accepted = [...presentation?.recentLaunches ?? []]
+    .sort((left, right) => right.revision - left.revision
+      || left.target.daemonId.localeCompare(right.target.daemonId)
+      || left.target.projectId.localeCompare(right.target.projectId));
+  for (const launch of accepted) {
+    const project = selectedProjectsById.get(launch.logicalProjectId);
     const location = project?.locations.find(item =>
-      item.target.daemonId === draft.target.daemonId && item.target.projectId === draft.target.projectId);
+      item.target.daemonId === launch.target.daemonId && item.target.projectId === launch.target.projectId);
     if (project && location) return { project, location: location.target };
   }
   for (const project of selectedProjects) {

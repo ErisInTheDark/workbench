@@ -36,27 +36,9 @@ export function resolveSidebarCreateTarget({
       ?? projects.find(({ id }) => id === createProjectId && selectedSet.has(id));
     return project ? { location: null, project } : null;
   }
-  // Selection holds logical ids; createProjectId is the physical id of a live location.
-  const candidates = logicalProject ? [logicalProject] : logicalProjects ?? [];
-  const available = (project: WorkbenchLogicalProject) =>
-    selectedSet.has(project.id) && project.locations.some(location => location.project);
-  const hasAcceptedSelection = !logicalProject && presentation?.drafts.some(draft =>
-    draft.phase === "accepted" && selectedSet.has(draft.logicalProjectId)
-    && candidates.some(project => project.id === draft.logicalProjectId
-      && project.locations.some(location =>
-        location.target.daemonId === draft.target.daemonId
-        && location.target.projectId === draft.target.projectId)));
-  if (hasAcceptedSelection && presentation) {
-    const preferred = preferredSelectedLaunchTarget(candidates, selectedProjectIds, presentation);
-    if (preferred) return preferred;
-  }
-  const project = candidates.find(candidate => candidate.id === selectedOwnerProjectId && available(candidate))
-    ?? candidates.find(candidate => selectedSet.has(candidate.id)
-      && candidate.locations.some(location => location.project && location.target.projectId === createProjectId));
-  if (!project) return null;
-  const location = project.locations.find(item =>
-    item.project && item.target.projectId === createProjectId)?.target
-    ?? project.locations.find(item => item.project)?.target
-    ?? null;
-  return location ? { location, project } : null;
+  return preferredSelectedLaunchTarget(
+    logicalProjects ?? (logicalProject ? [logicalProject] : []),
+    selectedProjectIds,
+    presentation,
+  );
 }

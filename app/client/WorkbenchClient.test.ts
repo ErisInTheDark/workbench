@@ -130,28 +130,11 @@ test("project home opens at the preferred folder and keeps a transient draft ide
         name: "other-worktree", rootPath: latestProject.rootPath },
     ],
     defaults: [], folders: [], members: [], divergences: [], sourceMappings: [],
-    drafts: [{
-      id: DraftIdSchema.parse("40000000-0000-4000-8000-000000000001"),
+    drafts: [],
+    recentLaunches: [{
       logicalProjectId: secondId,
       target: latestLocation,
-      prompt: "",
-      updatedAt: 3,
       revision: 3,
-      phase: "accepted",
-      pinned: false,
-      snoozed: false,
-      launchId: null,
-      acceptedThreadId: "latest",
-      attachments: [],
-      selection: { kind: "custom", settings: {
-        agentPath: null,
-        agentSource: null,
-        harness: "codex",
-        model: "model",
-        reasoningEffort: null,
-        serviceTier: null,
-        contextWindowTokens: null,
-      } },
     }],
   } });
 
