@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - IsolatedWorkbenchOptions: select external identities, live child output and injectable readiness deadlines.
+ * - IsolatedWorkbenchOptions: select external identities, private shell runtime source, live output and readiness deadlines.
  * - IsolatedWorkbenchProcessEvent: typed child output or structured daemon diagnostics.
  * - IsolatedWorkbenchSignalCleanup: settle registered scenario cleanup before a signalled test process exits.
  * - default IsolatedWorkbench: boot current source with private storage, install provider runtimes, and own its socket/process cleanup.
@@ -20,6 +20,8 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
+import { managedPowerShellExecutable } from "../../shared/windows-powershell-runtime.mjs";
 
 export const CLAUDE_NATIVE_INSTRUCTION_SENTINEL = "NATIVE_CLAUDE_INSTRUCTION_FORBIDDEN";
 export const WORKBENCH_INSTRUCTION_SENTINEL = "WORKBENCH_MANAGED_INSTRUCTION_REQUIRED";
@@ -82,6 +84,7 @@ export type IsolatedWorkbenchProcessEvent =
   };
 
 export interface IsolatedWorkbenchOptions {
+  powerShellRuntimeDirectory?: string;
   codexIdentity?: boolean;
   codexModelEndpoint?: string;
   claudeModelEndpoint?: string;
@@ -289,6 +292,7 @@ export default class IsolatedWorkbench {
         options.stateHome ?? null,
         options.processEvent,
         options.readinessSignal,
+        options.powerShellRuntimeDirectory,
       );
     } catch (error) {
       try {
@@ -312,6 +316,7 @@ export default class IsolatedWorkbench {
     stateHome: string | null,
     processEvent?: IsolatedWorkbenchOptions["processEvent"],
     readinessSignal?: () => AbortSignal,
+    powerShellRuntimeDirectory?: string,
   ) {
     const project = path.join(root, "projects", "fixture");
     await fs.mkdir(project, { recursive: true });
@@ -364,6 +369,17 @@ export default class IsolatedWorkbench {
       }
     }
     const dataRoot = path.join(root, "data", "inthedark", "wb");
+    if (process.platform === "win32") {
+      const runtime = powerShellRuntimeDirectory
+        ?? path.dirname(managedPowerShellExecutable(resolveWorkbenchDataRoot()));
+      const executable = path.join(runtime, "pwsh.exe");
+      try { await fs.access(executable); }
+      catch (cause) { throw new Error(`Scenario PowerShell runtime is unavailable at ${executable}.`, { cause }); }
+      await fs.cp(runtime, path.dirname(managedPowerShellExecutable(dataRoot)), {
+        recursive: true,
+        filter: () => { signal.throwIfAborted(); return true; },
+      });
+    }
     let privateOpenCodeIdentity: OpenCodeFixtureIdentity | null = null;
     if (openCodeIdentity) {
       const dataDirectory = path.join(root, "data", "opencode");
@@ -669,7 +685,7 @@ stream_max_retries = 0
       // Native acknowledgement, runtime ownership and foreground stdin belong to
       // the parent supervisor. startService supplies the fixture's own session.
       "WORKBENCH_DAEMON_ACK_REQUIRED", "WORKBENCH_SERVICE_ACK_REQUIRED", "WORKBENCH_SERVICE_RUNTIME", "WORKBENCH_SERVICE_SESSION",
-      "WORKBENCH_FOREGROUND_PIPE"]) delete env[key];
+      "WORKBENCH_FOREGROUND_PIPE", "FORCE_COLOR"]) delete env[key];
     for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]) delete env[key];
     env.WORKBENCH_APP_HOST = "127.0.0.1";
     return env;

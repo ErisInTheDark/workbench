@@ -14,6 +14,7 @@ import IsolatedWorkbench, {
   type IsolatedWorkbenchProcessEvent,
   type IsolatedWorkbenchOptions,
 } from "./IsolatedWorkbench";
+import { managedPowerShellExecutable } from "../../shared/windows-powershell-runtime.mjs";
 
 test("graceful scenario shutdown keeps dependencies alive until the app has stopped", async () => {
   const app = Promise.withResolvers<void>();
@@ -61,6 +62,7 @@ async function runtime(
   programs?: { app: string; host: string },
   prepareOpenCode?: (source: string) => Promise<IsolatedWorkbenchOptions["openCodeIdentity"]>,
   processEvent?: IsolatedWorkbenchOptions["processEvent"],
+  extraOptions: Pick<IsolatedWorkbenchOptions, "powerShellRuntimeDirectory"> = {},
 ) {
   captureTestOutput(context, process.stdout, text => text.startsWith("[scenario] "));
   captureTestOutput(context, process.stderr, text => text.startsWith("Scenario diagnostics retained: "));
@@ -68,12 +70,14 @@ async function runtime(
   const source = temporary.path;
   context.after(async () => await temporary.dispose());
   for (const directory of ["app/node_modules", "daemon/node_modules", "shared/node_modules",
-    "instructions", "package", "scripts", "node_modules", "test/scenarios"]) {
+    "instructions", "package", "scripts", "node_modules", "test/scenarios", "powershell"]) {
     await fs.mkdir(path.join(source, directory), { recursive: true });
   }
   await fs.writeFile(path.join(source, "package.json"), "{}");
   await fs.writeFile(path.join(source, ".gitignore"), ".workbench\nnode_modules\n");
   await fs.writeFile(path.join(source, "test/scenarios/isolated-shutdown.mjs"), "");
+  await fs.writeFile(path.join(source, "powershell/pwsh.exe"), "private shell fixture");
+  await fs.writeFile(path.join(source, "powershell/runtime.dll"), "private runtime fixture");
   if (programs) {
     // Only the loader is shared. The child programs and their data are private.
     await fs.symlink(path.resolve(import.meta.dirname, "../../node_modules/tsx"), path.join(source, "node_modules/tsx"), "junction");
@@ -87,8 +91,34 @@ async function runtime(
     codexIdentity: false, readinessSignal,
     openCodeIdentity: await prepareOpenCode?.(source),
     processEvent,
+    powerShellRuntimeDirectory: path.join(source, "powershell"),
+    ...extraOptions,
   });
 }
+
+test("Windows scenarios copy the complete shell runtime without sharing writable files", { skip: process.platform !== "win32" }, async context => {
+  const runtimeDirectory = await WorkbenchTemporaryDirectory.create("scenario-powershell-");
+  context.after(() => runtimeDirectory.dispose());
+  await fs.writeFile(path.join(runtimeDirectory.path, "pwsh.exe"), "private shell fixture");
+  await fs.writeFile(path.join(runtimeDirectory.path, "runtime.dll"), "private runtime fixture");
+  const fixture = await runtime(context, context.signal, undefined, undefined, undefined, undefined, {
+    powerShellRuntimeDirectory: runtimeDirectory.path,
+  });
+  try {
+    const executable = managedPowerShellExecutable(fixture.dataRootPath);
+    const companion = path.join(path.dirname(executable), "runtime.dll");
+    assert.equal(await fs.readFile(executable, "utf8"), "private shell fixture");
+    assert.equal(await fs.readFile(companion, "utf8"), "private runtime fixture");
+    await fs.writeFile(executable, "changed copy");
+    assert.equal(await fs.readFile(path.join(runtimeDirectory.path, "pwsh.exe"), "utf8"), "private shell fixture");
+  } finally { await fixture.close(); }
+});
+
+test("missing scenario PowerShell fails during setup rather than a provider turn", { skip: process.platform !== "win32" }, async context => {
+  await assert.rejects(runtime(context, context.signal, undefined, undefined, undefined, undefined, {
+    powerShellRuntimeDirectory: path.join(import.meta.dirname, "missing-powershell-runtime"),
+  }), /PowerShell.*unavailable/u);
+});
 
 const hostProgram = `
   console.log("host-pid " + process.pid);
