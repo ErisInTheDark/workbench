@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchProjectListItem: canonical compact project row with status counts or relative time and an optional context menu.
+ * - default WorkbenchProjectListItem: canonical compact project row with status counts or relative time and an optional
+ *   context menu, or a non-navigating preview of the same row that keeps its project tooltip.
  */
 "use client";
 
@@ -60,7 +61,54 @@ function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
   );
 }
 
-export default function WorkbenchProjectListItem({
+function ProjectRowContent({ active, entry }: { active: boolean; entry: DisplaySidebarProject }) {
+  const { activityAt, project, summary } = entry;
+  const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
+  return (
+    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
+      <span className="min-w-0 overflow-hidden"><WorkbenchProjectLabel active={active} project={project} /></span>
+      <span className="ml-2 text-[0.72rem] text-fg/muted">
+        {/* Pointer-transparent row text; the project tooltip carries the full time. */}
+        {WorkbenchThreadStatusCounts.hasCounts(counts) ? <WorkbenchThreadStatusCounts counts={counts} />
+          : activityAt === null ? null : <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />}
+      </span>
+    </div>
+  );
+}
+
+type ProjectRowProps = {
+  active?: boolean;
+  /** Right-click / long-press menu; coarse pointers also get a trailing more button. */
+  contextMenu?: WorkbenchContextMenuDefinition | null;
+  entry: DisplaySidebarProject;
+  href?: string;
+  id?: string;
+  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
+  presentation?: "row";
+  role?: "option";
+  selected?: boolean;
+  showTooltip?: boolean;
+  tabIndex?: number;
+};
+
+/** A hover preview lists the project without its surface, link or menu, keeping its own tooltip. */
+type ProjectPreviewProps = {
+  entry: DisplaySidebarProject;
+  presentation: "preview";
+};
+
+export default function WorkbenchProjectListItem(props: ProjectRowProps | ProjectPreviewProps) {
+  if (props.presentation !== "preview") return <ProjectRow {...props} />;
+  return (
+    <Tooltip content={<ProjectTooltipContent entry={props.entry} />} interactive>
+      <div className="min-w-0">
+        <ProjectRowContent active={false} entry={props.entry} />
+      </div>
+    </Tooltip>
+  );
+}
+
+function ProjectRow({
   active = false,
   contextMenu = null,
   entry,
@@ -71,38 +119,12 @@ export default function WorkbenchProjectListItem({
   selected = false,
   showTooltip = true,
   tabIndex,
-}: {
-  active?: boolean;
-  /** Right-click / long-press menu; coarse pointers also get a trailing more button. */
-  contextMenu?: WorkbenchContextMenuDefinition | null;
-  entry: DisplaySidebarProject;
-  href?: string;
-  id?: string;
-  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
-  role?: "option";
-  selected?: boolean;
-  showTooltip?: boolean;
-  tabIndex?: number;
-}) {
+}: ProjectRowProps) {
   const projectHref = useWorkbenchProjectNavigation();
   // Rows without a menu (search results, mockups) may render outside the menu provider.
   const menus = useContext(WorkbenchContextMenuContext);
-  const { activityAt, project, summary } = entry;
-  const counts = summary?.counts ?? WorkbenchThreadStatusCounts.emptyCounts;
-  const hasStatuses = WorkbenchThreadStatusCounts.hasCounts(counts);
+  const { project } = entry;
   const logical = "matchKey" in project;
-  const projectTitle = <WorkbenchProjectLabel active={active} project={project} />;
-  const content = (
-    <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-0">
-      <span className="min-w-0 overflow-hidden">{projectTitle}</span>
-      <span className="ml-2 text-[0.72rem] text-fg/muted">
-        {/* Pointer-transparent row text; the project tooltip carries the full time. */}
-        {hasStatuses ? <WorkbenchThreadStatusCounts counts={counts} /> : activityAt === null ? null : (
-          <WorkbenchRelativeTime timestampMs={activityAt} tooltip={false} />
-        )}
-      </span>
-    </div>
-  );
   const contextMenuButton = contextMenu ? (
     <button
       type="button"
@@ -141,17 +163,17 @@ export default function WorkbenchProjectListItem({
             y="0.5"
           />
         </svg>
-          <a
-            aria-label={`${role === "option" || href ? "Open" : selected ? "Deselect" : "Select"} ${logical ? project.label : project.name || project.id}`}
-            aria-selected={role === "option" ? selected : undefined}
-            className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-            href={href ?? projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
-            id={id}
-            onClick={(event) => onProjectLinkClick(event, project.id, logical)}
-            role={role}
-            tabIndex={tabIndex}
-          />
-        {content}
+        <a
+          aria-label={`${role === "option" || href ? "Open" : selected ? "Deselect" : "Select"} ${logical ? project.label : project.name || project.id}`}
+          aria-selected={role === "option" ? selected : undefined}
+          className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
+          href={href ?? projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
+          id={id}
+          onClick={(event) => onProjectLinkClick(event, project.id, logical)}
+          role={role}
+          tabIndex={tabIndex}
+        />
+        <ProjectRowContent active={active} entry={entry} />
         {contextMenuButton}
       </div>
     </Tooltip>

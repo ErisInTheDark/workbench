@@ -1,12 +1,14 @@
 /*
  * Exports:
- * - default WorkbenchSidebarSectionDisclosure: render the canonical icon, title, action, and chevron summary for every top-level Workbench sidebar section.
+ * - default WorkbenchSidebarSectionDisclosure: render the canonical icon, title, action, and chevron summary for every
+ *   top-level Workbench sidebar section, with an optional interactive tooltip on the collapsed summary.
  */
 "use client";
 
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 import Disclosure from "../ui/Disclosure";
+import Tooltip from "../ui/Tooltip";
 import type { IconProps } from "./workbench-icons";
 import {
   useWorkbenchSidebarPreferences,
@@ -21,12 +23,15 @@ type WorkbenchSidebarSectionDisclosureProps = Omit<
   icon: ComponentType<IconProps>;
   onOpenChange?: (open: boolean) => void;
   preferenceKey: WorkbenchSidebarDisclosurePreferenceKey;
+  /** Shown while collapsed, standing in for the hidden section content. */
+  collapsedTooltip?: ReactNode;
   title: ReactNode;
 };
 
 export default function WorkbenchSidebarSectionDisclosure({
   actions,
   className,
+  collapsedTooltip,
   icon: Icon,
   onOpenChange,
   preferenceKey,
@@ -35,6 +40,13 @@ export default function WorkbenchSidebarSectionDisclosure({
   ...props
 }: WorkbenchSidebarSectionDisclosureProps) {
   const { preferences, setDisclosureOpen } = useWorkbenchSidebarPreferences();
+  const open = preferences[preferenceKey];
+  const summary = (
+    <div className="group/entry-row flex min-w-0 items-center justify-between gap-1">
+      <span className="min-w-0 truncate text-base font-semibold leading-tight text-text">{title}</span>
+      {actions}
+    </div>
+  );
   const disclosureClassName = ["pl-3", className].filter(Boolean).join(" ");
   const disclosureSummaryClassName = ["-ml-3", "h-11 text-fg/muted md:h-8", summaryClassName].filter(Boolean).join(" ");
   return (
@@ -46,12 +58,9 @@ export default function WorkbenchSidebarSectionDisclosure({
         setDisclosureOpen(preferenceKey, event.currentTarget.open);
         onOpenChange?.(event.currentTarget.open);
       }}
-      open={preferences[preferenceKey]}
-      summary={(
-        <div className="group/entry-row flex min-w-0 items-center justify-between gap-1">
-          <span className="min-w-0 truncate text-base font-semibold leading-tight text-text">{title}</span>
-          {actions}
-        </div>
+      open={open}
+      summary={collapsedTooltip === undefined ? summary : (
+        <Tooltip content={collapsedTooltip} enabled={!open} interactive>{summary}</Tooltip>
       )}
       summaryClassName={disclosureSummaryClassName}
       {...props}

@@ -153,6 +153,8 @@ export default function WorkbenchSidebarPane({
                 navigateToRoute(createHomeRoute());
               }}
               createProjectHref={projectHref(newProjectRoute)}
+              createProjectSelected={route.view === "new-project"}
+              homeSelected={route.view === "home"}
               onCreateProject={event => {
                 if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                 event.preventDefault();

@@ -18,19 +18,16 @@ import {
 const VARIANT_CLASS_NAMES = {
   card: {
     glyph: 16,
-    max: "max-h-5 max-w-5",
     size: "size-5",
     text: "text-[0.68rem]",
   },
   heading: {
     glyph: 20,
-    max: "max-h-7 max-w-7",
     size: "size-7",
     text: "text-[0.82rem]",
   },
   thread: {
     glyph: 16,
-    max: "max-h-4 max-w-4",
     size: "size-4",
     text: "text-[0.56rem]",
   },
@@ -67,14 +64,18 @@ export default function WorkbenchProjectIcon ({
   const assetUrl = project ? getWorkbenchProjectIconUrl(project.id, assetKey, origin) : null;
   const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => setLoadFailed(false), [assetKey, assetUrl]);
-  const className = `inline-flex shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;
+  const { glyph, size, text } = VARIANT_CLASS_NAMES[variant];
+  // Every icon kind occupies the same fixed frame so labels beside it share one start column.
+  const className = `inline-flex ${size} shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;
 
-  if (!project) return <ProjectIcon aria-hidden="true" className="shrink-0" size={VARIANT_CLASS_NAMES[variant].glyph} />;
-  if (project.kind === "daemon") return <ComputerIcon aria-hidden="true" className="shrink-0" size={VARIANT_CLASS_NAMES[variant].glyph} />;
+  if (!project || project.kind === "daemon") {
+    const Glyph = project ? ComputerIcon : ProjectIcon;
+    return <span aria-hidden="true" className={className}><Glyph size={glyph} /></span>;
+  }
 
   if (project.icon && assetUrl && !loadFailed) {
     return (
-      <span aria-hidden="true" className={`${className} ${VARIANT_CLASS_NAMES[variant].max}`}>
+      <span aria-hidden="true" className={className}>
         <img
           alt=""
           className="max-h-full max-w-full object-contain"
@@ -93,7 +94,7 @@ export default function WorkbenchProjectIcon ({
     <span
       aria-hidden="true"
       className={`
-        ${className} ${VARIANT_CLASS_NAMES[variant].size} ${VARIANT_CLASS_NAMES[variant].text}
+        ${className} ${text}
         text-hue-(--identity-hue) bg-hue-(--identity-hue)/22
       `}
       style={accentStyle}

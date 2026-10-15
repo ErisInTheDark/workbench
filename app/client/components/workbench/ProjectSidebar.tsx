@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - default ProjectSidebar: render selected project groups, reveal controls, status summaries, daemon failure, the new
- *   project action and each logical project's "Folders" visibility menu.
+ * - default ProjectSidebar: render the home and new project links, selected project groups, reveal controls, status
+ *   summaries, daemon failure, the collapsed selection icons and tooltip, and each logical project's "Folders" visibility menu.
  */
 "use client";
 
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type MouseEvent } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
@@ -16,11 +16,13 @@ import {
   groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
 } from "./project-sidebar-groups";
 import { useProjects } from "./use-projects";
-import { workbenchNewEntryButtonClassName } from "./workbench-class-names";
-import { NewEntryIcon } from "./workbench-explorer";
-import { EllipsisIcon, HomeIcon, ProjectIcon } from "./workbench-icons";
+import {
+  workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName,
+  workbenchThreadListLabelClassName,
+} from "./workbench-class-names";
+import { EllipsisIcon, FolderClosedIcon, HomeIcon, ProjectIcon, type IconProps } from "./workbench-icons";
 import WorkbenchDaemonStartupFailure from "./WorkbenchDaemonStartupFailure";
-import IconButton from "../ui/IconButton";
+import WorkbenchProjectIcon from "./WorkbenchProjectIcon";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchProjectListItem from "./WorkbenchProjectListItem";
 import WorkbenchSidebarSectionDisclosure from "./WorkbenchSidebarSectionDisclosure";
@@ -79,6 +81,49 @@ function projectFolderMenu(
   };
 }
 
+const SUMMARY_ICON_LIMIT = 7;
+
+/** The collapsed summary's icon strip; past the limit, the last slot counts the rest. */
+function SelectedProjectIcons({ entries }: { entries: readonly DisplaySidebarProject[] }) {
+  const overflow = entries.length > SUMMARY_ICON_LIMIT;
+  const shown = overflow ? entries.slice(0, SUMMARY_ICON_LIMIT - 1) : entries;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {shown.map(entry => <WorkbenchProjectIcon key={entry.project.id} project={entry.project} />)}
+      {overflow ? (
+        <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-[0.3rem] border border-fg/10 text-[0.6rem] font-semibold leading-none text-fg/muted">
+          +{entries.length - shown.length}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** A sidebar navigation option styled like the thread section's "Create new thread" row. */
+function ProjectSectionLink({ href, icon: Icon, label, onClick, selected }: {
+  href?: string;
+  icon: ComponentType<IconProps>;
+  label: string;
+  onClick (event: MouseEvent<HTMLAnchorElement>): void;
+  selected: boolean;
+}) {
+  return (
+    <a
+      aria-current={selected ? "page" : undefined}
+      className={`
+        ${workbenchOptionRowClassName} min-h-9 min-w-0 flex-1 md:min-h-8
+        ${selected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
+      `}
+      href={href}
+      onClick={onClick}
+      title={label}
+    >
+      <Icon className="shrink-0" size={16} />
+      <span className={workbenchThreadListLabelClassName}>{label}</span>
+    </a>
+  );
+}
+
 export default function ProjectSidebar ({
   activeProjectId,
   selectedProjectIds,
@@ -90,6 +135,8 @@ export default function ProjectSidebar ({
   logicalError,
   logicalLoading,
   createProjectHref,
+  createProjectSelected,
+  homeSelected,
   onCreateProject,
   onHomeClick,
   onProjectLinkClick,
@@ -105,6 +152,8 @@ export default function ProjectSidebar ({
   logicalError?: string | null;
   logicalLoading?: boolean;
   createProjectHref?: string;
+  createProjectSelected: boolean;
+  homeSelected: boolean;
   onCreateProject (event: MouseEvent<HTMLAnchorElement>): void;
   onHomeClick (event: MouseEvent<HTMLAnchorElement>): void;
   onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
@@ -167,37 +216,19 @@ export default function ProjectSidebar ({
   ];
   const nextTier = nextProjectSelectionTier(revealedTier, projectSelectionGroups);
   const nextLabel = nextTier === 1 ? "show unsettled" : nextTier === 2 ? "show unarchived" : "show all projects";
+  const selectedEntries = orderedEntries.filter(entry => selectedSet.has(entry.project.id));
   return (
     <section className="shrink-0 pb-3">
       <WorkbenchSidebarSectionDisclosure
-        actions={(
-          <div className="flex items-center gap-1">
-            {preferences.projectsOpen ? null
-              : <WorkbenchThreadStatusCountsButton counts={otherCounts} label="unselected project" scope="project" />}
-            <IconButton
-              as="a"
-              href="/"
-              label="Home"
-              title="Home"
-              display="hover-border"
-              size="small"
-              onClick={onHomeClick}
-            >
-              <HomeIcon size={16} />
-            </IconButton>
-            <IconButton
-              as="a"
-              href={createProjectHref}
-              label="New project"
-              title="New project"
-              display="hover-border"
-              size="small"
-              className={workbenchNewEntryButtonClassName}
-              onClick={onCreateProject}
-            >
-              <NewEntryIcon size={16} />
-              <span className="sr-only">New project</span>
-            </IconButton>
+        actions={preferences.projectsOpen ? null : <SelectedProjectIcons entries={selectedEntries} />}
+        collapsedTooltip={(
+          <div className="flex w-[min(24rem,calc(100vw-2rem))] max-w-full flex-col gap-0.5">
+            {selectedEntries.map(entry => (
+              <WorkbenchProjectListItem entry={entry} key={entry.project.id} presentation="preview" />
+            ))}
+            {selectedEntries.length ? null : (
+              <p className="m-0 text-[0.8rem] text-fg/muted">{emptySelectionMessage ?? "No projects selected."}</p>
+            )}
           </div>
         )}
         icon={ProjectIcon}
@@ -209,6 +240,16 @@ export default function ProjectSidebar ({
         title="Projects"
       >
         <nav aria-label="Projects" className="flex flex-col gap-1">
+          <div className="mt-1 flex min-w-0 gap-1">
+            <ProjectSectionLink href="/" icon={HomeIcon} label="Home" onClick={onHomeClick} selected={homeSelected} />
+            <ProjectSectionLink
+              href={createProjectHref}
+              icon={FolderClosedIcon}
+              label="New project"
+              onClick={onCreateProject}
+              selected={createProjectSelected}
+            />
+          </div>
           {visibleProjects.map((entry) => (
             <WorkbenchProjectListItem
               active={entry.project.id === activeProjectId}
