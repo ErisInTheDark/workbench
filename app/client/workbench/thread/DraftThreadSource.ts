@@ -57,6 +57,7 @@ export default function createDraftThreadSource(
   let leases = 0;
   let disposed = false;
   let launchTurn: Turn | null = null;
+  let stayInCreate = false;
   const sync = () => {
     if (disposed) return;
     const draft = ports.readDraft();
@@ -65,17 +66,17 @@ export default function createDraftThreadSource(
       summary: {
         ...EMPTY_THREAD_STORE_STATE.summary,
         status: draft ? "ready" : "loading",
-        head: draft ? { ...headOf(draft), status: launchTurn ? "active" : draft.status } : null,
+        head: draft ? { ...headOf(draft), status: launchTurn && !stayInCreate ? "active" : draft.status } : null,
         rateLimits: draft ? ports.readRateLimits(draft.harness) : null,
         draftDocument: draft,
       },
       turns: {
         ...EMPTY_THREAD_STORE_STATE.turns,
-        transcript: draft && launchTurn
+        transcript: draft && launchTurn && !stayInCreate
           ? { status: "ready", threadId: draft.id, projection: projectLaunch(draft, launchTurn, ports.projectId) }
           : EMPTY_THREAD_STORE_STATE.turns.transcript,
-        turns: launchTurn ? [launchTurn] : EMPTY_THREAD_STORE_STATE.turns.turns,
-        liveTurnId: launchTurn?.id ?? null,
+        turns: launchTurn && !stayInCreate ? [launchTurn] : EMPTY_THREAD_STORE_STATE.turns.turns,
+        liveTurnId: stayInCreate ? null : launchTurn?.id ?? null,
       },
     });
   };
@@ -85,8 +86,9 @@ export default function createDraftThreadSource(
   return {
     feed: "draft",
     actions: {
-      async submitDraft(input, submit) {
+      async submitDraft(input, submit, options) {
         if (disposed || launchTurn) return false;
+        stayInCreate = options?.stayInCreate === true;
         const id = crypto.randomUUID();
         const item = createOptimisticItem({
           clientUserMessageId: null, handle: id, input, placement: "initial", status: "pending",

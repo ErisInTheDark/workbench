@@ -56,6 +56,28 @@ const input: UserInput[] = [
   { type: "image", url: "data:image/png;base64,aW1hZ2U=" },
 ];
 
+test("staying in creation retains the empty layout while fencing accepted and concurrent launches", async context => {
+  const { store } = fixture();
+  context.after(() => store.dispose());
+  const admission = Promise.withResolvers<boolean>();
+  const sending = store.actions.submitDraft(input, () => admission.promise, { stayInCreate: true });
+  assert.equal(store.getSlice("turns").turns.length, 0);
+  assert.equal(store.getSlice("summary").head?.status, "idle");
+  assert.equal(await store.actions.submitDraft(input, async () => true, { stayInCreate: true }), false);
+  admission.resolve(true);
+  assert.equal(await sending, true);
+  assert.equal(store.getSlice("turns").turns.length, 0);
+  assert.equal(await store.actions.submitDraft(input, async () => true, { stayInCreate: true }), false);
+});
+
+test("failed stay-in-create launch remains retryable without publishing a transcript", async context => {
+  const { store } = fixture();
+  context.after(() => store.dispose());
+  assert.equal(await store.actions.submitDraft(input, async () => false, { stayInCreate: true }), false);
+  assert.equal(store.getSlice("turns").turns.length, 0);
+  assert.equal(await store.actions.submitDraft(input, async () => true, { stayInCreate: true }), true);
+});
+
 test("submission immediately renders the initial input and connecting activity before acceptance", async context => {
   const { store } = fixture();
   context.after(() => store.dispose());

@@ -461,9 +461,11 @@ export default memo(function ThreadViewContent ({
     gitCommits: activeSidebarEntry.gitCommits ?? [],
     lifecycle: activeSidebarEntry.lifecycle,
   } : null, [activeSidebarEntry]);
+  const composerTarget = useMemo(() => activeThread?.isDraft && !threadComposerDraft && threadTarget?.kind === "draft"
+    ? { kind: "new" as const } : threadTarget, [activeThread?.isDraft, threadComposerDraft, threadTarget]);
   const activeProfileSlot = useMemo(() => activeThread
-    ? resolveThreadComposerProfileSlot(ProjectIdSchema.parse(projectId), threadTarget, activeThread)
-    : null, [activeThread?.harness, activeThread?.id, projectId, threadTarget]);
+    ? resolveThreadComposerProfileSlot(ProjectIdSchema.parse(projectId), composerTarget, activeThread)
+    : null, [activeThread?.harness, activeThread?.id, projectId, composerTarget]);
   const resolvedActiveThread = activeThread && activeProfileSlot
     ? composerProfileController.resolveThread(activeProfileSlot, activeThread)
     : activeThread;
@@ -806,7 +808,7 @@ export default memo(function ThreadViewContent ({
   const handleSendMessage = useCallback(async (
     _threadId: string,
     input: UserInput[],
-    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched">,
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched" | "stayInCreate">,
   ) => {
     if (!resolvedActiveThread || !activeProfileSlot) {
       throw new ThreadMessageNotSentError();
@@ -980,7 +982,7 @@ export default memo(function ThreadViewContent ({
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
       header={fileIndexError}
-      key={activeThread.id}
+      key={activeThread.isDraft ? viewInstanceKey : activeThread.id}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
       subscribeModelUpdates={threads.subscribeModelUpdates}
@@ -1012,7 +1014,7 @@ export default memo(function ThreadViewContent ({
       knownSkills={workbenchSkills}
       thread={resolvedActiveThread!}
       turns={loadedTurns}
-      threadTarget={activeThread.isDraft ? threadTarget : activeTarget}
+      threadTarget={activeThread.isDraft ? composerTarget : activeTarget}
       selectedTodos={todoSelection.selected}
       onTodoDeselect={id => todoSelection.deselect([id])}
       onTodosSent={todoSelection.deselect}

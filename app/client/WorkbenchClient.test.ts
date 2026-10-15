@@ -6,7 +6,8 @@ import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/wor
 import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalMosaicRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { createWorkbenchMosaicSplit, createWorkbenchMosaicTarget } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import { createWorkspaceClientFixture } from "./workbench/app/workspace-client-fixture";
 import { WorkbenchClient } from "./WorkbenchClient";
 
@@ -809,6 +810,57 @@ async function openRetainedDraft(context: TestContext) {
   } });
   return { socket, client, draft };
 }
+
+test("continuing creation replaces the draft once and retains its fresh identity through routing", async context => {
+  const { client, draft } = await openRetainedDraft(context);
+  await client.controls.applyRoute(createLogicalThreadRoute(logicalId, logicalId, null, {
+    kind: "draft", draftId: draft.id,
+  }));
+  const nextId = DraftIdSchema.parse(crypto.randomUUID());
+  const route = client.controls.continueThreadCreation(draft.id, nextId);
+  assert.ok(route);
+  assert.equal(route.threadTarget?.kind, "new");
+  assert.deepEqual(route.logical?.location, location);
+  assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, nextId);
+  assert.equal((await client.controls.applyRoute(route)).ok, true);
+  assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, nextId);
+  assert.equal(client.controls.continueThreadCreation(draft.id, DraftIdSchema.parse(crypto.randomUUID())), null);
+  const thirdId = DraftIdSchema.parse(crypto.randomUUID());
+  const nextRoute = client.controls.continueThreadCreation(nextId, thirdId);
+  assert.ok(nextRoute);
+  await client.controls.applyRoute(nextRoute);
+  assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, thirdId);
+});
+
+test("continuing creation cannot replace a newer selection", async context => {
+  const { client, draft } = await openRetainedDraft(context);
+  await client.controls.applyRoute(createHomeRoute());
+  assert.equal(client.controls.continueThreadCreation(draft.id, DraftIdSchema.parse(crypto.randomUUID())), null);
+  assert.equal(client.navigation.getSnapshot().route.view, "home");
+});
+
+test("continuing mosaic creation replaces only its draft and preserves the pane source", async context => {
+  const { client, draft } = await openRetainedDraft(context);
+  const other = createWorkbenchMosaicTarget({
+    kind: "file", filePath: "notes.txt", source: { logicalProjectId: logicalId, location },
+  });
+  const pane = createWorkbenchMosaicTarget({
+    kind: "thread", target: { kind: "draft", draftId: draft.id },
+    source: { logicalProjectId: logicalId, location },
+  }, { zoomDelta: 2, weightPercent: 40 });
+  assert.equal(pane.type, "target");
+  await client.controls.applyRoute(createLogicalMosaicRoute(logicalId, createWorkbenchMosaicSplit([other, pane])));
+  const nextId = DraftIdSchema.parse(crypto.randomUUID());
+  const route = client.controls.continueThreadCreation(draft.id, nextId);
+  assert.ok(route);
+  assert.equal(route.mosaicNode?.type, "split");
+  assert.deepEqual(route.mosaicNode.children, [other, {
+    ...pane, target: { ...pane.target, target: { kind: "draft", draftId: nextId } },
+  }]);
+  const next = client.getThreadStore(project.id, { kind: "draft", draftId: nextId });
+  assert.equal(next.getSlice("summary").draftDocument?.cwd, project.rootPath);
+  assert.equal(next.getSlice("turns").turns.length, 0);
+});
 
 test("reopening a saved draft warms opencode on its original daemon", async context => {
   const { socket, client, draft } = await openRetainedDraft(context);

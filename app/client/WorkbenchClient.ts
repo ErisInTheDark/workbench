@@ -17,8 +17,9 @@ import {
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
   createHomeRoute, createLogicalThreadRoute, createLogicalExistingThreadRoute,
-  createLogicalProjectRoute, getWorkbenchMosaicThreadRootIds,
-  createThreadRoute, getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, withProjectSelection, type WorkbenchRoute,
+  createLogicalProjectRoute, createLogicalMosaicRoute, createMosaicRoute, getWorkbenchMosaicThreadRootIds,
+  createThreadRoute, getWorkbenchThreadTargetRootId, isSameWorkbenchRoute, isWorkbenchRouteOwnerOfThread,
+  withProjectSelection, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import {
   WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema,
@@ -874,6 +875,41 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       return createDraft(location, harness, options);
     },
     createThreadDraftAt: createDraft,
+    continueThreadCreation: (draftId, nextDraftId) => {
+      const route = navigation.getSnapshot().route;
+      const location = localThreadLocations.get(draftId);
+      if (!location) return null;
+      const renderer = rendererFor(location);
+      const draft = renderer.getThreadStore(location.projectId, { kind: "draft", draftId }).getSlice("summary").draftDocument;
+      if (!draft) return null;
+      let nextRoute: WorkbenchRoute;
+      if (route.view === "mosaic" && route.mosaicNode) {
+        let found = false;
+        const replace = (node: NonNullable<WorkbenchRoute["mosaicNode"]>): NonNullable<WorkbenchRoute["mosaicNode"]> => {
+          if (node.type === "split") return { ...node, children: node.children.map(replace) };
+          if (node.target.kind !== "thread" || node.target.target.kind !== "draft"
+            || node.target.target.draftId !== draftId) return node;
+          found = true;
+          return { ...node, target: { ...node.target, target: { kind: "draft", draftId: nextDraftId } } };
+        };
+        const node = replace(route.mosaicNode);
+        if (!found) return null;
+        nextRoute = route.logical?.projectId
+          ? createLogicalMosaicRoute(route.logical.projectId, node)
+          : createMosaicRoute(route.projectId, node);
+        createDraft(location, draft.harness, { threadId: nextDraftId, select: false });
+      } else {
+        if (!route.logical || !isWorkbenchRouteOwnerOfThread(route, draftId, true)
+          || threadClient.getSnapshot().currentThread?.id !== draftId) return null;
+        const owner = route.logical.threadOwnerProjectId ?? logicalFor(location)?.id;
+        if (!owner) return null;
+        nextRoute = createLogicalThreadRoute(route.logical.projectId, owner, location,
+          route.threadTarget?.kind === "new" ? route.threadTarget : { kind: "new" });
+        draftRoute = nextRoute;
+        createDraft(location, draft.harness, { threadId: nextDraftId });
+      }
+      return withProjectSelection(nextRoute, route.selectedProjectIds);
+    },
     getSelectedThreadDraft: () => navigation.readPinnedDraft((projectId, draftId) =>
       sidebar.getDraft(ProjectIdSchema.parse(projectId), DraftIdSchema.parse(draftId))),
     sendThreadMessage: async (thread, input, options = {}) => {

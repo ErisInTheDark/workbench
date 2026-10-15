@@ -47,8 +47,9 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
+import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
+import SendActionBadge from "./SendActionBadge";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
 import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
@@ -73,7 +74,7 @@ import ThreadProfileEditorController, { type ProfileEditorSection } from "./Thre
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
-import { getThreadComposerStopControlState } from "./thread-composer-controls";
+import { getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
 import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext";
@@ -184,7 +185,7 @@ export default function ThreadComposer ({
   onSendMessage: (
     threadId: string,
     input: UserInput[],
-    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched">,
+    options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched" | "stayInCreate">,
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
@@ -274,6 +275,7 @@ export default function ThreadComposer ({
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const composerInputRef = useRef<PlaintextEditableHandle>(null);
+  const focusAfterSendRef = useRef(false);
   const modePanelsRef = useRef<HTMLDivElement>(null);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(threadState);
@@ -289,6 +291,11 @@ export default function ThreadComposer ({
       composerInputRef.current?.focus();
     }
   }, []);
+  useLayoutEffect(() => {
+    if (!focusAfterSendRef.current || isInputDisabled) return;
+    focusAfterSendRef.current = false;
+    if (!isMobileTextInputEnvironment()) composerInputRef.current?.focus();
+  }, [isInputDisabled]);
   // A one-shot seed, such as feedback being addressed, joins the new-thread composer's references through the normal draft path.
   useLayoutEffect(() => {
     if (composerTarget.kind !== "new") return;
@@ -312,6 +319,7 @@ export default function ThreadComposer ({
     allowWhileTextInputFocused: true,
   });
   const hasSendableInput = Boolean(trimmedValue || attachments.length || references.length);
+  const willStayInCreate = thread.isDraft && isShiftPressed && hasSendableInput && !isSendDisabled;
   const willAutoCompactOnSend = Boolean(thread.willAutoCompact)
     && hasSendableInput
     && !isSendDisabled
@@ -322,6 +330,7 @@ export default function ThreadComposer ({
       ? "Attaching..."
       : isThreadStateBroken
         ? "Unavailable"
+        : willStayInCreate ? `${sendLabel} (stay in create new thread)`
         : autoCompactSendLabel(sendLabel, willAutoCompactOnSend);
   useEffect(() => {
     onDraftSessionChange?.(editing.session);
@@ -452,10 +461,11 @@ export default function ThreadComposer ({
     wasEditorOpenRef.current = editorState.open;
   }, [activeHarness, editorState.open, loadAvailableModels]);
 
-  const submit = async () => {
+  const submit = async (shiftKey = isShiftPressed) => {
     if (!hasSendableInput || isSendDisabled) {
       return;
     }
+    focusAfterSendRef.current = thread.isDraft && shiftKey;
 
     // Drafts launch from saved references; existing threads carry every attached reference in their next message.
     const sentTodoIds = todoReferences.map(({ id }) => id);
@@ -469,7 +479,8 @@ export default function ThreadComposer ({
     setError("");
     const send = (onThreadLaunched?: WorkbenchSendThreadMessageOptions["onThreadLaunched"]) => onSendMessage(thread.id, input, {
       ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
-      ...(!thread.isDraft && isShiftPressed ? { skipAutoCompact: true } : {}),
+      ...(!thread.isDraft && shiftKey ? { skipAutoCompact: true } : {}),
+      ...(thread.isDraft && shiftKey ? { stayInCreate: true } : {}),
       onThreadLaunched,
     });
     if (!thread.isDraft) {
@@ -491,6 +502,7 @@ export default function ThreadComposer ({
           showError: setError,
         });
       }),
+      { stayInCreate: shiftKey },
     );
   };
 
@@ -536,16 +548,14 @@ export default function ThreadComposer ({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" || event.shiftKey || isComposing) {
-      return;
-    }
-
-    if (isMobileTextInputEnvironment()) {
-      return;
-    }
-
+    const action = getThreadComposerEnterAction({
+      key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey,
+      isComposing: isComposing || event.nativeEvent.isComposing,
+      isMobile: isMobileTextInputEnvironment(), isDraft: thread.isDraft,
+    });
+    if (!action) return;
     event.preventDefault();
-    void submit();
+    void submit(action === "stay");
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -828,7 +838,6 @@ export default function ThreadComposer ({
                     ) : (
                       <ThreadComposerRibbon
                         targetControl={targetControl}
-                        key={`${projectId}:${thread.id}`}
                         modelId={thread.model}
                         agentControl={<ThreadAgentQuickPicker
                           agents={availableAgents}
@@ -896,6 +905,10 @@ export default function ThreadComposer ({
                     {leadingActions}
                     <PrimaryButton
                       type="submit"
+                      onClick={event => {
+                        event.preventDefault();
+                        void submit(event.shiftKey);
+                      }}
                       disabled={!hasSendableInput || isSendDisabled}
                       shape="circle"
                       aria-label={sendButtonLabel}
@@ -904,6 +917,7 @@ export default function ThreadComposer ({
                     >
                       <SendHorizontalIcon size={20} />
                       {willAutoCompactOnSend ? <AutoCompactSendBadge /> : null}
+                      {willStayInCreate ? <SendActionBadge><ListEndIcon size={12} /></SendActionBadge> : null}
                     </PrimaryButton>
                     {trailingActions}
                     {resumeButton}

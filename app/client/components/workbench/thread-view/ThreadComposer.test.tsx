@@ -1,11 +1,24 @@
 /*
- * No production exports. Tests protect snooze/stop availability for live turns and saved questionnaires. Keywords: composer, snooze, stop, questionnaire, lifecycle, test.
+ * No production exports. Protect composer shortcuts and snooze/stop availability.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getThreadComposerStopControlState } from "./thread-composer-controls";
+import { getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
+
+test("draft enter shortcuts distinguish sending, staying and inserting a newline", () => {
+  const input = { key: "Enter", shiftKey: false, ctrlKey: false, isComposing: false, isMobile: false, isDraft: true };
+  assert.equal(getThreadComposerEnterAction(input), "send");
+  assert.equal(getThreadComposerEnterAction({ ...input, ctrlKey: true }), "send");
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true }), null);
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true }), "stay");
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true, isDraft: false }), null);
+  for (const blocked of [{ isComposing: true }, { isMobile: true }, { key: "Escape" }]) {
+    assert.equal(getThreadComposerEnterAction({ ...input, ...blocked }), null);
+    assert.equal(getThreadComposerEnterAction({ ...input, ...blocked, shiftKey: true, ctrlKey: true }), null);
+  }
+});
 
 test("snoozed questionnaires offer stop only after interruption finishes", () => {
   for (const isActiveThread of [true, false]) {

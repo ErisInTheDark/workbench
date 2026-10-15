@@ -1,7 +1,21 @@
 /*
  * Exports:
- * - getThreadComposerStopControlState: derive snooze/stop action, visibility, and availability from live-turn and questionnaire ownership. Keywords: composer, snooze, stop, questionnaire, lifecycle.
+ * - getThreadComposerEnterAction: distinguish draft creation shortcuts from newline and composition input.
+ * - getThreadComposerStopControlState: derive snooze/stop action, visibility, and availability.
  */
+
+export function getThreadComposerEnterAction(input: {
+  key: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  isComposing: boolean;
+  isMobile: boolean;
+  isDraft: boolean;
+}): "send" | "stay" | null {
+  if (input.key !== "Enter" || input.isComposing || input.isMobile) return null;
+  if (!input.shiftKey) return "send";
+  return input.ctrlKey && input.isDraft ? "stay" : null;
+}
 
 export function getThreadComposerStopControlState ({
   hasPendingUserInputRequest,

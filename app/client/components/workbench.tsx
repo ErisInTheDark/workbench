@@ -1185,6 +1185,27 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       ? {
         ...submittedOptions,
         onThreadLaunched: (materializedThread) => {
+          if (options?.stayInCreate) {
+            const current = currentRouteRef.current;
+            const ownsDraft = current.view === "mosaic"
+              ? Boolean(current.mosaicNode && mosaicContainsThreadTarget(current.mosaicNode, thread.id))
+              : isWorkbenchRouteOwnerOfThread(current, thread.id, true)
+                && workbenchClient.mounted?.threadRuntime.getSnapshot().currentThread?.id === thread.id;
+            if (ownsDraft) {
+              const nextId = DraftIdSchema.parse(crypto.randomUUID());
+              threadViewInstanceKeysByThreadIdRef.current.set(nextId,
+                threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id);
+              const nextRoute = controls.continueThreadCreation(DraftIdSchema.parse(thread.id), nextId);
+              if (nextRoute) {
+                workspaceController.removeDraftThreads(thread.id);
+                navigateToRoute(nextRoute, { replace: true });
+              } else {
+                threadViewInstanceKeysByThreadIdRef.current.delete(nextId);
+              }
+            }
+            options.onThreadLaunched?.(materializedThread);
+            return;
+          }
           threadViewInstanceKeysByThreadIdRef.current.set(
             materializedThread.id,
             threadViewInstanceKeysByThreadIdRef.current.get(thread.id) ?? thread.id,

@@ -1046,6 +1046,7 @@ export interface WorkbenchSendThreadMessageOptions {
   onThreadLaunched?: (thread: Pick<ThreadPayload, "id" | "harness">) => void;
   onTurnAdmitted?: (turnId: string) => void;
   selectThread?: boolean;
+  stayInCreate?: boolean;
   skipAutoCompact?: boolean;
   startNewTurn?: boolean;
   workflowIds?: string[];
@@ -1326,6 +1327,7 @@ export interface WorkbenchControls {
   createThreadDraft: (harness: WorkbenchHarness, options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
   createThreadDraftAt: (location: ProjectLocationReference, harness: WorkbenchHarness,
     options?: { select?: boolean; threadId?: DraftId }) => ThreadPayload<DraftId>;
+  continueThreadCreation: (draftId: DraftId, nextDraftId: DraftId) => WorkbenchRoute | null;
   getSelectedThreadDraft: () => WorkbenchThreadDraft | null;
   daemonRuntime: WorkbenchDaemonRuntimeStore;
   /** Show the selected (or default) provider's daemon-pushed limits; the daemon decides when they are reread. */
