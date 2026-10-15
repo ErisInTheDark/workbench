@@ -83,4 +83,13 @@ test("linked selections resolve current definitions and keep saved settings only
   assert.deepEqual(resolveLinkedProfileSelection(profiles, { profileId: "linked", settings: saved }, { harness: "codex" }),
     { kind: "custom", settings: saved });
   assert.equal(resolveLinkedProfileSelection(profiles, { profileId: "gone", settings: null }), null);
+  for (const approvalMode of ["skip", "auto", "approvals"] as const) {
+    const link = { profileId: "linked", settings: saved, approvalMode };
+    assert.deepEqual(resolveLinkedProfileSelection(profiles, link),
+      { kind: "profile", profileId: "linked", settings: current, approvalMode });
+    assert.deepEqual(resolveLinkedProfileSelection([], link),
+      { kind: "custom", settings: saved, approvalMode });
+    assert.deepEqual(resolveLinkedProfileSelection(profiles, link, { harness: "codex" }),
+      { kind: "custom", settings: saved, approvalMode });
+  }
 });

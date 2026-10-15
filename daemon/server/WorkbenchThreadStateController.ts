@@ -768,17 +768,14 @@ export default class WorkbenchThreadStateController {
       && state.newThreadProfile?.settings.harness === slot.harness) {
       selection = state.newThreadProfile;
     }
-    const link = selection?.kind === "profile" ? { profileId: selection.profileId, settings: selection.settings }
+    const link = selection?.kind === "profile" ? selection
       : refresh && !selection && entry?.entryKind === "subagent" && entry.profileId
         ? { profileId: entry.profileId, settings: null } : null;
     if (refresh && link) {
       if (!this.options.readComposerProfiles) throw new Error("The daemon composer profile catalogue is unavailable.");
-      // The approval mode sits beside the profile, so re-resolving the linked definition must keep it.
-      const approvalMode = selection?.approvalMode;
       // A deleted definition, or a linked thread definition whose provider drifted, previews the saved Custom snapshot.
       selection = resolveLinkedProfileSelection((await this.options.readComposerProfiles()).profiles, link,
         slot.kind === "thread" ? { harness: slot.harness } : undefined);
-      if (selection && approvalMode) selection = { ...selection, approvalMode };
     }
     if (!selection || !selection.settings.model.trim()
       && (slot.kind === "thread" || selection.kind !== "custom" || selection.settings.harness !== "opencode")) return null;

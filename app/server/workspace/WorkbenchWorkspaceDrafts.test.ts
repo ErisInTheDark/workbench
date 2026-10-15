@@ -274,14 +274,15 @@ test("references lead the first message and feedback ones travel as addressed fe
 });
 
 test("a linked draft launches with its stored profile's current definition", async context => {
-  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model") });
+  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model"), approvalMode: "skip" });
   const threadId = randomUUID();
   f.handle(async (method, params) => {
     if (method === "profiles/read") return { profiles: [definition("profile-1", settings(model.id, "opencode"))] };
     if (method === "models/list") return { data: [model] };
     assert.equal(method, "thread/launch");
     const request = WorkbenchThreadLaunchRequestSchema.parse(params);
-    assert.deepEqual(request.profile, { kind: "profile", profileId: "profile-1", settings: settings(model.id, "opencode") });
+    assert.deepEqual(request.profile, { kind: "profile", profileId: "profile-1", settings: settings(model.id, "opencode"), approvalMode: "skip" });
+    assert.deepEqual(f.draft().selection, request.profile);
     return { phase: "accepted", launchId: request.launchId, threadId, turnId: randomUUID() };
   });
   assert.deepEqual(await f.owner.launch(f.draftId, f.draft().revision), { threadId, harness: "opencode" });
@@ -289,14 +290,14 @@ test("a linked draft launches with its stored profile's current definition", asy
 });
 
 test("a draft whose linked profile is gone launches with its saved settings as Custom", async context => {
-  const f = await fixture(context, { kind: "profile", profileId: "gone", settings: settings(model.id) });
+  const f = await fixture(context, { kind: "profile", profileId: "gone", settings: settings(model.id), approvalMode: "auto" });
   const threadId = randomUUID();
   f.handle(async (method, params) => {
     if (method === "profiles/read") return { profiles: [] };
     if (method === "models/list") return { data: [model] };
     assert.equal(method, "thread/launch");
     const request = WorkbenchThreadLaunchRequestSchema.parse(params);
-    assert.deepEqual(request.profile, { kind: "custom", settings: settings(model.id) });
+    assert.deepEqual(request.profile, { kind: "custom", settings: settings(model.id), approvalMode: "auto" });
     return { phase: "accepted", launchId: request.launchId, threadId, turnId: randomUUID() };
   });
   assert.deepEqual(await f.owner.launch(f.draftId, f.draft().revision), { threadId, harness: "codex" });
@@ -351,7 +352,7 @@ test("a Custom draft cannot launch before its provider reports a model", async c
 });
 
 test("a submitting retry replays the recorded applied selection", async context => {
-  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model") });
+  const f = await fixture(context, { kind: "profile", profileId: "profile-1", settings: settings("stale model"), approvalMode: "auto" });
   const threadId = randomUUID();
   let firstProfile: unknown = null;
   f.handle(async (method, params) => {
@@ -365,7 +366,8 @@ test("a submitting retry replays the recorded applied selection", async context 
   await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), error =>
     error instanceof WorkbenchRpcRequestInterruptedError && error.dispatched);
   assert.equal(f.draft().phase, "submitting");
-  assert.deepEqual(firstProfile, { kind: "profile", profileId: "profile-1", settings: settings(model.id) });
+  assert.deepEqual(firstProfile, { kind: "profile", profileId: "profile-1", settings: settings(model.id), approvalMode: "auto" });
+  assert.deepEqual(f.draft().selection, firstProfile);
   f.handle(async (method, params) => {
     if (method === "thread/launch/read") return { state: null };
     assert.equal(method, "thread/launch");

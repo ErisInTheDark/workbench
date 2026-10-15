@@ -1276,24 +1276,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             ? { kind: "new-thread" as const, projectId: ownerProjectId }
             : { kind: "draft" as const, projectId: ownerProjectId, draftId,
               harness: draftThread?.harness ?? defaultProviderKey };
-          const selection = draftProfiles.getSelection(slot);
-          if (selection.kind === "profile" && selection.settings) {
-            return { kind: "profile" as const, profileId: selection.profileId,
-              settings: selection.settings };
-          }
-          if (selection.kind === "custom" && selection.settings) {
-            return { kind: "custom" as const, settings: selection.settings };
-          }
-          return {
-            kind: "custom" as const,
-            settings: {
-              agentPath: draftThread?.agentPath ?? null, agentSource: null,
-              harness: draftThread?.harness ?? defaultProviderKey, model: draftThread?.model ?? "",
-              reasoningEffort: draftThread?.reasoningEffort ?? null,
-              serviceTier: draftThread?.serviceTier === "fast" ? "fast" as const : null,
-              contextWindowTokens: draftThread?.contextWindowTokens ?? null,
-            },
-          };
+          return draftProfiles.getDraftSelection(slot, {
+            agentPath: draftThread?.agentPath ?? null, agentSource: null,
+            harness: draftThread?.harness ?? defaultProviderKey, model: draftThread?.model ?? "",
+            reasoningEffort: draftThread?.reasoningEffort ?? null,
+            serviceTier: draftThread?.serviceTier === "fast" ? "fast" : null,
+            contextWindowTokens: draftThread?.contextWindowTokens ?? null,
+          });
         },
         materialize: () => {
           const current = currentRouteRef.current;

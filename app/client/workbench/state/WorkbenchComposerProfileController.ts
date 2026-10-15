@@ -296,6 +296,12 @@ export default class WorkbenchComposerProfileController {
   getApprovalMode(slot: WorkbenchComposerProfileSlot): WorkbenchApprovalMode {
     return resolveApprovalMode(this.getSelection(slot));
   }
+  getDraftSelection(slot: WorkbenchComposerProfileSlot, fallbackSettings: WorkbenchComposerSettings): WorkbenchComposerProfileTargetSelection {
+    const selection = this.getSelection(slot);
+    return withApprovalMode(selection.kind === "profile"
+      ? { kind: "profile", profileId: selection.profileId, settings: selection.settings }
+      : { kind: "custom", settings: selection.settings ?? fallbackSettings }, selection.approvalMode);
+  }
   /**
    * Change only the slot's approval mode, keeping its profile and settings. A slot still previewing the
    * provider default has nothing to store the mode beside, so it first adopts the default model.

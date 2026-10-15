@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - copyComposerSettings: copy only profile-owned settings.
- * - resolveLinkedProfileSelection: resolve a stored profile link against current definitions, falling back to saved Custom settings.
+ * - resolveLinkedProfileSelection: resolve current profile settings or saved Custom fallback while retaining the target's approval mode.
  * - WorkbenchThreadCreationProfileSchema: validate creation sources before provider forwarding.
  * - contextCompactionThreshold: reserve fixed or proportional context headroom.
  * - contextWindowFloor: smallest selectable window of a model context capability.
@@ -11,6 +11,7 @@
 import { z } from "zod";
 import type {
   WorkbenchComposerProfile,
+  WorkbenchApprovalMode,
   WorkbenchComposerProfileTargetSelection,
   WorkbenchComposerSettings,
   WorkbenchHarness,
@@ -32,14 +33,15 @@ export function copyComposerSettings(settings: WorkbenchComposerSettings): Workb
 // only survive as Custom when the definition is gone or its provider no longer fits.
 export function resolveLinkedProfileSelection(
   profiles: readonly WorkbenchComposerProfile[],
-  link: { profileId: string; settings: WorkbenchComposerSettings | null },
+  link: { profileId: string; settings: WorkbenchComposerSettings | null; approvalMode?: WorkbenchApprovalMode },
   constraint?: { harness?: WorkbenchHarness },
 ): WorkbenchComposerProfileTargetSelection | null {
   const definition = profiles.find((profile) => profile.id === link.profileId);
+  const approval = link.approvalMode === undefined ? {} : { approvalMode: link.approvalMode };
   if (definition && (!constraint?.harness || definition.harness === constraint.harness)) {
-    return { kind: "profile", profileId: link.profileId, settings: copyComposerSettings(definition) };
+    return { kind: "profile", profileId: link.profileId, settings: copyComposerSettings(definition), ...approval };
   }
-  return link.settings ? { kind: "custom", settings: link.settings } : null;
+  return link.settings ? { kind: "custom", settings: link.settings, ...approval } : null;
 }
 
 export const WorkbenchThreadCreationProfileSchema = z.discriminatedUnion("kind", [

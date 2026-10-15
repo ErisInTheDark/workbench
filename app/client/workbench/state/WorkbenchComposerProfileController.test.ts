@@ -174,6 +174,36 @@ test("the approval mode persists on a default-previewing slot and survives later
   assert.equal(controller.getApprovalMode(slot), "skip");
 });
 
+test("draft snapshots retain approval choices through saves and a replacement controller", async context => {
+  const { controller, targets, persistence } = await createController([profile()]);
+  context.after(() => controller.dispose());
+  const slot: WorkbenchComposerProfileSlot = {
+    kind: "draft", projectId: fixtureIdentityValues.ProjectId["project-a"],
+    draftId: fixtureIdentityValues.DraftId["draft-a"], harness: "codex",
+  };
+  assert.deepEqual(controller.getDraftSelection(slot, CODEX_SETTINGS), { kind: "custom", settings: CODEX_SETTINGS });
+  for (const kind of ["custom", "profile"] as const) {
+    for (const approvalMode of ["skip", "auto", "approvals"] as const) {
+      if (kind === "profile") controller.selectProfile(slot, "profile-a");
+      else await controller.selectCustom(slot, CODEX_SETTINGS);
+      await controller.waitForSelection(slot);
+      await controller.setApprovalMode(slot, approvalMode, { harness: "codex", loadModels: async () => [] });
+      const snapshot = controller.getDraftSelection(slot, { ...CODEX_SETTINGS, model: "unused" });
+      assert.equal(snapshot.kind, kind);
+      assert.equal(snapshot.approvalMode, approvalMode);
+      await targets.write(slot, snapshot);
+      const reopened = new WorkbenchComposerProfileController();
+      try {
+        await reopened.initializePersistence(persistence);
+        await reopened.initializeTargetPersistence(targets);
+        await reopened.loadSelection(slot);
+        assert.equal(reopened.getApprovalMode(slot), approvalMode);
+        assert.deepEqual(reopened.getDraftSelection(slot, CODEX_SETTINGS), snapshot);
+      } finally { reopened.dispose(); }
+    }
+  }
+});
+
 test("missing daemon selection never resolves settings from a raw thread", async () => {
   const { controller } = await createController();
   const slot = { kind: "thread" as const, harness: "codex" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-a"), threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread") };

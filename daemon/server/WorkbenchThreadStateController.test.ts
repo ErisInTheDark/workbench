@@ -3752,7 +3752,7 @@ test("profile admission publishes only accepted candidates and orders later edit
   const persistence = new MemoryThreadStatePersistence();
   const usage: Array<{ id: string; at: number }> = [];
   const modelUsage: Array<{ harness: string; model: string; at: number }> = [];
-  const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" } };
+  const original = { kind: "profile" as const, profileId: "named", settings: { ...EMPTY_CODEX_SETTINGS, model: "old" }, approvalMode: "skip" as const };
   const latest = { ...original.settings, model: "new" };
   const controller = new WorkbenchThreadStateController({
     storageRoot: "profile-admission", threadStateStore: persistence,
@@ -3770,11 +3770,13 @@ test("profile admission publishes only accepted candidates and orders later edit
   const signal = new AbortController().signal;
   const rejected = await controller.withComposerProfileAdmission(slot, async ({ selection }) => {
     assert.equal(selection.settings.model, latest.model);
+    assert.equal(selection.approvalMode, "skip");
     return { accepted: false, result: "not sent" };
   }, signal);
   assert.equal(rejected.accepted, false);
   assert.deepEqual(await controller.readComposerProfileSnapshot(slot), original);
   assert.deepEqual((await controller.readComposerProfileTarget(slot))?.settings, latest);
+  assert.equal((await controller.readComposerProfileSnapshot(slot))?.approvalMode, "skip");
   await assert.rejects(controller.withComposerProfileAdmission(slot, async () => {
     throw new Error("Native start failed");
   }, signal), /Native start failed/);
@@ -3799,12 +3801,47 @@ test("profile admission publishes only accepted candidates and orders later edit
     return { accepted: true, result: "sent again" };
   }, signal);
   await entered;
-  const edited = { kind: "custom" as const, settings: { ...latest, model: "user-edit" } };
+  const edited = { kind: "custom" as const, settings: { ...latest, model: "user-edit" }, approvalMode: "auto" as const };
   const edit = controller.setComposerProfileTarget(slot, edited);
   await controller.setTitle(slot.projectId, slot.harness, slot.threadId, "Event update");
   release();
   await Promise.all([admission, edit]);
   assert.deepEqual(await controller.readComposerProfileTarget(slot), edited);
+});
+
+test("approval selections survive provider observations, accepted turns and controller recreation", async context => {
+  const persistence = new MemoryThreadStatePersistence();
+  const create = () => new WorkbenchThreadStateController({
+    storageRoot: "approval-selection", threadStateStore: persistence,
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [],
+    readComposerProfiles: async () => ({ profiles: [{
+      ...EMPTY_CODEX_SETTINGS, model: "latest", id: "named", name: "Named",
+      createdAt: 1, updatedAt: 1, scope: { kind: "global" as const },
+    }] }),
+  });
+  let controller = create();
+  context.after(() => controller.dispose());
+  const slot = { kind: "thread" as const, projectId: fixtureProjectIds["project"], harness: "codex" as const, threadId: fixtureThreadIds["existing"] };
+  await controller.ensureProviderEntry(slot.projectId, pinnedRecord("existing", "Existing"));
+  for (const approvalMode of ["skip", "auto", "approvals"] as const) {
+    const selection = {
+      kind: "profile" as const, profileId: "named",
+      settings: { ...EMPTY_CODEX_SETTINGS, model: "saved" }, approvalMode,
+    };
+    await controller.setComposerProfileTarget(slot, selection);
+    await controller.ensureProviderEntry(slot.projectId, pinnedRecord("existing", "Observed"));
+    assert.deepEqual(await controller.readComposerProfileSnapshot(slot), selection);
+    const accepted = await controller.withComposerProfileAdmission(slot, async ({ selection: applied }) => {
+      assert.equal(applied.settings.model, "latest");
+      assert.equal(applied.approvalMode, approvalMode);
+      return { accepted: true, result: "sent" };
+    }, new AbortController().signal);
+    assert.equal(accepted.profilePersistenceError, null);
+    await controller.dispose();
+    controller = create();
+    assert.equal((await controller.readComposerProfileSnapshot(slot))?.approvalMode, approvalMode);
+    assert.equal((await controller.readComposerProfileTarget(slot))?.approvalMode, approvalMode);
+  }
 });
 
 test("usage failure retains accepted success and still saves the applied profile", async (context) => {
