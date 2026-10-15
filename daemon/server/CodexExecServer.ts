@@ -3,7 +3,8 @@
  * - CodexExecServerOptions: inject the owned process launch, retirement, termination-grace and Linux relay boundaries.
  * - CodexExecRootEvent: a command's sandboxed root process appeared, or the command settled.
  * - default CodexExecServer: retain one pinned native sandbox executor, isolate commands, stop them through the
- *   executor (an acknowledged terminate ends a command), terminate live commands before retiring, and report each
+ *   executor (an acknowledged terminate ends a command), replace a failed executor process on the next command
+ *   without replaying, terminate live commands before retiring, and report each
  *   command's root process so a later generation can reap what a hard kill left behind.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -12,7 +13,7 @@ import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import {
-  CodexExecMessageSchema, type CodexExecRequest, type CodexExecResult,
+  CODEX_EXEC_AUDIT_METHODS, readCodexExecFrame, type CodexExecRequest, type CodexExecResult,
 } from "./codex-exec-protocol";
 import resolveCodexExecutable from "./codex-executable";
 import { readExecRootMarker, withExecRootMarker } from "./exec/exec-root-marker";
@@ -22,6 +23,7 @@ import { createSpawnOptions, killProcessTreeAsync, logError, lowerAgentProcessPr
 
 const OUTPUT_BYTES = 1024 * 1024;
 const FRAME_BYTES = 4 * 1024 * 1024;
+const METHOD_NOT_FOUND = -32601;
 const LOOPBACK_DOMAINS = {
   "127.0.0.1": "allow",
   "::1": "allow",
@@ -100,14 +102,20 @@ interface Session {
   requests: Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>;
   commands: Map<string, Command>;
   failure?: Error;
+  /** Set once this session's process tree is being retired; its close is then expected. */
+  retirement?: Promise<void>;
 }
 
 export default class CodexExecServer {
   /** Identifies this executor generation's commands in persisted root records. */
   readonly generation: string = randomUUID();
+  /** The session new commands use; a failed session is replaced by the next command. */
   private session?: Session;
+  /** Every session whose process tree is still owned, including failed ones still retiring. */
+  private readonly sessions = new Set<Session>();
   private retirement?: Promise<void>;
   private disposed = false;
+  private readonly reportedNotifications = new Set<string>();
   private admission = new AbortController();
   private requestId = 0;
   private readonly executions = new Set<Promise<unknown>>();
@@ -150,7 +158,9 @@ export default class CodexExecServer {
     for (const command of session.commands.values()) command.reject(error);
     session.commands.clear();
     this.reportError(error.message.slice(0, 500));
-    void this.dispose().catch(retirementError => {
+    // Commands are never replayed; the next command starts a fresh executor.
+    if (this.session === session) this.session = undefined;
+    void this.retireSession(session).catch(retirementError => {
       this.reportError(`Codex executor retirement failed: ${String(retirementError).slice(0, 400)}`);
     });
   }
@@ -178,8 +188,9 @@ export default class CodexExecServer {
   }
 
   private receive(session: Session, line: string) {
-    const message = CodexExecMessageSchema.parse(JSON.parse(line));
-    if ("id" in message) {
+    const frame = readCodexExecFrame(line);
+    if (frame.kind === "response") {
+      const { message } = frame;
       const request = session.requests.get(message.id);
       if (!request) return;
       session.requests.delete(message.id);
@@ -187,6 +198,23 @@ export default class CodexExecServer {
       else request.resolve(message.result);
       return;
     }
+    if (frame.kind === "request") {
+      this.reportError(`Codex executor asked for unsupported ${frame.method.slice(0, 100)}; declined.`);
+      session.child.stdin.write(`${JSON.stringify({
+        jsonrpc: "2.0", id: frame.id, error: { code: METHOD_NOT_FOUND, message: "Workbench does not handle this request." },
+      })}\n`, error => {
+        if (error) this.fail(session, error);
+      });
+      return;
+    }
+    if (frame.kind === "notification") {
+      if (!CODEX_EXEC_AUDIT_METHODS.has(frame.method) && !this.reportedNotifications.has(frame.method)) {
+        this.reportedNotifications.add(frame.method);
+        this.reportError(`Codex executor sent unsupported ${frame.method.slice(0, 100)} notifications; ignoring them.`);
+      }
+      return;
+    }
+    const message = frame.event;
     const processId = message.params.processId;
     const command = session.commands.get(processId);
     if (!command) return;
@@ -227,9 +255,10 @@ export default class CodexExecServer {
       requests: new Map(), commands: new Map(),
     };
     this.session = session;
+    this.sessions.add(session);
     session.closed = new Promise(resolve => {
       child.once("close", () => {
-        if (!this.disposed) {
+        if (!session.retirement) {
           this.fail(session, new Error("Codex executor connection closed; commands were not replayed."));
         }
         resolve();
@@ -255,7 +284,8 @@ export default class CodexExecServer {
         }
         if (Buffer.byteLength(pending) > FRAME_BYTES) throw new Error("Codex executor exceeded its message size limit.");
       } catch (error) {
-        this.fail(session, new Error("Invalid Codex executor message.", { cause: error }));
+        const cause = error instanceof Error ? error.message : String(error);
+        this.fail(session, new Error(`Invalid Codex executor message: ${cause.slice(0, 400)}`, { cause: error }));
       }
     });
     session.ready = this.request(session, "initialize", { clientName: "workbench" }).then(result => {
@@ -387,13 +417,19 @@ export default class CodexExecServer {
 
   dispose(): Promise<void> {
     this.disposed = true;
-    this.retirement ??= Promise.resolve().then(() => this.retire());
+    this.session = undefined;
+    this.retirement ??= Promise.all([...this.sessions].map(session => this.retireSession(session))).then(() => undefined);
     return this.retirement;
   }
 
-  private async retire() {
-    const session = this.session;
-    if (!session) return;
+  private retireSession(session: Session) {
+    session.retirement ??= Promise.resolve()
+      .then(() => this.retireTree(session))
+      .finally(() => this.sessions.delete(session));
+    return session.retirement;
+  }
+
+  private async retireTree(session: Session) {
     // The sandbox runner owns each command's job; only it can end the command's tree, so ask before killing.
     const live = [...session.commands].filter(([, command]) => command.addressable).map(([processId]) => processId);
     if (live.length && !session.failure) {

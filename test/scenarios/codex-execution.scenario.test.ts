@@ -1,10 +1,14 @@
-/* No exports. Explicit no-model scenario for the real persistent Codex sandbox executor. */
+/* No exports. Explicit no-model scenarios for the real persistent Codex sandbox executor and its Linux loopback relay. */
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer, type AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
+import NativeArtifactStage from "../../shared/process/NativeArtifactStage";
 import CodexExecServer from "../../daemon/server/CodexExecServer";
+import SandboxRelayBroker from "../../daemon/server/exec/SandboxRelayBroker";
 import type { CodexExecRequest } from "../../daemon/server/codex-exec-protocol";
 import IsolatedWorkbench from "./IsolatedWorkbench";
 
@@ -117,6 +121,53 @@ public static class DesktopProof {
     }
   } finally {
     await executor.dispose();
+    await fixture.close();
+  }
+});
+
+test("Linux managed-network commands reach host loopback services over raw TCP through the relay", { skip: process.platform !== "linux" }, async t => {
+  const repositoryRoot = path.resolve(process.cwd(), "..");
+  const fixture = await IsolatedWorkbench.create(repositoryRoot, t.signal);
+  const echo = createServer(socket => socket.pipe(socket));
+  echo.listen(0, "127.0.0.1");
+  await once(echo, "listening");
+  const port = (echo.address() as AddressInfo).port;
+  const errors: string[] = [];
+  const relayBroker = new SandboxRelayBroker({
+    root: repositoryRoot,
+    stage: new NativeArtifactStage({ runtimeRoot: fixture.root }),
+    reportError: message => errors.push(message),
+  });
+  const executor = new CodexExecServer({
+    cwd: fixture.project, relayBroker, reportError: message => errors.push(message),
+    env: { ...process.env, CODEX_HOME: path.join(fixture.root, "codex") },
+  });
+  try {
+    const execute = (command: string[]) => executor.execute({
+      command, cwd: fixture.project, workspaceRoots: [fixture.project],
+      permissions: {
+        type: "managed", network: "restricted",
+        file_system: {
+          type: "restricted",
+          entries: [
+            { path: { type: "special", value: { kind: "root" } }, access: "read" },
+            { path: { type: "path", path: pathToFileURL(fixture.project).href }, access: "write" },
+          ],
+        },
+      },
+      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false,
+    }, t.signal);
+    // A plain socket client with no proxy awareness, like a database driver or ws client.
+    const client = `const s=require("node:net").connect(${port},"127.0.0.1",()=>s.end("raw-ping"));let r="";s.on("data",d=>r+=d);s.on("close",()=>{console.log(r);process.exit(r==="raw-ping"?0:1)});s.on("error",e=>{console.error(e.message);process.exit(2)})`;
+    const raw = await execute([process.execPath, "-e", client]);
+    assert.equal(raw.exitCode, 0, `${raw.stderr}\n${errors.join("\n")}`);
+    assert.equal(raw.stdout.trim(), "raw-ping");
+    const after = await execute([process.execPath, "-e", "console.log('ok')"]);
+    assert.equal(after.stdout.trim(), "ok", after.stderr);
+  } finally {
+    await executor.dispose();
+    await relayBroker.dispose();
+    echo.close();
     await fixture.close();
   }
 });

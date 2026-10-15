@@ -11,26 +11,35 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?:
   if (typeof autoInitialize === "string") autoInitialize = true;
   const calls: { id: number; method: string; params: { processId: string } }[] = [];
   const waiting: (() => void)[] = [];
-  const child = Object.assign(new ChildProcess(), {
-    pid: 123, exitCode: null, signalCode: null,
-    stdout: new PassThrough(), stderr: new PassThrough(),
-    stdin: new Writable({ write(chunk, _encoding, callback) {
-      const call = JSON.parse(chunk.toString());
-      calls.push(call);
-      if (call.method === "initialize" && autoInitialize) reply(call.id, { sessionId: "test" });
-      for (const wake of waiting.splice(0)) wake();
-      callback();
-    } }),
-  }) as ChildProcessWithoutNullStreams;
+  const children = new Map<number, ChildProcessWithoutNullStreams>();
+  const spawnChild = () => {
+    const spawned = Object.assign(new ChildProcess(), {
+      pid: 123 + children.size, exitCode: null, signalCode: null,
+      stdout: new PassThrough(), stderr: new PassThrough(),
+      stdin: new Writable({ write(chunk, _encoding, callback) {
+        const call = JSON.parse(chunk.toString());
+        calls.push(call);
+        if (call.method === "initialize" && autoInitialize) reply(call.id, { sessionId: "test" });
+        for (const wake of waiting.splice(0)) wake();
+        callback();
+      } }),
+    }) as ChildProcessWithoutNullStreams;
+    children.set(spawned.pid!, spawned);
+    return spawned;
+  };
+  // The executor process the next frames come from; a failed executor is replaced by a new one.
+  let child = spawnChild();
+  let spawns = 0;
   function send(message: object) { child.stdout.push(`${JSON.stringify(message)}\n`); }
   function reply(id: number, result: object) { send({ jsonrpc: "2.0", id, result }); }
   function reject(id: number) { send({ jsonrpc: "2.0", id, error: { code: -32602, message: "command rejected" } }); }
-  async function next(method: string, index = 0) {
-    while (!calls.filter(call => call.method === method)[index]) {
+  async function nextWhere(matches: (call: typeof calls[number]) => boolean, index = 0) {
+    while (!calls.filter(matches)[index]) {
       await new Promise<void>(resolve => waiting.push(resolve));
     }
-    return calls.filter(call => call.method === method)[index]!;
+    return calls.filter(matches)[index]!;
   }
+  const next = (method: string, index = 0) => nextWhere(call => call.method === method, index);
   function event(method: string, processId: string, data: object = {}) {
     send({ method, params: { processId, seq: 1, ...data } });
   }
@@ -44,8 +53,12 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?:
   let releaseGrace!: () => void;
   const grace = new Promise<void>(resolve => { releaseGrace = resolve; });
   const owner = new CodexExecServer({
-    cwd: process.cwd(), spawnProcess: () => child,
-    retireProcess: async () => { retired++; child.emit("close", 0); },
+    cwd: process.cwd(),
+    spawnProcess: () => {
+      if (spawns++) child = spawnChild();
+      return child;
+    },
+    retireProcess: async pid => { retired++; children.get(pid!)?.emit("close", 0); },
     reportError: message => errors.push(message),
     terminationGrace: () => grace,
     platform,
@@ -55,7 +68,10 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?:
     command: ["test"], cwd: process.cwd(), permissions: { type: "disabled" },
     workspaceRoots: [process.cwd()], windowsSandboxLevel: "elevated", windowsSandboxPrivateDesktop: true,
   };
-  return { owner, child, next, reply, reject, event, finish, request, errors, releaseGrace, retired: () => retired };
+  return {
+    owner, get child() { return child; }, send, next, nextWhere, reply, reject, event, finish, request, errors, releaseGrace,
+    retired: () => retired, spawns: () => spawns,
+  };
 }
 
 test("concurrent commands retain interleaved output through exit until streams close", async t => {
@@ -238,16 +254,53 @@ test("stderr without a root marker is passed through untouched", async t => {
   assert.equal((await command).stderr, "<!-- not ours");
 });
 
-test("transport loss rejects active commands and does not replay them", async () => {
+test("transport loss rejects active commands without replaying them, and the next command gets a fresh executor", async t => {
   const f = fixture();
+  t.after(() => f.owner.dispose());
   const command = f.owner.execute(f.request, new AbortController().signal);
   const rejected = assert.rejects(command, /connection closed/);
   await f.next("process/start");
   f.child.emit("close", 1);
   await rejected;
-  await f.owner.dispose();
-  await assert.rejects(f.owner.execute(f.request, new AbortController().signal), /disposed/);
   assert.ok(f.errors.some(message => message.includes("not replayed")));
+
+  const next = f.owner.execute(f.request, new AbortController().signal);
+  const start = await f.next("process/start", 1);
+  assert.equal(f.spawns(), 2);
+  f.reply(start.id, { processId: start.params.processId });
+  f.finish(start.params.processId, "recovered");
+  assert.equal((await next).stdout, "recovered");
+});
+
+test("Codex network audit notifications and unsupported requests leave running commands alone", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  f.send({
+    jsonrpc: "2.0", method: "network/policyDecision",
+    params: { processId: start.params.processId, decision: "allow", host: "127.0.0.1", port: 5432, protocol: "https_connect" },
+  });
+  f.send({ jsonrpc: "2.0", id: 9, method: "network/policyRequest", params: {} });
+  const declined = await f.nextWhere(call => call.id === 9 && call.method === undefined) as unknown as { error: { code: number } };
+  assert.equal(declined.error.code, -32601);
+  f.finish(start.params.processId, "still running");
+  assert.equal((await command).stdout, "still running");
+  assert.equal(f.spawns(), 1);
+  assert.equal(f.errors.some(message => message.includes("policyDecision")), false);
+});
+
+test("a malformed frame fails only its executor and reports which frame and field broke", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const command = f.owner.execute(f.request, new AbortController().signal);
+  const rejected = assert.rejects(command, /Invalid Codex executor message: process\/output/u);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  f.event("process/output", start.params.processId, { stream: "stdout", chunk: "not base64!" });
+  await rejected;
+  assert.ok(f.errors.some(message => /process\/output: .*chunk/u.test(message)));
 });
 
 test("explicit disposal retires starting commands and waits for the owned tree", async () => {
