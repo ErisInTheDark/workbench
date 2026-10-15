@@ -42,7 +42,9 @@ export default function WorkbenchGitPeerTransferButton({ location, peer: address
     : global.gitPeerSyncMode;
   const alternate: GitPeerSyncMode = defaultMode === "merge" ? "rebase" : "merge";
   const busy = snapshot.busy?.peerKey === `${address.daemonId}/${address.projectId}` && snapshot.busy.action === action;
-  const fastForward = action === "pull" && peer?.state === "current" && peer.ahead === 0 && peer.behind > 0;
+  const fastForward = peer?.state === "current" && (action === "pull"
+    ? peer.ahead === 0 && peer.behind > 0
+    : peer.behind === 0 && peer.ahead > 0);
   const selected = busy ? snapshot.busy!.mode : fastForward ? "fastForward" : shift ? alternate : defaultMode;
   const available = preferences.schemaVersion >= appStateReleases.gitPeerSyncMode.version && project !== null;
   const disabled = !available || !state || !peer || peer.state !== "current" || snapshot.busy !== null;
