@@ -6,32 +6,32 @@
  * - normalizeSubagentProviderLifecycle: resolve subagent lifecycle defaults.
  * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, item-owned activity time, and provider notifications.
  */
-import { normalizeThreadTitle } from "./lib/thread-bootstrap";
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
-import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchGitArcLifecycleState, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
+import { normalizeThreadTitle } from "./lib/thread-bootstrap";
+import type { GitArcLifecycleState as RepoGitArcLifecycleState, GitArcPlanState as RepoGitArcPlanState } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 
-import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import {
+    ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
+    type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId,
+} from "workbench-shared/workbench/identity";
+import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
+import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
+import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
+import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import WorkbenchThreadStateController, { type WorkbenchObservedLifecycleEvent, type WorkbenchObservedThreadEntry, type WorkbenchThreadGitArcSnapshot, type WorkbenchThreadReconciliationFailure } from "./WorkbenchThreadStateController";
 import WorkbenchThreadStateStore, {
-  type WorkbenchThreadStateStoreDatabase,
+    type WorkbenchThreadStateStoreDatabase,
 } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoordinator";
-import type { WorkbenchGitArcActiveClaim } from "./WorkbenchGitArcFeature";
-import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
-import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import {
-  ProjectIdSchema, ThreadReferenceSchema, TurnReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema,
-  type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId,
-} from "workbench-shared/workbench/identity";
-import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
-import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
-import type WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
 import { isPathWithinRoot } from "./lib/project";
+import type { NativeTranscriptIdentityOwners } from "./thread-identity-transcript-mapping";
 
 interface ProjectRecord { id: ProjectId; rootPath: string }
 interface ProjectResolution { cwd: string; project: ProjectRecord }
@@ -393,7 +393,7 @@ export default class WorkbenchThreadStateFeature {
         const expectedCurrentTitle = typeof params.currentTitle === "string" ? params.currentTitle : null;
         if (expectedCurrentTitle !== (currentTitle || null)) {
           throw new Error(currentTitle
-            ? `Thread title mismatch. Current title: ${JSON.stringify(currentTitle)}. Retry with currentTitle set to this exact text.`
+            ? `Thread title mismatch. Current title: ${JSON.stringify(currentTitle)}, maybe set by user. Retry with corrected current title if change required.`
             : "Thread title mismatch. No current title is set. Retry without currentTitle.");
         }
         await this.setProviderThreadTitle(resolved.harness, resolved.thread.id, title, resolved.cwd);
