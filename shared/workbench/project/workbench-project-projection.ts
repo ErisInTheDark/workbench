@@ -31,7 +31,7 @@ import { getWorkbenchThreadFolderKey } from "workbench-shared/workbench/thread/t
 import { DraftIdSchema, FolderIdSchema } from "workbench-shared/workbench/identity";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import {
-  getWorkbenchHomeThreadKey, projectWorkbenchHomeThreadList,
+  getWorkbenchHomeThreadKey, projectWorkbenchHomeThreadList, partitionSnoozedThreadItems,
   type WorkbenchHomeThreadDisplayItem, type WorkbenchHomeThreadDisplayOrder,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { sidebarRowKey, type WorkbenchThreadSidebarRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
@@ -269,13 +269,15 @@ export function projectWorkbenchThreadMembership(
   const item = (value: WorkbenchHomeThreadDisplayItem): WorkspaceThreadPlacementItem => value.itemKind === "folder"
     ? { kind: "folder", projectId: value.projectId, folder: value.folder, keys: value.threadKeys }
     : { kind: "thread", key: value.entry.threadKey };
+  const snoozed = partitionSnoozedThreadItems(list.snoozedItems);
   return {
     members: rows.map(projectWorkspaceThreadMember),
     placement: {
       main: list.mainEntries.map(entry => entry.threadKey),
       archived: list.archivedEntries.map(entry => entry.threadKey),
       pinned: list.pinnedItems.map(item),
-      snoozed: list.snoozedItems.map(item),
+      snoozed: snoozed.snoozedItems.map(item),
+      working: snoozed.workingEntries.map(entry => entry.threadKey),
       settled: list.settledItems.map(item),
     },
     folders: {

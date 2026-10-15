@@ -51,7 +51,7 @@ test("display owner applies priority semantics and rejects settled draft placeme
   assert.equal(setWorkbenchThreadEntryDisplaySection(entry, "settled"), null);
 });
 
-test("display priority cannot snooze provider-owned thread activity", () => {
+test("display priority snoozes working threads but rejects idle claims and live approvals", () => {
   const providerEntry = parseWorkbenchThreadStateEntry({
     activityAt: 1,
     entryKind: "thread",
@@ -67,12 +67,22 @@ test("display priority cannot snooze provider-owned thread activity", () => {
   });
   assert.ok(providerEntry.entryKind === "thread");
   if (providerEntry.entryKind !== "thread") return;
-  assert.equal(setWorkbenchThreadEntryPriority(providerEntry, "snoozed"), null);
+  assert.ok(setWorkbenchThreadEntryPriority(providerEntry, "snoozed"));
   assert.ok(setWorkbenchThreadEntryPriority(providerEntry, "pinned"));
   assert.ok(setWorkbenchThreadEntryPriority({
     ...providerEntry,
     lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
   }, "snoozed"));
+  assert.equal(setWorkbenchThreadEntryPriority({
+    ...providerEntry,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "approval", settled: false },
+  }, "snoozed"), null);
+  assert.equal(setWorkbenchThreadEntryPriority({
+    ...providerEntry,
+    lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
+      intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
+  }, "snoozed"), null);
 });
 
 test("display owner clone can replace order without changing its source", () => {

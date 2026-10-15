@@ -40,6 +40,30 @@ function seedIdentities(database: Database.Database, projectId: keyof typeof fix
   }).threadId);
 }
 
+test("agent completion intent round-trips without completing working or pending-input threads", () => {
+  const database = openDatabase();
+  try {
+    const [threadId] = seedIdentities(database, "project", "intent");
+    assert.ok(threadId);
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    for (const agentStatus of ["completed", "blocked"] as const) {
+      const lifecycles: WorkbenchThreadLifecycle[] = [
+        { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus } },
+        { kind: "needsAttention", reason: "pendingInput", settled: false, requestKey: "question", agent: { agentStatus } },
+      ];
+      for (const lifecycle of lifecycles) {
+        repository.writeRecords([{
+          entryKind: "thread", identity: { harness: "codex", threadId }, title: "Intent", activityAt: 1,
+          lifecycle, metadata: { archived: false, pinned: false, snoozed: false },
+          profile: null, providerObserved: true, settledAt: null, gitHistoryCleanedAt: null,
+          mcpGeneration: null, snoozedUntil: null,
+        }]);
+        assert.deepEqual(repository.readProject(testProjectIds.project).records[0]?.lifecycle, lifecycle);
+      }
+    }
+  } finally { database.close(); }
+});
+
 test("navigation summaries preserve lifecycle counts and pinned title projection", () => {
   const database = openDatabase();
   try {

@@ -38,6 +38,19 @@ const completed: typeof stopped = {
   lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
 };
 
+test("working sidebar rows offer snooze even while holding collision claims", () => {
+  const working: typeof stopped = {
+    ...stopped,
+    lifecycle: { kind: "working", reason: "acceptedIntent", settled: false,
+      agent: { agentStatus: "working", turnId: fixtureIdentityValues.WorkbenchTurnId.turn } },
+    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["owned.ts"], intentName: "work",
+      intentDescription: "", phase: "active", proposals: [], updatedAt: "2026-09-08T00:00:00Z" },
+  };
+  assert.equal(getThreadRowActions(working, "main").baseAction, "snooze");
+  assert.equal(getThreadRowActions({ ...working, lifecycle: pending.lifecycle }, "main").baseAction, null);
+  assert.equal(getThreadRowActions({ ...working, lifecycle: completed.lifecycle }, "main").shiftAction, null);
+});
+
 test("stopped sidebar rows settle directly while retaining priority and claim blockers", () => {
   assert.deepEqual(getThreadRowActions(stopped, "main"), { baseAction: "settle", shiftAction: null });
   assert.equal(getThreadRowActions(stopped, "snoozed").baseAction, "wake");
@@ -52,7 +65,11 @@ test("stopped sidebar rows settle directly while retaining priority and claim bl
 test("a sidebar questionnaire offers snooze first and completion as the shift action", () => {
   assert.deepEqual(getThreadRowActions(pending, "main"), { baseAction: "snooze", shiftAction: "complete" });
   assert.deepEqual(getThreadRowActions({ ...pending, waitingFor: "other" }, "main"), { baseAction: "snooze", shiftAction: "complete" });
-  assert.deepEqual(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main"), { baseAction: null, shiftAction: "snooze" });
+  assert.deepEqual(getThreadRowActions({ ...pending, pendingQuestionnaire: null }, "main"), { baseAction: null, shiftAction: null });
+  assert.deepEqual(getThreadRowActions({
+    ...pending,
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: "new-approval", settled: false },
+  }, "main"), { baseAction: null, shiftAction: null });
 });
 
 test("stop carries the owning questionnaire or active turn evidence", () => {

@@ -81,7 +81,7 @@ export function createProviderBoundaryJourney(
         call("request_user_input", question("dismiss-preserved"), `${heldProof} ${prefixProof}`),
       ],
       stop: (proof: string): FakeThreadAction[] => [call("shell", { command: holdCommand(proof) })],
-      final: (prefixProof: string, finalProof: string, title: string): FakeThreadAction[] => [
+      final: (prefixProof: string, finalProof: string, title: string, completionProof: string): FakeThreadAction[] => [
         ...(provider === "codex" ? [] : [call("shell", {
           command: `node -e "require('fs').writeFileSync('${shellProofFile}-approved','${finalProof}')"`,
           outside_sandbox: true,
@@ -90,6 +90,7 @@ export function createProviderBoundaryJourney(
         call("rg", { args: ["-n", PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE] }),
         call("shell", { command: `node -e "require('fs').writeFileSync('${shellProofFile}','${finalProof}')"` }),
         call("task_completed", {}, provider !== "codex" ? `${finalProof} ${prefixProof} ${title}` : undefined),
+        call("shell", { command: holdCommand(completionProof) }),
         { text: provider === "codex" ? `${finalProof} ${prefixProof} ${title}` : provider === "claude" ? "Done." : "" },
       ],
     },
@@ -117,7 +118,7 @@ export function createProviderBoundaryJourney(
       `1. ${hold(proof)}`,
       "2. Make no additional tool calls. The scenario will interrupt this turn.",
     ].join("\n"),
-    final: (prefixProof: string, finalProof: string) => [
+    final: (prefixProof: string, finalProof: string, completionProof: string) => [
       "Authorised final provider scenario. Follow exactly, in order.",
       ...(provider === "codex" ? [] : [
         `First call ${tools.shell} with ${JSON.stringify({
@@ -134,7 +135,8 @@ export function createProviderBoundaryJourney(
       }','${finalProof}')"\`.`,
       `4. Quote "${finalProof}", "${prefixProof}", and the task title together in commentary.`,
       `5. Call ${tools.taskComplete}. This completion is authorised.`,
-      "6. End with an empty final response.",
+      `6. ${hold(completionProof)}`,
+      "7. End with an empty final response.",
     ].join("\n"),
   };
 }

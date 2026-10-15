@@ -32,6 +32,8 @@ function fixture(
 ) {
   const proposalReads: Array<{ cwd: string; proposalId: string }> = [];
   const stops: object[] = [];
+  const mutations: Array<Parameters<ObservedThreadSourcePorts["updateThreadStateWithAcceptance"]>[0]> = [];
+  let acceptMutation = true;
   const selections: Array<{ thread: ThreadTranscriptLocalThread; turnLimit?: number }> = [];
   const historyDemands: number[] = [];
   const submits: Array<{ clientMessageId: string }> = [];
@@ -78,7 +80,10 @@ function fixture(
     readRateLimits: () => null,
     watchRateLimits: () => {},
     subscribeRateLimits: () => () => {},
-    updateThreadStateWithAcceptance: async () => true,
+    updateThreadStateWithAcceptance: async (request: Parameters<ObservedThreadSourcePorts["updateThreadStateWithAcceptance"]>[0]) => {
+      mutations.push(request);
+      return acceptMutation;
+    },
     reportError: () => {},
     resolveAttachmentUrl: async (url: string) => url.startsWith("/api/workbench-client-state/attachment?")
       ? "data:image/png;base64,c2F2ZWQ=" : url,
@@ -91,7 +96,8 @@ function fixture(
   const source = createObservedThreadSource(ports, next => { published = { ...published, ...next }; });
   const release = source.acquire(interest);
   return {
-    source, release, selections, submits, stops, proposalReads, historyDemands,
+    source, release, selections, submits, stops, proposalReads, historyDemands, mutations,
+    rejectMutations: () => { acceptMutation = false; },
     publish: (value: WorkbenchTranscriptProjection) => onState({ status: "ready", threadId, projection: value }),
     resolveSubmit: (result: Parameters<typeof resolveSubmit>[0]) => resolveSubmit(result),
     resolveOlder: (turnIds: readonly string[] | null) => resolveOlder(turnIds),
@@ -100,6 +106,23 @@ function fixture(
 }
 
 const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+
+test("snooze routes ordinary work and request-fenced questions without changing activity locally", async () => {
+  const f = fixture({}, { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "completed" } });
+  try {
+    assert.equal(f.published.summary?.head?.status, "active");
+    await f.source.actions.snooze();
+    await f.source.actions.snooze("question");
+    assert.deepEqual(f.mutations, [
+      { projectId: "project", identity: { harness: "codex", threadId }, method: "workbench/thread-state/snooze/set", snoozed: true },
+      { projectId: "project", identity: { harness: "codex", threadId }, method: "workbench/thread-state/questionnaire/snooze", requestKey: "question" },
+    ]);
+    assert.equal(f.published.summary?.head?.status, "active");
+    assert.deepEqual(f.stops, []);
+    f.rejectMutations();
+    await assert.rejects(f.source.actions.snooze());
+  } finally { f.release(); }
+});
 
 test("the thread head shows the goal and active skills its observation runtime carries", () => {
   const goal = { objective: "ship the port", updatedAt: 3 };

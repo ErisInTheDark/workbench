@@ -925,6 +925,28 @@ test("home renders one combined priority list with project-owned folders and for
   assert.match(html, /data-thread-drag-target="dependent-snooze" data-thread-drag-target-project="beta"/u);
 });
 
+test("only snoozed working threads appear beneath the working disclosure", () => {
+  const working = {
+    ...createThreadEntry({ threadId: "working-snoozed", title: "Background work" }),
+    lifecycle: { kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const,
+      agent: { agentStatus: "completed" as const } },
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
+  const sleeping = {
+    ...createThreadEntry({ threadId: "sleeping-idle", title: "Sleeping idle" }),
+    lifecycle: { kind: "needsAttention" as const, reason: "noActiveTurn" as const, settled: false as const },
+    metadata: { archived: false as const, pinned: false, snoozed: true },
+  };
+  const html = renderThreads([working, sleeping]);
+  const workingHeading = html.indexOf("Working threads");
+  const snoozedHeading = html.indexOf("Snoozed threads");
+  assert.ok(workingHeading >= 0 && snoozedHeading > workingHeading);
+  assert.ok(html.indexOf("Background work", workingHeading) < snoozedHeading);
+  assert.ok(html.indexOf("Sleeping idle", snoozedHeading) > snoozedHeading);
+  assert.equal(renderThreads([sleeping]).includes("Working threads"), false);
+  assert.equal(renderThreads([{ ...working, metadata: { ...working.metadata, snoozed: false } }]).includes("Working threads"), false);
+});
+
 test("snoozed threads hide behind their disclosure by default in project and home lists", () => {
   const snoozed = {
     ...createThreadEntry({ threadId: "snoozed-hidden", title: "Snoozed hidden" }),

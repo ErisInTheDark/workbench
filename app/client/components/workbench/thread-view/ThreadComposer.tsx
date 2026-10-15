@@ -45,7 +45,7 @@ import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import type { WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchThreadSnoozeAvailable, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
@@ -338,7 +338,8 @@ export default function ThreadComposer ({
   }, [editing.session, onDraftSessionChange]);
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
-    canSnoozeQuestionnaire: sidebarEntry?.entryKind === "thread" && !sidebarEntry.metadata.archived && !isApprovalBlocked,
+    canSnooze: sidebarEntry?.entryKind === "thread" && isWorkbenchThreadSnoozeAvailable(sidebarEntry),
+    isApprovalBlocked,
     preferStop: isShiftPressed,
     snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
   });
@@ -515,7 +516,7 @@ export default function ThreadComposer ({
     setError("");
     try {
       if (stopControlState.action === "snooze") {
-        await threadController.actions.snoozeQuestionnaire(questionnaireRequestKey);
+        await threadController.actions.snooze(questionnaireRequestKey || undefined);
       } else {
         await onStopThread(thread.id);
       }
@@ -606,8 +607,8 @@ export default function ThreadComposer ({
     );
   };
 
-  const stopLabel = stopControlState.action === "snooze" ? "Snooze questionnaire" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire";
-  const stoppingLabel = stopControlState.action === "snooze" ? "Snoozing questionnaire" : "Stopping current turn";
+  const stopLabel = stopControlState.action === "snooze" ? "Snooze thread" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire";
+  const stoppingLabel = stopControlState.action === "snooze" ? "Snoozing thread" : "Stopping current turn";
   const stopButton = showStopButton ? (
     <PrimaryButton
       type="button"

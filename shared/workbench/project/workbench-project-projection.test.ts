@@ -450,6 +450,13 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
   for (const [index, member] of membership.members.entries()) {
     assert.deepEqual(materializeWorkspaceThreadRow(member, rows[index]!.entry), rows[index]);
   }
+  const snoozedWork = projectWorkbenchThreadMembership(rows.map(row =>
+    row.entry.entryKind === "thread" && !row.entry.metadata.archived && row.entry.title === "working"
+      ? { ...row, entry: { ...row.entry, metadata: { ...row.entry.metadata, snoozed: true } } }
+      : row), snapshot);
+  assert.deepEqual(titles(snoozedWork.placement.working ?? []), ["working"]);
+  assert.deepEqual(titles(snoozedWork.placement.main), ["claimed", "draft", "attention", "complete"]);
+  assert.deepEqual(itemTitles(snoozedWork.placement.snoozed), ["snoozed"]);
 });
 
 test("observed daemon facts show Home rows without becoming persisted launch targets", () => {

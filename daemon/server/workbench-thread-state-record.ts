@@ -181,8 +181,9 @@ function internalFields(value: unknown) {
   };
 }
 
-function repairWorkingSnooze(record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
-  if (record.entryKind !== "thread" || record.lifecycle.kind !== "working" || !record.metadata.snoozed) return record;
+function repairClaimedSnooze(record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
+  if (record.entryKind !== "thread" || record.lifecycle.kind === "working"
+    || !record.metadata.snoozed || !record.gitArc?.claimedPaths.length) return record;
   return {
     ...record,
     metadata: { archived: false, pinned: record.metadata.pinned, snoozed: false },
@@ -201,7 +202,7 @@ export function safeParseWorkbenchThreadStateEntry(value: unknown):
   if (parsed.data.entryKind === "draft") return { data: parsed.data, success: true };
   if (parsed.data.entryKind === "thread") {
     const { previousTitles: _previousTitles, waitingFor: _waitingFor, waitingOnThreads: _waitingOnThreads, ...persistent } = parsed.data;
-    return { data: repairWorkingSnooze({ ...persistent, ...internalFields(value) }), success: true };
+    return { data: repairClaimedSnooze({ ...persistent, ...internalFields(value) }), success: true };
   }
   const { previousTitles: _previousTitles, waitingFor: _waitingFor, ...persistent } = parsed.data;
   return { data: { ...persistent, ...internalFields(value) }, success: true };
@@ -239,13 +240,13 @@ export function conformStoredWorkbenchThreadStateRecord(
     ? (({ acceptance: _acceptance, ...arc }) => arc)(persistent.gitArc)
     : persistent.gitArc;
   const record = { ...persistent, ...(gitArc !== undefined ? { gitArc } : {}), ...internalFields(value) };
-  const repaired = repairWorkingSnooze(record);
-  const repairedWorkingSnooze = repaired !== record;
+  const repaired = repairClaimedSnooze(record);
+  const repairedClaimedSnooze = repaired !== record;
   return {
     data: repaired,
     repairedPaths: [
       ...conformed.repairedPaths,
-      ...(repairedWorkingSnooze
+      ...(repairedClaimedSnooze
         ? [["metadata", "snoozed"], ...(record.snoozedUntil ? [["snoozedUntil"]] : [])]
         : []),
     ],

@@ -89,6 +89,7 @@ const databaseReleases = Object.freeze({
   threadGitCommits: release(79, "ac0e7a80d8078d9a1c3b7b4e2d91b788f4f621738580035ae7f10b09996628f6"),
   threadGitCommitBackfill: release(80, "11235a0e9fae2fc8c7b8fc897289d697b8ddb1b0da3093c7b59a5518d10b008f"),
   captureGapTurns: release(81, "9763f6193f8e68707b2a7c241d8320ab1a868d7a2ea87d79e61ed44a77d0a95d"),
+  deferredAgentStatus: release(82, "20eca18f1a2de80850b6d685adc300328508c227d915034fb20f38a9fcb34e60"),
 });
 
 export default databaseReleases;

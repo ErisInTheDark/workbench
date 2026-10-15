@@ -16,7 +16,7 @@ import WorkbenchThreadStateStore from "./WorkbenchThreadStateStore";
 import type { WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
 import type { WorkbenchSubagentPersistence, WorkbenchThreadStateCommit } from "./database/thread-state/workbench-thread-state-persistence";
 import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
-import type { WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, type WorkbenchHarnessId } from "workbench-shared/workbench/thread/thread-state";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
 import { normalizeThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
 import { ProjectIdSchema, WorkbenchItemIdSchema } from "workbench-shared/workbench/identity";
@@ -87,7 +87,7 @@ export function createThreadStateTestDatabase(sqlite = new Database(":memory:"))
     admitThread(owner.project_id, record.identity.threadId, record.identity.harness);
     if (record.entryKind === "subagent") admitThread(record.projectId, record.parentThreadId);
     const lifecycle = record.lifecycle;
-    const turnId = "turnId" in lifecycle ? lifecycle.turnId : "agent" in lifecycle ? lifecycle.agent?.turnId : null;
+    const turnId = getWorkbenchLifecycleTurnId(lifecycle);
     if (turnId) admitTurn(record, turnId);
     for (const questionnaire of [record.pendingQuestionnaire, ...record.questionnaireHistory ?? []]) {
       if (!questionnaire) continue;

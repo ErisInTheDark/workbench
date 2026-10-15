@@ -949,6 +949,8 @@ test("status notices follow committed input transitions, not repeats or notifica
     await controller.ensureProviderEntry(fixtureProjectIds.project, entry);
     for (const status of ["blocked", "completed"] as const) {
       await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread, { kind: "agentStatus", status });
+      await controller.applyLifecycle(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
+        { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds.turn });
       await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
         { kind: "started", turnId: fixtureTurnIds.turn });
       await controller.acceptAdmission(fixtureProjectIds.project, "codex", fixtureThreadIds.thread,
@@ -1127,8 +1129,10 @@ test("plain questionnaire snooze retains input through interruption for codex an
       { id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false },
     ] },
   };
-  for (const harness of ["codex", "claude"] as const) {
-    await context.test(harness, async () => {
+  for (const [harness, route] of [
+    ["codex", "snooze"], ["claude", "snooze"], ["codex", "priority"], ["claude", "priority"],
+  ] as const) {
+    await context.test(`${harness}:${route}`, async () => {
       const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
         activityAt: 1, entryKind: "thread", title: "Task", identity: { harness, threadId: fixtureThreadIds["snooze-question"] },
         metadata: { archived: false, pinned: false, snoozed: false },
@@ -1151,7 +1155,10 @@ test("plain questionnaire snooze retains input through interruption for codex an
       try {
         await controller.readProject(fixtureProjectIds["project"]);
         await controller.refresh(fixtureProjectIds["project"]);
-        const response = await controller.handleRequest("observer", {
+        const response = await controller.handleRequest("observer", route === "priority" ? {
+          method: "workbench/thread-state/priority/set", projectId: fixtureProjectIds.project,
+          sourceKey: `${harness}:${provider.identity.threadId}`, priority: "snoozed",
+        } : {
           method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
           identity: provider.identity, snoozed: true,
         });
@@ -1184,6 +1191,78 @@ test("plain questionnaire snooze retains input through interruption for codex an
   }
 });
 
+test("snooze uses current collision claims and wakes on task outcome or new claims", async () => {
+  const source = pinnedRecord("thread", "Source");
+  const target = pinnedRecord("target", "Target");
+  const claimed: WorkbenchGitArcLifecycleState = {
+    checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
+    intentDescription: "", phase: "active", proposals: [], updatedAt: "now",
+  };
+  let arc: WorkbenchGitArcLifecycleState | null = claimed;
+  let interrupts = 0;
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "snooze-claims", threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [],
+    resolveGitArc: async () => arc,
+    interruptQuestionnaire: async () => { interrupts++; arc = claimed; return true; },
+  });
+  const snooze = (snoozed = true) => controller.handleRequest("observer", {
+    method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
+    identity: source.identity, snoozed,
+  });
+  const read = async () => {
+    const entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, source.identity.threadId);
+    assert.ok(entry?.entryKind === "thread");
+    return entry;
+  };
+  try {
+    await controller.ensureProviderEntry(fixtureProjectIds.project, source);
+    await controller.ensureProviderEntry(fixtureProjectIds.project, target);
+    for (const request of [
+      { method: "workbench/thread-state/snooze/set", identity: source.identity, snoozed: true },
+      { method: "workbench/thread-state/priority/set", sourceKey: "codex:thread", priority: "snoozed" },
+      { method: "workbench/thread-state/snooze/until", identity: source.identity,
+        target: { projectId: fixtureProjectIds.project, identity: target.identity } },
+    ] as const) {
+      const result = await controller.handleRequest("observer", { ...request, projectId: fixtureProjectIds.project });
+      assert.equal(WorkbenchThreadStateMutationResultSchema.parse(result.result).accepted, false);
+    }
+    await controller.acceptAdmission(fixtureProjectIds.project, "codex", source.identity.threadId,
+      { kind: "started", turnId: fixtureTurnIds.turn });
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
+    assert.equal((await read()).lifecycle.kind, "working");
+    await controller.setAgentStatus(fixtureProjectIds.project, source.identity.threadId, "completed");
+    assert.equal((await read()).metadata.snoozed, true);
+    assert.equal((await read()).lifecycle.kind, "working");
+    await controller.applyLifecycle(fixtureProjectIds.project, "codex", source.identity.threadId,
+      { kind: "turnCompleted", status: "completed", turnId: fixtureTurnIds.turn });
+    assert.equal((await read()).lifecycle.kind, "completed");
+    assert.equal((await read()).metadata.snoozed, false);
+    arc = null;
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
+    arc = claimed;
+    await controller.refreshGitArcState(fixtureProjectIds.project, "codex", source.identity.threadId);
+    assert.equal((await read()).metadata.snoozed, false);
+    arc = { ...claimed, phase: "stashed", claimedPaths: [], stashedPaths: ["saved.ts"] };
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, true);
+    await snooze(false);
+    const question = {
+      itemId: null, requestKey: "question", turnId: fixtureTurnIds.turn,
+      request: { id: "question", title: "Choose", summary: "", submitLabel: "Submit",
+        questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }] },
+    };
+    await controller.setPendingQuestionnaire(fixtureProjectIds.project, source.identity.threadId, question);
+    arc = claimed;
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, false);
+    assert.equal(interrupts, 0);
+    arc = null;
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse((await snooze()).result).accepted, false);
+    assert.equal(interrupts, 1);
+    assert.equal((await read()).metadata.snoozed, false);
+    assert.equal((await read()).pendingQuestionnaire?.requestKey, question.requestKey);
+  } finally { await controller.dispose(); }
+});
+
 test("stop marks a working thread stopped without waiting for its interrupt event", async () => {
   const working: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
     activityAt: 1, entryKind: "thread", title: "Task", identity: { harness: "codex", threadId: fixtureThreadIds["active"] },
@@ -1207,7 +1286,7 @@ test("stop marks a working thread stopped without waiting for its interrupt even
       method: "workbench/thread-state/snooze/set", projectId: fixtureProjectIds.project,
       identity: working.identity, snoozed: true,
     });
-    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(directSnooze.result).accepted, false);
+    assert.equal(WorkbenchThreadStateMutationResultSchema.parse(directSnooze.result).accepted, true);
     const dependentSnooze = await controller.handleRequest("observer", {
       method: "workbench/thread-state/snooze/until", projectId: fixtureProjectIds.project,
       identity: working.identity, target: { identity: target.identity, projectId: fixtureProjectIds.project },

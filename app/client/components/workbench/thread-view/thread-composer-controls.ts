@@ -22,7 +22,8 @@ export function getThreadComposerStopControlState ({
   isActiveThread,
   isCommentMode,
   isStopping,
-  canSnoozeQuestionnaire = false,
+  canSnooze = false,
+  isApprovalBlocked = false,
   preferStop = false,
   snoozed = false,
 }: {
@@ -30,13 +31,16 @@ export function getThreadComposerStopControlState ({
   isActiveThread: boolean;
   isCommentMode: boolean;
   isStopping: boolean;
-  canSnoozeQuestionnaire?: boolean;
+  canSnooze?: boolean;
+  isApprovalBlocked?: boolean;
   preferStop?: boolean;
   snoozed?: boolean;
 }) {
+  const canStop = isActiveThread || hasPendingUserInputRequest;
+  const snoozeAvailable = canSnooze && !snoozed && !isApprovalBlocked;
   return {
-    action: !preferStop && canSnoozeQuestionnaire && hasPendingUserInputRequest && (isActiveThread || !snoozed) ? "snooze" as const : "stop" as const,
-    disabled: (!isActiveThread && !hasPendingUserInputRequest) || isStopping,
-    visible: !isCommentMode && (isActiveThread || hasPendingUserInputRequest || isStopping),
+    action: snoozeAvailable && (!preferStop || !canStop) ? "snooze" as const : "stop" as const,
+    disabled: (!canStop && !snoozeAvailable) || isStopping,
+    visible: !isCommentMode && (canStop || snoozeAvailable || isStopping),
   };
 }

@@ -58,9 +58,11 @@ export interface ObservedThreadSourcePorts {
   /** Fires when observed Git arc reads may be stale, such as when the window regains focus. */
   subscribeGitArcProposalRefresh?: (listener: () => void) => () => void;
   updateThreadStateWithAcceptance: (request: {
-    method: "workbench/thread-state/questionnaire/snooze"; projectId: ReturnType<typeof ProjectIdSchema.parse>;
-    identity: ThreadEntry["identity"]; requestKey: string;
-  }) => Promise<boolean>;
+    projectId: ReturnType<typeof ProjectIdSchema.parse>; identity: ThreadEntry["identity"];
+  } & (
+    | { method: "workbench/thread-state/questionnaire/snooze"; requestKey: string }
+    | { method: "workbench/thread-state/snooze/set"; snoozed: true }
+  )) => Promise<boolean>;
   reportError: (message: string) => void;
   /** Saved composer attachments are app URLs; the daemon needs the image itself. */
   resolveAttachmentUrl: (url: string) => Promise<string>;
@@ -366,13 +368,14 @@ export default function createObservedThreadSource(
         });
         if (result.warning) ports.reportError(result.warning);
       },
-      async snoozeQuestionnaire(requestKey) {
+      async snooze(requestKey) {
         const entry = requireEntry();
         const accepted = await ports.updateThreadStateWithAcceptance({
-          method: "workbench/thread-state/questionnaire/snooze", projectId: ProjectIdSchema.parse(ports.projectId),
-          identity: entry.identity, requestKey,
+          projectId: ProjectIdSchema.parse(ports.projectId), identity: entry.identity,
+          ...(requestKey ? { method: "workbench/thread-state/questionnaire/snooze" as const, requestKey }
+            : { method: "workbench/thread-state/snooze/set" as const, snoozed: true as const }),
         });
-        if (!accepted) throw new Error("The questionnaire changed before it could be snoozed.");
+        if (!accepted) throw new Error("The thread changed before it could be snoozed.");
       },
       // Settings are owned by the composer profile selection, which persists to the thread entry.
       changeAgent: () => {},

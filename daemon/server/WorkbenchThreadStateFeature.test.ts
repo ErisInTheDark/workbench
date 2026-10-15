@@ -154,13 +154,31 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
   return Object.assign(feature, { observeThread: (thread: ThreadReadResponse["thread"]) => getOperations("codex").observeThread(thread) });
 }
 
+function discoveredProject(rootPath: string) {
+  return {
+    rootPath: path.dirname(rootPath),
+    data: [{
+      id: fixtureIdentityValues.ProjectId.project, kind: "git" as const, name: "Project", relativePath: ".", rootPath,
+      lastCommitTimeMs: null,
+      roots: [{ id: "root", isPrimary: true, name: "Project", relativePath: ".", rootPath }],
+    }],
+  };
+}
+
 test("project reads reject unknown owners before loading or writing state", async () => {
   const database = createThreadStateDatabase("C:/project", [["thread", "codex"]]);
   const projectId = fixtureIdentityValues.ProjectId.project;
   const feature = createFeature({
     database,
-    getProjectCatalog: () => ({ data: [], aliases: [{ alias: "old/project", projectId }], rootPath: "C:/" }),
-    gitArcs: { findActiveClaim: async () => null, listActiveClaims: async () => [] },
+    getProjectCatalog: () => ({
+      ...discoveredProject("C:/project"),
+      data: [{ ...discoveredProject("C:/project").data[0]!, kind: "daemon" }],
+      aliases: [{ alias: "old/project", projectId }],
+    }),
+    gitArcs: {
+      findActiveClaim: async () => { throw new Error("Non-worktree threads must not read Git."); },
+      listActiveClaims: async () => { throw new Error("Non-worktree projects must not read Git."); },
+    },
     listSubagents: async () => ({ subagents: [] }),
     harnesses: createHarnesses(async () => ({ id: null, result: { data: [] } })),
     resolveProjectById: async id => {
@@ -172,6 +190,17 @@ test("project reads reject unknown owners before loading or writing state", asyn
   });
   try {
     await feature.controller.readProject(fixtureIdentitySchemas.ProjectIdSchema.parse("old/project"));
+    const sidebar = normalizeProviderSidebarEntry("codex", { id: "thread", status: { type: "idle" }, name: "Idle", updatedAt: 1 });
+    assert.ok(sidebar?.entryKind === "thread");
+    await feature.controller.ensureProviderEntry(projectId, {
+      ...sidebar, lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+    });
+    const snoozed = await feature.controller.handleRequest("observer", {
+      method: "workbench/thread-state/snooze/set", projectId, identity: sidebar.identity, snoozed: true,
+    });
+    assert.equal(snoozed.error, undefined);
+    const saved = await feature.controller.getCanonicalThreadEntry(projectId, sidebar.identity.threadId);
+    assert.ok(saved?.entryKind === "thread" && saved.metadata.snoozed);
     const before = database.sqlite.prepare("SELECT * FROM workbench_sidebar_project_layouts").all();
     database.operations.length = 0;
     for (const id of ["remote:/example.test/project", "remote://example.test/unregistered"]) {
@@ -719,7 +748,7 @@ test("accepted newer work drops an unchanged questionnaire before snooze can act
   } finally { await h.feature.dispose(); }
 });
 
-test("agent status is a canonical thread mutation without provider reads", async () => {
+test("agent status records completion without dismissing pending input or reading the provider", async () => {
   const h = await questionnaireHarness();
   try {
     await h.feature.controller.observeLifecycle("codex", h.provider.identity.threadId, { kind: "recoveryFailed" });
@@ -729,7 +758,12 @@ test("agent status is a canonical thread mutation without provider reads", async
       params: { callerThreadId: h.provider.identity.threadId, cwd: "C:/workspace", status: "completed" },
     });
     assert.equal(result.error, undefined);
-    assert.equal((await h.read())?.lifecycle.kind, "completed");
+    const entry = await h.read();
+    assert.equal(entry?.lifecycle.kind, "needsAttention");
+    assert.ok(entry && "agent" in entry.lifecycle);
+    assert.equal(entry.lifecycle.agent?.agentStatus, "completed");
+    assert.ok(result.result && typeof result.result === "object" && "agentStatus" in result.result);
+    assert.equal(result.result.agentStatus, "completed");
     assert.deepEqual(h.requests, []);
   } finally { await h.feature.dispose(); }
 });
@@ -1002,7 +1036,7 @@ test("provider reconciliation publishes its first page before deeper history and
   };
   const feature = createFeature({
     database: createThreadStateDatabase(storageRoot, [["parent", "codex"], ["child", "codex"]]),
-    getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    getProjectCatalog: () => discoveredProject(storageRoot),
     gitArcs,
     listSubagents: async () => ({
       subagents: [{
@@ -1337,7 +1371,7 @@ test("Git snapshot reconciliation failures reach the bounded feature log", async
   const logs: string[] = [];
   const feature = createFeature({
     database: createThreadStateDatabase(),
-    getProjectCatalog: () => ({ data: [], rootPath: "C:/projects" }),
+    getProjectCatalog: () => discoveredProject("C:/workspace"),
     gitArcs: {
       findActiveClaim: async () => null,
       listActiveClaims: async () => [],
@@ -1448,7 +1482,7 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
   };
   const feature = createFeature({
     database: createThreadStateDatabase(storageRoot, [["thread-one", "codex"]]),
-    getProjectCatalog: () => ({ data: [], rootPath: storageRoot }),
+    getProjectCatalog: () => discoveredProject(storageRoot),
     gitArcs: {
       findActiveClaim: async () => resolved ? null : activeClaim,
       findLifecycleState: async () => lifecycleState(),

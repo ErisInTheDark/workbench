@@ -7,6 +7,7 @@
 import {
   getWorkbenchLifecycleTurnId,
   isWorkbenchThreadSettlementAvailable,
+  isWorkbenchThreadSnoozeAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchThreadSidebarGroup,
@@ -35,13 +36,14 @@ export function getThreadRowActions(
     && entry.lifecycle.kind === "needsAttention"
     && (!entry.waitingFor || hasQuestionnaire);
   const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry, { requiredTodoCount });
+  const canSnooze = isWorkbenchThreadSnoozeAvailable(entry);
   const baseAction = group === "settled" || group === "archived" ? "restore" : group === "snoozed" ? "wake"
-    : canComplete ? "snooze" : settlementAvailable ? "settle" : null;
+    : (canComplete || entry.lifecycle.kind === "working") && canSnooze ? "snooze" : settlementAvailable ? "settle" : null;
   const shiftAction = entry.entryKind === "subagent" ? null
     : group === "settled" ? "archive"
     : group === "snoozed" && entry.lifecycle.kind === "completed" && settlementAvailable ? "settle"
-    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "needsAttention" ? canComplete ? "complete" : "snooze"
-    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "completed" ? "snooze"
+    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "needsAttention" ? canComplete ? "complete" : canSnooze ? "snooze" : null
+    : group !== "archived" && group !== "snoozed" && entry.lifecycle.kind === "completed" && canSnooze ? "snooze"
     : null;
   return { baseAction, shiftAction };
 }

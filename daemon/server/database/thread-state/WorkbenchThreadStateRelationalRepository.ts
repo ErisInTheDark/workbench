@@ -13,6 +13,7 @@ import {
   WorkbenchThreadDraftSchema,
   WorkbenchHarnessSchema,
   WorkbenchThreadLifecycleSchema,
+  getWorkbenchLifecycleTurnId,
   createWorkbenchProjectThreadSummary,
   type WorkbenchComposerProfileSelectionState,
   type WorkbenchThreadLifecycle,
@@ -594,7 +595,7 @@ export default class WorkbenchThreadStateRelationalRepository {
     const agent = "agent" in lifecycle ? lifecycle.agent : undefined;
     const lifecycleFacts = {
       thread_id: threadId, lifecycle_kind: lifecycle.kind, reason: lifecycle.reason, settled: Number(lifecycle.settled),
-      turn_id: "turnId" in lifecycle ? lifecycle.turnId : agent?.turnId ?? null,
+      turn_id: getWorkbenchLifecycleTurnId(lifecycle),
       request_key: "requestKey" in lifecycle ? lifecycle.requestKey : null,
       agent_status: agent?.agentStatus ?? null,
       error_text: "error" in lifecycle ? lifecycle.error : null,
@@ -736,9 +737,9 @@ export default class WorkbenchThreadStateRelationalRepository {
     const lifecycle = WorkbenchThreadLifecycleSchema.parse({
       kind: row.lifecycle_kind, reason: row.reason, settled: Boolean(row.settled),
       ...(row.agent_status === null ? {} : {
-        agent: { agentStatus: row.agent_status, ...(row.turn_id === null ? {} : { turnId: row.turn_id }) },
+        agent: { agentStatus: row.agent_status, ...(row.turn_id === null || row.reason === "pendingInput" ? {} : { turnId: row.turn_id }) },
       }),
-      ...(row.turn_id !== null && row.agent_status === null ? { turnId: row.turn_id } : {}),
+      ...(row.turn_id !== null && (row.agent_status === null || row.reason === "pendingInput") ? { turnId: row.turn_id } : {}),
       ...(row.request_key === null ? {} : { requestKey: row.request_key }),
       ...(row.error_text === null ? {} : { error: row.error_text }),
     });

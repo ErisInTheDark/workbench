@@ -379,6 +379,7 @@ export const WorkspaceThreadPlacementSchema = z.object({
   archived: z.array(z.string().min(1)),
   pinned: z.array(placementItem),
   snoozed: z.array(placementItem),
+  working: z.array(z.string().min(1)).optional(),
   settled: z.array(placementItem),
 }).strict();
 export type WorkspaceThreadPlacement = z.infer<typeof WorkspaceThreadPlacementSchema>;

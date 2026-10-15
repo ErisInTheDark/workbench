@@ -135,7 +135,7 @@ export interface ThreadStoreActions {
   dismissSteer(itemId: string): Promise<void>;
   stopShell(itemId: string): Promise<void>;
   submitQuestionnaire(response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions): Promise<void>;
-  snoozeQuestionnaire(requestKey: string): Promise<void>;
+  snooze(requestKey?: string): Promise<void>;
   changeAgent(value: string | null): void;
   changeModel(value: string): void;
   changeReasoningEffort(value: string | null): void;

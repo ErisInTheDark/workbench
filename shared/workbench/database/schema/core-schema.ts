@@ -417,8 +417,36 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       `),
     ],
   }));
+  const deferredAgentLifecycle = evolveTable(threadErrorLifecycle, {
+    extras: (table) => ({
+      constraints: [
+        foreignKey([table.turn_id, table.thread_id], {
+          table: "thread_turns", columns: ["id", "thread_id"], onDelete: "CASCADE",
+        }),
+        check(sql`(${table.reason} = ${literal("providerFailed")}) = (${table.error_text} IS NOT NULL)`),
+        check(sql`
+          (${table.lifecycle_kind} = ${literal("working")} AND ${table.reason} = ${literal("acceptedIntent")}
+            AND ${table.settled} = ${literal(0)} AND ${table.request_key} IS NULL AND ${table.agent_status} IS NOT NULL)
+          OR (${table.lifecycle_kind} = ${literal("needsAttention")} AND ${table.settled} = ${literal(0)} AND (
+            (${table.reason} = ${literal("noActiveTurn")} AND ${table.turn_id} IS NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("interrupted")} AND ${table.turn_id} IS NOT NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("providerFailed")} AND ${table.turn_id} IS NOT NULL AND ${table.request_key} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("pendingInput")} AND ${table.request_key} IS NOT NULL AND ${table.agent_status} IS NOT ${literal("working")})
+            OR (${table.reason} = ${literal("agentBlocked")} AND ${table.request_key} IS NULL AND ${table.agent_status} IS ${literal("blocked")})
+          ))
+          OR (${table.lifecycle_kind} = ${literal("completed")} AND ${table.request_key} IS NULL AND (
+            (${table.reason} = ${literal("agentCompleted")} AND ${table.agent_status} IS ${literal("completed")})
+            OR (${table.reason} = ${literal("providerInactive")} AND ${table.turn_id} IS NULL AND ${table.agent_status} IS NULL)
+            OR (${table.reason} = ${literal("userCompleted")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+          ))
+          OR (${table.lifecycle_kind} = ${literal("stopped")} AND ${table.request_key} IS NULL
+            AND ${table.reason} = ${literal("userMarkedStopped")} AND (${table.turn_id} IS NULL OR ${table.agent_status} IS NOT NULL))
+        `),
+      ],
+    }),
+  });
   const lifecycleHistory = defineTableHistory({
-    current: threadErrorLifecycle,
+    current: deferredAgentLifecycle,
     versions: [
       ...workbenchThreadLifecycleHistory.versions,
       tableVersion({
@@ -443,6 +471,10 @@ export function defineThreadDomainCoreSchema(schemaVersion: number) {
       tableVersion({
         schemaVersion: databaseReleases.threadErrors.version, table: threadErrorLifecycle,
         migration: rebuildTable({ from: interruptedLifecycle, to: threadErrorLifecycle }),
+      }),
+      tableVersion({
+        schemaVersion: databaseReleases.deferredAgentStatus.version, table: deferredAgentLifecycle,
+        migration: rebuildTable({ from: threadErrorLifecycle, to: deferredAgentLifecycle }),
       }),
     ],
   });

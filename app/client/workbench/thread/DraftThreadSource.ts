@@ -127,7 +127,7 @@ export default function createDraftThreadSource(
       dismissSteer: unsupported("dismiss a steer"),
       stopShell: unsupported("stop a command"),
       submitQuestionnaire: unsupported("answer a question"),
-      snoozeQuestionnaire: unsupported("snooze a question"),
+      snooze: unsupported("snooze a thread"),
       changeAgent: value => ports.controls.setCurrentThreadAgent(ports.draftId, value),
       changeModel: value => ports.controls.setCurrentThreadModel(ports.draftId, value),
       changeReasoningEffort: value => ports.controls.setCurrentThreadReasoningEffort(ports.draftId, value),

@@ -40,6 +40,7 @@
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
  * - resolveWorkbenchThreadTitle: choose a meaningful provider name, first-message preview, or neutral fallback.
  * - isWorkbenchThreadStatusProviderOwned/reduceWorkbenchThreadLifecycle: thread-owned status and provider-event fencing.
+ * - isWorkbenchThreadSnoozeAvailable: permit placement snooze without hiding non-working collision claims or live approvals.
  * - isWorkbenchSidebarThreadCompletionAvailable: sidebar-only manual completion, including durable questionnaires without granting subagent authority.
  * - hasWorkbenchThreadDraftContent/countDraftPromptTokens/createDraftTitle: durable draft content, materialization, and title rules.
  */
@@ -212,14 +213,18 @@ const AgentTurnSchema = z.object({
 const AgentStatusSchema = AgentTurnSchema.partial({ turnId: true });
 
 const WorkingLifecycleSchema = z.object({
-  agent: z.object({ agentStatus: z.literal("working"), turnId: z.string().trim().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
+  agent: AgentStatusSchema,
   kind: z.literal("working"),
   reason: z.literal("acceptedIntent"),
   settled: z.literal(false),
 }).strict();
 
 const CanonicalNeedsAttentionLifecycleSchema = z.discriminatedUnion("reason", [
-  z.object({ kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">().optional() }).strict(),
+  z.object({
+    kind: z.literal("needsAttention"), reason: z.literal("pendingInput"), requestKey: z.string().min(1),
+    settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">().optional(),
+    agent: z.object({ agentStatus: z.enum(["completed", "blocked"]) }).strict().optional(),
+  }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("noActiveTurn"), settled: z.literal(false) }).strict(),
   z.object({ kind: z.literal("needsAttention"), reason: z.literal("interrupted"), settled: z.literal(false), turnId: z.string().min(1).brand<"WorkbenchTurnId">() }).strict(),
   z.object({
@@ -890,11 +895,23 @@ export type WorkbenchLifecycleEvent =
 export function getWorkbenchLifecycleTurnId(lifecycle: WorkbenchThreadLifecycle | null) {
   if (!lifecycle) return null;
   if ("turnId" in lifecycle && typeof lifecycle.turnId === "string") return lifecycle.turnId;
-  return "agent" in lifecycle && lifecycle.agent ? lifecycle.agent.turnId ?? null : null;
+  return "agent" in lifecycle && lifecycle.agent && "turnId" in lifecycle.agent ? lifecycle.agent.turnId ?? null : null;
 }
 
 export function isWorkbenchThreadStatusProviderOwned(lifecycle: WorkbenchThreadLifecycle) {
   return lifecycle.kind === "working" || (lifecycle.kind === "needsAttention" && lifecycle.reason === "pendingInput");
+}
+
+export function isWorkbenchThreadSnoozeAvailable(entry: SidebarRow | WorkbenchPinnedThreadSummaryEntry) {
+  if (entry.entryKind === "subagent" || entry.metadata.archived) return false;
+  if (entry.entryKind === "draft") return true;
+  if (entry.lifecycle.settled) return false;
+  if (entry.lifecycle.kind === "working") return true;
+  if (entry.gitArc?.claimedPaths.length) return false;
+  if (entry.lifecycle.kind !== "needsAttention" || entry.lifecycle.reason !== "pendingInput") return true;
+  return "canCompleteQuestionnaire" in entry
+    ? entry.canCompleteQuestionnaire
+    : entry.pendingQuestionnaire?.requestKey === entry.lifecycle.requestKey;
 }
 
 export function isWorkbenchSidebarThreadCompletionAvailable(entry: SidebarRow | WorkbenchPinnedThreadSummaryEntry) {
@@ -902,10 +919,14 @@ export function isWorkbenchSidebarThreadCompletionAvailable(entry: SidebarRow | 
   if (entry.lifecycle.kind === "stopped") return true;
   if (entry.lifecycle.kind !== "needsAttention") return false;
   if ("canCompleteQuestionnaire" in entry) return entry.lifecycle.reason !== "pendingInput" || entry.canCompleteQuestionnaire;
-  return entry.lifecycle.reason !== "pendingInput" || Boolean(entry.pendingQuestionnaire);
+  return entry.lifecycle.reason !== "pendingInput" || entry.pendingQuestionnaire?.requestKey === entry.lifecycle.requestKey;
 }
 
-export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle | null, event: WorkbenchLifecycleEvent): WorkbenchThreadLifecycle {
+export function reduceWorkbenchThreadLifecycle(
+  current: WorkbenchThreadLifecycle | null,
+  event: WorkbenchLifecycleEvent,
+  entryKind: "thread" | "subagent" = "thread",
+): WorkbenchThreadLifecycle {
   const currentTurnId = getWorkbenchLifecycleTurnId(current);
   switch (event.kind) {
     case "acceptedIntent":
@@ -920,9 +941,16 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
         ))
       ) return current;
       return { agent: { agentStatus: "working", turnId: event.turnId }, kind: "working", reason: "acceptedIntent", settled: false };
-    case "pendingInput":
+    case "pendingInput": {
       if (event.turnId && currentTurnId && currentTurnId !== event.turnId) return current!;
-      return { kind: "needsAttention", reason: "pendingInput", requestKey: event.requestKey, settled: false, ...(event.turnId ? { turnId: event.turnId } : {}) };
+      const turnId = event.turnId ?? (entryKind === "thread" ? currentTurnId : null);
+      return {
+        kind: "needsAttention", reason: "pendingInput", requestKey: event.requestKey, settled: false,
+        ...(turnId ? { turnId } : {}),
+        ...(entryKind === "thread" && current && "agent" in current && current.agent
+          && current.agent.agentStatus !== "working" ? { agent: { agentStatus: current.agent.agentStatus } } : {}),
+      };
+    }
     case "inputResolved":
       if (event.answered && (
         current?.kind === "completed"
@@ -935,6 +963,12 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       return { agent: { agentStatus: "working", ...(currentTurnId ? { turnId: currentTurnId } : {}) }, kind: "working", reason: "acceptedIntent", settled: false };
     case "agentStatus": {
       if (event.turnId && currentTurnId !== event.turnId) return current!;
+      if (entryKind === "thread") {
+        if (current?.kind === "working") return { ...current, agent: { ...current.agent, agentStatus: event.status } };
+        if (current?.kind === "needsAttention" && current.reason === "pendingInput") {
+          return { ...current, agent: { agentStatus: event.status } };
+        }
+      }
       const turn = event.turnId ?? currentTurnId;
       const placement = turn ? { turnId: turn } : {};
       return event.status === "completed"
@@ -951,9 +985,16 @@ export function reduceWorkbenchThreadLifecycle(current: WorkbenchThreadLifecycle
       if (event.status === "failed") {
         return { kind: "needsAttention", reason: "providerFailed", settled: false, turnId: event.turnId, error: boundThreadError(event.error) };
       }
+      if (current?.kind === "needsAttention" && current.reason === "pendingInput") return current;
+      if (current?.kind === "working" && current.agent.agentStatus !== "working") {
+        return current.agent.agentStatus === "completed"
+          ? { agent: { agentStatus: "completed", turnId: event.turnId }, kind: "completed", reason: "agentCompleted", settled: false }
+          : { agent: { agentStatus: "blocked", turnId: event.turnId }, kind: "needsAttention", reason: "agentBlocked", settled: false };
+      }
       return { kind: "needsAttention", reason: "noActiveTurn", settled: false };
     }
     case "providerTurnActive": {
+      if (current?.kind === "working" && currentTurnId === event.turnId) return current;
       // Moving items outrank only a turn end or provider snapshot; agent status, questions and user decisions stand.
       const revivable = current?.kind === "working"
         || (current?.kind === "completed" && current.reason === "providerInactive")

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadList: render the selected projects as one combined thread list with pinned, main, snoozed, and settled sections, from the listing's structure (rows read their own facts) or folder sidebars.
+ * - default WorkbenchThreadList: render pinned, main, snoozed-working, snoozed, and settled sections from listing structure or folder sidebars.
  */
 "use client";
 
@@ -25,6 +25,7 @@ import {
   getWorkbenchHomeFolderKey,
   getWorkbenchHomeThreadKey,
   projectWorkbenchHomeThreadList,
+  partitionSnoozedThreadItems,
   type WorkbenchHomeThreadDisplayItem,
 } from "workbench-shared/workbench/thread/home-thread-display-order";
 import { getProjectQualifiedThreadDisplayKey } from "workbench-shared/workbench/thread/thread-display-layout";
@@ -54,7 +55,7 @@ import DropTargetBoundary from "./drag/DropTargetBoundary";
 import Disclosure from "../ui/Disclosure";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
-import { CheckIcon, SnoozedThreadIcon, SparkleIcon } from "./workbench-icons";
+import { CheckIcon, EllipsisIcon, SnoozedThreadIcon, SparkleIcon } from "./workbench-icons";
 import { useWorkbenchSidebarPreferences } from "./workbench-sidebar-preferences-context";
 import WorkbenchThreadFolder from "./WorkbenchThreadFolder";
 import WorkbenchThreadListRow, { targetForRowEntry, type ThreadListRowContext, type ThreadListRowEntry } from "./WorkbenchThreadListRow";
@@ -83,6 +84,7 @@ interface ThreadListShape {
   pinnedItems: ListDisplayItem[];
   settledItems: ListDisplayItem[];
   snoozedItems: ListDisplayItem[];
+  workingEntries: ListHomeEntry[];
 }
 
 /** The app server's placement for the selected projects, as slots; each row reads its own facts, pending or loaded. */
@@ -113,6 +115,7 @@ function listFromPlacement (
     pinnedItems: items(placement.pinned),
     settledItems: items(placement.settled),
     snoozedItems: items(placement.snoozed),
+    workingEntries: (placement.working ?? []).flatMap(entryFor),
   };
 }
 
@@ -148,6 +151,7 @@ function listEntries (list: ThreadListShape) {
   return [
     ...list.archivedEntries,
     ...list.mainEntries,
+    ...list.workingEntries,
     ...list.pinnedItems.flatMap(item => item.itemKind === "folder" ? item.entries : [item.entry]),
     ...list.settledItems.flatMap(item => item.itemKind === "folder" ? item.entries : [item.entry]),
     ...list.snoozedItems.flatMap(item => item.itemKind === "folder" ? item.entries : [item.entry]),
@@ -239,6 +243,7 @@ export default function WorkbenchThreadList ({
 }) {
   const rowRefs = useRef(new Map<string, HTMLAnchorElement>());
   const [layoutError, setLayoutError] = useState("");
+  const [workingThreadsOpen, setWorkingThreadsOpen] = useState(false);
   const isShiftPressed = useNonTextInputShiftKey();
   const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
@@ -262,13 +267,14 @@ export default function WorkbenchThreadList ({
     if (logicalProjects && presentation) {
       return structure.placement
         ? listFromPlacement(structure.placement, structure.slots, selectedProjectIds)
-        : { archivedEntries: [], mainEntries: [], pinnedItems: [], settledItems: [], snoozedItems: [] };
+        : { archivedEntries: [], mainEntries: [], pinnedItems: [], settledItems: [], snoozedItems: [], workingEntries: [] };
     }
-    return projectWorkbenchHomeThreadList({
+    const list = projectWorkbenchHomeThreadList({
       projects: folderSidebars?.current && projectId
         ? [{ projectId, entries: folderSidebars.current.entries, displayOrder: folderSidebars.current.displayOrder }]
         : (folderSidebars?.sidebars.projects ?? []).filter(sidebar => selectedProjectIds.includes(sidebar.projectId)),
     }, folderSidebars?.homeDisplayOrder ?? {});
+    return { ...list, ...partitionSnoozedThreadItems(list.snoozedItems) };
   }, [folderSidebars, logicalProjects, presentation, projectId, selectedProjectIds, structure]);
   const readRows = () => client.mounted?.threadSidebar.getListing?.().rows ?? [];
   const rowForPayload = (payload: WorkbenchThreadRowDragPayload) => readRows().find(row =>
@@ -333,6 +339,11 @@ export default function WorkbenchThreadList ({
     pinnedItems: mergeDisplayItems(placementList.pinnedItems, currentEntries),
     settledItems: mergeDisplayItems(placementList.settledItems, currentEntries),
     snoozedItems: mergeDisplayItems(placementList.snoozedItems, currentEntries),
+    workingEntries: mergeContextMenuPlacementEntries(
+      placementList.workingEntries,
+      currentEntries,
+      entry => entry.threadKey,
+    ),
   };
   const archivedPlacementKeys = new Set(placementList.archivedEntries.map(entry => entry.threadKey));
   const settledLimit = preferences.settledThreadItemLimit;
@@ -367,6 +378,7 @@ export default function WorkbenchThreadList ({
   const navigableEntries = [
     ...visibleRows(list.pinnedItems),
     ...list.mainEntries,
+    ...(workingThreadsOpen ? list.workingEntries : []),
     ...(preferences.snoozedThreadsOpen ? visibleRows(list.snoozedItems) : []),
     ...(preferences.settledThreadsOpen ? visibleRows(displayedHistoryItems) : []),
   ];
@@ -636,6 +648,21 @@ export default function WorkbenchThreadList ({
         {list.mainEntries.length
           ? <ul className="m-0 flex flex-col gap-1 p-0">{list.mainEntries.map((entry) => renderEntry(entry, undefined, null, "main"))}</ul>
           : null}
+        {list.workingEntries.length ? (
+          <Disclosure
+            className="mt-2"
+            keepMounted
+            hideChevron
+            open={workingThreadsOpen}
+            onToggle={event => setWorkingThreadsOpen(event.currentTarget.open)}
+            summary={<span className="inline-flex items-center gap-2"><EllipsisIcon /><span>Working threads</span></span>}
+            summaryClassName="pl-2 text-[0.72rem] font-medium leading-[1.5] text-fg/muted"
+          >
+            <ul className="m-0 flex flex-col gap-1 p-0">
+              {list.workingEntries.map(entry => renderEntry(entry, undefined, null, "snoozed"))}
+            </ul>
+          </Disclosure>
+        ) : null}
         {list.snoozedItems.length ? (
           <Disclosure
             className="mt-2"

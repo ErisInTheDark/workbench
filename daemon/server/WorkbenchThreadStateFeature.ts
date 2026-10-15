@@ -220,6 +220,7 @@ export default class WorkbenchThreadStateFeature {
         return title;
       },
       resolveGitArc: async (projectId, harness, threadId) => {
+        if (!this.projectWorktreeAvailable(projectId)) return null;
         const project = await context.resolveProjectById(projectId);
         const state = context.gitArcs.findLifecycleState
           ? await context.gitArcs.findLifecycleState(project.rootPath, harness, threadId)
@@ -227,6 +228,7 @@ export default class WorkbenchThreadStateFeature {
         return projectGitArc(state ?? undefined);
       },
       resolveGitArcPlan: async (projectId, harness, threadId) => {
+        if (!this.projectWorktreeAvailable(projectId)) return null;
         if (!context.gitArcs.findPlanState) return null;
         const project = await context.resolveProjectById(projectId);
         const state = await context.gitArcs.findPlanState(project.rootPath, harness, threadId);
@@ -340,7 +342,9 @@ export default class WorkbenchThreadStateFeature {
         if (!identity) throw new Error("The managed thread does not belong to this cwd project.");
         const entry = await this.controller.setAgentStatus(identity.projectId, identity.threadId, status);
         return { id, result: {
-          agentStatus: entry.lifecycle.kind === "completed" ? "completed" : "blocked",
+          agentStatus: "agent" in entry.lifecycle ? entry.lifecycle.agent?.agentStatus : status,
+          deferred: entry.lifecycle.kind === "working"
+            || (entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"),
           revision: await this.controller.getRevision(identity.projectId),
           threadId: identity.threadId, turnId: getWorkbenchLifecycleTurnId(entry.lifecycle), userStatus: entry.lifecycle.kind,
         } };
@@ -477,12 +481,9 @@ export default class WorkbenchThreadStateFeature {
     return id;
   }
 
-  /**
-   * Settlement reads live Git state under the worktree, so it needs a discovered worktree. A project whose folder is
-   * gone leaves the discovered catalogue; with no worktree there is no live claim or stash to block settlement.
-   */
   private projectWorktreeAvailable(projectId: ProjectId) {
-    return this.context.getProjectCatalog().data.some(project => project.id === projectId);
+    return this.context.getProjectCatalog().data.some(project =>
+      project.id === projectId && (project.kind === "git" || project.kind === "workspace"));
   }
 
   async installCreatedProfile(harness: WorkbenchHarness, thread: ThreadPayload, selection: WorkbenchComposerProfileTargetSelection) {
@@ -544,6 +545,7 @@ export default class WorkbenchThreadStateFeature {
   ) {
     const project = await this.context.resolveProjectById(projectId);
     const readGitArcSnapshot = async (): Promise<WorkbenchThreadGitArcSnapshot> => {
+      if (!this.projectWorktreeAvailable(projectId)) return { arcs: [], plans: [] };
       const [gitArcs, gitArcPlans] = await Promise.all([
         this.context.gitArcs.listLifecycleStates
           ? this.context.gitArcs.listLifecycleStates(project.rootPath)

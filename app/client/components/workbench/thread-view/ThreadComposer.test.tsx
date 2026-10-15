@@ -20,17 +20,17 @@ test("draft enter shortcuts distinguish sending, staying and inserting a newline
   }
 });
 
-test("snoozed questionnaires offer stop only after interruption finishes", () => {
+test("snoozed questionnaires offer stop or dismissal instead of snoozing again", () => {
   for (const isActiveThread of [true, false]) {
     const state = getThreadComposerStopControlState({
       hasPendingUserInputRequest: true,
       isActiveThread,
       isCommentMode: false,
       isStopping: false,
-      canSnoozeQuestionnaire: true,
+      canSnooze: true,
       snoozed: true,
     });
-    assert.equal(state.action, isActiveThread ? "snooze" : "stop");
+    assert.equal(state.action, "stop");
     assert.equal(state.disabled, false);
   }
 });
@@ -41,7 +41,7 @@ test("unsnoozed saved questionnaires can be snoozed without a live turn", () => 
     isActiveThread: false,
     isCommentMode: false,
     isStopping: false,
-    canSnoozeQuestionnaire: true,
+    canSnooze: true,
     snoozed: false,
   }), { action: "snooze", disabled: false, visible: true });
 });
@@ -52,10 +52,22 @@ test("qualifying shift intent swaps questionnaire snooze for stop", () => {
     isActiveThread: true,
     isCommentMode: false,
     isStopping: false,
-    canSnoozeQuestionnaire: true,
+    canSnooze: true,
     preferStop: true,
     snoozed: false,
   }), { action: "stop", disabled: false, visible: true });
+});
+
+test("ordinary working and idle composers offer snooze without a questionnaire", () => {
+  for (const isActiveThread of [true, false]) {
+    assert.deepEqual(getThreadComposerStopControlState({
+      hasPendingUserInputRequest: false,
+      isActiveThread,
+      isCommentMode: false,
+      isStopping: false,
+      canSnooze: true,
+    }), { action: "snooze", disabled: false, visible: true });
+  }
 });
 
 test("idle composers without questionnaires do not show stop", () => {
@@ -65,4 +77,16 @@ test("idle composers without questionnaires do not show stop", () => {
     isCommentMode: false,
     isStopping: false,
   }), { action: "stop", disabled: true, visible: false });
+});
+
+test("idle snooze never becomes stop through shift and unavailable snooze stays hidden", () => {
+  const idle = { hasPendingUserInputRequest: false, isActiveThread: false, isCommentMode: false, isStopping: false, preferStop: true };
+  assert.deepEqual(getThreadComposerStopControlState({ ...idle, canSnooze: true }),
+    { action: "snooze", disabled: false, visible: true });
+  for (const unavailable of [{ canSnooze: false }, { canSnooze: true, snoozed: true }]) {
+    assert.equal(getThreadComposerStopControlState({ ...idle, ...unavailable }).visible, false);
+  }
+  assert.equal(getThreadComposerStopControlState({
+    ...idle, isActiveThread: true, preferStop: false, canSnooze: true, isApprovalBlocked: true,
+  }).action, "stop");
 });

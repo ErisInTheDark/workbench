@@ -1,7 +1,8 @@
 - User-facing sidebar threads and subagent threads have separate state semantics. Never infer subagent changes from sidebar thread requests. Plan subagent changes separately and obtain explicit user agreement.
 - Stop is only ever requested by user or parent agent. Interrupt is everything else.
 - A provider turn failure is a thread error: `needsAttention/providerFailed` holds its message until any continuation replaces the lifecycle. Never auto-continue it.
-- Snoozed and provider-active are mutually exclusive. Questionnaire snooze interrupts before snoozing and retains the question; stop dismisses it, clears snooze, and marks stopped. Repair active+snoozed to active+awake.
+- Snoozing working sidebar threads preserves their turn; leaving working wakes them. Non-working sidebar threads cannot stay snoozed while holding editable claims or sealed-proposal guards. Questionnaire snooze interrupts and retains the question; live approvals cannot be snoozed. Stop dismisses pending input and wakes the thread.
+- Agent status does not end an active sidebar turn. Apply completed/blocked on matching successful turn completion; stop, failure and pending input take precedence. Subagent semantics remain separate.
 - Accepted provider intent wakes the thread, drops any held questionnaire, and marks the accepted turn working.
 - ID-addressed agent messages wait behind the target's pending questionnaire. Relationship-addressed parent messages may settle a child questionnaire.
 - Provider list snapshots seed unknown rows only; a lifecycle with a known turn changes through that turn's events. Snapshots may end only turnless provider-owned lifecycles.

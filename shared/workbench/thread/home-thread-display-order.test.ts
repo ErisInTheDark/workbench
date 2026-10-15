@@ -10,6 +10,7 @@ import {
   getWorkbenchHomeThreadKey,
   moveWorkbenchHomeThreadDisplayItem,
   projectWorkbenchHomeThreadList,
+  partitionSnoozedThreadItems,
   resolveWorkbenchHomeThreadSectionKeys,
 } from "./home-thread-display-order.ts";
 import { getWorkbenchThreadDisplayKey } from "./thread-display-order.ts";
@@ -55,6 +56,30 @@ function sidebar(
 function sidebars(...projects: WorkbenchThreadSidebarSnapshot[]): WorkbenchProjectThreadSidebars {
   return { projects };
 }
+
+test("working snooze partition keeps mixed-folder order and never mutates saved membership", () => {
+  const working = {
+    ...thread("alpha", "working", 3, { snoozed: true }),
+    lifecycle: { kind: "working" as const, reason: "acceptedIntent" as const, settled: false as const,
+      agent: { agentStatus: "completed" as const } },
+  };
+  const sleeping = thread("alpha", "sleeping", 2, { snoozed: true });
+  const folder = {
+    folderId: fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000101"),
+    section: "snoozed" as const,
+    threadKeys: [getWorkbenchThreadDisplayKey(working), getWorkbenchThreadDisplayKey(sleeping)], title: "Mixed",
+  };
+  const list = projectWorkbenchHomeThreadList(sidebars(sidebar("alpha", [working, sleeping], { folders: [folder] })), {});
+  const original = structuredClone(list.snoozedItems);
+  const partition = partitionSnoozedThreadItems(list.snoozedItems);
+  assert.deepEqual(partition.workingEntries.map(entry => entry.entry.title), ["alpha:working"]);
+  const remaining = partition.snoozedItems[0];
+  assert.ok(remaining?.itemKind === "folder");
+  assert.deepEqual(remaining.entries.map(entry => entry.entry.title), ["alpha:sleeping"]);
+  assert.deepEqual(list.snoozedItems, original);
+  const allWorking = projectWorkbenchHomeThreadList(sidebars(sidebar("alpha", [working], { folders: [folder] })), {});
+  assert.deepEqual(partitionSnoozedThreadItems(allWorking.snoozedItems).snoozedItems, []);
+});
 
 test("home keeps archives available outside settled manual layout", () => {
   const archived = { ...thread("project", "archive", 99), metadata: { archived: true as const, pinned: false as const, snoozed: false as const } };

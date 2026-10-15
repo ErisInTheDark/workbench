@@ -61,6 +61,7 @@ import {
   getWorkbenchLifecycleTurnId,
   getThreadSidebarGroup,
   isWorkbenchThreadStatusProviderOwned,
+  isWorkbenchThreadSnoozeAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   reduceWorkbenchThreadLifecycle,
   resolveWorkbenchThreadTitle,
@@ -859,7 +860,7 @@ export default class WorkbenchThreadStateController {
       // A held questionnaire still waits on the user, however the turn around it moves.
       const reducedLifecycle = ownedEvent.kind === "providerTurnActive" && existing.pendingQuestionnaire
         ? existing.lifecycle
-        : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent);
+        : reduceWorkbenchThreadLifecycle(existing.lifecycle, ownedEvent, existing.entryKind);
       const heldQuestionnaire = this.heldQuestionnaire(existing, questionnaireMutation);
       const retainedQuestionnaire = existing.entryKind === "thread"
         && existing.lifecycle.kind === "needsAttention"
@@ -924,6 +925,7 @@ export default class WorkbenchThreadStateController {
         const snapshot = this.snapshot(projectId, state);
         const highestSnoozed = snapshot.entries.find((candidate) => (
           getThreadSidebarGroup(candidate) === "snoozed"
+          && candidate.entryKind === "thread" && candidate.lifecycle.kind !== "working"
           && !findWorkbenchThreadFolder(snapshot.displayOrder, getWorkbenchThreadDisplayKey(candidate))
           && (() => {
             const record = state.entries.get(getWorkbenchThreadDisplayKey(candidate));
@@ -1974,6 +1976,13 @@ export default class WorkbenchThreadStateController {
     request: Extract<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" }>,
   ) {
     const state = await this.getProject(request.projectId);
+    const candidate = state.entries.get(request.sourceKey);
+    if (request.priority === "snoozed" && candidate?.entryKind === "thread") {
+      return await this.mutateThread({
+        method: "workbench/thread-state/snooze/set", projectId: request.projectId,
+        identity: candidate.identity, snoozed: true,
+      });
+    }
     return await this.enqueue(`${request.projectId}:thread:${request.sourceKey}`, async () => {
       const entry = state.entries.get(request.sourceKey);
       if (!entry) return { accepted: false, revision: state.revision };
@@ -2002,7 +2011,8 @@ export default class WorkbenchThreadStateController {
     const sourceKey = `${request.identity.harness}:${request.identity.threadId}`;
     const targetKey = `${request.target.identity.harness}:${request.target.identity.threadId}`;
     return await this.enqueue(`${request.projectId}:thread:${sourceKey}`, async () => {
-      const source = sourceState.entries.get(sourceKey);
+      let source = sourceState.entries.get(sourceKey);
+      if (source) source = await this.refreshSnoozeClaims(request.projectId, source);
       const target = targetState.entries.get(targetKey);
       if (
         !source
@@ -2010,6 +2020,7 @@ export default class WorkbenchThreadStateController {
         || source.metadata.archived
         || source.lifecycle.settled
         || isWorkbenchThreadStatusProviderOwned(source.lifecycle)
+        || !isWorkbenchThreadSnoozeAvailable(source)
         || !target
         || target.entryKind !== "thread"
         || target.metadata.archived
@@ -2110,12 +2121,23 @@ export default class WorkbenchThreadStateController {
     )));
   }
 
+  private async refreshSnoozeClaims(projectId: ProjectId, entry: WorkbenchThreadStateEntry) {
+    if (entry.entryKind !== "thread" || entry.lifecycle.kind === "working") return entry;
+    return await this.options.runGitArcReadTransition(projectId, async () =>
+      await this.refreshGitArcState(projectId, entry.identity.harness, entry.identity.threadId) ?? entry);
+  }
+
   private async mutateThread(request: Exclude<WorkbenchThreadStateRequest, { method: "workbench/thread-state/priority/set" | "workbench/thread-state/snooze/until" }>) {
     const state = await this.getProject(request.projectId);
     const key = getThreadDisplayThreadKey(request.identity.harness, request.identity.threadId);
-    const candidate = state.entries.get(key);
+    let candidate = state.entries.get(key);
     const snoozingQuestionnaire = request.method === "workbench/thread-state/questionnaire/snooze";
     const plainQuestionnaireSnooze = request.method === "workbench/thread-state/snooze/set" && request.snoozed;
+    const snoozing = snoozingQuestionnaire || plainQuestionnaireSnooze;
+    if (snoozing && candidate?.entryKind === "thread" && candidate.pendingQuestionnaire) {
+      candidate = await this.refreshSnoozeClaims(request.projectId, candidate);
+      if (!isWorkbenchThreadSnoozeAvailable(candidate)) return { accepted: false, revision: state.revision };
+    }
     const snoozeQuestionnaire = (snoozingQuestionnaire || plainQuestionnaireSnooze) && candidate?.entryKind === "thread"
       && !candidate.metadata.archived
       && candidate.pendingQuestionnaire
@@ -2144,7 +2166,8 @@ export default class WorkbenchThreadStateController {
     }
     const mutate = async () => await this.enqueue(`${request.projectId}:thread:${key}`, async () => {
       const beforePublication = new Map(state.entries);
-      const entry = state.entries.get(key);
+      let entry = state.entries.get(key);
+      if (snoozing && entry) entry = await this.refreshSnoozeClaims(request.projectId, entry);
       if (!entry || entry.entryKind === "draft") return { accepted: false, revision: state.revision };
       if (interruptedQuestionnaire && (
         entry.entryKind !== "thread" || entry.metadata.archived
@@ -2164,10 +2187,8 @@ export default class WorkbenchThreadStateController {
         return { accepted: false, revision: state.revision };
       }
       if (
-        request.method === "workbench/thread-state/snooze/set"
-        && request.snoozed
-        && isWorkbenchThreadStatusProviderOwned(entry.lifecycle)
-        && !snoozeQuestionnaire
+        snoozing && (!isWorkbenchThreadSnoozeAvailable(entry)
+          || (entry.pendingQuestionnaire && !snoozeQuestionnaire))
       ) {
         return { accepted: false, revision: state.revision };
       }
@@ -2198,7 +2219,7 @@ export default class WorkbenchThreadStateController {
         : entry.metadata.archived
           ? entry
           : { ...entry, metadata: { archived: false as const, pinned: request.pinned, snoozed: entry.metadata.snoozed } };
-      if (entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed }, snoozedUntil: null };
+      if (!snoozeQuestionnaire && entry.entryKind === "thread" && !entry.metadata.archived && request.method === "workbench/thread-state/snooze/set" && !(entry.lifecycle.settled && request.snoozed)) next = { ...entry, metadata: { archived: false, pinned: entry.metadata.pinned, snoozed: request.snoozed }, snoozedUntil: null };
       if (request.method === "workbench/thread-state/settle") {
         const lifecycle = reduceWorkbenchThreadLifecycle(entry.lifecycle, { kind: "settle", entryKind: entry.entryKind });
         next = entry.entryKind === "subagent"

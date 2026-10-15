@@ -61,7 +61,9 @@ export function adaptWorkbenchAgentCliResponse({
         ? "Task title already matches"
         : `Task title set: ${readString(payload, "title") || "untitled"}`);
     case "thread-status":
-      return succeeded(`Task marked ${readString(payload, "agentStatus") || "unknown"}.`);
+      return succeeded(payload?.deferred === true
+        ? `Task ${readString(payload, "agentStatus") || "unknown"} recorded for turn end.`
+        : `Task marked ${readString(payload, "agentStatus") || "unknown"}.`);
     case "thread-refresh":
       return succeeded("Thread refresh scheduled.");
     case "subagent-create":

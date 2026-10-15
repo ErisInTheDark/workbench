@@ -6,6 +6,7 @@
  * - getWorkbenchHomeThreadKey/getWorkbenchHomeFolderKey: qualify thread and folder identities.
  * - resolveWorkbenchHomeThreadSectionKeys: flatten ordered section membership.
  * - projectWorkbenchHomeThreadList: combine project sidebars with project-owned folders and a separate archived tail.
+ * - partitionSnoozedThreadItems: separate working rows from sleeping folders without changing saved placement.
  * - moveWorkbenchHomeThreadDisplayItem: move a qualified thread block.
  * - replaceWorkbenchHomeThreadDisplayMember/removeWorkbenchHomeThreadDisplayMember: replace or remove home membership.
  * - removeWorkbenchThreadFromProjectFolder: remove project-owned folder membership separately.
@@ -73,6 +74,25 @@ export interface WorkbenchHomeThreadList {
   pinnedItems: WorkbenchHomeThreadDisplayItem[];
   settledItems: WorkbenchHomeThreadDisplayItem[];
   snoozedItems: WorkbenchHomeThreadDisplayItem[];
+}
+
+export function partitionSnoozedThreadItems(items: readonly WorkbenchHomeThreadDisplayItem[]) {
+  const workingEntries: WorkbenchHomeThreadEntry[] = [];
+  const snoozedItems: WorkbenchHomeThreadDisplayItem[] = [];
+  for (const item of items) {
+    const sleeping = (item.itemKind === "folder" ? item.entries : [item.entry]).filter(entry => {
+      if (entry.entry.entryKind === "thread" && entry.entry.lifecycle.kind === "working") {
+        workingEntries.push(entry);
+        return false;
+      }
+      return true;
+    });
+    if (!sleeping.length) continue;
+    snoozedItems.push(item.itemKind === "folder"
+      ? { ...item, entries: sleeping, threadKeys: sleeping.map(entry => entry.threadKey) }
+      : item);
+  }
+  return { workingEntries, snoozedItems };
 }
 
 export function normalizeWorkbenchHomeThreadDisplayOrder(candidate: unknown): WorkbenchHomeThreadDisplayOrder {

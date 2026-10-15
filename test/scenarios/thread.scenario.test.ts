@@ -486,6 +486,7 @@ test("selected providers complete the shared thread boundary journey in one clon
   let primaryFailure: Error | null = null;
   const activeProof = `active-${randomUUID()}`;
   const stopProof = `stop-${randomUUID()}`;
+  const completionProof = `completion-${randomUUID()}`;
   const title = `${provider} ${mode} ${randomUUID()}`;
   const steerProof = passphrase();
   const liveProof = passphrase();
@@ -809,8 +810,8 @@ test("selected providers complete the shared thread boundary journey in one clon
     // A leftover scripted response would answer the final turn's first request instead of its own script.
     assert.equal(fakeModel?.queuedActions ?? 0, 0, "Compaction must consume exactly its scripted summary");
     const finalProof = passphrase();
-    if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title));
-    const finalTurn = await submit(journey.final(prefixProof, finalProof));
+    if (fakeModel) fakeModel.enqueue(journey.fake.final(prefixProof, finalProof, title, completionProof));
+    const finalTurn = await submit(journey.final(prefixProof, finalProof, completionProof));
     console.log(`[${provider} live] final turn admitted at ${new Date().toISOString()}`);
     if (provider !== "codex") {
       const approval = await pending("decision");
@@ -821,6 +822,13 @@ test("selected providers complete the shared thread boundary journey in one clon
       assert.equal((await answer(approval, "decision", "Allow once")).route, "live");
       console.log(`[${provider} live] outside-sandbox approval answered at ${new Date().toISOString()}`);
     }
+    await waitHeldTool(finalTurn, completionProof);
+    const pendingCompletion = await runtime.threadSummary(threadId, scenarioSignal);
+    assert.equal(pendingCompletion?.summary.row.lifecycle.kind, "working",
+      "Agent completion must not end the app's active lifecycle before its turn ends");
+    assert.ok(pendingCompletion?.summary.row.lifecycle.kind === "working");
+    assert.equal(pendingCompletion.summary.row.lifecycle.agent.agentStatus, "completed");
+    await journeyGate.release(completionProof);
     durableProjection = { success: true, data: await waitTurn(finalTurn) };
     console.log(`[${provider} live] final turn completed`);
     const finalItems = durableProjection.data.turns.find(turn => turn.id === finalTurn)?.items ?? [];
@@ -925,7 +933,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     };
     try {
       if (provider === "codex" && codexGate) await fs.writeFile(codexGate.release, "");
-      if (journeyGate) await Promise.all([journeyGate.release(activeProof), journeyGate.release(stopProof)]);
+      if (journeyGate) await Promise.all([journeyGate.release(activeProof), journeyGate.release(stopProof), journeyGate.release(completionProof)]);
       await removeNativeSession();
     } catch (cleanupError) {
       if (primaryFailure) throw new AggregateError([primaryFailure, cleanupError], "Provider journey and native cleanup failed.");

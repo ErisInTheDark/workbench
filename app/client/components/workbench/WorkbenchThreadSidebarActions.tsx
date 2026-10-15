@@ -16,6 +16,7 @@ import {
   getThreadSidebarGroup,
   isWorkbenchThreadSettlementAvailable,
   isWorkbenchThreadStatusProviderOwned,
+  isWorkbenchThreadSnoozeAvailable,
   isWorkbenchSidebarThreadCompletionAvailable,
   type WorkbenchPinnedThreadSummaryEntry,
   type WorkbenchThreadPriority,
@@ -307,8 +308,7 @@ function WorkbenchThreadSidebarActionsProvider({
         onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned, source),
       }, {
         checked: snoozed,
-        disabled: group === "archived" || (entry.entryKind !== "draft"
-          && (entry.lifecycle.settled || entry.lifecycle.kind === "working")),
+        disabled: group === "archived" || (!snoozed && !isWorkbenchThreadSnoozeAvailable(entry)),
         icon: <SnoozedThreadIcon size={16} />,
         id: "snooze",
         label: snoozed ? "Wake" : "Snooze thread",

@@ -63,7 +63,7 @@ test("provider omission preserves saved top-level visibility and placement", () 
   assert.ok(projectWorkbenchThreadStateEntry(settled));
 });
 
-test("working top-level records repair to awake while inactive snooze remains durable", () => {
+test("working snooze remains durable while non-working collision claims force wake", () => {
   const lifecycle = {
     agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") },
     kind: "working" as const,
@@ -81,8 +81,8 @@ test("working top-level records repair to awake while inactive snooze remains du
     ...entry, lifecycle, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
   });
   assert.ok(working.entryKind === "thread");
-  assert.equal(working.metadata.snoozed, false);
-  assert.equal(working.snoozedUntil, null);
+  assert.equal(working.metadata.snoozed, true);
+  assert.deepEqual(working.snoozedUntil, snoozedUntil);
 
   const inactive = parseWorkbenchThreadStateEntry({
     ...entry, metadata: { ...entry.metadata, snoozed: true }, snoozedUntil,
@@ -90,17 +90,22 @@ test("working top-level records repair to awake while inactive snooze remains du
   assert.ok(inactive.entryKind === "thread");
   assert.equal(inactive.metadata.snoozed, true);
   assert.deepEqual(inactive.snoozedUntil, snoozedUntil);
+  const claimed = parseWorkbenchThreadStateEntry({
+    ...inactive,
+    gitArc: { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
+      intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
+  });
+  assert.ok(claimed.entryKind === "thread");
+  assert.equal(claimed.metadata.snoozed, false);
+  assert.equal(claimed.snoozedUntil, null);
 });
 
-test("stored working snooze repair reports every corrected path", () => {
+test("stored claim snooze repair reports every corrected path", () => {
+  const gitArc = { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
+    intentDescription: "", phase: "active", proposals: [], updatedAt: "now" };
   const conformed = conformStoredWorkbenchThreadStateRecord({
     ...entry,
-    lifecycle: {
-      agent: { agentStatus: "working", turnId: "turn" },
-      kind: "working",
-      reason: "acceptedIntent",
-      settled: false,
-    },
+    gitArc,
     metadata: { ...entry.metadata, snoozed: true },
     snoozedUntil: {
       targets: [{
@@ -118,12 +123,7 @@ test("stored working snooze repair reports every corrected path", () => {
 
   const withoutDeadline = conformStoredWorkbenchThreadStateRecord({
     ...entry,
-    lifecycle: {
-      agent: { agentStatus: "working", turnId: "turn" },
-      kind: "working",
-      reason: "acceptedIntent",
-      settled: false,
-    },
+    gitArc,
     metadata: { ...entry.metadata, snoozed: true },
   }, fixtureIdentityValues.ProjectId.project);
   assert.equal(withoutDeadline.success, true);

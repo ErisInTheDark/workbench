@@ -43,7 +43,7 @@ function unavailable(): never { throw new Error("The thread is not ready."); }
 const unavailableActions: ThreadStoreActions = {
   submitDraft: unavailable,
   send: unavailable, stop: unavailable, compact: unavailable, resendSteer: unavailable, dismissSteer: unavailable,
-  stopShell: unavailable, submitQuestionnaire: unavailable, snoozeQuestionnaire: unavailable, changeAgent: unavailable,
+  stopShell: unavailable, submitQuestionnaire: unavailable, snooze: unavailable, changeAgent: unavailable,
   changeModel: unavailable, changeReasoningEffort: unavailable, changeServiceTier: unavailable, changeSettings: unavailable,
   loadOlder: unavailable, observeGitArcProposal: () => () => {},
   observeGitArcClaimChanges: () => () => {}, refreshGitArcClaimChanges: () => {},

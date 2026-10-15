@@ -63,8 +63,8 @@ const taskSet = defineWorkbenchAgentCommand({
 function taskStatus(status: "blocked" | "completed") {
   return defineWorkbenchAgentCommand({
     description: status === "completed"
-      ? "Mark this managed task completed."
-      : "Mark this managed task blocked.",
+      ? "Set task completed; active sidebar threads apply it when the turn ends."
+      : "Set task blocked; active sidebar threads apply it when the turn ends.",
     helpGroups: ["task"],
     words: ["task", status],
     usage: `wb task ${status}`,
