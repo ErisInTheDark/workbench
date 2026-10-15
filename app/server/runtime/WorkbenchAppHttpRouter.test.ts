@@ -113,7 +113,7 @@ test("rejects unauthenticated native ingress headers instead of granting localho
   await router.start();
   context.after(() => router.close());
   const server = new HttpServer({ hostname: "127.0.0.1", handleRequest: (request, response) => router.handle(request, response) });
-  context.after(() => server.close());
+  context.after(() => server.close({ force: true }));
   const { url } = await server.start();
   const response = await fetch(`${url}/launch`, { headers: {
     "x-workbench-network-token": "forged",
@@ -121,7 +121,9 @@ test("rejects unauthenticated native ingress headers instead of granting localho
   } });
   assert.equal(response.status, 403);
   await response.text();
-  assert.equal((await fetch(`${url}/launch`)).status, 200);
+  const localResponse = await fetch(`${url}/launch`);
+  assert.equal(localResponse.status, 200);
+  await localResponse.text();
 });
 
 test("rejects LAN clients before pages or APIs despite forged local headers", async (context) => {
