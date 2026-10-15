@@ -212,19 +212,28 @@ test(`tool previews are ${optedIn ? "delivered" : "withheld"} across subscriptio
 
 test("opening a transcript heals its thread's capture gaps, but restoring a subscription after reload does not", async () => {
   const healed: string[] = [];
+  const recovered: string[] = [];
   const { controller } = createController({
     clock: new FakeClock(),
     transcript: { read: async () => null, subscribe: async () => undefined, unsubscribe: () => undefined },
-    transcriptReconciliation: { healCaptureGaps: async threadId => { healed.push(threadId); } },
+    transcriptReconciliation: {
+      healCaptureGaps: async threadId => { healed.push(threadId); },
+      recoverObservedThread: async threadId => { recovered.push(threadId); },
+    },
   });
   const client = createClient((_data, callback) => { callback?.(); });
   try {
+    await controller.handleMessage(client, "connection", frame("workbench/transcript/read", 0, {
+      params: { threadId: "thread", turnLimit: 1 },
+    }), false);
+    assert.deepEqual(recovered, []);
     await controller.handleMessage(client, "connection", frame("workbench/transcript/subscribe", 1, {
       params: { threadId: "thread", turnLimit: 1, subscriptionId: "sub", protocolVersion: 4 },
     }), false);
     controller.detachForReload();
     await controller.resumeAfterFailedReload();
     assert.deepEqual(healed, ["thread"]);
+    assert.deepEqual(recovered, ["thread"]);
   } finally { controller.dispose(); }
 });
 

@@ -39,6 +39,14 @@ export default class WorkbenchTranscriptSubscriptionController {
     this.#live = live;
   }
 
+  get observedThreadIds(): string[] {
+    return [...new Set([...this.#subscriptions.values()].map(subscription => subscription.request.threadId))];
+  }
+
+  isThreadObserved(threadId: string) {
+    return [...this.#subscriptions.values()].some(subscription => subscription.request.threadId === threadId);
+  }
+
   async subscribe(subscription: WorkbenchTranscriptSubscription) {
     if (this.#disposed) throw new Error("Workbench transcript subscriptions are disposed");
     if (subscription.request.beforeTurnIndex !== undefined) {

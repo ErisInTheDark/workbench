@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptRetentionResult: payload rows expired by one atomic pass.
+ * - WorkbenchTranscriptRetentionCutoffs: expiry clocks and observed threads excluded from whole-turn expiry.
  * - default WorkbenchTranscriptRetentionRepository: aggregate durable tool facts and expire eligible result/transcript payloads.
  */
 import type Database from "better-sqlite3";
@@ -14,6 +15,7 @@ export interface WorkbenchTranscriptRetentionCutoffs {
   expiredAt: number;
   resultCutoff: number;
   transcriptCutoff: number;
+  observedThreadIds?: readonly string[];
 }
 
 const DAY_MS = 86_400_000;
@@ -24,7 +26,7 @@ export default class WorkbenchTranscriptRetentionRepository {
   expire(cutoffs: WorkbenchTranscriptRetentionCutoffs): WorkbenchTranscriptRetentionResult {
     return this.database.transaction(() => {
       const expiredResults = this.expireResults(cutoffs.resultCutoff, cutoffs.expiredAt);
-      const expiredTurns = this.expireTranscripts(cutoffs.transcriptCutoff, cutoffs.expiredAt);
+      const expiredTurns = this.expireTranscripts(cutoffs.transcriptCutoff, cutoffs.expiredAt, cutoffs.observedThreadIds ?? []);
       return { expiredResults, expiredTurns };
     })();
   }
@@ -94,7 +96,7 @@ export default class WorkbenchTranscriptRetentionRepository {
     return inserted;
   }
 
-  private expireTranscripts(cutoff: number, expiredAt: number) {
+  private expireTranscripts(cutoff: number, expiredAt: number, observedThreadIds: readonly string[]) {
     const inserted = this.database.prepare(`
       INSERT OR IGNORE INTO thread_turn_payload_retention(turn_id, expired_at)
       SELECT turn.id, @expiredAt
@@ -102,7 +104,8 @@ export default class WorkbenchTranscriptRetentionRepository {
       JOIN workbench_thread_retention retention ON retention.thread_id = turn.thread_id
       LEFT JOIN thread_turn_payload_retention expired ON expired.turn_id = turn.id
       WHERE retention.settled_at < @cutoff AND expired.turn_id IS NULL
-    `).run({ cutoff, expiredAt }).changes;
+        AND turn.thread_id NOT IN (SELECT value FROM json_each(@observedThreadIds))
+    `).run({ cutoff, expiredAt, observedThreadIds: JSON.stringify(observedThreadIds) }).changes;
     if (!inserted) return 0;
     this.aggregateCandidateResults(`
       retained.item_id IS NULL

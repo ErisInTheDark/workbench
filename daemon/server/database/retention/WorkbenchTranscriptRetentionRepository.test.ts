@@ -49,6 +49,29 @@ function processItem(
     VALUES (?, 0, ?, 'echo', 'C:/project', ?)`).run(input.itemId, input.state, input.output);
 }
 
+test("observed settled transcripts survive until release while restored threads stay protected", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    for (const [index, threadId] of ["observed", "unobserved", "restored"].entries()) {
+      seed(database, threadId, threadId === "restored" ? null : 1);
+      processItem(database, {
+        threadId, turnId: `${threadId}-turn`, itemId: index + 1, createdAt: 1, state: "completed", output: threadId,
+      });
+    }
+    const owner = new WorkbenchTranscriptRetentionRepository(database);
+    assert.equal(owner.expire({
+      expiredAt: 1_000, resultCutoff: 0, transcriptCutoff: 100, observedThreadIds: ["observed"],
+    }).expiredTurns, 1);
+    assert.deepEqual(database.prepare("SELECT thread_id FROM thread_items ORDER BY thread_id").pluck().all(), ["observed", "restored"]);
+    assert.equal(owner.expire({
+      expiredAt: 2_000, resultCutoff: 0, transcriptCutoff: 100, observedThreadIds: [],
+    }).expiredTurns, 1);
+    assert.deepEqual(database.prepare("SELECT thread_id FROM thread_items").pluck().all(), ["restored"]);
+  } finally { database.close(); }
+});
+
 test("result expiry preserves the call envelope, honours exact cutoffs, and aggregates once", () => {
   const database = new Database(":memory:");
   try {

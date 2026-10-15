@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect latest-window-only refresh ownership, replacement, and stale publish suppression. Keywords: transcript, subscription, test.
+ * No production exports. Tests protect observation lifetime, latest-window refresh ownership, replacement, and stale publish suppression.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -16,6 +16,33 @@ function deferred<Value>() {
   });
   return { promise, reject, resolve };
 }
+
+test("observation protection spans opening, multiple views, replacement, failure and disposal", async () => {
+  const pending = deferred<WorkbenchTranscriptSnapshot | null>();
+  const owner = new WorkbenchTranscriptSubscriptionController(() => pending.promise, assert.fail);
+  const subscribe = (id: string, threadId = "thread") => owner.subscribe({
+    id, request: { threadId, turnLimit: 1 }, publish: () => undefined,
+  });
+  const first = subscribe("first");
+  const second = subscribe("second");
+  assert.deepEqual(owner.observedThreadIds, ["thread"]);
+  owner.unsubscribe("first");
+  assert.equal(owner.isThreadObserved("thread"), true);
+  pending.resolve(null);
+  await Promise.all([first, second]);
+  await subscribe("second", "replacement");
+  assert.equal(owner.isThreadObserved("thread"), false);
+  assert.deepEqual(owner.observedThreadIds, ["replacement"]);
+  owner.dispose();
+  assert.deepEqual(owner.observedThreadIds, []);
+
+  const failed = new WorkbenchTranscriptSubscriptionController(async () => { throw new Error("read failed"); }, assert.fail);
+  await assert.rejects(failed.subscribe({
+    id: "failed", request: { threadId: "thread", turnLimit: 1 }, publish: () => undefined,
+  }), /read failed/);
+  assert.equal(failed.isThreadObserved("thread"), false);
+  failed.dispose();
+});
 
 test("subscriptions refresh only changed latest windows and replacement suppresses stale publication", async () => {
   const reads: string[] = [];

@@ -3129,6 +3129,9 @@ test("only an explicit recovery recreates a retention-expired turn", () => {
   try {
     repository.settle([threadObservation(), turnObservation("turn", 0)]);
     database.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES ('turn', 5)").run();
+    const catalog = repository.read({ threadId: "thread", turnIds: [], turnLimit: 1 });
+    assert.deepEqual(catalog?.expiredTurnPayloads, [{ turnId: "turn", expiredAt: 5 }]);
+    assert.deepEqual(catalog?.rows.threadItems, []);
     repository.settle([window], "replay");
     assert.deepEqual([items(), tombstones()], [0, 1], "routine replays keep retention expiry");
     repository.settle([window], "explicitRecovery");

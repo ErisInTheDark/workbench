@@ -468,7 +468,7 @@ export default class WorkbenchTranscriptRepository {
           threadItems.map(({ id }) => id),
         ).map(({ expired_at, item_id }) => ({ expiredAt: expired_at, itemId: item_id })),
         expiredTurnPayloads: this.#all(selectRows(threadPayloadRetentionTables.turnPayloadRetention, {
-          whereIn: { turn_id: loadedTurnIds },
+          whereIn: { turn_id: requestedTurnIds?.size === 0 ? turns.map(turn => turn.id) : loadedTurnIds },
         })).map(({ expired_at, turn_id }) => ({ expiredAt: expired_at, turnId: turn_id })),
         hasPreviousTurns: firstLoadedTurnIndex !== undefined
           && turns.some((turn) => turn.turn_index < firstLoadedTurnIndex),
@@ -1423,10 +1423,6 @@ export default class WorkbenchTranscriptRepository {
     return observation.threadId;
   }
 
-  /**
-   * An explicitly demanded re-read may recreate a retention-expired turn; the next retention run expires it again,
-   * since its thread is still settled. Only turns the batch's windows re-read completely are revived.
-   */
   #reviveExpiredTurns(observations: readonly WorkbenchTranscriptObservation[]) {
     for (const observation of observations) {
       if (observation.kind !== "providerTurnScope" && observation.kind !== "canonicalWindow") continue;

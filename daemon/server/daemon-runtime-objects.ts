@@ -178,6 +178,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
 }
 
 export interface DaemonTranscriptRegistration {
+  isThreadObserved(threadId: string): boolean;
   acceptLiveUpdate?(update: TranscriptLiveUpdate): void;
   acceptApprovalOutcome(entry: import("workbench-shared/workbench/provider/provider-approval").WorkbenchApprovalOutcomeEntry): void;
   assertReady(): void;

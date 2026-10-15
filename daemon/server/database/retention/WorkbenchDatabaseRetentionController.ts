@@ -27,6 +27,7 @@ export default class WorkbenchDatabaseRetentionController {
     private readonly database: RetentionDatabase,
     private readonly now: () => number = Date.now,
     private readonly scheduling: RetentionScheduler = scheduler,
+    private readonly readObservedThreadIds: () => string[] = () => [],
   ) {}
 
   start() {
@@ -43,7 +44,7 @@ export default class WorkbenchDatabaseRetentionController {
       expiredAt: now,
       resultCutoff: now - DAY_MS,
       transcriptCutoff: now - 3 * DAY_MS,
-    }, now - DAY_MS, signal).then(() => undefined).catch((error: unknown) => {
+    }, now - DAY_MS, signal, this.readObservedThreadIds).then(() => undefined).catch((error: unknown) => {
       if (signal.aborted) return;
       console.error(`database retention failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1_000));
     }).finally(() => { this.active = null; });

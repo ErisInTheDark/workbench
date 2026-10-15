@@ -629,6 +629,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     cutoffs: Extract<WorkbenchDatabaseRequestPayload, { type: "expireRetainedPayloads" }>["cutoffs"],
     proposalCacheCutoff: number,
     signal?: AbortSignal,
+    readObservedThreadIds?: () => string[],
   ) {
     await this.start();
     const startedAt = performance.now();
@@ -641,7 +642,10 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       signal?.throwIfAborted();
       return await this.#request(request);
     };
-    const expiry = await step({ type: "expireRetainedPayloads", cutoffs });
+    const expiry = await step({
+      type: "expireRetainedPayloads",
+      cutoffs: { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) },
+    });
     if (expiry.type !== "retentionExpiry") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${expiry.type}`);
     const createdBefore = cutoffs.expiredAt - ASSET_ADMISSION_GRACE_MS;
     const candidates = await step({ type: "listOrphanAssetCandidates", createdBefore });

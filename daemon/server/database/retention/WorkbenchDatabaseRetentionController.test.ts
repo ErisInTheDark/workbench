@@ -8,6 +8,23 @@ import WorkbenchDatabaseRetentionController from "./WorkbenchDatabaseRetentionCo
 
 const DAY_MS = 86_400_000;
 
+test("retention delegates live observation sampling for each expiry dispatch", async () => {
+  let observed = ["first"];
+  const protections: string[][] = [];
+  const owner = new WorkbenchDatabaseRetentionController({
+    runRetention: async (_cutoffs, _cacheCutoff, _signal, readObservedThreadIds) => {
+      protections.push(readObservedThreadIds?.() ?? []);
+      return { expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0, fullCompaction: false, reclaimedPages: 0 };
+    },
+  }, () => 0, createScheduler().scheduling, () => observed);
+  try {
+    await owner.run();
+    observed = ["second"];
+    await owner.run();
+    assert.deepEqual(protections, [["first"], ["second"]]);
+  } finally { await owner.dispose(); }
+});
+
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
   const promise = new Promise<Value>((accept) => { resolve = accept; });

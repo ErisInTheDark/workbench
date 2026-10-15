@@ -179,8 +179,7 @@ export interface WorkbenchWebSocketRequestControllerOptions {
   threadState: Pick<WorkbenchThreadStateController, "handleRequest">;
   transcript: Pick<DaemonTranscriptRegistration, "read" | "subscribe" | "unsubscribe">
     & Partial<Pick<DaemonTranscriptRegistration, "prefetch">>;
-  /** Opening a thread re-reads its capture-gap anchors in the background; the healed body arrives through the subscription. */
-  transcriptReconciliation?: Pick<import("./WorkbenchTranscriptReconciliationController").default, "healCaptureGaps">;
+  transcriptReconciliation?: Pick<import("./WorkbenchTranscriptReconciliationController").default, "healCaptureGaps" | "recoverObservedThread">;
   writeLine?: (line: string) => void;
 }
 
@@ -928,6 +927,7 @@ export default class WorkbenchWebSocketRequestController {
       turnLimit: request.params.turnLimit,
     });
     void this.transcriptReconciliation?.healCaptureGaps(request.params.threadId);
+    void this.transcriptReconciliation?.recoverObservedThread(request.params.threadId);
     return { subscribed: true };
   }
 

@@ -115,7 +115,7 @@ test("fresh database is ready without a prepared project catalogue", async () =>
   }
 });
 
-test("retention enables incremental reclaim and physically shrinks a historical database", async (context) => {
+test("retention protects current observers while reclaiming a historical database", async (context) => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-reclaim-");
   const databasePath = join(temporary.path, "workbench.sqlite3");
   captureTestOutput(context, process.stdout, text => text.startsWith(DATABASE_LOG_PREFIX));
@@ -128,6 +128,17 @@ test("retention enables incremental reclaim and physically shrinks a historical 
       (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
     VALUES ('thread', ?, '/repo', 'thread', 1, 1, 1, 1)
   `).run(testProjectIds.project);
+  seeded.exec(`
+    INSERT INTO workbench_harnesses(id) VALUES ('codex');
+    INSERT INTO workbench_thread_states(thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      VALUES ('thread', 'topLevel', 'codex', 'thread', 1, 1);
+    INSERT INTO workbench_thread_retention(thread_id, settled_at) VALUES ('thread', 1);
+    INSERT INTO thread_turns(id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
+      VALUES ('turn', 'thread', 0, 'codex', '/repo', 'native', 'completed', 1);
+    INSERT INTO workbench_transcript_item_identities(id, thread_id) VALUES ('item', 'thread');
+    INSERT INTO thread_items(id, public_id, thread_id, turn_id, item_position, type, created_at, updated_at)
+      VALUES (1, 'item', 'thread', 'turn', 0, 'userMessage', 1, 1);
+  `);
   const digest = "a".repeat(64);
   seeded.prepare(`
     INSERT INTO transcript_assets(digest, mime_type, byte_length, storage_key, created_at)
@@ -141,16 +152,21 @@ test("retention enables incremental reclaim and physically shrinks a historical 
   seeded.close();
   const beforeBytes = (await stat(databasePath)).size;
   const diagnostics: WorkbenchDatabaseDiagnosticEvent[] = [];
+  let observed: string[] = [];
   const controller = new WorkbenchDatabaseController({
     databasePath,
-    onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+    onDiagnostic: diagnostic => {
+      diagnostics.push(diagnostic);
+      if (diagnostic.operation === "retention" && diagnostic.phase === "pending") observed = ["thread"];
+    },
   });
   try {
     const result = await controller.runRetention({
       expiredAt: 10_000_000,
       resultCutoff: 0,
-      transcriptCutoff: 0,
-    }, 0);
+      transcriptCutoff: 100,
+    }, 0, undefined, () => observed);
+    assert.equal(result.expiredTurns, 0);
     assert.equal(result.expiredAssets, 1);
     assert.equal(result.fullCompaction, true);
     assert.ok(result.reclaimedPages > 1_000);
@@ -171,6 +187,7 @@ test("retention enables incremental reclaim and physically shrinks a historical 
     const inspection = new Database(databasePath, { readonly: true, fileMustExist: true });
     try {
       assert.equal(inspection.pragma("auto_vacuum", { simple: true }), 2);
+      assert.equal(inspection.prepare("SELECT COUNT(*) FROM thread_items").pluck().get(), 1);
       assert.deepEqual(inspection.pragma("foreign_key_check"), []);
     } finally {
       inspection.close();

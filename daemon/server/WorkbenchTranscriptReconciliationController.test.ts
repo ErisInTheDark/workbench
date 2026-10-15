@@ -5,8 +5,9 @@ import WorkbenchTranscriptReconciliationController, { type WorkbenchTranscriptRe
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 
-function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts"> {
+function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<WorkbenchTranscriptReconciliationOptions, "identities" | "transcripts" | "isThreadObserved"> {
   return {
+    isThreadObserved: () => true,
     identities: { resolve: async input => ({
       threadId: WorkbenchThreadIdSchema.parse(input.threadId), projectId: ProjectIdSchema.parse("project"), projectRoot: "/repo",
       bindings: [{ harness: "opencode", nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("native"), pending: false, turnIndex: 2 }],
@@ -14,6 +15,133 @@ function identityPorts(turns: WorkbenchTranscriptSnapshot["turns"] = []): Pick<W
     transcripts: { catalog: async () => ({ turns } as WorkbenchTranscriptSnapshot) },
   };
 }
+
+test("opening coalesces expired-turn recovery, newest first, stopping after the last observer leaves", async () => {
+  const turns = ["old", "kept", "new"].map((id, turn_index) => ({
+    id, thread_id: "thread", identity_origin: "workbench" as const, turn_index, harness_id: "codex",
+    native_location: "/repo", native_thread_id: "native", native_turn_id: `native-${id}`,
+    state: "completed" as const, created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  }));
+  const ports = identityPorts(turns);
+  const expired = new Set(["old", "new"]);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const recovered: string[] = [];
+  let observed = true;
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...ports,
+    isThreadObserved: () => observed,
+    transcripts: { catalog: async threadId => ({
+      ...await ports.transcripts.catalog(threadId)!,
+      expiredTurnPayloads: [...expired].map(turnId => ({ turnId, expiredAt: 5 })),
+    } as WorkbenchTranscriptSnapshot) },
+    readRecoveryGaps: async () => [],
+    recover: async input => {
+      assert.equal(input.explicit, true);
+      assert.equal(input.target.mode, "exact");
+      if (input.target.mode !== "exact") throw new Error("Expected exact recovery");
+      recovered.push(input.target.turnId);
+      if (input.target.turnId === "new") {
+        entered.resolve();
+        await release.promise;
+        observed = false;
+      }
+      expired.delete(input.target.turnId);
+      return { turnIds: [input.target.turnId], exhausted: false };
+    },
+    warn: assert.fail,
+  });
+  try {
+    const first = owner.recoverObservedThread("thread");
+    await entered.promise;
+    const second = owner.recoverObservedThread("thread");
+    release.resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(recovered, ["new"]);
+    observed = true;
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(recovered, ["new", "old"]);
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(recovered, ["new", "old"]);
+  } finally { await owner.dispose(); }
+});
+
+test("observed recovery leaves failed turns retryable without blocking other expired turns", async () => {
+  const turns = ["good", "bad"].map((id, turn_index) => ({
+    id, thread_id: "thread", identity_origin: "workbench" as const, turn_index, harness_id: "codex",
+    native_location: "/repo", native_thread_id: "native", native_turn_id: id,
+    state: "completed" as const, created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  }));
+  const ports = identityPorts(turns);
+  const recovered: string[] = [];
+  const warnings: string[] = [];
+  const expired = new Set(turns.map(turn => turn.id));
+  let unavailable = true;
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...ports,
+    transcripts: { catalog: async threadId => ({
+      ...await ports.transcripts.catalog(threadId)!,
+      expiredTurnPayloads: [...expired].map(turnId => ({ turnId, expiredAt: 5 })),
+    } as WorkbenchTranscriptSnapshot) },
+    readRecoveryGaps: async () => [],
+    recover: async input => {
+      if (input.target.mode !== "exact") throw new Error("Expected exact recovery");
+      recovered.push(input.target.turnId);
+      if (input.target.turnId === "bad" && unavailable) throw new Error("provider history unavailable");
+      expired.delete(input.target.turnId);
+      return { turnIds: [input.target.turnId], exhausted: false };
+    },
+    warn: message => warnings.push(message),
+  });
+  try {
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(recovered, ["bad", "good"]);
+    assert.equal(warnings.length, 1);
+    unavailable = false;
+    await owner.recoverObservedThread("thread");
+    assert.deepEqual(recovered, ["bad", "good", "bad"]);
+  } finally { await owner.dispose(); }
+});
+
+test("leaving while observed recovery waits behind another thread prevents its provider read", async () => {
+  const turn = {
+    id: "turn", thread_id: "thread", identity_origin: "workbench" as const, turn_index: 0, harness_id: "codex",
+    native_location: "/repo", native_thread_id: "native", native_turn_id: "native-turn",
+    state: "completed" as const, created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  };
+  const ports = identityPorts([turn]);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let observed = true;
+  const recovered: string[] = [];
+  const owner = new WorkbenchTranscriptReconciliationController({
+    ...ports,
+    isThreadObserved: () => observed,
+    transcripts: { catalog: async threadId => ({
+      ...await ports.transcripts.catalog(threadId)!,
+      expiredTurnPayloads: [{ turnId: turn.id, expiredAt: 5 }],
+    } as WorkbenchTranscriptSnapshot) },
+    readRecoveryGaps: async threadId => {
+      if (threadId === "thread") observed = false;
+      return [];
+    },
+    recover: async input => {
+      recovered.push(input.threadId);
+      entered.resolve();
+      await release.promise;
+      return { turnIds: [turn.id], exhausted: false };
+    },
+    warn: assert.fail,
+  });
+  try {
+    const blocking = owner.reconcile({ threadId: "other", target: { mode: "latest" }, refresh: false });
+    await entered.promise;
+    const opening = owner.recoverObservedThread("thread");
+    release.resolve();
+    await Promise.all([blocking, opening]);
+    assert.deepEqual(recovered, ["other"]);
+  } finally { await owner.dispose(); }
+});
 
 test("duplicate demands share one window while independent windows wait without fetching bodies", async () => {
   const first = Promise.withResolvers<void>();
@@ -93,12 +221,22 @@ test("failed windows retain useful bounded diagnostics and do not strand queued 
   await owner.dispose();
 });
 
-test("retirement aborts active native work, rejects queued demands and drains the owner", async () => {
+for (const observed of [false, true]) {
+test(`retirement drains ${observed ? "observed restoration" : "manual recovery"} and rejects queued demands`, async () => {
   const entered = Promise.withResolvers<void>();
   const aborted = Promise.withResolvers<void>();
   let calls = 0;
+  const ports = identityPorts([{
+    id: "turn", thread_id: "active", identity_origin: "workbench", turn_index: 0, harness_id: "codex",
+    native_location: "/repo", native_thread_id: "native", native_turn_id: "native-turn", state: "completed",
+    created_at: 1, started_at: 1, ended_at: 2, duration_ms: 1,
+  }]);
   const owner = new WorkbenchTranscriptReconciliationController({
-    ...identityPorts(),
+    ...ports,
+    transcripts: { catalog: async threadId => ({
+      ...await ports.transcripts.catalog(threadId)!,
+      expiredTurnPayloads: [{ turnId: "turn", expiredAt: 5 }],
+    } as WorkbenchTranscriptSnapshot) },
     readRecoveryGaps: async () => [],
     recover: async (_input, signal) => {
       calls++;
@@ -111,14 +249,16 @@ test("retirement aborts active native work, rejects queued demands and drains th
     warn: assert.fail,
   });
   const input = { threadId: "active", target: { mode: "latest" as const }, refresh: false };
-  const active = assert.rejects(owner.reconcile(input), /retired/);
+  const active = observed ? owner.recoverObservedThread(input.threadId) : assert.rejects(owner.reconcile(input), /retired/);
   await entered.promise;
   const queued = assert.rejects(owner.reconcile({ ...input, threadId: "queued" }), /retired/);
   await owner.dispose();
   await Promise.all([active, queued]);
+  assert.equal(owner.hasPendingWork(), false);
   assert.equal(calls, 1);
   await assert.rejects(owner.reconcile(input), /retired/);
 });
+}
 
 test("a window reports changed only when a transcript commit for its own thread lands during recovery", async () => {
   const listeners = new Set<(threadIds: readonly string[]) => void>();

@@ -14,7 +14,7 @@
 - Keep provider-native evidence separate from Workbench items.
 - Provider-native evidence does not render or order history.
 - Expire completed result bodies one day after item creation. Keep invocation, outcome, timing, error, exit, and item identity facts plus an expiry tombstone.
-- Expire a settled generation's item graph and provider-native payloads three days after settlement. Keep turn identity and a turn tombstone; only an explicit single-turn recovery recreates expired payload, until the next retention run.
+- Expire unobserved settled generations three days after settlement. Keep turn identity and tombstones. Explicit recovery recreates expired payload until the next eligible retention run.
 - Aggregate expired `wb`/`wbex` call and failure facts before deletion. Count each removed call once.
 - Collect only canonically unreachable transcript assets older than the one-hour admission grace. Addresses alone are not reachability.
 - Treat command presentation as derived and replaceable.
@@ -22,6 +22,6 @@
 - Rematching cannot replace the source operation or durable subsystem facts.
 - Provider omission is not transcript deletion. Remove an admitted item only from positive same-fact identity evidence, never because a reread omits it.
 - Reading admitted transcript history must not depend on provider refresh or recovery succeeding.
-- Reconcile provider observations separately from SQLite reads, one demanded turn at a time. Opening a thread may queue named turns, such as open capture-gap anchors, but never sweeps its historical bodies; acknowledge only capture gaps covered by completed recovery.
+- Reconcile providers separately from SQLite reads, one named turn at a time. Opening a thread recovers expired turns while observed and queues open capture-gap anchors; never sweep other historical bodies. Acknowledge only capture gaps covered by completed recovery.
 - Transcript subscription bootstrap never reads inside provider ingest order. Opening views buffer settlements instead.
 Compaction is a Workbench item lifecycle, never a conversation turn. Manual and automatic compaction share admission and completion; native execution identity is evidence only.

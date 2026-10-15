@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchTranscriptReconciliationOptions: canonical resolution, storage and native recovery ports.
- * - default WorkbenchTranscriptReconciliationController: own explicit demanded transcript recovery, report whether each window changed its thread, and heal capture-gap anchors once per lifetime.
+ * - default WorkbenchTranscriptReconciliationController: own demanded recovery, coalesced observed-thread restoration, change reporting, and capture-gap healing.
  */
 import type { WorkbenchThreadReconcile, WorkbenchThreadReconcileResult } from "workbench-shared/workbench/thread/thread-actions";
 import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -11,6 +11,7 @@ import type WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 export interface WorkbenchTranscriptReconciliationOptions {
   identities: Pick<WorkbenchThreadIdentityController, "resolve">;
   transcripts: Pick<WorkbenchTranscriptReader, "catalog">;
+  isThreadObserved(threadId: string): boolean;
   /** Open capture gaps of a canonical thread, with the anchor turns no window has re-read yet. */
   readRecoveryGaps(threadId: string): Promise<ReadonlyArray<{ id: string; turnIds: readonly string[] }>>;
   /** Threads each transcript commit changed; lets a window report whether it changed anything. */
@@ -22,6 +23,7 @@ export interface WorkbenchTranscriptReconciliationOptions {
 type Target = WorkbenchThreadReconcile & { harness: string };
 type Job = {
   target: Target;
+  onlyWhileObserved: boolean;
   controller: AbortController;
   result: ReturnType<typeof Promise.withResolvers<WorkbenchThreadReconcileResult>>;
   /** A commit for this thread landed while the window ran. */
@@ -52,6 +54,7 @@ export default class WorkbenchTranscriptReconciliationController {
   private readonly stopSettled: () => void;
   /** `${gapId}:${turnId}` anchors already queued for healing; an unrecoverable turn warns once, not on every visit. */
   private readonly healedAnchors = new Set<string>();
+  private readonly observedRecoveries = new Map<string, Promise<void>>();
 
   constructor(private readonly options: WorkbenchTranscriptReconciliationOptions) {
     this.stopSettled = options.subscribeSettled?.(threadIds => {
@@ -67,6 +70,44 @@ export default class WorkbenchTranscriptReconciliationController {
     signal?.throwIfAborted();
     if (!target) return { turnIds: [], exhausted: true };
     return this.enqueue(target, signal);
+  }
+
+  async recoverObservedThread(threadId: string) {
+    try {
+      this.controller.signal.throwIfAborted();
+      const identity = await this.options.identities.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      this.controller.signal.throwIfAborted();
+      if (!identity || !this.options.isThreadObserved(identity.threadId)) return;
+      const existing = this.observedRecoveries.get(identity.threadId);
+      if (existing) return await existing;
+      const task = this.recoverExpiredTurns(identity.threadId)
+        .finally(() => { this.observedRecoveries.delete(identity.threadId); });
+      this.observedRecoveries.set(identity.threadId, task);
+      await task;
+    } catch (error) {
+      if (!this.controller.signal.aborted) this.options.warn(`[transcript-reconciliation] observed recovery failed: ${boundedMessage(error)}`);
+    }
+  }
+
+  private async recoverExpiredTurns(threadId: string) {
+    const catalog = await this.options.transcripts.catalog(threadId);
+    const expired = new Set(catalog?.expiredTurnPayloads?.map(payload => payload.turnId));
+    for (const turn of (catalog?.turns ?? []).toReversed()) {
+      this.controller.signal.throwIfAborted();
+      if (!this.options.isThreadObserved(threadId)) return;
+      if (!expired.has(turn.id)) continue;
+      if (!turn.native_turn_id) {
+        this.options.warn(`[transcript-reconciliation] expired turn has no provider recovery identity: ${boundedMessage(turn.id)}`);
+        continue;
+      }
+      const result = await this.enqueue({
+        threadId, harness: turn.harness_id, target: { mode: "exact", turnId: turn.id }, refresh: false, explicit: true,
+      }, undefined, true).catch(() => null); // The queue reports failures; one unavailable turn must not strand the rest.
+      if (!this.options.isThreadObserved(threadId)) return;
+      if (result && !result.turnIds.includes(turn.id)) {
+        this.options.warn(`[transcript-reconciliation] provider did not recover expired turn: ${boundedMessage(turn.id)}`);
+      }
+    }
   }
 
   /**
@@ -97,11 +138,15 @@ export default class WorkbenchTranscriptReconciliationController {
     }
   }
 
-  private enqueue(target: Target, signal?: AbortSignal) {
+  private enqueue(target: Target, signal?: AbortSignal, onlyWhileObserved = false) {
+    this.controller.signal.throwIfAborted();
     const existing = this.queue.find(job => sameWindow(job.target, target))
       ?? (!target.refresh && this.active && sameWindow(this.active.target, target) ? this.active : null);
-    if (existing) return this.wait(existing, signal);
-    const job: Job = { target, controller: new AbortController(), result: Promise.withResolvers<WorkbenchThreadReconcileResult>() };
+    if (existing) {
+      existing.onlyWhileObserved &&= onlyWhileObserved;
+      return this.wait(existing, signal);
+    }
+    const job: Job = { target, onlyWhileObserved, controller: new AbortController(), result: Promise.withResolvers<WorkbenchThreadReconcileResult>() };
     this.queue.push(job);
     this.draining ??= Promise.resolve().then(() => this.drain());
     return this.wait(job, signal);
@@ -161,6 +206,10 @@ export default class WorkbenchTranscriptReconciliationController {
           signal.throwIfAborted();
           const gapIds = (await this.options.readRecoveryGaps(job.target.threadId)).map(gap => gap.id);
           signal.throwIfAborted();
+          if (job.onlyWhileObserved && !this.options.isThreadObserved(job.target.threadId)) {
+            job.result.resolve({ turnIds: [], exhausted: false, changed: false });
+            continue;
+          }
           job.changed = false;
           const result = await this.options.recover({ ...job.target, gapIds }, signal);
           signal.throwIfAborted();
@@ -186,7 +235,8 @@ export default class WorkbenchTranscriptReconciliationController {
     this.controller.abort(new Error("Transcript reconciliation retired."));
     for (const job of this.queue.splice(0)) job.result.reject(this.controller.signal.reason);
     await this.draining;
+    await Promise.allSettled(this.observedRecoveries.values());
   }
 
-  hasPendingWork() { return this.draining !== null || this.queue.length > 0; }
+  hasPendingWork() { return this.draining !== null || this.queue.length > 0 || this.observedRecoveries.size > 0; }
 }

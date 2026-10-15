@@ -297,6 +297,14 @@ export default class WorkbenchTranscriptController {
     return this.#captureGaps.pendingRecoveryThreadIds;
   }
 
+  get observedThreadIds() {
+    return this.#subscriptions.observedThreadIds;
+  }
+
+  isThreadObserved(threadId: string) {
+    return this.#subscriptions.isThreadObserved(threadId);
+  }
+
   readRecoveryGaps(threadId: WorkbenchThreadId) {
     this.#assertActive();
     return this.#captureGaps.readRecovery(threadId);

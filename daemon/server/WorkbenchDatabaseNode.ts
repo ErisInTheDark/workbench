@@ -67,7 +67,7 @@ export default ReloadableNode.define<
       },
     });
     const transcript = new WorkbenchTranscriptController(database, captureGaps);
-    const retention = new WorkbenchDatabaseRetentionController(database);
+    const retention = new WorkbenchDatabaseRetentionController(database, undefined, undefined, () => transcript.observedThreadIds);
     // The database owns the worker isolates, so their heaps are reported from here.
     const memory = new WorkbenchMemoryReporter({
       readWorkerHeaps: () => database.readWorkerHeaps(),
