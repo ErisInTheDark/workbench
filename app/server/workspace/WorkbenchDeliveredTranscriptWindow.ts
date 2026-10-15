@@ -157,12 +157,20 @@ export default class WorkbenchDeliveredTranscriptWindow {
       this.#remember(splitWorkbenchTranscriptSnapshot(snapshot).envelopes);
       return this.#apply(snapshot, [], true);
     }
+    const hadPrevious = this.#hasPreviousItems;
+    const first = this.#firstCursor;
+    if (first && snapshot.rows.threadItems.some(item => {
+      const turn = snapshot.turns.find(turn => turn.id === item.turn_id) ?? this.#turns.get(item.turn_id);
+      return turn && compareWorkbenchTranscriptItemCursors({
+        itemId: item.public_id, itemPosition: item.item_position, turnIndex: turn.turn_index,
+      }, first) < 0;
+    })) this.#hasPreviousItems = true;
     const bounded = this.#bound(snapshot);
     const removed = removedItemIds.filter(id => this.#roots.has(id));
     const unchangedItems = snapshot.rows.threadItems.length > 0 && bounded.rows.threadItems.length === 0
       && areDeeplyEqual(snapshot.thread, this.#thread)
       && snapshot.turns.every(turn => areDeeplyEqual(turn, this.#turns.get(turn.id) ?? turn));
-    if (!removed.length && (unchangedItems || this.#unchanged(bounded))) return null;
+    if (!removed.length && hadPrevious === this.#hasPreviousItems && (unchangedItems || this.#unchanged(bounded))) return null;
     this.#thread = snapshot.thread;
     return this.#apply(bounded, removed, false);
   }

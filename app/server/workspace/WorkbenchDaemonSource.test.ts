@@ -11,6 +11,12 @@ import {
 } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import WorkbenchDaemonSource, { type WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import WorkbenchTranscriptReservoir from "./WorkbenchTranscriptReservoir";
+import WorkbenchDeliveredTranscriptWindow from "./WorkbenchDeliveredTranscriptWindow";
+import { splitWorkbenchTranscriptSnapshot } from "workbench-shared/workbench/transcript/workbench-transcript-envelope";
+import {
+  applyTranscriptLayoutPatch, applyTranscriptStructure, type TranscriptLayout,
+} from "workbench-shared/workbench/transcript/thread-transcript-stream";
+import type { WorkbenchTranscriptProjection } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
 
 class Socket extends EventTarget {
   readyState: number = WebSocket.CONNECTING;
@@ -132,6 +138,99 @@ test("a streamed live baseline refreshes the reservoir's newest end", async cont
   assert.equal(socket.sent.some(item => item.method === "workbench/transcript/prefetch"), false);
   lease.release();
   transcript.release();
+});
+
+test("recovery after an empty baseline reaches browser paging through the source and reservoir", async context => {
+  const reservoir = new WorkbenchTranscriptReservoir();
+  const f = fixture(reservoir);
+  context.after(() => { f.source.dispose(); reservoir.dispose(); });
+  const threadId = randomUUID();
+  const window = new WorkbenchDeliveredTranscriptWindow();
+  const browser: { layout: TranscriptLayout | null; projection: WorkbenchTranscriptProjection | null } = {
+    layout: null, projection: null,
+  };
+  const apply = (update: ReturnType<WorkbenchDeliveredTranscriptWindow["receive"]>) => {
+    if (!update) return;
+    browser.layout = applyTranscriptLayoutPatch(update.reset ? null : browser.layout, update.layout);
+    browser.projection = applyTranscriptStructure(update.reset ? null : browser.projection, update, browser.layout);
+  };
+  f.source.observeTranscript({ threadId, turnLimit: 4, protocolVersion: 5, initialItemCredit: 1 }, event => {
+    if (event.kind === "transcriptStream" && event.data.update.kind === "structure") {
+      apply(window.receive(event.data.update.snapshot, event.data.update.removedItemIds));
+    }
+  });
+  const socket = await f.created;
+  const opening = f.source.socket.connect(); socket.open(); await opening;
+  const request = await socket.request("workbench/transcript/subscribe");
+  const empty: WorkbenchTranscriptSnapshot = {
+    thread: {
+      activity_at: 1, archived: 0, created_at: 1, id: threadId, identity_origin: "workbench", next_turn_index: 0,
+      pinned: 0, project_id: "project", project_root: "C:/project", snoozed: 0, title: "thread",
+      transcript_content_version: 0, updated_at: 1,
+    },
+    turns: [], loadedTurnIds: [], hasPreviousTurns: false, rows: emptyTranscriptSnapshotRows(),
+  };
+  const notify = (snapshot: WorkbenchTranscriptSnapshot, reset: boolean) => socket.notify({
+    method: "workbench/transcript/streamed",
+    params: { subscriptionId: request.params.subscriptionId,
+      update: { kind: "structure", reset, snapshot, removedItemIds: [], layout: {}, hasPreviousTurns: false } },
+  });
+  notify(empty, true);
+  socket.notify({ id: request.id, result: { subscribed: true } });
+  const lease = reservoir.open({ consumerId: "browser", daemonId: f.source.id,
+    generation: f.source.socket.getSnapshot().generation, threadId });
+  apply(window.deliver(await lease.demand(1)));
+  const recovered = (index: number): WorkbenchTranscriptSnapshot => {
+    const turnId = `turn-${index}`;
+    const itemId = `item-${index}`;
+    const rows = emptyTranscriptSnapshotRows();
+    rows.itemIdentities.push({ id: itemId, thread_id: threadId });
+    rows.threadItems.push({ id: index + 1, public_id: itemId, turn_id: turnId, thread_id: threadId,
+      item_position: 0, type: "assistantMessage", created_at: 1, updated_at: 1 });
+    rows.threadItemAssistantMessages.push({ item_id: index + 1, item_type: "assistantMessage",
+      state: "completed", phase: "commentary", text: `recovered ${index}` });
+    return { ...empty, rows, loadedTurnIds: [turnId], turns: [{
+      id: turnId, thread_id: threadId, turn_index: index, harness_id: "codex", native_location: "C:/project",
+      native_thread_id: threadId, native_turn_id: turnId, identity_origin: "workbench", created_at: 1,
+      started_at: 1, ended_at: 2, duration_ms: 1, state: "completed",
+    }] };
+  };
+  const newest = recovered(1);
+  const older = recovered(0);
+  notify(newest, false);
+  assert.equal(browser.projection?.hasPreviousTurns, false);
+  notify(older, false);
+  assert.deepEqual(browser.projection?.turns.map(turn => turn.id), ["turn-1"]);
+  assert.equal(browser.projection?.hasPreviousTurns, true, "recovery must reopen browser scrolling");
+
+  const sent = socket.sent.length;
+  const pending = lease.demand(2);
+  assert.ok(socket.sent.slice(sent).some(value => value.method === "workbench/transcript/prefetch"),
+    "the empty baseline must not permanently exhaust the reservoir");
+  const prefetch = await socket.request("workbench/transcript/prefetch", sent);
+  const catalog = { ...empty, turns: [...older.turns, ...newest.turns] };
+  const envelopes = [older, newest].flatMap(value => splitWorkbenchTranscriptSnapshot(value).envelopes);
+  socket.notify({ id: prefetch.id, result: { catalog, envelopes, hasMore: false, retainedBytes: 0 } });
+  apply(window.deliver(await pending));
+  assert.deepEqual(browser.projection?.turns.map(turn => turn.id), ["turn-0", "turn-1"]);
+  assert.deepEqual(browser.projection?.display.orderedItems.map(item => item.itemId), ["item-0", "item-1"]);
+  assert.equal(browser.projection?.hasPreviousTurns, false);
+  socket.notify({ method: "workbench/transcript/streamed", params: {
+    subscriptionId: request.params.subscriptionId,
+    update: { kind: "structure", reset: false, snapshot: empty, removedItemIds: ["item-1"], layout: {}, hasPreviousTurns: false },
+  } });
+  const next = reservoir.open({ consumerId: "next", daemonId: f.source.id,
+    generation: f.source.socket.getSnapshot().generation, threadId });
+  const beforeRemovalRead = socket.sent.length;
+  const afterRemoval = next.demand(2);
+  assert.ok(socket.sent.slice(beforeRemovalRead).some(value => value.method === "workbench/transcript/prefetch"),
+    "a removal must invalidate previously cached items too");
+  const removalRead = await socket.request("workbench/transcript/prefetch", beforeRemovalRead);
+  socket.notify({ id: removalRead.id, result: {
+    catalog, envelopes: splitWorkbenchTranscriptSnapshot(older).envelopes, hasMore: false, retainedBytes: 0,
+  } });
+  assert.deepEqual((await afterRemoval).envelopes.map(envelope => envelope.itemId), ["item-0"]);
+  assert.deepEqual(f.warnings, []);
 });
 
 test("passive reload and update status leaves sleeping daemons cold while explicit work retains them", async context => {

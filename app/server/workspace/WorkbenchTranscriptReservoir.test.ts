@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect transcript reservoir byte bounds, oversize replacement, coalesced refill, fairness, failure cleanup, and lease disposal.
+ * No production exports. Protect bounded transcript caching, invalidation fencing, shared refill, fairness, and disposal.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -112,6 +112,95 @@ function turnResult(itemId: string, turnIndex: number, hasMore: boolean): Workbe
       snapshot: { ...envelope.snapshot, loadedTurnIds: [turnId], rows, turns },
     }],
   };
+}
+
+test("invalidation reopens exhausted history without losing each viewer's cursor or another thread's cache", async context => {
+  const reservoir = new WorkbenchTranscriptReservoir();
+  context.after(() => reservoir.dispose());
+  const requests: Array<{ threadId: string; before?: { itemId: string } }> = [];
+  reservoir.registerSource({
+    daemonId: "daemon", generation: 1,
+    prefetch: async request => {
+      requests.push(request);
+      const older = turnResult("older", 0, false);
+      return { ...older, envelopes: [...older.envelopes, ...turnResult("newest", 1, false).envelopes] };
+    },
+  });
+  reservoir.seed({ daemonId: "daemon", generation: 1, threadId: "thread", result: turnResult("newest", 1, false) });
+  reservoir.seed({ daemonId: "daemon", generation: 1, threadId: "other", result: result("other", "other-item", "") });
+  const first = reservoir.open({ consumerId: "first", daemonId: "daemon", generation: 1, threadId: "thread" });
+  const second = reservoir.open({ consumerId: "second", daemonId: "daemon", generation: 1, threadId: "thread" });
+  const other = reservoir.open({ consumerId: "other", daemonId: "daemon", generation: 1, threadId: "other" });
+  await first.demand(1);
+  await second.demand(1);
+  reservoir.invalidate({ daemonId: "daemon", generation: 1, threadId: "thread" });
+  const pages = await Promise.all([first.demand(1), second.demand(1)]);
+  assert.deepEqual(pages.map(page => page.envelopes.map(envelope => envelope.itemId)), [["older"], ["older"]]);
+  assert.equal(requests.length, 1);
+  assert.deepEqual((await other.demand(1)).envelopes.map(envelope => envelope.itemId), ["other-item"]);
+  assert.equal(requests.length, 1);
+  assert.deepEqual((await first.demand(1)).envelopes, []);
+});
+
+for (const staleOutcome of ["success", "failure"] as const) {
+  test(`invalidation fences an in-flight ${staleOutcome} before satisfying demand`, async context => {
+    const reservoir = new WorkbenchTranscriptReservoir();
+    context.after(() => reservoir.dispose());
+    const stale = deferred<WorkbenchTranscriptPrefetchResult>();
+    let calls = 0;
+    reservoir.registerSource({
+      daemonId: "daemon", generation: 1,
+      prefetch: () => ++calls === 1 ? stale.promise : Promise.resolve(turnResult("recovered", 0, false)),
+    });
+    const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+    const page = lease.demand(1);
+    reservoir.invalidate({ daemonId: "daemon", generation: 1, threadId: "thread" });
+    if (staleOutcome === "success") stale.resolve({ catalog: snapshot("thread"), envelopes: [], hasMore: false, retainedBytes: 0 });
+    else stale.reject(new Error("obsolete failure"));
+    assert.deepEqual((await page).envelopes.map(envelope => envelope.itemId), ["recovered"]);
+    assert.equal(calls, 2);
+    assert.equal(reservoir.getDiagnostics().pendingDemands, 0);
+  });
+}
+
+test("a fresh baseline seed fences an older refill without starting an unnecessary replacement", async context => {
+  const reservoir = new WorkbenchTranscriptReservoir();
+  context.after(() => reservoir.dispose());
+  const stale = deferred<WorkbenchTranscriptPrefetchResult>();
+  let calls = 0;
+  reservoir.registerSource({ daemonId: "daemon", generation: 1, prefetch: () => { calls++; return stale.promise; } });
+  const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+  const pending = lease.demand(1);
+  reservoir.seed({ daemonId: "daemon", generation: 1, threadId: "thread", result: turnResult("fresh", 1, false) });
+  assert.deepEqual((await pending).envelopes.map(envelope => envelope.itemId), ["fresh"]);
+  stale.resolve(turnResult("obsolete", 0, false));
+  await stale.promise;
+  const next = reservoir.open({ consumerId: "next", daemonId: "daemon", generation: 1, threadId: "thread" });
+  assert.deepEqual((await next.demand(2)).envelopes.map(envelope => envelope.itemId), ["fresh"]);
+  assert.equal(calls, 1);
+});
+
+for (const stop of ["release", "dispose"] as const) {
+  test(`invalidated demand cannot restart after ${stop}`, async context => {
+    const reservoir = new WorkbenchTranscriptReservoir();
+    context.after(() => reservoir.dispose());
+    const stale = deferred<WorkbenchTranscriptPrefetchResult>();
+    let calls = 0;
+    reservoir.registerSource({
+      daemonId: "daemon", generation: 1, prefetch: () => { calls++; return stale.promise; },
+    });
+    const lease = reservoir.open({ consumerId: "browser", daemonId: "daemon", generation: 1, threadId: "thread" });
+    const pending = assert.rejects(lease.demand(1), /released/);
+    reservoir.invalidate({ daemonId: "daemon", generation: 1, threadId: "thread" });
+    if (stop === "release") lease.release();
+    else reservoir.dispose();
+    stale.resolve(turnResult("obsolete", 0, false));
+    await pending;
+    assert.equal(calls, 1);
+    assert.equal(reservoir.getDiagnostics().pendingDemands, 0);
+    assert.equal(reservoir.getDiagnostics().refillIntents, 0);
+    assert.equal(reservoir.getDiagnostics().residentBytes, 0);
+  });
 }
 
 test("a live seed that does not reach the cached range replaces it, so pages never skip a gap", async () => {

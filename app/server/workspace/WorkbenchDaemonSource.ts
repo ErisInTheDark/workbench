@@ -520,6 +520,11 @@ export default class WorkbenchDaemonSource {
         || parsed.data.update.kind === "structure" && parsed.data.update.reset;
       if (parsed.data.update.kind === "structure" && parsed.data.update.reset) {
         this.seedTranscriptReservoir(interest, parsed.data.update.snapshot);
+      } else if (parsed.data.update.kind === "structure" && interest.request.protocolVersion === 5
+        && (parsed.data.update.snapshot.rows.threadItems.length || parsed.data.update.removedItemIds.length)) {
+        this.options.transcriptReservoir?.invalidate({
+          daemonId: this.id, generation: this.socket.getSnapshot().generation, threadId: interest.request.threadId,
+        });
       }
     }
     const generation = this.socket.getSnapshot().generation;

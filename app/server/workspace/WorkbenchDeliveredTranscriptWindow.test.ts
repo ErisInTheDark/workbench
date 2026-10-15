@@ -200,3 +200,23 @@ test("a thread without history takes its first live baseline as the browser base
   assert.deepEqual(browser.itemIds, ["item-0", "item-1"]);
   assert.equal(browser.projection?.hasPreviousTurns, false);
 });
+
+test("recovered older items reopen exhausted paging without crossing the delivered boundary", () => {
+  const source = history(3);
+  const window = new WorkbenchDeliveredTranscriptWindow();
+  const browser = new Browser();
+  browser.apply(window.deliver(page(source, 2, 3, false)));
+  assert.equal(browser.projection?.hasPreviousTurns, false);
+
+  const recovered = window.receive(live(source, 0, 1), []);
+  browser.apply(recovered);
+  assert.equal(browser.projection?.hasPreviousTurns, true);
+  assert.deepEqual(browser.itemIds, ["item-2"]);
+  assert.deepEqual(recovered?.snapshot.rows.threadItems, []);
+  assert.equal(window.receive(live(source, 0, 1), []), null);
+
+  browser.apply(window.deliver(page(source, 0, 2, false)));
+  assert.deepEqual(browser.itemIds, ["item-0", "item-1", "item-2"]);
+  assert.equal(browser.projection?.hasPreviousTurns, false);
+  assert.equal(window.receive(live(source, 0, 1), []), null);
+});

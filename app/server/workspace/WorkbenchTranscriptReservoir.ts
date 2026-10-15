@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchTranscriptReservoirDiagnostics: reachable retention and lifecycle counts for leak diagnostics.
  * - WorkbenchTranscriptReservoirLease: one browser's constant-size contiguous transcript demand.
- * - default WorkbenchTranscriptReservoir: own global serialized transcript retention, eviction, coalesced refill, fairness, contiguous live seeding, and source generations.
+ * - default WorkbenchTranscriptReservoir: own bounded transcript caching, invalidation, coalesced refill, live seeding, and source generations.
  */
 import type {
   WorkbenchTranscriptItemCursor,
@@ -59,10 +59,9 @@ interface LeaseState {
 }
 
 interface SourceState {
-  cancellation: AbortController | null;
   daemonId: string;
   generation: number;
-  inFlight: Promise<void> | null;
+  inFlight: { threadId: string; cancellation: AbortController; invalidated: boolean } | null;
   intents: Set<string>;
   prefetch(request: WorkbenchTranscriptPrefetchRequest, signal: AbortSignal): Promise<WorkbenchTranscriptPrefetchResult>;
 }
@@ -131,7 +130,6 @@ export default class WorkbenchTranscriptReservoir {
     }
     if (previous) this.#removeSource(previous, sourceChangedError());
     const source: SourceState = {
-      cancellation: null,
       daemonId: input.daemonId,
       generation: input.generation,
       inFlight: null,
@@ -171,10 +169,26 @@ export default class WorkbenchTranscriptReservoir {
     if (this.#disposed) throw new Error("Transcript reservoir is disposed.");
     const source = this.#sources.get(input.daemonId);
     if (!source || source.generation !== input.generation) throw sourceChangedError();
+    if (source.inFlight?.threadId === input.threadId) source.inFlight.invalidated = true;
     this.#dropDisconnected(source, input.threadId, input.result);
     this.#insert(source, input.threadId, input.result, input.replaceTurnIds);
     this.#fulfil(source, input.threadId);
     if (this.#hasPendingDemand(source, input.threadId) && input.result.hasMore) {
+      source.intents.add(input.threadId);
+      this.#schedule(source);
+    }
+  }
+
+  invalidate(input: { daemonId: string; generation: number; threadId: string }) {
+    if (this.#disposed) throw new Error("Transcript reservoir is disposed.");
+    const source = this.#sources.get(input.daemonId);
+    if (!source || source.generation !== input.generation) throw sourceChangedError();
+    if (source.inFlight?.threadId === input.threadId) source.inFlight.invalidated = true;
+    const key = this.#threadKey(input.daemonId, input.generation, input.threadId);
+    const thread = this.#threads.get(key);
+    if (thread) for (const block of [...thread.blocks]) this.#removeBlock(block);
+    this.#threads.delete(key);
+    if (this.#hasPendingDemand(source, input.threadId)) {
       source.intents.add(input.threadId);
       this.#schedule(source);
     }
@@ -277,28 +291,30 @@ export default class WorkbenchTranscriptReservoir {
       .flatMap(block => block.envelopes)
       .sort((left, right) => cursorOrder(left.cursor, right.cursor))[0]?.cursor;
     const cancellation = new AbortController();
-    source.cancellation = cancellation;
+    const flight = { threadId, cancellation, invalidated: false };
+    source.inFlight = flight;
     let completed: WorkbenchTranscriptPrefetchResult | null = null;
     let failure: Error | null = null;
-    const work = source.prefetch({
+    void source.prefetch({
       ...(before ? { before } : {}),
       maxBytes: Math.max(1, Math.floor(this.#maxBytes / REFILL_FRACTION)),
       protocolVersion: 5,
       threadId,
     }, cancellation.signal).then(result => {
-      if (this.#sources.get(source.daemonId) !== source || cancellation.signal.aborted) return;
+      if (this.#sources.get(source.daemonId) !== source || cancellation.signal.aborted || flight.invalidated) return;
       const inserted = this.#insert(source, threadId, result);
       if (!inserted && result.hasMore) throw new Error("Transcript refill made no cursor progress.");
       completed = result;
     }).catch(error => {
-      if (this.#sources.get(source.daemonId) !== source || cancellation.signal.aborted) return;
+      if (this.#sources.get(source.daemonId) !== source || cancellation.signal.aborted || flight.invalidated) return;
       failure = boundedError(error);
     }).finally(() => {
-      if (source.inFlight !== work) return;
+      if (source.inFlight !== flight) return;
       source.inFlight = null;
-      source.cancellation = null;
       if (this.#sources.get(source.daemonId) !== source || cancellation.signal.aborted) return;
-      if (failure) {
+      if (flight.invalidated) {
+        if (this.#hasPendingDemand(source, threadId)) source.intents.add(threadId);
+      } else if (failure) {
         this.#rejectThread(source, threadId, failure);
       } else if (completed) {
         this.#fulfil(source, threadId);
@@ -310,7 +326,6 @@ export default class WorkbenchTranscriptReservoir {
       }
       this.#schedule(source);
     });
-    source.inFlight = work;
   }
 
   #insert(
@@ -452,8 +467,8 @@ export default class WorkbenchTranscriptReservoir {
   }
 
   #removeSource(source: SourceState, error: Error) {
-    source.cancellation?.abort(error);
-    source.cancellation = null;
+    source.inFlight?.cancellation.abort(error);
+    source.inFlight = null;
     source.intents.clear();
     this.#sources.delete(source.daemonId);
     for (const lease of [...this.#leases]) {
