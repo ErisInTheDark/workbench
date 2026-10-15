@@ -6,8 +6,9 @@
 import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { WorkbenchDaemonEndpointSchema, type WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
+import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import { readDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+import verifyWorkbenchDaemonEndpoint from "workbench-shared/process/verify-workbench-daemon-endpoint";
 
 export type WorkbenchLocalDaemonSnapshot = {
   endpoint: WorkbenchDaemonEndpoint | null;
@@ -90,7 +91,9 @@ export default class WorkbenchLocalDaemon {
           || previous.origin !== endpoint?.origin || previous.pid !== endpoint?.pid)) {
           this.publish({ endpoint: null, failure: null });
         }
-        if (endpoint) await this.verify(endpoint, request.signal);
+        if (endpoint) {
+          await verifyWorkbenchDaemonEndpoint(endpoint, this.options.fetcher ?? fetch, request.signal);
+        }
         if (this.active() && !this.invalidated) this.publish({ endpoint, failure: null });
       } catch {
         if (!request.signal.aborted && this.active()) {
@@ -99,35 +102,6 @@ export default class WorkbenchLocalDaemon {
       } finally {
         if (this.request === request) this.request = null;
       }
-    }
-  }
-
-  private async verify(endpoint: WorkbenchDaemonEndpoint, signal: AbortSignal) {
-    const response = await (this.options.fetcher ?? fetch)(`${endpoint.origin}/healthz`, {
-      cache: "no-store", redirect: "error", signal,
-    });
-    if (!response.ok || !response.body) {
-      await response.body?.cancel();
-      throw new Error("Daemon health endpoint is unavailable.");
-    }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const next = await reader.read();
-        if (next.done) break;
-        size += next.value.byteLength;
-        if (size > 16_384) {
-          await reader.cancel();
-          throw new Error("Daemon health response exceeds its size limit.");
-        }
-        chunks.push(next.value);
-      }
-    } finally { reader.releaseLock(); }
-    const actual = WorkbenchDaemonEndpointSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-    if (actual.instanceId !== endpoint.instanceId || actual.pid !== endpoint.pid || actual.origin !== endpoint.origin) {
-      throw new Error("Daemon health identity does not match its publication.");
     }
   }
 

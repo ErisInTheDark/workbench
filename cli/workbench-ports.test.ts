@@ -1,6 +1,10 @@
 /* No production exports. Tests active listener discovery and plain-text port rendering. */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { renderWorkbenchPorts, workbenchPorts } from "./workbench-ports.ts";
 
 test("lists active Workbench listeners by numeric port", () => {
@@ -35,4 +39,18 @@ test("renders a human-readable table rather than JSON", () => {
   assert.match(rendered, /port\s+domain\s+protocol/u);
   assert.match(rendered, /5173\s+app\s+http\/ws/u);
   assert.match(rendered, /61973\s+host\s+http\/ws/u);
+});
+
+test("checkout ports dispatch does not require Vite+", async () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const result = await promisify(execFile)(process.execPath, [path.join(root, "cli/dispatch.mjs"), "ports"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      NODE_TEST_CONTEXT: undefined,
+      PATH: "",
+      WORKBENCH_DATA_ROOT: path.join(root, ".workbench", "tmp", `ports-empty-${process.pid}`),
+    },
+  });
+  assert.equal(result.stderr, "");
 });

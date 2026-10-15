@@ -22,7 +22,7 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-
 import ReloadableNode from "./ReloadableNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
 import ClaudeProviderNode from "./providers/claude/ClaudeProviderNode";
-import { applyServerCodexSandboxPolicy } from "./codex-sandbox-policy";
+import { applyServerCodexPermissions } from "./codex-sandbox-policy";
 import { NativeThreadIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import { describeErrorCauseChain } from "workbench-shared/process/error-cause-chain";
 import { WorkbenchThreadCreationProfileSchema } from "workbench-shared/workbench/thread/thread-profile";
@@ -146,7 +146,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       signal.throwIfAborted();
       await persist(() => threadState.setProviderMcpGeneration(state.projectId, "codex", threadIdentity.knownThread(ThreadReferenceSchema.parse(thread.id)).threadId, generation));
       signal.throwIfAborted();
-      applyServerCodexSandboxPolicy(
+      applyServerCodexPermissions(
         request,
         project.roots.map((root) => root.rootPath),
         networkAccess,

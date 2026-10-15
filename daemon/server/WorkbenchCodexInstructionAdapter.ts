@@ -18,6 +18,7 @@ import { createWorkbenchActivatedSkillsInput } from "workbench-shared/workbench/
 import type { JsonRpcRequest } from "./bridge-types";
 import { withWorkbenchCodexMcpConfig } from "./workbench-codex-mcp-config";
 import { readWorkbenchPromptContext, WORKBENCH_PROMPT_CONTEXT_FIELD } from "./workbench-prompt-context";
+import { withWorkbenchCodexSandboxConfig } from "./codex-sandbox-policy";
 
 export type WorkbenchCodexInstructionSource =
   | { readonly kind: "cwd"; readonly cwd?: string | null }
@@ -121,32 +122,38 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     const params = asRecord(message.params);
     const caller = readWorkbenchPromptContext(message);
     const collaborationMode = asRecord(params.collaborationMode);
+    const ownedParams = {
+      ...params,
+      cwd: configuration.cwd,
+      model: settings.model,
+      serviceTier: settings.serviceTier,
+    };
+    const configuredParams = message.method === "turn/start" ? {
+      ...ownedParams,
+      effort: settings.reasoningEffort,
+      ...(params.collaborationMode ? {
+        collaborationMode: {
+          ...collaborationMode,
+          settings: { ...asRecord(collaborationMode.settings), model: settings.model, reasoning_effort: settings.reasoningEffort },
+        },
+      } : {}),
+    } : withWorkbenchCodexSandboxConfig({
+      ...ownedParams,
+      config: {
+        ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort,
+        ...(settings.contextWindowTokens != null ? {
+          model_context_window: settings.contextWindowTokens,
+          model_auto_compact_token_limit: contextCompactionThreshold(settings.contextWindowTokens),
+        } : {}),
+      },
+    });
     return {
       ...message,
       [WORKBENCH_PROMPT_CONTEXT_FIELD]: {
         ...caller, ...ownership, agentPath: settings.agentPath,
         workflowIds: caller?.workflowIds ?? [configuration.subagentName ? "subagent" : "default"],
       },
-      params: {
-        ...params, cwd: configuration.cwd, model: settings.model, serviceTier: settings.serviceTier,
-        ...(message.method === "turn/start" ? {
-          effort: settings.reasoningEffort,
-          ...(params.collaborationMode ? {
-            collaborationMode: {
-              ...collaborationMode,
-              settings: { ...asRecord(collaborationMode.settings), model: settings.model, reasoning_effort: settings.reasoningEffort },
-            },
-          } : {}),
-        } : {
-          config: {
-            ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort,
-            ...(settings.contextWindowTokens != null ? {
-              model_context_window: settings.contextWindowTokens,
-              model_auto_compact_token_limit: contextCompactionThreshold(settings.contextWindowTokens),
-            } : {}),
-          },
-        }),
-      },
+      params: configuredParams,
     };
   }
 

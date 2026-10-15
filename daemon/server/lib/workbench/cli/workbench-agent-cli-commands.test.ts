@@ -28,6 +28,7 @@ import { parseGitArcReceipt } from "workbench-shared/workbench/git/git-arc-recei
 import { parseGitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry.ts";
 import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import { WORKBENCH_PARENT_ONLY_TOOLS } from "workbench-shared/workbench/commands/workbench-tool-audience";
 
 const execFileAsync = promisify(execFile);
@@ -1696,7 +1697,13 @@ test("stash commands are argument-free whole-arc operations with conflict guidan
 
 test("generated and root launchers follow endpoint publication instead of inherited origin", async () => {
   const rotatedRequests: string[] = [];
+  let rotatedEndpoint!: WorkbenchDaemonEndpoint;
   const rotatedServer = http.createServer((request, response) => {
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(rotatedEndpoint));
+      return;
+    }
     rotatedRequests.push(request.url ?? "");
     response.writeHead(200, { "Content-Type": "text/plain" });
     response.end("rotated\n");
@@ -1705,12 +1712,13 @@ test("generated and root launchers follow endpoint publication instead of inheri
   try {
     const rotatedAddress = rotatedServer.address();
     assert(rotatedAddress && typeof rotatedAddress === "object");
-    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), {
+    rotatedEndpoint = {
       version: 1,
       instanceId: randomUUID(),
       pid: process.pid,
       origin: `http://127.0.0.1:${rotatedAddress.port}`,
-    });
+    };
+    await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), rotatedEndpoint);
     const shimDirectoryPath = path.join(temporaryDirectoryPath, "rotated-shims");
     const installed = await new WorkbenchAgentCliEnvironment({
       resolverSourcePath,
@@ -1739,6 +1747,37 @@ test("generated and root launchers follow endpoint publication instead of inheri
       origin,
     });
   }
+});
+
+test("generated launchers reject a stale daemon publication before dispatch", async () => {
+  const staleDataRoot = path.join(temporaryDirectoryPath, "stale-daemon-data");
+  await publishDaemonEndpoint(path.join(staleDataRoot, "daemon", "runtime.json"), {
+    version: 1,
+    instanceId: randomUUID(),
+    pid: process.pid,
+    origin: "http://127.0.0.1:1",
+  });
+  const shimDirectoryPath = path.join(temporaryDirectoryPath, "stale-shims");
+  const installed = await new WorkbenchAgentCliEnvironment({
+    resolverSourcePath,
+    runtimeDirectoryPath: shimDirectoryPath,
+    shellSourcePath,
+  }).install({});
+  await assert.rejects(
+    execFileAsync("bash", [installed.posixShimPath, "subagent", "list"], {
+      cwd: temporaryDirectoryPath,
+      env: {
+        ...process.env,
+        WORKBENCH_DATA_ROOT: staleDataRoot,
+        WORKBENCH_ORIGIN: origin,
+      },
+    }),
+    (error: NodeJS.ErrnoException & { stderr?: string }) => {
+      assert.match(error.stderr ?? "", /published daemon endpoint is stale or unreachable/u);
+      assert.match(error.stderr ?? "", /wb ports/u);
+      return true;
+    },
+  );
 });
 
 test("adapts semantic text, useful JSON, native documents, and plain errors", () => {

@@ -20,12 +20,43 @@ import { createSpawnOptions, killProcessTreeAsync, logError, lowerAgentProcessPr
 
 const OUTPUT_BYTES = 1024 * 1024;
 const FRAME_BYTES = 4 * 1024 * 1024;
+const LOOPBACK_DOMAINS = {
+  "127.0.0.1": "allow",
+  "::1": "allow",
+  localhost: "allow",
+} as const;
 /**
  * How long retirement waits for the executor to acknowledge terminating its live commands. Owner: `retire`. Reason:
  * a wedged executor must not block a reload or shutdown forever. Failure: warn and kill the executor tree anyway;
  * the next generation reaps any recorded roots that survive.
  */
 const RETIREMENT_TERMINATION_GRACE_MS = 5_000;
+
+function managedNetwork(
+  permissions: CodexExecRequest["permissions"],
+  platform: NodeJS.Platform,
+) {
+  if (platform !== "linux" || permissions.type !== "managed") return {};
+  const domains = permissions.network === "enabled"
+    ? { ...LOOPBACK_DOMAINS, "*": "allow" as const }
+    : LOOPBACK_DOMAINS;
+  return {
+    enforceManagedNetwork: true,
+    networkProxy: {
+      proxy: {
+        allowLocalBinding: false,
+        allowUpstreamProxy: false,
+        dangerouslyAllowAllUnixSockets: false,
+        domains,
+        enabled: true,
+        enableSocks5: false,
+        enableSocks5Udp: false,
+        mode: "full",
+        unixSockets: null,
+      },
+    },
+  };
+}
 
 export interface CodexExecServerOptions {
   cwd: string;
@@ -299,6 +330,7 @@ export default class CodexExecServer {
         envPolicy: request.envPolicy ?? {
           inherit: "all", ignoreDefaultExcludes: true, exclude: [], set: {}, includeOnly: [],
         },
+        ...managedNetwork(request.permissions, this.options.platform ?? process.platform),
         sandbox: {
           permissions: request.permissions,
           cwd: pathToFileURL(request.cwd).href,
