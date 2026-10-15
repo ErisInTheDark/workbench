@@ -74,16 +74,18 @@ test("existing variables win unless override is set", async t => {
   assert.equal(processEnv.KEEP, "file");
 });
 
-test("managed agent processes run no store commands", async t => {
+test("managed agent processes resolve store references through the configured runner", async t => {
   unmanaged(t);
   process.env.WORKBENCH_THREAD_ID = "thread";
-  const marker = path.join(os.tmpdir(), `wb-config-marker-${process.pid}-${Date.now()}`);
-  t.after(() => fs.rm(marker, { force: true }));
-  const touch = `custom: ${node} -e "require('fs').writeFileSync(process.argv[1], 'ran')" "${marker.replaceAll("\\", "\\\\")}" {key}`;
-  const file = await envFile(t, `WB_STORES=\`${touch}\`\nKEY=\${custom:k}\n`);
-  const warnings: string[] = [];
-  const { parsed } = await config({ path: file, processEnv: {}, warn: message => warnings.push(message) });
-  assert.equal(parsed.KEY, "${custom:k}");
-  assert.match(warnings[0]!, /managed agent/);
-  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+  const file = await envFile(t, "WB_STORES=custom: custom-store {key}\nKEY=${custom:k}\n");
+  const calls: string[][] = [];
+  const runner = {
+    async run(argv: string[]) {
+      calls.push(argv);
+      return { ok: true as const, stdout: "resolved\n" };
+    },
+  };
+  const { parsed } = await config({ path: file, processEnv: {}, runner, warn: () => {} });
+  assert.equal(parsed.KEY, "resolved");
+  assert.deepEqual(calls, [["custom-store", "k"]]);
 });

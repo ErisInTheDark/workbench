@@ -17,10 +17,6 @@ function warnDefault(message) {
   process.emitWarning(message, "WorkbenchStoreWarning");
 }
 
-function isManagedAgentProcess() {
-  return Boolean(process.env.WORKBENCH_THREAD_ID?.trim() || process.env.CODEX_THREAD_ID?.trim());
-}
-
 function stripTerminalLineEnding(value) {
   return value.endsWith("\r\n") ? value.slice(0, -2) : value.endsWith("\n") ? value.slice(0, -1) : value;
 }
@@ -58,10 +54,6 @@ async function resolveReferences(parsed, definitions, { runner, signal, warn }) 
     }
   }
   if (!lookups.size) return parsed;
-  if (isManagedAgentProcess()) {
-    warn("Store lookups are disabled in Workbench-managed agent processes. Store references were left unchanged.");
-    return parsed;
-  }
   const results = new Map(await Promise.all(Array.from(lookups, async ([id, lookup]) => {
     const result = await runner.run(lookup.argv, { signal });
     if (!result.ok) {

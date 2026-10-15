@@ -1,12 +1,14 @@
 /*
  * Exports:
  * - WorkbenchStoreCommandRequestSchema/WorkbenchStoreCommandRequest: validated human store get/set request for one cwd.
- * - WORKBENCH_STORE_COMMANDS: human-only `wb store get|set`, absent from help and MCP and rejected for managed callers.
+ * - WORKBENCH_STORE_COMMANDS: hidden store commands; managed reads require deliberate environment access and writes stay human-only.
  */
 import { z } from "zod";
 import { ProjectStoreKeySchema } from "workbench-shared/workbench/project/project-store";
 
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
+
+const DANGEROUS_ACCESS = "DANGEROUSLY_ACCESS_ENV_VARS";
 
 export const WorkbenchStoreCommandRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("get"), cwd: z.string().trim().min(1), key: ProjectStoreKeySchema }).strict(),
@@ -16,6 +18,12 @@ export type WorkbenchStoreCommandRequest = z.output<typeof WorkbenchStoreCommand
 
 function requireHuman(callerThreadId: string | null) {
   if (callerThreadId) throw new Error("wb store is not available to Workbench-managed agents.");
+}
+
+function requireReadAccess(callerThreadId: string | null) {
+  if (callerThreadId && process.env[DANGEROUS_ACCESS] !== "1") {
+    throw new Error("wb store is not available to Workbench-managed agents.");
+  }
 }
 
 function operands(args: readonly string[]) {
@@ -37,7 +45,7 @@ const get = defineWorkbenchAgentCommand({
     return { key };
   },
   buildRequest({ key }, { callerThreadId, cwd }) {
-    requireHuman(callerThreadId);
+    requireReadAccess(callerThreadId);
     return postWorkbenchAgentCommand("/internal/store", { action: "get", cwd, key });
   },
 });

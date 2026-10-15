@@ -2,10 +2,23 @@
  * No production exports. Tests the shell-free store lookup boundary.
  */
 import assert from "node:assert/strict";
-import test from "node:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 import StoreCommandRunner from "./StoreCommandRunner.mjs";
 
 const node = process.execPath;
+const dangerousAccess = "DANGEROUSLY_ACCESS_ENV_VARS";
+
+function withoutDangerousAccess(t: TestContext) {
+  const saved = process.env[dangerousAccess];
+  delete process.env[dangerousAccess];
+  t.after(() => {
+    if (saved === undefined) delete process.env[dangerousAccess];
+    else process.env[dangerousAccess] = saved;
+  });
+}
 
 test("lookups receive literal arguments without shell interpretation", async () => {
   const result = await new StoreCommandRunner().run([
@@ -13,6 +26,22 @@ test("lookups receive literal arguments without shell interpretation", async () 
   ]);
   assert.equal(result.ok, true);
   assert.deepEqual(JSON.parse(result.ok ? result.stdout : ""), ["$(echo hi)", "a&b|c", "%PATH%"]);
+});
+
+test("the packaged wb lookup alone receives deliberate environment access", async t => {
+  withoutDangerousAccess(t);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "wb-store-runner-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const packagedWb = path.join(directory, "wb.mjs");
+  await fs.writeFile(packagedWb, `process.stdout.write(process.env.${dangerousAccess} ?? "missing");\n`);
+  const runner = new StoreCommandRunner({ packagedWb });
+
+  const packaged = await runner.run(["wb", "store", "get", "KEY"]);
+  const custom = await runner.run([node, "-e", `process.stdout.write(process.env.${dangerousAccess} ?? "missing")`]);
+
+  assert.equal(packaged.ok && packaged.stdout, "1");
+  assert.equal(custom.ok && custom.stdout, "missing");
+  assert.equal(process.env[dangerousAccess], undefined);
 });
 
 test("failures report only bounded reasons", async () => {

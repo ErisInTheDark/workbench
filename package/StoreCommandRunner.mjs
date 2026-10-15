@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const PACKAGED_WB = path.join(path.dirname(fileURLToPath(import.meta.url)), "wb");
+const DANGEROUS_ACCESS = "DANGEROUSLY_ACCESS_ENV_VARS";
 
 export default class StoreCommandRunner {
   constructor({ maxOutputBytes = MAX_OUTPUT_BYTES, packagedWb = PACKAGED_WB } = {}) {
@@ -19,9 +20,16 @@ export default class StoreCommandRunner {
   async run(argv, { signal } = {}) {
     signal?.throwIfAborted();
     // `wb` means this package's own bootstrap so lookups work without PATH setup.
-    const [executable, ...args] = argv[0] === "wb" ? [process.execPath, this.packagedWb, ...argv.slice(1)] : argv;
+    const packaged = argv[0] === "wb";
+    const [executable, ...args] = packaged ? [process.execPath, this.packagedWb, ...argv.slice(1)] : argv;
     return await new Promise((resolve, reject) => {
-      const child = spawn(executable, args, { shell: false, signal, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+      const child = spawn(executable, args, {
+        env: packaged ? { ...process.env, [DANGEROUS_ACCESS]: "1" } : process.env,
+        shell: false,
+        signal,
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
       const chunks = [];
       let length = 0;
       let overflow = false;
