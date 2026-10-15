@@ -980,7 +980,7 @@ export default memo(function ThreadViewContent ({
       targetControl={approvalModeControl ?? (showDraftComposer ? draftTargetControl : null)}
       controlNotice={approvalNotice}
       header={fileIndexError}
-      key={`${projectId}:${activeThread.id}`}
+      key={activeThread.id}
       composerSpellCheck={composerSpellCheck}
       onListModels={threads.listModels}
       subscribeModelUpdates={threads.subscribeModelUpdates}

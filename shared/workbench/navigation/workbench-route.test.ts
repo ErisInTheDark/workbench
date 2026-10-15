@@ -46,6 +46,10 @@ test("folder choice remains current through draft promotion, not unrelated navig
   assert.equal(isSameDraftRouteIntent(before,
     createLogicalThreadRoute(null, project, location, { kind: "new" }), draftId), false);
   assert.equal(isSameDraftRouteIntent(before, promoted, draftId), true);
+  assert.equal(isSameDraftRouteIntent(promoted,
+    createLogicalThreadRoute(null, project, null, { kind: "draft", draftId }), draftId), true);
+  assert.equal(isSameDraftRouteIntent(promoted,
+    createLogicalThreadRoute(null, project, location, { kind: "draft", draftId }), draftId), false);
   assert.equal(isSameDraftRouteIntent(before,
     createLogicalThreadRoute(null, project, null, { kind: "draft", draftId: otherDraftId }), draftId), false);
   assert.equal(isSameDraftRouteIntent(before,

@@ -12,7 +12,7 @@ import type {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema,
-  WorkbenchThreadIdSchema, type DaemonId, type DraftId, type ProjectId,
+  WorkbenchThreadIdSchema, type DaemonId, type DraftId, type LogicalProjectId, type ProjectId,
 } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import {
@@ -136,6 +136,21 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const { workspace, clientStateController: state } = bindings;
   const lifetime = new LifecycleScope();
   const presentation = new WorkbenchPresentationClient({ workspace });
+  const retargetPresentationDraft = async (
+    id: DraftId, target: ProjectLocationReference, logicalProjectId?: LogicalProjectId,
+  ) => {
+    const draft = presentation.draft(id);
+    if (!draft || draft.phase !== "unsent") throw new Error("The unsent draft is unavailable.");
+    await presentation.putDraft({
+      id: draft.id,
+      logicalProjectId: logicalProjectId ?? draft.logicalProjectId,
+      target,
+      prompt: draft.prompt,
+      references: draft.references,
+      selection: draft.selection,
+      updatedAt: Date.now(),
+    });
+  };
   const network = new WorkbenchNetworkClient({ workspace });
   const daemon = workspace.daemon();
   const runtime = new WorkbenchDaemonRuntimeClient({ workspace });
@@ -331,7 +346,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       }
       const logical = logicalFor(location);
       if (!logical) throw new Error("The destination folder is not registered.");
-      await presentation.putDraft({ ...saved, logicalProjectId: logical.id, target: location });
+      await retargetPresentationDraft(DraftIdSchema.parse(draftId), location, logical.id);
     },
   });
   const navigation = new WorkbenchNavigationController(initialRoute, { load: loadRoute });
@@ -796,9 +811,13 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const current = threadClient.getSnapshot().currentThread;
       const sameDraft = current?.isDraft && sameLocation(localThreadLocations.get(current.id), location)
         && (target.kind === "draft" ? current.id === target.draftId : draftRoute?.threadTarget?.kind === "new");
+      const retainedNewDraftId = target.kind === "new" && current?.isDraft
+        && draftRoute?.threadTarget?.kind === "new"
+        ? DraftIdSchema.parse(current.id)
+        : undefined;
       const draft = sameDraft ? current : createDraft(location,
         saved?.selection.settings.harness ?? defaultProviderKey,
-        { threadId: target.kind === "draft" ? target.draftId : undefined });
+        { threadId: target.kind === "draft" ? target.draftId : retainedNewDraftId });
       if (saved) threadClient.setCurrentThreadComposerSettings(draft.id, saved.selection.settings);
       draftLocation = location;
       draftRoute = route;
@@ -927,13 +946,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     deleteThreadDraft: (id, projectId) => sidebar.delete(id, Date.now(), projectId),
     moveThreadDraft: (source, destination, id) => sidebar.moveDraft(source, destination, id),
     deletePresentationDraft: id => presentation.removeDraft(id),
-    retargetPresentationDraft: async (id, target, logicalProjectId) => {
-      const draft = presentation.draft(id);
-      if (!draft || draft.phase !== "unsent") throw new Error("The unsent draft is unavailable.");
-      // Saving a known destination does not require a live daemon. Launch validates capabilities.
-      await presentation.putDraft({ ...draft, target,
-        logicalProjectId: logicalProjectId ?? draft.logicalProjectId, updatedAt: Date.now() });
-    },
+    // Saving a known destination does not require a live daemon. Launch validates capabilities.
+    retargetPresentationDraft,
     setPresentationDraftPriority: (...args) => presentation.setDraftPriority(...args),
     savePresentationProjectLayout: (...args) => presentation.saveProjectLayout(...args),
     savePresentationHomeLayout: (...args) => presentation.saveHomeLayout(...args),

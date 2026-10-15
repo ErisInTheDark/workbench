@@ -137,6 +137,7 @@ import WorkbenchStatsTabs from "./workbench/stats/WorkbenchStatsTabs";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
+import { draftSessionOwner } from "./workbench/thread-view/DraftSessionController";
 import { seedNewThreadReferences } from "../workbench/thread/new-thread-reference-seeds";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import { readWorkbenchLaunchSelection } from "workbench-shared/state/workbench-client-state";
@@ -1548,7 +1549,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     : effectiveSelectedThreadId;
   const activeThreadId = showThreadView ? threadViewInstanceKey : "";
   const activeFilePath = showFileView ? effectiveFilePath : "";
-  const threadSurfaceKey = `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
+  const retainsDraftSurface = effectiveThreadTarget?.kind === "new" || effectiveThreadTarget?.kind === "draft"
+    || Boolean(threadForThreadView && threadViewInstanceKeysByThreadIdRef.current.has(threadForThreadView.id));
+  const threadSurfaceKey = retainsDraftSurface
+    ? `draft:${threadViewInstanceKey}`
+    : `${routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? "attached"}:${threadProjectId}:${threadViewInstanceKey}`;
   const threadFileScope = useMemo(() => ({
     daemon: selectedDaemon,
     daemonId: routeThreadContext?.daemonId ?? routeDraftContext?.daemonId ?? routeLaunchLocation?.daemonId,
@@ -1592,21 +1597,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         const destination = logicalProject?.locations.find(item => item.project)?.target;
         if (!logicalProject || !destination) throw new Error("That project's daemon folder is unavailable.");
         const draftSession = activeDraftSessionRef.current;
-        if (target?.kind === "draft") {
-          if (!draftSession || !await draftSession.flush("retarget")) {
-            throw new Error("Save the draft before changing projects.");
-          }
-          if (currentRouteRef.current !== route) return;
-          await controls.retargetPresentationDraft(target.draftId, destination, logicalProject.id);
-          if (currentRouteRef.current !== route) return;
-          navigateToRoute(createLogicalThreadRoute(null, logicalProject.id, null, target), { replace: true });
-        } else {
-          const input = draftSession?.getSnapshot().draft;
-          if (input?.text.trim() || input?.attachments.length) {
-            throw new Error("Save the draft before changing projects.");
-          }
-          navigateToRoute(createLogicalThreadRoute(null, logicalProject.id, destination, { kind: "new" }));
-        }
+        const draftId = target?.kind === "draft" ? target.draftId
+          : threadForThreadView?.isDraft ? DraftIdSchema.parse(threadForThreadView.id) : null;
+        const owner = workbenchClient.mounted?.presentationClient;
+        if (!draftSession || !draftId || !owner) throw new Error("The draft editor is unavailable.");
+        await draftSession.retarget(draftSessionOwner(destination.projectId, draftId), async () => {
+          if (!isSameDraftRouteIntent(route, currentRouteRef.current, draftId)) return false;
+          const draft = owner.draft(draftId);
+          if (draft) await controls.retargetPresentationDraft(draftId, destination, logicalProject.id);
+          if (!isSameDraftRouteIntent(route, currentRouteRef.current, draftId)) return false;
+          navigateToRoute(createLogicalThreadRoute(null, logicalProject.id, draft ? null : destination,
+            draft ? { kind: "draft", draftId } : { kind: "new" }), { replace: Boolean(draft) });
+          return true;
+        });
         return;
       }
       if (!threadProjectId) return;
@@ -1623,7 +1626,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     } finally {
       setIsProjectRotationPending(false);
     }
-  }, [controls, homeDraftProjectId, homeDraftProjects, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects, selectedPhysicalProjects, threadProjectId]);
+  }, [controls, homeDraftProjectId, homeDraftProjects, isHomeDraftRoute, navigateToRoute, route, selectedLogicalProjects,
+    selectedPhysicalProjects, threadForThreadView, threadProjectId, workbenchClient.mounted]);
   const homeRotatorProject = route.logical ? logicalThreadProject
     : explorer.projects.find(project => project.id === threadProject?.id);
   const projectRotator = isHomeDraftRoute && homeRotatorProject ? (
@@ -2460,27 +2464,30 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           onSelect={location => {
                             void (async () => {
                               const submittedRoute = route;
+                              const logicalRoute = submittedRoute.logical;
+                              const logicalOwnerProjectId = logicalRoute?.threadOwnerProjectId;
                               // Observed folders (e.g. unregistered worktrees) are valid launch targets too.
                               const destination = projectFolderOptions([logicalThreadProject]).find(item =>
                                 item.target.daemonId === location.daemonId && item.target.projectId === location.projectId);
                               if (!destination?.project) throw new Error("That daemon folder is unavailable.");
-                              if (!controls || !submittedRoute.logical?.threadOwnerProjectId
+                              if (!controls || !logicalRoute || !logicalOwnerProjectId
                                 || !threadForThreadView?.isDraft) return;
                               const draftSession = activeDraftSessionRef.current;
-                              if (!draftSession || !await draftSession.flush("retarget")) {
-                                throw new Error("Save the draft before changing its folder.");
-                              }
-                              if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, threadForThreadView.id)) return;
                               const owner = workbenchClient.mounted?.presentationClient;
-                              if (!owner) throw new Error("App presentation state is unavailable.");
-                              const draft = owner.draft(threadForThreadView.id);
-                              if (draft) await controls.retargetPresentationDraft(DraftIdSchema.parse(draft.id), location);
-                              if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, threadForThreadView.id)) return;
-                              const nextRoute = createLogicalThreadRoute(submittedRoute.logical.projectId,
-                                submittedRoute.logical.threadOwnerProjectId, draft ? null : location,
-                                draft ? { kind: "draft", draftId: DraftIdSchema.parse(draft.id) } : { kind: "new" });
-                              if (draft) navigateToRoute(nextRoute, { replace: true });
-                              else await controls.applyRoute(nextRoute);
+                              if (!draftSession || !owner) throw new Error("The draft editor is unavailable.");
+                              const draftId = DraftIdSchema.parse(threadForThreadView.id);
+                              await draftSession.retarget(draftSessionOwner(location.projectId, draftId), async () => {
+                                if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, draftId)) return false;
+                                const draft = owner.draft(draftId);
+                                if (draft) await controls.retargetPresentationDraft(draftId, location);
+                                if (!isSameDraftRouteIntent(submittedRoute, currentRouteRef.current, draftId)) return false;
+                                const nextRoute = createLogicalThreadRoute(logicalRoute.projectId,
+                                  logicalOwnerProjectId, draft ? null : location,
+                                  draft ? { kind: "draft", draftId } : { kind: "new" });
+                                if (draft) navigateToRoute(nextRoute, { replace: true });
+                                else await controls.applyRoute(nextRoute);
+                                return true;
+                              });
                             })().catch(error => setSelectionError(
                               error instanceof Error ? error.message.slice(0, 500) : "Unable to change draft folder.",
                             ));

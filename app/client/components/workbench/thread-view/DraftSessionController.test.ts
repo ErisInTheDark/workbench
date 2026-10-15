@@ -366,3 +366,79 @@ test("an explicit flush waits for the follow-up save, not just the older in-flig
   assert.equal(settledBeforeAcknowledgement, false);
   assert.equal(store.saved.text, "second");
 });
+
+test("retargeting preserves pending edits until the destination owner arrives", async () => {
+  const store = fixture(emptyComposer(), emptyComposer);
+  store.ports.owner = "old";
+  const session = store.create();
+  session.edit(draft => ({ ...draft, text: "keep this local" }));
+
+  assert.equal(await session.retarget("new", () => true), true);
+  assert.equal(store.writes, 0);
+  assert.equal(store.scheduled.size, 0);
+
+  const destination = { ...store.ports, owner: "new" };
+  session.updatePorts(destination);
+  assert.equal(store.scheduled.size, 1);
+  store.scheduled.values().next().value?.();
+  await session.flush();
+  assert.equal(store.saved.text, "keep this local");
+});
+
+test("retargeting waits for an in-flight save and failed movement resumes the current owner", async () => {
+  const store = fixture(emptyComposer(), emptyComposer);
+  store.ports.owner = "old";
+  const saved = deferred<WorkbenchComposerInputDraft>();
+  store.ports.save = update => saved.promise.then(draft => update(draft));
+  const session = store.create();
+  session.edit(draft => ({ ...draft, text: "saving" }));
+  const saving = session.flush();
+  let moved = false;
+  const retargeting = session.retarget("new", () => {
+    moved = true;
+    return false;
+  });
+
+  await Promise.resolve();
+  assert.equal(moved, false);
+  saved.resolve(emptyComposer());
+  await saving;
+  assert.equal(await retargeting, false);
+  assert.equal(moved, true);
+});
+
+test("retargeting never moves after an in-flight save failure", async context => {
+  context.mock.method(console, "error", () => {});
+  const store = fixture(emptyComposer(), emptyComposer);
+  store.ports.owner = "old";
+  const failure = deferred<WorkbenchComposerInputDraft>();
+  store.ports.save = () => failure.promise;
+  const session = store.create();
+  session.edit(draft => ({ ...draft, text: "do not lose this" }));
+  const saving = session.flush();
+  let moves = 0;
+  const retargeting = session.retarget("new", () => {
+    moves += 1;
+    return true;
+  });
+
+  failure.reject(new Error("save failed"));
+  await saving;
+  assert.equal(await retargeting, false);
+  assert.equal(moves, 0);
+  assert.equal(session.getSnapshot().draft.text, "do not lose this");
+  assert.match(session.getSnapshot().error, /save failed/u);
+});
+
+test("cancelled retargeting resumes pending edits on the current owner", async () => {
+  const store = fixture(emptyComposer(), emptyComposer);
+  store.ports.owner = "old";
+  const session = store.create();
+  session.edit(draft => ({ ...draft, text: "still here" }));
+
+  assert.equal(await session.retarget("new", () => false), false);
+  assert.equal(store.scheduled.size, 1);
+  store.scheduled.values().next().value?.();
+  await session.flush();
+  assert.equal(store.saved.text, "still here");
+});

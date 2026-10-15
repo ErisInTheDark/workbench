@@ -7,6 +7,7 @@
  * - DraftSaveOptions: distinguish autosave, submission, and detached writes.
  * - DraftSessionPorts: existing persistence owner and scheduler boundary.
  * - DraftSessionSnapshot: rendered input and lifecycle status.
+ * - draftSessionOwner: stable project-qualified owner identity for an editing session.
  */
 import type { WorkbenchThreadComposerAttachmentDraft } from "workbench-shared/types";
 import { isThreadMessageNotSentError } from "../../../workbench/thread/thread-message-submission";
@@ -22,6 +23,7 @@ export interface DraftSaveOptions {
 }
 
 export interface DraftSessionPorts<Draft> {
+  owner?: string;
   empty: () => Draft;
   /** Null means the draft is not eligible for persistence yet; retain its edits. */
   save: (update: DraftUpdate<Draft>, options: DraftSaveOptions) => Promise<Draft | null> | Draft | null;
@@ -36,6 +38,10 @@ export interface DraftSessionSnapshot<Draft> {
   isSubmitting: boolean;
 }
 
+export function draftSessionOwner(projectId: string, threadId: string) {
+  return `${projectId}\0${threadId}`;
+}
+
 export default class DraftSessionController<Draft extends DraftSessionContent> {
   #ports: DraftSessionPorts<Draft>;
   readonly #listeners = new Set<() => void>();
@@ -46,6 +52,7 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
   #timer: number | null = null;
   #attached = false;
   #submitted = false;
+  #retargetOwner: string | null = null;
   readonly #attachmentReads = new Set<symbol>();
 
   constructor(draft: Draft, ports: DraftSessionPorts<Draft>) {
@@ -66,6 +73,10 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
       schedule: this.#ports.schedule,
       cancelSchedule: this.#ports.cancelSchedule,
     };
+    if (this.#retargetOwner && ports.owner === this.#retargetOwner) {
+      this.#retargetOwner = null;
+      if (this.#pending.length && !this.#saving && !this.#snapshot.isSubmitting) this.#scheduleSave();
+    }
   }
 
   attach() {
@@ -133,6 +144,26 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
     const saved = await operation;
     if (saved && this.#pending.length && !this.#snapshot.isSubmitting) this.#scheduleSave();
     return saved;
+  }
+
+  async retarget(owner: string, move: () => Promise<boolean> | boolean): Promise<boolean> {
+    if (this.#retargetOwner || this.#snapshot.isSubmitting) return false;
+    this.#cancelSave();
+    this.#retargetOwner = owner;
+    if (this.#saving && !await this.#saving && this.#snapshot.error) {
+      this.#retargetOwner = null;
+      return false;
+    }
+    let moved = false;
+    try {
+      moved = await move();
+      return moved;
+    } finally {
+      if (!moved && this.#retargetOwner === owner) {
+        this.#retargetOwner = null;
+        if (this.#pending.length && !this.#snapshot.error) this.#scheduleSave();
+      }
+    }
   }
 
   reset() {

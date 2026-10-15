@@ -58,7 +58,7 @@ import StickyComposerSurface from "./StickyComposerSurface";
 import ThreadProfileQuickPicker from "./ThreadProfileQuickPicker";
 import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
-import type { DraftUpdate } from "./DraftSessionController";
+import { draftSessionOwner, type DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import useHeightTransition from "./use-height-transition";
 import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
@@ -240,6 +240,7 @@ export default function ThreadComposer ({
   [thread.harness, thread.id, thread.isDraft, threadTarget]);
   const emptyDraft = useMemo<WorkbenchComposerInputDraft>(() => ({ attachments: [], text: "", updatedAt: 0 }), []);
   const editing = useDraftSession(threadComposerDraft ?? emptyDraft, {
+    owner: draftSessionOwner(projectId, thread.id),
     empty: () => emptyDraft,
     save: (update, options) => onThreadComposerDraftChange(projectId, thread.id, update, options.reason, composerTarget, options.detached),
   });

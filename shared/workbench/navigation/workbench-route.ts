@@ -746,7 +746,11 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
 
 export function isSameDraftRouteIntent(before: WorkbenchRoute, current: WorkbenchRoute, draftId: string) {
   if (before === current) return true;
-  if (before.view !== "thread" || before.threadTarget?.kind !== "new" || !before.logical) return false;
+  if (before.view !== "thread") return false;
+  if (before.threadTarget?.kind === "draft") {
+    return before.threadTarget.draftId === draftId && isSameWorkbenchRoute(before, current);
+  }
+  if (before.threadTarget?.kind !== "new" || !before.logical) return false;
   return isSameWorkbenchRoute({
     ...before,
     threadId: draftId,

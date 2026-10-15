@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type { ExplorerSnapshot, WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceProjects } from "workbench-shared/workbench/workspace/workspace-observation";
-import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
+import type { PresentationDraftInput, PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import { projectWorkbenchThreadMembership } from "workbench-shared/workbench/project/workbench-project-projection";
 import { DaemonIdSchema, DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createHomeRoute, createLogicalExistingThreadRoute, createLogicalProjectRoute, createLogicalThreadRoute, createProjectSelectionRoute, createSettingsRoute, withProjectSelection, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -77,7 +77,7 @@ test("default and empty project list routes do not invent a browsed folder", asy
     && item.params.query.kind === "projectTree"), false);
 });
 
-test("project home opens a new thread at the latest accepted selected project folder", async context => {
+test("project home opens at the preferred folder and keeps a transient draft identity when its project changes", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();
   const client = WorkbenchClient({ workspace: fixture.workspace });
@@ -167,6 +167,66 @@ test("project home opens a new thread at the latest accepted selected project fo
   const draft = client.threadRuntime.getSnapshot().currentThread;
   assert.ok(draft?.isDraft);
   assert.deepEqual(client.draftLocationFor(draft.id), latestLocation);
+
+  const moved = createLogicalThreadRoute(logicalId, logicalId, location, { kind: "new" });
+  assert.equal((await client.controls.applyRoute(moved)).ok, true);
+  assert.equal(client.threadRuntime.getSnapshot().currentThread?.id, draft.id);
+  assert.deepEqual(client.draftLocationFor(draft.id), location);
+  assert.equal(client.presentationClient.draft(draft.id), null);
+});
+
+test("retargeting a durable draft sends only presentation input fields", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const draftId = DraftIdSchema.parse("40000000-0000-4000-8000-000000000002");
+  const stored = {
+    id: draftId,
+    logicalProjectId: logicalId,
+    target: location,
+    prompt: "project switch browser validation",
+    references: [],
+    selection: { kind: "custom" as const, settings: {
+      agentPath: null,
+      agentSource: null,
+      harness: "codex" as const,
+      model: "model",
+      reasoningEffort: null,
+      serviceTier: null,
+      contextWindowTokens: null,
+    } },
+    updatedAt: 3,
+    revision: 3,
+    phase: "unsent" as const,
+    pinned: false,
+    snoozed: false,
+    launchId: null,
+    acceptedThreadId: null,
+    attachments: [],
+  };
+  await providePresentation(socket, { ...noLayout, revision: 3, drafts: [stored] });
+  const writes: PresentationDraftInput[] = [];
+  context.mock.method(client.presentationClient, "putDraft", async (draft: PresentationDraftInput) => {
+    writes.push(draft);
+    return noLayout;
+  });
+  const destination = { daemonId, projectId: ProjectIdSchema.parse("local://C:/git/app/other") };
+  const destinationLogicalId = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+
+  await client.controls.retargetPresentationDraft(draftId, destination, destinationLogicalId);
+
+  assert.equal(writes.length, 1);
+  const { updatedAt, ...input } = writes[0]!;
+  assert.equal(typeof updatedAt, "number");
+  assert.deepEqual(input, {
+    id: draftId,
+    logicalProjectId: destinationLogicalId,
+    target: destination,
+    prompt: stored.prompt,
+    references: [],
+    selection: stored.selection,
+  });
 });
 
 test("settings keeps zero, one or many selected logical projects without browsing a physical folder", async context => {
