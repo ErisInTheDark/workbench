@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - WorkbenchConfigOptions: dotenv loading, mutually exclusive missing-value policies, cancellation and warning hooks.
- * - WorkbenchConfigOutput: parsed values after store replacement, with the first file read error.
- * - config: load dotenv and store values; reject missing required names before writing the environment.
+ * - WorkbenchConfigOptions: dotenv mapping, missing-value policies, cancellation and warning hooks.
+ * - WorkbenchConfigOutput: mapped values after store replacement and policy checks, with the first file read error.
+ * - config: load and map dotenv values; resolve stores and check required names before environment writes.
  */
 export type WorkbenchConfigOptions = {
   /** One file or several; earlier files win unless `override` is set. Defaults to `.env`. */
@@ -11,6 +11,8 @@ export type WorkbenchConfigOptions = {
   /** Replace variables already present in `processEnv`, as dotenv does. */
   override?: boolean;
   processEnv?: Record<string, string | undefined>;
+  /** Map merged parsed values before store resolution and policy checks. Rejection prevents environment writes. */
+  map?: (env: Record<string, string>) => Record<string, string> | Promise<Record<string, string>>;
   /** Aborting kills running store commands and rejects. */
   signal?: AbortSignal;
   /** Opt into bounded lookup warnings that never contain command output. Silent by default. */

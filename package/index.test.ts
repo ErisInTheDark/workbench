@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests dotenv loading with named store replacement.
+ * No production exports. Tests dotenv mapping, named store replacement, and missing-value policies.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -72,6 +72,77 @@ test("existing variables win unless override is set", async t => {
   assert.equal(processEnv.KEEP, "existing");
   await config({ path: file, processEnv, override: true });
   assert.equal(processEnv.KEEP, "file");
+});
+
+test("async mapping sees merged inputs and finishes before lookups or environment writes", async t => {
+  const first = await envFile(t, "KEEP=first\nDROP=unused\n");
+  const second = await envFile(t, "KEEP=second\nOTHER=value\n");
+  for (const override of [false, true]) {
+    const processEnv = { KEEP: "existing" };
+    let mappingFinished = false;
+    let mappings = 0;
+    const runner = {
+      async run() {
+        assert.equal(mappingFinished, true);
+        assert.deepEqual(processEnv, { KEEP: "existing" });
+        return { ok: true as const, stdout: "secret\n" };
+      },
+    };
+    const { parsed } = await config({
+      path: [first, second], processEnv, override, required: ["TOKEN"], runner,
+      map: async env => {
+        mappings++;
+        assert.deepEqual(env, { KEEP: override ? "second" : "first", DROP: "unused", OTHER: "value" });
+        await Promise.resolve();
+        assert.deepEqual(processEnv, { KEEP: "existing" });
+        mappingFinished = true;
+        return { KEEP: `${env.KEEP}-mapped`, WB_STORES: "test: lookup {key}", TOKEN: "${test:key}" };
+      },
+    });
+    assert.equal(mappings, 1);
+    assert.deepEqual(parsed, {
+      KEEP: override ? "second-mapped" : "first-mapped",
+      WB_STORES: "test: lookup {key}", TOKEN: "secret",
+    });
+    assert.deepEqual(processEnv, { ...parsed, KEEP: override ? "second-mapped" : "existing" });
+  }
+});
+
+test("sync mapping is checked by the missing-variable policy before population", async t => {
+  const file = await envFile(t, "REQUIRED=present\n");
+  const processEnv = { KEEP: "existing" };
+  await assert.rejects(config({
+    path: file, processEnv, required: ["REQUIRED"],
+    map: () => ({ ADDED: "value" }),
+  }), /\bREQUIRED\b/);
+  assert.deepEqual(processEnv, { KEEP: "existing" });
+  const { parsed } = await config({
+    path: file, processEnv, required: ["ADDED"],
+    map: () => ({ ADDED: "value" }),
+  });
+  assert.deepEqual(parsed, { ADDED: "value" });
+  assert.deepEqual(processEnv, { KEEP: "existing", ADDED: "value" });
+});
+
+test("mapping failures and cancellation leave the environment untouched", async t => {
+  const file = await envFile(t, "KEEP=changed\n");
+  const failure = new Error("mapping failed");
+  for (const mode of ["throw", "reject", "abort"]) {
+    const processEnv = { KEEP: "existing" };
+    const controller = new AbortController();
+    await assert.rejects(config({
+      path: file, processEnv, override: true, signal: controller.signal,
+      map: env => {
+        if (mode === "throw") throw failure;
+        return Promise.resolve().then(() => {
+          if (mode === "reject") throw failure;
+          controller.abort(failure);
+          return env;
+        });
+      },
+    }), error => error === failure);
+    assert.deepEqual(processEnv, { KEEP: "existing" });
+  }
 });
 
 test("managed agent processes resolve store references through the configured runner", async t => {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - config: load dotenv files, resolve named store references, and enforce an optional missing-variable policy.
+ * - config: load and map dotenv values, resolve store references, and enforce an optional missing-variable policy.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -109,10 +109,13 @@ export async function config({
   runner = new StoreCommandRunner(),
   required,
   optional,
+  map,
 } = {}) {
   signal?.throwIfAborted();
   const policy = missingPolicy(required, optional);
-  const { parsed: raw, error } = await readParsed(Array.isArray(paths) ? paths : [paths], encoding, override);
+  const { parsed: input, error } = await readParsed(Array.isArray(paths) ? paths : [paths], encoding, override);
+  const raw = map ? await map(input) : input;
+  signal?.throwIfAborted();
   const definitions = raw.WB_STORES?.trim() || processEnv.WB_STORES?.trim() || DEFAULT_STORE_DEFINITIONS;
   const { parsed, unresolved } = await resolveReferences(raw, definitions, { runner, signal, warn, policy });
   applyMissingPolicy(parsed, unresolved, policy, processEnv, override);
