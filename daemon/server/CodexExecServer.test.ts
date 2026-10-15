@@ -1,12 +1,12 @@
-/* No exports. Exercises native transport ordering, cancellation settling on terminate acknowledgement, termination before retirement, and command root markers. */
+/* No exports. Exercises native transport ordering, cancellation settling on terminate acknowledgement, termination before retirement, command root markers, and Linux relay admission. */
 import assert from "node:assert/strict";
 import { PassThrough, Writable } from "node:stream";
 import { ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { test } from "node:test";
-import CodexExecServer from "./CodexExecServer";
+import CodexExecServer, { type CodexExecServerOptions } from "./CodexExecServer";
 import type { CodexExecRequest } from "./codex-exec-protocol";
 
-function fixture(autoInitialize: boolean | NodeJS.Platform = true) {
+function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?: CodexExecServerOptions["relayBroker"]) {
   const platform: NodeJS.Platform = typeof autoInitialize === "string" ? autoInitialize : "linux";
   if (typeof autoInitialize === "string") autoInitialize = true;
   const calls: { id: number; method: string; params: { processId: string } }[] = [];
@@ -49,6 +49,7 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true) {
     reportError: message => errors.push(message),
     terminationGrace: () => grace,
     platform,
+    relayBroker,
   });
   const request: CodexExecRequest = {
     command: ["test"], cwd: process.cwd(), permissions: { type: "disabled" },
@@ -181,6 +182,49 @@ test("Windows pwsh commands report their root process first; other commands run 
   assert.deepEqual(marked.argv.slice(0, 3), ["pwsh", "-NoProfile", "-Command"]);
   assert.match(marked.argv[3]!, /^\[Console\]::Error\.WriteLine\('<!--wb-exec-root '.*; Get-Date$/u);
   assert.deepEqual(plain.argv, ["node", "-e", "1"]);
+});
+
+test("Linux managed-network commands start inside an admitted relay that is released when they settle", async t => {
+  const admissions: (string[] | null)[] = [["relay", "--", "test"], null];
+  const admitted: string[][] = [];
+  let released = 0;
+  const f = fixture("linux", {
+    admit: async command => {
+      admitted.push([...command]);
+      const argv = admissions.shift();
+      return argv ? { argv, env: { WB_RELAY: "token" }, release: () => { released++; } } : null;
+    },
+  });
+  t.after(() => f.owner.dispose());
+  const managed: CodexExecRequest = {
+    ...f.request, env: { KEEP: "1" }, permissions: { type: "managed", file_system: { type: "unrestricted" }, network: "restricted" },
+  };
+  type Start = { argv: string[]; env: Record<string, string> };
+
+  const relayed = f.owner.execute(managed, new AbortController().signal);
+  const start = await f.next("process/start");
+  assert.deepEqual((start.params as unknown as Start).argv, ["relay", "--", "test"]);
+  assert.deepEqual((start.params as unknown as Start).env, { KEEP: "1", WB_RELAY: "token" });
+  f.reply(start.id, { processId: start.params.processId });
+  assert.equal(released, 0);
+  f.finish(start.params.processId, "");
+  await relayed;
+  assert.equal(released, 1);
+
+  const unavailable = f.owner.execute(managed, new AbortController().signal);
+  const fallback = await f.next("process/start", 1);
+  assert.deepEqual((fallback.params as unknown as Start).argv, ["test"]);
+  f.reply(fallback.id, { processId: fallback.params.processId });
+  f.finish(fallback.params.processId, "");
+  await unavailable;
+
+  const unmanaged = f.owner.execute(f.request, new AbortController().signal);
+  const plain = await f.next("process/start", 2);
+  assert.deepEqual((plain.params as unknown as Start).argv, ["test"]);
+  f.reply(plain.id, { processId: plain.params.processId });
+  f.finish(plain.params.processId, "");
+  await unmanaged;
+  assert.equal(admitted.length, 2);
 });
 
 test("stderr without a root marker is passed through untouched", async t => {

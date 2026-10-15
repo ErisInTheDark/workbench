@@ -58,7 +58,8 @@ note: have tried to keep dependencies minimal for the most part
 `/daemon/host` — wake service  
 `/daemon/server` — workbench harness  
 `/daemon/voice` — vtt service (rust)  
-`/daemon/repo` — vfs service (go)
+`/daemon/repo` — vfs service (go)  
+`/daemon/relay` — linux sandbox loopback relay (go)  
 `/integration` — integrations in third party software
 `/instructions` — instructions for agents, copied into the user's `~/.workbench` folder whenever read  
 `/app/server` — server for frontend app  

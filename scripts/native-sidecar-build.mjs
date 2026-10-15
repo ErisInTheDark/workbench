@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - defineGoSidecar: describe one repository-owned Go sidecar and its isolated build cache.
+ * - defineGoSidecar: describe one repository-owned Go sidecar, its published platforms and isolated build cache.
  * - readGoOption: read the optional `--go <binary>` toolchain override.
  * - runSidecarGo: execute the selected Go toolchain inside a sidecar package with isolated caches.
  * - sidecarSourceHash: fingerprint production Go sources through the shared runtime verifier.
@@ -21,11 +21,15 @@ const targets = Object.freeze({
 });
 
 /**
- * @param {{ label: string, source: string, executable: string, protocol: number }} sidecar
+ * @param {{ label: string, source: string, executable: string, protocol: number, platforms?: (keyof typeof targets)[] }} sidecar
  */
 export function defineGoSidecar(sidecar) {
+  for (const platform of sidecar.platforms ?? []) {
+    if (!(platform in targets)) throw new Error(`Unknown sidecar platform: ${platform}`);
+  }
   return Object.freeze({
     ...sidecar,
+    platforms: Object.freeze([...(sidecar.platforms ?? Object.keys(targets))]),
     root,
     sourcePath: path.join(root, sidecar.source),
     cache: path.join(root, `.workbench/tmp/${sidecar.label}-build`),
@@ -73,7 +77,7 @@ export async function sidecarSourceHash(sidecar) {
 
 export async function publishSidecar(sidecar, executable) {
   // Repository sidecars stay CGO-free so one host can keep every platform receipt aligned.
-  for (const platform of Object.keys(targets)) {
+  for (const platform of sidecar.platforms) {
     await publishSidecarTarget(sidecar, platform, executable);
   }
 }

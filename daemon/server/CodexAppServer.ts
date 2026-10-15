@@ -50,6 +50,9 @@ export function getCodexAppServerArgs() {
     // Workbench owns thread goals; Codex's native goals and their auto-continuation stay off.
     "--config",
     "features.goals=false",
+    // Every provider runs commands through the Workbench shell, which owns sandbox networking such as the Linux relay.
+    "--config",
+    "features.shell_tool=false",
     "--config",
     "features.apply_patch_streaming_events=true",
     "--config",

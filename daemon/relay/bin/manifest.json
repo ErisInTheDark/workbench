@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "artifacts": {
+    "linux-x64": {
+      "file": "linux-x64/workbench-relay",
+      "sha256": "ae47989c2c57fd5e01c5359e4eef207e3e0c860706484fa0c207b0eb8d7bf641",
+      "sourceHash": "7910cd172f920c243f29ec42b5546942e1eb3fa61bcab9501d62f6c7d7e36b83"
+    }
+  }
+}

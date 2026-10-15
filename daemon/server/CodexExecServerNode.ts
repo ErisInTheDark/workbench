@@ -1,11 +1,14 @@
 /*
  * Exports:
- * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair and the machine-wide expensive-command slots, stopping running commands when it is replaced; reloadable shell orchestration lives in a child.
+ * - default CodexExecServerNode: own the sandbox executor process, its Windows ACL repair, its Linux loopback relay broker and the machine-wide expensive-command slots, stopping running commands when it is replaced; reloadable shell orchestration lives in a child.
  */
 import ReloadableNode from "./ReloadableNode";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
+import path from "node:path";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import CodexExecServer from "./CodexExecServer";
+import SandboxRelayBroker from "./exec/SandboxRelayBroker";
 import CodexSandboxAclController from "./CodexSandboxAclController";
 import CodexToolsNode from "./CodexToolsNode";
 import OpenCodeProvider from "./providers/opencode/OpenCodeProvider";
@@ -19,7 +22,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   access: "agent",
   children: [WorkbenchShellRunnerNode, CodexToolsNode, OpenCodeProvider, ClaudeProviderNode],
   create: (context) => {
-    const executor = new CodexExecServer({ cwd: context.daemonPackageRoot });
+    const relayBroker = process.platform === "linux"
+      ? new SandboxRelayBroker({
+        root: path.resolve(context.daemonPackageRoot, ".."),
+        // The staged copy is executable and survives the committed binary being rebuilt.
+        stage: new NativeArtifactStage({
+          runtimeRoot: context.dataRootPath,
+          warn: message => logError("sandbox-relay", message),
+        }),
+      })
+      : undefined;
+    const executor = new CodexExecServer({ cwd: context.daemonPackageRoot, relayBroker });
     const sandboxAcl = new CodexSandboxAclController();
     // Shared by every provider's shell so one machine-wide limit covers all agents' builds and test suites.
     const commandCapacity = new WorkbenchCommandCapacity({
@@ -30,6 +43,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const retire = async () => {
       commandCapacity.dispose();
       await Promise.all([executor.dispose(), sandboxAcl.dispose()]);
+      await relayBroker?.dispose();
     };
     return {
       registrations: { codexExecutor: executor, codexSandboxAcl: sandboxAcl, commandCapacity },

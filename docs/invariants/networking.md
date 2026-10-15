@@ -6,4 +6,5 @@
 - Keep one network identity and policy receiver per installation. App disposal must not stop daemon publication, DNS or policy reception.
 - Keep the CA private key with the authority; a persistent leaf key identifies an installation while Tailscale node IDs are replaceable transport identities. Rebind only after key proof with the prior app node offline, migrating every directory reference atomically. DNS selection is independent of ownership, and ownership transfer preserves root trust through durable prepare, relinquish, and activate phases without automatic root replacement.
 - Persist network configuration, membership, grants, and handover or rename intent before acknowledging native changes; if persistence fails, keep the previous safe state and expose the failure.
+- Linux sandboxed commands reach every host loopback port, and the host reaches their loopback listeners, through the Workbench relay; remote egress policy stays with Codex's managed proxy.
 - Serve only the Workbench-owned DNS suffix from the selected DNS app; leave public and unrelated names to the configured external path, with no hidden resolver failover.

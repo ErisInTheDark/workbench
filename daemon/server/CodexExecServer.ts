@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - CodexExecServerOptions: inject the owned process launch, retirement and termination-grace boundaries.
+ * - CodexExecServerOptions: inject the owned process launch, retirement, termination-grace and Linux relay boundaries.
  * - CodexExecRootEvent: a command's sandboxed root process appeared, or the command settled.
  * - default CodexExecServer: retain one pinned native sandbox executor, isolate commands, stop them through the
  *   executor (an acknowledged terminate ends a command), terminate live commands before retiring, and report each
@@ -16,6 +16,8 @@ import {
 } from "./codex-exec-protocol";
 import resolveCodexExecutable from "./codex-executable";
 import { readExecRootMarker, withExecRootMarker } from "./exec/exec-root-marker";
+import type SandboxRelayBroker from "./exec/SandboxRelayBroker";
+import type { SandboxRelayAdmission } from "./exec/SandboxRelayBroker";
 import { createSpawnOptions, killProcessTreeAsync, logError, lowerAgentProcessPriority } from "./process-helpers";
 
 const OUTPUT_BYTES = 1024 * 1024;
@@ -67,6 +69,8 @@ export interface CodexExecServerOptions {
   /** Resolves when retirement should stop waiting for termination acknowledgements. */
   terminationGrace?: () => Promise<void>;
   platform?: NodeJS.Platform;
+  /** Gives Linux managed-network commands host loopback access; absent, they keep Codex's proxy-only network. */
+  relayBroker?: Pick<SandboxRelayBroker, "admit">;
 }
 
 export type CodexExecRootEvent =
@@ -321,16 +325,22 @@ export default class CodexExecServer {
     }, request.timeoutMs);
     const stop = stopped.then((): never => { throw abortReason ?? new Error("Command cancelled."); });
     stop.catch(() => undefined);
+    const platform = this.options.platform ?? process.platform;
+    let relay: SandboxRelayAdmission | null = null;
     try {
+      // Codex isolates managed Linux commands in their own network namespace; the relay restores host loopback.
+      if (platform === "linux" && request.permissions.type === "managed") {
+        relay = await this.options.relayBroker?.admit(request.command) ?? null;
+      }
       // Start and terminate share one ordered stream, so a sent start is already addressable.
       command.addressable = true;
       const started = this.request(session, "process/start", {
-        processId, argv: withExecRootMarker(request.command, this.options.platform ?? process.platform), cwd: pathToFileURL(request.cwd).href,
-        env: request.env ?? {}, tty: false, arg0: null,
+        processId, argv: relay?.argv ?? withExecRootMarker(request.command, platform), cwd: pathToFileURL(request.cwd).href,
+        env: { ...request.env, ...relay?.env }, tty: false, arg0: null,
         envPolicy: request.envPolicy ?? {
           inherit: "all", ignoreDefaultExcludes: true, exclude: [], set: {}, includeOnly: [],
         },
-        ...managedNetwork(request.permissions, this.options.platform ?? process.platform),
+        ...managedNetwork(request.permissions, platform),
         sandbox: {
           permissions: request.permissions,
           cwd: pathToFileURL(request.cwd).href,
@@ -357,6 +367,7 @@ export default class CodexExecServer {
       session.commands.get(processId)?.reject(error instanceof Error ? error : new Error(String(error)));
       throw error;
     } finally {
+      relay?.release();
       clearTimeout(timer);
       signal.removeEventListener("abort", abort);
       session.commands.delete(processId);

@@ -12,6 +12,7 @@
 | /daemon/server | workbench harness |
 | /daemon/voice | rust vtt service |
 | /daemon/repo | go vfs service |
+| /daemon/relay | go sandbox loopback relay (linux) |
 | /integration | integrations in third party software |
 | /instructions | instructions for agents, copied into the user's `~/.workbench` folder whenever read |
 | /app/server | server for frontend app. orchestrates daemons, batches requests |
