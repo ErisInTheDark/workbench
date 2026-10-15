@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchWorkspaceObservationController: own named, partial observations over daemon fact owners (incl. working-tree summaries rerun only when changed paths or claims move, branch positions against peers, live vis sessions, and retargetable thread summary batches); publish typed keyed deltas after each first value.
+ * - default WorkbenchWorkspaceObservationController: own named daemon observations, explicit selected-project demand and keyed deltas.
+ * - DaemonObservationChange: first-value or revision-relative delta publication.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
@@ -83,9 +84,10 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
   private readonly unsubscribe: Array<() => void>;
   private closed = false;
   private summaryFlushQueued = false;
+  private readonly updateDemand: ReturnType<import("./WorkbenchInstallationUpdateController").default["trackProjectDemand"]> | undefined;
 
   constructor(private readonly owners: {
-    installationUpdate?: Pick<import("./WorkbenchInstallationUpdateController").default, "read" | "subscribe">;
+    installationUpdate?: Pick<import("./WorkbenchInstallationUpdateController").default, "read" | "subscribe" | "trackProjectDemand">;
     reload: { read(): WorkbenchReloadDirtSnapshot; subscribe(listener: () => void): () => void };
     catalogue: Pick<WorkbenchProjectCatalogController, "getFacts" | "subscribe">;
     identities: Pick<WorkbenchThreadIdentityController, "findThread" | "resolve" | "subscribe">;
@@ -110,6 +112,9 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     warn(message: string): void;
     cooperate?: () => Promise<void>;
   }) {
+    this.updateDemand = owners.installationUpdate?.trackProjectDemand(projectId =>
+      [...this.observations.values()].some(({ request: { query } }) =>
+        query.kind === "projectSelection" && query.projectIds.includes(projectId)));
     this.unsubscribe = [
       ...(owners.installationUpdate ? [owners.installationUpdate.subscribe(() => {
         for (const observation of this.observations.values()) {
@@ -153,13 +158,17 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     };
     this.observations.set(key, observation);
     try { this.start(observation); }
-    finally { observation.opening = false; }
+    finally {
+      observation.opening = false;
+      this.updateDemand?.refresh();
+    }
     return observation.value;
   }
 
   private start(observation: Observation<Client>) {
     const request = observation.request;
     switch (request.query.kind) {
+      case "projectSelection": break;
       case "runtime": break;
       case "update": break;
       case "catalogue": break;
@@ -286,10 +295,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
-  /**
-   * Swaps a live `threadSummaries` batch's ids in place: kept threads keep their values and the change
-   * publishes as an ordinary delta, so growing or shrinking a batch ships only the threads that moved.
-   */
+  /** Replace selection or summary-batch ids without dropping retained demand. */
   retarget(connectionId: string, input: DaemonWorkspaceRetarget) {
     if (this.closed) throw new Error("Workspace observations are reloading.");
     const request = DaemonWorkspaceRetargetSchema.parse(input);
@@ -297,11 +303,13 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     if (!observation || observation.request.generation !== request.generation) {
       throw new Error("Workspace observation to retarget is not open.");
     }
-    if (observation.request.query.kind !== "threadSummaries" || request.query.kind !== "threadSummaries") {
-      throw new Error("Only thread summary batches can be retargeted.");
+    if (observation.request.query.kind !== request.query.kind
+      || request.query.kind !== "threadSummaries" && request.query.kind !== "projectSelection") {
+      throw new Error("Only thread summary batches and project selections can be retargeted.");
     }
     observation.request = request;
-    this.readSummaries(observation);
+    if (request.query.kind === "projectSelection") this.updateDemand?.refresh();
+    else this.readSummaries(observation);
     return { revision: observation.value.revision };
   }
 
@@ -326,6 +334,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
 
   dispose() {
     this.closed = true;
+    this.updateDemand?.release();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     for (const observation of this.observations.values()) this.retire(observation);
   }
@@ -349,6 +358,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const envelope = { subscriptionId: request.subscriptionId, generation: request.generation, revision: 0 };
     const catalogue = this.owners.catalogue.getFacts();
     switch (request.query.kind) {
+      case "projectSelection": return { ...envelope, kind: "projectSelection", phase: "current", failure: null };
       case "runtime": return { ...envelope, kind: "runtime", phase: "current", failure: null, data: this.readReload() };
       case "update": return { ...envelope, kind: "update", phase: this.owners.installationUpdate ? "current" : "pending",
         failure: null, data: this.owners.installationUpdate?.read() ?? null };
@@ -911,6 +921,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     observation.stats?.release();
     observation.dirty.clear();
     this.observations.delete(this.key(observation.connectionId, observation.request.subscriptionId));
+    this.updateDemand?.refresh();
   }
 
   private key(connectionId: string, subscriptionId: string) {

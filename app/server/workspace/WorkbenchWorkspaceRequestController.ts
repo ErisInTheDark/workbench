@@ -615,6 +615,10 @@ export default class WorkbenchWorkspaceRequestController {
         interest.stop.push(this.options.workspace.subscribe(refresh),
           this.options.presentation.subscribe(refresh), this.options.workspace.retain());
         break;
+      case "projectSelection":
+        interest.stop.push(this.options.workspace.subscribe(refresh),
+          this.options.sources.subscribe(refresh), this.options.workspace.retain());
+        break;
       case "archivedThreads":
         interest.stop.push(this.options.workspace.subscribe(refresh), this.options.workspace.retain());
         break;
@@ -666,14 +670,15 @@ export default class WorkbenchWorkspaceRequestController {
     return interest.value;
   }
 
-  /** Swaps a live summary batch's thread ids; the browser receives the difference as an ordinary delta. */
+  /** Replace selection or summary-batch ids without dropping retained demand. */
   retarget(input: WorkspaceRetarget) {
     if (this.closed) throw new Error("Workspace connection is closed.");
     const request = WorkspaceRetargetSchema.parse(input);
     const interest = this.interests.get(request.subscriptionId);
     if (!interest || interest.request.generation !== request.generation) throw new Error("Workspace observation to retarget is not open.");
-    if (interest.request.query.kind !== "threadSummaries" || request.query.kind !== "threadSummaries") {
-      throw new Error("Only thread summary batches can be retargeted.");
+    if (interest.request.query.kind !== request.query.kind
+      || request.query.kind !== "threadSummaries" && request.query.kind !== "projectSelection") {
+      throw new Error("Only thread summary batches and project selections can be retargeted.");
     }
     interest.request = request;
     this.refresh(interest);
@@ -713,6 +718,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "runtime": return { ...base, kind: "runtime", data: this.options.runtime.read() };
       case "presentation": return { phase: "current", failure: null, kind: "presentation", data: this.options.presentation.read() };
       case "projects": return { ...base, kind: "projects", data: this.options.workspace.getSnapshot() };
+      case "projectSelection": return { ...base, kind: "projectSelection" };
       case "projectGroups": return { ...base, kind: "projectGroups", data: this.options.workspace.getProjectGroups().data };
       case "projectThreads": return { ...base, kind: "projectThreads", data: {
         members: [], projects: [], folders: { pinned: [], projects: {} },
@@ -802,6 +808,15 @@ export default class WorkbenchWorkspaceRequestController {
         return;
       }
       case "projectThreads": this.projectRows(interest); return;
+      case "projectSelection": {
+        const { targets } = this.rowTargets(query.projects);
+        this.observeTargets(interest, targets, projectIds => ({ kind: "projectSelection", projectIds }));
+        const facts = [...interest.sources.values()].map(source => source.observation.getSnapshot());
+        const failure = facts.find(fact => fact.failure)?.failure ?? null;
+        const complete = interest.sources.size === targets.size && facts.every(fact => fact.phase === "current");
+        this.update(interest, { kind: "projectSelection", phase: complete ? "current" : failure ? "failed" : "pending", failure });
+        return;
+      }
       case "archivedThreads": this.projectArchivedRows(interest); return;
       case "threadSummaries": this.projectThreadSummaries(interest); return;
       case "projectTree": {
@@ -997,7 +1012,7 @@ export default class WorkbenchWorkspaceRequestController {
   }
 
   /** Concrete daemon projects behind a project-reference selection (null = every known project). */
-  private rowTargets(selected: Extract<WorkspaceObserve["query"], { kind: "projectThreads" | "archivedThreads" | "stats" }>["projects"]) {
+  private rowTargets(selected: Extract<WorkspaceObserve["query"], { kind: "projectThreads" | "archivedThreads" | "stats" | "projectSelection" }>["projects"]) {
     const workspace = this.options.workspace.getSnapshot();
     const targets = new Map<DaemonId, Set<ProjectId>>();
     const add = (daemonId: DaemonId, projectId: ProjectId) => {
@@ -1023,6 +1038,23 @@ export default class WorkbenchWorkspaceRequestController {
     for (const [id, existing] of interest.sources) {
       const projectIds = [...targets.get(id) ?? []].sort();
       if (areDeeplyEqual(projectIds, existing.projectIds)) continue;
+      if (interest.request.query.kind === "projectSelection" && projectIds.length) {
+        const next = query(projectIds);
+        try {
+          existing.observation.retarget(next);
+          existing.projectIds = projectIds;
+          continue;
+        } catch {
+          // Another app may share the old selection; acquire new demand before releasing our share.
+          const source = this.options.sources.get(id);
+          if (source) {
+            const replacement = source.observe(next, () => this.refresh(interest));
+            interest.sources.set(id, { projectIds, observation: replacement });
+            existing.observation.release();
+            continue;
+          }
+        }
+      }
       interest.sources.delete(id);
       existing.observation.release();
     }

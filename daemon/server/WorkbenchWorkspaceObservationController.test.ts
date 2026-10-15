@@ -67,6 +67,42 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
   };
 }
 
+test("only explicit selected projects drive update demand across apps and release", context => {
+  const reader: { read: ((projectId: ProjectId) => boolean) | null } = { read: null };
+  const demands: boolean[] = [];
+  const otherId = randomUUID();
+  const f = fixture(context, { installationUpdate: {
+    read: () => ({ state: "current", reason: null, upstream: "origin/main", behind: 0, ahead: 0,
+      conflicts: [], lockfileChanged: false, checkedAt: 1, projectId: a, failure: null }),
+    subscribe: () => () => {},
+    trackProjectDemand: read => {
+      reader.read = read;
+      return { refresh: () => demands.push(read(a)), release: () => { reader.read = null; } };
+    },
+  } });
+  f.observe({ kind: "projectTree", projectId: a });
+  f.observe({ kind: "projectThreads", projectIds: [a] });
+  const other = f.observe({ kind: "projectSelection", projectIds: [b] }, otherId);
+  assert.equal(reader.read?.(a), false);
+  const first = f.observe({ kind: "projectSelection", projectIds: [a] }, randomUUID(), 1, "first");
+  assert.equal(demands.at(-1), true);
+  f.owner.retarget("first", { subscriptionId: first.subscriptionId, generation: 1,
+    query: { kind: "projectSelection", projectIds: [a, b] } });
+  assert.equal(demands.at(-1), true);
+  const second = f.observe({ kind: "projectSelection", projectIds: [a, b] }, randomUUID(), 1, "second");
+  f.owner.release("first", { subscriptionId: first.subscriptionId, generation: first.generation });
+  assert.equal(reader.read?.(a), true);
+  f.owner.disconnect("second");
+  assert.equal(demands.at(-1), false);
+  f.observe({ kind: "projectSelection", projectIds: [a] }, otherId, 2);
+  f.owner.release("connection", { subscriptionId: other.subscriptionId, generation: other.generation });
+  assert.equal(reader.read?.(a), true);
+  f.owner.release("second", { subscriptionId: second.subscriptionId, generation: second.generation });
+  assert.equal(reader.read?.(a), true);
+  f.owner.dispose();
+  assert.equal(reader.read, null);
+});
+
 test("installation changes publish typed deltas only to update observers and release their owner", context => {
   let current: InstallationUpdate = {
     state: "current", reason: null, upstream: "origin/main", behind: 0, ahead: 0,
@@ -77,6 +113,7 @@ test("installation changes publish typed deltas only to update observers and rel
   const f = fixture(context, { installationUpdate: {
     read: () => current,
     subscribe: listener => { changed = listener; return () => { released++; }; },
+    trackProjectDemand: () => ({ refresh: () => {}, release: () => {} }),
   } });
   const initial = f.observe({ kind: "update" });
   f.observe({ kind: "runtime" });

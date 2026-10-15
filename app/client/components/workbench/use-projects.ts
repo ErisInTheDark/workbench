@@ -1,17 +1,20 @@
 /*
  * Exports:
- * - useProjects: read the logical projects; members read their group tiers, daemon folder catalogues, logical and per-project thread summaries, and the route's project selection.
+ * - useProjects: read logical projects, groups, folders, summaries and selection; observeSelection relays the sidebar's selected projects.
  * - useProject: read one logical project by id; members read the project owning a folder location and one project's summary.
  */
 "use client";
 
-import { useCallback, useContext, useRef, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useRef, useSyncExternalStore } from "react";
 
 import type {
   WorkbenchLogicalProject, WorkbenchLogicalProjectSummary, WorkbenchLogicalThreadRow, WorkbenchProjectOption,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import type { WorkspaceProjectReference } from "workbench-shared/workbench/workspace/workspace-observation";
+import type { WorkspaceQueryHandle } from "../../workbench/app/WorkbenchWorkspaceClient";
 import type { WorkbenchProjectThreadSummaries } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchProjectThreadRowSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import type ProjectFactsStore from "../../workbench/project/ProjectFactsStore";
@@ -98,6 +101,28 @@ useProjects.selection = function useProjectSelection(
     return next;
   }, [browseLocation, facts, physicalProjects, presentationMode, route, sidebar]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+};
+
+useProjects.observeSelection = function useSelectedProjectObservation(selection: ProjectSelection, explicitClient?: WorkbenchClientController) {
+  const providedClient = useContext(WorkbenchClientContext);
+  const mounted = (explicitClient ?? providedClient)?.mounted;
+  const workspace = mounted?.workspace;
+  const daemonId = mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId;
+  const logical = selection.displayedLogicalProjects !== undefined;
+  const projects = selection.selectionProjectIds.flatMap<WorkspaceProjectReference>(id => logical
+    ? [{ kind: "logical" as const, projectId: LogicalProjectIdSchema.parse(id) }]
+    : daemonId ? [{ kind: "location" as const, location: { daemonId: DaemonIdSchema.parse(daemonId), projectId: ProjectIdSchema.parse(id) } }] : []);
+  const key = JSON.stringify(projects);
+  const handle = useRef<WorkspaceQueryHandle<"projectSelection"> | null>(null);
+  useEffect(() => {
+    if (!workspace) return;
+    const observation = workspace.observe({ kind: "projectSelection", projects });
+    handle.current = observation;
+    return () => { handle.current = null; observation.release(); };
+  }, [workspace]);
+  useEffect(() => {
+    handle.current?.retarget({ kind: "projectSelection", projects });
+  }, [workspace, key]);
 };
 
 export function useProject(id: string | null | undefined) {

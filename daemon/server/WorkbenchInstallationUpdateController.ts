@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchInstallationUpdateController: own running-checkout fetches, upstream prediction and leased pulls through
- *   WorkbenchGitIntegration, repair failure and background checks.
+ *   WorkbenchGitIntegration, repair failure and selected-project-aware background checks.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -25,7 +25,7 @@ type Options = {
   transitions: Pick<ReturnType<typeof createWorktreeGitTransitions>, "run" | "read">;
   projectId(): Promise<ProjectId | null>;
   warn(message: string): void;
-  schedule?: (check: () => void) => () => void;
+  schedule?: (check: () => void, intervalMs: number) => () => void;
   watch?: (changed: () => void) => (() => void) | Promise<() => void>;
   observe?: (changed: () => void) => Promise<() => void>;
   /** Runs one git command; `signal` aborts it when the controller is disposed. */
@@ -46,7 +46,8 @@ export default class WorkbenchInstallationUpdateController {
   private readonly journalPath: string;
   private readonly git: (args: string[]) => Promise<GitResult>;
   private readonly integration: WorkbenchGitIntegration;
-  private stopSchedule: (() => void) | null = null;
+  private schedule: { intervalMs: number; stop(): void } | null = null;
+  private readonly projectDemand = new Set<(projectId: ProjectId) => boolean>();
   private stopWatch: (() => void) | null = null;
   private closed = false;
   private background: Promise<void> | null = null;
@@ -74,20 +75,51 @@ export default class WorkbenchInstallationUpdateController {
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
 
   start() {
-    if (this.closed || this.stopSchedule) return;
-    const schedule = this.options.schedule ?? (check => {
-      const timer = setInterval(check, 15 * 60 * 1000);
+    if (this.closed || this.schedule) return;
+    this.scheduleChecks();
+    this.backgroundCheck(true, true);
+  }
+
+  trackProjectDemand(read: (projectId: ProjectId) => boolean) {
+    if (this.closed) throw new Error("Installation update checks were disposed.");
+    const demand = (projectId: ProjectId) => read(projectId);
+    this.projectDemand.add(demand);
+    this.refreshSchedule();
+    return {
+      refresh: () => { if (this.projectDemand.has(demand)) this.refreshSchedule(); },
+      release: () => {
+        if (this.projectDemand.delete(demand)) this.refreshSchedule();
+      },
+    };
+  }
+
+  private checkInterval() {
+    const id = this.value.projectId;
+    return id && [...this.projectDemand].some(read => read(id)) ? 30_000 : 15 * 60 * 1000;
+  }
+
+  private refreshSchedule() {
+    if (this.closed || !this.schedule || this.schedule.intervalMs === this.checkInterval()) return;
+    this.schedule.stop();
+    this.scheduleChecks();
+  }
+
+  private scheduleChecks() {
+    const intervalMs = this.checkInterval();
+    const schedule = this.options.schedule ?? ((check, interval) => {
+      const timer = setInterval(check, interval);
       timer.unref();
       return () => clearInterval(timer);
     });
-    this.stopSchedule = schedule(() => this.backgroundCheck(true));
-    this.backgroundCheck(true, true);
+    this.schedule = { intervalMs, stop: schedule(() => this.backgroundCheck(true), intervalMs) };
   }
 
   async dispose() {
     this.closed = true;
     this.lifetime.abort(new Error("Installation update checks were disposed."));
-    this.stopSchedule?.();
+    this.schedule?.stop();
+    this.schedule = null;
+    this.projectDemand.clear();
     this.stopWatch?.();
     this.listeners.clear();
     await this.background;
@@ -240,6 +272,7 @@ export default class WorkbenchInstallationUpdateController {
   private publish(value: InstallationUpdate) {
     if (this.closed) return;
     this.value = value;
+    this.refreshSchedule();
     for (const listener of this.listeners) listener();
   }
 }

@@ -24,7 +24,7 @@
  * - WORKSPACE_DELTA_METHOD/WorkspaceObservationDeltaSchema/WorkspaceObservationDelta: keyed delta onto one observation revision.
  * - WorkspaceArchivedThreadsSchema/WorkspaceArchivedThreads: paged archived members with per-project totals.
  * - daemonObservationShape/workspaceObservationShape: how each observation kind decomposes into keyed deltas.
- * Queries include a thread's live `threadVis` sessions and one stored `visSnapshot`.
+ * Queries include live `projectSelection` demand, a thread's `threadVis` sessions and one stored `visSnapshot`.
  */
 import { z } from "zod";
 import {
@@ -96,6 +96,7 @@ const envelope = {
 };
 
 export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("projectSelection"), projectIds: z.array(ProjectIdSchema) }).strict(),
   z.object({ kind: z.literal("runtime") }).strict(),
   z.object({ kind: z.literal("update") }).strict(),
   z.object({ kind: z.literal("catalogue") }).strict(),
@@ -159,6 +160,7 @@ const archivedProject = z.object({
 }).strict();
 
 export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
+  z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
   z.object({ ...envelope, kind: z.literal("update"), data: InstallationUpdateSchema }).strict(),
   z.object({
@@ -215,6 +217,7 @@ export const WorkspaceProjectReferenceSchema = z.discriminatedUnion("kind", [
 export type WorkspaceProjectReference = z.infer<typeof WorkspaceProjectReferenceSchema>;
 
 export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("projectSelection"), projects: z.array(WorkspaceProjectReferenceSchema) }).strict(),
   z.object({ kind: z.literal("search"), request: WorkbenchSearchRequestSchema }).strict(),
   z.object({ kind: z.literal("daemonRuntime"), daemonId: DaemonIdSchema.optional() }).strict(),
   z.object({ kind: z.literal("daemonUpdate"), daemonId: DaemonIdSchema.optional() }).strict(),
@@ -444,6 +447,7 @@ const runtime = z.object({
 }).strict();
 
 export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
+  z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
   z.object({ ...envelope, kind: z.literal("search"), data: WorkspaceSearchResponseSchema,
     sources: z.array(z.object({
       daemonId: DaemonIdSchema, projectId: ProjectIdSchema.nullable(),

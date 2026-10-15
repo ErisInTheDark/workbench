@@ -11,6 +11,7 @@ import WorkbenchThreadTransitionCoordinator from "./WorkbenchThreadTransitionCoo
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
 import { INSTALLATION_REPAIR_JOURNAL_SEGMENTS, type InstallationRepairJournal } from "workbench-shared/workbench/installation-update";
 import { randomUUID } from "node:crypto";
+import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 
 const execute = promisify(execFile);
 
@@ -243,6 +244,49 @@ test("failed fetch stays unavailable through local recomputes and logs each fail
   assert.ok(!warnings[0]?.includes("private network details"));
   fetchFails = false;
   assert.equal((await controller.check()).state, "available");
+});
+
+test("selected-project demand switches one schedule and survives overlapping observation owners", async t => {
+  const f = await fixture(t);
+  const id = ProjectIdSchema.parse("workbench");
+  const identity = Promise.withResolvers<typeof id>();
+  const schedules: Array<{ interval: number; stopped: boolean }> = [];
+  const controller = new WorkbenchInstallationUpdateController({
+    repoRoot: f.local, dataRoot: path.join(f.temporary.path, "data"), transitions: f.transitions,
+    projectId: () => identity.promise, warn: warning => assert.fail(warning),
+    watch: () => () => {},
+    schedule: (_check, interval) => {
+      const schedule = { interval, stopped: false };
+      assert.ok(schedules.every(item => item.stopped));
+      schedules.push(schedule);
+      return () => { schedule.stopped = true; };
+    },
+  });
+  t.after(() => controller.dispose());
+  let selected = false;
+  const first = controller.trackProjectDemand(projectId => selected && projectId === id);
+  controller.start();
+  assert.equal(schedules.at(-1)?.interval, 15 * 60 * 1000);
+  selected = true;
+  first.refresh();
+  assert.equal(schedules.length, 1);
+  const ready = Promise.withResolvers<void>();
+  controller.subscribe(() => { if (controller.read().projectId === id) ready.resolve(); });
+  identity.resolve(id);
+  await ready.promise;
+  assert.equal(schedules.at(-1)?.interval, 30_000);
+  first.refresh();
+  assert.equal(schedules.length, 2);
+  const replacement = controller.trackProjectDemand(projectId => projectId === id);
+  first.release();
+  first.release();
+  assert.equal(schedules.length, 2);
+  replacement.release();
+  assert.equal(schedules.at(-1)?.interval, 15 * 60 * 1000);
+  await controller.dispose();
+  assert.ok(schedules.every(item => item.stopped));
+  first.refresh();
+  assert.equal(schedules.length, 3);
 });
 
 test("start owns one injected schedule and watcher and disposal stops both", async t => {

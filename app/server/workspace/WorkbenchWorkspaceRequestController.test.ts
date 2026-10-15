@@ -7,7 +7,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
-import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
 import WorkbenchPresentationController from "../state/WorkbenchPresentationController";
 import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
@@ -211,6 +211,66 @@ function state(revision: number): WorkbenchClientStateResponse {
       questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [],
     } };
 }
+
+test("selected logical projects relay demand to every location and clear it on deselection and disposal", async context => {
+  const logicalId = LogicalProjectIdSchema.parse(randomUUID());
+  const otherId = LogicalProjectIdSchema.parse(randomUUID());
+  const locations = ["one", "two"].map(name => ({
+    daemonId: DaemonIdSchema.parse(randomUUID()), projectId: ProjectIdSchema.parse(name),
+  }));
+  const demands: Array<{ daemonId: string; query: object; released: boolean }> = [];
+  let shared = false;
+  const sources = locations.map(location => ({
+    id: location.daemonId, available: true, observe: (query: object) => {
+      if (shared) assert.ok(demands.some(demand => demand.daemonId === location.daemonId && !demand.released));
+      const demand = { daemonId: location.daemonId, query, released: false };
+      demands.push(demand);
+      return { getSnapshot: () => ({ phase: "current", failure: null, value: { kind: "projectSelection" } }),
+        retarget: (next: object) => {
+          if (shared) throw new Error("Shared observation");
+          demand.query = next;
+        },
+        release: () => { demand.released = true; } };
+    },
+  }));
+  const f = await fixture(context, { get: id => sources.find(source => source.id === id) });
+  const snapshot = f.workspace.getSnapshot();
+  context.mock.method(f.workspace, "getSnapshot", () => ({ ...snapshot, projects: [logicalId, otherId].map(id => ({
+    id, matchKey: id, label: id, locations: locations.map(target => ({
+      target: id === logicalId ? target : { ...target, projectId: ProjectIdSchema.parse("unselected") },
+      daemonId: target.daemonId, hostname: target.daemonId, name: id, rootPath: `/${id}`, project: null,
+    })),
+  })) }));
+  const subscriptionId = randomUUID();
+  const observe = (generation: number, selected: boolean) => f.owner.observe({ subscriptionId, generation,
+    query: { kind: "projectSelection", projects: selected ? [{ kind: "logical", projectId: logicalId }] : [] } });
+  assert.equal(observe(1, true).phase, "current");
+  assert.deepEqual(demands.map(({ daemonId, query }) => ({ daemonId, query })), locations.map(location => ({
+    daemonId: location.daemonId, query: { kind: "projectSelection", projectIds: [location.projectId] },
+  })));
+  f.owner.retarget({ subscriptionId, generation: 1, query: { kind: "projectSelection", projects: [
+    { kind: "logical", projectId: logicalId }, { kind: "logical", projectId: otherId },
+  ] } });
+  assert.equal(demands.length, 2);
+  assert.ok(demands.every(demand => !demand.released));
+  assert.deepEqual(demands.map(demand => demand.query), locations.map(location => ({
+    kind: "projectSelection", projectIds: [location.projectId, "unselected"].sort(),
+  })));
+  shared = true;
+  f.owner.retarget({ subscriptionId, generation: 1,
+    query: { kind: "projectSelection", projects: [{ kind: "logical", projectId: logicalId }] } });
+  assert.equal(demands.length, 4);
+  assert.ok(demands.slice(0, 2).every(demand => demand.released));
+  assert.ok(demands.slice(2).every(demand => !demand.released));
+  shared = false;
+  observe(2, false);
+  assert.ok(demands.every(demand => demand.released));
+  observe(3, true);
+  f.owner.release({ subscriptionId, generation: 2 });
+  assert.equal(demands.filter(demand => !demand.released).length, 2);
+  f.owner.dispose();
+  assert.ok(demands.every(demand => demand.released));
+});
 
 test("peer previews route first-three and full-history demand to the selected checkout and release both", async context => {
   const daemonId = DaemonIdSchema.parse(randomUUID());

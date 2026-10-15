@@ -395,6 +395,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const browseLocation = explorer.browseLocation ?? null;
   const logicalProjects = useProjects(workbenchClient);
   const projectSelection = useProjects.selection(route, explorer.projects, browseLocation, workbenchClient);
+  useProjects.observeSelection(projectSelection, workbenchClient);
   const {
     displayedLogicalProjects, selectionProjectIds, selectedLogicalProject, selectedLogicalProjects, selectedPhysicalProjects,
   } = projectSelection;
