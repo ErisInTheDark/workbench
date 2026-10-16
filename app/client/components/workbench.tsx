@@ -62,7 +62,7 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
+import { isSvgFile, isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
 import {
     preferredSelectedLaunchTarget,
     projectLogicalThreadDisplayOrder,
@@ -75,7 +75,7 @@ import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
-import { FileActionContext, FileScopeContext, useFileActions } from "../workbench/file/use-file";
+import { FileActionContext, FileScopeContext, resolveFileOpenDestination, useFileActions } from "../workbench/file/use-file";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
@@ -128,6 +128,7 @@ import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositor
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
+import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
 import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
@@ -979,8 +980,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     daemonId: browseLocation?.daemonId,
     projectId: browseProjectId,
   }), [browseDaemon, browseLocation?.daemonId, browseProjectId]);
+  const fileOpenPolicy = useMemo(() => ({
+    openMarkdownFilesWith: resolvedSettings.openMarkdownFilesWith,
+    openOtherFilesWith: resolvedSettings.openOtherFilesWith,
+    openSvgFilesWith: resolvedSettings.openSvgFilesWith,
+  }), [resolvedSettings.openMarkdownFilesWith, resolvedSettings.openOtherFilesWith, resolvedSettings.openSvgFilesWith]);
   const openFileByPolicy = useFileActions({
-    behavior: resolvedSettings.fileOpenBehavior,
+    policy: fileOpenPolicy,
     browseLocation,
     currentProjectId: explorer.currentProjectId,
     defaultDaemon: controls?.daemon ?? null,
@@ -1408,8 +1414,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   const createDialogParentLabel = createDialogParentPath || "project";
   const canOpenFileFromExplorer = useCallback((path: string) => (
-    resolvedSettings.fileOpenBehavior !== "workbench" || isWorkbenchOpenableFile(path)
-  ), [resolvedSettings.fileOpenBehavior]);
+    resolveFileOpenDestination({ path }, fileOpenPolicy) !== null
+  ), [fileOpenPolicy]);
   const mobileMosaicFallbackTarget = route.view === "mosaic"
     ? getRouteMosaicFallbackTarget(route.mosaicNode, isMobile)
     : null;
@@ -2660,6 +2666,23 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       const togglePanelMinimized = () => {
                         updateMosaicPanelOptions(panelId, { minimized: !isMinimized || undefined });
                       };
+                      if (target.kind === "file" && isSvgFile(target.filePath)) {
+                        return (
+                          <WorkbenchSvgEditorView
+                            key={target.filePath}
+                            contained={showMosaicView}
+                            controls={controls}
+                            location={mosaicTarget?.source?.location ?? null}
+                            onClose={showMosaicView ? () => { closeMosaicPanel(mosaicTarget ?? target); } : undefined}
+                            onHeaderPointerDragStart={showMosaicView ? (event) => {
+                              beginWorkbenchPointerDrag(event, { sourcePanelId: panelId, target: mosaicTarget ?? target, type: "panel-target" });
+                            } : undefined}
+                            path={target.filePath}
+                            sidebarToggleInset={sidebarToggleInset}
+                          />
+                        );
+                      }
+
                       if (target.kind === "file") {
                         return (
                           <WorkbenchFilePanel
@@ -2819,7 +2842,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     }}
                   />
                 ) : null}
-                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
+                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout && isSvgFile(effectiveFilePath) ? (
+                  <WorkbenchSvgEditorView key={effectiveFilePath} controls={controls} location={browseLocation} path={effectiveFilePath} />
+                ) : showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
                   <WorkbenchFilePanel
                     controls={controls}
                     editorFontClassName={editorFontClassName}

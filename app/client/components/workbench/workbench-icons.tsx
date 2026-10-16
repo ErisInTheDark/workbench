@@ -56,6 +56,7 @@
  * - TriangleIcon/DiamondIcon: trend direction and steady glyphs.
  * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - SlashIcon: compact skill overflow glyph.
+ * - Redo2Icon/Grid3x3Icon/WandSparklesIcon: editor redo, grid and format glyphs.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
@@ -842,6 +843,21 @@ export function UnfoldVerticalIcon(props: IconProps) {
 
 export function Undo2Icon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5 5.5 5.5 0 0 1-5.5 5.5H11" /></OutlinedIcon>;
+}
+
+export function Redo2Icon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5 5.5 5.5 0 0 0 9.5 20H13" /></OutlinedIcon>;
+}
+
+export function Grid3x3Icon(props: IconProps) {
+  return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></OutlinedIcon>;
+}
+
+export function WandSparklesIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
+    <path d="m14 7 3 3M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9" />
+  </OutlinedIcon>;
 }
 
 const FLAG_PATH = "M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528";

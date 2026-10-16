@@ -26,6 +26,7 @@ import WorkbenchReactDevelopmentModeSetting from "./WorkbenchReactDevelopmentMod
 import WorkbenchRepoPrerequisiteSettings from "./WorkbenchRepoPrerequisiteSettings";
 import WorkbenchSettingsContextRow from "./WorkbenchSettingsContextRow";
 import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
+import WorkbenchSettingsRadioTable from "./WorkbenchSettingsRadioTable";
 import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
 
 type Page = "general" | "projects" | "agents" | "network";
@@ -221,7 +222,11 @@ export default function WorkbenchSettingsView({
         </> : null}
         {page === "projects" ? <>
           <FormSection id="settings-files" title="Files">
-            <WorkbenchSettingsPreferences keys={["fileOpenBehavior", "showUnopenableFiles"]}
+            <WorkbenchSettingsRadioTable title="Open files with"
+              description="Where file links and explorer clicks open, by file type."
+              keys={["openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith"]}
+              logicalProjectId={logicalProject?.id ?? null} onError={onError} />
+            <WorkbenchSettingsPreferences keys={["showUnopenableFiles"]}
               logicalProjectId={logicalProject?.id ?? null} onError={onError} />
           </FormSection>
           <FormSection id="settings-git" title="Git">

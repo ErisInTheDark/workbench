@@ -63,6 +63,7 @@ test("typed global and project preferences survive reopening and retain pre-upgr
   const old = new Database(databasePath);
   applyWorkbenchDatabaseSchema(old, appStateSchema, { targetVersion: 13 });
   old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('theme','winter',0,1)").run();
+  old.prepare("INSERT INTO global_preferences(key,text_value,deleted,revision) VALUES ('fileOpenBehavior','vscode',0,1)").run();
   old.prepare("INSERT INTO daemon_registrations(id,kind,created_at,revision) VALUES ('retained','local',0,1)").run();
   old.prepare("INSERT INTO project_preferences(daemon_registration_id,project_id,key,enabled,boolean_value,deleted,revision) VALUES ('retained','alpha','threadCodeBlockWrap',1,1,0,2)").run();
   old.close();
@@ -84,7 +85,17 @@ test("typed global and project preferences survive reopening and retain pre-upgr
         logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "gitPeerSyncMode",
         enabled: 1, boolean_value: null, integer_value: null, text_value: "merge", deleted: 0, revision,
       }),
+      insertRow(appStateTables.globalPreferences, {
+        key: "openSvgFilesWith", boolean_value: null, integer_value: null, text_value: "workbench", deleted: 0, revision,
+      }),
+      insertRow(appStateTables.logicalProjectPreferences, {
+        logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "openOtherFilesWith",
+        enabled: 1, boolean_value: null, integer_value: null, text_value: "none", deleted: 0, revision,
+      }),
     ]);
+    assert.throws(() => repository.commit(revision => [insertRow(appStateTables.globalPreferences, {
+      key: "openMarkdownFilesWith", boolean_value: null, integer_value: null, text_value: "none", deleted: 0, revision,
+    })]));
   } finally { await repository.close(); }
   const reopened = new WorkbenchAppStateRepository({ databasePath });
   await reopened.start();
@@ -92,6 +103,11 @@ test("typed global and project preferences survive reopening and retain pre-upgr
     assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "theme" } }))[0]?.text_value, "winter");
     assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "threadCodeDetails" } }))[0]?.boolean_value, 1);
     assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "gitPeerSyncMode" } }))[0]?.text_value, "rebase");
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "fileOpenBehavior" } }))[0]?.text_value, "vscode");
+    assert.equal(reopened.query(selectRows(appStateTables.globalPreferences, { where: { key: "openSvgFilesWith" } }))[0]?.text_value, "workbench");
+    assert.equal(reopened.query(selectRows(appStateTables.logicalProjectPreferences, {
+      where: { logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "openOtherFilesWith" },
+    }))[0]?.text_value, "none");
     const syncOverride = reopened.query(selectRows(appStateTables.logicalProjectPreferences, {
       where: { logical_project_id: "a7ed7187-325c-4d6e-a3fe-d99411829437", key: "gitPeerSyncMode" },
     }))[0];

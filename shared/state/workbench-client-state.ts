@@ -3,7 +3,8 @@
  * - WorkbenchHarnessValue: provider identity.
  * - WorkbenchThemeValue: theme choices.
  * - WorkbenchEditorFontFamilyValue: editor font choices.
- * - WorkbenchFileOpenBehaviorValue: file opening policy.
+ * - WorkbenchFileOpenBehaviorValue: legacy single file opening policy, read only as a per-kind fallback.
+ * - WorkbenchViewableFileOpenValue/WorkbenchOtherFileOpenValue: per-file-kind open destinations.
  * - WorkbenchTranscriptModeValue: transcript storage selection.
  * - WorkbenchGlobalPreference: typed global preference.
  * - WorkbenchProjectPreference: typed project override.
@@ -70,6 +71,8 @@ import type { ProviderKey as WorkbenchHarnessValue } from "../workbench/provider
 export type WorkbenchThemeValue = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamilyValue = "mono" | "sans" | "serif";
 export type WorkbenchFileOpenBehaviorValue = "vscode" | "workbench" | "workbench-or-vscode";
+export type WorkbenchViewableFileOpenValue = "vscode" | "workbench";
+export type WorkbenchOtherFileOpenValue = "none" | "vscode";
 export type WorkbenchTranscriptModeValue = "compare" | "json" | "sqlite";
 
 export type WorkbenchGlobalPreference =
@@ -93,6 +96,8 @@ export type WorkbenchGlobalPreference =
   | { key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { key: "appPort" | "editorFontSize" | "projectTimeGroupCount"; value: number }
   | { key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
+  | { key: "openMarkdownFilesWith" | "openSvgFilesWith"; value: WorkbenchViewableFileOpenValue }
+  | { key: "openOtherFilesWith"; value: WorkbenchOtherFileOpenValue }
   | { key: "gitPeerSyncMode"; value: GitPeerSyncMode }
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "theme"; value: WorkbenchThemeValue }
@@ -103,6 +108,8 @@ export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "editorFontFamily"; value: WorkbenchEditorFontFamilyValue }
   | { enabled: boolean; key: "editorFontSize"; value: number }
   | { enabled: boolean; key: "fileOpenBehavior"; value: WorkbenchFileOpenBehaviorValue }
+  | { enabled: boolean; key: "openMarkdownFilesWith" | "openSvgFilesWith"; value: WorkbenchViewableFileOpenValue }
+  | { enabled: boolean; key: "openOtherFilesWith"; value: WorkbenchOtherFileOpenValue }
   | { enabled: boolean; key: "gitPeerSyncMode"; value: GitPeerSyncMode }
   | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue };
 
@@ -226,11 +233,15 @@ const preferenceBoolean = z.object({
   ]),
   value: z.boolean(),
 });
+const ViewableFileOpenSchema = z.enum(["vscode", "workbench"]);
+const OtherFileOpenSchema = z.enum(["none", "vscode"]);
 const GlobalPreferenceSchema = z.union([
   preferenceBoolean,
   z.object({ key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
   z.object({ key: z.enum(["appPort", "editorFontSize", "projectTimeGroupCount"]), value: z.number() }),
   z.object({ key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
+  z.object({ key: z.enum(["openMarkdownFilesWith", "openSvgFilesWith"]), value: ViewableFileOpenSchema }),
+  z.object({ key: z.literal("openOtherFilesWith"), value: OtherFileOpenSchema }),
   z.object({ key: z.literal("gitPeerSyncMode"), value: GitPeerSyncModeSchema }),
   z.object({ key: z.literal("harness"), value: ProviderKeySchema }),
   z.object({ key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
@@ -243,6 +254,8 @@ const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
   z.object({ enabled: z.boolean(), key: z.literal("editorFontSize"), value: z.number() }),
   z.object({ enabled: z.boolean(), key: z.literal("fileOpenBehavior"), value: z.enum(["vscode", "workbench", "workbench-or-vscode"]) }),
+  z.object({ enabled: z.boolean(), key: z.enum(["openMarkdownFilesWith", "openSvgFilesWith"]), value: ViewableFileOpenSchema }),
+  z.object({ enabled: z.boolean(), key: z.literal("openOtherFilesWith"), value: OtherFileOpenSchema }),
   z.object({ enabled: z.boolean(), key: z.literal("gitPeerSyncMode"), value: GitPeerSyncModeSchema }),
   z.object({ enabled: z.boolean(), key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
 ]);
@@ -255,6 +268,11 @@ const SidebarPreferenceSchema = z.union([
   ]), value: z.boolean() }),
 ]);
 const projectAddress = { daemonRegistrationId: address, projectId: address };
+const projectPreferenceKeys = [
+  "composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
+  "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
+  "theme", "gitPeerSyncMode", "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+] as const satisfies readonly WorkbenchProjectPreference["key"][];
 const attachment = z.object({ id: address, url: z.string() });
 
 export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
@@ -305,15 +323,12 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
-    key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
-      "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
-      "theme", "gitPeerSyncMode"]) }),
+    key: z.enum(projectPreferenceKeys) }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
-    key: z.enum(["composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
-      "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
-      "theme", "gitPeerSyncMode"]) }),
+    key: z.enum(projectPreferenceKeys) }),
   z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
     key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit", "browseSessionsOpen", "explorerOpen",
       "pinnedStatusCountsExpanded", "pinnedThreadsOpen", "projectStatusCountsExpanded", "projectsOpen",

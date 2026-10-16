@@ -46,6 +46,8 @@ import type WorkbenchClientStateController from "./workbench/state/WorkbenchClie
 import type { ClientDraftIdentity } from "./workbench/state/draft-persistence";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import FileDraftStore from "./workbench/state/FileDraftStore";
+import { createInitialEditHistory } from "./workbench/state/edit-history";
+import type { TextFileDocumentPort } from "./workbench/file/TextFileDocumentController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
@@ -83,6 +85,7 @@ type MountedControls = WorkbenchControls & {
       "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath"
       | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>
       & { location?: ProjectLocationReference }): ReturnType<typeof WorkbenchFilePanelClient>;
+  createTextFileDocumentPort(path: string, location?: ProjectLocationReference | null): TextFileDocumentPort;
 };
 
 export interface MountedWorkbenchClient {
@@ -734,7 +737,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     let location = draftRouteTarget
       ? explicit ?? saved?.target ?? (logical && presentation.snapshot().data
         ? preferredLogicalLaunchLocation(logical, presentation.snapshot().data!) : null)
-      : browseTarget;
+      // The url omits a folder the sidebar selects implicitly, so views open in the browsed folder.
+      : browseTarget ?? browseFolder;
     if (!location && draftRouteTarget && logical) location = logical.locations.find(item => item.project)?.target
       ?? logical.locations[0]?.target ?? null;
     // Historical physical routes are resolved from app facts, never guessed across sources.
@@ -1018,6 +1022,34 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       panels.add(client);
       panelLifetime.addUnsubscribe(() => panels.delete(client));
       return client;
+    },
+    createTextFileDocumentPort: (path, explicitLocation) => {
+      const location = explicitLocation ?? browseLocation;
+      if (!location) throw new Error("Choose a folder before opening an editor.");
+      const operations = workspace.daemon({ kind: "folder", location });
+      const drafts = fileDraftStoreFor(location);
+      const { projectId } = location;
+      return {
+        read: async () => {
+          const file = await operations.projects.files.read({ projectId, path });
+          return { content: file.content, mtimeMs: file.mtimeMs };
+        },
+        save: async (content, expectedMtimeMs, force) => {
+          const result = await operations.projects.files.save({ projectId, path, content, expectedMtimeMs, force });
+          return "actualMtimeMs" in result ? { kind: "conflict", message: result.error } : { kind: "saved", mtimeMs: result.mtimeMs };
+        },
+        drafts: {
+          read: () => {
+            const buffer = drafts.getBuffer(path);
+            return buffer?.dirty ? { content: buffer.content, mtimeMs: buffer.expectedMtimeMs } : null;
+          },
+          write: ({ baseline, content, mtimeMs }) => drafts.setBuffer(path, {
+            baselineContent: baseline, content, dirty: true, editorState: content, expectedMtimeMs: mtimeMs, headContent: null,
+            history: createInitialEditHistory(content), mode: "plain", pendingWriteConflict: null, saveIssue: null,
+          }),
+          clear: () => drafts.clearBuffer(path),
+        },
+      };
     },
   };
 

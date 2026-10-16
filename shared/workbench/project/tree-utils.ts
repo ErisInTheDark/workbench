@@ -3,8 +3,11 @@
  * - treeContainsFilePath: check whether a nested workbench tree contains a specific file path. Keywords: tree traversal, file lookup, recursion, explorer.
  * - formatTimestamp: format a timestamp string for workbench display using the current locale. Keywords: dates, time, Intl.DateTimeFormat, UI display.
  * - isMarkdownFile: detect markdown file paths by extension. Keywords: markdown, extension, file type.
+ * - isSvgFile: detect SVG file paths by extension.
  * - isTextLikeFile: detect text-editable file paths by extension or extensionless name. Keywords: text file, editable, extension, workbench.
- * - isWorkbenchOpenableFile: detect files the workbench should treat as openable markdown content. Keywords: openable, markdown, file type, workbench.
+ * - WorkbenchFileKind: file kinds with a dedicated Workbench view.
+ * - getWorkbenchFileKind: classify a path into its Workbench view kind, or null when Workbench has none.
+ * - isWorkbenchOpenableFile: detect files with a dedicated Workbench view. Keywords: openable, markdown, svg, file type, workbench.
  * - isEnvironmentFile: detect `.env` and `.env.*` files edited from project settings.
  * - flattenProjectTreeFiles: list every project-relative file path in a nested tree. Keywords: tree traversal, file mention, flatten.
  * - getFirstFile: find the first file path in a nested tree that matches an optional predicate. Keywords: tree traversal, first match, recursion, file selection.
@@ -40,12 +43,24 @@ export function isMarkdownFile(filePath: string) {
   return /\.md(?:own)?$/i.test(filePath);
 }
 
+export function isSvgFile(filePath: string) {
+  return /\.svg$/i.test(filePath);
+}
+
 export function isTextLikeFile(filePath: string) {
   return /\.(?:md|txt|json|js|mjs|cjs|css|html|yml|yaml|toml|gitignore)$/i.test(filePath) || !/\.[a-z0-9]+$/i.test(filePath);
 }
 
+export type WorkbenchFileKind = "markdown" | "svg";
+
+export function getWorkbenchFileKind(filePath: string): WorkbenchFileKind | null {
+  if (isMarkdownFile(filePath)) return "markdown";
+  if (isSvgFile(filePath)) return "svg";
+  return null;
+}
+
 export function isWorkbenchOpenableFile(filePath: string) {
-  return isMarkdownFile(filePath);
+  return getWorkbenchFileKind(filePath) !== null;
 }
 
 export function isEnvironmentFile(filePath: string) {

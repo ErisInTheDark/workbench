@@ -2,34 +2,51 @@
  * Exports:
  * - WorkbenchTheme: available themes.
  * - WorkbenchEditorFontFamily: editor font choices.
- * - WorkbenchFileOpenBehavior: file opening policy.
+ * - WorkbenchViewableFileOpenDestination: where a file kind with a Workbench view opens.
+ * - WorkbenchOtherFileOpenDestination: where files without a Workbench view open.
+ * - WorkbenchFileOpenSettingKey: per-file-kind open destination settings.
+ * - WorkbenchFileOpenPolicy: every per-file-kind open destination.
+ * - WORKBENCH_FILE_OPEN_SETTING_KEYS: file kind to its open destination setting.
  * - WorkbenchSettingKey: configurable setting identities.
  * - WorkbenchGlobalSettings: global preference values.
  * - WorkbenchSettingDefinition: setting control metadata.
  * - WORKBENCH_SETTING_DEFINITIONS: shared settings controls and search metadata.
  */
 import type { GitPeerSyncMode } from "../git/git-peer-contracts";
+import type { WorkbenchFileKind } from "../project/tree-utils";
 
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
-export type WorkbenchFileOpenBehavior = "workbench" | "workbench-or-vscode" | "vscode";
+export type WorkbenchViewableFileOpenDestination = "workbench" | "vscode";
+export type WorkbenchOtherFileOpenDestination = "vscode" | "none";
+export type WorkbenchFileOpenSettingKey = "openMarkdownFilesWith" | "openSvgFilesWith" | "openOtherFilesWith";
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
-  | "editorFontSize" | "fileOpenBehavior" | "gitPeerSyncMode"
+  | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
   | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails";
+
+export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
+  markdown: "openMarkdownFilesWith",
+  svg: "openSvgFilesWith",
+  other: "openOtherFilesWith",
+} as const satisfies Record<WorkbenchFileKind | "other", WorkbenchFileOpenSettingKey>;
 
 export interface WorkbenchGlobalSettings {
   composerSpellCheck: boolean;
   editorFontFamily: WorkbenchEditorFontFamily;
   editorFontSize: number;
   editorSpellCheck: boolean;
-  fileOpenBehavior: WorkbenchFileOpenBehavior;
+  openMarkdownFilesWith: WorkbenchViewableFileOpenDestination;
+  openOtherFilesWith: WorkbenchOtherFileOpenDestination;
+  openSvgFilesWith: WorkbenchViewableFileOpenDestination;
   gitPeerSyncMode: GitPeerSyncMode;
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
   threadCodeDetails: boolean;
 }
+
+export type WorkbenchFileOpenPolicy = Pick<WorkbenchGlobalSettings, WorkbenchFileOpenSettingKey>;
 
 export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = WorkbenchSettingKey> = {
   columns?: "one" | "two";
@@ -59,12 +76,25 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
   },
   editorFontSize: { description: "Controls editor and thread text scale.", key: "editorFontSize", label: "Text size", type: "number" },
-  fileOpenBehavior: {
-    description: "Controls whether project file links open in Workbench or VS Code.", key: "fileOpenBehavior", label: "Open files with", type: "select",
+  openMarkdownFilesWith: {
+    description: "Rich text editor.", key: "openMarkdownFilesWith", label: "Markdown", type: "select",
     options: [
-      { description: "Open supported markdown files in Workbench and ignore unsupported files.", label: "Workbench only", value: "workbench" },
-      { description: "Open markdown in Workbench and use VS Code for files Workbench cannot open.", label: "Workbench, then VS Code", value: "workbench-or-vscode" },
-      { description: "Always ask the local server to open file links in VS Code.", label: "VS Code", value: "vscode" },
+      { description: "Edit as rich text in Workbench.", label: "Workbench", value: "workbench" },
+      { description: "Ask the local server to open the file in VS Code.", label: "VS Code", value: "vscode" },
+    ],
+  },
+  openSvgFilesWith: {
+    description: "Preview and code editor.", key: "openSvgFilesWith", label: "SVG", type: "select",
+    options: [
+      { description: "Edit in the Workbench preview and code editor.", label: "Workbench", value: "workbench" },
+      { description: "Ask the local server to open the file in VS Code.", label: "VS Code", value: "vscode" },
+    ],
+  },
+  openOtherFilesWith: {
+    description: "Files without a Workbench view.", key: "openOtherFilesWith", label: "Other files", type: "select",
+    options: [
+      { description: "Ask the local server to open the file in VS Code.", label: "VS Code", value: "vscode" },
+      { description: "Ignore links to these files.", label: "Ignore", value: "none" },
     ],
   },
   showUnopenableFiles: { description: "Controls whether the project sidebar shows files Workbench cannot open directly.", key: "showUnopenableFiles", label: "Show unsupported files", type: "boolean" },

@@ -4,7 +4,7 @@
  * - FileOpenAction: shared file-opening action signature.
  * - FileActionContext: share one file-open action without DOM delegation.
  * - FileScopeContext: identify the project and daemon owning rendered file controls.
- * - useFileActions: route file opens through Workbench or VS Code policy.
+ * - useFileActions: route file opens through the per-file-kind Workbench or VS Code policy.
  * - useFile: derive file-pill display and its owner-scoped open action.
  * - resolveFileOpenDestination: choose the destination for a file target.
  * - resolveWorkbenchFileRoute: route a file through its concrete project owner.
@@ -21,9 +21,12 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { ProjectLocationReferenceSchema } from "workbench-shared/workbench/project/project-location";
-import { isWorkbenchOpenableFile } from "workbench-shared/workbench/project/tree-utils";
+import { getWorkbenchFileKind } from "workbench-shared/workbench/project/tree-utils";
 import type { WorkbenchFileOpenTarget, WorkbenchLogicalProject } from "workbench-shared/types";
-import type { WorkbenchFileOpenBehavior } from "workbench-shared/workbench/settings/workbench-setting-definitions";
+import {
+  WORKBENCH_FILE_OPEN_SETTING_KEYS,
+  type WorkbenchFileOpenPolicy,
+} from "workbench-shared/workbench/settings/workbench-setting-definitions";
 import {
   getProjectFilePathDisplay,
   type ProjectFilePathDisplayOptions,
@@ -41,12 +44,12 @@ export const FileActionContext = createContext<FileOpenAction | null>(null);
 export const FileScopeContext = createContext<FileScope | null>(null);
 
 export function resolveFileOpenDestination(
-  target: WorkbenchFileOpenTarget,
-  behavior: WorkbenchFileOpenBehavior,
+  target: Pick<WorkbenchFileOpenTarget, "absolutePath" | "path">,
+  policy: WorkbenchFileOpenPolicy,
 ): "workbench" | "vscode" | null {
-  if (target.absolutePath || behavior === "vscode") return "vscode";
-  if (isWorkbenchOpenableFile(target.path)) return "workbench";
-  return behavior === "workbench-or-vscode" ? "vscode" : null;
+  if (target.absolutePath) return "vscode";
+  const destination = policy[WORKBENCH_FILE_OPEN_SETTING_KEYS[getWorkbenchFileKind(target.path) ?? "other"]];
+  return destination === "none" ? null : destination;
 }
 
 export function resolveWorkbenchFileRoute({
@@ -79,7 +82,7 @@ export function resolveWorkbenchFileRoute({
 }
 
 export function useFileActions({
-  behavior,
+  policy,
   browseLocation,
   currentProjectId,
   defaultDaemon,
@@ -89,7 +92,7 @@ export function useFileActions({
   route,
   selectedDaemon,
 }: {
-  behavior: WorkbenchFileOpenBehavior;
+  policy: WorkbenchFileOpenPolicy;
   browseLocation: ProjectLocationReference | null;
   currentProjectId: string | null;
   defaultDaemon: WorkbenchDaemonClient | null;
@@ -110,7 +113,7 @@ export function useFileActions({
       return false;
     }
     const location = parsedLocation?.data ?? browseLocation;
-    const destination = resolveFileOpenDestination(target, behavior);
+    const destination = resolveFileOpenDestination(target, policy);
     if (!destination) return false;
 
     if (destination === "workbench") {
@@ -140,7 +143,7 @@ export function useFileActions({
       console.error("Unable to open file in VS Code.");
       return false;
     }
-  }, [behavior, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
+  }, [policy, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
     onInvalidLocation, route, selectedDaemon]);
 }
 

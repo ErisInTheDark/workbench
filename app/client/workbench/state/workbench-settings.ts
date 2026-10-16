@@ -5,7 +5,7 @@
  * - MAX_EDITOR_FONT_SIZE: maximum editor zoom.
  * - WorkbenchTheme: theme choices.
  * - WorkbenchEditorFontFamily: editor font choices.
- * - WorkbenchFileOpenBehavior: file opening policy.
+ * - WorkbenchFileOpenPolicy: per-file-kind open destinations.
  * - WorkbenchSettingKey: configurable identities.
  * - WorkbenchGlobalSettings: global preference values.
  * - WorkbenchProjectSettings: project override slots.
@@ -42,10 +42,13 @@ import { LogicalProjectIdSchema, type LogicalProjectId } from "workbench-shared/
 import {
   WORKBENCH_SETTING_DEFINITIONS,
   type WorkbenchEditorFontFamily,
-  type WorkbenchFileOpenBehavior,
+  type WorkbenchFileOpenPolicy,
+  type WorkbenchFileOpenSettingKey,
   type WorkbenchGlobalSettings,
+  type WorkbenchOtherFileOpenDestination,
   type WorkbenchSettingKey,
   type WorkbenchTheme,
+  type WorkbenchViewableFileOpenDestination,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -53,7 +56,7 @@ import WorkbenchClientStateController from "./WorkbenchClientStateController";
 export {
   WORKBENCH_SETTING_DEFINITIONS,
   type WorkbenchEditorFontFamily,
-  type WorkbenchFileOpenBehavior,
+  type WorkbenchFileOpenPolicy,
   type WorkbenchGlobalSettings,
   type WorkbenchSettingDefinition,
   type WorkbenchSettingKey,
@@ -118,8 +121,23 @@ function normalizeEditorFontFamily(value: unknown): WorkbenchEditorFontFamily {
   return value === "serif" || value === "mono" ? value : "sans";
 }
 
-function normalizeFileOpenBehavior(value: unknown): WorkbenchFileOpenBehavior {
-  return value === "workbench-or-vscode" || value === "vscode" ? value : "workbench";
+function normalizeViewableFileOpen(value: unknown): WorkbenchViewableFileOpenDestination {
+  return value === "vscode" ? "vscode" : "workbench";
+}
+
+function normalizeOtherFileOpen(value: unknown): WorkbenchOtherFileOpenDestination {
+  return value === "none" ? "none" : "vscode";
+}
+
+/** The single `fileOpenBehavior` policy predates per-kind rows; each kind falls back to it until written. */
+function legacyFileOpenPolicy(value: unknown): WorkbenchFileOpenPolicy | null {
+  if (value !== "workbench" && value !== "workbench-or-vscode" && value !== "vscode") return null;
+  const viewable = value === "vscode" ? "vscode" : "workbench";
+  return {
+    openMarkdownFilesWith: viewable,
+    openOtherFilesWith: value === "workbench" ? "none" : "vscode",
+    openSvgFilesWith: viewable,
+  };
 }
 
 function normalizeGitPeerSyncMode(value: unknown): WorkbenchGlobalSettings["gitPeerSyncMode"] {
@@ -128,12 +146,15 @@ function normalizeGitPeerSyncMode(value: unknown): WorkbenchGlobalSettings["gitP
 
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
+  const legacy = legacyFileOpenPolicy(candidate.fileOpenBehavior);
   return {
     composerSpellCheck: typeof candidate.composerSpellCheck === "boolean" ? candidate.composerSpellCheck : false,
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
     editorFontSize: clampEditorFontSize(candidate.editorFontSize),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
-    fileOpenBehavior: normalizeFileOpenBehavior(candidate.fileOpenBehavior),
+    openMarkdownFilesWith: normalizeViewableFileOpen(candidate.openMarkdownFilesWith ?? legacy?.openMarkdownFilesWith),
+    openOtherFilesWith: normalizeOtherFileOpen(candidate.openOtherFilesWith ?? legacy?.openOtherFilesWith),
+    openSvgFilesWith: normalizeViewableFileOpen(candidate.openSvgFilesWith ?? legacy?.openSvgFilesWith),
     gitPeerSyncMode: normalizeGitPeerSyncMode(candidate.gitPeerSyncMode),
     showUnopenableFiles: typeof candidate.showUnopenableFiles === "boolean" ? candidate.showUnopenableFiles : false,
     theme: normalizeTheme(candidate.theme),
@@ -157,11 +178,11 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: normalizeTheme(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontFamily":
       return { enabled, value: normalizeEditorFontFamily(candidate.value) } as WorkbenchProjectSettingOverride<K>;
-    case "fileOpenBehavior":
-      return {
-        enabled,
-        value: normalizeFileOpenBehavior(candidate.value ?? defaultValue),
-      } as WorkbenchProjectSettingOverride<K>;
+    case "openMarkdownFilesWith":
+    case "openSvgFilesWith":
+      return { enabled, value: normalizeViewableFileOpen(candidate.value ?? defaultValue) } as WorkbenchProjectSettingOverride<K>;
+    case "openOtherFilesWith":
+      return { enabled, value: normalizeOtherFileOpen(candidate.value ?? defaultValue) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
@@ -182,7 +203,9 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     editorFontFamily: "sans",
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
     editorSpellCheck: false,
-    fileOpenBehavior: "workbench-or-vscode",
+    openMarkdownFilesWith: "workbench",
+    openOtherFilesWith: "vscode",
+    openSvgFilesWith: "workbench",
     gitPeerSyncMode: "merge",
     showUnopenableFiles: false,
     theme: "default",
@@ -198,7 +221,9 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     editorFontFamily: { enabled: false, value: globalDefaults.editorFontFamily },
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
     editorSpellCheck: { enabled: false, value: globalDefaults.editorSpellCheck },
-    fileOpenBehavior: { enabled: false, value: globalDefaults.fileOpenBehavior },
+    openMarkdownFilesWith: { enabled: false, value: globalDefaults.openMarkdownFilesWith },
+    openOtherFilesWith: { enabled: false, value: globalDefaults.openOtherFilesWith },
+    openSvgFilesWith: { enabled: false, value: globalDefaults.openSvgFilesWith },
     gitPeerSyncMode: { enabled: false, value: globalDefaults.gitPeerSyncMode },
     showUnopenableFiles: { enabled: false, value: globalDefaults.showUnopenableFiles },
     theme: { enabled: false, value: globalDefaults.theme },
@@ -324,12 +349,18 @@ export async function writeGlobalWorkbenchSetting<K extends WorkbenchSettingKey>
 }
 
 function normalizePreferenceOverrides(candidate: Record<string, unknown>): WorkbenchProjectSettings {
+  const legacyOverride = isRecord(candidate.fileOpenBehavior) ? candidate.fileOpenBehavior : null;
+  const legacy = legacyFileOpenPolicy(legacyOverride?.value);
+  const fileOpenOverride = <K extends WorkbenchFileOpenSettingKey>(key: K) => normalizeProjectOverride(key,
+    candidate[key] ?? (legacy ? { enabled: legacyOverride?.enabled, value: legacy[key] } : undefined));
   return {
     composerSpellCheck: normalizeProjectOverride("composerSpellCheck", candidate.composerSpellCheck),
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
-    fileOpenBehavior: normalizeProjectOverride("fileOpenBehavior", candidate.fileOpenBehavior),
+    openMarkdownFilesWith: fileOpenOverride("openMarkdownFilesWith"),
+    openOtherFilesWith: fileOpenOverride("openOtherFilesWith"),
+    openSvgFilesWith: fileOpenOverride("openSvgFilesWith"),
     gitPeerSyncMode: normalizeProjectOverride("gitPeerSyncMode", candidate.gitPeerSyncMode),
     showUnopenableFiles: normalizeProjectOverride("showUnopenableFiles", candidate.showUnopenableFiles),
     theme: normalizeProjectOverride("theme", candidate.theme),
@@ -482,7 +513,9 @@ export function resolveWorkbenchSettings(
     editorFontFamily: projectSettings.editorFontFamily.enabled ? projectSettings.editorFontFamily.value : globalSettings.editorFontFamily,
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,
     editorSpellCheck: projectSettings.editorSpellCheck.enabled ? projectSettings.editorSpellCheck.value : globalSettings.editorSpellCheck,
-    fileOpenBehavior: projectSettings.fileOpenBehavior.enabled ? projectSettings.fileOpenBehavior.value : globalSettings.fileOpenBehavior,
+    openMarkdownFilesWith: projectSettings.openMarkdownFilesWith.enabled ? projectSettings.openMarkdownFilesWith.value : globalSettings.openMarkdownFilesWith,
+    openOtherFilesWith: projectSettings.openOtherFilesWith.enabled ? projectSettings.openOtherFilesWith.value : globalSettings.openOtherFilesWith,
+    openSvgFilesWith: projectSettings.openSvgFilesWith.enabled ? projectSettings.openSvgFilesWith.value : globalSettings.openSvgFilesWith,
     gitPeerSyncMode: projectSettings.gitPeerSyncMode.enabled ? projectSettings.gitPeerSyncMode.value : globalSettings.gitPeerSyncMode,
     showUnopenableFiles: projectSettings.showUnopenableFiles.enabled ? projectSettings.showUnopenableFiles.value : globalSettings.showUnopenableFiles,
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,

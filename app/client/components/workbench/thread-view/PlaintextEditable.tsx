@@ -217,6 +217,7 @@ export default function PlaintextEditable ({
   disabled = false,
   id,
   onBlur,
+  onCaretChange,
   onChange,
   onCompositionEnd,
   onCompositionStart,
@@ -238,6 +239,8 @@ export default function PlaintextEditable ({
   disabled?: boolean;
   id?: string;
   onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
+  /** Collapsed caret offset after clicks, key presses and input; null while a range is selected. */
+  onCaretChange?: (offset: number | null) => void;
   onChange?: (value: string) => void;
   onCompositionEnd?: (event: CompositionEvent<HTMLDivElement>) => void;
   onCompositionStart?: (event: CompositionEvent<HTMLDivElement>) => void;
@@ -407,7 +410,9 @@ export default function PlaintextEditable ({
 
   const updateCaretOffset = () => {
     const element = elementRef.current;
-    setCaretOffset(element ? getEditableCaretOffset(element) : null);
+    const offset = element ? getEditableCaretOffset(element) : null;
+    setCaretOffset(offset);
+    onCaretChange?.(offset);
   };
 
   const acceptSuggestion = (suggestion: InlineMentionSuggestion) => {
@@ -506,6 +511,7 @@ export default function PlaintextEditable ({
               setCaretOffset(getEditableCaretOffset(event.currentTarget));
             }
             onChange?.(nextValue);
+            onCaretChange?.(nextValue ? getEditableCaretOffset(event.currentTarget) : 0);
           }}
           onKeyDown={(event) => {
             if (voice.locked) {

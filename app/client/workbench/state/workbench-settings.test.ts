@@ -41,6 +41,28 @@ test("sync policy inherits, persists per logical project and resets without chan
   assert.equal(resolve(), "rebase");
 });
 
+test("per-kind file-open rows fall back to the legacy single policy until each kind is written", async () => {
+  const controller = new WorkbenchClientStateController({ mode: "memory" });
+  const project = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");
+  const resolve = () => resolveWorkbenchSettings(
+    readGlobalWorkbenchSettings(controller.getSnapshot().records),
+    readLogicalProjectWorkbenchSettings(project, controller.getSnapshot().records),
+  );
+  await controller.put({ kind: "globalPreference", preference: { key: "fileOpenBehavior", value: "workbench" } });
+  assert.deepEqual([resolve().openMarkdownFilesWith, resolve().openSvgFilesWith, resolve().openOtherFilesWith],
+    ["workbench", "workbench", "none"]);
+  await controller.put({ kind: "logicalProjectPreference", logicalProjectId: project,
+    preference: { enabled: true, key: "fileOpenBehavior", value: "vscode" } });
+  assert.deepEqual([resolve().openMarkdownFilesWith, resolve().openSvgFilesWith, resolve().openOtherFilesWith],
+    ["vscode", "vscode", "vscode"]);
+  await writeLogicalProjectWorkbenchSetting(controller, project, "openSvgFilesWith", { enabled: false, value: "vscode" });
+  assert.equal(resolve().openSvgFilesWith, "workbench");
+  assert.equal(resolve().openMarkdownFilesWith, "vscode");
+  await writeGlobalWorkbenchSetting(controller, "openOtherFilesWith", "vscode");
+  assert.equal(readGlobalWorkbenchSettings(controller.getSnapshot().records).openOtherFilesWith, "vscode");
+  assert.equal(readGlobalWorkbenchSettings(controller.getSnapshot().records).openMarkdownFilesWith, "workbench");
+});
+
 test("one logical project override applies across daemon folders and reset reaches global", async () => {
   const controller = new WorkbenchClientStateController({ mode: "memory" });
   const project = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");

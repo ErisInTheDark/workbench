@@ -32,6 +32,7 @@ const appStateReleases = Object.freeze({
   composerDraftReferences: release(22, "5695acd99487d62b9d743d13e9a645ba6062c9fcc1203080d6c945366c880118"),
   lastProjectSelection: release(23, "d0f9f271f879577296f03a090e290754fb07ccc59d1c6be69defc6ebc891d1f7"),
   gitPeerSyncMode: release(24, "cb8714fe1b66e9903487689815161338840f54068e25fef854875ea2decedde5"),
+  fileOpenDestinations: release(25, "308fc5a5f45708c82570e729f6d8e3d6d1405cdabe9a76c2d89c3d7612bfeb13"),
 });
 
 export default appStateReleases;

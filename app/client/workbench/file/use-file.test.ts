@@ -30,12 +30,18 @@ test("file pills derive repo identity from the absolute target without rewriting
   assert.equal(targets[0]?.path, absolutePath);
 });
 
-test("file-open policy preserves absolute and unsupported-file choices", () => {
-  assert.equal(resolveFileOpenDestination({ path: "docs/a.md" }, "workbench"), "workbench");
-  assert.equal(resolveFileOpenDestination({ path: "src/a.ts" }, "vscode"), "vscode");
-  assert.equal(resolveFileOpenDestination({ path: "image.png" }, "workbench"), null);
-  assert.equal(resolveFileOpenDestination({ path: "image.png" }, "workbench-or-vscode"), "vscode");
-  assert.equal(resolveFileOpenDestination({ absolutePath: "C:/external/a.ts", path: "a.ts" }, "workbench"), "vscode");
+const defaultPolicy = {
+  openMarkdownFilesWith: "workbench", openOtherFilesWith: "vscode", openSvgFilesWith: "workbench",
+} as const;
+
+test("file-open policy routes each file kind by its own row and keeps absolute targets external", () => {
+  assert.equal(resolveFileOpenDestination({ path: "docs/a.md" }, defaultPolicy), "workbench");
+  assert.equal(resolveFileOpenDestination({ path: "icons/a.SVG" }, defaultPolicy), "workbench");
+  assert.equal(resolveFileOpenDestination({ path: "icons/a.svg" }, { ...defaultPolicy, openSvgFilesWith: "vscode" }), "vscode");
+  assert.equal(resolveFileOpenDestination({ path: "docs/a.md" }, { ...defaultPolicy, openSvgFilesWith: "vscode" }), "workbench");
+  assert.equal(resolveFileOpenDestination({ path: "image.png" }, defaultPolicy), "vscode");
+  assert.equal(resolveFileOpenDestination({ path: "image.png" }, { ...defaultPolicy, openOtherFilesWith: "none" }), null);
+  assert.equal(resolveFileOpenDestination({ absolutePath: "C:/external/a.svg", path: "a.svg" }, defaultPolicy), "vscode");
 });
 
 test("file actions use the rendering panel owner across navigation and external opens", async () => {
@@ -58,7 +64,7 @@ test("file actions use the rendering panel owner across navigation and external 
   const action: { current: FileOpenAction | null } = { current: null };
   function Harness() {
     action.current = useFileActions({
-      behavior: "workbench-or-vscode",
+      policy: defaultPolicy,
       browseLocation: null,
       currentProjectId: "browse-project",
       defaultDaemon,

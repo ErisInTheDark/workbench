@@ -502,6 +502,33 @@ const globalPreferencesV12 = defineTable("global_preferences", {
   `)],
 }));
 
+const globalPreferencesV13 = defineTable("global_preferences", {
+  ...globalPreferencesV12.columns,
+  key: enumText(
+    "appPort", "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "harness", "projectStatusCountsExpanded", "projectsOpen", "projectTimeGroupCount",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
+    "theme", "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen",
+    "transcriptProjectionMode", "voiceInputEnabled", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+  ).primaryKey(),
+}, table => ({
+  constraints: [check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reactDevelopmentMode")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}, ${literal("threadGitArcProposalsOpen")}, ${literal("threadVisOpen")}, ${literal("voiceInputEnabled")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("theme")}, ${literal("transcriptProjectionMode")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+    ))
+  `)],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: globalPreferencesV1 }),
@@ -566,8 +593,13 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.gitPeerSyncMode.version,
       table: globalPreferencesV12,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV12, to: globalPreferencesV13 }),
+      schemaVersion: appStateReleases.fileOpenDestinations.version,
+      table: globalPreferencesV13,
+    }),
   ],
-  current: globalPreferencesV12,
+  current: globalPreferencesV13,
 });
 
 const projectPreferencesV1 = defineTable("project_preferences", {
@@ -707,6 +739,30 @@ const projectPreferencesV5 = defineTable("project_preferences", {
   `)],
 }));
 
+const projectPreferencesV6 = defineTable("project_preferences", {
+  ...projectPreferencesV5.columns,
+  key: enumText(
+    "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "showUnopenableFiles", "theme", "threadCodeBlockWrap", "threadCodeDetails", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+  ).notNull(),
+}, table => ({
+  constraints: [primaryKey([table.daemon_registration_id, table.project_id, table.key]), check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.enabled} IS NULL AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND ${table.enabled} IS NOT NULL AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("showUnopenableFiles")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} = ${literal("editorFontSize")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+    ))
+  `)],
+}));
+
 const projectPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(projectPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: projectPreferencesV1 }),
@@ -733,8 +789,13 @@ const projectPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.gitPeerSyncMode.version,
       table: projectPreferencesV5,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: projectPreferencesV5, to: projectPreferencesV6 }),
+      schemaVersion: appStateReleases.fileOpenDestinations.version,
+      table: projectPreferencesV6,
+    }),
   ],
-  current: projectPreferencesV5,
+  current: projectPreferencesV6,
 });
 
 const logicalProjectPreferences = defineTable("logical_project_preferences", {
@@ -804,6 +865,29 @@ const logicalProjectPreferencesV3 = defineTable("logical_project_preferences", {
     ))
   `)],
 }));
+const logicalProjectPreferencesV4 = defineTable("logical_project_preferences", {
+  ...logicalProjectPreferencesV3.columns,
+  key: enumText(
+    "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "showUnopenableFiles", "theme", "threadCodeBlockWrap", "threadCodeDetails", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+  ).notNull(),
+}, table => ({
+  constraints: [primaryKey([table.logical_project_id, table.key]), check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.enabled} IS NULL AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND ${table.enabled} IS NOT NULL AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("showUnopenableFiles")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} = ${literal("editorFontSize")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+    ))
+  `)],
+}));
 
 const logicalProjectPreferencesHistory = defineTableHistory({
   versions: [
@@ -825,8 +909,13 @@ const logicalProjectPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.gitPeerSyncMode.version,
       table: logicalProjectPreferencesV3,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: logicalProjectPreferencesV3, to: logicalProjectPreferencesV4 }),
+      schemaVersion: appStateReleases.fileOpenDestinations.version,
+      table: logicalProjectPreferencesV4,
+    }),
   ],
-  current: logicalProjectPreferencesV3,
+  current: logicalProjectPreferencesV4,
 });
 
 const projectSidebarPreferencesHistory = initialHistory(defineTable("project_sidebar_preferences", {
