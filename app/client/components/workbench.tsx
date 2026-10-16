@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default Workbench: stable shell composition, providers, explorer/file dialogs, responsive chrome, and DOM surfaces.
+ * - default Workbench: shell composition, providers, explorer actions, routed views and responsive chrome.
  * Local helpers: route, title, drag, editor, file, and thread UI transformations.
  */
 "use client";
@@ -33,6 +33,7 @@ import {
 } from "workbench-shared/workbench/navigation/workbench-mosaic-route";
 import {
     createFileRoute,
+    createDiscardedDraftExitRoute,
     createHomeRoute,
     createHomeThreadRoute,
     createLogicalExistingThreadRoute,
@@ -121,13 +122,12 @@ import {
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
-import type { WorkbenchDomSurfaces } from "../workbench/workbench-dom";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
 import WorkbenchGitRefreshButton from "./workbench/git/WorkbenchGitRefreshButton";
 import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositoryControl";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
-import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
+import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
 import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
 import WorkbenchSvgWorkspace from "./workbench/svg/WorkbenchSvgWorkspace";
 import { useSvgFileTabs } from "./workbench/svg/use-svg-file-tabs";
@@ -152,13 +152,9 @@ import { useWorkbenchClientMount } from "./workbench/use-workbench-client";
 import { useProjects } from "./workbench/use-projects";
 import { useThreads } from "./workbench/use-threads";
 import {
-    workbenchFloatingToolbarClassName,
-    workbenchFloatingToolbarGroupClassName,
     workbenchNewEntryButtonClassName,
     workbenchOptionHoverClassName,
     workbenchOptionRowClassName,
-    workbenchRevisionActionButtonClassName,
-    workbenchRevisionHoverToolbarClassName
 } from "./workbench/workbench-class-names";
 import {
     useWorkbenchClientStateController,
@@ -180,7 +176,6 @@ import {
     ExternalLinkIcon,
     FolderOpenIcon,
     ProjectIcon,
-    SaveIcon,
     SidebarCollapseIcon,
     SidebarExpandIcon,
     SparkleIcon,
@@ -369,7 +364,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const workbenchMount = useWorkbenchClientMount({
     appRpc,
     clientStateController,
-    getDomSurfaces: getWorkbenchDomSurfaces,
     initialRoute,
   });
   const workbenchClient = workbenchMount.client;
@@ -383,15 +377,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         { kind: "provider", harness: row.entry.identity.harness,
           threadId: ThreadReferenceSchema.parse(row.entry.identity.threadId) }));
   }, [navigateToRoute]);
-  const handlePresentationDraftDeleted = useCallback((draftId: string, logicalProjectId: string) => {
+  const handlePresentationDraftDeleted = useCallback((draftId: string) => {
     const current = currentRouteRef.current;
-    if (current.view === "thread" && current.threadTarget?.kind === "draft"
-      && current.threadTarget.draftId === draftId) {
-      navigateToRoute(current.logical?.projectId
-        ? createLogicalProjectRoute(current.logical.projectId,
-          current.logical.browseLocation ?? null)
-        : createLogicalProjectRoute(logicalProjectId), { replace: true });
-    }
+    const exit = createDiscardedDraftExitRoute(current, draftId);
+    if (exit) navigateToRoute(exit, { replace: true });
   }, [navigateToRoute]);
   const projectHref = useWorkbenchProjectNavigation(workbenchClient);
   currentRouteRef.current = route;
@@ -492,31 +481,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     navigatePanel: () => undefined,
     navigateProject: () => undefined,
   }));
-  const editorRef = useRef<HTMLDivElement>(null);
   const mainPaneRef = useRef<HTMLElement>(null);
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
-  const customCaretRef = useRef<HTMLDivElement>(null);
-  const diffGutterRef = useRef<HTMLDivElement>(null);
-  const floatingToolbarRef = useRef<HTMLDivElement>(null);
-  const revisionHoverToolbarRef = useRef<HTMLDivElement>(null);
-  const revisionHoverAcceptButtonRef = useRef<HTMLButtonElement>(null);
-  const revisionHoverRejectButtonRef = useRef<HTMLButtonElement>(null);
   const filePathLabelRef = useRef<HTMLParagraphElement>(null);
   const statusLineRef = useRef<HTMLParagraphElement>(null);
-  const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
-  const saveFileButtonRef = useRef<HTMLButtonElement>(null);
-  const zoomButtonRef = useRef<HTMLButtonElement>(null);
-  const saveConflictDialogRef = useRef<HTMLDivElement>(null);
-  const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
-  const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
-  const saveConflictActualRef = useRef<HTMLParagraphElement>(null);
-  const saveConflictKeepEditingButtonRef = useRef<HTMLButtonElement>(null);
-  const saveConflictReloadButtonRef = useRef<HTMLButtonElement>(null);
-  const saveConflictOverwriteButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftDialogRef = useRef<HTMLDivElement>(null);
-  const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
@@ -541,76 +509,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
   useEffect(() => () => { searchController.dispose(); }, [searchController]);
   useEffect(() => () => { workspaceController.dispose(); }, [workspaceController]);
-
-  function getWorkbenchDomSurfaces (): WorkbenchDomSurfaces | null {
-    if (
-      !editorRef.current
-      || !customCaretRef.current
-      || !diffGutterRef.current
-      || !floatingToolbarRef.current
-      || !revisionHoverToolbarRef.current
-      || !revisionHoverAcceptButtonRef.current
-      || !revisionHoverRejectButtonRef.current
-      || !filePathLabelRef.current
-      || !statusLineRef.current
-      || !resetDraftButtonRef.current
-      || !saveFileButtonRef.current
-      || !zoomButtonRef.current
-      || !saveConflictDialogRef.current
-      || !saveConflictSummaryRef.current
-      || !saveConflictExpectedRef.current
-      || !saveConflictActualRef.current
-      || !saveConflictKeepEditingButtonRef.current
-      || !saveConflictReloadButtonRef.current
-      || !saveConflictOverwriteButtonRef.current
-      || !resetDraftDialogRef.current
-      || !resetDraftCancelButtonRef.current
-      || !resetDraftHeadButtonRef.current
-      || !resetDraftSavedButtonRef.current
-    ) {
-      return null;
-    }
-
-    return {
-      controls: {
-        resetDraftButton: resetDraftButtonRef.current,
-        saveFileButton: saveFileButtonRef.current,
-        zoomButton: zoomButtonRef.current,
-      },
-      dialogs: {
-        saveConflict: {
-          dialog: saveConflictDialogRef.current,
-          summary: saveConflictSummaryRef.current,
-          expected: saveConflictExpectedRef.current,
-          actual: saveConflictActualRef.current,
-          keepEditing: saveConflictKeepEditingButtonRef.current,
-          reload: saveConflictReloadButtonRef.current,
-          overwrite: saveConflictOverwriteButtonRef.current,
-        },
-        resetDraft: {
-          dialog: resetDraftDialogRef.current,
-          cancel: resetDraftCancelButtonRef.current,
-          resetToHead: resetDraftHeadButtonRef.current,
-          resetToSaved: resetDraftSavedButtonRef.current,
-        },
-      },
-      editor: {
-        editor: editorRef.current,
-        customCaret: customCaretRef.current,
-        diffGutter: diffGutterRef.current,
-      },
-      statusDisplay: {
-        filePathLabel: filePathLabelRef.current,
-        statusLine: statusLineRef.current,
-      },
-      toolbars: {
-        floating: floatingToolbarRef.current,
-        revisionHover: revisionHoverToolbarRef.current,
-        revisionAccept: revisionHoverAcceptButtonRef.current,
-        revisionReject: revisionHoverRejectButtonRef.current,
-      },
-    };
-  }
 
   const selectedThreadProjectId = route.view === "thread"
     ? route.threadOwnerProjectId || explorer.currentProjectId || route.projectId
@@ -1582,8 +1480,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   // Existing threads load inside their own view (thread store); only drafts and new threads wait for a document.
   const isThreadViewReady = showThreadView && (Boolean(threadForThreadView)
     || effectiveThreadTarget?.kind === "provider" || effectiveThreadTarget?.kind === "subagent");
-  const isFileViewReady = showFileView && !currentThread && explorer.currentPath === effectiveFilePath;
-  const isSelectionPending = !selectionError && ((showThreadView && !isThreadViewReady) || (showFileView && !isFileViewReady));
+  const isSelectionPending = !selectionError && showThreadView && !isThreadViewReady;
   const threadViewInstanceKey = getThreadViewInstanceKey(threadForThreadView?.id ?? effectiveThreadId);
   const selectedThreadIdForView = effectiveThreadTarget?.kind === "new" && threadForThreadView
     ? threadForThreadView.id
@@ -2418,7 +2315,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     <div className="flex items-center gap-1.5">
                       {showGitView ? <WorkbenchGitRefreshButton /> : null}
                       <WorkbenchZoomButton
-                        ref={zoomButtonRef}
                         label="Editor text size"
                         disabled={!shouldShowShellHeader}
                         min={MIN_EDITOR_FONT_SIZE}
@@ -2427,31 +2323,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         onPreview={setEditorFontSizePreview}
                         onChange={updateEditorFontSize}
                       />
-                    </div>
-                    <div className="flex items-center gap-1.5" hidden={Boolean(currentThread) || showThreadView || showSettingsView || showGitView || showStatsView || Boolean(routeView)}>
-                      <IconButton
-                        id="save-file"
-                        ref={saveFileButtonRef}
-                        type="button"
-                        title="Save current file"
-                        label="Save current file"
-                        display="hover-border"
-                        data-invalid="false"
-                      >
-                        <SaveIcon size={20} />
-                        <span className="sr-only">Save current file</span>
-                      </IconButton>
-                      <IconButton
-                        id="reset-draft"
-                        ref={resetDraftButtonRef}
-                        type="button"
-                        title="Discard the current draft"
-                        label="Discard the current draft"
-                        display="hover-border"
-                      >
-                        <BinIcon size={20} />
-                        <span className="sr-only">Discard the current draft</span>
-                      </IconButton>
                     </div>
                   </div>
                 </div>
@@ -2666,7 +2537,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     ) : null}
                   </div>
                 ) : null}
-                {shouldRenderMainLayout && mainLayoutForRender && (!showFileView || isFileViewReady || activeWorkbenchDrag?.payload.type === "panel-target" || activeWorkbenchDrag?.payload.type === "thread-row") ? (
+                {shouldRenderMainLayout && mainLayoutForRender ? (
                   <WorkbenchWorkspace
                     controller={workspaceController}
                     getPanelViewKey={target => target.kind === "thread"
@@ -2712,9 +2583,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
                       if (target.kind === "file") {
                         return (
-                          <WorkbenchFilePanel
+                          <WorkbenchFileView
                             contained={showMosaicView}
-                            controls={controls}
+                            route={route}
                             editorFontClassName={editorFontClassName}
                             fontSizeRem={panelFontSizeRem}
                             baseFontSizeRem={displayedEditorFontSize}
@@ -2869,126 +2740,22 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     }}
                   />
                 ) : null}
-                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout && svgFileTabs.tabs ? (
+                {showFileView && !shouldRenderMainLayout && svgFileTabs.tabs ? (
                   <WorkbenchSvgWorkspace controls={controls} tabs={svgFileTabs.tabs} />
-                ) :showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
-                  <WorkbenchFilePanel
-                    controls={controls}
+                ) :showFileView && !shouldRenderMainLayout ? (
+                  <WorkbenchFileView
+                    route={route}
                     editorFontClassName={editorFontClassName}
                     fontSizeRem={displayedEditorFontSize}
                     isFocused
-                    location={browseLocation}
+                    location={mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined}
                     onFocus={() => { }}
                     path={effectiveFilePath}
                     spellCheck={resolvedSettings.editorSpellCheck}
                   />
                 ) : null}
-                {showFileView && selectionError ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] max-w-full flex-col gap-2 rounded-[1.4rem] border border-danger/30 bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
-                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-danger uppercase">File</p>
-                      <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Unable to open file</p>
-                      <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{selectionError}</p>
-                    </div>
-                  </div>
-                ) : null}
-                {showFileView && !selectionError && !isFileViewReady ? (
-                  <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-content items-center justify-center py-8">
-                    <div className="shadow-float flex min-w-[16rem] flex-col gap-2 rounded-[1.4rem] border border-[color-mix(in srgb, var(--text) 10%, transparent)] bg-[color: color-mix(in srgb, var(--bg) 94%, transparent)] [--fg-bg: color-mix(in srgb, var(--bg) 94%, var(--app-bg-solid))] px-5 py-4 text-left">
-                      <p className="m-0 text-[0.8rem] font-medium tracking-[0.08em] text-fg/muted uppercase">File</p>
-                      <p className="m-0 text-[1rem] font-semibold leading-tight text-text">Loading file...</p>
-                      <p className="m-0 break-all text-[0.84rem] leading-6 text-fg/muted">{effectiveFilePath}</p>
-                    </div>
-                  </div>
-                ) : null}
               </section>
               </ThreadScrollViewport>
-
-              <WorkbenchDialog
-                id="save-conflict-dialog"
-                dialogRef={saveConflictDialogRef}
-                titleId="save-conflict-title"
-                summaryId="save-conflict-summary"
-                eyebrow="Write conflict"
-                title="This file changed on disk"
-                actions={
-                  <>
-                    <button
-                      id="save-conflict-keep-editing"
-                      ref={saveConflictKeepEditingButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Keep editing
-                    </button>
-                    <button
-                      id="save-conflict-reload"
-                      ref={saveConflictReloadButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Reload from disk
-                    </button>
-                    <button
-                      id="save-conflict-overwrite"
-                      ref={saveConflictOverwriteButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Overwrite anyway
-                    </button>
-                  </>
-                }
-              >
-                <>
-                  <p id="save-conflict-summary" ref={saveConflictSummaryRef} className="mt-3 text-sm leading-6 text-fg/muted">
-                    Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.
-                  </p>
-                  <p id="save-conflict-expected" ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
-                  <p id="save-conflict-actual" ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
-                </>
-              </WorkbenchDialog>
-
-              <WorkbenchDialog
-                id="reset-draft-dialog"
-                dialogRef={resetDraftDialogRef}
-                titleId="reset-draft-title"
-                summaryId="reset-draft-summary"
-                eyebrow="Discard draft"
-                title="Reset this draft?"
-                actions={
-                  <>
-                    <button
-                      id="reset-draft-cancel"
-                      ref={resetDraftCancelButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      id="reset-draft-head"
-                      ref={resetDraftHeadButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Reset to HEAD
-                    </button>
-                    <button
-                      id="reset-draft-saved"
-                      ref={resetDraftSavedButtonRef}
-                      type="button"
-                      className={dialogButtonClassName}
-                    >
-                      Reset to saved
-                    </button>
-                  </>
-                }
-              >
-                <p id="reset-draft-summary" className="mt-3 text-sm leading-6 text-fg/muted">
-                  Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
-                </p>
-              </WorkbenchDialog>
 
               <WorkbenchDialog
                 id="delete-file-dialog"
@@ -3103,131 +2870,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             </main>
           </MobilePaneTrack>
 
-          <div
-            id="floating-toolbar"
-            ref={floatingToolbarRef}
-            className={workbenchFloatingToolbarClassName}
-            hidden
-          >
-            <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="inline">
-              <button
-                data-command="bold"
-                type="button"
-                title="Bold"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                b
-              </button>
-              <button
-                data-command="italic"
-                type="button"
-                title="Italic"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                i
-              </button>
-              <button
-                data-command="inline-code"
-                type="button"
-                title="Inline code"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                code
-              </button>
-              <button
-                data-command="comment"
-                type="button"
-                title="Inline comment"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                note
-              </button>
-              <button
-                data-command="del"
-                type="button"
-                title="Deleted text"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                del
-              </button>
-              <button
-                data-command="ins"
-                type="button"
-                title="Inserted text"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                ins
-              </button>
-            </div>
-            <div className={workbenchFloatingToolbarGroupClassName} data-toolbar-group="block">
-              <button
-                data-command="h1"
-                type="button"
-                title="Heading 1"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                h1
-              </button>
-              <button
-                data-command="h2"
-                type="button"
-                title="Heading 2"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                h2
-              </button>
-              <button
-                data-command="unordered-list"
-                type="button"
-                title="Bullets"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                ul
-              </button>
-              <button
-                data-command="ordered-list"
-                type="button"
-                title="Numbers"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                ol
-              </button>
-              <button
-                data-command="quote"
-                type="button"
-                title="Quote"
-                className="pointer-events-auto min-w-8 rounded-full px-2 py-1 transition hover:bg-accent-soft hover:text-accent focus-visible:bg-accent-soft focus-visible:text-accent focus-visible:outline-none"
-              >
-                &gt;
-              </button>
-            </div>
-          </div>
-
-          <div
-            id="revision-hover-toolbar"
-            ref={revisionHoverToolbarRef}
-            className={workbenchRevisionHoverToolbarClassName}
-            hidden
-          >
-            <button
-              id="revision-hover-accept"
-              ref={revisionHoverAcceptButtonRef}
-              type="button"
-              title="Accept revision"
-              className={workbenchRevisionActionButtonClassName}
-            >
-              accept
-            </button>
-            <button
-              id="revision-hover-reject"
-              ref={revisionHoverRejectButtonRef}
-              type="button"
-              title="Reject revision"
-              className={workbenchRevisionActionButtonClassName}
-            >
-              reject
-            </button>
-          </div>
         </div>
         </WorkbenchContextMenuProvider>
       </WorkbenchDragProvider>

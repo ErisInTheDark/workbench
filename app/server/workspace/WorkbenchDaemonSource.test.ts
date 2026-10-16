@@ -59,6 +59,35 @@ function fixture(transcriptReservoir?: WorkbenchTranscriptReservoir) {
   return { source, descriptor, created: created.promise, warnings };
 }
 
+test("file observations retain their data through pending daemon facts", async context => {
+  const f = fixture();
+  context.after(() => f.source.dispose());
+  const projectId = ProjectIdSchema.parse("folder");
+  const handle = f.source.observe({ kind: "projectFile", projectId, path: "notes.md" }, () => {});
+  const socket = await f.created;
+  const opening = f.source.socket.connect();
+  socket.open();
+  await opening;
+  const request = await socket.request("workspace/observe");
+  const value = {
+    kind: "projectFile", subscriptionId: request.params.subscriptionId, generation: request.params.generation,
+    revision: 1, phase: "current", failure: null,
+    data: { projectId, path: "notes.md", content: "keep", headContent: null, mtimeMs: 1,
+      updatedAt: new Date(1).toISOString(), changeSummary: null },
+  };
+  socket.notify({ method: "workspace/updated", params: value });
+  socket.notify({ method: "workspace/updated", params: { ...value, revision: 2, phase: "pending", data: null } });
+  const pending = handle.getSnapshot();
+  assert.equal(pending.phase, "pending");
+  assert.equal(pending.value?.kind, "projectFile");
+  if (pending.value?.kind === "projectFile") assert.equal(pending.value.data?.content, "keep");
+  socket.notify({ method: "workspace/updated", params: { ...value, revision: 3,
+    data: { ...value.data, content: "fresh" } } });
+  const fresh = handle.getSnapshot();
+  assert.equal(fresh.phase, "current");
+  if (fresh.value?.kind === "projectFile") assert.equal(fresh.value.data?.content, "fresh");
+});
+
 test("socket generations register one validated reservoir prefetch edge and remove it on close", async context => {
   const reservoir = new WorkbenchTranscriptReservoir();
   const f = fixture(reservoir);

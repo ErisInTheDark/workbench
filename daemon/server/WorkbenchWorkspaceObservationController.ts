@@ -22,6 +22,7 @@ import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogCon
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchThreadStateController from "./WorkbenchThreadStateController";
 import type WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
+import type WorkbenchProjectFileController from "./WorkbenchProjectFileController";
 import type { WorkbenchReloadDirtSnapshot } from "workbench-shared/reload/workbench-reload";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
@@ -97,6 +98,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     /** Canonical per-thread summaries for `threadSummaries` batches. */
     summaries?: Pick<WorkbenchThreadSummaryIndex, "peek" | "read" | "subscribe">;
     projects: Pick<WorkbenchProjectSnapshotController, "observe" | "getCurrentUpdate">;
+    files?: Pick<WorkbenchProjectFileController, "observe">;
     stats?: Pick<WorkbenchStatsController, "observe">;
     workingTree?: Pick<WorkbenchWorkingTreeController, "summary">;
     branchPositions?: Pick<WorkbenchBranchPositionController, "observe" | "observeCommits">;
@@ -174,6 +176,19 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
       case "catalogue": break;
       case "threadIdentity": this.readIdentity(observation); break;
       case "thread": this.readThread(observation); break;
+      case "projectFile": {
+        const files = this.owners.files;
+        if (!files) {
+          this.update(observation, { kind: "projectFile", phase: "unavailable", failure: "File observations are unavailable.", data: null });
+          break;
+        }
+        const handle = files.observe(request.query.projectId, request.query.path, () => {
+          this.update(observation, { kind: "projectFile", ...handle.read() });
+        });
+        observation.stopTree = handle.release;
+        this.update(observation, { kind: "projectFile", ...handle.read() });
+        break;
+      }
       case "projectTree":
         observation.stopTree = this.owners.projects.observe(request.query.projectId, project => {
           this.update(observation, { kind: "projectTree", phase: "current", failure: null, project });
@@ -401,6 +416,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
         ...envelope, kind: "threadIdentity", phase: "pending", failure: null, identity: null,
       };
       case "thread": return { ...envelope, kind: "thread", phase: "pending", failure: null, data: null, runtime: {} };
+      case "projectFile": return { ...envelope, kind: "projectFile", phase: "pending", failure: null, data: null };
       case "workingTreeSummary": return { ...envelope, kind: "workingTreeSummary", phase: "pending", failure: null, summary: null };
       case "branchPosition": return { ...envelope, kind: "branchPosition", phase: "pending", failure: null, position: null };
       case "branchCommits": return { ...envelope, kind: "branchCommits", phase: "pending", failure: null, data: null };

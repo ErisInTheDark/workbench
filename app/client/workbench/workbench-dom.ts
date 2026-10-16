@@ -8,7 +8,6 @@
  * - EditorDomSurface: React-owned editor elements.
  * - StatusDisplaySurface: file path and status labels.
  * - ControlButtonsDomSurface: save, reset and zoom-trigger elements.
- * - WorkbenchDomSurfaces: React-owned DOM capabilities required by the runtime.
  * - WorkbenchEditorDomSurfaces: DOM capabilities consumed by the editor client.
  * - hasRequiredEditorDomSurface: validate editor elements before boot.
  * - hasRequiredStatusDisplaySurface: validate status elements before boot.
@@ -74,14 +73,6 @@ export interface ControlButtonsDomSurface {
   resetDraftButton: HTMLButtonElement;
   saveFileButton: HTMLButtonElement;
   zoomButton: HTMLButtonElement;
-}
-
-export interface WorkbenchDomSurfaces {
-  controls: ControlButtonsDomSurface;
-  dialogs: DialogDomSurface;
-  editor: EditorDomSurface;
-  statusDisplay: StatusDisplaySurface;
-  toolbars: ToolbarDomSurface;
 }
 
 export interface WorkbenchEditorDomSurfaces {

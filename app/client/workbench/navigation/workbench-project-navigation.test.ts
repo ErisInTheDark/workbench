@@ -7,8 +7,8 @@ import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenc
 import {
   createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute,
   createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
-  createLogicalExistingThreadRoute,
-  createLogicalThreadRoute, withProjectSelection,
+  createLogicalExistingThreadRoute, createLogicalFileRoute,
+  createLogicalThreadRoute, withProjectSelection, withFileTabs, getWorkbenchFileTabs,
   createToggledProjectSelectionRoute,
   createWorkbenchHref, parseWorkbenchRouteFromLocation,
 } from "workbench-shared/workbench/navigation/workbench-route";
@@ -327,6 +327,51 @@ function createFolderNavigation() {
   }]);
   return { first, navigation, second, workbenchOnOne, workbenchOnTwo, worktree };
 }
+
+test("opening a file keeps sidebar selection and preserves its folder through a URL round-trip", () => {
+  const { first, second, navigation, workbenchOnOne, worktree } = createFolderNavigation();
+  for (const selection of [null, [], [first], [second, first]]) {
+    const current = {
+      ...withProjectSelection(createProjectRoute(""), selection),
+      folderAddress: [workbenchOnOne.daemonId, "workbench"],
+    };
+    const target = createLogicalFileRoute(second, worktree.target, "notes.md");
+    const href = navigation.href(target, current, "inherit");
+    assert.ok(href);
+    const reopened = navigation.readRoute(href);
+    assert.deepEqual(reopened.selectedProjectIds, selection);
+    assert.deepEqual(reopened.folderAddress, current.folderAddress);
+    const tab = reopened.fileTabs?.[reopened.fileTabIndex ?? 0];
+    assert.ok(tab?.folderAddress);
+    assert.deepEqual(navigation.folderForAddress(tab.folderAddress), worktree.target);
+    assert.equal(reopened.filePath, "notes.md");
+  }
+});
+
+test("changing focused file tabs preserves both tab folders and explicit selection intent", () => {
+  const { first, second, navigation, workbenchOnOne, worktree } = createFolderNavigation();
+  const folderAddress = [workbenchOnOne.daemonId, "workbench"];
+  const current = { ...withProjectSelection(createProjectRoute(""), [first, second]), folderAddress };
+  const tabs = [
+    { filePath: "first.svg", folderAddress: null },
+    { filePath: "second.svg", folderAddress: ["+convex-lab"] },
+  ];
+  for (const index of [0, 1]) {
+    const location = index === 0 ? workbenchOnOne.target : worktree.target;
+    const target = withFileTabs({
+      ...createLogicalFileRoute(index === 0 ? first : second, location, tabs[index]!.filePath), folderAddress,
+    }, tabs, index);
+    const href = navigation.href(target, current, "inherit");
+    assert.ok(href);
+    const reopened = navigation.readRoute(href);
+    assert.deepEqual(reopened.selectedProjectIds, [first, second]);
+    assert.deepEqual(getWorkbenchFileTabs(reopened), { tabs, index });
+    assert.deepEqual(navigation.fileLocationFor(reopened), location);
+  }
+  const exact = navigation.href(createLogicalFileRoute(second, worktree.target, "second.svg"), current, "exact");
+  assert.ok(exact);
+  assert.deepEqual(navigation.readRoute(exact).selectedProjectIds, [second]);
+});
 
 test("a folder equal to its project address is omitted from the path as redundant", () => {
   const id = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");

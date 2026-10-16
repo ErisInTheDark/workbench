@@ -65,6 +65,7 @@ const client = {
   controls: null,
   mounted: {
     networkClient: {} as NonNullable<WorkbenchClientController["mounted"]>["networkClient"],
+    files: {} as NonNullable<WorkbenchClientController["mounted"]>["files"],
     presentationClient: {} as NonNullable<WorkbenchClientController["mounted"]>["presentationClient"],
     workspace: {} as NonNullable<WorkbenchClientController["mounted"]>["workspace"],
     voice: { settings: { subscribe: () => () => {}, enabled: false } } as unknown as NonNullable<WorkbenchClientController["mounted"]>["voice"],

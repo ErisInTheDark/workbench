@@ -7,8 +7,7 @@
  * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts and cleanup.
  */
 
-import type { ChangeSummary } from "workbench-shared/types";
-import type { FilePayload, SaveConflictPayload, SaveFilePayload } from "workbench-shared/types";
+import type { FileDocumentSnapshot, WorkbenchFileDocument } from "./file/WorkbenchFileStore";
 import {
     createListItemDomEditor,
 } from "./dom/mutation/list-item-dom-edit";
@@ -39,7 +38,6 @@ import {
     formatTimestamp,
 } from "workbench-shared/workbench/project/tree-utils";
 import EditHistoryManager from "./state/EditHistoryManager";
-import type { FileDraftStore } from "./state/FileDraftStore";
 import FileSessionState from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import SessionState from "./state/SessionState";
@@ -53,7 +51,6 @@ import type { WorkbenchEditorDomSurfaces } from "./workbench-dom";
 const HISTORY_KEYFRAME_INTERVAL = 50;
 export interface WorkbenchFilePanelSnapshot {
   currentPath: string;
-  currentThreadId: string;
   dirty: boolean;
   fontSize: number;
   hasPendingWriteConflict: boolean;
@@ -63,41 +60,19 @@ export interface WorkbenchFilePanelSnapshot {
 export type WorkbenchFilePanelListener = (snapshot: WorkbenchFilePanelSnapshot) => void;
 
 export interface WorkbenchFilePanelClientOptions {
-  autoRefreshCleanFileDelayMs?: number;
-  autoRefreshCleanFile?: boolean;
   autoSave?: boolean;
   autoSaveDelayMs?: number;
-  clearThreadSelection: () => void;
-  draftStore: FileDraftStore;
-  emitExplorerStateChange: () => void;
-  expandProjectPath: (filePath: string) => void;
-  fileTransport: {
-    read(projectId: string, path: string): Promise<FilePayload>;
-    reset(projectId: string, path: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
-    save(projectId: string, path: string, content: string, expectedMtimeMs: number, force?: boolean): Promise<SaveFilePayload | SaveConflictPayload>;
-  };
-  getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
-  getProjectId: () => string;
-  onContentChange?: (content: string) => void;
-  refreshProjectOnSave?: boolean;
-  refreshProject: () => Promise<void>;
+  document: WorkbenchFileDocument;
   surfaces: WorkbenchEditorDomSurfaces;
 }
 
 export interface WorkbenchFilePanelClient {
-  clearSelectionView: () => void;
+  acceptObservation: (snapshot: FileDocumentSnapshot) => void;
   dispose: () => void;
-  getCurrentPath: () => string;
   getSnapshot: () => WorkbenchFilePanelSnapshot;
-  openFile: (filePath: string, options?: { ignoreDirty?: boolean; source?: "open" | "reload" }) => Promise<boolean>;
-  refreshCurrentFileFromDiskIfSafe: () => Promise<void>;
-  saveCurrentFile: (options?: { force?: boolean }) => Promise<void>;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   previewFontSize: (fontSize: number | null) => void;
-  setStatusMessage: (message?: string) => void;
-  showThreadPlaceholder: (threadId: string, label: string, statusMessage?: string) => void;
   subscribe: (listener: WorkbenchFilePanelListener) => () => void;
-  syncCurrentDraftBuffer: () => void;
 }
 
 function WorkbenchFilePanelClient(
@@ -105,22 +80,12 @@ function WorkbenchFilePanelClient(
   lifecycle: LifecycleScope = new LifecycleScope(),
 ): WorkbenchFilePanelClient {
   const {
-    autoRefreshCleanFileDelayMs,
-    clearThreadSelection,
-    autoRefreshCleanFile = false,
     autoSave = false,
     autoSaveDelayMs,
-    draftStore,
-    emitExplorerStateChange,
-    expandProjectPath,
-    fileTransport,
-    getProjectChangeSummary,
-    getProjectId,
-    onContentChange,
-    refreshProjectOnSave,
-    refreshProject,
+    document,
     surfaces,
   } = options;
+  const draftStore = document.drafts;
   const listeners = new Set<WorkbenchFilePanelListener>();
   const editorSurface = surfaces.editor;
   const statusDisplay = surfaces.statusDisplay;
@@ -208,7 +173,7 @@ function WorkbenchFilePanelClient(
     },
     fileSessionState,
     getEditorHasFocus: () => editorHasFocus,
-    getProjectChangeSummary,
+    getProjectChangeSummary: () => document.getSnapshot().data?.changeSummary,
     handleCompositionEnd: () => {
       isComposing = false;
     },
@@ -359,7 +324,7 @@ function WorkbenchFilePanelClient(
         return;
       }
 
-      await openFile(sessionState.currentPath, { ignoreDirty: true, source: "reload" });
+      await resetCurrentDraftToSaved();
     },
     handleResetCurrentDraftToSaved: async () => {
       await resetCurrentDraftToSaved();
@@ -393,13 +358,7 @@ function WorkbenchFilePanelClient(
       unwrapTopLevelListItemToParagraph,
     },
     mutationRuntime: {
-      inspectCurrentDraft: () => {
-        const previousContent = fileSessionState.currentContent;
-        fileClient.inspectCurrentDraft();
-        if (fileSessionState.currentContent !== previousContent) {
-          onContentChange?.(fileSessionState.currentContent);
-        }
-      },
+      inspectCurrentDraft: () => { fileClient.inspectCurrentDraft(); },
       recordEditHistory: (previousContent, nextContent, selection) => {
         editHistoryManager.recordEditHistory(previousContent, nextContent, selection);
       },
@@ -427,21 +386,12 @@ function WorkbenchFilePanelClient(
   });
 
   fileClient = WorkbenchFileClient({
-    autoRefreshCleanFileDelayMs,
-    autoRefreshCleanFile,
     autoSave,
     autoSaveDelayMs,
-    clearThreadSelection,
-    draftStore,
+    document,
     editorDocument: editorClient.getDocumentAdapter(),
-    emitExplorerStateChange,
     eventBus,
-    expandProjectPath,
-    fileTransport,
     fileSessionState,
-    getProjectId,
-    refreshProjectOnSave,
-    refreshProject,
     sessionState,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
   });
@@ -450,7 +400,6 @@ function WorkbenchFilePanelClient(
     const editorUiSnapshot = editorClient.getSnapshot();
     return {
       currentPath: sessionState.currentPath,
-      currentThreadId: sessionState.currentThreadId,
       dirty: fileSessionState.dirty,
       fontSize: editorUiSnapshot.fontSize,
       hasPendingWriteConflict: Boolean(fileSessionState.pendingWriteConflict),
@@ -477,13 +426,7 @@ function WorkbenchFilePanelClient(
     const lastSnapshot = previousSessionSnapshot;
     previousSessionSnapshot = snapshot;
 
-    if (
-      lastSnapshot.currentPath !== snapshot.currentPath
-      || lastSnapshot.currentThreadId !== snapshot.currentThreadId
-    ) {
-      emit();
-      emitExplorerStateChange();
-    }
+    if (lastSnapshot.currentPath !== snapshot.currentPath) emit();
   }));
 
   let previousFileSessionSnapshot = fileSessionState.getSnapshot();
@@ -498,7 +441,6 @@ function WorkbenchFilePanelClient(
       || Boolean(lastSnapshot.pendingWriteConflict) !== Boolean(snapshot.pendingWriteConflict)
     ) {
       emit();
-      emitExplorerStateChange();
     }
   }));
 
@@ -509,7 +451,6 @@ function WorkbenchFilePanelClient(
 
     if (previousSnapshot.fontSize !== snapshot.fontSize) {
       emit();
-      emitExplorerStateChange();
     }
   }));
 
@@ -534,22 +475,17 @@ function WorkbenchFilePanelClient(
     fileClient.scheduleSelectionPersistence();
   }
 
-  async function openFile(
-    filePath: string,
-    fileOptions?: { ignoreDirty?: boolean; source?: "open" | "reload" },
-  ) {
-    const didOpen = await fileClient.openFile(filePath, fileOptions);
-    if (didOpen) {
-      onContentChange?.(fileSessionState.currentContent);
-      emit();
-    }
-    return didOpen;
+  function acceptObservation(snapshot: FileDocumentSnapshot) {
+    fileClient.acceptObservation(snapshot);
+    editorClient.setSaveButtonState();
+    editorClient.refreshStatusMessage(snapshot.failure ?? undefined);
+    emit();
   }
 
   async function resetCurrentDraftToSaved() {
     editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentDraftToSaved();
-    onContentChange?.(fileSessionState.currentContent);
+    if (lifecycle.isDisposed) return;
     editor.focus();
     emit();
   }
@@ -557,85 +493,36 @@ function WorkbenchFilePanelClient(
   async function resetCurrentFileToHead() {
     editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentFileToHead();
-    onContentChange?.(fileSessionState.currentContent);
+    if (lifecycle.isDisposed) return;
     editor.focus();
     emit();
   }
 
   async function saveCurrentFile(saveOptions?: { force?: boolean }) {
     await fileClient.saveCurrentFile(saveOptions);
-    onContentChange?.(fileSessionState.currentContent);
+    if (lifecycle.isDisposed) return;
     emit();
-  }
-
-  async function refreshCurrentFileFromDiskIfSafe() {
-    await fileClient.refreshCurrentFileFromDiskIfSafe();
-    onContentChange?.(fileSessionState.currentContent);
-    emit();
-  }
-
-  function clearSelectionView() {
-    fileClient.clearSelection();
-    editorClient.setHoveredRevisionNode(null);
-    editorClient.clearPendingInlineFormats();
-    editorClient.clearSelectionView();
-    editorClient.setSaveButtonState();
-    editorClient.refreshStatusMessage();
-    editorClient.scheduleDiffGutterRefresh();
-    editorClient.refreshEditorChrome();
-    emit();
-  }
-
-  function showThreadPlaceholder(threadId: string, label: string, statusMessage?: string) {
-    fileClient.selectThread(threadId);
-    editorClient.showThreadPlaceholder(label);
-    editorClient.clearPendingInlineFormats();
-    editorClient.setHoveredRevisionNode(null);
-    editorClient.setSaveButtonState();
-    editorClient.refreshStatusMessage(statusMessage);
-    editorClient.scheduleDiffGutterRefresh();
-    editorClient.refreshEditorChrome();
-    emit();
-  }
-
-  function syncCurrentDraftBuffer() {
-    fileClient.syncCurrentDraftBuffer();
   }
 
   function setFontSize(fontSize: number, setOptions?: { persist?: boolean }) {
     editorClient.setFontSize(fontSize, setOptions);
   }
 
-  function setStatusMessage(message?: string) {
-    editorClient.refreshStatusMessage(message);
-  }
-
-  function getCurrentPath() {
-    return sessionState.currentPath;
-  }
-
   editorClient.setSaveButtonState();
   emit();
 
   return {
-    clearSelectionView,
+    acceptObservation,
     dispose: () => {
-      editorClient.dispose();
       fileClient.dispose();
+      editorClient.dispose();
       listeners.clear();
       lifecycle.dispose();
     },
-    getCurrentPath,
     getSnapshot,
-    openFile,
-    refreshCurrentFileFromDiskIfSafe,
-    saveCurrentFile,
     setFontSize,
     previewFontSize: editorClient.previewFontSize,
-    setStatusMessage,
-    showThreadPlaceholder,
     subscribe,
-    syncCurrentDraftBuffer,
   };
 }
 

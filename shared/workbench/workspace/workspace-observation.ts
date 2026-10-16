@@ -27,6 +27,7 @@
  * Queries include live `projectSelection` demand, a thread's `threadVis` sessions and one stored `visSnapshot`.
  */
 import { z } from "zod";
+import { ProjectFileSnapshotSchema } from "../project/project-file";
 import {
   DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema,
   ThreadReferenceSchema, WorkbenchThreadIdSchema,
@@ -107,6 +108,7 @@ export const DaemonWorkspaceQuerySchema = z.discriminatedUnion("kind", [
     sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), projectId: ProjectIdSchema }).strict(),
+  z.object({ kind: z.literal("projectFile"), projectId: ProjectIdSchema, path: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("workingTreeSummary"), projectId: ProjectIdSchema }).strict(),
   z.object({ kind: z.literal("branchPosition"), projectId: ProjectIdSchema, peers: z.array(GitPeerAddressSchema).max(32) }).strict(),
   GitPeerCommitsRequestSchema.extend({ kind: z.literal("branchCommits"), projectId: ProjectIdSchema }).strict(),
@@ -160,6 +162,7 @@ const archivedProject = z.object({
 }).strict();
 
 export const DaemonWorkspaceObservationSchema = z.discriminatedUnion("kind", [
+  z.object({ ...envelope, kind: z.literal("projectFile"), data: ProjectFileSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
   z.object({ ...envelope, kind: z.literal("runtime"), data: WorkbenchDaemonReloadDirtEnvelopeSchema.shape.snapshot }).strict(),
   z.object({ ...envelope, kind: z.literal("update"), data: InstallationUpdateSchema }).strict(),
@@ -230,6 +233,7 @@ export const WorkspaceQuerySchema = z.discriminatedUnion("kind", [
     sidebarRowVersion: WorkbenchThreadSidebarRowVersionSchema.optional(),
   }).strict(),
   z.object({ kind: z.literal("projectTree"), location: ProjectLocationReferenceSchema }).strict(),
+  z.object({ kind: z.literal("projectFile"), location: ProjectLocationReferenceSchema, path: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("workingTreeSummary"), location: ProjectLocationReferenceSchema }).strict(),
   /** The folder's branch against its logical project's other visible folders on other daemons. */
   z.object({ kind: z.literal("gitPeers"), location: ProjectLocationReferenceSchema }).strict(),
@@ -448,6 +452,7 @@ const runtime = z.object({
 }).strict();
 
 export const WorkspaceObservationSchema = z.discriminatedUnion("kind", [
+  z.object({ ...envelope, kind: z.literal("projectFile"), data: ProjectFileSnapshotSchema.nullable() }).strict(),
   z.object({ ...envelope, kind: z.literal("projectSelection") }).strict(),
   z.object({ ...envelope, kind: z.literal("search"), data: WorkspaceSearchResponseSchema,
     sources: z.array(z.object({
@@ -625,6 +630,7 @@ function buildDaemonObservationShape(kind: DaemonWorkspaceObservation["kind"]): 
     } };
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "projectTree": return { schema, fields: { project: projectTreeShape } };
+    case "projectFile": return { schema, fields: { data: observationShape.object({ schema: ProjectFileSnapshotSchema }) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
     // A retarget adds and removes whole threads; one thread's change ships only its changed fields.
     case "threadSummaries": return { schema, fields: { summaries: observationShape.record(LocatedThreadSummarySchema.nullable(), {
@@ -661,6 +667,7 @@ function buildWorkspaceObservationShape(kind: WorkspaceObservation["kind"]): Obs
     case "thread": return { schema, fields: { data: entriesShape(threadObservationObject), runtime: runtimeShape } };
     case "appState": return { schema, fields: { data: appStateShape() } };
     case "projectTree": return { schema, fields: { data: projectTreeShape } };
+    case "projectFile": return { schema, fields: { data: observationShape.object({ schema: ProjectFileSnapshotSchema }) } };
     case "threadVis": return { schema, fields: { data: visThreadShape } };
     case "threadSummaries": return { schema, fields: { data: observationShape.record(WorkspaceThreadSummarySchema.nullable(), {
       fields: { summary: observationShape.object(threadSummaryShape) },

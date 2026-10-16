@@ -294,6 +294,7 @@ export interface DaemonRuntimeObjects {
   daemonHttp: WorkbenchDaemonHttpRouter;
   projectCatalog: WorkbenchProjectCatalogController;
   projectSnapshot: WorkbenchProjectSnapshotController;
+  projectFiles: import("./WorkbenchProjectFileController").default;
   workingTree: import("./WorkbenchWorkingTreeController").default;
   accountLimits: import("./WorkbenchAccountLimitsController").default;
   /** Per-thread live provider facts for thread observations. */

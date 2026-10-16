@@ -3,7 +3,7 @@
  * - createInitialEditorUIStateSnapshot: default UI snapshot before client construction.
  * - EditorMode: current rendering mode.
  * - SaveGuardIssue: persisted save-guard mismatch details.
- * - EditorUIState: editor font size, transient status and thread labels.
+ * - EditorUIState: editor font size and transient status.
  * - EditorUIStateSnapshot: readonly editor UI projection.
  * - EditorUIStateListener: subscriber signature for shell changes.
  * - EditOperationHooks: post-mutation selection restoration hooks.
@@ -82,7 +82,6 @@ const DIRTY_STATUS_MESSAGE = "Unsaved changes.";
 const PLAIN_TEXT_STATUS_MESSAGE = "Plain text file.";
 const RICH_TEXT_SAVED_STATUS_MESSAGE = "Saved.";
 const SAVE_GUARD_STATUS_MESSAGE = "Save blocked: markup mismatch. Check the console log.";
-const THREAD_STATUS_MESSAGE = "Thread. Continue below.";
 const WRITE_CONFLICT_STATUS_MESSAGE = "File changed on disk. Reload or overwrite to save.";
 const TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS = 750;
 const TOOLBAR_INTERACTION_GRACE_MS = 220;
@@ -126,7 +125,6 @@ interface DiffAnchorMetrics {
 export interface EditorUIState {
   fontSize: number;
   statusMessage: string;
-  threadLabel: string;
 }
 
 export interface EditorUIStateSnapshot {
@@ -204,7 +202,6 @@ interface WorkbenchEditorClient {
   applyToolbarCommand: (command: string) => void;
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
   changeFontSize: (delta: number) => void;
-  clearSelectionView: () => void;
   clearPendingInlineFormats: () => void;
   dispose: () => void;
   getDocumentAdapter: () => EditorDocumentAdapter;
@@ -236,7 +233,6 @@ interface WorkbenchEditorClient {
   setStatusMessage: (message: string) => void;
   showResetDraftDialog: () => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
-  showThreadPlaceholder: (label: string) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
   syncStructuredBlockStyles: (root?: ParentNode) => void;
   updateCustomCaret: () => void;
@@ -254,7 +250,6 @@ function createInitialEditorState(): EditorUIState {
   return {
     fontSize: DEFAULT_EDITOR_FONT_SIZE,
     statusMessage: DEFAULT_STATUS_MESSAGE,
-    threadLabel: "",
   };
 }
 
@@ -803,7 +798,7 @@ function WorkbenchEditorClient(
 
   function getDeterministicStatusMessage() {
     if (!options.sessionState.currentPath) {
-      return options.sessionState.currentThreadId ? THREAD_STATUS_MESSAGE : DEFAULT_STATUS_MESSAGE;
+      return DEFAULT_STATUS_MESSAGE;
     }
 
     if (options.fileSessionState.saveIssue) {
@@ -829,11 +824,6 @@ function WorkbenchEditorClient(
   function syncEditorLabel() {
     if (options.sessionState.currentPath) {
       statusDisplay.filePathLabel.textContent = options.sessionState.currentPath;
-      return;
-    }
-
-    if (options.sessionState.currentThreadId) {
-      statusDisplay.filePathLabel.textContent = state.threadLabel || "Create new thread";
       return;
     }
 
@@ -1482,28 +1472,6 @@ function WorkbenchEditorClient(
     showDialog(dialogSurface.resetDraft.dialog, dialogSurface.resetDraft.cancel);
   }
 
-  function clearSelectionView() {
-    state.threadLabel = "";
-    editor.textContent = "";
-    editor.scrollTop = 0;
-    editor.dataset.placeholder = "Select a markdown file to start editing.";
-    editor.setAttribute("contenteditable", "false");
-    syncEditorLabel();
-    setSaveButtonState();
-    refreshStatusMessage();
-  }
-
-  function showThreadPlaceholder(label: string) {
-    state.threadLabel = label;
-    editor.dataset.placeholder = "Select a markdown file to start editing.";
-    editor.setAttribute("contenteditable", "false");
-    editor.textContent = "";
-    editor.scrollTop = 0;
-    syncEditorLabel();
-    setSaveButtonState();
-    refreshStatusMessage();
-  }
-
   function changeFontSize(delta: number) {
     const nextFontSize = Math.min(
       MAX_EDITOR_FONT_SIZE,
@@ -1847,7 +1815,6 @@ function WorkbenchEditorClient(
     applyToolbarCommand,
     canonicalizeAllInlineRunContainers,
     changeFontSize,
-    clearSelectionView,
     clearPendingInlineFormats,
     dispose: () => {
       listeners.clear();
@@ -1882,7 +1849,6 @@ function WorkbenchEditorClient(
     setStatusMessage,
     showResetDraftDialog,
     showSaveConflict,
-    showThreadPlaceholder,
     subscribe,
     syncStructuredBlockStyles,
     updateCustomCaret,

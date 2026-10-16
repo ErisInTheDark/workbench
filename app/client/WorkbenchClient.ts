@@ -45,7 +45,7 @@ import WorkbenchPresentationClient from "./workbench/state/WorkbenchPresentation
 import type WorkbenchClientStateController from "./workbench/state/WorkbenchClientStateController";
 import type { ClientDraftIdentity } from "./workbench/state/draft-persistence";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import FileDraftStore from "./workbench/state/FileDraftStore";
+import WorkbenchFileStore from "./workbench/file/WorkbenchFileStore";
 import { createInitialEditHistory } from "./workbench/state/edit-history";
 import type { TextFileDocumentPort } from "./workbench/file/TextFileDocumentController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
@@ -53,7 +53,6 @@ import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
 import WorkbenchProjectClient from "./workbench/WorkbenchProjectClient";
 import WorkbenchThreadClient, { type WorkbenchThreadProject } from "./workbench/WorkbenchThreadClient";
 import { WorkbenchModelReadSupersededError } from "./workbench/WorkbenchAccountClient";
-import WorkbenchFilePanelClient, { type WorkbenchFilePanelClientOptions } from "./workbench/WorkbenchFilePanelClient";
 import WorkbenchNavigationController from "./workbench/WorkbenchNavigationController";
 import WorkbenchProjectNavigation from "./workbench/navigation/workbench-project-navigation";
 import WorkbenchRouteIntentController from "./workbench/navigation/WorkbenchRouteIntentController";
@@ -65,7 +64,6 @@ import ThreadSidebarClient from "./workbench/thread/ThreadSidebarClient";
 import ThreadSummaryStore from "./workbench/thread/ThreadSummaryStore";
 import type ThreadTextPresentationController from "./workbench/thread/ThreadTextPresentationController";
 import WorkbenchVoiceClient from "./workbench/voice/WorkbenchVoiceClient";
-import type { WorkbenchDomSurfaces, WorkbenchEditorDomSurfaces } from "./workbench/workbench-dom";
 
 type ThreadClient = ReturnType<typeof WorkbenchThreadClient>;
 type QueryHandle<K extends WorkspaceObservation["kind"]> = {
@@ -80,17 +78,13 @@ type ViewContext = {
   assetSource: { kind: "source"; daemonId: DaemonId };
 };
 type MountedControls = WorkbenchControls & {
-  createFilePanelClient(surfaces: WorkbenchEditorDomSurfaces,
-    options?: Partial<Omit<WorkbenchFilePanelClientOptions,
-      "clearThreadSelection" | "draftStore" | "emitExplorerStateChange" | "expandProjectPath"
-      | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>
-      & { location?: ProjectLocationReference }): ReturnType<typeof WorkbenchFilePanelClient>;
   createTextFileDocumentPort(path: string, location?: ProjectLocationReference | null): TextFileDocumentPort;
   /** Create a new file holding `content`; rejects when the path already exists. */
   createTextFile(path: string, content: string, location?: ProjectLocationReference | null): Promise<void>;
 };
 
 export interface MountedWorkbenchClient {
+  files: WorkbenchFileStore;
   networkClient: WorkbenchNetworkClient;
   presentationClient: WorkbenchPresentationClient;
   workspace: WorkbenchWorkspaceClient;
@@ -137,7 +131,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   workspace: WorkbenchWorkspaceClient;
   appRpc?: WorkbenchAppRpcClient | null;
   clientStateController?: WorkbenchClientStateController;
-  dom?: WorkbenchDomSurfaces | null;
 }): MountedWorkbenchClient {
   const { workspace, clientStateController: state } = bindings;
   const lifetime = new LifecycleScope();
@@ -167,7 +160,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   let draftLocation: ProjectLocationReference | null = null;
   let draftRoute: WorkbenchRoute | null = null;
   let lastLoadedRoute: WorkbenchRoute | null = null;
-  let activePath = "";
   let disposed = false;
   let scheduled = false;
   let lastExplorer: ExplorerSnapshot | null = null;
@@ -182,8 +174,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const renderers = new Map<DaemonId, ThreadClient>();
   const warmedOpenCodeSources = new Map<DaemonId, number>();
   const localThreadLocations = new Map<string, ProjectLocationReference>();
-  const fileDrafts = new Map<string, ReturnType<typeof FileDraftStore>>();
-  const panels = new Set<ReturnType<typeof WorkbenchFilePanelClient>>();
   const factListeners = new Set<() => void>();
   const changeListeners = new Set<() => void>();
   const warn = (message: string, error?: unknown) => console.warn(message,
@@ -195,6 +185,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   const projectFacts = projectFactsStore.getData;
   const registrationFor = (daemonId: DaemonId) =>
     state?.getSnapshot().registrations.find(item => item.daemonId === daemonId)?.id ?? "";
+  const files = new WorkbenchFileStore(workspace, state, registrationFor, warn);
   const folder = (location: ProjectLocationReference | null | undefined) => {
     if (!location) return undefined;
     const facts = projectFacts();
@@ -595,19 +586,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     emit();
   }
 
-  function fileDraftStoreFor(location: ProjectLocationReference) {
-    const registrationId = registrationFor(location.daemonId);
-    const key = `${location.daemonId}/${location.projectId}`;
-    let store = fileDrafts.get(key);
-    if (!store) {
-      store = FileDraftStore(() => location.projectId, emit, state,
-        message => warn(message), () => registrationFor(location.daemonId) || registrationId);
-      fileDrafts.set(key, store);
-      void store.hydratePersistedDrafts().catch(error => warn("File drafts could not load.", error));
-    }
-    return store;
-  }
-
   function emit() {
     if (disposed || scheduled) return;
     scheduled = true;
@@ -633,10 +611,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       });
       for (const listener of changeListeners) listener();
       const snapshot: ExplorerSnapshot = {
-        ...project, browseLocation, currentPath: activePath,
+        ...project, browseLocation, currentPath: navigation.getSnapshot().route.view === "file"
+          ? navigation.getSnapshot().route.filePath : "",
         isProjectLoading: !!browseLocation && (!tree?.getSnapshot().value?.data || project.isLoading),
         currentThreadId: threads.currentThreadId,
-        locallyModifiedPaths: browseLocation ? fileDraftStoreFor(browseLocation).getLocallyModifiedPaths() : [],
+        locallyModifiedPaths: browseLocation ? files.draftsFor(browseLocation).getLocallyModifiedPaths() : [],
         fontSize: fontSize?.preference.key === "editorFontSize" ? fontSize.preference.value : DEFAULT_EDITOR_FONT_SIZE,
       };
       if (areExplorerSnapshotsEquivalent(lastExplorer, snapshot)) return;
@@ -671,11 +650,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return result;
   }
 
-  function focusedTabFolder(route: WorkbenchRoute) {
-    const address = route.view === "file" ? route.fileTabs?.[route.fileTabIndex ?? 0]?.folderAddress : null;
-    return address?.length ? projectNavigator.folderForAddress(address) : null;
-  }
-
   async function loadView(route: WorkbenchRoute,
     context: { isCurrent(): boolean; signal: AbortSignal }): Promise<WorkbenchRouteLoadResult> {
     const target = route.threadTarget;
@@ -688,6 +662,12 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     // The url folder owns the browse scope; the draft channel keeps its own folder intent.
     const browseFolder = projectNavigator.folderForRoute(route) ?? null;
     selectRowsForRoute(route);
+    if (route.view === "file") {
+      selectFolder(browseFolder);
+      draftLocation = null;
+      threadClient.clearThreadSelection();
+      return { ok: true };
+    }
     if (route.view === "home" || route.view === "project" && !route.selectedProjectIds?.length
       || route.view === "git" && (route.logical || !route.projectId || route.folderAddress?.length)
       || route.view === "settings"
@@ -695,7 +675,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       || route.view === "new-project") {
       selectFolder(browseFolder);
       draftLocation = null;
-      activePath = "";
       threadClient.clearThreadSelection();
       return { ok: true };
     }
@@ -744,8 +723,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     let location = draftRouteTarget
       ? explicit ?? saved?.target ?? (logical && presentation.snapshot().data
         ? preferredLogicalLaunchLocation(logical, presentation.snapshot().data!) : null)
-      // The focused file tab names its own folder; otherwise the url omits a folder the sidebar selects implicitly.
-      : explicit ?? focusedTabFolder(route) ?? browseTarget ?? browseFolder;
+      : explicit ?? browseTarget ?? browseFolder;
     if (!location && draftRouteTarget && logical) location = logical.locations.find(item => item.project)?.target
       ?? logical.locations[0]?.target ?? null;
     // Historical physical routes are resolved from app facts, never guessed across sources.
@@ -785,7 +763,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       });
       if (!context.isCurrent() || outcome.kind === "superseded") return { ok: false };
       if (outcome.kind === "failure") return { ok: false, error: outcome.message };
-      activePath = "";
       const canonical = {
         ...withProjectSelection(createLogicalExistingThreadRoute(logicalId ?? null,
           target?.kind === "provider" ? { ...target, harness: data.identity.harness } : target!, null),
@@ -797,7 +774,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     }
     if (!location && logical && route.view === "project") {
       selectFolder(browseFolder);
-      activePath = "";
       threadClient.clearThreadSelection();
       return { ok: true };
     }
@@ -811,7 +787,6 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       return { ok: false, error: "The chosen folder does not belong to this project." };
     }
     selectFolder(browseFolder ?? (draftRouteTarget ? browseTarget : location));
-    activePath = route.view === "file" ? route.filePath : "";
     if (route.view === "thread" && target && (target.kind === "new" || target.kind === "draft")) {
       if (target.kind === "draft" && !saved) {
         return presentation.snapshot().data ? { ok: false, error: "The saved draft is unavailable." }
@@ -983,9 +958,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       const location = browseLocation;
       const result = await projectClient.deleteFile(path, options);
       if (!result.confirmationRequired && location) {
-        try { await fileDraftStoreFor(location).clearBuffer(path); }
+        try { await files.draftsFor(location).clearBuffer(path); }
         catch (error) { warn("File deleted, but its editor draft could not be removed.", error); }
-        if (activePath === path) activePath = "";
         emit();
       }
       return result;
@@ -1002,39 +976,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     updatePresentationProjectLayout: (...args) => presentation.updateProjectLayout(...args),
     updatePresentationHomeLayout: intent => presentation.updateHomeLayout(intent),
     updatePresentationPinnedLayout: (...args) => presentation.updatePinnedLayout(...args),
-    createFilePanelClient: (surfaces, options = {}) => {
-      const { location = browseLocation, ...panelOptions } = options;
-      if (!location) throw new Error("Choose a folder before opening an editor.");
-      const operations = workspace.daemon({ kind: "folder", location });
-      const panelLifetime = new LifecycleScope();
-      const client = WorkbenchFilePanelClient({
-        ...panelOptions, surfaces, draftStore: fileDraftStoreFor(location),
-        clearThreadSelection: () => { threadClient.clearThreadSelection(); },
-        emitExplorerStateChange: emit,
-        expandProjectPath: path => {
-          if (sameLocation(location, browseLocation)) projectClient.expandPath(path);
-        },
-        getProjectChangeSummary: path => sameLocation(location, browseLocation)
-          ? projectClient.getSnapshot().changes[path] ?? null : null,
-        getProjectId: () => location.projectId,
-        refreshProject: async () => {
-          await workspace.request("project/tree/refresh", { projectId: location.projectId }, { kind: "folder", location });
-        },
-        fileTransport: {
-          read: (projectId, path) => operations.projects.files.read({ projectId, path }),
-          reset: (projectId, path, expectedMtimeMs, force) => operations.projects.files.reset({ projectId, path, expectedMtimeMs, force }),
-          save: (projectId, path, content, expectedMtimeMs, force) => operations.projects.files.save({ projectId, path, content, expectedMtimeMs, force }),
-        },
-      }, panelLifetime);
-      panels.add(client);
-      panelLifetime.addUnsubscribe(() => panels.delete(client));
-      return client;
-    },
     createTextFileDocumentPort: (path, explicitLocation) => {
       const location = explicitLocation ?? browseLocation;
       if (!location) throw new Error("Choose a folder before opening an editor.");
       const operations = workspace.daemon({ kind: "folder", location });
-      const drafts = fileDraftStoreFor(location);
+      const drafts = files.draftsFor(location);
       const { projectId } = location;
       return {
         read: async () => {
@@ -1093,6 +1039,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     emit();
   }));
   lifetime.addUnsubscribe(presentation.subscribe(factsChanged));
+  lifetime.addUnsubscribe(files.subscribeDrafts(emit));
   if (state) lifetime.addUnsubscribe(state.subscribe(factsChanged));
   presentation.start();
   void network.start().catch(error => warn("Network settings could not start.", error));
@@ -1100,7 +1047,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
   emit();
 
   return {
-    workspace, networkClient: network, presentationClient: presentation,
+    workspace, files, networkClient: network, presentationClient: presentation,
     navigation, projectNavigator, routeIntents, controls, voice, projectFileIndexStore,
     projectFacts: projectFactsStore,
     projectSourceErrors: {
@@ -1154,7 +1101,7 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
       for (const release of memberLeases.values()) release();
       memberLeases.clear();
       threadSummaries.dispose();
-      for (const panel of panels) panel.dispose();
+      files.dispose();
       navigation.dispose();
       routeIntents.dispose();
       void sidebar.dispose().then(() => presentation.dispose());

@@ -78,6 +78,22 @@ test("default and empty project list routes do not invent a browsed folder", asy
     && item.params.query.kind === "projectTree"), false);
 });
 
+test("file routes do not wait for sidebar metadata or narrow the selected projects", async context => {
+  const fixture = createWorkspaceClientFixture();
+  const socket = await fixture.open();
+  const client = WorkbenchClient({ workspace: fixture.workspace });
+  context.after(() => { client.dispose(); fixture.dispose(); });
+  const second = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000004");
+  const route: WorkbenchRoute = {
+    ...createProjectSelectionRoute([logicalId, second]), view: "file", filePath: "notes.md",
+    fileTabs: [{ filePath: "notes.md", folderAddress: ["elsewhere"] }], fileTabIndex: 0,
+  };
+  assert.equal((await client.controls.applyRoute(route)).ok, true);
+  assert.deepEqual(client.navigation.getSnapshot().route.selectedProjectIds, [logicalId, second]);
+  assert.equal(socket.sent.some(item => item.method === "workspace/observe"
+    && item.params.query.kind === "projectTree"), false);
+});
+
 test("project home opens at the preferred folder and keeps a transient draft identity when its project changes", async context => {
   const fixture = createWorkspaceClientFixture();
   const socket = await fixture.open();

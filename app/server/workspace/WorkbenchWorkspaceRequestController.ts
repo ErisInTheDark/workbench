@@ -633,6 +633,7 @@ export default class WorkbenchWorkspaceRequestController {
       }
       case "accountLimits":
       case "gitPeerCommits":
+      case "projectFile":
         interest.stop.push(this.options.sources.subscribe(refresh));
         break;
       case "workingTreeSummary": {
@@ -728,6 +729,7 @@ export default class WorkbenchWorkspaceRequestController {
       case "threadOwner": return { ...base, kind: "threadOwner", data: { phase: "pending", failure: null } };
       case "thread": return { ...base, kind: "thread", owner: { phase: "pending", failure: null }, data: null, runtime: {} };
       case "projectTree": return { ...base, kind: "projectTree", sourceGeneration: 0, data: null };
+      case "projectFile": return { ...base, kind: "projectFile", data: null };
       case "workingTreeSummary": return { ...base, kind: "workingTreeSummary", data: null };
       case "gitPeers": return { ...base, kind: "gitPeers", data: null };
       case "gitPeerCommits": return { ...base, kind: "gitPeerCommits", data: null };
@@ -881,6 +883,22 @@ export default class WorkbenchWorkspaceRequestController {
         this.update(interest, { kind: "gitPeerCommits",
           phase: fact?.phase ?? "unavailable", failure: fact?.failure ?? (source ? null : "Device unavailable."),
           data: fact?.value?.kind === "branchCommits" ? fact.value.data : null });
+        return;
+      }
+      case "projectFile": {
+        const source = this.options.sources.get(query.location.daemonId);
+        const key = source ? JSON.stringify(query) : null;
+        if (interest.thread?.key !== key) {
+          interest.thread?.observation.release();
+          interest.thread = source && key ? {
+            key, observation: source.observe({
+              kind: "projectFile", projectId: query.location.projectId, path: query.path,
+            }, () => this.refresh(interest)),
+          } : null;
+        }
+        const fact = interest.thread?.observation.getSnapshot();
+        this.update(interest, { kind: "projectFile", phase: fact?.phase ?? "pending",
+          failure: fact?.failure ?? null, data: fact?.value?.kind === "projectFile" ? fact.value.data : null });
         return;
       }
       case "stats": this.projectStats(interest); return;

@@ -5,6 +5,7 @@
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - WorkbenchFileTab/withFileTabs/getWorkbenchFileTabs: ordered file tabs after the focused tab number, each optionally prefixed by its folder address and the folder marker.
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
+ * - createDiscardedDraftExitRoute: leave only the draft still viewed when deletion completes.
  * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
@@ -129,6 +130,12 @@ export function createToggledProjectSelectionRoute(
   return route.view === "thread" && !(projectId === ownerProjectId && selectedProjectIds.includes(projectId))
     ? withProjectSelection(route, nextIds)
     : createProjectSelectionRoute(nextIds);
+}
+
+export function createDiscardedDraftExitRoute(route: WorkbenchRoute, draftId: string): WorkbenchRoute | null {
+  if (route.view !== "thread" || route.threadTarget?.kind !== "draft" || route.threadTarget.draftId !== draftId) return null;
+  const exit = createSettledThreadExitRoute(route, route.threadOwnerProjectId);
+  return { ...exit, folderAddress: route.folderAddress };
 }
 
 /** Leave a settled thread for the view that listed it, keeping the project selection. */

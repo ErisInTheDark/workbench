@@ -434,6 +434,23 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
   readRequest.socket.send(JSON.stringify({ id: readRequest.id, result: file }));
   assert.deepEqual(await read, file);
 
+  const fileQuery = { kind: "projectFile" as const, location: { daemonId: a, projectId }, path: "notes.md" };
+  const firstFile = first.workspace.observe(fileQuery);
+  const secondFile = second.workspace.observe(fileQuery);
+  const observedFile = await daemonA.query("projectFile");
+  const observedData = { ...file, path: "notes.md", content: "observed", changeSummary: null };
+  daemonA.answer(observedFile, { kind: "projectFile", phase: "current", failure: null, data: observedData });
+  await waitFor(firstFile, snapshot => snapshot.value?.data?.content === "observed");
+  await waitFor(secondFile, snapshot => snapshot.value?.data?.content === "observed");
+  assert.equal(daemonB.requests.some(request => request.method === "workspace/observe"
+    && DaemonWorkspaceObserveSchema.parse(request.params).query.kind === "projectFile"), false);
+  daemonA.push(observedFile, { kind: "projectFile", phase: "current", failure: null,
+    data: { ...observedData, content: "updated", mtimeMs: 2 } });
+  await waitFor(firstFile, snapshot => snapshot.value?.data?.content === "updated");
+  await waitFor(secondFile, snapshot => snapshot.value?.data?.content === "updated");
+  firstFile.release();
+  secondFile.release();
+
   first.workspace.dispose(); first.rpc.dispose();
   daemonA.push(aCatalogue, { kind: "catalogue", phase: "current", failure: null,
     catalogue: { data: catalogue.data.map(item => ({ ...item.project, name: "Renamed" })), aliases: [], rootPath: "C:/" },

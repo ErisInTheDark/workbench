@@ -862,6 +862,7 @@ function createWorkbenchCoreFeature(
     resolveProjectById: projectId => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: cwd => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Project store" }),
   });
+  const projectFiles = new WorkbenchProjectFileController(projectCatalog, projectSnapshot);
   const daemonRequests = new WorkbenchDaemonRequestController({
     autoCompact,
     commandApprovals,
@@ -876,7 +877,7 @@ function createWorkbenchCoreFeature(
       (projectId) => projectCatalog.resolveProjectById(projectId),
       (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
     ),
-    files: new WorkbenchProjectFileController(projectCatalog, projectSnapshot),
+    files: projectFiles,
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),
     profiles: profileStore,
@@ -928,6 +929,7 @@ function createWorkbenchCoreFeature(
     accountLimits,
     threadRuntime,
     threadSummaries: summaries,
+    projectFiles,
     turnRecoveryFailures: {
       report: async (cwd, harness, threadId) => {
         const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });
@@ -1030,6 +1032,7 @@ function createWorkbenchCoreFeature(
       reportPhase("search disposal");
       await search.dispose();
       reportPhase("project snapshot disposal");
+      projectFiles.dispose();
       projectSnapshot.dispose();
       reportPhase("project catalog disposal");
       await projectCatalog.dispose();

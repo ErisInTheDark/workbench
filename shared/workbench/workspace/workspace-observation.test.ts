@@ -22,6 +22,27 @@ const entry = (activityAt: number, extra: object = {}) => ({
 });
 const location = { daemonId: "00000000-0000-4000-8000-0000000000da", projectId: "project" };
 
+test("file observation demand names its own folder without project selection", () => {
+  assert.deepEqual(WorkspaceQuerySchema.parse({ kind: "projectFile", location, path: "notes.md" }),
+    { kind: "projectFile", location, path: "notes.md" });
+  assert.deepEqual(DaemonWorkspaceQuerySchema.parse({ kind: "projectFile", projectId: location.projectId, path: "notes.md" }),
+    { kind: "projectFile", projectId: location.projectId, path: "notes.md" });
+});
+
+test("file deltas retain unchanged HEAD content at both observation hops", () => {
+  const first = {
+    kind: "projectFile" as const, subscriptionId, generation: 1, revision: 1, phase: "current", failure: null,
+    data: { projectId: "project", path: "notes.md", content: "before", headContent: "unchanged HEAD",
+      mtimeMs: 1, updatedAt: new Date(1).toISOString(), changeSummary: null },
+  };
+  const next = { ...first, data: { ...first.data, content: "after", mtimeMs: 2 } };
+  for (const shape of [daemonObservationShape("projectFile"), workspaceObservationShape("projectFile")]) {
+    const delta = diffObservationValue(first, next, shape)!;
+    assert.ok(!JSON.stringify(delta).includes(first.data.headContent));
+    assert.deepEqual(applyObservationDelta(first, delta, shape), next);
+  }
+});
+
 test("peer commit updates preserve unchanged rows at both observation hops", () => {
   for (const kind of ["branchCommits", "gitPeerCommits"] as const) {
     const shape = kind === "branchCommits" ? daemonObservationShape(kind) : workspaceObservationShape(kind);

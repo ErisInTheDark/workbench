@@ -5,7 +5,7 @@
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
   createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createProjectSelectionRoute, createWorkbenchHref,
-  parseWorkbenchRouteFromLocation, withProjectSelection, type WorkbenchRoute,
+  parseWorkbenchRouteFromLocation, withProjectSelection, withFileTabs, getWorkbenchFileTabs, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
@@ -201,14 +201,32 @@ export default class WorkbenchProjectNavigation {
       : parseWorkbenchRouteFromLocation(location));
   }
 
+  fileLocationFor(route: WorkbenchRoute): ProjectLocationReference | null {
+    const resolved = this.resolveRoute(route);
+    const tab = resolved.fileTabs?.[resolved.fileTabIndex ?? 0];
+    if (tab?.folderAddress?.length) return this.folderForAddress(tab.folderAddress);
+    return resolved.logical?.location ?? this.folderForRoute(resolved);
+  }
+
   href(route: WorkbenchRoute, current?: WorkbenchRoute,
     selection: "inherit" | "exact" = "exact"): string | undefined {
-    const intent = selection === "inherit" && current && route.view === "thread"
-      && (current.selectedProjectIds !== null || route.selectedProjectIds === null)
+    const fileLocation = route.view === "file" ? this.fileLocationFor(route) : null;
+    const intent = selection === "inherit" && current && (route.view === "file" || route.view === "thread"
+      && (current.selectedProjectIds !== null || route.selectedProjectIds === null))
       ? withProjectSelection(route, current.selectedProjectIds) : route;
-    const withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
+    let withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
       ? { ...intent, folderAddress: [...current.folderAddress] }
       : intent;
+    if (fileLocation) {
+      const sidebarFolder = this.folderForRoute(this.resolveRoute(withFolder));
+      const sameFolder = sidebarFolder?.daemonId === fileLocation.daemonId
+        && sidebarFolder?.projectId === fileLocation.projectId;
+      const address = sameFolder ? null : ProjectFolderAddress.forFolder(this.folders, fileLocation);
+      if (address && !address.length) return undefined;
+      const { tabs, index } = getWorkbenchFileTabs(withFolder);
+      if (index >= 0) withFolder = withFileTabs(withFolder, tabs.map((tab, position) =>
+        position === index ? { ...tab, folderAddress: address } : tab), index);
+    }
     const resolved = this.resolveRoute(withFolder);
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
     if (resolved.logical) {

@@ -689,6 +689,7 @@ export default class WorkbenchDaemonSource {
       return { ...value, catalogue: value.catalogue ?? previous.catalogue, locations: value.locations ?? previous.locations };
     }
     if (value.kind === "projectTree" && previous.kind === "projectTree") return { ...value, project: value.project ?? previous.project };
+    if (value.kind === "projectFile" && previous.kind === "projectFile") return { ...value, data: value.data ?? previous.data };
     if (value.kind === "threadIdentity" && previous.kind === "threadIdentity") return { ...value, identity: value.identity ?? previous.identity };
     if (value.kind === "thread" && previous.kind === "thread") return { ...value, data: value.data ?? previous.data };
     if (value.kind === "projectThreads" && previous.kind === "projectThreads") {

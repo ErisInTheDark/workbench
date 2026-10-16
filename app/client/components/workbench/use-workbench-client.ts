@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - useWorkbenchClientMount: own async Workbench client mount and disposal around root-owned DOM surfaces; returns the mount-stable client plus root-only explorer, startup and source-error reads.
+ * - useWorkbenchClientMount: own async workspace-client mount/disposal and root-only explorer, startup and source-error reads.
  */
 "use client";
 
@@ -12,7 +12,6 @@ import ProjectTreeFileIndex from "workbench-shared/workbench/project/ProjectTree
 import type WorkbenchClientStateController from "../../workbench/state/WorkbenchClientStateController";
 import type WorkbenchAppRpcClient from "../../workbench/app/WorkbenchAppRpcClient";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
-import type { WorkbenchDomSurfaces } from "../../workbench/workbench-dom";
 import type { WorkbenchClientController } from "./workbench-client-context";
 import { useWorkbenchWorkspace } from "./WorkbenchWorkspaceContext";
 
@@ -47,7 +46,6 @@ const INITIAL_PRESENTATION: ReturnType<NonNullable<MountedWorkbenchClient["prese
 interface WorkbenchClientMountOptions {
   appRpc: WorkbenchAppRpcClient | null;
   clientStateController: WorkbenchClientStateController;
-  getDomSurfaces: () => WorkbenchDomSurfaces | null;
   initialRoute: WorkbenchRoute;
 }
 
@@ -74,7 +72,6 @@ export function useWorkbenchClientMount(options: WorkbenchClientMountOptions): {
           workspace,
           appRpc: current.appRpc,
           clientStateController: current.clientStateController,
-          dom: current.getDomSurfaces(),
           initialRoute: current.initialRoute,
           onExplorerStateChange: (snapshot) => {
             if (cancelled) return;

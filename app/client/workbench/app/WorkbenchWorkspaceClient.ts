@@ -409,6 +409,7 @@ export default class WorkbenchWorkspaceClient {
     if (previous?.kind === value.kind && value.phase !== "current") {
       if (value.kind === "thread" && previous.kind === "thread" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "projectTree" && previous.kind === "projectTree" && !value.data) value = { ...value, data: previous.data };
+      else if (value.kind === "projectFile" && previous.kind === "projectFile" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "presentation" && previous.kind === "presentation" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "appState" && previous.kind === "appState" && !value.data) value = { ...value, data: previous.data };
       else if (value.kind === "runtime" && previous.kind === "runtime" && !value.data) value = { ...value, data: previous.data };

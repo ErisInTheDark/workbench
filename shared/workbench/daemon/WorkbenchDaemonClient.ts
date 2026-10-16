@@ -5,6 +5,7 @@
  * - default WorkbenchDaemonClient: create the browser daemon client.
  */
 import { InstallationPullResultSchema } from "../installation-update";
+import { FilePayloadSchema } from "../project/project-file";
 import type {
   WorkbenchDaemonGitArcMethod,
   WorkbenchDaemonMethod,
@@ -131,9 +132,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "thread/presentation/attachment/read": return WorkbenchPresentationAttachmentChunkSchema;
     case "thread/presentation/layout/read": return WorkbenchPresentationLayoutChunkSchema;
     case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
-    case "project/file/read": return z.object({
-      content: z.string(), headContent: z.string().nullable(), mtimeMs: z.number(), path: z.string(), projectId: z.string(), updatedAt: z.string(),
-    }).strict();
+    case "project/file/read": return FilePayloadSchema;
     case "project/file/reset":
     case "project/file/save": return fileWriteSchema;
     case "search/query": return WorkbenchSearchResponseSchema;

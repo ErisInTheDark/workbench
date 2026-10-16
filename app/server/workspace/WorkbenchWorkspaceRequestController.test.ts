@@ -299,6 +299,26 @@ test("peer previews route first-three and full-history demand to the selected ch
   assert.equal(released, 2);
 });
 
+test("file demand addresses only its own folder and releases independently of selection", async context => {
+  const daemonId = DaemonIdSchema.parse(randomUUID());
+  const location = { daemonId, projectId: ProjectIdSchema.parse("file-owner") };
+  const observed: object[] = [];
+  let released = 0;
+  const source = { id: daemonId, observe: (query: object) => {
+    observed.push(query);
+    return { getSnapshot: () => ({ phase: "failed", failure: "Disconnected", value: null }),
+      release: () => { released++; } };
+  } };
+  const f = await fixture(context, { get: id => id === daemonId ? source : undefined });
+  const subscriptionId = randomUUID();
+  const result = f.owner.observe({ subscriptionId, generation: 1,
+    query: { kind: "projectFile", location, path: "notes.md" } });
+  assert.equal(result.phase, "failed");
+  assert.deepEqual(observed, [{ kind: "projectFile", projectId: location.projectId, path: "notes.md" }]);
+  f.owner.release({ subscriptionId, generation: 1 });
+  assert.equal(released, 1);
+});
+
 /** `daemons` replaces daemon lookup for the request owner only, standing in for connected sources. */
 async function fixture(
   context: TestContext,

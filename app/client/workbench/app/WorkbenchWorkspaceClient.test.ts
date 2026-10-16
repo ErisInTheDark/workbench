@@ -91,6 +91,25 @@ const runtime = {
   data: { frontendGeneration: null, reloadDirt: { dirtyScopes: [], pendingScopes: [], error: null } },
 };
 
+test("file facts survive a pending replacement without being reported as current", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const location = { daemonId: DaemonIdSchema.parse("00000001-0000-4000-8000-000000000000"),
+    projectId: ProjectIdSchema.parse("folder") };
+  const handle = fixture.workspace.observe({ kind: "projectFile", location, path: "notes.md" });
+  const request = await socket.request("workspace/observe");
+  const data = { projectId: location.projectId, path: "notes.md", content: "keep", headContent: null,
+    mtimeMs: 1, updatedAt: new Date(1).toISOString(), changeSummary: null };
+  await socket.observation(request, { kind: "projectFile", phase: "current", failure: null, data });
+  await socket.observation(request, { kind: "projectFile", phase: "pending", failure: null, data: null }, 2);
+  assert.equal(handle.getSnapshot().phase, "pending");
+  assert.equal(handle.getSnapshot().value?.data?.content, "keep");
+  await socket.observation(request, { kind: "projectFile", phase: "current", failure: null,
+    data: { ...data, content: "fresh", mtimeMs: 2 } }, 3);
+  assert.equal(handle.getSnapshot().value?.data?.content, "fresh");
+});
+
 test("an available query publishes while an unrelated query remains pending", async context => {
   const fixture = createWorkspaceClientFixture();
   context.after(() => fixture.dispose());

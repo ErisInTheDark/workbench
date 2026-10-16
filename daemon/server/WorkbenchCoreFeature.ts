@@ -20,6 +20,7 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "modules",
   "projectCatalog",
   "projectSnapshot",
+  "projectFiles",
   "projectStore",
   "providerObservations",
   "questionnaires",

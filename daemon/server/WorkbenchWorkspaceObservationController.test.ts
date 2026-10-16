@@ -13,6 +13,7 @@ import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thr
 import type { InstallationUpdate } from "workbench-shared/workbench/installation-update";
 import { createThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
+import type { ProjectFileFact } from "./WorkbenchProjectFileController";
 
 type Client = { id: string };
 type Owners = ConstructorParameters<typeof WorkbenchWorkspaceObservationController<Client>>[0];
@@ -66,6 +67,36 @@ function fixture(context: TestContext, overrides: Partial<Owners> = {}) {
     }),
   };
 }
+
+test("file observations publish scoped failure facts and release replaced demand", context => {
+  let fact: ProjectFileFact = { phase: "pending", failure: null, data: null };
+  let changed = () => {};
+  const released: string[] = [];
+  const f = fixture(context, { files: {
+    observe: (_projectId, path, listener) => {
+      changed = listener;
+      return { read: () => fact, release: () => { released.push(path); } };
+    },
+  } });
+  const id = randomUUID();
+  f.observe({ kind: "projectFile", projectId: a, path: "first.md" }, id);
+  fact = { phase: "current", failure: null, data: {
+    projectId: a, path: "first.md", content: "first", headContent: null,
+    mtimeMs: 1, updatedAt: new Date(1).toISOString(), changeSummary: null,
+  } };
+  changed();
+  fact = { ...fact, phase: "stale", failure: "temporarily unavailable" };
+  changed();
+  const latest = f.updates.at(-1)!.value;
+  assert.equal(latest.kind, "projectFile");
+  if (latest.kind !== "projectFile") return;
+  assert.equal(latest.phase, "stale");
+  assert.equal(latest.data?.content, "first");
+  f.observe({ kind: "projectFile", projectId: b, path: "second.md" }, id, 2);
+  assert.deepEqual(released, ["first.md"]);
+  f.owner.release("connection", { subscriptionId: id, generation: 2 });
+  assert.deepEqual(released, ["first.md", "second.md"]);
+});
 
 test("only explicit selected projects drive update demand across apps and release", context => {
   const reader: { read: ((projectId: ProjectId) => boolean) | null } = { read: null };

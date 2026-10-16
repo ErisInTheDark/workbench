@@ -7,6 +7,8 @@ import {
   createLogicalExistingThreadRoute,
   createProjectSelectionRoute,
   createSettledThreadExitRoute,
+  createDiscardedDraftExitRoute,
+  createLogicalThreadRoute,
   createToggledProjectSelectionRoute,
   createHomeThreadHref,
   createPinnedThreadHref,
@@ -263,6 +265,24 @@ test("settling the viewed thread keeps the project selection it was listed under
     withProjectSelection(createHomeThreadRoute("owner", "one"), ["viewed", "owner"]), "owner");
   assert.deepEqual(physical.threadTarget, { kind: "new" });
   assert.deepEqual(physical.selectedProjectIds, ["viewed", "owner"]);
+});
+
+test("discarding a viewed draft preserves selection and ignores superseded or repeated completions", () => {
+  const owner = "123e4567-e89b-42d3-a456-426614174001";
+  const other = "123e4567-e89b-42d3-a456-426614174002";
+  const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174003");
+  for (const selection of [null, [], [owner], [other, owner]]) {
+    const route = {
+      ...withProjectSelection(createLogicalThreadRoute(null, owner, null, { kind: "draft", draftId }), selection),
+      folderAddress: ["folder"],
+    };
+    const exit = createDiscardedDraftExitRoute(route, draftId);
+    assert.ok(exit);
+    assert.deepEqual(exit.selectedProjectIds, selection);
+    assert.deepEqual(exit.folderAddress, route.folderAddress);
+    assert.equal(createDiscardedDraftExitRoute(exit, draftId), null);
+    assert.equal(createDiscardedDraftExitRoute(route, "another-draft"), null);
+  }
 });
 
 test("missing or malformed draft routes never fall through to provider identity", () => {

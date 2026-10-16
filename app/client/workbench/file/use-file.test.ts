@@ -7,6 +7,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { createProjectRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchProjectNavigation from "../navigation/workbench-project-navigation";
 
 import { FileActionContext, resolveFileOpenDestination, useFile, useFileActions, type FileOpenAction } from "./use-file";
 
@@ -33,6 +35,36 @@ test("file pills derive repo identity from the absolute target without rewriting
 const defaultPolicy = {
   openMarkdownFilesWith: "workbench", openOtherFilesWith: "vscode", openSvgFilesWith: "workbench",
 } as const;
+
+test("a sidebar Workbench file open preserves the selection in the generated URL", async () => {
+  const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const first = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000002");
+  const second = LogicalProjectIdSchema.parse("00000000-0000-4000-8000-000000000003");
+  const location = { daemonId, projectId: ProjectIdSchema.parse("folder") };
+  const projects = [{
+    id: first, label: "first", matchKey: "remote://github.com/team/first",
+    locations: [{ target: location, daemonId, hostname: "local", name: "first", rootPath: "C:/first", project: null }],
+  }, { id: second, label: "second", matchKey: "remote://github.com/team/second", locations: [] }];
+  const navigator = new WorkbenchProjectNavigation([], [], projects);
+  const current = navigator.readRoute("/first/+/second/@/");
+  let href: string | undefined;
+  const action: { current: FileOpenAction | null } = { current: null };
+  function Harness() {
+    action.current = useFileActions({
+      policy: defaultPolicy, browseLocation: location, currentProjectId: location.projectId,
+      defaultDaemon: null, selectedDaemon: null, logicalProjects: projects, route: current,
+      onInvalidLocation: () => assert.fail("Valid file location rejected."),
+      navigateToRoute: route => { href = navigator.href(route, current, "inherit"); },
+    });
+    return null;
+  }
+  renderToStaticMarkup(createElement(Harness));
+  assert.equal(await action.current?.({ path: "notes.md" }), true);
+  assert.ok(href);
+  const reopened = navigator.readRoute(href);
+  assert.deepEqual(reopened.selectedProjectIds, [first, second]);
+  assert.deepEqual(navigator.fileLocationFor(reopened), location);
+});
 
 test("file-open policy routes each file kind by its own row and keeps absolute targets external", () => {
   assert.equal(resolveFileOpenDestination({ path: "docs/a.md" }, defaultPolicy), "workbench");
