@@ -1,25 +1,29 @@
 /*
  * Default export:
- * - WorkbenchNetworkConnectionForm: display-only connection drafts and explicit safe Apply/Reset.
+ * - WorkbenchNetworkConnectionForm: connection settings card with drafts and explicit safe Apply/Reset once edited.
  */
 "use client";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkSettings } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import RadioRow from "../ui/RadioRow";
 import WorkbenchTextField from "./WorkbenchTextField";
 import PrimaryButton from "../ui/PrimaryButton";
 import IconButton from "../ui/IconButton";
+import SettingsCard, { SettingsCardRow } from "../ui/SettingsCard";
 import { ExternalLinkIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon } from "./workbench-icons";
 
 const modes = [
-  { value: "localhost", label: "localhost", ariaLabel: "Localhost only", icon: <HomeIcon className="size-4" /> },
-  { value: "tailnet-ip", label: "tailnet ip", ariaLabel: "Tailnet IP", icon: <ExternalLinkIcon className="size-4" /> },
-  { value: "tailnet-service", label: "tailnet service", ariaLabel: "Tailnet service with HTTPS", icon: <LockIcon className="size-4" /> },
+  { value: "localhost", label: "Localhost", ariaLabel: "Localhost only", icon: <HomeIcon className="size-4" /> },
+  { value: "tailnet-ip", label: "Tailnet IP", ariaLabel: "Tailnet IP", icon: <ExternalLinkIcon className="size-4" /> },
+  { value: "tailnet-service", label: "Tailnet service", ariaLabel: "Tailnet service with HTTPS", icon: <LockIcon className="size-4" /> },
 ] as const;
 type Draft = { mode: WorkbenchNetworkSettings["mode"]; localPort: string; tailnetPort: string; label: string };
 
-export default function WorkbenchNetworkConnectionForm() {
+export default function WorkbenchNetworkConnectionForm({ children }: {
+  /** Status rows shown above the editable connection rows in the same card. */
+  children?: ReactNode;
+}) {
   const network = useWorkbenchNetwork();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [working, setWorking] = useState(false);
@@ -45,7 +49,7 @@ export default function WorkbenchNetworkConnectionForm() {
     catch (failure) { setError(failure instanceof Error ? failure.message : "Connection settings could not be saved."); }
     finally { setWorking(false); }
   }
-  return <form className="flex flex-col gap-4" onSubmit={event => {
+  return <form className="flex flex-col gap-3" onSubmit={event => {
     event.preventDefault();
     if (disabled) return;
     void run(() => network.client.changeSettings({
@@ -53,32 +57,39 @@ export default function WorkbenchNetworkConnectionForm() {
       ...(value.mode === "tailnet-service" ? { label: value.label } : {}),
     }));
   }}>
-    <div className="flex flex-wrap items-center gap-3">
-      <span className="text-sm text-text">Connection type</span>
-      <RadioRow ariaLabel="Connection type" options={modes.filter(mode => mode.value !== "localhost" || snapshot.capabilities?.trustHost)}
-        value={value.mode} disabled={disabled} onChange={mode => edit({ mode })} />
-    </div>
-    <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-      <label className="flex items-center gap-3 text-sm text-text" htmlFor="workbench-local-port">Local port
-        <WorkbenchTextField id="workbench-local-port" type="number" min={1} max={65535} required value={value.localPort}
-          className="w-28" disabled={disabled || !snapshot.localPort?.editable} onChange={event => edit({ localPort: event.currentTarget.value })} />
-      </label>
-      <label className="flex items-center gap-3 text-sm text-fg/muted" htmlFor="workbench-tailnet-port">Tailnet port
-        <WorkbenchTextField id="workbench-tailnet-port" type="number" min={1} max={65535} required value={value.tailnetPort}
-          className="w-28" disabled={disabled} onChange={event => edit({ tailnetPort: event.currentTarget.value })} />
-      </label>
-    </div>
-    {value.mode === "tailnet-service" ? <label className="flex flex-wrap items-center gap-3 text-sm text-text" htmlFor="workbench-machine-name">Machine name
-      <WorkbenchTextField id="workbench-machine-name" value={value.label} required maxLength={60} pattern="[a-z0-9]([a-z0-9-]{0,58}[a-z0-9])?"
-        autoComplete="off" className="w-52 max-w-full" disabled={disabled} onChange={event => edit({ label: event.currentTarget.value })} />
-      <span className="text-xs text-fg/muted">{value.label || "<machine>"}.wb.inthedark.boo</span>
-    </label> : null}
-    {!snapshot.localPort?.editable && snapshot.localPort ? <p className="m-0 text-xs text-fg/muted">Local port is controlled by WORKBENCH_APP_PORT.</p> : null}
+    <SettingsCard label="This app">
+      {children}
+      <SettingsCardRow label="Reachable via">
+        <RadioRow ariaLabel="Connection type" size="comfortable" options={modes.filter(mode => mode.value !== "localhost" || snapshot.capabilities?.trustHost)}
+          value={value.mode} disabled={disabled} onChange={mode => edit({ mode })} />
+      </SettingsCardRow>
+      {value.mode === "tailnet-service" ? <SettingsCardRow label={<label htmlFor="workbench-machine-name">Private name</label>}>
+        <span className="flex min-w-0 items-center">
+          <WorkbenchTextField id="workbench-machine-name" variant="flush" value={value.label} required maxLength={60}
+            pattern="[a-z0-9]([a-z0-9-]{0,58}[a-z0-9])?" autoComplete="off" spellCheck={false}
+            className="field-sizing-content min-w-16 max-w-full pr-0.5" disabled={disabled} onChange={event => edit({ label: event.currentTarget.value })} />
+          <span className="text-fg/muted">.wb.inthedark.boo</span>
+        </span>
+      </SettingsCardRow> : null}
+      <SettingsCardRow label="Ports">
+        <label className="flex items-center gap-2" htmlFor="workbench-local-port">Local
+          <WorkbenchTextField id="workbench-local-port" variant="flush" type="number" min={1} max={65535} required value={value.localPort}
+            className="w-20 tabular-nums" disabled={disabled || !snapshot.localPort?.editable}
+            title={snapshot.localPort && !snapshot.localPort.editable ? "Set by WORKBENCH_APP_PORT" : undefined}
+            onChange={event => edit({ localPort: event.currentTarget.value })} />
+        </label>
+        <label className={`flex items-center gap-2 ${value.mode === "localhost" ? "text-fg/muted" : ""}`} htmlFor="workbench-tailnet-port">Tailnet
+          <WorkbenchTextField id="workbench-tailnet-port" variant="flush" type="number" min={1} max={65535} required value={value.tailnetPort}
+            className="w-20 tabular-nums" disabled={disabled} onChange={event => edit({ tailnetPort: event.currentTarget.value })} />
+        </label>
+      </SettingsCardRow>
+      {dirty ? <SettingsCardRow>
+        <span className="flex-1 text-fg/muted">Unsaved connection changes</span>
+        <IconButton type="submit" size="small" display="hover-border" label="Apply connection settings" disabled={disabled}><SaveIcon className="size-4" /></IconButton>
+        <IconButton size="small" display="hover-border" label="Reset connection changes" disabled={busy} onClick={() => { setDraft(null); setError(""); }}><ResetIcon className="size-4" /></IconButton>
+      </SettingsCardRow> : null}
+    </SettingsCard>
     {!snapshot.capabilities?.settingsApply ? <p role="status" className="m-0 text-sm text-fg/muted">Reload client:network, then refresh to use the updated connection controls.</p> : null}
-    <div className="flex items-center gap-2">
-      <IconButton type="submit" label="Apply connection settings" disabled={disabled || !dirty}><SaveIcon className="size-4" /></IconButton>
-      <IconButton label="Reset connection changes" disabled={busy || !draft} onClick={() => { setDraft(null); setError(""); }}><ResetIcon className="size-4" /></IconButton>
-    </div>
     {snapshot.change ? <div className="flex flex-col gap-2 text-sm">
       <p className="m-0 text-fg/muted">{snapshot.change.phase === "failed"
         ? "Some settings may already be saved. This address remains available; retry to finish applying."

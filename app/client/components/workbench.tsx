@@ -1444,6 +1444,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const selectedSettingsProject = selectionProjectIds.length === 1
     ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
     : null;
+  /** The sidebar's project selection bounds what settings can reach; no selection reaches every project. */
+  const settingsReachableProjects = selectionProjectIds.length
+    ? (displayedLogicalProjects ?? []).filter(project => selectionProjectIds.includes(project.id))
+    : displayedLogicalProjects ?? [];
   const showStatsView = route.view === "stats";
   const showGitView = route.view === "git";
   const showFullBleedMainView = showMosaicView;
@@ -2574,9 +2578,10 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       workbenchClient.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId,
                     ).data ?? null}
                     daemons={presentationState?.data?.daemons ?? []}
-                    folders={selectedSettingsProject
-                      ? projectFolderOptions([selectedSettingsProject])
-                      : []}
+                    folders={projectFolderOptions(settingsReachableProjects)}
+                    projects={settingsReachableProjects.map(project => ({
+                      id: project.id, label: project.displayName ?? project.label, iconProject: project,
+                    }))}
                     getDaemon={daemonId => workbenchClient.mounted?.workspace.daemon({ kind: "installation", daemonId }) ?? null}
                     getFolderDaemon={location => workbenchClient.mounted?.workspace.daemon({ kind: "folder", location }) ?? null}
                     logicalProject={selectedSettingsProject ? {

@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - VoiceSettingsSnapshot: acknowledged configuration and catalogue/preparation state.
+ * - VoiceSettingsSnapshot: acknowledged configuration, installed-harness model catalogues and preparation state.
  * - default VoiceSettingsController: ordered voice settings, stale-response fencing and disposal.
  */
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
-import { defaultProviderKey, installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { createVoiceConfiguration, readVoiceModelSelection, type VoiceModelSelection } from "workbench-shared/workbench/voice/voice-session-contract";
 import type WorkbenchClientStateController from "../state/WorkbenchClientStateController";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
@@ -13,12 +13,11 @@ import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/
 
 export interface VoiceSettingsSnapshot {
   selection: VoiceModelSelection | null;
-  harness: WorkbenchHarness;
   status: "loading" | "saving" | "disabled" | "preparing" | "ready" | "failed";
   error: string;
-  models: readonly WorkbenchModelOption[];
-  catalogue: "idle" | "loading" | "ready" | "failed";
-  catalogueError: string;
+  /** Visible models per installed harness; a harness whose catalogue failed keeps its last loaded models. */
+  catalogues: Partial<Record<WorkbenchHarness, readonly WorkbenchModelOption[]>>;
+  cataloguesLoading: boolean;
   inputEnabled: boolean;
   canToggle: boolean;
   recordAudio: boolean;
@@ -26,8 +25,8 @@ export interface VoiceSettingsSnapshot {
 
 export default class VoiceSettingsController {
   private snapshot: VoiceSettingsSnapshot = {
-    selection: null, harness: defaultProviderKey, status: "loading", error: "",
-    models: [], catalogue: "idle", catalogueError: "",
+    selection: null, status: "loading", error: "",
+    catalogues: {}, cataloguesLoading: false,
     inputEnabled: true, canToggle: false, recordAudio: false,
   };
   private readonly listeners = new Set<() => void>();
@@ -66,28 +65,18 @@ export default class VoiceSettingsController {
       if (!this.current(revision)) return;
       const selection = readVoiceModelSelection(await this.daemon.voice.configuration.read());
       if (!this.current(revision)) return;
-      if (selection && selection.harness !== this.snapshot.harness) this.resetCatalogue(selection.harness);
       this.publish({ selection });
       await this.prepareSelection(revision);
     } catch (error) { this.failConfiguration(revision, error); }
   }
 
-  async selectHarness(harness: WorkbenchHarness) {
-    if (!installedProviderKeys.some(key => key === harness)) {
-      this.failConfiguration(++this.configurationRevision, new Error("The voice harness is not installed."));
+  async selectModel(harness: WorkbenchHarness, model: string) {
+    if (!installedProviderKeys.some(key => key === harness)
+      || !this.snapshot.catalogues[harness]?.some(option => option.id === model)) {
+      this.failConfiguration(++this.configurationRevision, new Error("That voice model is no longer available."));
       return;
     }
-    if (harness === this.snapshot.harness) return;
-    this.resetCatalogue(harness);
-    await this.select(null);
-  }
-
-  async selectModel(model: string) {
-    if (this.snapshot.catalogue !== "ready" || !this.snapshot.models.some(option => option.id === model && !option.hidden)) {
-      this.failConfiguration(++this.configurationRevision, new Error("The voice model is no longer available. Refresh the model list."));
-      return;
-    }
-    await this.select({ harness: this.snapshot.harness, model });
+    await this.select({ harness, model });
   }
 
   disable = () => this.setEnabled(false);
@@ -102,26 +91,27 @@ export default class VoiceSettingsController {
     } catch (error) { this.failConfiguration(this.configurationRevision, error); }
   }
 
+  /** Loads every installed harness catalogue together; one harness failing leaves the others selectable. */
   async loadModels() {
     const revision = ++this.catalogueRevision;
-    const harness = this.snapshot.harness;
-    this.publish({ catalogue: "loading", catalogueError: "" });
-    try {
-      const result = await this.daemon.models.list(harness);
-      if (this.disposed || revision !== this.catalogueRevision) return;
-      this.publish({ models: result.data, catalogue: "ready" });
-    } catch (error) {
-      if (error instanceof WorkbenchRpcRequestInterruptedError && (this.disposed || revision !== this.catalogueRevision)) return;
-      console.warn("[voice] model catalogue could not load");
-      if (this.disposed || revision !== this.catalogueRevision) return;
-      this.publish({ catalogue: "failed", catalogueError: this.message(error) });
-    }
+    this.publish({ cataloguesLoading: true });
+    await Promise.all(installedProviderKeys.map(async harness => {
+      try {
+        const result = await this.daemon.models.list(harness);
+        if (this.disposed || revision !== this.catalogueRevision) return;
+        this.publish({ catalogues: { ...this.snapshot.catalogues, [harness]: result.data.filter(model => !model.hidden) } });
+      } catch (error) {
+        if (this.disposed || revision !== this.catalogueRevision) return;
+        console.warn(`[voice] ${harness} model catalogue could not load`);
+      }
+    }));
+    if (!this.disposed && revision === this.catalogueRevision) this.publish({ cataloguesLoading: false });
   }
 
   disconnect() {
     ++this.configurationRevision;
     ++this.catalogueRevision;
-    this.publish({ status: "loading", error: "", catalogue: "idle", models: [] });
+    this.publish({ status: "loading", error: "", cataloguesLoading: false });
   }
 
   dispose() {
@@ -164,10 +154,6 @@ export default class VoiceSettingsController {
     });
   }
 
-  private resetCatalogue(harness: WorkbenchHarness) {
-    ++this.catalogueRevision;
-    this.publish({ harness, models: [], catalogue: "idle", catalogueError: "" });
-  }
   private current(revision: number) { return !this.disposed && revision === this.configurationRevision; }
   private failConfiguration(revision: number, error: unknown) {
     if (error instanceof WorkbenchRpcRequestInterruptedError && !this.current(revision)) return;

@@ -29,6 +29,31 @@ test("edits persist in order and keep unrelated thresholds when the checkbox cha
   owner.dispose();
 });
 
+test("queued edits show immediately and a failed edit falls back without dropping later ones", async () => {
+  const gate = Promise.withResolvers<void>();
+  let stored = { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS };
+  const owner = new ThreadAutoCompactSettingsController({
+    read: async () => ({ settings: stored }),
+    update: async ({ settings }) => {
+      await gate.promise;
+      if (settings.idleMinutes) throw new Error("idle refused");
+      stored = { ...stored, ...settings };
+      return { settings: stored };
+    },
+  });
+  await owner.load();
+  const first = owner.update({ idleMinutes: 60 });
+  const second = owner.update({ tokenThreshold: 500_000 });
+  assert.deepEqual(owner.getSnapshot().settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, idleMinutes: 60, tokenThreshold: 500_000 });
+  gate.resolve();
+  await first;
+  assert.match(owner.getSnapshot().error, /idle refused/);
+  assert.deepEqual(owner.getSnapshot().settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, tokenThreshold: 500_000 });
+  await second;
+  assert.deepEqual(owner.getSnapshot().settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, tokenThreshold: 500_000 });
+  owner.dispose();
+});
+
 test("a retired settings selection ignores its outstanding load", async () => {
   const started = Promise.withResolvers<void>();
   const reply = Promise.withResolvers<{ settings: typeof DEFAULT_THREAD_AUTO_COMPACT_SETTINGS }>();

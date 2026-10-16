@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default StepSlider: stepped settings range, with optional compact track/value presentation.
+ * - default StepSlider: bordered stepped settings range with every step's dot and label visible.
  */
 
 "use client";
@@ -10,7 +10,6 @@ import WorkbenchRangeInput from "../workbench/WorkbenchRangeInput";
 type StepSliderProps<T extends number> = {
   ariaLabel: string;
   disabled?: boolean;
-  compact?: boolean;
   onChange: (value: T) => void;
   steps: Array<{
     label: string;
@@ -30,27 +29,12 @@ function getClosestStepIndex<T extends number> (steps: Array<{ value: T }>, valu
 export default function StepSlider<T extends number> ({
   ariaLabel,
   disabled = false,
-  compact = false,
   onChange,
   steps,
   value,
 }: StepSliderProps<T>) {
   const activeIndex = getClosestStepIndex(steps, value);
   const maxIndex = Math.max(0, steps.length - 1);
-
-  if (compact) return <div className="flex min-w-0 items-center gap-2" title={ariaLabel}>
-    <WorkbenchRangeInput
-      aria-label={ariaLabel}
-      aria-valuetext={steps[activeIndex].label}
-      className="h-8 w-24 min-w-0 sm:w-28"
-      disabled={disabled}
-      min={0} max={maxIndex} step={1} value={activeIndex}
-      onChange={event => onChange((steps[Number.parseInt(event.target.value, 10)] ?? steps[activeIndex]).value)}
-    />
-    <span aria-hidden="true" className="min-w-[5ch] text-right font-mono text-xs tabular-nums text-fg/muted">
-      {steps[activeIndex].label}
-    </span>
-  </div>;
 
   return (
     <div
@@ -60,7 +44,7 @@ export default function StepSlider<T extends number> ({
     >
       <div className="relative px-1 pt-1">
         <div className="pointer-events-none absolute right-1 left-1 top-[0.9rem] flex justify-between">
-          {steps.map((step, index) => (
+          {steps.map((step) => (
             <span
               key={step.value}
               aria-hidden="true"

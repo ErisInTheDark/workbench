@@ -160,7 +160,9 @@ export default class WorkbenchWorkspaceClient {
     }
   }
 
+  /** Daemon requests are never sent while the app connection is down; they wait for it instead of failing unsent. */
   async request<Result>(method: string, params: object, scope?: WorkspaceScope): Promise<Result> {
+        await this.connect();
         if (method === "thread/identity/resolve") {
           const target = z.object({ threadId: ThreadReferenceSchema }).parse(params);
           const observation = this.observe({ kind: "threadOwner", threadId: target.threadId });

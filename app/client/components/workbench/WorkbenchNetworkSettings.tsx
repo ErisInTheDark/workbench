@@ -1,28 +1,44 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: render one connection mode, its address controls and contextual setup.
+ * - WorkbenchNetworkSettings: "This app" (status, setup, connection) and "Other devices" (address, shared access) sections.
  */
 "use client";
 import { useContext, useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
+import Disclosure from "../ui/Disclosure";
+import FormSection from "../ui/FormSection";
 import PrimaryButton from "../ui/PrimaryButton";
+import SettingsCard, { SettingsCardRow } from "../ui/SettingsCard";
 import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import IconButton from "../ui/IconButton";
+import LoaderIcon from "./LoaderIcon";
 import WorkbenchNetworkAccessSettings from "./WorkbenchNetworkAccessSettings";
-import WorkbenchDaemonDiscovery from "./WorkbenchDaemonDiscovery";
 import WorkbenchNetworkConnectionForm from "./WorkbenchNetworkConnectionForm";
 import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
-import Disclosure from "../ui/Disclosure";
-import { CheckIcon, ExternalLinkIcon } from "./workbench-icons";
+import { CheckIcon, ExternalLinkIcon, TriangleAlertIcon } from "./workbench-icons";
+
+function Address({ label, url }: { label: string; url: string }) {
+  return <span className="flex min-w-0 items-center gap-1">
+    <a className="min-w-0 break-all font-mono text-[0.8rem] text-accent" href={url} target="_blank" rel="noreferrer">{url}</a>
+    <WorkbenchCopyButton label={`Copy ${label}`} text={url} />
+    <IconButton as="a" label={`Open ${label}`} size="small" display="hover-border" href={url} target="_blank" rel="noreferrer">
+      <ExternalLinkIcon className="size-4" />
+    </IconButton>
+  </span>;
+}
 
 function NetworkSettingsContent () {
   const network = useWorkbenchNetwork();
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const snapshot = network.snapshot;
-  if (!snapshot) return <p className="text-sm text-fg/muted" role="status">{network.error ?? "Loading networking..."}</p>;
+  if (!snapshot) {
+    return <FormSection id="settings-connection" title="Connection">
+      <p className="m-0 text-sm text-fg/muted" role="status">{network.error ?? "Loading networking..."}</p>
+    </FormSection>;
+  }
   const mode = workbenchNetworkMode(snapshot.configuration);
   const privateAccess = snapshot.configuration.privateAccess;
   const status = snapshot.runtime;
@@ -35,76 +51,78 @@ function NetworkSettingsContent () {
       : status.hostServe.url ?? window.location.origin;
   const appUrl = rawUrl ? new URL("/launch", rawUrl).href : null;
   const tailnetUrl = status.hostServe.url ? new URL("/launch", status.hostServe.url).href : null;
-  const discoverable = mode !== "localhost" && status.daemonServe?.phase === "ready";
-  const connectionReady = mode === "localhost" || (service ? httpsReady : status.hostServe.phase === "ready");
-  const connectionStatus = mode === "localhost" ? "Local only"
+  const attention = service
+    ? !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
+    : mode !== "localhost" && status.hostServe.phase !== "ready";
+  const connectionStatus = mode === "localhost" ? "Only this computer"
     : service ? httpsReady ? "HTTPS ready"
       : network.verification.phase === "checking" ? "Checking HTTPS..."
-        : network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available
-          ? "HTTPS needs attention" : "Setting up HTTPS"
+        : attention ? "HTTPS needs attention" : "Setting up HTTPS..."
       : status.hostServe.phase === "ready" ? "Tailnet ready" : "Tailnet connection needs attention";
+  const messages = [
+    mode !== "localhost" ? status.daemonServe?.message : null,
+    mode !== "localhost" ? status.hostServe.message : null,
+    snapshot.configuration.rename ? `Changing address to ${snapshot.configuration.rename.to}.wb.inthedark.boo...` : null,
+  ].filter((message): message is string => Boolean(message));
+  const failures = [network.error, snapshot.failure, error, mode !== "localhost" ? snapshot.executable.message : null]
+    .filter((message, index, all): message is string => Boolean(message) && all.indexOf(message) === index);
+  const otherDevices = mode !== "localhost" && tailnetUrl && network.client.canAccessFromAnotherDevice();
 
-  async function act (action: WorkbenchNetworkAction, applied?: () => void | Promise<void>) {
+  async function act (action: WorkbenchNetworkAction) {
     setWorking(true);
     setError("");
-    try { await network.client.action(action); await applied?.(); }
+    try { await network.client.action(action); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Networking could not be updated."); }
     finally { setWorking(false); }
   }
 
-  return (
-    <section id="settings-connection" className="max-w-3xl scroll-mt-24 space-y-5 py-1">
-      <header className="flex flex-wrap items-center gap-5">
-        <p role="status" className="m-0 flex flex-wrap items-center gap-2 text-sm text-fg/muted">
-          {connectionReady ? <CheckIcon className="size-4 text-success" /> : null}
-          <span>{connectionStatus}{mode !== "localhost" ? discoverable ? " · discoverable" : " · not discoverable" : ""}</span>
-        </p>
-      </header>
-      <div className="space-y-3">
-        {mode !== "localhost" && status.daemonServe?.message ? <p className="m-0 text-fg/muted">{status.daemonServe.message}</p> : null}
-        {mode !== "localhost" && status.hostServe.message ? <p className="m-0 text-fg/muted">{status.hostServe.message}</p> : null}
-        {snapshot.configuration.rename ? <p className="m-0 text-fg/muted">Changing address to {snapshot.configuration.rename.to}.wb.inthedark.boo...</p> : null}
-        {[network.error, snapshot.failure, error].filter((message, index, all) => message && all.indexOf(message) === index)
-          .map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
-        {mode !== "localhost" && snapshot.executable.message ? <p role="alert" className="m-0 text-danger">{snapshot.executable.message}</p> : null}
+  return <>
+    <FormSection id="settings-connection" title="This app">
+      <div className="space-y-3 py-1">
         {service && privateAccess ? <WorkbenchPrivateAccessWizard /> : null}
-        {!privateAccess && service ? <p className="m-0 text-fg/muted">Apply a machine name to begin private HTTPS setup.</p> : null}
-        {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed" ? <PrimaryButton disabled={busy || !editable}
-          onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
         {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
-        <WorkbenchNetworkConnectionForm />
-        <div id="settings-daemons" className="scroll-mt-24"><WorkbenchDaemonDiscovery /></div>
-        <div className="flex flex-wrap items-center gap-2 text-sm"><span>App URL</span>
-          {appUrl ? <>
-            <a className="min-w-0 break-all font-mono text-accent" href={appUrl} target="_blank" rel="noreferrer">{appUrl}</a>
-            <WorkbenchCopyButton label="Copy app address" text={appUrl} />
-            <IconButton as="a" label="Open app" size="small" display="hover-border" href={appUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></IconButton>
-          </> : <span className="text-fg/muted">not yet available</span>}
-        </div>
-        {service && tailnetUrl ? <Disclosure summary="Access this app from another device" contentClassName="flex flex-col gap-2 pt-3">
-          {network.client.canAccessFromAnotherDevice() ? <>
-            <p className="m-0 text-fg/muted">Open this address on the other device, then download and trust the certificate in Networking.</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-fg/muted">Tailnet IP access</span>
-              <code className="min-w-0 break-all text-text">{tailnetUrl}</code>
-              <WorkbenchCopyButton label="Copy tailnet IP address" text={tailnetUrl} />
-              <IconButton as="a" label="Open tailnet IP address" size="small" display="hover-border" href={tailnetUrl} target="_blank" rel="noreferrer"><ExternalLinkIcon className="size-4" /></IconButton>
+        <WorkbenchNetworkConnectionForm>
+          <SettingsCardRow label="Status">
+            <span role="status" className="flex items-center gap-2 text-text">
+              {attention ? <TriangleAlertIcon className="size-4 text-[color:var(--attention)]" />
+                : service && !httpsReady ? <LoaderIcon size={14} />
+                  : <CheckIcon className="size-4 text-success" />}
+              {connectionStatus}
+            </span>
+            {busy && editable ? <PrimaryButton shape="compact" className="ml-auto"
+              onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>
+              Cancel
+            </PrimaryButton> : null}
+          </SettingsCardRow>
+          {appUrl ? <SettingsCardRow label="App address"><Address label="app address" url={appUrl} /></SettingsCardRow> : null}
+          {messages.length || failures.length ? <SettingsCardRow>
+            <div className="space-y-1">
+              {messages.map(message => <p key={message} className="m-0 text-fg/muted">{message}</p>)}
+              {failures.map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
             </div>
-            <WorkbenchQrCode text={tailnetUrl} />
-          </> : <p className="m-0 text-fg/muted">Enable another device for this app under Shared network → App access.</p>}
-        </Disclosure> : null}
-        {snapshot.configuration.group ? <div id="settings-app-access" className="scroll-mt-24">
-          <Disclosure summary="Shared network" contentClassName="pt-3">
-            <WorkbenchNetworkAccessSettings />
-          </Disclosure>
-        </div> : null}
-        {busy && editable ? <PrimaryButton
-          onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>
-          Cancel pending action
-        </PrimaryButton> : null}
+          </SettingsCardRow> : null}
+          {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed" ? <SettingsCardRow>
+            <PrimaryButton shape="compact" disabled={busy || !editable} onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton>
+          </SettingsCardRow> : null}
+        </WorkbenchNetworkConnectionForm>
       </div>
-    </section>
-  );
+    </FormSection>
+    <FormSection id="settings-app-access" title="Other devices">
+      <div className="py-1">
+        {mode === "localhost"
+          ? <p className="m-0 text-sm text-fg/muted">Only this computer can open the app. Use a tailnet connection to reach it from other devices.</p>
+          : <SettingsCard label="Other devices">
+            {tailnetUrl ? <SettingsCardRow label="Open at">
+              {otherDevices ? <div className="min-w-0 space-y-1">
+                <Address label="tailnet address" url={tailnetUrl} />
+                <Disclosure summary="QR code" className="text-fg/muted" contentClassName="pt-2"><WorkbenchQrCode text={tailnetUrl} /></Disclosure>
+              </div> : <span className="text-fg/muted">Allow other devices below to open this app.</span>}
+            </SettingsCardRow> : null}
+            {snapshot.configuration.group ? <WorkbenchNetworkAccessSettings /> : null}
+          </SettingsCard>}
+      </div>
+    </FormSection>
+  </>;
 }
 
 export default function WorkbenchNetworkSettings () {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default RadioRow: render a compact pill row of mutually exclusive Workbench modes.
+ * - default RadioRow: render a compact or comfortable pill row of mutually exclusive Workbench modes.
  */
 "use client";
 
@@ -20,12 +20,15 @@ export default function RadioRow<T extends string>({
   disabled = false,
   onChange,
   options,
+  size = "compact",
   value,
 }: {
   ariaLabel: string;
   disabled?: boolean;
   onChange: (value: T) => void;
   options: readonly RadioRowOption<T>[];
+  /** `compact` shrinks with toolbar text; `comfortable` stays readable inside settings rows. */
+  size?: "compact" | "comfortable";
   value: T;
 }) {
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -59,9 +62,14 @@ export default function RadioRow<T extends string>({
             type="button"
             aria-checked={selected}
             aria-label={option.ariaLabel}
-            className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 py-1 text-[0.78em] font-medium leading-none transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 ${selected
-              ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text"
-              : "border-transparent hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}`}
+            className={`
+              inline-flex min-w-0 items-center gap-1 rounded-full border font-medium leading-none transition
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45
+              ${size === "comfortable" ? "px-2.5 py-1.5 text-detail" : "px-2 py-1 text-[0.78em]"}
+              ${selected
+                ? "border-[color-mix(in_srgb,var(--text)_22%,transparent)] bg-[color-mix(in_srgb,var(--bg)_82%,transparent)] text-text"
+                : "border-transparent hover:bg-[color-mix(in_srgb,var(--text)_4%,transparent)] hover:text-text"}
+            `}
             disabled={disabled || option.disabled}
             key={option.value}
             onClick={() => onChange(option.value)}
@@ -72,7 +80,7 @@ export default function RadioRow<T extends string>({
             title={option.title}
           >
             {option.icon ?? null}
-            <span className="truncate">{option.label}</span>
+            <span className="-my-[0.15em] truncate py-[0.15em]">{option.label}</span>
           </button>
         );
       })}

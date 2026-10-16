@@ -51,7 +51,7 @@ export default function WorkbenchSettingsPreferences({
     return <section key={key} className="relative space-y-3 py-3">
       <div>
         <h3 className="m-0 text-sm font-semibold text-text">{definition.label}</h3>
-        {definition.description ? <p className="m-0 mt-1 text-xs leading-5 text-fg/muted">{definition.description}</p> : null}
+        {definition.description ? <p className="m-0 mt-1 text-detail text-fg/muted">{definition.description}</p> : null}
       </div>
       {key === "editorFontSize"
         ? <StepSlider ariaLabel={definition.label} disabled={unavailable}

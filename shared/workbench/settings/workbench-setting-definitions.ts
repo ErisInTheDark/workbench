@@ -68,7 +68,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   },
   composerSpellCheck: { description: "Controls spellcheck in thread composers and questionnaire text answers.", key: "composerSpellCheck", label: "Composer spellcheck", type: "boolean" },
   editorFontFamily: {
-    description: "Controls the body font used by the rich markdown editor.", key: "editorFontFamily", label: "Editor font", type: "select",
+    description: "Controls the body font used by the rich markdown editor.", key: "editorFontFamily", label: "Markdown editor font", type: "select",
     options: [
       { description: "Agentic default for technical editing.", label: "Sans", value: "sans" },
       { description: "Story-writing style with a literary feel.", label: "Serif", value: "serif" },
@@ -104,7 +104,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   theme: {
     columns: "two", description: "Controls Workbench colors and font personality.", key: "theme", label: "Theme", type: "select",
     options: [
-      { description: "Current quiet Workbench colors and fonts.", label: "Default", value: "default" },
+      { description: "Quiet Workbench colors and fonts.", label: "Default", value: "default" },
       { description: "Pink sparkles with Sour Gummy and Comic Code Light.", label: "Magical girl mode", value: "magical-girl" },
       { description: "Snowy day and night colors with the normal Workbench fonts.", label: "Winter", value: "winter" },
     ],

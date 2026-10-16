@@ -2,8 +2,6 @@
  * Exports:
  * - default ThreadProfileEditor: profile customisation popup sharing authoritative profile settings.
  * - formatProfileContext: context cap label without losing 1K precision.
- * - profileContextColour: context slider colour through six ordered stops.
- * - profileEffortColour: faint-to-saturated accent for effort.
  */
 "use client";
 import { useId, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -20,6 +18,7 @@ import { useWorkbenchComposerProfiles } from "../WorkbenchComposerProfileContext
 import IconButton from "../../ui/IconButton";
 import WorkbenchPopover from "../WorkbenchPopover";
 import PressDragSlider from "../../ui/PressDragSlider";
+import { sliderAccentColour, sliderSpectrumColour } from "../../ui/slider-colours";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadAgentPicker from "./ThreadAgentPicker";
 import ThreadComposerPickerHeader from "./ThreadComposerPickerHeader";
@@ -30,15 +29,6 @@ import ThreadProfilePicker from "./ThreadProfilePicker";
 
 export function formatProfileContext (tokens: number) {
   return tokens >= 1_000_000 ? `${Number((tokens / 1_000_000).toFixed(3))}M` : `${Math.round(tokens / 1000)}K`;
-}
-export function profileEffortColour (fraction: number) {
-  return `color-mix(in srgb,var(--accent) ${20 + fraction * 80}%,transparent)`;
-}
-export function profileContextColour (fraction: number) {
-  const stops = ["#3b82f6", "#22c55e", "#eab308", "#f97316", "#ef4444", "#9ca3af"];
-  const position = Math.max(0, Math.min(1, fraction)) * (stops.length - 1);
-  const index = Math.floor(position);
-  return `color-mix(in srgb,${stops[index]} ${(1 - (position - index)) * 100}%,${stops[Math.min(index + 1, stops.length - 1)]})`;
 }
 
 export default function ThreadProfileEditor ({
@@ -191,7 +181,7 @@ export default function ThreadProfileEditor ({
         {showsEffort || showsFastMode || capability ? <div className="grid [grid-template-columns:auto_1fr_auto_auto] pr-3">
           {showsEffort ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Effort</span>
-            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
+            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:effort`} label="Reasoning effort" min={0} max={efforts.length - 1} step={1} value={Math.max(0, efforts.indexOf(settings.reasoningEffort ?? ""))} valueText={settings.reasoningEffort ?? "Default"} valueOptions={["Default", ...efforts]} format={(index) => efforts[index] ?? ""} colour={sliderAccentColour} onChange={(index) => update({ reasoningEffort: efforts[index] })} />
           </div> : null}
           {showsFastMode ? <IconButton
             size="small"
@@ -203,7 +193,7 @@ export default function ThreadProfileEditor ({
           ><ZapIcon size={16} className={settings.serviceTier === "fast" ? "fill-current" : undefined} /></IconButton> : null}
           {capability ? <div className="grid grid-cols-subgrid col-span-3 min-w-0 items-center gap-3 px-4 py-0.5 text-sm">
             <span className="text-fg/muted">Context</span>
-            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={profileContextColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
+            <PressDragSlider presentation="inline" subgrid={true} key={`${settings.harness}:${settings.model}:context`} label="Context window" min={contextWindowFloor(capability)} max={capability.maximumTokens} step={1000} value={settings.contextWindowTokens ?? capability.defaultTokens} format={formatProfileContext} colour={sliderSpectrumColour} onChange={(contextWindowTokens) => update({ contextWindowTokens })} />
           </div> : null}
         </div> : null}
         {block("agent", "Agent definition", state.agents.find((entry) => entry.path === settings.agentPath)?.name ?? getWorkbenchAgentPathLabel(settings.agentPath) ?? "Default agent", <ThreadAgentPicker

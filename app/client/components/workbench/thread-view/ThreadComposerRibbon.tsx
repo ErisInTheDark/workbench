@@ -8,7 +8,8 @@ import type { ReactNode } from "react";
 import { contextWindowFloor } from "workbench-shared/workbench/thread/thread-profile";
 import { ZapIcon } from "../workbench-icons";
 import PressDragSlider from "../../ui/PressDragSlider";
-import { formatProfileContext, profileContextColour, profileEffortColour } from "./ThreadProfileEditor";
+import { sliderAccentColour, sliderSpectrumColour } from "../../ui/slider-colours";
+import { formatProfileContext } from "./ThreadProfileEditor";
 
 export default function ThreadComposerRibbon({
   agentControl,
@@ -54,12 +55,12 @@ export default function ThreadComposerRibbon({
       {modelControl}
       {context ? <>
         <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-        <PressDragSlider key={`${modelId}:context`} label="Context window" min={contextWindowFloor(context)} max={context.maximumTokens} step={1000} value={context.value} format={formatProfileContext} colour={profileContextColour} onChange={onContextChange} />
+        <PressDragSlider key={`${modelId}:context`} label="Context window" min={contextWindowFloor(context)} max={context.maximumTokens} step={1000} value={context.value} format={formatProfileContext} colour={sliderSpectrumColour} onChange={onContextChange} />
       </> : null}
       {showsReasoningEffortControl && supportedReasoningEfforts.length ? (
         <>
           <span className="w-px bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" aria-hidden="true" />
-          <PressDragSlider key={`${modelId}:effort`} label="Reasoning effort" min={0} max={supportedReasoningEfforts.length - 1} step={1} value={Math.max(0, supportedReasoningEfforts.indexOf(currentReasoningEffort ?? ""))} valueText={currentReasoningEffort ?? "Default"} format={(index) => supportedReasoningEfforts[index] ?? ""} colour={profileEffortColour} onChange={(index) => onReasoningEffortChange(supportedReasoningEfforts[index])} />
+          <PressDragSlider key={`${modelId}:effort`} label="Reasoning effort" min={0} max={supportedReasoningEfforts.length - 1} step={1} value={Math.max(0, supportedReasoningEfforts.indexOf(currentReasoningEffort ?? ""))} valueText={currentReasoningEffort ?? "Default"} format={(index) => supportedReasoningEfforts[index] ?? ""} colour={sliderAccentColour} onChange={(index) => onReasoningEffortChange(supportedReasoningEfforts[index])} />
         </>
       ) : null}
       {showsFastModeControl ? (

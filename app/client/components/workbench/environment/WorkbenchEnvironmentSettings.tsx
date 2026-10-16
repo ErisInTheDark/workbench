@@ -76,7 +76,7 @@ export default function WorkbenchEnvironmentSettings({ daemonId, projectId }: { 
   return <div className="space-y-5 py-3">
     <section className="space-y-2">
       <h3 className="m-0 text-sm font-semibold text-text">Store</h3>
-      <p className="m-0 text-[0.8rem] leading-5 text-fg/muted">Encrypted for this folder on its device. Reference values as <code>{"${wb:KEY}"}</code> in .env files.</p>
+      <p className="m-0 text-detail text-fg/muted">Encrypted for this folder on its device. Reference values as <code>{"${wb:KEY}"}</code> in .env files.</p>
       <InputList kind="pairs" idPrefix="project-store" rowLabel="Store entry" keyPlaceholder="KEY" placeholder="value"
         disabled={store.state.status === "loading"} errors={store.state.issues}
         rows={store.state.rows} onRowsChange={rows => store.controller.setRows(rows)} />

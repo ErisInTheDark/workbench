@@ -65,7 +65,7 @@ test("voice enables only after a complete selection is saved and prepared", asyn
   await controller.ready;
   assert.equal(controller.enabled, false);
   await controller.loadModels();
-  const selecting = controller.selectModel(model.id);
+  const selecting = controller.selectModel("codex", model.id);
   assert.equal(controller.enabled, false);
   preparation.resolve({ ok: true });
   await selecting;
@@ -137,7 +137,7 @@ test("disable queues after an in-flight save without briefly re-enabling voice",
   context.after(() => controller.dispose());
   await controller.ready;
   await controller.loadModels();
-  const selecting = controller.selectModel(model.id);
+  const selecting = controller.selectModel("codex", model.id);
   await entered.promise;
   const disabling = controller.disable();
   const enabled: boolean[] = [];
@@ -149,49 +149,57 @@ test("disable queues after an in-flight save without briefly re-enabling voice",
   assert.equal(controller.getSnapshot().selection?.model, model.id);
 });
 
-test("changing harness clears the model and fences the previous harness catalogue", async context => {
+test("one harness catalogue failing leaves the other harness models selectable", async context => {
+  context.mock.method(console, "warn", () => {});
   const h = fixture();
-  h.port.voice.configuration.read = async () => createVoiceConfiguration({ harness: "copilot", model: "old" });
+  h.port.models.list = async harness => {
+    if (harness === "claude") throw new Error("claude offline");
+    return { data: [{ ...model, id: `${harness}-model` }, { ...model, id: `${harness}-hidden`, hidden: true }] };
+  };
+  const controller = new VoiceSettingsController(h.port, h.preferences);
+  context.after(() => controller.dispose());
+  await controller.ready;
+  await controller.loadModels();
+  const { catalogues, cataloguesLoading, error } = controller.getSnapshot();
+  assert.equal(cataloguesLoading, false);
+  assert.equal(catalogues.claude, undefined);
+  assert.deepEqual(catalogues.codex?.map(option => option.id), ["codex-model"]);
+  assert.equal(error, "");
+  await controller.selectModel("opencode", "opencode-model");
+  assert.equal(h.saved().selection?.settings.model, "opencode-model");
+  await controller.selectModel("codex", "codex-hidden");
+  assert.match(controller.getSnapshot().error, /no longer available/);
+});
+
+test("a newer catalogue load fences an older late response", async context => {
+  const h = fixture();
   const first = deferred<{ data: WorkbenchModelOption[] }>();
   let calls = 0;
-  h.port.models.list = async () => ++calls === 1 ? first.promise : { data: [model] };
+  h.port.models.list = async harness => harness === "codex" && ++calls === 1 ? first.promise : { data: [model] };
   const controller = new VoiceSettingsController(h.port, h.preferences);
   context.after(() => controller.dispose());
   await controller.ready;
   const old = controller.loadModels();
-  await controller.selectHarness("codex");
-  assert.equal(controller.getSnapshot().selection, null);
-  assert.equal(controller.enabled, false);
-  assert.equal(controller.getSnapshot().harness, "codex");
   await controller.loadModels();
-  first.resolve({ data: [{ ...model, id: "old" }] });
+  first.resolve({ data: [{ ...model, id: "stale" }] });
   await old;
-  assert.deepEqual(controller.getSnapshot().models.map(option => option.id), [model.id]);
+  assert.deepEqual(controller.getSnapshot().catalogues.codex?.map(option => option.id), [model.id]);
 });
 
-test("read and catalogue failures stay visible until an explicit retry succeeds", async context => {
+test("read failures stay visible until a later refresh succeeds", async context => {
   context.mock.method(console, "warn", () => {});
   const h = fixture();
   const read = h.port.voice.configuration.read;
-  const list = h.port.models.list;
   h.port.voice.configuration.read = async () => { throw new Error("read failed"); };
-  h.port.models.list = async () => { throw new Error("catalogue failed"); };
   const controller = new VoiceSettingsController(h.port, h.preferences);
   context.after(() => controller.dispose());
   await controller.ready;
   assert.equal(controller.enabled, false);
   assert.match(controller.getSnapshot().error, /read failed/);
-  await controller.loadModels();
-  assert.equal(controller.getSnapshot().catalogue, "failed");
-  assert.match(controller.getSnapshot().catalogueError, /catalogue failed/);
   h.port.voice.configuration.read = read;
-  h.port.models.list = list;
   await controller.refresh();
-  await controller.loadModels();
   assert.equal(controller.getSnapshot().status, "disabled");
-  assert.equal(controller.getSnapshot().catalogue, "ready");
   assert.equal(controller.getSnapshot().error, "");
-  assert.equal(controller.getSnapshot().catalogueError, "");
 });
 
 test("failed persistence and preparation remain visible and can recover", async context => {
@@ -203,12 +211,12 @@ test("failed persistence and preparation remain visible and can recover", async 
   context.after(() => controller.dispose());
   await controller.ready;
   await controller.loadModels();
-  await controller.selectModel(model.id);
+  await controller.selectModel("codex", model.id);
   assert.equal(controller.enabled, false);
   assert.match(controller.getSnapshot().error, /write refused/);
   h.port.voice.configuration.write = write;
   h.port.voice.prepare = async () => { throw new Error("native unavailable"); };
-  await controller.selectModel(model.id);
+  await controller.selectModel("codex", model.id);
   assert.equal(controller.enabled, false);
   assert.match(controller.getSnapshot().error, /native unavailable/);
   h.port.voice.prepare = async () => ({ ok: true });
@@ -226,7 +234,7 @@ test("disconnect and disposal fence late preparation and catalogue results", asy
   context.after(() => controller.dispose());
   await controller.ready;
   await controller.loadModels();
-  const selecting = controller.selectModel(model.id);
+  const selecting = controller.selectModel("codex", model.id);
   await entered.promise;
   controller.disconnect();
   preparation.resolve({ ok: true });

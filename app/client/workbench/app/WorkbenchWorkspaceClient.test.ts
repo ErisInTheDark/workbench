@@ -1,4 +1,4 @@
-/* No production exports. Protect partial queries, shared demand and stale-result fencing. */
+/* No production exports. Protect partial queries, shared demand, stale-result fencing and connection-waiting requests. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -59,6 +59,31 @@ test("auto-compaction settings cross the workspace facade to the selected daemon
   assert.deepEqual(next.params.params, { settings: patch });
   socket.reply(next, { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
   assert.deepEqual((await update).settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch });
+});
+
+test("daemon requests made before the app connection opens are sent once it opens", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  fixture.rpc.start();
+  const socket = await fixture.nextSocket(0);
+  const read = fixture.workspace.daemon().threadAutoCompact.read();
+  for (let hop = 0; hop < 20; hop++) await Promise.resolve();
+  assert.equal(socket.sent.length, 0);
+  socket.open();
+  const request = await socket.request("workspace/command");
+  socket.reply(request, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+  assert.deepEqual(await read, { settings: DEFAULT_THREAD_AUTO_COMPACT_SETTINGS });
+});
+
+test("closing the workspace releases requests still waiting for a connection", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  fixture.rpc.start();
+  const socket = await fixture.nextSocket(0);
+  const read = fixture.workspace.daemon().threadAutoCompact.read();
+  fixture.workspace.dispose();
+  await assert.rejects(read, /Workspace client closed/u);
+  assert.equal(socket.sent.length, 0);
 });
 
 const runtime = {

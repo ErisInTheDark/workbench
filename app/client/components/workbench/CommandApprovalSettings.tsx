@@ -1,11 +1,10 @@
 /*
  * Exports:
- * - default CommandApprovalSettings: edit exact-workdir command permissions with authoritative daemon saves.
+ * - default CommandApprovalSettings: edit one folder's exact-workdir command permissions with authoritative daemon saves.
  */
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import type { ProjectFolderOption } from "workbench-shared/workbench/project/project-folder-address";
 import type { CommandApprovalRule } from "workbench-shared/workbench/settings/command-approvals";
 import CommandApprovalSettingsController from "../../workbench/CommandApprovalSettingsController";
 import InputList from "./InputList";
@@ -31,32 +30,7 @@ function isWithin(root: string, path: string) {
   return candidate === base || candidate.startsWith(`${base}/`);
 }
 
-export default function CommandApprovalSettings({
-  folders,
-  projectId,
-}: {
-  folders: readonly ProjectFolderOption[];
-  projectId: string;
-}) {
-  const [selectedKey, setSelectedKey] = useState("");
-  const selected = folders.find(item => `${item.target.daemonId}/${item.target.projectId}` === selectedKey)
-    ?? folders.find(item => item.target.projectId === projectId) ?? folders[0] ?? null;
-  if (!selected) return null;
-  return <div className="space-y-3 py-3">
-    <h3 className="m-0 text-sm font-semibold text-text">Command prefixes allowed outside sandbox</h3>
-    <WorkbenchSettingsContextRow label="Folder"
-      value={`${selected.target.daemonId}/${selected.target.projectId}`}
-      options={folders.map(item => ({
-        id: `${item.target.daemonId}/${item.target.projectId}`,
-        label: item.displayPath ?? `${item.hostname}:${item.rootPath}`,
-      }))}
-      onSelect={setSelectedKey} />
-    <ApprovalEditor key={`${selected.target.daemonId}/${selected.target.projectId}`}
-      projectId={selected.target.projectId} rootPath={selected.rootPath} />
-  </div>;
-}
-
-function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: string }) {
+export default function CommandApprovalSettings({ projectId, rootPath }: { projectId: string; rootPath: string }) {
   const daemon = useWorkbenchDaemonClient();
   const controller = useMemo(() => new CommandApprovalSettingsController({
     read: () => daemon.commandApprovals.read({ projectId }),
@@ -80,7 +54,8 @@ function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: 
   const removeIds = saved.filter(rule => !filled.some(row => row.id === rule.id && row.value === byId.get(rule.id)))
     .map(rule => rule.id);
   const dirty = add.length > 0 || removeIds.length > 0;
-  return <>
+  return <div className="space-y-3 py-1">
+    <p className="m-0 text-detail text-fg/muted">Command prefixes agents may run outside the sandbox.</p>
     {workdirs.length > 1 ? <WorkbenchSettingsContextRow label="Workdir" value={workdir}
       options={workdirs.map(path => ({ id: path, label: path }))}
       onSelect={setSelectedWorkdir} /> : null}
@@ -98,5 +73,5 @@ function ApprovalEditor({ projectId, rootPath }: { projectId: string; rootPath: 
     </div>
     {state.loading ? <p role="status" className="m-0 text-xs text-fg/muted">Loading approvals...</p> : null}
     {state.error ? <p role="alert" className="m-0 text-xs text-danger">{state.error}</p> : null}
-  </>;
+  </div>;
 }

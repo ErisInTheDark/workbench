@@ -86,7 +86,7 @@ export default function SandboxNetworkSettings ({
         className={hasProjectOverride ? "pr-12" : undefined}
         description={scope === "global"
           ? "Allow agents outbound network access."
-          : "Allow agents outbound network access in this project."}
+          : "Allow agents outbound network access in this folder."}
         disabled={isLoading}
         isChecked={enabled}
         isSingleChoice={false}

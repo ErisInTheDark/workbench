@@ -1,81 +1,78 @@
 /* Exports:
- * - default VoiceSettings: independent harness/model drag selectors for voice input.
+ * - VoiceInputSetting: app preference that turns voice input on or off.
+ * - default VoiceSettings: the voice daemon's model drag menu, readiness and audio retention.
  */
 import { useContext, useEffect, useSyncExternalStore } from "react";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import type VoiceSettingsController from "../../../workbench/voice/VoiceSettingsController";
 import WorkbenchClientContext from "../workbench-client-context";
-import PressDragMenu from "../../ui/PressDragMenu";
-import ThreadHarnessControl from "../thread-view/ThreadHarnessControl";
 import LoaderIcon from "../LoaderIcon";
 import { OptionCard } from "../../ui/OptionCards";
+import SettingsCard, { SettingsCardRow } from "../../ui/SettingsCard";
 import WorkbenchCheckbox from "../WorkbenchCheckbox";
-import { CheckIcon, XIcon } from "../workbench-icons";
+import WorkbenchModelMenu from "../WorkbenchModelMenu";
+import { CheckIcon, ChevronDownIcon, HarnessIcon } from "../workbench-icons";
 
-export default function VoiceSettings() {
-  const client = useContext(WorkbenchClientContext)?.mounted?.voice;
-  return client ? <VoiceSelectors controller={client.settings} /> : null;
+function useVoiceSettings() {
+  return useContext(WorkbenchClientContext)?.mounted?.voice?.settings ?? null;
 }
 
-function VoiceSelectors({ controller }: { controller: VoiceSettingsController }) {
-  const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  useEffect(() => {
-    if (state.catalogue === "idle" && state.status !== "loading") void controller.loadModels();
-  }, [controller, state.harness, state.catalogue, state.status]);
-  const selectedModel = state.selection?.harness === state.harness ? state.selection.model : null;
-  const models = state.catalogue === "ready" ? state.models.filter(model => !model.hidden) : [];
-  const pending = ["loading", "saving", "preparing"].includes(state.status);
+function useSnapshot(controller: VoiceSettingsController) {
+  return useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+}
 
-  return <section aria-label="Voice input" className="grid gap-2 rounded-[0.85rem] py-1">
-    <OptionCard
-      label="Voice input"
-      density="tight"
-      isChecked={state.inputEnabled}
-      isSingleChoice={false}
-      disabled={!state.canToggle}
-      onClick={() => { void controller.setEnabled(!state.inputEnabled); }}
-      inlineContent={<>
-      <PressDragMenu
-        label="Voice harness"
-        items={installedProviderKeys.map(harness => ({
-          id: harness, checked: state.harness === harness,
-          content: <ThreadHarnessControl harness={harness} inline />,
-        }))}
-        onSelect={id => {
-          const harness = installedProviderKeys.find(harness => harness === id);
-          if (harness) void controller.selectHarness(harness);
-        }}
-      ><ThreadHarnessControl harness={state.harness} inline /></PressDragMenu>
-      <PressDragMenu
+export function VoiceInputSetting() {
+  const controller = useVoiceSettings();
+  return controller ? <VoiceInputToggle controller={controller} /> : null;
+}
+
+function VoiceInputToggle({ controller }: { controller: VoiceSettingsController }) {
+  const state = useSnapshot(controller);
+  return <div className="py-1">
+    <OptionCard label="Voice input" description="Dictate into editors and composers."
+      isChecked={state.inputEnabled} isSingleChoice={false} disabled={!state.canToggle}
+      onClick={() => { void controller.setEnabled(!state.inputEnabled); }} />
+    {!state.canToggle ? <p className="m-0 px-3 pt-1 text-xs text-fg/muted">Reload the app database to save voice preferences.</p> : null}
+  </div>;
+}
+
+export default function VoiceSettings() {
+  const controller = useVoiceSettings();
+  return controller ? <VoiceModel controller={controller} /> : null;
+}
+
+function VoiceModel({ controller }: { controller: VoiceSettingsController }) {
+  const state = useSnapshot(controller);
+  useEffect(() => { void controller.loadModels(); }, [controller]);
+  const selection = state.selection;
+  const model = selection
+    ? state.catalogues[selection.harness]?.find(option => matchesWorkbenchModelOption(option, selection.model))
+    : undefined;
+  const pending = state.status === "loading" || state.status === "saving" || state.status === "preparing";
+  return <SettingsCard label="Voice">
+    <SettingsCardRow label="Model">
+      <WorkbenchModelMenu
         label="Voice model"
-        items={models.map(model => ({
-          id: model.id, checked: selectedModel === model.id,
-          content: <span className="block truncate">{model.displayName || model.id}</span>,
-        }))}
-        onSelect={id => { void controller.selectModel(id); }}
+        catalogues={state.catalogues}
+        allowedHarnesses={installedProviderKeys}
+        selected={selection ? { harness: selection.harness, modelId: selection.model } : null}
+        onSelect={entry => { void controller.selectModel(entry.harness, entry.model.id); }}
       >
-        {state.catalogue === "loading" ? <LoaderIcon /> : null}
-        <span className="max-w-64 truncate">
-          {state.models.find(model => model.id === selectedModel)?.displayName || selectedModel || "Select model"}
+        {selection ? <HarnessIcon harness={selection.harness} size={16} className="shrink-0" /> : null}
+        <span className={`max-w-64 truncate ${selection ? "" : "text-fg/muted"}`}>
+          {model?.displayName ?? selection?.model ?? (state.cataloguesLoading ? "Loading models..." : "Choose model")}
         </span>
-      </PressDragMenu>
-      <span role="status" aria-label={state.status} title={state.status} className="inline-flex items-center gap-1 text-xs text-fg/muted">
-        {pending ? <LoaderIcon size={12} /> : state.status === "ready" ? <CheckIcon size={12} /> : <XIcon size={12} />}
+        <ChevronDownIcon size={14} className="shrink-0 text-fg/muted" />
+      </WorkbenchModelMenu>
+      <span role="status" aria-label={`Voice ${state.status}`} title={state.status}
+        className="inline-flex size-4 items-center justify-center text-fg/muted">
+        {pending ? <LoaderIcon size={12} /> : state.status === "ready" ? <CheckIcon size={14} className="text-success" /> : null}
       </span>
-      <WorkbenchCheckbox
-        label="Save audio locally"
-        checked={state.recordAudio}
-        onChange={value => controller.setRecordAudio(value)}
-      />
-      </>}
-    >
-    {!state.canToggle ? <p className="m-0 text-xs text-fg/muted">Reload the app database to save browser voice preferences.</p> : null}
-    {state.error ? <div role="alert" className="text-sm text-danger">
-      {state.error} <button type="button" className="rounded px-2 py-1 hover:bg-button-hover" onClick={() => { void controller.refresh(); }}>Retry</button>
-    </div> : null}
-    {state.catalogueError ? <div role="alert" className="text-sm text-danger">
-      {state.catalogueError} <button type="button" className="rounded px-2 py-1 hover:bg-button-hover" onClick={() => { void controller.loadModels(); }}>Retry models</button>
-    </div> : state.catalogue === "ready" && !models.length ? <p role="status" className="m-0 text-xs text-fg/muted">No models available.</p> : null}
-    </OptionCard>
-  </section>;
+      <span className="ml-auto text-base">
+        <WorkbenchCheckbox label="Save audio locally" checked={state.recordAudio} onChange={value => controller.setRecordAudio(value)} />
+      </span>
+    </SettingsCardRow>
+    {state.error ? <SettingsCardRow><p role="alert" className="m-0 text-danger">{state.error}</p></SettingsCardRow> : null}
+  </SettingsCard>;
 }

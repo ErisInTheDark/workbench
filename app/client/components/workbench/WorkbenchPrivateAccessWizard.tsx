@@ -37,7 +37,9 @@ export default function WorkbenchPrivateAccessWizard() {
   const act = (action: WorkbenchNetworkAction) => { void run(() => network.client.action(action)); };
   const waiting = step === "connecting" || step === "discovering";
   if ((step === "ready" || step === "checking") && status.discovery !== "failed" && !error) return null;
-  return <section className="flex flex-col items-start gap-3 text-sm">
+  return <section aria-label="Private HTTPS setup" className="
+    flex flex-col items-start gap-3 rounded-[0.95rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-3 text-sm
+  ">
     {network.verification.phase === "failed" && (step === "dns" || step === "trust")
       ? <p role="alert" className="m-0 text-danger">{network.verification.message}</p> : null}
     {waiting ? <p className="m-0 text-sm text-fg/muted">{step === "discovering" ? "Existing apps are found automatically. There is no pairing code to copy." : "Workbench is opening its own private connection. Your computer's normal ports stay untouched."}</p> : null}

@@ -34,7 +34,6 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
   const [serverIssues, setServerIssues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [available, setAvailable] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -53,11 +52,11 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
     }).catch((failure: Error) => {
       if (cancelled) return;
       setAvailable(false);
-      setError(`Git roots are unavailable until a daemon is connected. ${failure.message}`);
+      setError(failure.message);
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [daemon, reloadKey]);
+  }, [daemon]);
 
   const filled = useMemo(() => InputListRows.populated(rows).map(row => ({ id: row.id, value: row.value.trim() })), [rows]);
   const localIssues = useMemo(() => {
@@ -111,7 +110,7 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
 
   return (
     <section className="space-y-3 py-1">
-      <p className="m-0 mb-2 text-[0.8rem] leading-5 text-fg/muted">Folders scanned for git repositories and workspaces.</p>
+      <p className="m-0 mb-2 text-detail text-fg/muted">Folders scanned for git repositories and workspaces.</p>
       <InputList
         disabled={loading || saving || !available}
         errors={{ ...serverIssues, ...localIssues }}
@@ -146,7 +145,6 @@ export default function WorkbenchProjectDiscoverySettings ({ onSaved }: { onSave
         ><ResetIcon size={16} /></IconButton>
       </div>
       {error ? <p role="alert" className="m-0 text-[0.8rem] text-danger">{error}</p> : null}
-      {!available && !loading ? <button className="rounded-lg px-3 py-1.5 text-[0.83rem] text-accent hover:bg-accent-soft" onClick={() => setReloadKey(value => value + 1)} type="button">Retry connection</button> : null}
       {status ? <p role="status" className="m-0 text-[0.8rem] text-fg/muted">{status}</p> : null}
     </section>
   );
