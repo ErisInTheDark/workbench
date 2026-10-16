@@ -27,7 +27,7 @@ type ModelRequest = {
   messages?: Array<{
     role?: string;
     tool_call_id?: string;
-    content?: string | Array<{ type?: string; tool_use_id?: string }>;
+    content?: string | Array<{ type?: string; tool_use_id?: string; text?: string; source?: { type?: string; data?: string } }>;
   }>;
   model?: string;
   stream?: boolean;
@@ -77,6 +77,7 @@ export default class FakeThreadModelServer {
   private forbiddenPromptText: string | null = null;
   private requiredPromptText: string | null = null;
   private readonly nextPromptText: string[][] = [];
+  private readonly nextClaudeImages: Array<{ marker: string; data: readonly string[] }> = [];
   private readonly holds = new EventEmitter();
 
   private constructor(private readonly server: Server, readonly baseUrl: string) {}
@@ -143,6 +144,10 @@ export default class FakeThreadModelServer {
     this.nextPromptText.push(texts);
   }
 
+  expectNextClaudeImages(marker: string, data: readonly string[]) {
+    this.nextClaudeImages.push({ marker, data });
+  }
+
   forgetInterruptedTool() {
     this.pendingResult = null;
   }
@@ -185,6 +190,18 @@ export default class FakeThreadModelServer {
       else this.geminiResponse(response, { text: "Scenario" });
       response.end();
       return;
+    }
+    const expectedImages = this.nextClaudeImages[0];
+    if (expectedImages && provider === "claude") {
+      const content = body.messages?.findLast(message => message.role === "user"
+        && Array.isArray(message.content)
+        && message.content.some(part => part.type === "text" && part.text?.includes(expectedImages.marker)))?.content;
+      const images = Array.isArray(content) ? content.filter(part => part.type === "image") : [];
+      if (images.length !== expectedImages.data.length || images.some((image, index) =>
+        image.source?.type !== "base64" || image.source.data !== expectedImages.data[index])) {
+        throw new Error("Claude model request lost or reordered attachment images.");
+      }
+      this.nextClaudeImages.shift();
     }
     const expected = this.nextPromptText[0];
     if (expected) {

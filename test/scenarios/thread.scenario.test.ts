@@ -475,6 +475,11 @@ test("selected providers complete the shared thread boundary journey in one clon
   const mode = selectedSelection[provider] as ThreadTestMode;
   const profile = profiles[provider]!;
   const fakeModel = fakeModels[provider] ?? null;
+  const attachmentData = provider === "claude" && fakeModel ? [
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  ] : [];
+  const attachmentInput = attachmentData.map(data => ({ type: "image" as const, url: `data:image/png;base64,${data}` }));
   if (provider === "claude") {
     fakeModel?.forbidPromptText(CLAUDE_NATIVE_INSTRUCTION_SENTINEL);
     fakeModel?.requirePromptText(WORKBENCH_INSTRUCTION_SENTINEL);
@@ -636,11 +641,13 @@ test("selected providers complete the shared thread boundary journey in one clon
       owner.waitForFact(read, ready);
     const durable = () => owner.durable();
     const waitHeldTool = (id: string, proof: string) => owner.waitHeldTool(id, proof);
+    const steerText = journey.steer(steerProof) + (attachmentInput.length ? "\ncompare #[attach:2] with #[attach:1]" : "");
     const steerIntoActiveTurn = async (id: string) => {
       await waitHeldTool(id, activeProof);
+      if (attachmentInput.length) fakeModel!.expectNextClaudeImages(steerProof, attachmentData);
       const result = await runtime.daemon.threads.message({
         threadId: threadId!, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: id,
-        input: [{ type: "text", text: journey.steer(steerProof), text_elements: [] }],
+        input: [{ type: "text", text: steerText, text_elements: [] }, ...attachmentInput],
       });
       assert.deepEqual(result, { kind: "steered", turnId: id });
       assert.ok(journeyGate);
@@ -710,6 +717,13 @@ test("selected providers complete the shared thread boundary journey in one clon
     const steerIndex = activeItems.findIndex(item => item.type === "userMessage"
       && item.content.some(content => content.type === "text" && content.text.includes(steerProof)));
     assert.ok(gateIndex >= 0 && steerIndex > gateIndex, "Delivered steer must follow the held tool");
+    if (attachmentInput.length) {
+      const delivered = activeItems[steerIndex];
+      assert.ok(delivered?.type === "userMessage");
+      assert.deepEqual(delivered.content.filter(part => part.type === "text").map(part => part.text), [steerText],
+        "Provider attachment labels must not become canonical user text");
+      assert.equal(delivered.content.filter(part => part.type === "image").length, attachmentInput.length);
+    }
     assert.equal((await answer(liveQuestion, "live-answer", liveProof)).route, "live");
     const heldQuestion = await pending("held-answer");
     assert.equal(heldQuestion.turnId, activeTurn);
@@ -776,8 +790,25 @@ test("selected providers complete the shared thread boundary journey in one clon
 
     step("running the stopped turn");
     if (fakeModel) fakeModel.enqueue(journey.fake.stop(stopProof));
-    const stoppedTurn = await submit(journey.stop(stopProof));
+    const stopText = journey.stop(stopProof);
+    let stoppedTurn: string;
+    if (attachmentInput.length) {
+      fakeModel!.expectNextClaudeImages(stopProof, attachmentData);
+      const started = await runtime.daemon.threads.message({
+        threadId, clientMessageId: randomUUID(), intent: "continue",
+        input: [{ type: "text", text: stopText, text_elements: [] }, ...attachmentInput],
+        context: { workflowIds: [] },
+      });
+      assert.ok(started.kind === "started");
+      stoppedTurn = started.turn.id;
+    } else stoppedTurn = await submit(stopText);
     await waitHeldTool(stoppedTurn, stopProof);
+    if (attachmentInput.length) {
+      const userMessage = (await durable()).turns.find(turn => turn.id === stoppedTurn)?.items.find(item => item.type === "userMessage");
+      assert.ok(userMessage?.type === "userMessage");
+      assert.deepEqual(userMessage.content.filter(part => part.type === "text").map(part => part.text), [stopText]);
+      assert.equal(userMessage.content.filter(part => part.type === "image").length, attachmentInput.length);
+    }
     await runtime.daemon.threads.stop({ threadId, intent: "stop", turnId: stoppedTurn });
     await journeyGate.release(stopProof);
     await waitTurn(stoppedTurn, "interrupted");

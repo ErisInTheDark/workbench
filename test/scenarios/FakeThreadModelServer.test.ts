@@ -165,3 +165,31 @@ test("fake Claude Messages stream requires the matching tool result before advan
     assert.match(await next.text(), /after/u);
   } finally { await server.close(); }
 });
+
+test("Claude attachment checks reject missing, nested and reordered images before accepting intact delivery", async context => {
+  const reported = captureRejections(context);
+  const server = await FakeThreadModelServer.start();
+  const image = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+  try {
+    server.enqueue([{ text: "received" }]);
+    server.expectNextClaudeImages("attachment-proof", ["first", "second"]);
+    const request = (images: object[]) => fetch(`${server.baseUrl}/v1/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6", stream: true,
+        messages: [{ role: "user", content: [{ type: "text", text: "attachment-proof" }, ...images] }],
+      }),
+    });
+    for (const invalid of [[], [
+      { type: "document", source: { type: "content", content: [image("first"), image("second")] } },
+    ], [image("second"), image("first")]]) {
+      const response = await request(invalid);
+      assert.equal(response.status, 400);
+      await response.text();
+    }
+    assert.equal(reported.length, 3);
+    const valid = await request([image("first"), image("second")]);
+    assert.equal(valid.status, 200);
+    assert.match(await valid.text(), /received/u);
+  } finally { await server.close(); }
+});

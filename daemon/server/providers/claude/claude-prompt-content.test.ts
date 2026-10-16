@@ -8,9 +8,6 @@ import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content
 
 const text = (value: string) => ({ type: "text" as const, text: value, text_elements: [] });
 const png = (data: string) => ({ type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data } });
-const attachment = (number: number, image: object) => ({
-  type: "document", title: `#[attach:${number}]`, source: { type: "content", content: [image] },
-});
 
 test("text-only input stays the exact newline-joined string Claude already receives", async () => {
   assert.equal(await claudePromptContent([
@@ -27,9 +24,32 @@ test("images become content blocks in input order alongside merged text", async 
     text("look"), text("here"), { type: "image", url: "data:image/png;base64,AAAA" },
     { type: "localImage", path }, { type: "image", url: "https://example.com/a.webp" }, text("thanks"),
   ]), [
-    { type: "text", text: "look\nhere" }, attachment(1, png("AAAA")), attachment(2, png(Buffer.from("local-bytes").toString("base64"))),
-    attachment(3, { type: "image", source: { type: "url", url: "https://example.com/a.webp" } }), { type: "text", text: "thanks" },
+    { type: "text", text: "look\nhere" }, png("AAAA"), png(Buffer.from("local-bytes").toString("base64")),
+    { type: "image", source: { type: "url", url: "https://example.com/a.webp" } }, { type: "text", text: "thanks" },
   ]);
+});
+
+test("explicit attachment references add a provider map without nesting or changing images", async () => {
+  const prompt = "compare #[attach:2] with #[attach:1]";
+  const input = [text(prompt), { type: "image" as const, url: "data:image/png;base64,AAAA" },
+    { type: "image" as const, url: "data:image/png;base64,BBBB" }];
+  const before = structuredClone(input);
+  const content = await claudePromptContent(input);
+  assert.ok(Array.isArray(content));
+  assert.deepEqual(content.filter(block => block.type === "image"), [png("AAAA"), png("BBBB")]);
+  const texts = content.filter(block => block.type === "text").map(block => block.text);
+  assert.equal(texts[0], prompt);
+  assert.equal(texts.length, 2);
+  for (const number of [1, 2]) assert.ok(texts[1]!.includes(`#[attach:${number}] = image ${number} in this message`));
+  assert.deepEqual(input, before);
+});
+
+test("removed mentions and ordinary file mentions do not annotate images, and references without images stay unchanged", async () => {
+  for (const prompt of ["#[attach:removed]", "#[src/file.ts]", "#[attach:0]"]) {
+    assert.deepEqual(await claudePromptContent([text(prompt), { type: "image", url: "data:image/png;base64,AAAA" }]),
+      [{ type: "text", text: prompt }, png("AAAA")]);
+  }
+  assert.equal(await claudePromptContent([text("see #[attach:1]")]), "see #[attach:1]");
 });
 
 test("input Claude cannot read is rejected before a turn starts", async () => {
