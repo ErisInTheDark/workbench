@@ -45,8 +45,8 @@ const appPages: { id: AppPage; label: string; sections: Section[] }[] = [
     { id: "settings-advanced", label: "Advanced" },
   ] },
   { id: "network", label: "Networking", sections: [
-    { id: "settings-connection", label: "This app" },
-    { id: "settings-app-access", label: "Other devices" },
+    { id: "settings-connection", label: "Connection" },
+    { id: "settings-app-access", label: "Network rules" },
   ] },
 ];
 const machinePages: { id: MachinePage; label: string; sections: Section[] }[] = [
@@ -139,7 +139,8 @@ export default function WorkbenchSettingsView({
   const projectDaemonId = logicalProject?.iconProject.locations.find(location => location.project?.kind === "daemon")?.daemonId;
   const defaultDaemonId = daemons.find(item => item.id === projectDaemonId)?.id
     ?? daemons.find(item => item.id === attachedDaemonId)?.id ?? daemons[0]?.id ?? null;
-  const [chosenPlace, setPlace] = useState<Place>(() => initialPlace(initialSection, defaultDaemonId));
+  const [chosenPlace, setPlace] = useState<Place>(() => initialPlace(
+    initialSection ?? (globalThis.location?.hash.slice(1) || null), defaultDaemonId));
   const place: Place = chosenPlace.kind === "machine" && !daemons.some(item => item.id === chosenPlace.daemonId)
     ? { kind: "app", page: "general" } : chosenPlace;
   const [chosenFolderKey, setChosenFolderKey] = useState("");

@@ -66,6 +66,14 @@
   }
 }
 
+@utility no-number-spinner {
+  appearance: textfield;
+
+  &::-webkit-inner-spin-button, &::-webkit-outer-spin-button {
+    appearance: none;
+  }
+}
+
 /* Typed so StickyComposerSurface can read its pin inset as resolved px. */
 @property --sticky-composer-inset {
   syntax: "<length>";

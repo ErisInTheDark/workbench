@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: "This app" (status, setup, connection) and "Other devices" (address, shared access) sections.
+ * - WorkbenchNetworkSettings: app reachability status, any needed setup, then Connection and Other devices disclosures.
  */
 "use client";
 import { useContext, useState } from "react";
@@ -19,9 +19,11 @@ import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
 import { CheckIcon, ExternalLinkIcon, TriangleAlertIcon } from "./workbench-icons";
 
-function Address({ label, url }: { label: string; url: string }) {
+/** Shows `url` itself, or `text` in its place when the address is too long to be worth reading. */
+function Address({ label, url, text }: { label: string; url: string; text?: string }) {
   return <span className="flex min-w-0 items-center gap-1">
-    <a className="min-w-0 break-all font-mono text-[0.8rem] text-accent" href={url} target="_blank" rel="noreferrer">{url}</a>
+    {text ? <span className="text-text">{text}</span>
+      : <a className="min-w-0 break-all font-mono text-[0.8rem] text-accent" href={url} target="_blank" rel="noreferrer">{url}</a>}
     <WorkbenchCopyButton label={`Copy ${label}`} text={url} />
     <IconButton as="a" label={`Open ${label}`} size="small" display="hover-border" href={url} target="_blank" rel="noreferrer">
       <ExternalLinkIcon className="size-4" />
@@ -50,7 +52,8 @@ function NetworkSettingsContent () {
     : service ? httpsReady ? status.privateAccess.url : window.location.origin
       : status.hostServe.url ?? window.location.origin;
   const appUrl = rawUrl ? new URL("/launch", rawUrl).href : null;
-  const tailnetUrl = status.hostServe.url ? new URL("/launch", status.hostServe.url).href : null;
+  // Another device lands on this page, where it can trust the certificate before HTTPS works there.
+  const tailnetUrl = status.hostServe.url ? new URL("/@/settings#settings-connection", status.hostServe.url).href : null;
   const attention = service
     ? !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
     : mode !== "localhost" && status.hostServe.phase !== "ready";
@@ -76,53 +79,58 @@ function NetworkSettingsContent () {
     finally { setWorking(false); }
   }
 
-  return <>
-    <FormSection id="settings-connection" title="This app">
-      <div className="space-y-3 py-1">
-        {service && privateAccess ? <WorkbenchPrivateAccessWizard /> : null}
-        {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
-        <WorkbenchNetworkConnectionForm>
-          <SettingsCardRow label="Status">
-            <span role="status" className="flex items-center gap-2 text-text">
-              {attention ? <TriangleAlertIcon className="size-4 text-[color:var(--attention)]" />
-                : service && !httpsReady ? <LoaderIcon size={14} />
-                  : <CheckIcon className="size-4 text-success" />}
-              {connectionStatus}
-            </span>
-            {busy && editable ? <PrimaryButton shape="compact" className="ml-auto"
-              onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>
-              Cancel
-            </PrimaryButton> : null}
-          </SettingsCardRow>
-          {appUrl ? <SettingsCardRow label="App address"><Address label="app address" url={appUrl} /></SettingsCardRow> : null}
-          {messages.length || failures.length ? <SettingsCardRow>
-            <div className="space-y-1">
-              {messages.map(message => <p key={message} className="m-0 text-fg/muted">{message}</p>)}
-              {failures.map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
-            </div>
-          </SettingsCardRow> : null}
-          {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed" ? <SettingsCardRow>
-            <PrimaryButton shape="compact" disabled={busy || !editable} onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton>
-          </SettingsCardRow> : null}
-        </WorkbenchNetworkConnectionForm>
+  const group = snapshot.configuration.group;
+  const tone = attention ? "attention" : service && !httpsReady ? "pending" : "ready";
+  return <section id="settings-connection" className="scroll-mt-24 space-y-4 pt-6">
+    <div className="flex min-w-0 items-center gap-4">
+      <span aria-hidden="true" className={`
+        flex size-10 shrink-0 items-center justify-center rounded-full
+        ${tone === "ready" ? "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] text-success"
+          : tone === "attention" ? "bg-[color-mix(in_srgb,var(--attention)_16%,transparent)] text-[color:var(--attention)]"
+            : "bg-fg/5 text-fg/muted"}
+      `}>
+        {tone === "attention" ? <TriangleAlertIcon className="size-5" /> : tone === "pending" ? <LoaderIcon size={18} /> : <CheckIcon className="size-5" />}
+      </span>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <p role="status" className="m-0 text-base font-semibold text-text">{connectionStatus}</p>
+        {appUrl ? <Address label="app address" url={appUrl} /> : null}
       </div>
-    </FormSection>
-    <FormSection id="settings-app-access" title="Other devices">
-      <div className="py-1">
-        {mode === "localhost"
-          ? <p className="m-0 text-sm text-fg/muted">Only this computer can open the app. Use a tailnet connection to reach it from other devices.</p>
-          : <SettingsCard label="Other devices">
-            {tailnetUrl ? <SettingsCardRow label="Open at">
-              {otherDevices ? <div className="min-w-0 space-y-1">
-                <Address label="tailnet address" url={tailnetUrl} />
-                <Disclosure summary="QR code" className="text-fg/muted" contentClassName="pt-2"><WorkbenchQrCode text={tailnetUrl} /></Disclosure>
-              </div> : <span className="text-fg/muted">Allow other devices below to open this app.</span>}
-            </SettingsCardRow> : null}
-            {snapshot.configuration.group ? <WorkbenchNetworkAccessSettings /> : null}
-          </SettingsCard>}
+      {busy && editable ? <PrimaryButton shape="compact"
+        onClick={() => { void network.client.action({ action: "cancel" }).catch(() => setError("Cancellation could not be sent.")); }}>
+        Cancel
+      </PrimaryButton> : null}
+    </div>
+    {messages.length || failures.length ? <div className="space-y-1 px-1 text-sm">
+      {messages.map(message => <p key={message} className="m-0 text-fg/muted">{message}</p>)}
+      {failures.map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
+    </div> : null}
+    {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed"
+      ? <PrimaryButton shape="compact" disabled={busy || !editable} onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
+    {service && privateAccess ? <WorkbenchPrivateAccessWizard /> : null}
+    {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
+    <div className="@container pt-2"><div className="flex flex-col gap-6 @4xl:flex-row @4xl:gap-0">
+      <div className="min-w-0 flex-1 @4xl:pr-6"><WorkbenchNetworkConnectionForm /></div>
+      <div className="flex min-w-0 items-start gap-4 text-sm @4xl:w-[22rem] @4xl:shrink-0 @4xl:border-l @4xl:border-fg/10 @4xl:pl-6">
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <h3 className="m-0 text-sm font-semibold text-text">Set up another device</h3>
+          <p className="m-0 text-detail text-fg/muted">{mode === "localhost"
+            ? "Only this computer can open the app. Choose a tailnet connection to reach it from other devices."
+            : !tailnetUrl || !otherDevices ? "Allow the device under Network rules first."
+              : service ? "Before Tailnet service works on another device, you must open this page via the tailnet IP and trust the certificate."
+                : "Open this page via the tailnet IP on the other device."}</p>
+          {mode !== "localhost" && tailnetUrl && otherDevices ? <Address label="tailnet IP URL" url={tailnetUrl} text="Tailnet IP URL" /> : null}
+        </div>
+        {mode !== "localhost" && tailnetUrl && otherDevices ? <WorkbenchQrCode text={tailnetUrl} className="size-28" /> : null}
       </div>
-    </FormSection>
-  </>;
+    </div></div>
+    {group ? <Disclosure id="settings-app-access" className="scroll-mt-24 border-t border-fg/8" summaryClassName="py-2.5 text-base" contentClassName="pb-3 pl-7"
+      summary={<span className="flex min-w-0 items-center justify-between gap-3">
+        <span className="font-medium text-text">Network rules</span>
+        <span className="truncate text-sm text-fg/muted">{group.access === "all" ? "All tailnet devices" : `Selected devices · ${group.grants.length} grants`}</span>
+      </span>}>
+      <SettingsCard label="Network rules" flush><WorkbenchNetworkAccessSettings /></SettingsCard>
+    </Disclosure> : null}
+  </section>;
 }
 
 export default function WorkbenchNetworkSettings () {

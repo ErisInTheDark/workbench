@@ -3,7 +3,7 @@
  * - WorkbenchNetworkConnectionForm: connection settings card with drafts and explicit safe Apply/Reset once edited.
  */
 "use client";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkSettings } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import RadioRow from "../ui/RadioRow";
@@ -20,10 +20,7 @@ const modes = [
 ] as const;
 type Draft = { mode: WorkbenchNetworkSettings["mode"]; localPort: string; tailnetPort: string; label: string };
 
-export default function WorkbenchNetworkConnectionForm({ children }: {
-  /** Status rows shown above the editable connection rows in the same card. */
-  children?: ReactNode;
-}) {
+export default function WorkbenchNetworkConnectionForm() {
   const network = useWorkbenchNetwork();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [working, setWorking] = useState(false);
@@ -41,6 +38,8 @@ export default function WorkbenchNetworkConnectionForm({ children }: {
   const busy = working || snapshot.busy;
   const disabled = busy || !!snapshot.change || !snapshot.capabilities?.manageApp || !snapshot.capabilities.settingsApply || !snapshot.localPort;
   const dirty = draft !== null && (Object.keys(saved) as (keyof Draft)[]).some(key => draft[key] !== saved[key]);
+  /** The device name only applies through Tailnet service; before that it is a preview of the suggested name. */
+  const namedService = value.mode === "tailnet-service" || Boolean(snapshot.configuration.privateAccess);
   function edit(next: Partial<Draft>) { setDraft({ ...value, ...next }); }
   async function run(action: () => Promise<void>) {
     setWorking(true);
@@ -54,33 +53,31 @@ export default function WorkbenchNetworkConnectionForm({ children }: {
     if (disabled) return;
     void run(() => network.client.changeSettings({
       mode: value.mode, localPort: Number(value.localPort), tailnetPort: Number(value.tailnetPort),
-      ...(value.mode === "tailnet-service" ? { label: value.label } : {}),
+      ...(namedService ? { label: value.label } : {}),
     }));
   }}>
-    <SettingsCard label="This app">
-      {children}
+    <SettingsCard label="Connection settings" flush>
       <SettingsCardRow label="Reachable via">
         <RadioRow ariaLabel="Connection type" size="comfortable" options={modes.filter(mode => mode.value !== "localhost" || snapshot.capabilities?.trustHost)}
           value={value.mode} disabled={disabled} onChange={mode => edit({ mode })} />
       </SettingsCardRow>
-      {value.mode === "tailnet-service" ? <SettingsCardRow label={<label htmlFor="workbench-machine-name">Private name</label>}>
-        <span className="flex min-w-0 items-center">
-          <WorkbenchTextField id="workbench-machine-name" variant="flush" value={value.label} required maxLength={60}
-            pattern="[a-z0-9]([a-z0-9-]{0,58}[a-z0-9])?" autoComplete="off" spellCheck={false}
-            className="field-sizing-content min-w-16 max-w-full pr-0.5" disabled={disabled} onChange={event => edit({ label: event.currentTarget.value })} />
-          <span className="text-fg/muted">.wb.inthedark.boo</span>
-        </span>
-      </SettingsCardRow> : null}
+      <SettingsCardRow label={<label htmlFor="workbench-machine-name">Device name</label>}>
+        <WorkbenchTextField id="workbench-machine-name" variant="dotted" value={value.label} required maxLength={60}
+          pattern="[a-z0-9]([a-z0-9-]{0,58}[a-z0-9])?" autoComplete="off" spellCheck={false}
+          title={namedService ? undefined : "Used once Tailnet service is turned on"}
+          className="field-sizing-content min-w-16 max-w-full" disabled={disabled || !namedService}
+          onChange={event => edit({ label: event.currentTarget.value })} />
+      </SettingsCardRow>
       <SettingsCardRow label="Ports">
         <label className="flex items-center gap-2" htmlFor="workbench-local-port">Local
-          <WorkbenchTextField id="workbench-local-port" variant="flush" type="number" min={1} max={65535} required value={value.localPort}
-            className="w-20 tabular-nums" disabled={disabled || !snapshot.localPort?.editable}
+          <WorkbenchTextField id="workbench-local-port" variant="dotted" type="number" min={1} max={65535} required value={value.localPort}
+            className="no-number-spinner field-sizing-content min-w-[5ch] font-mono font-semibold tabular-nums" disabled={disabled || !snapshot.localPort?.editable}
             title={snapshot.localPort && !snapshot.localPort.editable ? "Set by WORKBENCH_APP_PORT" : undefined}
             onChange={event => edit({ localPort: event.currentTarget.value })} />
         </label>
-        <label className={`flex items-center gap-2 ${value.mode === "localhost" ? "text-fg/muted" : ""}`} htmlFor="workbench-tailnet-port">Tailnet
-          <WorkbenchTextField id="workbench-tailnet-port" variant="flush" type="number" min={1} max={65535} required value={value.tailnetPort}
-            className="w-20 tabular-nums" disabled={disabled} onChange={event => edit({ tailnetPort: event.currentTarget.value })} />
+        <label className={`ml-4 flex items-center gap-2 ${value.mode === "localhost" ? "text-fg/muted" : ""}`} htmlFor="workbench-tailnet-port">Tailnet
+          <WorkbenchTextField id="workbench-tailnet-port" variant="dotted" type="number" min={1} max={65535} required value={value.tailnetPort}
+            className="no-number-spinner field-sizing-content min-w-[5ch] font-mono font-semibold tabular-nums" disabled={disabled} onChange={event => edit({ tailnetPort: event.currentTarget.value })} />
         </label>
       </SettingsCardRow>
       {dirty ? <SettingsCardRow>

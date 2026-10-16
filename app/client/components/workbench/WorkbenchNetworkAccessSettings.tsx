@@ -48,7 +48,10 @@ export default function WorkbenchNetworkAccessSettings() {
   for (const grant of policy.grants) {
     if (!devices.some(device => device.nodeId === grant.deviceNodeId)) devices.push({ nodeId: grant.deviceNodeId, name: grant.deviceNodeId, online: false });
   }
-  devices.sort((left, right) => left.name.localeCompare(right.name));
+  /** A device hosting a Workbench app shows that app's configured device name, matching its column. */
+  const deviceLabel = (device: { nodeId: string; name: string }) => members.find(app => device.nodeId === (
+    app.nodeId === snapshot.runtime.privateAccess.nodeId ? snapshot.runtime.host?.nodeId ?? app.hostNodeId : app.hostNodeId))?.label ?? device.name;
+  devices.sort((left, right) => deviceLabel(left).localeCompare(deviceLabel(right)));
 
   async function act(action: WorkbenchNetworkAction, applied: () => void) {
     setWorking(true);
@@ -73,19 +76,22 @@ export default function WorkbenchNetworkAccessSettings() {
     {!snapshot.capabilities?.manageNetwork ? <SettingsCardRow>
       <span className="text-fg/muted">Managed by {owner?.label ?? "the owner app"}. Change network settings on that computer.</span>
     </SettingsCardRow> : null}
-    {(["dns", "owner"] as const).map(kind => {
-      const id = kind === "dns" ? group.dnsNodeId : group.ownerNodeId;
-      const name = members.find(member => member.nodeId === id)?.label ?? "Unavailable";
-      return <SettingsCardRow key={kind} label={kind === "dns" ? "Nameserver" : "Owner"}>
-        {canManage && !busy ? <PressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
-          triggerClassName="-mx-2.5 text-text"
-          items={members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span className="inline-flex items-center gap-2">{member.label}<Availability state={availability(member.nodeId)} /></span> }))}
-          onSelect={nodeId => choose(kind, nodeId)}>
-          <span className="font-medium">{name}</span><ChevronDownIcon className="size-3.5 text-fg/muted" />
-        </PressDragMenu> : <span className="font-medium text-text">{name}</span>}
-        <Availability state={availability(id)} />
-      </SettingsCardRow>;
-    })}
+    <SettingsCardRow label="Nameserver">
+      {(["dns", "owner"] as const).map(kind => {
+        const id = kind === "dns" ? group.dnsNodeId : group.ownerNodeId;
+        const name = members.find(member => member.nodeId === id)?.label ?? "Unavailable";
+        return <span key={kind} className={`flex items-center gap-2 ${kind === "owner" ? "ml-6" : ""}`}>
+          {kind === "owner" ? <span className="text-fg/muted">Owner</span> : null}
+          {canManage && !busy ? <PressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
+            triggerClassName="-mx-2.5 text-text"
+            items={members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span className="inline-flex items-center gap-2">{member.label}<Availability state={availability(member.nodeId)} /></span> }))}
+            onSelect={nodeId => choose(kind, nodeId)}>
+            <span className="font-medium">{name}</span><ChevronDownIcon className="size-3.5 text-fg/muted" />
+          </PressDragMenu> : <span className="font-medium text-text">{name}</span>}
+          <Availability state={availability(id)} />
+        </span>;
+      })}
+    </SettingsCardRow>
     {candidate && selected ? <SettingsCardRow>
       <div className="min-w-0 flex-1 basis-72 space-y-1">
         <p className="m-0 font-medium text-text">{candidate.kind === "dns" ? `Use ${selected.label} for DNS?` : `Transfer ownership to ${selected.label}?`}</p>
@@ -108,15 +114,15 @@ export default function WorkbenchNetworkAccessSettings() {
         }} />
     </SettingsCardRow>
     {policy.access === "selected" ? <SettingsCardRow><div className="scrollbar-hover-reveal w-full overflow-x-auto">
-      <table className="w-full text-left">
-        <thead><tr><th className="py-1.5 pr-4 font-normal text-fg/muted">Device</th>{members.map(app => <th className="px-2 py-1.5 text-center font-normal text-fg/muted" key={app.nodeId}>{app.label}</th>)}</tr></thead>
-        <tbody>{devices.map(device => <tr key={device.nodeId}>
-          <th className="py-1 pr-4 font-normal text-text">{device.name}{!device.online ? <span className="ml-2 text-xs text-fg/muted">offline</span> : null}</th>
+      <table className="w-full border-separate border-spacing-0 text-left">
+        <thead><tr><th className="py-1.5 pl-2 pr-4 font-normal text-fg/muted">Device app can access...</th>{members.map(app => <th className="px-2 py-1.5 text-center font-normal text-fg/muted" key={app.nodeId}>{app.label}</th>)}</tr></thead>
+        <tbody className="[&>tr:nth-child(odd)>*]:bg-fg/4 [&>tr>*:first-child]:rounded-l-lg [&>tr>*:last-child]:rounded-r-lg">{devices.map(device => <tr key={device.nodeId}>
+          <th className="py-1 pl-2 pr-4 font-normal text-text">{deviceLabel(device)}{!device.online ? <span className="ml-2 text-xs text-fg/muted">offline</span> : null}</th>
           {members.map(app => {
             const ownApp = device.nodeId === (app.nodeId === snapshot.runtime.privateAccess.nodeId
               ? snapshot.runtime.host?.nodeId ?? app.hostNodeId : app.hostNodeId);
             return <td key={app.nodeId} className="px-2 py-1 text-center [&_label]:justify-center" title={ownApp ? "Always allowed on this device" : undefined}><WorkbenchCheckbox
-            label={<span className="sr-only">{device.name} access to {app.label}{ownApp ? " - Always allowed on this device" : ""}</span>}
+            label={<span className="sr-only">{deviceLabel(device)} access to {app.label}{ownApp ? " - Always allowed on this device" : ""}</span>}
             checked={ownApp || policy.grants.some(grant => grant.deviceNodeId === device.nodeId && grant.appNodeId === app.nodeId)}
             disabled={ownApp || busy || !canManage || stale} onChange={checked => {
               const grants = policy.grants.filter(grant => grant.deviceNodeId !== device.nodeId || grant.appNodeId !== app.nodeId);
