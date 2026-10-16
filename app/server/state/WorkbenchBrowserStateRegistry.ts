@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchBrowserStateRegistryOptions: browser-state storage and diagnostic seams.
- * - default WorkbenchBrowserStateRegistry: own browser stores, cloning, project adoption, seed refresh, and disposal.
+ * - default WorkbenchBrowserStateRegistry: own browser stores, shared revision-bound workspace reads, cloning, project adoption, seed refresh, and disposal.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +13,7 @@ import {
   type WorkbenchClientStateIdentity,
   type WorkbenchClientStateMutation,
   type WorkbenchClientStateRecord,
+  type WorkbenchClientStateResponse,
   type WorkbenchClientStateAttachmentIdentity,
 } from "workbench-shared/state/workbench-client-state";
 
@@ -20,6 +21,14 @@ import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import type { WorkbenchDatabaseDiagnostic } from "workbench-shared/database/workbench-database-migration";
 import type { WorkbenchProjectAlias } from "workbench-shared/types";
+import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+
+type WorkspaceBindings = readonly { daemonId: string; attachedLocal: boolean; aliases?: readonly WorkbenchProjectAlias[] }[];
+interface WorkspaceRead {
+  revision: number;
+  sources: WorkspaceBindings;
+  result: Promise<WorkbenchClientStateResponse>;
+}
 
 export interface WorkbenchBrowserStateRegistryOptions {
   browserStateDirectoryPath?: string;
@@ -87,6 +96,7 @@ export default class WorkbenchBrowserStateRegistry {
   readonly #controllers = new Map<string, WorkbenchAppStateController>();
   readonly #openingControllers = new Map<string, Promise<WorkbenchAppStateController>>();
   readonly #listeners = new Map<string, Set<(revision: number) => void>>();
+  readonly #workspaceReads = new Map<WorkbenchAppStateController, WorkspaceRead>();
   #seedQueue = Promise.resolve();
   #disposed = false;
 
@@ -155,9 +165,33 @@ export default class WorkbenchBrowserStateRegistry {
 
   async readWorkspaceBrowser(
     browserStateId: string | undefined,
-    sources: readonly { daemonId: string; attachedLocal: boolean; aliases?: readonly WorkbenchProjectAlias[] }[],
+    sources: WorkspaceBindings,
   ) {
     const controller = await this.#controllerFor(browserStateId);
+    const revision = controller.revision;
+    const previous = this.#workspaceReads.get(controller);
+    if (previous?.revision === revision && areDeeplyEqual(previous.sources, sources)) return previous.result;
+    const bindings = structuredClone(sources);
+    const read: WorkspaceRead = {
+      revision,
+      sources: bindings,
+      result: this.#readWorkspaceBrowser(browserStateId, controller, bindings).then(response => {
+        read.revision = response.revision;
+        return response;
+      }, error => {
+        if (this.#workspaceReads.get(controller) === read) this.#workspaceReads.delete(controller);
+        throw error;
+      }),
+    };
+    this.#workspaceReads.set(controller, read);
+    return read.result;
+  }
+
+  async #readWorkspaceBrowser(
+    browserStateId: string | undefined,
+    controller: WorkbenchAppStateController,
+    sources: WorkspaceBindings,
+  ) {
     if (controller !== this.#sharedController) {
       const before = this.#sharedController.revision;
       const attached = sources.filter(source => source.attachedLocal);
@@ -183,6 +217,7 @@ export default class WorkbenchBrowserStateRegistry {
     const response = controller.read(undefined, {
       attachmentsAsUrls: true, browserStateId: browserStateId ?? "shared",
     });
+    if (this.#disposed) throw new BrowserStateRetiredError();
     if (response.revision !== before) this.#notifyBrowser(browserStateId, response.revision);
     return response;
   }
@@ -261,6 +296,7 @@ export default class WorkbenchBrowserStateRegistry {
 
   async close() {
     this.#disposed = true;
+    this.#workspaceReads.clear();
     const failures = (await Promise.allSettled(this.#openingControllers.values()))
       .flatMap((result) => result.status === "rejected" && !(result.reason instanceof BrowserStateRetiredError) ? [result.reason] : []);
     await this.#seedQueue;

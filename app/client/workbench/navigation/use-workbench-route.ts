@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - canCanonicalizeWorkbenchRoute: keep launch URLs intact until browser app state has loaded.
- * - useWorkbenchRoute: derive routes from browser history and expose guarded canonical navigation.
+ * - useWorkbenchRoute: derive routes from browser history, persist local launch selection, and expose guarded canonical navigation.
  * - useWorkbenchRouteIntent: apply one URL-derived route intent and its canonical replacement.
  */
 
@@ -104,22 +104,21 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
 
   const selectedProjectIdsKey = route.selectedProjectIds === null
     ? "unfiltered"
-    : `explicit\0${route.selectedProjectIds.join("\0")}`;
-  const storedSelection = stateSnapshot.records.find(record => record.kind === "lastProjectSelection");
-  const storedSelectionKey = storedSelection?.selectedProjectIds === null
-    ? "unfiltered"
-    : storedSelection
-      ? `explicit\0${storedSelection.selectedProjectIds.join("\0")}`
-      : "absent";
+    : ["explicit", ...route.selectedProjectIds].join("\0");
+  const canSaveSelection = stateSnapshot.schemaVersion >= WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION
+    && route.view !== "invalid" && (!route.selectedProjectIds?.length || Boolean(route.logical));
   useEffect(() => {
-    if (stateSnapshot.schemaVersion < WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION
-      || route.view === "invalid"
-      || selectedProjectIdsKey === storedSelectionKey
-      || (route.selectedProjectIds?.length && !route.logical)) return;
+    if (!canSaveSelection) return;
+    // Another tab's saved launch preference is not a navigation intent in this tab.
+    const storedSelection = state.getSnapshot().records.find(record => record.kind === "lastProjectSelection");
+    const storedSelectionKey = storedSelection?.selectedProjectIds === null
+      ? "unfiltered"
+      : storedSelection ? ["explicit", ...storedSelection.selectedProjectIds].join("\0") : "absent";
+    if (selectedProjectIdsKey === storedSelectionKey) return;
     let selectedProjectIds: LogicalProjectId[] | null = null;
-    if (route.selectedProjectIds !== null) {
+    if (selectedProjectIdsKey !== "unfiltered") {
       selectedProjectIds = [];
-      for (const projectId of route.selectedProjectIds) {
+      for (const projectId of selectedProjectIdsKey.split("\0").slice(1)) {
         const parsed = LogicalProjectIdSchema.safeParse(projectId);
         if (!parsed.success) return;
         selectedProjectIds.push(parsed.data);
@@ -129,15 +128,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
       const message = error instanceof Error ? error.message : "Unknown app-state mutation failure.";
       console.warn("Workbench last project selection could not be saved.", message.slice(0, 500));
     });
-  }, [
-    route.logical,
-    route.selectedProjectIds,
-    route.view,
-    selectedProjectIdsKey,
-    state,
-    stateSnapshot.schemaVersion,
-    storedSelectionKey,
-  ]);
+  }, [canSaveSelection, selectedProjectIdsKey, state]);
 
   return {
     navigateToRoute,

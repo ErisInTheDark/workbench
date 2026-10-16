@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect browser database cloning, isolation, seed refresh, failure cleanup and disposal.
+ * No exports. Tests protect shared workspace reads, browser isolation, seed refresh, failure cleanup and disposal.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -19,12 +19,103 @@ import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workb
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
+import WorkbenchAppStateController from "./WorkbenchAppStateController.ts";
 import WorkbenchBrowserStateRegistry from "./WorkbenchBrowserStateRegistry.ts";
 
 const BROWSER_A = "10000000-0000-4000-8000-000000000001";
 const BROWSER_B = "20000000-0000-4000-8000-000000000002";
 const BROWSER_C = "30000000-0000-4000-8000-000000000003";
 const BROWSER_D = "40000000-0000-4000-8000-000000000004";
+
+test("connections sharing browser state share workspace projection until its revision changes", async context => {
+  const { registry } = await fixture(context);
+  const bind = context.mock.method(WorkbenchAppStateController.prototype, "bindDaemons");
+  const reads = await Promise.all(Array.from({ length: 3 }, () => registry.readWorkspaceBrowser(undefined, [])));
+  assert.equal(bind.mock.callCount(), 1, "simultaneous connections must not repeat binding and projection");
+  assert.deepEqual(reads[1], reads[0]);
+  assert.deepEqual(reads[2], reads[0]);
+  await registry.readWorkspaceBrowser(undefined, []);
+  assert.equal(bind.mock.callCount(), 1, "an unchanged revision needs no new workspace projection");
+
+  await registry.mutateBrowser(undefined, { action: "put", record: {
+    kind: "lastProjectSelection", selectedProjectIds: [LogicalProjectIdSchema.parse(testProjectIds.project)],
+  } });
+  const next = await registry.readWorkspaceBrowser(undefined, []);
+  assert.ok(next.revision > reads[0]!.revision);
+  assert.deepEqual(records(next).find(record => record.kind === "lastProjectSelection")?.selectedProjectIds,
+    [testProjectIds.project]);
+  assert.equal(bind.mock.callCount(), 2);
+});
+
+test("shared workspace reads isolate browser identities and adopt changed bindings", async context => {
+  const { registry } = await fixture(context);
+  await Promise.all([registry.readWorkspaceBrowser(BROWSER_A, []), registry.readWorkspaceBrowser(BROWSER_B, [])]);
+  await registry.mutateBrowser(BROWSER_A, { action: "put", record: {
+    kind: "lastProjectSelection", selectedProjectIds: [],
+  } });
+  assert.deepEqual(records(await registry.readWorkspaceBrowser(BROWSER_A, []))
+    .find(record => record.kind === "lastProjectSelection")?.selectedProjectIds, []);
+  assert.equal(records(await registry.readWorkspaceBrowser(BROWSER_B, []))
+    .some(record => record.kind === "lastProjectSelection"), false);
+
+  const daemonId = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
+  const source = { daemonId, attachedLocal: false };
+  const bound = await registry.readWorkspaceBrowser(BROWSER_A, [source]);
+  const registration = bound.registrations?.find(item => item.daemonId === daemonId);
+  assert.ok(registration);
+  const adopted = await registry.readWorkspaceBrowser(BROWSER_A, [{
+    ...source, aliases: [{ alias: "old/path", projectId: testProjectIds.project }],
+  }]);
+  assert.deepEqual(adopted.projectAliases?.find(item => item.daemonRegistrationId === registration.id)?.aliases,
+    [{ alias: "old/path", projectId: testProjectIds.project }]);
+});
+
+test("failed shared workspace reads can retry and closed stores cannot serve retained snapshots", async context => {
+  const { registry } = await fixture(context);
+  const bind = WorkbenchAppStateController.prototype.bindDaemons;
+  let fail = true;
+  context.mock.method(WorkbenchAppStateController.prototype, "bindDaemons", function (
+    this: WorkbenchAppStateController, ...args: Parameters<typeof bind>
+  ) {
+    if (fail) { fail = false; return Promise.reject(new Error("binding unavailable")); }
+    return bind.apply(this, args);
+  });
+  await assert.rejects(registry.readWorkspaceBrowser(undefined, []), /binding unavailable/);
+  const recovered = await registry.readWorkspaceBrowser(undefined, []);
+  assert.equal(recovered.kind, "snapshot");
+  await registry.close();
+  await assert.rejects(registry.readWorkspaceBrowser(undefined, []), /registry is closed/);
+});
+
+test("a superseded workspace read cannot discard a newer revision after failing", async context => {
+  const { registry } = await fixture(context);
+  const entered = Promise.withResolvers<void>();
+  const stalled = Promise.withResolvers<Awaited<ReturnType<WorkbenchAppStateController["bindDaemons"]>>>();
+  const original = WorkbenchAppStateController.prototype.bindDaemons;
+  let first = true;
+  const bind = context.mock.method(WorkbenchAppStateController.prototype, "bindDaemons", function (
+    this: WorkbenchAppStateController, ...args: Parameters<typeof original>
+  ) {
+    if (first) {
+      first = false;
+      entered.resolve();
+      return stalled.promise;
+    }
+    return original.apply(this, args);
+  });
+  const retired = assert.rejects(registry.readWorkspaceBrowser(undefined, []), /old binding failed/);
+  await entered.promise;
+  await registry.mutateBrowser(undefined, { action: "put", record: {
+    kind: "lastProjectSelection", selectedProjectIds: [],
+  } });
+  const current = await registry.readWorkspaceBrowser(undefined, []);
+  stalled.reject(new Error("old binding failed"));
+  await retired;
+  const retained = await registry.readWorkspaceBrowser(undefined, []);
+  assert.deepEqual(retained, current);
+  assert.deepEqual(records(retained).find(record => record.kind === "lastProjectSelection")?.selectedProjectIds, []);
+  assert.equal(bind.mock.callCount(), 2);
+});
 
 test("retirement cancels an opening browser store without treating cancellation as failed disposal", async context => {
   const { registry, shared } = await fixture(context);
