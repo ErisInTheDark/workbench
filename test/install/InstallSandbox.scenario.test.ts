@@ -60,7 +60,7 @@ for (const toolchain of ["existing", "missing"] as const) test(`a sandboxed inst
     throw new Error(`Sandboxed install failed in ${sandbox.root}\n${log.join("").slice(-8000)}`, { cause: error });
   }
 
-  const record = JSON.parse(await fs.readFile(path.join(sandbox.home, ".workbench", "installation.json"), "utf8"));
+  const record = JSON.parse(await fs.readFile(path.join(sandbox.dataRoot, "installation", "installation.json"), "utf8"));
   assert.deepEqual(record, { version: 1, root: sandbox.defaultCheckout, phase: "ready" });
   assert.equal(prompts.length, 1, "a fresh install asks for consent once");
   const head = async (cwd: string) => (await sandbox.run("git", ["rev-parse", "HEAD"], { cwd })).trim();

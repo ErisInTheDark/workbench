@@ -13,6 +13,7 @@ import WorkbenchInstallPrompt from "./WorkbenchInstallPrompt.mjs";
 import WorkbenchBootstrapCommand from "./WorkbenchBootstrapCommand.mjs";
 import WorkbenchToolchain from "./WorkbenchToolchain.mjs";
 import WorkbenchPackageRegistration from "./WorkbenchPackageRegistration.mjs";
+import resolveWorkbenchDataRoot from "./workbench-data-root.mjs";
 
 export default class WorkbenchBootstrap {
   constructor({
@@ -35,7 +36,10 @@ export default class WorkbenchBootstrap {
     this.toolchain = toolchain;
     this.registration = registration;
     this.write = write;
-    this.registry = path.join(home, ".workbench", "installation.json");
+    this.registry = path.join(
+      resolveWorkbenchDataRoot({ environment, homeDirectory: home, platform }),
+      "installation", "installation.json",
+    );
   }
 
   async checkoutExists(root) {

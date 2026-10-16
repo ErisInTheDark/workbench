@@ -10,6 +10,7 @@ import { once } from "node:events";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import WorkbenchBootstrap from "./WorkbenchBootstrap.mjs";
+import resolveWorkbenchDataRoot from "./workbench-data-root.mjs";
 
 async function fixture(context, options = {}) {
   const temporary = await WorkbenchTemporaryDirectory.create("wb-bootstrap-");
@@ -67,14 +68,16 @@ async function fixture(context, options = {}) {
     },
     registration: { prepare: async () => {}, register: async () => {} },
   });
-  return { bootstrap, home, checkout, calls, prompts, locationDefaults, output };
+  const dataRoot = resolveWorkbenchDataRoot({ homeDirectory: home, environment: options.environment ?? {} });
+  const registry = path.join(dataRoot, "installation", "installation.json");
+  return { bootstrap, home, dataRoot, registry, checkout, calls, prompts, locationDefaults, output };
 }
 
 const clones = f => f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length;
-const record = async f => JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8"));
+const record = async f => JSON.parse(await fs.readFile(f.registry, "utf8"));
 async function writeRecord(f, phase) {
-  await fs.mkdir(path.join(f.home, ".workbench"), { recursive: true });
-  await fs.writeFile(path.join(f.home, ".workbench", "installation.json"),
+  await fs.mkdir(path.dirname(f.registry), { recursive: true });
+  await fs.writeFile(f.registry,
     JSON.stringify({ version: 1, root: f.checkout, phase }));
 }
 
@@ -109,7 +112,7 @@ test("missing vp is provisioned after consent instead of rejected as a prerequis
   };
   await f.bootstrap.run([]);
   assert.equal(provisioned, true);
-  assert.equal(JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")).phase, "ready");
+  assert.equal((await record(f)).phase, "ready");
 });
 
 test("registration retains the original environment and follows checkout preparation", async context => {
@@ -146,6 +149,8 @@ test("only human launch and connect may install, and refusal writes nothing", as
 test("installation records the selected checkout and never clones it again", async context => {
   const f = await fixture(context);
   await f.bootstrap.run(["connect"]);
+  assert.equal((await record(f)).phase, "ready");
+  await assert.rejects(fs.access(path.join(f.home, ".workbench")), { code: "ENOENT" });
   assert.equal(f.calls.filter(call => call.command === "git" && call.args[0] === "clone").length, 1);
   assert.equal(f.calls.find(call => call.command === "git" && call.args[0] === "clone").args.at(-1), f.checkout);
   assert.ok(f.output.some(line => line.includes(f.checkout)));
@@ -173,6 +178,28 @@ test("installation records the selected checkout and never clones it again", asy
   assert.equal(f.calls[0].args.at(-1), "view");
 });
 
+test("an overridden data root owns installation state across bootstrap invocations", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-bootstrap-data-");
+  context.after(() => temporary.dispose());
+  const environment = { WORKBENCH_DATA_ROOT: path.join(temporary.path, "custom data") };
+  const f = await fixture(context, { environment });
+  await f.bootstrap.run([]);
+  assert.deepEqual(await record(f), { version: 1, root: f.checkout, phase: "ready" });
+  await assert.rejects(fs.access(path.join(f.home, ".workbench")), { code: "ENOENT" });
+
+  const next = new WorkbenchBootstrap({
+    home: f.home,
+    environment,
+    packageRoot: path.join(f.home, "npm-cache", "package"),
+    commands: f.bootstrap.commands,
+    prompt: { choose: async () => { assert.fail("an installed checkout must not prompt"); } },
+  });
+  f.calls.length = 0;
+  await next.run(["view"]);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].args[0], path.join(f.checkout, "cli", "dispatch.mjs"));
+});
+
 test("a deleted ready checkout is reinstalled at its recorded location", async context => {
   const f = await fixture(context);
   await f.bootstrap.run([]);
@@ -187,7 +214,7 @@ test("a deleted ready checkout is reinstalled at its recorded location", async c
   assert.equal(f.prompts.length, 2);
   assert.equal(f.prompts[1], "location");
   assert.deepEqual(
-    JSON.parse(await fs.readFile(path.join(f.home, ".workbench", "installation.json"), "utf8")),
+    await record(f),
     { version: 1, root: f.checkout, phase: "ready" },
   );
 });
@@ -196,9 +223,7 @@ test("an invalid ready checkout is preserved rather than replaced", async contex
   const f = await fixture(context);
   await fs.mkdir(f.checkout, { recursive: true });
   await fs.writeFile(path.join(f.checkout, "keep"), "user");
-  await fs.mkdir(path.join(f.home, ".workbench"));
-  await fs.writeFile(path.join(f.home, ".workbench", "installation.json"),
-    JSON.stringify({ version: 1, root: f.checkout, phase: "ready" }));
+  await writeRecord(f, "ready");
 
   await assert.rejects(f.bootstrap.run([]), /restore or repair/i);
 
