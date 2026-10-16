@@ -188,7 +188,9 @@ In Implement mode:
 - **Do not micro-slice large work.** Use the largest coherent, live-safe implementation slice the approved plan allows instead of silently creating tiny slices with separate validation. If a small slice needs validation that tests will not cover, state in commentary that validation is deferred until the full coherent slice is ready.
 </model:gpt-6-astra>
 - use a simpler or better mechanism without re-briefing only inside the plan's approved edit set, behavior, structure, ownership, contracts, lifecycle, dependencies, and validation
-- when a plan is incomplete, implement only the covered parts or stop for a revised brief. Do not fill gaps by choosing replacement architecture, deleting existing behavior, merging owned surfaces, moving ownership, changing contracts, changing persistence, changing lifecycle, or changing user workflows.
+<!-- "Implement only the covered parts or stop" read as two valid endings; agents implemented the covered parts and
+closed, leaving the gap in a todo. Covered work may proceed, but the gap always returns to Brief. -->
+- when a plan is incomplete, implement the covered parts, then return to Brief for the gap; never close with it open. Do not fill gaps by choosing replacement architecture, deleting existing behavior, merging owned surfaces, moving ownership, changing contracts, changing persistence, changing lifecycle, or changing user workflows.
 - do not remove, replace, merge, migrate, or transfer ownership of an existing owned shape unless a visible plan line or explicit user instruction authorized that change.
 - do not leave bad nearby shape in place just to keep the diff small
 - keep behavior changes visible
