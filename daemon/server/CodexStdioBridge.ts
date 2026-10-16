@@ -6,6 +6,7 @@
  */
 import type { CodexThreadContextReadResponse, CodexThreadPageResponse } from "workbench-shared/codex/thread-context";
 import { toThreadTurn, type CodexThreadSource, type CodexTurnSource } from "workbench-shared/codex/thread-adapter";
+import { frameCodexAttachmentInput } from "workbench-shared/codex/attachment-input";
 import { randomUUID } from "node:crypto";
 import type { CodexApprovalPort } from "./CodexApprovalAdapter";
 import { summarizeApprovalList } from "./lib/workbench/approval-presentation";
@@ -1725,7 +1726,11 @@ export default class CodexStdioBridge {
     try {
       signal.throwIfAborted();
       if (method === "thread/start") this.traceThreadCreation(message.id, "native-send", upstreamRequestId);
-      this.send(upstreamMessage);
+      const params = asRecord(upstreamMessage.params);
+      const wireMessage = (method === "turn/start" || method === "turn/steer") && Array.isArray(params?.input)
+        ? { ...upstreamMessage, params: { ...params, input: frameCodexAttachmentInput<unknown>(params.input) } }
+        : upstreamMessage;
+      this.send(wireMessage);
     } catch (error) {
       this.pendingResponses.delete(upstreamRequestId);
       if (method === "turn/steer") {

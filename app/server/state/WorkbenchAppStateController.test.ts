@@ -50,6 +50,34 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
   ));
 }
 
+test("composer attachments preserve supplied order through unchanged URLs, uploads and reopen", async context => {
+  const fixture = await controllerFixture(context);
+  const identity = { kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId,
+    projectId: "project", threadId: "thread" };
+  const attachments = ["z-first", "a-second", "m-third"].map(id => ({ id, url: `image:${id}` }));
+  const read = (controller: WorkbenchAppStateController) => {
+    const record = projectedRecords(controller.read()).find(item => item.kind === "composerDraft");
+    return record?.kind === "composerDraft" ? record.value.attachments.map(item => item.id) : [];
+  };
+  try {
+    await fixture.controller.mutate({ action: "put", record: {
+      ...identity, value: { text: "images", attachments, updatedAt: 1 },
+    } });
+    assert.deepEqual(read(fixture.controller), attachments.map(item => item.id));
+    await fixture.controller.mutate({ action: "put", record: {
+      ...identity, value: { text: "images", attachments: attachments.slice(1), updatedAt: 2 },
+    } });
+    await fixture.controller.putAttachment(identity, "b-fourth", "image/png", new Uint8Array([1]));
+    await fixture.controller.putAttachment(identity, "a-second", "image/png", new Uint8Array([2]));
+    assert.deepEqual(read(fixture.controller), ["a-second", "m-third", "b-fourth"]);
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(read(restarted), ["a-second", "m-third", "b-fourth"]);
+  } finally { await restarted.close(); }
+});
+
 test("logical project preferences persist independently of physical project addresses", async context => {
   const fixture = await controllerFixture(context);
   const logicalProjectId = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");

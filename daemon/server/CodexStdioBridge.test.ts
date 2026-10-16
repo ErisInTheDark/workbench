@@ -2803,6 +2803,41 @@ test("Workbench questionnaires share native listing, response, and transcript hi
   }
 });
 
+test("attachment frames are added only to native start and steer packets", async () => {
+  const identities = await recordingIdentities({ existingTurn: true });
+  const messages: JsonRpcRequest[] = [];
+  const bridge = new CodexStdioBridge({
+    identities,
+    appServer: { send(message: JsonRpcRequest) {
+      messages.push(message);
+      queueMicrotask(() => void bridge.handleUpstreamMessage({
+        id: message.id ?? null, error: { code: -32000, message: "Rejected diagnostic input" },
+      }));
+    } } as unknown as CodexAppServer,
+    handleWorkbenchRequest: rejectWorkbenchRequest,
+    onNotification() {},
+    resolveProjectFromCwd: async () => null,
+  });
+  const image = { type: "image", url: "data:image/png;base64,AAAA" };
+  const input = [{ type: "text", text: "look", text_elements: [] }, image];
+  const provider = bridge as unknown as {
+    dispatchManagedProviderRequest(request: JsonRpcRequest): Promise<JsonRpcResponse>;
+  };
+  try {
+    for (const method of ["turn/start", "turn/steer"]) {
+      const response = await provider.dispatchManagedProviderRequest({
+        id: method, method, params: { threadId: "thread", expectedTurnId: "turn", input },
+      });
+      assert.equal(response.error?.message, "Rejected diagnostic input");
+      const native = messages.at(-1)?.params as { input: Array<{ type: string; text?: string }> };
+      assert.equal(native.input.length, 4);
+      assert.match(native.input[1]?.text ?? "", /<wb:attachment id="attach:1">/u);
+      assert.equal(native.input[2], image);
+      assert.equal(input.length, 2);
+    }
+  } finally { await bridge.disposeImmediately(); }
+});
+
 test("SQLite transcript failure does not block steer or questionnaire side effects", async (context) => {
   const diagnostics = captureTestOutput(context, process.stderr, text =>
     text.startsWith("[codex-transcript] capture failed client-request:") && text.includes("cause=SQLite transcript failed"));

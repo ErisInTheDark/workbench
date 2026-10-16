@@ -12,7 +12,7 @@
  * - toThreadTurn: admit native item identity evidence before a turn reaches Workbench consumers.
  * - CodexThreadSource/CodexTurnSource: accepted native or canonical content before conversion.
  * - UnsupportedCodexImageReferenceError: sanitized failure for unsupported provider-file media.
- * - toWorkbenchCodexInput/toWorkbenchCodexItem: convert supported native content without widening core contracts.
+ * - toWorkbenchCodexInput/toWorkbenchCodexItem: normalise native media and remove image transport frames.
  * - readWorkbenchTurnHistory: normalise the existing provider-thread history extension at its boundary.
  */
 import type { ThreadPayloadData, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
@@ -29,6 +29,7 @@ import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread
 import { withCodexItemMetadata } from "./thread-item-source.ts";
 import { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
 import { normalizeThreadLocation as normalizeAbsolutePathForComparison } from "../workbench/thread/thread-location.ts";
+import { stripCodexAttachmentFrames } from "./attachment-input.ts";
 export { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
 export {
   isThreadWithinRoot as isCodexThreadWithinRoot, isThreadAtRoot as isCodexThreadAtRoot,
@@ -66,7 +67,7 @@ function toWorkbenchCodexOutputPart(part: FunctionCallOutputContentItem | Native
 type NativeThreadItemOutputPart = Exclude<Extract<NativeThreadItem, { type: "functionCallOutput" }>["output"], string>[number];
 
 export function toWorkbenchCodexItem(item: ThreadItem | NativeThreadItem): ThreadItem {
-  if (item.type === "userMessage") return { ...item, content: item.content.map(toWorkbenchCodexInput) };
+  if (item.type === "userMessage") return { ...item, content: stripCodexAttachmentFrames(item.content.map(toWorkbenchCodexInput)) };
   if (item.type === "functionCallOutput") {
     return { ...item, output: typeof item.output === "string" ? item.output : item.output.map(toWorkbenchCodexOutputPart) };
   }

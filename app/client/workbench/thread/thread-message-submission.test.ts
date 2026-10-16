@@ -35,6 +35,7 @@ test("existing-thread input sends attached feedback before text and keeps images
     message: "please investigate",
     references: [{ ...feedback, daemonId: null }],
   });
+  assert.equal(input.length, 2, "attachment transport must not add prose to the user's message");
   assert.deepEqual(input[1], { type: "image", url: "image:screenshot" });
 });
 

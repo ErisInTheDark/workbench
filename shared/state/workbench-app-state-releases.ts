@@ -33,6 +33,7 @@ const appStateReleases = Object.freeze({
   lastProjectSelection: release(23, "d0f9f271f879577296f03a090e290754fb07ccc59d1c6be69defc6ebc891d1f7"),
   gitPeerSyncMode: release(24, "cb8714fe1b66e9903487689815161338840f54068e25fef854875ea2decedde5"),
   fileOpenDestinations: release(25, "308fc5a5f45708c82570e729f6d8e3d6d1405cdabe9a76c2d89c3d7612bfeb13"),
+  attachmentOrder: release(26, "89bfb0d1bb03ed619a51b2ccc90b444d4aac69daec13ec8eaf06ff0b9404075c"),
 });
 
 export default appStateReleases;

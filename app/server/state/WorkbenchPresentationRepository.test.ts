@@ -39,6 +39,35 @@ function catalog(rootPath: string, identityKey = remote) {
   }] };
 }
 
+test("attachment admission order survives replacement, removal and reopen", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    repository.mutate({ kind: "putDraft", expectedRevision: null, draft: {
+      id: draftId, logicalProjectId: repository.read().projects[0]!.id,
+      target: { daemonId: first, projectId }, prompt: "images", selection, updatedAt: 1,
+    } });
+    const content = Buffer.from("image");
+    const hash = createHash("sha256").update(content).digest("hex");
+    for (const id of ["z-first", "a-second", "m-third"]) {
+      repository.putAttachmentChunk(draftId, id, 0, content);
+      repository.completeAttachment(draftId, id, 1, "image/png", hash);
+    }
+    repository.completeAttachment(draftId, "z-first", 1, "image/png", hash);
+    assert.deepEqual(repository.read().drafts[0]!.attachments.map(item => item.id), ["z-first", "a-second", "m-third"]);
+    repository.mutate({ kind: "deleteAttachment", draftId, attachmentId: "a-second",
+      expectedRevision: repository.read().drafts[0]!.revision });
+    await repository.close();
+    await repository.start();
+    assert.deepEqual(repository.read().drafts[0]!.attachments.map(item => item.id), ["z-first", "m-third"]);
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("hidden folders persist per project, repeat idempotently and never hide the last registered folder", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-");
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });

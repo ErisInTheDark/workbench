@@ -5,10 +5,10 @@
  */
 "use client";
 
-import { useMemo, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { applyAttachmentTextEdits, renumberAttachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import type {
   WorkbenchQuestionnaireDraft,
   WorkbenchSkillSummary,
@@ -33,10 +33,10 @@ import {
   isWorkbenchApprovalRequest,
 } from "workbench-shared/workbench/thread/thread-user-input-requests";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { FeatherIcon, SendHorizontalIcon, XIcon } from "../workbench-icons";
+import { FeatherIcon, SendHorizontalIcon } from "../workbench-icons";
 import { OptionCard } from "../../ui/OptionCards";
-import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
-import ThreadLightboxImage from "./ThreadLightboxImage";
+import PlaintextEditable, { threadPlaintextEditableClassName, type PlaintextEditableHandle } from "./PlaintextEditable";
+import ComposerAttachments from "./ComposerAttachments";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
@@ -254,6 +254,32 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       : update(initialDraft),
   });
   const { selectedValues, customValues, attachments } = editing.draft;
+  const answerEditors = useRef(new Map<string, PlaintextEditableHandle>());
+  const activeAnswer = useRef<string | null>(null);
+  const removeAttachment = (id: string) => {
+    if ([...answerEditors.current.values()].some(editor => !editor.canEdit())) return;
+    const current = editing.session.getSnapshot().draft;
+    const next = current.attachments.filter(attachment => attachment.id !== id);
+    for (const [key, text] of Object.entries(current.customValues)) {
+      const editor = answerEditors.current.get(key);
+      if (editor && !editor.applyEdits(text, renumberAttachmentReferences(text, current.attachments, next))) return;
+    }
+    editing.session.edit(draft => {
+      const attachments = draft.attachments.filter(attachment => attachment.id !== id);
+      return { ...draft, attachments, customValues: Object.fromEntries(Object.entries(draft.customValues).map(([key, text]) => [
+        key, applyAttachmentTextEdits(text, renumberAttachmentReferences(text, draft.attachments, attachments)),
+      ])) };
+    });
+  };
+  const answerEditorProps = (id: string) => ({
+    attachmentCount: attachments.length,
+    onEditError: (error: Error) => editing.session.reportError(error, "Unable to edit attachment references."),
+    ref: (editor: PlaintextEditableHandle | null) => {
+      if (editor) answerEditors.current.set(id, editor);
+      else answerEditors.current.delete(id);
+    },
+    onSelectionChange: (range: { start: number; end: number } | null) => { if (range) activeAnswer.current = id; },
+  });
   const [isQuickResponseCustomInputRequested, setIsQuickResponseCustomInputRequested] = useState(false);
   const [localError, setError] = useState("");
   const error = localError || editing.error;
@@ -287,9 +313,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
       return;
     }
 
-    const supplementalInput: UserInput[] = responseAttachments.map((attachment) => ({
-      type: "image",
-      url: attachment.url,
+    const supplementalInput = responseAttachments.map(attachment => ({
+      type: "image" as const, url: attachment.url,
     }));
     const activatedSkillPaths = highlightSources
       ? getActivatedWorkbenchSkillPathsForTextValues(Object.values(responseCustomValues), highlightSources)
@@ -563,6 +588,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                       {isReadOnlyMode ? (
                         customValue ? (
                           <PlaintextEditable
+                            {...answerEditorProps(question.id)}
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             className={`${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg bg-fg/4 px-3 py-3 text-[0.84em] leading-[1.5] text-text outline-none`}
@@ -585,6 +611,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           data-thread-questionnaire-custom-layout="compact-flow"
                         >
                           <PlaintextEditable
+                            {...answerEditorProps(question.id)}
                             id={`${request.id}:${question.id}:custom`}
                             ariaLabel={`${headerText} answer`}
                             autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
@@ -612,6 +639,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                         </div>
                       ) : (
                         <PlaintextEditable
+                          {...answerEditorProps(question.id)}
                           id={`${request.id}:${question.id}:custom`}
                           ariaLabel={`${headerText} answer`}
                           autoFocus={isSoleFreeformQuestion || isQuickResponseCustomInputRequested}
@@ -651,33 +679,13 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         {!isHistoryMode && ((isPreviewMode ? previewProps?.draft?.attachments.length : attachments.length) || isAttaching) ? (
           <div className="space-y-2">
             {(isPreviewMode ? previewProps?.draft?.attachments ?? [] : attachments).length ? (
-              <div className="flex flex-wrap gap-3">
-                {(isPreviewMode ? previewProps?.draft?.attachments ?? [] : attachments).map((attachment, index) => (
-                  <div key={attachment.id} className={joinClasses("relative", compact ? "h-16 w-16" : "h-24 w-24")}>
-                    <ThreadLightboxImage
-                      alt={`Questionnaire attached image ${index + 1}`}
-                      buttonClassName="h-full w-full rounded-[0.95rem]"
-                      imageClassName="h-full w-full object-cover"
-                      src={attachment.url}
-                    />
-                    {!isPreviewMode ? <button
-                      type="button"
-                      disabled={isSubmitting}
-                      aria-label={`Remove questionnaire attached image ${index + 1}`}
-                      title="Remove attached image"
-                      className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                      onClick={() => {
-                        editing.session.edit((draft) => ({
-                          ...draft,
-                          attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
-                        }));
-                      }}
-                    >
-                      <XIcon size={14} />
-                    </button> : null}
-                  </div>
-                ))}
-              </div>
+              <ComposerAttachments attachments={isPreviewMode ? previewProps?.draft?.attachments ?? [] : attachments}
+                compact={compact} disabled={isSubmitting || isAttaching}
+                onRemove={isPreviewMode ? undefined : removeAttachment}
+                onReference={isPreviewMode ? undefined : number => {
+                  const editor = answerEditors.current.get(activeAnswer.current ?? "") ?? answerEditors.current.values().next().value;
+                  editor?.insertText(`#[attach:${number}]`);
+                }} />
             ) : null}
             {isAttaching && !isPreviewMode ? (
               <p className="m-0 text-[0.78em] leading-[1.6] text-fg/muted">Attaching pasted image...</p>

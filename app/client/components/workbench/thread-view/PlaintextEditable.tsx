@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default PlaintextEditable: plaintext input with autofocus, overlays and portal-isolated mention suggestions.
- * - PlaintextEditableHandle: focus the editor at a model-text offset.
+ * - PlaintextEditableHandle: focus, insert or apply guarded in-place text edits.
  * - PlaintextHighlight: one overlay range and its classes.
  * - threadPlaintextEditableClassName: shared Tailwind styling for thread text editors.
  */
@@ -15,7 +15,7 @@ import {
   type InlineMentionHighlightSources,
   type InlineMentionSuggestion,
 } from "../../../workbench/thread/inline-mention-highlights";
-import { getInlineMentionMarkClassName } from "../../../workbench/thread/inline-mention-styles";
+import { getInlineMentionMarkClassName, getInlineMentionOverlayClassName } from "../../../workbench/thread/inline-mention-styles";
 import { getCollapsedRangeRect } from "../../../workbench/dom/layout/viewport-metrics";
 import { isMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import {
@@ -25,8 +25,16 @@ import {
 import VoiceInputControl, { useVoiceInput } from "../voice/VoiceInputControl";
 import { capturePlaintextSelection, restorePlaintextSelection } from "./plaintext-selection";
 import type { VoiceSelection } from "workbench-shared/workbench/voice/voice-document";
+import { attachmentReferenceDragType, attachmentReferences, type AttachmentTextEdit } from "workbench-shared/workbench/thread/attachment-references";
+import { applyPlaintextEdits, mapPlaintextOffset, selectPlaintextRange } from "./plaintext-edits";
+import { getCaretRangeFromPoint } from "../../../workbench/dom/selection/selection-dom";
 
-export interface PlaintextEditableHandle { focus(offset?: number): void }
+export interface PlaintextEditableHandle {
+  focus(offset?: number): void;
+  canEdit(): boolean;
+  applyEdits(expectedText: string, edits: readonly AttachmentTextEdit[]): boolean;
+  insertText(text: string): void;
+}
 
 export interface PlaintextHighlight {
   start: number;
@@ -225,18 +233,20 @@ function InlineMentionSuggestionsPopup ({
 export default function PlaintextEditable ({
   ariaLabel,
   autoFocus = false,
+  attachmentCount,
   className,
   disabled = false,
   id,
   onBlur,
   onSelectionChange,
   onChange,
+  onEditError,
   onCompositionEnd,
   onCompositionStart,
   onKeyDown,
   onPaste,
   placeholder,
-  highlights = [],
+  highlights: suppliedHighlights = [],
   highlightText = false,
   mentionSources = null,
   mentionSuggestionsPlacement = "above",
@@ -247,6 +257,7 @@ export default function PlaintextEditable ({
 }: {
   ariaLabel?: string;
   autoFocus?: boolean;
+  attachmentCount?: number;
   className?: string;
   disabled?: boolean;
   id?: string;
@@ -254,6 +265,7 @@ export default function PlaintextEditable ({
   /** Model-text selection after clicks, key presses, input and drag-selection; null when focus is elsewhere. */
   onSelectionChange?: (range: { start: number; end: number } | null) => void;
   onChange?: (value: string) => void;
+  onEditError?: (error: Error) => void;
   onCompositionEnd?: (event: CompositionEvent<HTMLDivElement>) => void;
   onCompositionStart?: (event: CompositionEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -271,6 +283,18 @@ export default function PlaintextEditable ({
   value: string;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
+  const retainedSelection = useRef<{ text: string; selection: VoiceSelection } | null>(null);
+  const applyingEdits = useRef(false);
+  const references = attachmentCount === undefined ? [] : attachmentReferences(value);
+  const highlights = [
+    ...suppliedHighlights.filter(highlight => !references.some(reference => reference.start < highlight.end && reference.end > highlight.start)),
+    ...references.map(reference => ({
+      start: reference.start, end: reference.end,
+      className: reference.number !== null && reference.number <= (attachmentCount ?? 0)
+        ? getInlineMentionOverlayClassName("attachment")
+        : `${getInlineMentionOverlayClassName("attachment")} bg-danger/15 underline decoration-danger`,
+    })),
+  ].sort((left, right) => left.start - right.start);
   const savedVoiceSelection = useRef<{ text: string } & ({ selection: VoiceSelection } | { error: Error }) | null>(null);
   const pendingVoiceSelection = useRef<{ text: string; selection: VoiceSelection } | null>(null);
   const voice = useVoiceInput(value, onChange, !disabled && !readOnly, {
@@ -286,16 +310,59 @@ export default function PlaintextEditable ({
     },
     accept(text, selection) { pendingVoiceSelection.current = { text, selection }; },
   });
+  const canEdit = () => Boolean(elementRef.current && !disabled && !readOnly && !voice.locked && !isComposingRef.current);
+  const applyEdits = (expectedText: string, edits: readonly AttachmentTextEdit[]) => {
+    if (!canEdit() || expectedText !== value) return false;
+    applyingEdits.current = true;
+    try {
+      applyPlaintextEdits(elementRef.current!, expectedText, edits);
+      const retained = retainedSelection.current;
+      if (retained?.text === expectedText) retainedSelection.current = {
+        text: elementRef.current!.innerText,
+        selection: {
+          start: mapPlaintextOffset(retained.selection.start, edits),
+          end: mapPlaintextOffset(retained.selection.end, edits),
+        },
+      };
+      return true;
+    } catch (error) {
+      if (!onEditError) throw error;
+      onEditError(error instanceof Error ? error : new Error("Unable to edit the attachment reference."));
+      return false;
+    } finally { applyingEdits.current = false; }
+  };
+  const insertText = (text: string) => {
+    const element = elementRef.current;
+    if (!element || !canEdit()) return;
+    applyingEdits.current = true;
+    try {
+      const retained = retainedSelection.current;
+      const selection = capturePlaintextSelection(element, value)
+        ?? (retained?.text === value ? retained.selection : null)
+        ?? { start: value.length, end: value.length };
+      const next = applyPlaintextEdits(element, value, [{ ...selection, text }]);
+      const caret = selection.start + text.length;
+      element.focus();
+      selectPlaintextRange(element, next, caret);
+      retainedSelection.current = { text: next, selection: { start: caret, end: caret } };
+      setCaretOffset(caret);
+      onChange?.(next);
+    } catch (error) {
+      if (!onEditError) throw error;
+      onEditError(error instanceof Error ? error : new Error("Unable to insert the attachment reference."));
+    } finally { applyingEdits.current = false; }
+  };
   useImperativeHandle(ref, () => ({
+    canEdit,
+    applyEdits,
+    insertText,
     focus(offset) {
       const element = elementRef.current;
       if (!element || disabled || readOnly || voice.locked) return;
-      // Use canonical plaintext so an offset also works after browser-created multiline nodes.
-      element.textContent = value;
       element.focus();
-      restoreEditableCaretOffset(element, Math.max(0, offset ?? value.length));
+      selectPlaintextRange(element, value, Math.max(0, Math.min(value.length, offset ?? value.length)));
     },
-  }), [disabled, readOnly, value, voice.locked]);
+  }), [disabled, readOnly, value, voice.locked, onChange, onEditError]);
   const containerRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const syncVoiceFontSize = () => {
@@ -492,6 +559,8 @@ export default function PlaintextEditable ({
           suppressContentEditableWarning
           tabIndex={readOnly || disabled ? -1 : 0}
           onBlur={event => {
+            const retained = capturePlaintextSelection(event.currentTarget, value);
+            retainedSelection.current = retained ? { text: value, selection: retained } : null;
             if (!voice.locked && voice.visible) {
               try {
                 const selection = capturePlaintextSelection(event.currentTarget, value);
@@ -513,6 +582,7 @@ export default function PlaintextEditable ({
             onCompositionStart?.(event);
           }}
           onInput={(event) => {
+            if (applyingEdits.current) return;
             if (voice.locked) { event.currentTarget.textContent = value; return; }
             const nextValue = normalizePlaintextEditableValue(event.currentTarget.innerText);
             if (!nextValue) {
@@ -557,6 +627,24 @@ export default function PlaintextEditable ({
             onKeyDown?.(event);
           }}
           onPaste={event => { if (voice.locked) { event.preventDefault(); return; } onPaste?.(event); }}
+          onDragOver={event => {
+            if (attachmentCount === undefined || !event.dataTransfer.types.includes(attachmentReferenceDragType)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = canEdit() ? "copy" : "none";
+          }}
+          onDrop={event => {
+            if (attachmentCount === undefined || !event.dataTransfer.types.includes(attachmentReferenceDragType)) return;
+            event.preventDefault();
+            if (!canEdit()) return;
+            const number = Number(event.dataTransfer.getData(attachmentReferenceDragType));
+            if (!Number.isSafeInteger(number) || number < 1 || number > attachmentCount) return;
+            const range = getCaretRangeFromPoint(event.clientX, event.clientY);
+            if (!range || !event.currentTarget.contains(range.startContainer)) return;
+            const selection = window.getSelection();
+            selection?.removeAllRanges();
+            selection?.addRange(range);
+            insertText(`#[attach:${number}]`);
+          }}
           onClick={updateCaretOffset}
           onKeyUp={updateCaretOffset}
           onMouseUp={onSelectionChange ? updateCaretOffset : undefined}

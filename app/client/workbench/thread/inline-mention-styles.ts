@@ -14,17 +14,17 @@ export const inlineMentionMarkBaseClassName = [
   "[box-decoration-break:clone] [-webkit-box-decoration-break:clone]",
 ].join(" ");
 
-export function getInlineMentionMarkToneClassName(kind: InlineMentionCandidateKind) {
+export function getInlineMentionMarkToneClassName(kind: InlineMentionCandidateKind | "attachment") {
   return kind === "skill"
     ? "ring-1 ring-inset bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] ring-[color-mix(in_srgb,var(--accent)_24%,transparent)]"
     : projectFilePathBackgroundClassName;
 }
 
-export function getInlineMentionMarkClassName(kind: InlineMentionCandidateKind) {
+export function getInlineMentionMarkClassName(kind: InlineMentionCandidateKind | "attachment") {
   return `${inlineMentionMarkBaseClassName} ${getInlineMentionMarkToneClassName(kind)}`;
 }
 
-export function getInlineMentionOverlayClassName(kind: InlineMentionCandidateKind) {
+export function getInlineMentionOverlayClassName(kind: InlineMentionCandidateKind | "attachment") {
   return [
     getInlineMentionMarkClassName(kind),
     "rounded-[0.28em]",

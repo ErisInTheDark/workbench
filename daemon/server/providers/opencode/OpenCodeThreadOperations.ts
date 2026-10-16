@@ -128,10 +128,15 @@ function modelRef(model: string) {
 function prompt(input: readonly WorkbenchUserInput[]) {
   const text: string[] = [];
   const files: { uri: string; name?: string }[] = [];
+  let imageNumber = 0;
   for (const part of input) {
     if (part.type === "text") text.push(part.text);
     else if (part.type === "skill" || part.type === "mention") text.push(`@${part.name} (${part.path})`);
-    else if (part.type === "localImage" || part.type === "localAudio") files.push({ uri: pathToFileURL(part.path).href });
+    else if (part.type === "image" || part.type === "localImage") files.push({
+      uri: part.type === "image" ? part.url : pathToFileURL(part.path).href,
+      name: `#[attach:${++imageNumber}]`,
+    });
+    else if (part.type === "localAudio") files.push({ uri: pathToFileURL(part.path).href });
     else files.push({ uri: part.url });
   }
   return { text: text.join("\n"), ...(files.length ? { files } : {}) };

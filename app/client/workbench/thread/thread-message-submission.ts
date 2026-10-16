@@ -1,5 +1,4 @@
 /*
- * Keywords: composer, draft, preservation, admission, cleanup, cancellation.
  * Exports:
  * - ThreadMessageNotSentError: expected pre-dispatch cancellation that silently restores composer input. Keywords: message, draft, cancellation.
  * - isThreadMessageNotSentError: classify expected not-sent cancellation without matching text. Keywords: message, error, classification.

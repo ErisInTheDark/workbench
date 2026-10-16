@@ -47,7 +47,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { isWorkbenchThreadSnoozeAvailable, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon, XIcon } from "../workbench-icons";
+import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import SendActionBadge from "./SendActionBadge";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
@@ -69,6 +69,8 @@ import {
 import { workbenchThreadTodoReference, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import ComposerReferencePills from "./ComposerReferencePills";
 import ThreadLightboxImage from "./ThreadLightboxImage";
+import ComposerAttachments from "./ComposerAttachments";
+import { applyAttachmentTextEdits, renumberAttachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import ThreadProfileEditor from "./ThreadProfileEditor";
 import ThreadProfileEditorController, { type ProfileEditorSection } from "./ThreadProfileEditorController";
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
@@ -275,6 +277,18 @@ export default function ThreadComposer ({
   const questionnaireRequestKey = pendingUserInputRequest?.requestKey ?? "";
   const showQuestionnairePanel = hasVisiblePendingUserInputRequest && isQuestionnaireVisible;
   const composerInputRef = useRef<PlaintextEditableHandle>(null);
+  const removeAttachment = (id: string) => {
+    const current = editing.session.getSnapshot().draft;
+    const next = current.attachments.filter(attachment => attachment.id !== id);
+    const edits = renumberAttachmentReferences(current.text, current.attachments, next);
+    if (!composerInputRef.current?.canEdit()) return;
+    if (!composerInputRef.current.applyEdits(current.text, edits)) return;
+    editing.session.edit(draft => {
+      const attachments = draft.attachments.filter(attachment => attachment.id !== id);
+      return { ...draft, attachments, text: applyAttachmentTextEdits(draft.text,
+        renumberAttachmentReferences(draft.text, draft.attachments, attachments)) };
+    });
+  };
   const focusAfterSendRef = useRef(false);
   const modePanelsRef = useRef<HTMLDivElement>(null);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
@@ -748,6 +762,8 @@ export default function ThreadComposer ({
                 />
                 <PlaintextEditable
                   ref={composerInputRef}
+                  attachmentCount={attachments.length}
+                  onEditError={error => editing.session.reportError(error, "Unable to edit attachment references.")}
                   id={`thread-composer:${thread.id}`}
                   ariaLabel={isCommentMode ? "Write comment" : "Message thread"}
                   className={`${threadPlaintextEditableClassName} min-h-[5.75rem] w-full border-0 bg-transparent px-1 py-1 text-[0.96em] leading-[1.65] text-text outline-none`}
@@ -775,34 +791,9 @@ export default function ThreadComposer ({
                 />
                 {hasNormalComposerSupplementalContent ? (
                   <div className="mt-3 space-y-3">
-                    {attachments.length ? (
-                      <div className="flex flex-wrap gap-3 px-1">
-                        {attachments.map((attachment, index) => (
-                          <div key={attachment.id} className="relative h-24 w-24">
-                            <ThreadLightboxImage
-                              alt={`Attached image ${index + 1}`}
-                              buttonClassName="h-full w-full rounded-[0.95rem]"
-                              imageClassName="h-full w-full object-cover"
-                              src={attachment.url}
-                            />
-                            <button
-                              type="button"
-                              aria-label={`Remove attached image ${index + 1}`}
-                              title="Remove attached image"
-                              className="absolute top-1.5 right-1.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full bg-[color-mix(in srgb, var(--bg) 82%, transparent)] text-text shadow-sm transition hover:bg-[color-mix(in srgb, var(--bg) 92%, transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
-                              onClick={() => {
-                                editing.session.edit((draft) => ({
-                                  ...draft,
-                                  attachments: draft.attachments.filter((currentAttachment) => currentAttachment.id !== attachment.id),
-                                }));
-                              }}
-                            >
-                              <XIcon size={14} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
+                    {attachments.length ? <ComposerAttachments attachments={attachments} disabled={isInputDisabled || isComposing}
+                      onRemove={removeAttachment}
+                      onReference={number => composerInputRef.current?.insertText(`#[attach:${number}]`)} /> : null}
                     {helperText ? (
                       <p className={joinClasses(
                         attachments.length ? "mt-2 mb-0 px-1 text-[0.78em] leading-[1.6]" : "m-0 px-1 text-[0.78em] leading-[1.6]",

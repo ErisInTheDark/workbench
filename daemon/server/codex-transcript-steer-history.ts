@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { ThreadItem as NativeThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
 import type { ThreadItem as WorkbenchThreadItem, UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { toWorkbenchCodexInput, type CodexTurnSource as Turn } from "workbench-shared/codex/thread-adapter";
+import { stripCodexAttachmentFrames } from "workbench-shared/codex/attachment-input";
 import { areUserInputsEquivalentForUserMessageDedupe } from "workbench-shared/workbench/thread/thread-item-normalization";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types.ts";
@@ -260,7 +261,7 @@ export function updateMatchingPendingSteerEntriesForUserMessage(
   resolvedAt: number,
 ) {
   if (item.type !== "userMessage") return entries;
-  const content = item.content.map(toWorkbenchCodexInput);
+  const content = stripCodexAttachmentFrames(item.content.map(toWorkbenchCodexInput));
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (
@@ -285,7 +286,7 @@ export function updatePendingSteerEntriesForInterruptedTurn(
   const canonicalUserMessages = turn.items.filter((
     item,
   ): item is Extract<ThreadItem, { type: "userMessage" }> => item.type === "userMessage")
-    .map(item => ({ ...item, content: item.content.map(toWorkbenchCodexInput) }));
+    .map(item => ({ ...item, content: stripCodexAttachmentFrames(item.content.map(toWorkbenchCodexInput)) }));
   let changed = false;
   const nextEntries = entries.map((entry) => {
     if (entry.status !== "pending" || Boolean(entry.clientUserMessageId?.trim())) return entry;

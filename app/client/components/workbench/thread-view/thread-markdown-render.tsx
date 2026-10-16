@@ -254,6 +254,11 @@ function renderThreadInlineNodes (
             source={node.source}
           />
         );
+      case "attachmentMention":
+        return <span key={key} title={node.number === null ? "Removed attachment" : `Attachment ${node.number}`}
+          className={`${getInlineMentionMarkClassName("attachment")} rounded-[0.35rem] px-[0.34em] py-[0.08em] ${node.number === null ? "text-danger" : ""}`}>
+          {node.text}
+        </span>;
       case "knownSkillMention":
         return (
           <span

@@ -1,5 +1,4 @@
 /*
- * Keywords: draft, hydration, save, navigation, attachment, submission.
  * Exports:
  * - default DraftSessionController: own buffered edits, saves, attachments, and submission for either form.
  * - DraftSessionContent: shared image attachment shape.
@@ -53,7 +52,7 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
   #attached = false;
   #submitted = false;
   #retargetOwner: string | null = null;
-  readonly #attachmentReads = new Set<symbol>();
+  readonly #attachmentReads = new Map<symbol, readonly WorkbenchThreadComposerAttachmentDraft[] | null>();
 
   constructor(draft: Draft, ports: DraftSessionPorts<Draft>) {
     this.#ports = ports;
@@ -176,7 +175,7 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
   async attachImages(read: () => Promise<readonly { url: string }[]>) {
     if (this.#snapshot.isSubmitting) return;
     const operation = Symbol();
-    this.#attachmentReads.add(operation);
+    this.#attachmentReads.set(operation, null);
     this.#publish({ isAttaching: true, error: "" });
     try {
       const input = await read();
@@ -186,15 +185,25 @@ export default class DraftSessionController<Draft extends DraftSessionContent> {
           ? crypto.randomUUID() : `attachment:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         url,
       }));
+      this.#attachmentReads.set(operation, images);
+    } catch (error) {
+      if (this.#attachmentReads.has(operation)) {
+        this.#attachmentReads.set(operation, []);
+        this.reportError(error, "Unable to attach the pasted image.");
+      }
+    } finally {
+      const error = this.#snapshot.error;
+      const images: WorkbenchThreadComposerAttachmentDraft[] = [];
+      for (const [pending, batch] of this.#attachmentReads) {
+        if (batch === null) break;
+        images.push(...batch);
+        this.#attachmentReads.delete(pending);
+      }
       if (images.length) this.edit((draft) => ({
         ...draft,
         attachments: [...draft.attachments, ...images.filter((image) => !draft.attachments.some(({ id }) => id === image.id))],
       }));
-    } catch (error) {
-      if (this.#attachmentReads.has(operation)) this.reportError(error, "Unable to attach the pasted image.");
-    } finally {
-      this.#attachmentReads.delete(operation);
-      this.#publish({ isAttaching: this.#attachmentReads.size > 0 });
+      this.#publish({ isAttaching: this.#attachmentReads.size > 0, error });
     }
   }
 

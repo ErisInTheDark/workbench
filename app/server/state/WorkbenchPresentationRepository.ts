@@ -138,7 +138,7 @@ export default class WorkbenchPresentationRepository {
       GROUP BY logical_project_id, daemon_id, project_id
       ORDER BY revision DESC, logical_project_id, daemon_id, project_id
     `).all() as Array<Pick<DraftRow, "logical_project_id" | "daemon_id" | "project_id" | "revision">>;
-    const attachments = db.prepare("SELECT draft_id, id, media_type, content_hash FROM presentation_draft_attachments ORDER BY draft_id, id")
+    const attachments = db.prepare("SELECT draft_id, id, media_type, content_hash FROM presentation_draft_attachments ORDER BY draft_id, position, id")
       .all() as Array<Pick<PresentationRows["attachments"], "draft_id" | "id" | "media_type" | "content_hash">>;
     const references = this.readReferences();
     const folders = db.prepare("SELECT * FROM presentation_folders ORDER BY scope, position, id")
@@ -309,12 +309,12 @@ export default class WorkbenchPresentationRepository {
         throw new Error("Attachment content does not match its expected digest.");
       }
       db.prepare(`
-        INSERT INTO presentation_draft_attachments(draft_id, id, media_type, content_length, content_hash)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO presentation_draft_attachments(draft_id, id, media_type, content_length, content_hash, position)
+        VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM presentation_draft_attachments WHERE draft_id = ?))
         ON CONFLICT(draft_id, id) DO UPDATE SET
           media_type = excluded.media_type, content_length = excluded.content_length,
           content_hash = excluded.content_hash
-      `).run(draftId, id, mediaType, length, expectedHash);
+      `).run(draftId, id, mediaType, length, expectedHash, draftId);
       db.prepare("UPDATE presentation_drafts SET revision = ? WHERE id = ?")
         .run(this.nextRevision(), draftId);
     })();

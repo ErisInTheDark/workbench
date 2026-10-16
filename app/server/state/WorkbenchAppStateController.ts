@@ -169,10 +169,15 @@ export default class WorkbenchAppStateController {
         { where: ownerWhere, limit: 1 },
       ))[0];
       if (!parent || parent.deleted) throw new Error("The image draft is unavailable.");
+      const attachments = this.#repository.query(selectRows(
+        composer ? appStateTables.composerDraftAttachments : appStateTables.questionnaireDraftAttachments,
+        { where: ownerWhere },
+      ));
+      const position = Math.max(-1, ...attachments.map(row => row.position)) + 1;
       const revision = this.#repository.commit(nextRevision => composer
         ? [
           upsertRow(appStateTables.composerDraftAttachments, {
-            ...ownerWhere, id: attachmentId, owner_deleted: 0, url: STORED_IMAGE,
+            ...ownerWhere, id: attachmentId, owner_deleted: 0, url: STORED_IMAGE, position,
           }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "id"],
             updateColumns: ["url"] }),
           upsertRow(appStateTables.composerDraftImageContent, {
@@ -184,7 +189,7 @@ export default class WorkbenchAppStateController {
         : [
           upsertRow(appStateTables.questionnaireDraftAttachments, {
             ...ownerWhere, request_key: "requestKey" in owner ? owner.requestKey : "",
-            key: attachmentId, owner_deleted: 0, url: STORED_IMAGE,
+            key: attachmentId, owner_deleted: 0, url: STORED_IMAGE, position,
           }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "key"],
             updateColumns: ["url"] }),
           upsertRow(appStateTables.questionnaireDraftImageContent, {
@@ -685,8 +690,11 @@ export default class WorkbenchAppStateController {
       if (next.has(row.id)) continue;
       mutations.push(deleteRows(appStateTables.composerDraftAttachments, { ...where, id: row.id }));
     }
-    for (const [id, url] of next) {
+    for (const [position, [id, url]] of [...next].entries()) {
       const current = existing.find(row => row.id === id);
+      if (current && current.position !== position) {
+        mutations.push(updateRows(appStateTables.composerDraftAttachments, { position }, { ...where, id }));
+      }
       if (url.startsWith("/api/workbench-client-state/attachment?")) {
         if (!current) throw new Error("The saved draft image reference is unavailable.");
         continue;
@@ -696,9 +704,9 @@ export default class WorkbenchAppStateController {
         mutations.push(deleteRows(appStateTables.composerDraftImageContent, { ...where, attachment_id: id }));
       }
       mutations.push(upsertRow(appStateTables.composerDraftAttachments, {
-        ...where, id, owner_deleted: 0, url,
+        ...where, id, owner_deleted: 0, url, position,
       }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "id"],
-        updateColumns: ["url"] }));
+        updateColumns: ["url", "position"] }));
     }
     return mutations;
   }
@@ -743,8 +751,11 @@ export default class WorkbenchAppStateController {
       if (next.has(row.key)) continue;
       mutations.push(deleteRows(appStateTables.questionnaireDraftAttachments, { ...where, key: row.key }));
     }
-    for (const [key, url] of next) {
+    for (const [position, [key, url]] of [...next].entries()) {
       const current = existing.find(row => row.key === key);
+      if (current && current.position !== position) {
+        mutations.push(updateRows(appStateTables.questionnaireDraftAttachments, { position }, { ...where, key }));
+      }
       if (url.startsWith("/api/workbench-client-state/attachment?")) {
         if (!current) throw new Error("The saved draft image reference is unavailable.");
         continue;
@@ -754,9 +765,9 @@ export default class WorkbenchAppStateController {
         mutations.push(deleteRows(appStateTables.questionnaireDraftImageContent, { ...where, attachment_id: key }));
       }
       mutations.push(upsertRow(appStateTables.questionnaireDraftAttachments, {
-        ...where, key, owner_deleted: 0, url,
+        ...where, key, owner_deleted: 0, url, position,
       }, { conflictColumns: ["daemon_registration_id", "project_id", "thread_id", "request_key", "key"],
-        updateColumns: ["url"] }));
+        updateColumns: ["url", "position"] }));
     }
     return mutations;
   }

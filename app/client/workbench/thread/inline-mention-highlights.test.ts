@@ -20,6 +20,11 @@ const sources = buildInlineMentionCandidates({
   }],
 });
 
+test("attachment tokens never activate files or offer filesystem completion", () => {
+  assert.deepEqual(buildInlineMentionHighlights("#[attach:2]", sources), []);
+  assert.deepEqual(buildInlineMentionSuggestions("#[attach:2", 10, sources), []);
+});
+
 test("completion produces a bracketed file reference and ends suggestions for both mention kinds", () => {
   for (const [input, path] of [
     ["#wid", "app/widget.ts"],

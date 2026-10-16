@@ -2,7 +2,7 @@
  * Exports:
  * - ClaudeContentBlock/ClaudePromptContent: SDK user-message content; text-only prompts stay plain strings.
  * - claudeImageBlock: convert a base64 data URL or http(s) URL into a Claude image block.
- * - claudePromptContent: translate submitted Workbench input into Claude prompt content, including images.
+ * - claudePromptContent: translate submitted input and label images using native document titles.
  * - appendClaudePrompt: put hidden Workbench content after prompt content without disturbing attached images.
  * - prefixClaudePrompt: put Workbench context ahead of prompt content without disturbing attached images.
  */
@@ -52,6 +52,11 @@ async function localImage(path: string): Promise<ClaudeImageBlock> {
 /** Adjacent text parts join with newlines, matching the text-only prompt Claude has always received. */
 export async function claudePromptContent(parts: readonly WorkbenchUserInput[]): Promise<ClaudePromptContent> {
   const blocks: ClaudeContentBlock[] = [];
+  let imageNumber = 0;
+  const image = (content: ClaudeImageBlock) => blocks.push({
+    type: "document", title: `#[attach:${++imageNumber}]`,
+    source: { type: "content", content: [content] },
+  });
   const text = (value: string) => {
     const last = blocks.at(-1);
     if (last?.type === "text") blocks[blocks.length - 1] = { type: "text", text: `${last.text}\n${value}` };
@@ -61,8 +66,8 @@ export async function claudePromptContent(parts: readonly WorkbenchUserInput[]):
     if (part.type === "text") text(part.text);
     else if (part.type === "skill") text(`/${part.name}`);
     else if (part.type === "mention") text(`@${part.path}`);
-    else if (part.type === "image") blocks.push(claudeImageBlock(part.url));
-    else if (part.type === "localImage") blocks.push(await localImage(part.path));
+    else if (part.type === "image") image(claudeImageBlock(part.url));
+    else if (part.type === "localImage") image(await localImage(part.path));
     else throw new Error(`Claude provider does not support ${part.type} input.`);
   }
   if (blocks.every(block => block.type === "text")) return blocks.map(block => block.text).join("\n");

@@ -8,6 +8,9 @@ import { claudePromptContent, prefixClaudePrompt } from "./claude-prompt-content
 
 const text = (value: string) => ({ type: "text" as const, text: value, text_elements: [] });
 const png = (data: string) => ({ type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data } });
+const attachment = (number: number, image: object) => ({
+  type: "document", title: `#[attach:${number}]`, source: { type: "content", content: [image] },
+});
 
 test("text-only input stays the exact newline-joined string Claude already receives", async () => {
   assert.equal(await claudePromptContent([
@@ -24,8 +27,8 @@ test("images become content blocks in input order alongside merged text", async 
     text("look"), text("here"), { type: "image", url: "data:image/png;base64,AAAA" },
     { type: "localImage", path }, { type: "image", url: "https://example.com/a.webp" }, text("thanks"),
   ]), [
-    { type: "text", text: "look\nhere" }, png("AAAA"), png(Buffer.from("local-bytes").toString("base64")),
-    { type: "image", source: { type: "url", url: "https://example.com/a.webp" } }, { type: "text", text: "thanks" },
+    { type: "text", text: "look\nhere" }, attachment(1, png("AAAA")), attachment(2, png(Buffer.from("local-bytes").toString("base64"))),
+    attachment(3, { type: "image", source: { type: "url", url: "https://example.com/a.webp" } }), { type: "text", text: "thanks" },
   ]);
 });
 

@@ -227,13 +227,14 @@ test("launch reads stored image bytes and disposal drains the accepted operation
     const request = WorkbenchThreadLaunchRequestSchema.parse(params);
     launchId = request.launchId;
     const image = request.firstInput.find(input => input.type === "image");
+    assert.equal(request.firstInput.filter(input => input.type === "text").length, 1);
     assert.equal(image?.type === "image" ? image.url : null, `data:image/png;base64,${content.toString("base64")}`);
     assert.equal(request.projectId, projectId);
     entered.resolve();
     return accepted.promise;
   });
   const launching = f.owner.launch(f.draftId, f.draft().revision);
-  await entered.promise;
+  await Promise.race([entered.promise, launching]);
   const closing = f.owner.dispose();
   await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /closing/);
   assert.equal(f.retained(), 1);

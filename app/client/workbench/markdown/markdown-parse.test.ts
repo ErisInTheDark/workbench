@@ -6,6 +6,13 @@ import { test } from "node:test";
 
 import { isThreadMarkdownSectionBreak, parseBlocks, parseInlineMarkdown, parseThreadMarkdownSections } from "./markdown-parse";
 
+test("attachment mentions are not filesystem links and code examples remain literal", () => {
+  const nodes = parseInlineMarkdown("#[attach:2] #[attach:removed] `#[attach:3]`", { profile: "thread" });
+  assert.deepEqual(nodes.filter(node => node.type !== "text").map(node => node.type), [
+    "attachmentMention", "attachmentMention", "code",
+  ]);
+});
+
 test("thread sections split prose at top-level plans and mode changes only", () => {
   const markdown = [
     "intro **text**",

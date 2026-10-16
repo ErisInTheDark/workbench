@@ -237,7 +237,7 @@ export function projectWorkbenchClientStateRows(
     composerReferences.set(key, values);
   }
   const composerAttachments = new Map<string, Array<{ id: string; url: string }>>();
-  for (const row of rows.composerDraftAttachments) {
+  for (const row of [...rows.composerDraftAttachments].sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))) {
     const key = composerKey(row);
     const values = composerAttachments.get(key) ?? [];
     values.push({ id: row.id, url: row.url });
@@ -283,7 +283,7 @@ export function projectWorkbenchClientStateRows(
     (values[row.key] ??= []).push(row.value);
     questionnaireSelections.set(key, values);
   }
-  for (const row of rows.questionnaireDraftAttachments) {
+  for (const row of [...rows.questionnaireDraftAttachments].sort((a, b) => a.position - b.position || a.key.localeCompare(b.key))) {
     const key = questionnaireKey(row);
     const values = questionnaireAttachments.get(key) ?? [];
     values.push({ id: row.key, url: row.url });

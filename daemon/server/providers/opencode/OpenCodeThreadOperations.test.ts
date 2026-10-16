@@ -654,7 +654,7 @@ test("browse screenshot delivers the marked image as a steer into the live turn"
   const prompt = prompts[0]!;
   assert.equal(prompt.delivery, "steer");
   assert.equal(prompt.text, createAgentScreenshotSteerText());
-  assert.deepEqual(prompt.files, [{ uri: imageUrl }]);
+  assert.deepEqual(prompt.files, [{ uri: imageUrl, name: "#[attach:1]" }]);
   assert.deepEqual(prompt.metadata.workbench.input, [
     { type: "text", text: createAgentScreenshotSteerText(), text_elements: [] },
     { type: "image", url: imageUrl },

@@ -27,6 +27,7 @@ import {
   type TableDefinition,
 } from "../database/schema/schema-definition.ts";
 import {
+  addColumns,
   createTable,
   copyDistinctValues,
   deleteRows,
@@ -1024,7 +1025,7 @@ function composerOwnerConstraints(table: {
   ];
 }
 
-const composerDraftAttachmentsHistory = initialHistory(defineTable("composer_draft_attachments", {
+const composerDraftAttachmentsV1 = defineTable("composer_draft_attachments", {
   daemon_registration_id: text().notNull(),
   project_id: text().notNull(),
   thread_id: text().notNull(),
@@ -1036,7 +1037,21 @@ const composerDraftAttachmentsHistory = initialHistory(defineTable("composer_dra
     primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.id]),
     ...composerOwnerConstraints(table),
   ],
-})));
+}));
+const composerDraftAttachments = evolveTable(composerDraftAttachmentsV1, {
+  add: { position: integer().notNull().nonNegative().default(0) },
+});
+const composerDraftAttachmentsHistory = defineTableHistory({
+  current: composerDraftAttachments,
+  versions: [
+    tableVersion({ schemaVersion: appStateReleases.initialAppState.version,
+      table: composerDraftAttachmentsV1, migration: createTable(composerDraftAttachmentsV1) }),
+    tableVersion({ schemaVersion: appStateReleases.attachmentOrder.version,
+      table: composerDraftAttachments, migration: addColumns({
+        from: composerDraftAttachmentsV1, to: composerDraftAttachments, columns: ["position"],
+      }) }),
+  ],
+});
 
 const composerDraftReferences = defineTable("composer_draft_references", {
   daemon_registration_id: text().notNull(),
@@ -1177,7 +1192,7 @@ const questionnaireDraftSelectionsHistory = initialHistory(defineTable("question
   ],
 })));
 
-const questionnaireDraftAttachmentsHistory = initialHistory(defineTable("questionnaire_draft_attachments", {
+const questionnaireDraftAttachmentsV1 = defineTable("questionnaire_draft_attachments", {
   daemon_registration_id: text().notNull(),
   project_id: text().notNull(),
   thread_id: text().notNull(),
@@ -1190,7 +1205,21 @@ const questionnaireDraftAttachmentsHistory = initialHistory(defineTable("questio
     primaryKey([table.daemon_registration_id, table.project_id, table.thread_id, table.request_key, table.key]),
     ...questionnaireOwnerConstraints(table),
   ],
-})));
+}));
+const questionnaireDraftAttachments = evolveTable(questionnaireDraftAttachmentsV1, {
+  add: { position: integer().notNull().nonNegative().default(0) },
+});
+const questionnaireDraftAttachmentsHistory = defineTableHistory({
+  current: questionnaireDraftAttachments,
+  versions: [
+    tableVersion({ schemaVersion: appStateReleases.initialAppState.version,
+      table: questionnaireDraftAttachmentsV1, migration: createTable(questionnaireDraftAttachmentsV1) }),
+    tableVersion({ schemaVersion: appStateReleases.attachmentOrder.version,
+      table: questionnaireDraftAttachments, migration: addColumns({
+        from: questionnaireDraftAttachmentsV1, to: questionnaireDraftAttachments, columns: ["position"],
+      }) }),
+  ],
+});
 
 const questionnaireDraftImageContent = defineTable("questionnaire_draft_image_content", {
   daemon_registration_id: text().notNull(),

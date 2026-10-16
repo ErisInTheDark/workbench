@@ -98,6 +98,7 @@ function inlineVisibleText(node: ParsedInlineNode): string {
     case "text":
     case "code":
     case "knownSkillMention":
+    case "attachmentMention":
       return node.text;
     case "break":
       return "\n";

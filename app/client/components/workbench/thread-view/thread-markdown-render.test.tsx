@@ -12,6 +12,12 @@ import {
   renderThreadMarkdown,
 } from "./thread-markdown-render";
 
+test("attachment references render without filesystem navigation", () => {
+  const html = renderToStaticMarkup(createElement(Fragment, null, renderThreadInlineMarkdown("#[attach:2]", { profile: "thread" }, "attachment")));
+  assert.ok(html.includes("#[attach:2]"));
+  assert.ok(!html.includes("<a "));
+});
+
 test("SVG preview policy allows inline scripts and styles while denying other sources", () => {
   const document = createSvgCodeBlockPreviewSrcDoc("<svg><script>globalThis.previewRan = true</script></svg>");
   const policy = document.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/u)?.[1];

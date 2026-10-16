@@ -1029,6 +1029,10 @@ function parseInlineMentionTokens(text: string): ParsedInlineMentionToken[] {
       const closeIndex = text.indexOf("]", index + 2);
       const lineEndIndex = getLineEndIndex(text, index + 2);
       if (closeIndex !== -1 && closeIndex <= lineEndIndex) {
+        if (text.slice(index + 2, closeIndex).startsWith("attach:")) {
+          index = closeIndex;
+          continue;
+        }
         tokens.push({
           end: closeIndex + 1,
           explicitBoundary: true,
@@ -1103,6 +1107,7 @@ function parseActiveInlineMentionToken(text: string, caretOffset: number): Parse
     }
 
     const rawValueStart = explicitBoundary ? index + 2 : index + 1;
+    if (explicitBoundary && text.slice(rawValueStart, caretOffset).startsWith("attach:")) return null;
     if (rawValueStart > caretOffset) {
       continue;
     }

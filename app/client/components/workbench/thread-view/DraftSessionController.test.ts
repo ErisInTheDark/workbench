@@ -43,6 +43,36 @@ function fixture<Draft extends DraftSessionContent>(initial: Draft, empty: () =>
 const emptyComposer = (): WorkbenchComposerInputDraft => ({ text: "", attachments: [], updatedAt: 0 });
 const emptyQuestionnaire = (): WorkbenchQuestionnaireDraft => ({ customValues: {}, selectedValues: {}, attachments: [], updatedAt: 0 });
 
+test("overlapping pastes retain invocation order even when the second read finishes first", async () => {
+  const store = fixture(emptyComposer(), emptyComposer);
+  const session = store.create();
+  const first = deferred<readonly { url: string }[]>();
+  const second = deferred<readonly { url: string }[]>();
+  const firstRead = session.attachImages(() => first.promise);
+  const secondRead = session.attachImages(() => second.promise);
+  second.resolve([{ url: "image:second" }, { url: "image:third" }]);
+  await secondRead;
+  assert.equal(session.getSnapshot().isAttaching, true);
+  first.resolve([{ url: "image:first" }]);
+  await firstRead;
+  await session.flush();
+  assert.deepEqual(store.saved.attachments.map(image => image.url), ["image:first", "image:second", "image:third"]);
+});
+
+test("a failed leading read releases later images without hiding its error", async context => {
+  context.mock.method(console, "error", () => undefined);
+  const store = fixture(emptyComposer(), emptyComposer);
+  const session = store.create();
+  const first = deferred<readonly { url: string }[]>();
+  const reading = session.attachImages(() => first.promise);
+  await session.attachImages(async () => [{ url: "image:second" }]);
+  first.reject(new Error("First image was unreadable"));
+  await reading;
+  assert.deepEqual(session.getSnapshot().draft.attachments.map(item => item.url), ["image:second"]);
+  assert.match(session.getSnapshot().error, /unreadable/u);
+  assert.equal(session.getSnapshot().isAttaching, false);
+});
+
 for (const kind of ["composer", "questionnaire"] as const) {
   test(`${kind} drafts accept newer hydration after saving and unchanged views never write`, async () => {
     const initial = kind === "composer" ? emptyComposer() : emptyQuestionnaire();

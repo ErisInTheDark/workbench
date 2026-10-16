@@ -113,6 +113,9 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
       case "inlineComment":
         html += `<span data-inline-comment="true">${renderInlineHtml(node.children)}</span>`;
         break;
+      case "attachmentMention":
+        html += escapeHtml(node.text);
+        break;
       case "knownSkillMention":
         html += `<span data-known-skill-mention="true" title="${escapeHtml(node.title)}">${escapeHtml(node.text)}</span>`;
         break;

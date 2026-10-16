@@ -22,6 +22,7 @@ import {
     buildInlineMentionHighlights,
     type InlineMentionHighlightSources,
 } from "../thread/inline-mention-highlights";
+import { attachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import {
     isBlockCommentLine,
 } from "./comment-markdown";
@@ -78,6 +79,7 @@ export type ParsedInlineNode =
   | { type: "inlineComment"; children: ParsedInlineNode[] }
   | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: string | null; iconType: string; source: string }
   | { type: "knownSkillMention"; text: string; title: string }
+  | { type: "attachmentMention"; text: string; number: number | null }
   | {
     type: "projectFileLink";
     absolutePath: string | null;
@@ -585,6 +587,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
   const nodes: ParsedInlineNode[] = [];
   let index = 0;
   const inlineMentionHighlights = getInlineMentionHighlights(markdown, options);
+  const attachments = new Map(attachmentReferences(markdown).map(reference => [reference.start, reference]));
   let inlineMentionIndex = 0;
 
   while (index < markdown.length) {
@@ -706,6 +709,12 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       }
     }
 
+    const attachment = attachments.get(index);
+    if (attachment) {
+      nodes.push({ type: "attachmentMention", text: attachment.text, number: attachment.number });
+      index = attachment.end;
+      continue;
+    }
     const explicitFileMention = parseExplicitProjectFileMention(markdown, index, options);
     if (explicitFileMention) {
       nodes.push(explicitFileMention.node);

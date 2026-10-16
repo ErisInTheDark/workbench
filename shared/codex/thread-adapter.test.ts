@@ -9,6 +9,21 @@ import { isProjectCodexThreadAtExpectedCwd, toThreadTurn } from "./thread-adapte
 import { getWorkbenchInputState, withWorkbenchInputState } from "../workbench/thread/thread-input-item.ts";
 import type { Turn } from "./generated/app-server/v2/Turn.ts";
 
+test("native attachment frames are removed before canonical user-message admission", () => {
+  const text = (text: string) => ({ type: "text" as const, text, text_elements: [] });
+  const image = { type: "image" as const, url: "data:image/png;base64,AAAA", detail: "original" as const };
+  const turn: Turn = {
+    id: "turn", itemsView: "full", status: "completed", error: null,
+    startedAt: null, completedAt: null, durationMs: null,
+    items: [{ type: "userMessage", id: "message", clientId: "client", content: [
+      text("compare #[attach:1]"), text('<wb:attachment id="attach:1">'), image, text("</wb:attachment>"),
+    ] }],
+  };
+  const item = toThreadTurn(turn).items[0];
+  assert.equal(item?.type, "userMessage");
+  assert.deepEqual(item?.type === "userMessage" ? item.content : [], [text("compare #[attach:1]"), image]);
+});
+
 test("relationship-owned cwd permits an exact linked-worktree thread without broadening project membership", () => {
   const projectRoot = "C:/git/web/workbench";
   const linkedWorktree = "C:/git/web/workbench/.workbench/worktrees/convex-lab";

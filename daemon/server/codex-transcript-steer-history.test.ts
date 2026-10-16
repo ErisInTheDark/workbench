@@ -8,6 +8,25 @@ import {
   updatePendingSteerEntriesForInterruptedTurn,
 } from "./codex-transcript-steer-history.ts";
 
+test("native image framing does not stop a pending steer from matching its delivered message", () => {
+  const input = [{ type: "image" as const, url: "data:image/png;base64,AAAA" }];
+  const entry = createSteerHistoryEntryFromRequest({
+    id: "steer", method: "turn/steer", params: { threadId: "thread", expectedTurnId: "turn", input },
+  });
+  assert.ok(entry);
+  const item: Extract<ThreadItem, { type: "userMessage" }> = {
+    type: "userMessage", id: "input", clientId: null, content: [
+      { type: "text", text: '<wb:attachment id="attach:1">', text_elements: [] },
+      ...input, { type: "text", text: "</wb:attachment>", text_elements: [] },
+    ],
+  };
+  assert.equal(updateMatchingPendingSteerEntriesForUserMessage([entry], item, 10)[0]?.status, "sent");
+  assert.equal(updatePendingSteerEntriesForInterruptedTurn([entry], {
+    id: "turn", items: [item], itemsView: "full", status: "interrupted",
+    error: null, startedAt: null, completedAt: null, durationMs: null,
+  }, 10)[0]?.status, "sent");
+});
+
 test("steer parsing and reconciliation cannot silently discard a file-backed image", () => {
   const item: Extract<ThreadItem, { type: "userMessage" }> = {
     type: "userMessage", id: "input", clientId: null, content: [

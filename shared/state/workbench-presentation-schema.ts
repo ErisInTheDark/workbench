@@ -4,7 +4,7 @@
  * - presentationSchema: protected relational history for the shared presentation database.
  */
 import {
-  blob, booleanInteger, defineTable, enumText, foreignKey, integer, primaryKey, text, unique,
+  blob, booleanInteger, defineTable, enumText, evolveTable, foreignKey, integer, primaryKey, text, unique,
   type SelectRow, type TableDefinition,
 } from "../database/schema/schema-definition.ts";
 import {
@@ -165,13 +165,27 @@ const drafts = defineTableHistory({
       }) }),
   ],
 });
-const attachments = initial(defineTable("presentation_draft_attachments", {
+const attachmentTableV1 = defineTable("presentation_draft_attachments", {
   draft_id: text().notNull().references("presentation_drafts", "id"),
   id: text().notNull(),
   media_type: text().notNull(),
   content_length: integer().notNull().nonNegative(),
   content_hash: text().notNull(),
-}, table => ({ constraints: [primaryKey([table.draft_id, table.id])] })));
+}, table => ({ constraints: [primaryKey([table.draft_id, table.id])] }));
+const attachmentTable = evolveTable(attachmentTableV1, {
+  add: { position: integer().notNull().nonNegative().default(0) },
+});
+const attachments = defineTableHistory({
+  current: attachmentTable,
+  versions: [
+    tableVersion({ schemaVersion: releases.initialPresentation.version,
+      table: attachmentTableV1, migration: createTable(attachmentTableV1) }),
+    tableVersion({ schemaVersion: releases.attachmentOrder.version,
+      table: attachmentTable, migration: addColumns({
+        from: attachmentTableV1, to: attachmentTable, columns: ["position"],
+      }) }),
+  ],
+});
 const attachmentChunks = initial(defineTable("presentation_attachment_chunks", {
   draft_id: text().notNull().references("presentation_drafts", "id"),
   attachment_id: text().notNull(),
