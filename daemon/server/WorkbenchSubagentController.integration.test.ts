@@ -1,5 +1,6 @@
 /* Exports: none. Protect profiles, durable relationships, ownership, parent stop and questionnaire delivery. */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
@@ -14,6 +15,7 @@ import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController"
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
+import type { WorkbenchThreadStateRecord } from "./workbench-thread-state-record";
 
 async function profileFixture(context: TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-subagent-profiles-");
@@ -180,6 +182,67 @@ function createProjectResolver(expectedCwd: string) {
     return { cwd, project, root };
   };
 }
+
+test("creation reuses settled names while name targeting selects the new child and history survives", async (context) => {
+  const fixture = subagentFixture();
+  const cwd = process.cwd();
+  const provider = new FakeProvider(cwd);
+  const store = new WorkbenchSubagentStore(fixture.database);
+  const historicalId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("unrelated-thread");
+  const { reservationId, ...reserved } = await store.reserve({
+    reservationId: randomUUID(), parentThreadId: callerThreadId, projectId: testProjectIds.workbench,
+    harness: "codex", cwd, name: "Mimi", title: "Previous work", profileId: profile().id,
+    profileName: profile().name, createdAt: 1, updatedAt: 1,
+  });
+  const historical = { ...reserved, threadId: historicalId };
+  await store.replace(callerThreadId, reservationId, historical);
+  const writeState = (record: WorkbenchSubagentRelationship, settled: boolean) => {
+    const state: WorkbenchThreadStateRecord = {
+      ...record, entryKind: "subagent", identity: { harness: record.harness, threadId: record.threadId },
+      activityAt: 1, pinned: false, lifecycle: { kind: "completed", reason: "agentCompleted", settled, agent: { agentStatus: "completed" } },
+      profile: null, providerObserved: true, settledAt: settled ? 2 : null,
+      gitHistoryCleanedAt: null, mcpGeneration: null, snoozedUntil: null,
+    };
+    fixture.database.admitRecord(state);
+    fixture.database.repository.writeRecords([state]);
+  };
+  writeState(historical, true);
+  const stopped: string[] = [];
+  const controller = new WorkbenchSubagentController({
+    identities: fixture.identities, publicThreadId: fixture.publicThreadId, provider: () => provider,
+    onRelationshipCommitted: async record => { writeState(record, false); },
+    resolveProjectFromCwd: createProjectResolver(cwd), subagentStore: store,
+    profileStore: {
+      read: async () => ({ profiles: [profile()] }),
+      mutate: async () => { throw new Error("Unexpected profile mutation"); },
+    },
+    stopThread: async id => { stopped.push(id); },
+    threadState: {
+      getEntry: async (projectId, _harness, threadId) =>
+        fixture.database.repository.readRecords({ selection: "threads", threadIds: [threadId], projectId })[0] ?? null,
+      mutate: async () => { throw new Error("Unexpected state mutation"); },
+      subscribe: () => () => {},
+    },
+  });
+  context.after(() => controller.dispose());
+  const create = () => controller.handleRequest({
+    id: 1, method: "workbench/subagent/create",
+    params: { callerThreadId, cwd, name: "mimi", title: "New work", profileId: profile().id,
+      message: "Inspect the code.", userVisibleSimpleVersion: "Asked Mimi to inspect the code." },
+  });
+  assert.deepEqual(await create(), { id: 1, result: { threadId: childThreadId } });
+  assert.match((await create()).error?.message ?? "", /unsettled direct child/i);
+  const stop = await controller.handleRequest({
+    id: 2, method: "workbench/subagent/stop", params: { callerThreadId, cwd, names: ["MIMI"] },
+  });
+  assert.equal(stop.error, undefined);
+  assert.deepEqual(stopped, [childThreadId]);
+  const history = await controller.handleRequest({
+    id: 3, method: "workbench/subagent/list", params: { callerThreadId, cwd, settled: true },
+  });
+  assert.deepEqual((history.result as WorkbenchSubagentPage).subagents.map(record => record.threadId), [historicalId]);
+  assert.equal((await store.list({ projectId: testProjectIds.workbench, parentThreadId: callerThreadId })).subagents.length, 2);
+});
 
 test("creates with the selected profile and delivers attributed initial input", async (context) => {
   const fixture = subagentFixture();

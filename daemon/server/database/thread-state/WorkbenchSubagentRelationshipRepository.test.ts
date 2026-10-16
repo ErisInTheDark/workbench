@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { installWorkbenchDatabaseSchema } from "../workbench-database-schema";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository";
 import WorkbenchSubagentRelationshipRepository from "./WorkbenchSubagentRelationshipRepository";
+import WorkbenchThreadStateRelationalRepository from "./WorkbenchThreadStateRelationalRepository";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -60,6 +61,35 @@ test("cross-harness activation retains parent allocation and removing membership
     assert.ok(database.prepare("SELECT id FROM workbench_threads WHERE id = ?").get(childThreadId));
     const next = repository.reserve({ ...reservation, reservationId: randomUUID() });
     assert.equal(next.directSubagentIndex, 1);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally {
+    database.close();
+  }
+});
+
+test("settled names can be reserved again without losing history or accepting live duplicates", () => {
+  const { database, repository, reservation, parentThreadId, childThreadId } = fixture();
+  try {
+    const { reservationId, ...reserved } = repository.reserve(reservation);
+    const active = { ...reserved, threadId: childThreadId };
+    repository.activate(parentThreadId, reservationId, active);
+    const reserveAgain = () => repository.reserve({ ...reservation, reservationId: randomUUID(), name: "LENA" });
+    assert.throws(reserveAgain, /already in use/);
+    const states = new WorkbenchThreadStateRelationalRepository(database);
+    const writeState = (settled: boolean) => states.writeRecords([{
+      ...active, entryKind: "subagent", identity: { harness: active.harness, threadId: childThreadId },
+      activityAt: 1, pinned: false, lifecycle: { kind: "completed", reason: "agentCompleted", settled, agent: { agentStatus: "completed" } },
+      profile: null, providerObserved: true, settledAt: settled ? 2 : null, gitHistoryCleanedAt: null,
+      mcpGeneration: null, snoozedUntil: null,
+    }]);
+    writeState(false);
+    assert.throws(reserveAgain, /already in use/);
+    writeState(true);
+    const next = reserveAgain();
+    assert.equal(next.directSubagentIndex, 1);
+    assert.deepEqual(repository.getOwned(parentThreadId, reservation.projectId, childThreadId), active);
+    assert.throws(reserveAgain, /already in use/);
+    assert.equal(repository.readParent(parentThreadId)?.nextDirectSubagentIndex, 2);
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally {
     database.close();

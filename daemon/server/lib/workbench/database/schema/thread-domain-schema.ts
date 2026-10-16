@@ -51,6 +51,32 @@ export function defineThreadDomainSchema(schemaVersion: number) {
     });
   }
 
+  function releaseSettledNames(history: typeof relationships) {
+    const previous = history.versions.at(-1)!.table;
+    const current = evolveTable(previous, {
+      extras: table => ({
+        constraints: [
+          unique([table.id, table.relationship_kind]),
+          unique([table.parent_thread_id, table.direct_subagent_index]),
+        ],
+        indexes: [
+          index("workbench_subagent_relationships_project_idx", [table.project_id, table.created_at, table.id]),
+          index("workbench_subagent_relationships_name_idx", [table.parent_thread_id, table.name_key]),
+          index("workbench_subagent_reservations_name_idx", [table.parent_thread_id, table.name_key], {
+            unique: true, where: sql`${table.relationship_kind} = ${literal("reserved")}`,
+          }),
+        ],
+      }),
+    });
+    return defineTableHistory({
+      current,
+      versions: [...history.versions, tableVersion({
+        schemaVersion: databaseReleases.reusableSubagentNames.version, table: current,
+        migration: rebuildTable({ from: previous, to: current }),
+      })],
+    });
+  }
+
   const states = install(defineTable("workbench_thread_states", {
     thread_id: text().primaryKey().references("workbench_threads", "id", { onDelete: "CASCADE" }),
     thread_kind: enumText("topLevel", "subagent").notNull(),
@@ -262,6 +288,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
   const profileHistories = new Set<unknown>([profiles, projectProfiles]);
   const finalHistories = new Map(Object.entries(histories).map(([name, history]) => {
     if (history === importReceipt) return [name, retireTableHistory(history, databaseReleases.retireLegacyImportReceipts.version)];
+    if (history === relationships) return [name, releaseSettledNames(ownProjectReferences(relationships))];
     const owned = "project_id" in history.current.columns ? ownProjectReferences<TableDefinition>(history) : history;
     return [name, profileHistories.has(history) ? addApprovalMode(owned) : owned];
   }));
@@ -271,7 +298,7 @@ export function defineThreadDomainSchema(schemaVersion: number) {
       retention: retention.current, snoozeDependencies: snoozeDependencies.current,
       profiles: finalHistories.get("profiles")!.current, projectProfiles: finalHistories.get("projectProfiles")!.current,
       drafts: drafts.current, attachments: attachments.current, parents: parents.current,
-      relationships: relationships.current, relationshipMetadata: relationshipMetadata.current,
+      relationships: finalHistories.get("relationships")!.current, relationshipMetadata: relationshipMetadata.current,
       activeRelationships: activeRelationships.current,
     },
     history: defineSubsystemHistory([...finalHistories.values()]),

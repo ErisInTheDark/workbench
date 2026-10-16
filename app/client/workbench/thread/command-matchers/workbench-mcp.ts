@@ -1,10 +1,9 @@
 /*
- * Keywords: MCP, commands, routing, shell, Git arc failures.
  * Exports:
- * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: resolve a recorded wb MCP call and keep failed Recall calls on the generic MCP error surface. Keywords: workbench, MCP, command, route, failure.
- * - getWorkbenchMcpCommandDisplay: match a simple recorded wb MCP call to its shared summary presentation. Keywords: workbench, MCP, command, rendering.
- * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive valid wb shell evidence and its matcher shell into the ordinary command presentation shape. Keywords: workbench, MCP, shell, command, presentation.
- * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes. Keywords: workbench, MCP, rm, delete, file change.
+ * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls and retain dedicated Git, title, and status failure presentation.
+ * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
+ * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence.
+ * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { NativeFileChange } from "./native-file-changes";
@@ -127,7 +126,8 @@ export function shouldUseWorkbenchMcpSpecializedRenderer(
   return !isFailure
     || route.operation.kind === "gitArc"
     || route.operation.kind === "gitArcWait"
-    || route.operation.kind === "threadTitle";
+    || route.operation.kind === "threadTitle"
+    || route.operation.kind === "threadStatus";
 }
 
 export function getWorkbenchMcpCommandDisplay({

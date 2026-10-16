@@ -2460,8 +2460,9 @@ function ThreadCommandSequence ({
           />
         ) : segment.kind === "threadStatus" ? (
           <ThreadStatusCommandItem
+            failureText={segment.item.aggregatedOutput}
             key={`thread-status:${segment.item.id}`}
-            outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode) as "completed" | "inProgress"}
+            outcome={getThreadCommandExecutionOutcome(segment.item.status, segment.item.exitCode)}
             status={segment.status}
           />
         ) : segment.kind === "gitArc" || segment.kind === "message" || segment.kind === "subagent" ? (

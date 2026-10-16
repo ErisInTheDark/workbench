@@ -617,7 +617,7 @@ export function buildCommandSequenceRenderSegments({ items, ...context }: Comman
       flushCommands(); flushWaits(); segments.push({ kind: "threadContext", item, operation: recall }); continue;
     }
     if (title?.action === "set") { flushCommands(); flushWaits(); segments.push({ kind: "threadTitle", item, title: title.title }); continue; }
-    if (status && (outcome === "completed" || outcome === "inProgress")) {
+    if (status) {
       flushCommands(); flushWaits(); segments.push({ kind: "threadStatus", item, status: status.status }); continue;
     }
     const gitArcAction = getGitArcMatcherAction(display.claimedBy);

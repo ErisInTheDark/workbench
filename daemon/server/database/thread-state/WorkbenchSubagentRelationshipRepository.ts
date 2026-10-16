@@ -75,7 +75,13 @@ export default class WorkbenchSubagentRelationshipRepository {
   reserve(record: Omit<WorkbenchSubagentReservation, "directSubagentIndex">): WorkbenchSubagentReservation {
     z.uuid().parse(record.reservationId);
     return this.database.transaction(() => {
-      if (this.database.prepare("SELECT 1 FROM workbench_subagent_relationships WHERE parent_thread_id = ? AND name_key = ?")
+      if (this.database.prepare(`
+        SELECT 1 FROM workbench_subagent_relationships relationship
+        LEFT JOIN workbench_active_subagent_relationships active ON active.relationship_id = relationship.id
+        LEFT JOIN workbench_thread_lifecycle lifecycle ON lifecycle.thread_id = active.thread_id
+        WHERE relationship.parent_thread_id = ? AND relationship.name_key = ?
+          AND (relationship.relationship_kind = 'reserved' OR COALESCE(lifecycle.settled, 0) = 0)
+      `)
         .get(record.parentThreadId, record.name.toLocaleLowerCase())) {
         throw new Error(`Subagent name is already in use by this parent: ${record.name}`);
       }

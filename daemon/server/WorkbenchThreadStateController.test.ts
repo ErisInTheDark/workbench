@@ -927,6 +927,55 @@ test("accepted questionnaire response returns its thread to working", async () =
   }
 });
 
+test("task status requires every direct child to be settled without changing rejected parent intent", async () => {
+  for (const status of ["completed", "blocked"] as const) {
+    const controller = new WorkbenchThreadStateController({
+      storageRoot: "task-child-settlement", threadStateStore: new MemoryThreadStatePersistence(),
+      getProjectCatalog: projectCatalog, reconcileProject: async () => [],
+    });
+    try {
+      const parent = pinnedRecord("thread", "Parent");
+      const unrelated = pinnedRecord("target", "Unrelated");
+      await controller.ensureProviderEntry(fixtureProjectIds.project, parent);
+      await controller.ensureProviderEntry(fixtureProjectIds.project, unrelated);
+      const { metadata: _metadata, ...common } = parent;
+      const child: Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> = {
+        ...common, entryKind: "subagent", identity: { harness: "opencode", threadId: fixtureThreadIds.child },
+        lifecycle: { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } },
+        createdAt: 1, updatedAt: 1, cwd: "C:/workspace", directSubagentIndex: 0,
+        name: "mimi", parentThreadId: parent.identity.threadId, pinned: false,
+        profileId: "profile", profileName: "profile", projectId: fixtureProjectIds.project,
+      };
+      await controller.ensureProviderEntry(fixtureProjectIds.project, child);
+      const before = await controller.getCanonicalThreadEntry(fixtureProjectIds.project, parent.identity.threadId);
+      for (const event of [
+        null,
+        { kind: "agentStatus", status: "completed" },
+        { kind: "userStopped" },
+      ] as const) {
+        if (event) await controller.applyLifecycle(fixtureProjectIds.project, "opencode", child.identity.threadId, event);
+        await assert.rejects(controller.setAgentStatus(fixtureProjectIds.project, parent.identity.threadId, status), error => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /mimi/);
+          assert.match(error.message, /wb subagent list/);
+          assert.match(error.message, /wb subagent settle/);
+          return true;
+        });
+        assert.deepEqual(await controller.getCanonicalThreadEntry(fixtureProjectIds.project, parent.identity.threadId), before);
+      }
+      await controller.setAgentStatus(fixtureProjectIds.project, unrelated.identity.threadId, status);
+      const settled = await controller.handleRequest("observer", {
+        method: "workbench/thread-state/settle", projectId: fixtureProjectIds.project, identity: child.identity,
+      });
+      assert.equal(WorkbenchThreadStateMutationResultSchema.parse(settled.result).accepted, true);
+      const applied = await controller.setAgentStatus(fixtureProjectIds.project, parent.identity.threadId, status);
+      assert.equal("agent" in applied.lifecycle && applied.lifecycle.agent?.agentStatus, status);
+    } finally {
+      await controller.dispose();
+    }
+  }
+});
+
 test("status notices follow committed input transitions, not repeats or notification success", async () => {
   const notices: string[] = [];
   const statesAtPublication: Array<string | null> = [];

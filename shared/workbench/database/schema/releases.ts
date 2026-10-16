@@ -91,6 +91,7 @@ const databaseReleases = Object.freeze({
   captureGapTurns: release(81, "9763f6193f8e68707b2a7c241d8320ab1a868d7a2ea87d79e61ed44a77d0a95d"),
   deferredAgentStatus: release(82, "20eca18f1a2de80850b6d685adc300328508c227d915034fb20f38a9fcb34e60"),
   voiceRecordAudio: release(83, "9ae9c87621fc33e73150f44b1c01fb0572d6a0ae03d2d24803097254531fa316"),
+  reusableSubagentNames: release(84, "1c3af4eebdcb2a6f409b774c7649b0fe2ef8f3d5c1f2d096c9960a8bda4bc329"),
 });
 
 export default databaseReleases;

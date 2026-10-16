@@ -13,7 +13,7 @@ import {
   createWorkbenchUnfinishedTurnInput,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
-  buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
+  buildCommandSequenceRenderSegments, buildRenderableBlocks, getRenderableBlockItems, getWorkedBlockRows, groupIncomingAgentMessageRuns,
   reuseRenderableBlocks, hasSameBlockTimeline, isHiddenCommandExecution, type CommandItem,
 } from "./thread-render-blocks";
 import { partitionWorkedRows } from "./thread-worked-run";
@@ -444,6 +444,20 @@ test("proposal rows remain visible boundaries while other Git arc work stays col
     ]).map(row => row.eligible),
     [true, true],
   );
+});
+
+test("failed CLI task status calls keep their dedicated route and failure output", () => {
+  for (const status of ["completed", "blocked"]) {
+    const item = {
+      ...command("rejected", `wb task ${status}`), exitCode: 1,
+      aggregatedOutput: "Unsettled child mimi must be settled first.",
+    };
+    const segments = buildCommandSequenceRenderSegments({ items: [item] });
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0]?.kind, "threadStatus");
+    assert.ok(segments[0] && "item" in segments[0]);
+    assert.equal(segments[0].item, item);
+  }
 });
 
 test("MCP task actions and outgoing thread messages remain boundaries", () => {

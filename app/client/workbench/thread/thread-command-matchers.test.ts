@@ -600,7 +600,7 @@ test("failed Recall MCP calls use the generic error renderer", () => {
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(gitRoute, true), true);
   assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(waitRoute, true), true);
   const statusRoute = getWorkbenchMcpCommandRoute({ argumentsValue: {}, server: "wbex", tool: "task_blocked" });
-  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), false);
+  assert.equal(shouldUseWorkbenchMcpSpecializedRenderer(statusRoute, true), true);
 });
 
 test("Thread Recall CLI and MCP routes preserve the same useful intent", () => {

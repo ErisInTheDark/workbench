@@ -142,8 +142,8 @@ export default function ThreadWorkbenchCommandItem({
   if (operation.kind === "threadTitle") {
     return <ThreadTitleCommandItem failureText={output} outcome={outcome} title={operation.title} />;
   }
-  if (operation.kind === "threadStatus" && (outcome === "completed" || outcome === "inProgress")) {
-    return <ThreadStatusCommandItem outcome={outcome} status={operation.status} />;
+  if (operation.kind === "threadStatus") {
+    return <ThreadStatusCommandItem failureText={output} outcome={outcome} status={operation.status} />;
   }
   if (operation.kind === "threadRecall" && threadCwdPath) {
     return (
