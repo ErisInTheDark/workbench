@@ -306,9 +306,9 @@ export default class StaticHttpRequestController {
   }
 
   private shouldUseSpaFallback(request: IncomingMessage, requestedPath: string) {
+    // Asset requests send */*; only an explicit HTML navigation may name a path with an extension (e.g. a file route).
     return this.spaFallbackPath !== null
-      && path.extname(requestedPath) === ""
-      && acceptsHtml(request);
+      && (path.extname(requestedPath) === "" ? acceptsHtml(request) : Boolean(request.headers.accept?.includes("text/html")));
   }
 
   private async readPath(filePath: string): Promise<

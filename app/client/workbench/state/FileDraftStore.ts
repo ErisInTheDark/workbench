@@ -81,7 +81,36 @@ function FileDraftStore(
 ): FileDraftStore {
   const listeners = new Set<FileDraftStoreListener>();
   let draftBuffers = new Map<string, DraftBuffer>();
+  /** Paths whose draft this session set or cleared; persisted records only speak for the others. */
+  const ownedPaths = new Set<string>();
   let draftPersistenceQueue = Promise.resolve();
+
+  function bufferFromRecord(record: FileDraftRecord): DraftBuffer {
+    return {
+      baselineContent: record.value.baselineContent,
+      content: record.value.content,
+      dirty: record.value.content !== record.value.baselineContent,
+      editorState: createEditorStateFromContent(record.value.content, record.value.mode),
+      expectedMtimeMs: record.value.expectedMtimeMs,
+      headContent: record.value.headContent,
+      history: createInitialEditHistory(record.value.content),
+      mode: record.value.mode,
+      pendingWriteConflict: null,
+      saveIssue: null,
+    };
+  }
+
+  /** App state and the daemon registration can arrive after this store; adopt records for paths this session has not touched. */
+  function adoptPersistedDrafts() {
+    let adopted = false;
+    for (const record of getPersistedDraftRecords()) {
+      if (ownedPaths.has(record.path) || draftBuffers.has(record.path)) continue;
+      if (!adopted) draftBuffers = new Map(draftBuffers);
+      draftBuffers.set(record.path, bufferFromRecord(record));
+      adopted = true;
+    }
+    return adopted;
+  }
 
   function getSnapshot(): FileDraftStoreSnapshot {
     return {
@@ -150,11 +179,13 @@ function FileDraftStore(
   }
 
   function getBuffer(filePath: string) {
+    adoptPersistedDrafts();
     const buffer = draftBuffers.get(filePath);
     return buffer ? cloneDraftBuffer(buffer) : null;
   }
 
   function setBuffer(filePath: string, buffer: DraftBuffer) {
+    ownedPaths.add(filePath);
     draftBuffers = new Map(draftBuffers);
     draftBuffers.set(filePath, cloneDraftBuffer(buffer));
     void persistDraftBuffer(filePath, buffer);
@@ -162,6 +193,7 @@ function FileDraftStore(
   }
 
   async function clearBuffer(filePath: string) {
+    ownedPaths.add(filePath);
     const previousBuffer = draftBuffers.get(filePath);
     if (!previousBuffer) {
       await persistDraftBuffer(filePath, null);
@@ -175,29 +207,12 @@ function FileDraftStore(
   }
 
   async function hydratePersistedDrafts() {
-    const draftEntries = getPersistedDraftRecords()
-      .map((record) => {
-        const buffer: DraftBuffer = {
-          baselineContent: record.value.baselineContent,
-          content: record.value.content,
-          dirty: record.value.content !== record.value.baselineContent,
-          editorState: createEditorStateFromContent(record.value.content, record.value.mode),
-          expectedMtimeMs: record.value.expectedMtimeMs,
-          headContent: record.value.headContent,
-          history: createInitialEditHistory(record.value.content),
-          mode: record.value.mode,
-          pendingWriteConflict: null,
-          saveIssue: null,
-        };
-
-        return [record.path, buffer] satisfies [string, DraftBuffer];
-      });
-
-    draftBuffers = new Map(draftEntries);
+    adoptPersistedDrafts();
     emit();
   }
 
   function getLocallyModifiedPaths() {
+    adoptPersistedDrafts();
     return Array.from(draftBuffers.entries())
       .filter(([, buffer]) => buffer.dirty)
       .map(([filePath]) => filePath)

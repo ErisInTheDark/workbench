@@ -61,7 +61,7 @@ test("serves static files and HEAD responses from an OS-assigned port", async (c
   assert.equal(headResponse.headers.get("content-length"), getResponse.headers.get("content-length"));
 });
 
-test("uses the SPA fallback only for extensionless HTML navigation", async (context) => {
+test("uses the SPA fallback for HTML navigation, including routes ending in a file extension, but not asset requests", async (context) => {
   const server = new StaticHttpServer({
     hostname: "127.0.0.1",
     rootDirectoryPath: await fixture(),
@@ -74,7 +74,11 @@ test("uses the SPA fallback only for extensionless HTML navigation", async (cont
   assert.equal(navigation.status, 200);
   assert.equal(await navigation.text(), "<main>Workbench</main>");
 
+  const fileRoute = await fetch(`${url}/project/@/file/icons/a.svg`, { headers: { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" } });
+  assert.equal(fileRoute.status, 200);
+  assert.equal(await fileRoute.text(), "<main>Workbench</main>");
   assert.equal((await fetch(`${url}/missing.js`)).status, 404);
+  assert.equal((await fetch(`${url}/missing.js`, { headers: { Accept: "*/*" } })).status, 404);
   assert.equal((await fetch(`${url}/missing`, { headers: { Accept: "application/json" } })).status, 404);
 });
 
