@@ -2026,7 +2026,6 @@ export default class WorkbenchThreadStateController {
         || source.metadata.archived
         || source.lifecycle.settled
         || isWorkbenchThreadStatusProviderOwned(source.lifecycle)
-        || !isWorkbenchThreadSnoozeAvailable(source)
         || !target
         || target.entryKind !== "thread"
         || target.metadata.archived

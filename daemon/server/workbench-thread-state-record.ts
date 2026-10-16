@@ -183,6 +183,7 @@ function internalFields(value: unknown) {
 
 function repairClaimedSnooze(record: WorkbenchThreadStateRecord): WorkbenchThreadStateRecord {
   if (record.entryKind !== "thread" || record.lifecycle.kind === "working"
+    || record.snoozedUntil?.targets.length
     || !record.metadata.snoozed || !record.gitArc?.claimedPaths.length) return record;
   return {
     ...record,

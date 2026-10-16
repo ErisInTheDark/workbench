@@ -1242,7 +1242,6 @@ test("plain questionnaire snooze retains input through interruption for codex an
 
 test("snooze uses current collision claims and wakes on task outcome or new claims", async () => {
   const source = pinnedRecord("thread", "Source");
-  const target = pinnedRecord("target", "Target");
   const claimed: WorkbenchGitArcLifecycleState = {
     checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
     intentDescription: "", phase: "active", proposals: [], updatedAt: "now",
@@ -1266,12 +1265,9 @@ test("snooze uses current collision claims and wakes on task outcome or new clai
   };
   try {
     await controller.ensureProviderEntry(fixtureProjectIds.project, source);
-    await controller.ensureProviderEntry(fixtureProjectIds.project, target);
     for (const request of [
       { method: "workbench/thread-state/snooze/set", identity: source.identity, snoozed: true },
       { method: "workbench/thread-state/priority/set", sourceKey: "codex:thread", priority: "snoozed" },
-      { method: "workbench/thread-state/snooze/until", identity: source.identity,
-        target: { projectId: fixtureProjectIds.project, identity: target.identity } },
     ] as const) {
       const result = await controller.handleRequest("observer", { ...request, projectId: fixtureProjectIds.project });
       assert.equal(WorkbenchThreadStateMutationResultSchema.parse(result.result).accepted, false);
@@ -4104,7 +4100,7 @@ test("priority transitions retain pins while snoozed and clear both when returni
   await temporary.dispose();
 });
 
-test("cross-project dependent snooze waits for completion and the final live claim", async () => {
+test("claimed sources retain cross-project dependent snooze until completion and the final target claim", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-thread-dependent-snooze-");
   const root = temporary.path;
   const source: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
@@ -4140,12 +4136,14 @@ test("cross-project dependent snooze waits for completion and the final live cla
     reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
       await acceptProviderSnapshot("codex", projectId === "alpha" ? [source] : [target], { complete: true });
       await acceptGitArcSnapshot({
-        arcs: projectId === "beta" && targetArc ? [{ harness: "codex", state: targetArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }] : [],
+        arcs: projectId === "alpha"
+          ? [{ harness: "codex", state: claimedArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source") }]
+          : targetArc ? [{ harness: "codex", state: targetArc, threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target") }] : [],
         plans: [],
       });
       return [];
     },
-    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : null,
+    resolveGitArc: async (_projectId, _harness, threadId) => threadId === "target" ? targetArc : claimedArc,
     storageRoot: root,
   });
   await Promise.all([controller.readProject(fixtureProjectIds.alpha), controller.readProject(fixtureProjectIds.beta)]);
@@ -4153,12 +4151,27 @@ test("cross-project dependent snooze waits for completion and the final live cla
     (await controller.getSnapshot(fixtureProjectIds["alpha"])).freshness === "fresh"
     && (await controller.getSnapshot(fixtureProjectIds["beta"])).freshness === "fresh"
   ), "Projects did not reconcile.");
-  await controller.handleRequest("observer", {
+  const toggleWait = () => controller.handleRequest("observer", {
     identity: source.identity,
     method: "workbench/thread-state/snooze/until",
     projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("alpha"),
     target: { identity: target.identity, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("beta") },
   });
+  const result = await toggleWait();
+  assert.equal(WorkbenchThreadStateMutationResultSchema.parse(result.result).accepted, true);
+  await controller.refreshGitArcState(fixtureProjectIds.alpha, "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("source"));
+  const readSource = async () => {
+    const entry = await controller.getCanonicalThreadEntry(fixtureProjectIds.alpha, source.identity.threadId);
+    assert.ok(entry?.entryKind === "thread");
+    return entry;
+  };
+  assert.equal((await readSource()).metadata.snoozed, true);
+  assert.deepEqual((await readSource()).gitArc?.claimedPaths, claimedArc.claimedPaths);
+  await toggleWait();
+  assert.equal((await readSource()).metadata.snoozed, false);
+  assert.equal((await readSource()).snoozedUntil, null);
+  await toggleWait();
+  assert.equal((await readSource()).metadata.snoozed, true);
   await controller.observeLifecycle("codex", fixtureThreadIds["target"], { kind: "userCompleted" });
   let sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, true);
@@ -4171,6 +4184,7 @@ test("cross-project dependent snooze waits for completion and the final live cla
   await controller.refreshGitArcState(fixtureProjectIds["beta"], "codex", fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("target"));
   sourceEntry = (await controller.getSnapshot(fixtureProjectIds["alpha"])).entries.find((entry) => entry.entryKind === "thread");
   assert.equal(sourceEntry?.entryKind === "thread" ? sourceEntry.metadata.snoozed : null, false);
+  assert.deepEqual((await readSource()).gitArc?.claimedPaths, claimedArc.claimedPaths);
   const storedAfterWake = await readProjectState<{ records: Array<{ snoozedUntil?: unknown }> }>(root, "alpha");
   assert.equal(storedAfterWake.records[0]?.snoozedUntil, null);
   await controller.dispose();

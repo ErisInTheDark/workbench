@@ -63,7 +63,7 @@ test("provider omission preserves saved top-level visibility and placement", () 
   assert.ok(projectWorkbenchThreadStateEntry(settled));
 });
 
-test("working snooze remains durable while non-working collision claims force wake", () => {
+test("dependent snooze survives collision claims while ordinary inactive snooze wakes", () => {
   const lifecycle = {
     agent: { agentStatus: "working" as const, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("turn") },
     kind: "working" as const,
@@ -96,11 +96,15 @@ test("working snooze remains durable while non-working collision claims force wa
       intentDescription: "", phase: "active", proposals: [], updatedAt: "now" },
   });
   assert.ok(claimed.entryKind === "thread");
-  assert.equal(claimed.metadata.snoozed, false);
-  assert.equal(claimed.snoozedUntil, null);
+  assert.equal(claimed.metadata.snoozed, true);
+  assert.deepEqual(claimed.snoozedUntil, snoozedUntil);
+  const ordinary = parseWorkbenchThreadStateEntry({ ...claimed, snoozedUntil: null });
+  assert.ok(ordinary.entryKind === "thread");
+  assert.equal(ordinary.metadata.snoozed, false);
+  assert.equal(ordinary.snoozedUntil, null);
 });
 
-test("stored claim snooze repair reports every corrected path", () => {
+test("stored claim snooze preserves dependent waits and repairs ordinary snooze", () => {
   const gitArc = { checkpointCommit: "a".repeat(40), claimedPaths: ["guarded.ts"], intentName: "Work",
     intentDescription: "", phase: "active", proposals: [], updatedAt: "now" };
   const conformed = conformStoredWorkbenchThreadStateRecord({
@@ -117,9 +121,9 @@ test("stored claim snooze repair reports every corrected path", () => {
   }, fixtureIdentityValues.ProjectId.project);
   assert.equal(conformed.success, true);
   if (!conformed.success || conformed.data.entryKind !== "thread") return;
-  assert.equal(conformed.data.metadata.snoozed, false);
-  assert.equal(conformed.data.snoozedUntil, null);
-  assert.deepEqual(conformed.repairedPaths, [["metadata", "snoozed"], ["snoozedUntil"]]);
+  assert.equal(conformed.data.metadata.snoozed, true);
+  assert.equal(conformed.data.snoozedUntil?.targets[0]?.identity.threadId, "target");
+  assert.deepEqual(conformed.repairedPaths, []);
 
   const withoutDeadline = conformStoredWorkbenchThreadStateRecord({
     ...entry,
