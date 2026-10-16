@@ -3,6 +3,7 @@
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
+ * - WorkbenchFileTab/withFileTabs/getWorkbenchFileTabs: ordered file tabs after the focused tab number, each optionally prefixed by its folder address and the folder marker.
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
  * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
  * - createHomeRoute/createProjectSelectionRoute/createToggledProjectSelectionRoute/withProjectSelection/createProjectRoute/createFileRoute/createThreadRoute/createPinnedThreadRoute/createHomeThreadRoute/createSettingsRoute/createNewProjectRoute/createStatsRoute/createGitRoute/createMosaicRoute/createInvalidWorkbenchRoute: construct routes.
@@ -37,9 +38,19 @@ export type WorkbenchRouteView = "home" | "project" | "file" | "thread" | "setti
 export const WORKBENCH_STATS_TABS = ["usage", "workspaces", "tools"] as const;
 export type WorkbenchStatsTab = typeof WORKBENCH_STATS_TABS[number];
 
+/** One open file tab; a null folder address means the route's own sidebar folder. */
+export interface WorkbenchFileTab {
+  filePath: string;
+  folderAddress: readonly string[] | null;
+}
+
 export interface WorkbenchRoute {
   error: string;
+  /** Focused file; with `fileTabs` it is always `fileTabs[fileTabIndex].filePath`. */
   filePath: string;
+  /** Open file tabs in order; absent means the single `filePath` tab in the route folder. */
+  fileTabs?: readonly WorkbenchFileTab[];
+  fileTabIndex?: number;
   /** Sidebar folder selection from the `*` url slot. Absent means inherit; null means explicitly no folder. */
   folderAddress?: string[] | null;
   mosaicNode: WorkbenchMosaicNode | null;
@@ -234,6 +245,55 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
     threadTarget: null,
     view: "file",
   };
+}
+
+/** Focus `index` among `tabs`; a lone tab in the route folder collapses back to a plain file route. */
+export function withFileTabs(route: WorkbenchRoute, tabs: readonly WorkbenchFileTab[], index: number): WorkbenchRoute {
+  const focused = tabs[index];
+  if (!focused) throw new Error("The focused file tab must exist.");
+  const { fileTabs: _tabs, fileTabIndex: _index, ...base } = route;
+  return tabs.length === 1 && !focused.folderAddress
+    ? { ...base, view: "file", filePath: focused.filePath }
+    : { ...base, view: "file", filePath: focused.filePath, fileTabs: tabs.map(tab => ({ ...tab })), fileTabIndex: index };
+}
+
+export function getWorkbenchFileTabs(route: WorkbenchRoute): { tabs: readonly WorkbenchFileTab[]; index: number } {
+  if (route.view !== "file") return { tabs: [], index: -1 };
+  return route.fileTabs?.length
+    ? { tabs: route.fileTabs, index: route.fileTabIndex ?? 0 }
+    : { tabs: route.filePath ? [{ filePath: route.filePath, folderAddress: null }] : [], index: 0 };
+}
+
+function parseFileRoute(projectId: string, segments: readonly string[]): WorkbenchRoute {
+  if (!segments.includes("+") && !segments.includes(WORKBENCH_FOLDER_MARKER)) return createFileRoute(projectId, segments.join("/"));
+  const [indexText = "", ...rest] = segments;
+  const index = Number(indexText);
+  const groups: string[][] = [[]];
+  for (const segment of rest) {
+    if (segment === "+") groups.push([]);
+    else groups.at(-1)!.push(segment);
+  }
+  const tabs: WorkbenchFileTab[] = [];
+  for (const group of groups) {
+    const marker = group.indexOf(WORKBENCH_FOLDER_MARKER);
+    const folderAddress = marker < 0 ? null : group.slice(0, marker);
+    const filePath = group.slice(marker + 1).join("/");
+    if (!filePath || folderAddress?.length === 0) return createInvalidWorkbenchRoute("File tabs need a path and, when marked, a folder.", projectId);
+    tabs.push({ filePath, folderAddress });
+  }
+  if (!Number.isInteger(index) || index < 1 || index > tabs.length) {
+    return createInvalidWorkbenchRoute("File tab routes start with the focused tab number.", projectId);
+  }
+  return withFileTabs(createFileRoute(projectId, tabs[index - 1]!.filePath), tabs, index - 1);
+}
+
+function encodeFileTabs(route: WorkbenchRoute) {
+  if (!route.fileTabs?.length) return encodeWorkbenchRoutePath(route.filePath);
+  const groups = route.fileTabs.map(tab => [
+    ...(tab.folderAddress?.length ? [...tab.folderAddress.map(encodeRouteSegment), WORKBENCH_FOLDER_MARKER] : []),
+    encodeWorkbenchRoutePath(tab.filePath),
+  ].join("/"));
+  return `${(route.fileTabIndex ?? 0) + 1}/${groups.join("/+/")}`;
 }
 
 export function createThreadRoute(projectId: string, target: string | WorkbenchThreadRouteTarget): WorkbenchRoute {
@@ -517,7 +577,7 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
     const value = valueSegments.value.join("/");
     if (mode === "file") {
-      return createFileRoute(projectId, value);
+      return parseFileRoute(projectId, valueSegments.value);
     }
     if (mode === "thread") {
       return parseThreadTargetSegments(valueSegments.value, projectId);
@@ -658,7 +718,7 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
     return "/";
   }
   if (route.view === "file") {
-    return `${markedPath}/file/${encodeWorkbenchRoutePath(route.filePath)}`;
+    return `${markedPath}/file/${encodeFileTabs(route)}`;
   }
   if (route.view === "thread") {
     const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: RouteThreadReferenceSchema.parse(route.threadId) });
@@ -735,6 +795,8 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && areDeeplyEqual(left.selectedProjectIds, right.selectedProjectIds)
     && areDeeplyEqual(left.folderAddress ?? null, right.folderAddress ?? null)
     && left.filePath === right.filePath
+    && areDeeplyEqual(left.fileTabs ?? null, right.fileTabs ?? null)
+    && (left.fileTabIndex ?? 0) === (right.fileTabIndex ?? 0)
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)
     && left.threadId === right.threadId
     && (left.statsTab ?? "usage") === (right.statsTab ?? "usage")

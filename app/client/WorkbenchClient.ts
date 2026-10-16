@@ -86,6 +86,8 @@ type MountedControls = WorkbenchControls & {
       | "fileTransport" | "getProjectChangeSummary" | "getProjectId" | "refreshProject" | "surfaces">>
       & { location?: ProjectLocationReference }): ReturnType<typeof WorkbenchFilePanelClient>;
   createTextFileDocumentPort(path: string, location?: ProjectLocationReference | null): TextFileDocumentPort;
+  /** Create a new file holding `content`; rejects when the path already exists. */
+  createTextFile(path: string, content: string, location?: ProjectLocationReference | null): Promise<void>;
 };
 
 export interface MountedWorkbenchClient {
@@ -669,6 +671,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return result;
   }
 
+  function focusedTabFolder(route: WorkbenchRoute) {
+    const address = route.view === "file" ? route.fileTabs?.[route.fileTabIndex ?? 0]?.folderAddress : null;
+    return address?.length ? projectNavigator.folderForAddress(address) : null;
+  }
+
   async function loadView(route: WorkbenchRoute,
     context: { isCurrent(): boolean; signal: AbortSignal }): Promise<WorkbenchRouteLoadResult> {
     const target = route.threadTarget;
@@ -737,8 +744,8 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     let location = draftRouteTarget
       ? explicit ?? saved?.target ?? (logical && presentation.snapshot().data
         ? preferredLogicalLaunchLocation(logical, presentation.snapshot().data!) : null)
-      // The url omits a folder the sidebar selects implicitly, so views open in the browsed folder.
-      : browseTarget ?? browseFolder;
+      // The focused file tab names its own folder; otherwise the url omits a folder the sidebar selects implicitly.
+      : explicit ?? focusedTabFolder(route) ?? browseTarget ?? browseFolder;
     if (!location && draftRouteTarget && logical) location = logical.locations.find(item => item.project)?.target
       ?? logical.locations[0]?.target ?? null;
     // Historical physical routes are resolved from app facts, never guessed across sources.
@@ -1050,6 +1057,16 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
           clear: () => drafts.clearBuffer(path),
         },
       };
+    },
+    createTextFile: async (path, content, explicitLocation) => {
+      const location = explicitLocation ?? browseLocation;
+      if (!location) throw new Error("Choose a folder before creating a file.");
+      const operations = workspace.daemon({ kind: "folder", location });
+      const existing = await operations.projects.files.read({ projectId: location.projectId, path }).then(() => true, () => false);
+      if (existing) throw new Error(`${path} already exists.`);
+      // A forced save creates the missing file without the markdown naming rules of explorer entries.
+      const saved = await operations.projects.files.save({ projectId: location.projectId, path, content, expectedMtimeMs: 0, force: true });
+      if ("actualMtimeMs" in saved) throw new Error(saved.error);
     },
   };
 

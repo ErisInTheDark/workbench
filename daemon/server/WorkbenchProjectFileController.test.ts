@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect project-file conflict, mutation, and containment behavior.
+ * - No production exports; tests protect project-file conflict, mutation, forced creation, and containment behavior.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -68,6 +68,15 @@ test("file writes preserve mtime conflicts and refresh snapshots only after muta
       }),
       /outside the project (?:root|workspace)/u,
     );
+
+    const write = (relative: string, force: boolean) => controller.write({
+      content: "<svg/>", expectedMtimeMs: 0, force, path: relative,
+      projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), resetToHead: false,
+    });
+    await assert.rejects(write("icon.svg", false), /ENOENT/u);
+    assert.equal("changes" in await write("icon.svg", true), true);
+    assert.equal(await fs.readFile(path.join(root, "icon.svg"), "utf8"), "<svg/>");
+    await assert.rejects(write("image.png", true), /can be edited/u);
   } finally {
     await temporary.dispose();
   }

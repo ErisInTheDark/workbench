@@ -68,6 +68,18 @@ function getEditableCaretOffset (element: HTMLElement) {
   return prefixRange.toString().length;
 }
 
+function getEditableSelectionRange (element: HTMLElement) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return null;
+  const prefix = range.cloneRange();
+  prefix.selectNodeContents(element);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const start = prefix.toString().length;
+  return { start, end: start + range.toString().length };
+}
+
 function restoreEditableCaretOffset (element: HTMLElement, offset: number | null) {
   if (offset === null) {
     return;
@@ -217,7 +229,7 @@ export default function PlaintextEditable ({
   disabled = false,
   id,
   onBlur,
-  onCaretChange,
+  onSelectionChange,
   onChange,
   onCompositionEnd,
   onCompositionStart,
@@ -239,8 +251,8 @@ export default function PlaintextEditable ({
   disabled?: boolean;
   id?: string;
   onBlur?: (event: FocusEvent<HTMLDivElement>) => void;
-  /** Collapsed caret offset after clicks, key presses and input; null while a range is selected. */
-  onCaretChange?: (offset: number | null) => void;
+  /** Model-text selection after clicks, key presses, input and drag-selection; null when focus is elsewhere. */
+  onSelectionChange?: (range: { start: number; end: number } | null) => void;
   onChange?: (value: string) => void;
   onCompositionEnd?: (event: CompositionEvent<HTMLDivElement>) => void;
   onCompositionStart?: (event: CompositionEvent<HTMLDivElement>) => void;
@@ -410,9 +422,8 @@ export default function PlaintextEditable ({
 
   const updateCaretOffset = () => {
     const element = elementRef.current;
-    const offset = element ? getEditableCaretOffset(element) : null;
-    setCaretOffset(offset);
-    onCaretChange?.(offset);
+    setCaretOffset(element ? getEditableCaretOffset(element) : null);
+    if (onSelectionChange) onSelectionChange(element ? getEditableSelectionRange(element) : null);
   };
 
   const acceptSuggestion = (suggestion: InlineMentionSuggestion) => {
@@ -511,7 +522,7 @@ export default function PlaintextEditable ({
               setCaretOffset(getEditableCaretOffset(event.currentTarget));
             }
             onChange?.(nextValue);
-            onCaretChange?.(nextValue ? getEditableCaretOffset(event.currentTarget) : 0);
+            if (onSelectionChange) onSelectionChange(getEditableSelectionRange(event.currentTarget));
           }}
           onKeyDown={(event) => {
             if (voice.locked) {
@@ -548,6 +559,7 @@ export default function PlaintextEditable ({
           onPaste={event => { if (voice.locked) { event.preventDefault(); return; } onPaste?.(event); }}
           onClick={updateCaretOffset}
           onKeyUp={updateCaretOffset}
+          onMouseUp={onSelectionChange ? updateCaretOffset : undefined}
         />
       </div>
       {suggestionsPopupPortal}

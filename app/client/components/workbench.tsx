@@ -129,6 +129,8 @@ import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreePr
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFilePanel from "./workbench/layout/WorkbenchFilePanel";
 import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
+import WorkbenchSvgWorkspace from "./workbench/svg/WorkbenchSvgWorkspace";
+import { useSvgFileTabs } from "./workbench/svg/use-svg-file-tabs";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
 import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
@@ -985,7 +987,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     openOtherFilesWith: resolvedSettings.openOtherFilesWith,
     openSvgFilesWith: resolvedSettings.openSvgFilesWith,
   }), [resolvedSettings.openMarkdownFilesWith, resolvedSettings.openOtherFilesWith, resolvedSettings.openSvgFilesWith]);
+  const svgFileTabs = useSvgFileTabs({
+    browseLocation,
+    currentProjectId: explorer.currentProjectId,
+    logicalProjects,
+    navigateToRoute,
+    navigator: workbenchClient.mounted?.projectNavigator ?? null,
+    route,
+  });
   const openFileByPolicy = useFileActions({
+    routeForWorkbenchFile: svgFileTabs.routeForWorkbenchFile,
     policy: fileOpenPolicy,
     browseLocation,
     currentProjectId: explorer.currentProjectId,
@@ -2842,9 +2853,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     }}
                   />
                 ) : null}
-                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout && isSvgFile(effectiveFilePath) ? (
-                  <WorkbenchSvgEditorView key={effectiveFilePath} controls={controls} location={browseLocation} path={effectiveFilePath} />
-                ) : showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
+                {showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout && svgFileTabs.tabs ? (
+                  <WorkbenchSvgWorkspace controls={controls} tabs={svgFileTabs.tabs} />
+                ) :showFileView && !selectionError && isFileViewReady && !shouldRenderMainLayout ? (
                   <WorkbenchFilePanel
                     controls={controls}
                     editorFontClassName={editorFontClassName}

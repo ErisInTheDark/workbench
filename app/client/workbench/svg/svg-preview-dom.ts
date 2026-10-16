@@ -4,7 +4,6 @@
  * - SvgViewBox: user-space rectangle the preview frames.
  * - readSvgViewBox: viewBox from the root, falling back to numeric width/height, then the SVG default size.
  * - buildSvgPreview: inert DOM copy of a parsed document, without scripts, foreign content, handlers or javascript: values.
- * - svgPreviewDataUrl: standalone image URL of a preview at a pixel size and currentColor.
  */
 import { getSvgAttribute, type SvgSourceElement } from "./svg-source";
 
@@ -85,12 +84,4 @@ export function buildSvgPreview(document: Document, root: SvgSourceElement): SVG
   element.setAttribute("width", "100%");
   element.setAttribute("height", "100%");
   return element;
-}
-
-export function svgPreviewDataUrl(preview: SVGSVGElement, size: number, color: string) {
-  const copy = preview.cloneNode(true) as SVGSVGElement;
-  copy.setAttribute("width", String(size));
-  copy.setAttribute("height", String(size));
-  copy.style.color = color;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(copy))}`;
 }

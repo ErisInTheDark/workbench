@@ -10,6 +10,7 @@ import {
   formatSvgNumber,
   parseSvgPathData,
   serializeSvgPathData,
+  svgArcCircle,
   type SvgPathSegment,
   type SvgPoint,
 } from "./svg-path-data";
@@ -157,6 +158,36 @@ function attachedControls(segments: SvgPathSegment[], index: number) {
   ];
 }
 
+const CORNER_RADIUS_STEP = 0.5;
+
+/** Resize a rounded corner (an arc between two tangent lines) toward `pointer`, keeping it tangent to both lines. */
+function roundCorner(segments: SvgPathSegment[], index: number, pointer: SvgPoint) {
+  const arc = segments[index];
+  const previous = segments[index - 1];
+  if (!arc?.arc || !previous) return null;
+  const end = arc.points.at(-1)!;
+  const corner = svgArcCircle(arc.start, arc.arc, end)?.tangentIntersection;
+  if (!corner) return null;
+  const unit = (point: SvgPoint) => {
+    const length = Math.hypot(point.x - corner.x, point.y - corner.y) || 1;
+    return { x: (point.x - corner.x) / length, y: (point.y - corner.y) / length };
+  };
+  const towardStart = unit(arc.start);
+  const towardEnd = unit(end);
+  const halfAngle = Math.acos(Math.max(-1, Math.min(1, towardStart.x * towardEnd.x + towardStart.y * towardEnd.y))) / 2;
+  if (!Number.isFinite(halfAngle) || halfAngle < 1e-3) return null;
+  const bisector = unit({ x: corner.x + towardStart.x + towardEnd.x, y: corner.y + towardStart.y + towardEnd.y });
+  const along = (pointer.x - corner.x) * bisector.x + (pointer.y - corner.y) * bisector.y;
+  const radius = Math.max(CORNER_RADIUS_STEP, Math.round(along * Math.sin(halfAngle) / CORNER_RADIUS_STEP) * CORNER_RADIUS_STEP);
+  const tangentLength = radius / Math.tan(halfAngle);
+  const start = { x: corner.x + towardStart.x * tangentLength, y: corner.y + towardStart.y * tangentLength };
+  Object.assign(previous.points.at(-1)!, start);
+  Object.assign(arc.start, start);
+  arc.arc = [radius, radius, arc.arc[2], arc.arc[3], arc.arc[4]];
+  Object.assign(arc.points.at(-1)!, { x: corner.x + towardEnd.x * tangentLength, y: corner.y + towardEnd.y * tangentLength });
+  return segments;
+}
+
 function pathShape(element: SvgSourceElement): SvgShape | null {
   const segments = parseSvgPathData(getSvgAttribute(element, "d") ?? "");
   if (!segments?.length) return null;
@@ -164,6 +195,10 @@ function pathShape(element: SvgSourceElement): SvgShape | null {
   segments.forEach((segment, index) => {
     if (segment.type === "Z") return;
     const end = segment.points.at(-1)!;
+    const corner = segment.type === "A" ? svgArcCircle(segment.start, segment.arc!, end) : null;
+    if (corner?.tangentIntersection && index > 0) {
+      handles.push({ id: `r${index}`, kind: "radius", point: { x: corner.x, y: corner.y }, links: [segment.start, end] });
+    }
     if (segment.type === "C") {
       handles.push({ id: `${index}:0`, kind: "control", point: segment.points[0]!, links: [segment.start] });
       handles.push({ id: `${index}:1`, kind: "control", point: segment.points[1]!, links: [end] });
@@ -178,6 +213,7 @@ function pathShape(element: SvgSourceElement): SvgShape | null {
   return {
     handles,
     move: (id, to) => {
+      if (id.startsWith("r")) return write(roundCorner(cloneSegments(segments), Number(id.slice(1)), to) ?? segments);
       const [segmentIndex, pointIndex] = id.split(":").map(Number) as [number, number];
       const next = cloneSegments(segments);
       const segment = next[segmentIndex];

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectFileController: own validated markdown, SVG and .env file reads, writes, HEAD resets, and mtime conflicts.
+ * - default WorkbenchProjectFileController: own validated markdown, SVG and .env file reads, writes (forced writes may create), HEAD resets, and mtime conflicts.
  */
 import fs from "node:fs/promises";
 
@@ -52,11 +52,15 @@ export default class WorkbenchProjectFileController {
   }) {
     const project = await this.catalog.resolveProjectById(request.projectId);
     const file = resolveProjectFilePath(project, request.path);
-    const before = await fs.stat(file.absolutePath);
     if (!isEditableFile(file.rootRelativePath)) throw new Error("Only markdown, SVG and .env files can be edited in the workbench.");
-    if (!before.isFile()) throw new Error("The requested path is not a file.");
-    const actualMtimeMs = Math.trunc(before.mtimeMs);
-    if (!request.force && actualMtimeMs !== Math.trunc(request.expectedMtimeMs)) {
+    // A forced save writes regardless of disk state, so it also creates a file that does not exist yet.
+    const before = await fs.stat(file.absolutePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" && request.force && !request.resetToHead) return null;
+      throw error;
+    });
+    if (before && !before.isFile()) throw new Error("The requested path is not a file.");
+    const actualMtimeMs = before ? Math.trunc(before.mtimeMs) : 0;
+    if (before && !request.force && actualMtimeMs !== Math.trunc(request.expectedMtimeMs)) {
       return {
         actualMtimeMs,
         actualUpdatedAt: before.mtime.toISOString(),

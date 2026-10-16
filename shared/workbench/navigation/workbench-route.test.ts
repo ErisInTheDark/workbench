@@ -1,13 +1,14 @@
 /*
  * Exports: none.
- * Tests: stats tabs survive href round trips and selection changes; draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
+ * Tests: file tabs survive href round trips with per-tab folders; stats tabs survive href round trips and selection changes; draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema } from "../identity";
 import {
-  createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createStatsRoute, createToggledProjectSelectionRoute,
-  createWorkbenchHref, isSameDraftRouteIntent, isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withProjectSelection,
+  createFileRoute, createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createStatsRoute, createToggledProjectSelectionRoute,
+  createWorkbenchHref, getWorkbenchFileTabs, isSameDraftRouteIntent, isSameWorkbenchRoute, parseWorkbenchRouteFromPath,
+  withFileTabs, withProjectSelection,
 } from "./workbench-route";
 
 test("stats tabs round-trip through their href, keep through selection changes, and default to usage", () => {
@@ -21,6 +22,29 @@ test("stats tabs round-trip through their href, keep through selection changes, 
   assert.equal(createWorkbenchHref(createStatsRoute(null, "usage")), "/@/stats");
   assert.equal(isSameWorkbenchRoute(createStatsRoute(null, "tools"), createStatsRoute(null)), false);
   assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
+});
+
+test("file tabs keep order, focus and per-tab folders through hrefs; a lone local tab stays a plain file url", () => {
+  const tabs = [
+    { filePath: "icons/smile.svg", folderAddress: null },
+    { filePath: "icons/star.svg", folderAddress: ["+convex-lab"] },
+    { filePath: "brand/logo.svg", folderAddress: ["velvet-daemon", "wb"] },
+  ];
+  const route = withFileTabs(withProjectSelection(createFileRoute("workbench", "icons/smile.svg"), ["workbench"]), tabs, 1);
+  const href = createWorkbenchHref(route);
+  assert.equal(href, "/workbench/@/file/2/icons/smile.svg/+/%2Bconvex-lab/*/icons/star.svg/+/velvet-daemon/wb/*/brand/logo.svg");
+  const parsed = parseWorkbenchRouteFromPath(href);
+  assert.equal(parsed.filePath, "icons/star.svg");
+  assert.deepEqual(getWorkbenchFileTabs(parsed), { tabs, index: 1 });
+  assert.equal(isSameWorkbenchRoute(parsed, route), true);
+  assert.equal(isSameWorkbenchRoute(parsed, withFileTabs(route, tabs, 0)), false);
+
+  const single = withFileTabs(createFileRoute("workbench", "x.svg"), [{ filePath: "icons/a.svg", folderAddress: null }], 0);
+  assert.equal(createWorkbenchHref(single), "/workbench/@/file/icons/a.svg");
+  assert.deepEqual(getWorkbenchFileTabs(parseWorkbenchRouteFromPath("/workbench/@/file/icons/a.svg")).tabs,
+    [{ filePath: "icons/a.svg", folderAddress: null }]);
+  assert.equal(parseWorkbenchRouteFromPath("/workbench/@/file/4/a.svg/+/b.svg").view, "invalid");
+  assert.equal(parseWorkbenchRouteFromPath("/workbench/@/file/1/*/a.svg").view, "invalid");
 });
 
 test("new project view round-trips through its href with and without a project selection", () => {

@@ -57,6 +57,9 @@
  * - CompactIcon/ListIcon/QuestionnaireListIcon/EllipsisIcon/FeatherIcon: thread action glyphs.
  * - SlashIcon: compact skill overflow glyph.
  * - Redo2Icon/Grid3x3Icon/WandSparklesIcon: editor redo, grid and format glyphs.
+ * - MousePointerIcon/PenToolIcon/CircleIcon/CircleDotIcon/FlipHorizontalIcon/FlipVerticalIcon/PaletteIcon/RulerIcon/SaveAsIcon:
+ *   svg editor tools, transforms, overlay toggles and save as.
+ * - MagnetIcon/MagnetOffIcon: point snapping on and off.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
@@ -851,6 +854,74 @@ export function Redo2Icon(props: IconProps) {
 
 export function Grid3x3Icon(props: IconProps) {
   return <OutlinedIcon {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></OutlinedIcon>;
+}
+
+export function MousePointerIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" /></OutlinedIcon>;
+}
+
+export function PenToolIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z" />
+    <path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18" />
+    <path d="m2.3 2.3 7.286 7.286" /><circle cx="11" cy="11" r="2" />
+  </OutlinedIcon>;
+}
+
+export function CircleIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="10" /></OutlinedIcon>;
+}
+
+export function CircleDotIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="1" /></OutlinedIcon>;
+}
+
+export function FlipHorizontalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m3 7 5 5-5 5V7M21 7l-5 5 5 5V7M12 20v2M12 14v2M12 8v2M12 2v2" /></OutlinedIcon>;
+}
+
+export function FlipVerticalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m17 3-5 5-5-5h10M17 21l-5-5-5 5h10M4 12H2M10 12H8M16 12h-2M22 12h-2" /></OutlinedIcon>;
+}
+
+export function PaletteIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" />
+    <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /><circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
+    <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" /><circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
+  </OutlinedIcon>;
+}
+
+export function RulerIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z" />
+    <path d="m14.5 12.5 2-2M11.5 9.5l2-2M8.5 6.5l2-2M17.5 15.5l2-2" />
+  </OutlinedIcon>;
+}
+
+export function MagnetIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="m12 15 4 4" />
+    <path d="M2.352 10.648a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.029-6.029a1 1 0 1 1 3 3l-6.029 6.029a1.205 1.205 0 0 0 0 1.704l2.296 2.296a1.205 1.205 0 0 0 1.704 0l6.365-6.367A1 1 0 0 0 8.716 4.282z" />
+    <path d="m5 8 4 4" />
+  </OutlinedIcon>;
+}
+
+export function MagnetOffIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11.648 21.648 9.352 19.352M13.352 21.648A1.205 1.205 0 0 1 11.648 21.648M2.352 12.352A1.205 1.205 0 0 1 2.352 10.648" />
+    <path d="M4.648 14.648 2.352 12.352M6.352 14.648A1.205 1.205 0 0 1 4.648 14.648M9.352 19.352A1.205 1.205 0 0 1 9.352 17.648" />
+    <path d="M12.5 8.49A2.14 2.14 0 0 1 15.5 11.5M12.5 8.49 10.5 10.5M14.5 20.5 13.5 21.5M15.5 11.5 13.5 13.51" />
+    <path d="M19.56 15.436A7.78 7.78 0 0 0 8.567 4.436M19.56 15.436 17.493 17.5M2 2 22 22M2.352 10.648 3.5 9.5" />
+    <path d="M7.5 13.5 6.352 14.648M8.567 4.436 6.5 6.5M9.352 17.648 10.648 16.352" />
+  </OutlinedIcon>;
+}
+
+export function SaveAsIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M10 2v3a1 1 0 0 0 1 1h5M18 18v-6a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6M18 22H4a2 2 0 0 1-2-2V6" />
+    <path d="M8 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9.172a2 2 0 0 1 1.414.586l2.828 2.828A2 2 0 0 1 22 6.828V16a2 2 0 0 1-2.01 2z" />
+  </OutlinedIcon>;
 }
 
 export function WandSparklesIcon(props: IconProps) {
