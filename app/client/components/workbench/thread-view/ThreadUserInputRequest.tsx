@@ -545,11 +545,13 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           return (
                             <OptionCard
                               key={optionId}
-                              description={option.description}
+                              description={isApproval
+                                ? renderThreadInlineMarkdown(option.description, {}, `${optionId}:description`)
+                                : option.description}
                               isChecked={isChecked}
                               isHistoryMode
                               isSingleChoice={isSingleChoice}
-                              label={isApproval ? renderThreadInlineMarkdown(option.label, {}, optionId) : option.label}
+                              label={option.label}
                               wrapLabel={isApproval}
                               markerId={optionId}
                               presentation={isApproval || compact ? "compact-inline" : "card"}
@@ -561,10 +563,12 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                           <OptionCard
                             key={optionId}
                             disabled={isSubmitting}
-                            description={option.description}
+                            description={isApproval
+                              ? renderThreadInlineMarkdown(option.description, {}, `${optionId}:description`)
+                              : option.description}
                             isChecked={isChecked}
                             isSingleChoice={isSingleChoice}
-                            label={isApproval ? renderThreadInlineMarkdown(option.label, {}, optionId) : option.label}
+                            label={option.label}
                             wrapLabel={isApproval}
                             markerId={optionId}
                             presentation={isApproval || compact ? "compact-inline" : "card"}

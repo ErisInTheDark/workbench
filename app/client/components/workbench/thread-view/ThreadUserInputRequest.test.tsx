@@ -226,3 +226,35 @@ test("full live questionnaire remains the default with its shared submit control
   assert.match(html, /data-thread-user-input-presentation="full"/u);
   assert.match(html, /data-thread-questionnaire-submit="true"/u);
 });
+
+test("approval option descriptions render command prefixes as inline code", () => {
+  const approvalRequest = {
+    ...request,
+    approval: {},
+    questions: [{
+      allowOther: false,
+      header: "Approval",
+      id: "decision",
+      isSecret: false,
+      options: [
+        { description: "Approve this command just for the current action.", label: "Allow once" },
+        { description: "Approve commands starting with `vp run service:restart` in this project.", label: "Always allow" },
+        { description: "Do not approve this command.", label: "Decline" },
+      ],
+      question: "Should the agent run this command?",
+    }],
+    title: "Approve command execution",
+  } satisfies WorkbenchUserInputRequest;
+  const html = renderToStaticMarkup(createElement(ThreadUserInputRequest, {
+    draft: null,
+    mode: "live",
+    onDraftChange: (update) => update(draft),
+    onDraftClear: () => undefined,
+    onSubmit: async () => undefined,
+    request: approvalRequest,
+    spellCheck: false,
+  }));
+
+  assert.match(html, /<code[^>]*>vp run service:restart<\/code>/u);
+  assert.doesNotMatch(html, /`vp run service:restart`/u);
+});

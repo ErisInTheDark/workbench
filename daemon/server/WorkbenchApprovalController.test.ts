@@ -13,12 +13,12 @@ import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./Wo
 const threadId = WorkbenchThreadIdSchema.parse("11111111-1111-4111-8111-111111111111");
 const turnId = WorkbenchTurnIdSchema.parse("22222222-2222-4222-8222-222222222222");
 const projectId = ProjectIdSchema.parse("33333333-3333-4333-8333-333333333333");
-const prefix = ["pnpm", "run", "typecheck"];
+const prefix = ["vp", "run", "service:restart"];
 
 function command(overrides: Partial<Extract<WorkbenchApprovalSubject, { kind: "command" }>> = {}): WorkbenchApprovalSubject {
   return {
-    kind: "command", command: "pwsh -NoProfile -Command 'pnpm run typecheck'", cwd: "C:/repo", commandActions: [],
-    justification: "Run checks.", networkTarget: null, rememberable: true, suggestedPrefixes: [], ...overrides,
+    kind: "command", command: "vp run service:restart --watch", cwd: "C:/repo", commandActions: [],
+    justification: "Run checks.", networkTarget: null, rememberable: true, ...overrides,
   };
 }
 
@@ -128,13 +128,16 @@ test("an approval closed while its review is running is never decided", async ()
 
 test("a shown approval carries command context, offers one-shot and remember choices, and records its answered outcome", async () => {
   const h = harness();
-  assert.deepEqual(await h.open("first", command({ suggestedPrefixes: [prefix] })), { kind: "shown" });
+  assert.deepEqual(await h.open("first"), { kind: "shown" });
   assert.deepEqual(h.events, ["questionnaire/requested", "pendingInput"]);
   const pending = h.controller.list()[0]!;
-  assert.equal(pending.request.approval?.command?.command, "pwsh -NoProfile -Command 'pnpm run typecheck'");
+  assert.equal(pending.request.approval?.command?.command, "vp run service:restart --watch");
   assert.equal(pending.itemId, "item-first");
   assert.equal(h.options("first").includes("Allow for session"), false);
   assert.ok(h.options("first").some(label => label.includes("Always allow")));
+  const remembered = pending.request.questions[0]?.options.find(option => option.label.includes("Always allow"));
+  assert.match(remembered?.description ?? "", /vp run service:restart/u);
+  assert.doesNotMatch(remembered?.description ?? "", /C:\/repo|future script|confirmation/iu);
   await assert.rejects(h.choose("first", []), /exactly one/u);
   await assert.rejects(h.choose("first", ["Allow once", "Decline"]), /exactly one/u);
   await h.choose("first", ["Allow once"]);
@@ -147,17 +150,23 @@ test("a shown approval carries command context, offers one-shot and remember cho
 
 test("remembering a prefix saves before delivering, and a failed save keeps the question answerable", async () => {
   const failing = harness({ failSave: true });
-  await failing.open("first", command({ suggestedPrefixes: [prefix] }));
+  await failing.open("first");
   const always = failing.options("first").find(label => label.includes("Always allow"))!;
   await assert.rejects(failing.choose("first", [always]), /permission store unavailable/u);
   assert.deepEqual(failing.delivered, []);
   assert.equal(failing.controller.list().length, 1);
 
   const h = harness();
-  await h.open("first", command({ suggestedPrefixes: [prefix] }));
+  await h.open("first");
   await h.choose("first", [h.options("first").find(label => label.includes("Always allow"))!]);
   assert.deepEqual(h.saves, [prefix]);
   assert.deepEqual(h.delivered, [{ kind: "allowOnce" }]);
+});
+
+test("commands without a Workbench-owned prefix offer no remembered choice", async () => {
+  const h = harness();
+  await h.open("first", command({ command: "echo hello" }));
+  assert.equal(h.options("first").some(label => label.includes("Always allow")), false);
 });
 
 test("saved rules decide without asking: confirmed runs auto-approve, unconfirmed ones refuse with feedback", async () => {

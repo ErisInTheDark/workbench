@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - getPackageScriptPrefix: derive an exact script invocation prefix without trailing script arguments.
+ * - getPackageScriptPrefix: derive an exact package-script or task-runner prefix without trailing arguments.
  */
 interface Runner {
   commands: readonly string[];
   shortcuts?: readonly string[];
   builtins?: readonly string[];
+  scriptPattern?: RegExp;
   switches: readonly string[];
   values: readonly string[];
 }
@@ -43,6 +44,15 @@ const runners: Readonly<Record<string, Runner>> = {
     commands: ["run-script", "run"],
     switches: ["--no-interaction", "-n", "--quiet", "-q", "--verbose", "-v", "-vv", "-vvv", "--no-plugins", "--no-scripts", "--dev", "--no-dev"],
     values: ["--working-dir", "-d", "--timeout"],
+  },
+  vp: {
+    commands: ["run"],
+    scriptPattern: /^(?:@[^/\s#]+\/[^/\s#]+#|[^/\s#]+#)?[^/\s#]+$/u,
+    switches: [
+      "-r", "--recursive", "-t", "--transitive", "-w", "--workspace-root", "--fail-if-no-match",
+      "--ignore-depends-on", "-v", "--verbose", "--cache", "--no-cache", "--parallel", "--last-details",
+    ],
+    values: ["-F", "--filter", "--log", "--concurrency-limit"],
   },
 };
 
@@ -99,6 +109,8 @@ export function getPackageScriptPrefix(argv: readonly string[]): string[] | null
     index = next;
   } else if (!runner.builtins || runner.builtins.includes(verb)) return null;
   const script = argv[index];
-  if (!script || script.startsWith("-") || /[/\\*?]/u.test(script) || (name === "bun" && /\.(?:[cm]?[jt]sx?|wasm)$/iu.test(script))) return null;
+  if (!script || script.startsWith("-")
+    || !(runner.scriptPattern?.test(script) ?? !/[/\\*?]/u.test(script))
+    || (name === "bun" && /\.(?:[cm]?[jt]sx?|wasm)$/iu.test(script))) return null;
   return argv.slice(0, index + 1);
 }

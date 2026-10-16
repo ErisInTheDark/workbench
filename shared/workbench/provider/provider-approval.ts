@@ -17,7 +17,6 @@ export type WorkbenchApprovalSubject =
     networkTarget: string | null;
     /** Whether saved command rules may decide or be offered for this request. */
     rememberable: boolean;
-    suggestedPrefixes: string[][];
   }
   | { kind: "fileChange"; reason: string | null; grantRoot: string | null }
   | { kind: "permissions"; cwd: string; reason: string | null; permissions: string | null }

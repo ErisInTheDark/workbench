@@ -197,7 +197,7 @@ export default class WorkbenchApprovalController {
       allowSession: input.allowSession,
       rememberOptions: entry.remember?.candidates.map(candidate => ({
         label: candidate.label,
-        description: `Remember for this project in ${entry.remember!.workdir}. Includes trailing arguments and future script contents; explicit single-command confirmation is required.`,
+        description: `Approve commands starting with \`${displayPrefix(candidate.prefix)}\` in this project.`,
       })),
       ...(summary ? { summary } : {}),
     });
@@ -340,15 +340,11 @@ export default class WorkbenchApprovalController {
         feedback: `The command prefix ${JSON.stringify(saved.prefix)} has previously been approved to run outside the sandbox in ${saved.workdir} for this thread's project, but you must explicitly state that you are not bundling additional shell code into the command. If true, resubmit with this exact sentence on its own line in justification: "${COMMAND_APPROVAL_CONFIRMATION}" Otherwise, separate the shell operations and request approval normally. This is an automatic Workbench check, not a user rejection.`,
       };
     }
-    const prefixes: string[][] = [];
-    for (const candidate of [...subject.suggestedPrefixes, getPackageScriptPrefix(argv)]) {
-      if (!candidate || !matchesApprovalPrefix(argv, candidate) || candidate.some(token => !token)) continue;
-      if (!prefixes.some(prefix => prefix.length === candidate.length && matchesApprovalPrefix(prefix, candidate))) prefixes.push([...candidate]);
-    }
-    entry.remember = {
+    const prefix = getPackageScriptPrefix(argv);
+    entry.remember = prefix && matchesApprovalPrefix(argv, prefix) ? {
       projectId, workdir,
-      candidates: prefixes.map(prefix => ({ prefix, label: `**Always allow** - \`${displayPrefix(prefix)}\` command prefix` })),
-    };
+      candidates: [{ prefix, label: "Always allow" }],
+    } : null;
     return null;
   }
 

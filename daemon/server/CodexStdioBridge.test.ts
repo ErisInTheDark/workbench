@@ -185,7 +185,7 @@ test("codex approvals are transport only: adapt to the Workbench owner and carry
       threadId: "thread", turnId: "turn", itemId: "item-first", requestKey: "first",
       subject: {
         kind: "command", command: "pnpm run typecheck", cwd: "C:/repo", commandActions: [], justification: "Run tests.",
-        networkTarget: null, rememberable: true, suggestedPrefixes: [["pnpm", "run"]],
+        networkTarget: null, rememberable: true,
       },
     });
     assert.equal(notifications.some(event => event.method === "questionnaire/requested"), false, "the owner, not the bridge, shows approvals");

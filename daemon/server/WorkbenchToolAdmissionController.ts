@@ -138,7 +138,7 @@ export default class WorkbenchToolAdmissionController {
         subject: {
           kind: "command", command: line, cwd, commandActions: [],
           justification: input.justification?.trim() || null, networkTarget: null,
-          rememberable: true, suggestedPrefixes: [],
+          rememberable: true,
         },
         itemId: input.itemId ?? null,
         turnId: input.turnId ?? null,

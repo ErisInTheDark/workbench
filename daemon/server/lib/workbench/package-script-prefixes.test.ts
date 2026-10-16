@@ -13,6 +13,9 @@ test("runner forms preserve invocation through the script name, excluding its ar
     ["yarn", "run", "check"], ["yarn", "verify"], ["bun", "run", "check"], ["bun", "check"],
     ["node", "--run", "check"], ["deno", "task", "check"],
     ["composer", "run-script", "check"], ["composer", "run", "check"],
+    ["vp", "run", "check"], ["vp", "run", "@scope/app#check"],
+    ["vp", "run", "--filter", "@scope/app", "check"],
+    ["vp", "run", "-r", "--cache", "check"], ["C:\\tools\\vp.exe", "run", "check"],
     ["corepack", "pnpm", "run", "check"], ["corepack", "yarn", "verify"],
     ["C:\\node\\npm.cmd", "run", "check"],
     ["pnpm", "--filter", "web", "run", "check"],
@@ -32,5 +35,6 @@ test("builtins, executable launchers, missing values and unknown flags are not g
     ["pnpm", "--mystery", "value", "test"], ["npm", "run"], ["pnpm", "--filter"],
     ["yarn", "run", "--mystery", "test"], ["corepack", "prepare", "pnpm"],
     ["bun", "app.ts"], ["pnpm", "run", "/test.*/"], ["deno", "run", "app.ts"],
+    ["vp", "run"], ["vp", "build"], ["vp", "run", "--mystery", "test"], ["vp", "run", "--filter"],
   ]) assert.equal(getPackageScriptPrefix(argv), null, argv.join(" "));
 });

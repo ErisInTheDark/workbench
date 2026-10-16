@@ -523,13 +523,12 @@ function toApprovalSubject(pending: PendingCodexApproval): WorkbenchApprovalSubj
         // Saved rules decide only plain command runs Codex would accept as-is.
         rememberable: params.kind !== "writeStdin" && !params.additionalPermissions && !params.networkApprovalContext
           && !(params.availableDecisions && !params.availableDecisions.includes("accept")),
-        suggestedPrefixes: params.proposedExecpolicyAmendment ? [params.proposedExecpolicyAmendment] : [],
       };
     }
     case "execCommandApproval":
       return {
         kind: "command", command: pending.params.command.join(" "), cwd: pending.params.cwd, commandActions: [],
-        justification: pending.params.reason ?? null, networkTarget: null, rememberable: false, suggestedPrefixes: [],
+        justification: pending.params.reason ?? null, networkTarget: null, rememberable: false,
       };
     case "fileChangeApproval":
       return { kind: "fileChange", reason: pending.params.reason ?? null, grantRoot: pending.params.grantRoot ?? null };

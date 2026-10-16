@@ -12,7 +12,7 @@ import WorkbenchApprovalReviewController, { type WorkbenchApprovalReviewOptions 
 
 const subject = {
   kind: "command" as const, command: "winget install foo", cwd: "C:/", commandActions: [],
-  justification: "User asked to install foo.", networkTarget: null, rememberable: true, suggestedPrefixes: [],
+  justification: "User asked to install foo.", networkTarget: null, rememberable: true,
 };
 
 function setup(overrides: Partial<WorkbenchApprovalReviewOptions> = {}) {
