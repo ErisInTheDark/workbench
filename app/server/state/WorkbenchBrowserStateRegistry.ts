@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchBrowserStateRegistryOptions: browser-state storage and diagnostic seams.
- * - default WorkbenchBrowserStateRegistry: own browser stores, shared revision-bound workspace reads, cloning, project adoption, seed refresh, and disposal.
+ * - default WorkbenchBrowserStateRegistry: own browser stores, shared revision-bound workspace reads, cloning, project
+ *   adoption, forgetting removed logical projects, seed refresh, and disposal.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -97,6 +98,8 @@ export default class WorkbenchBrowserStateRegistry {
   readonly #openingControllers = new Map<string, Promise<WorkbenchAppStateController>>();
   readonly #listeners = new Map<string, Set<(revision: number) => void>>();
   readonly #workspaceReads = new Map<WorkbenchAppStateController, WorkspaceRead>();
+  /** Every logical project that still exists; stores forget the rest when told and again when they next open. */
+  #liveLogicalProjects: ReadonlySet<string> | null = null;
   #seedQueue = Promise.resolve();
   #disposed = false;
 
@@ -294,6 +297,33 @@ export default class WorkbenchBrowserStateRegistry {
     return await operation;
   }
 
+  /** Forget state keyed to logical projects outside `live` in the shared store and every open browser store. */
+  async forgetLogicalProjects(live: ReadonlySet<string>) {
+    const previous = this.#liveLogicalProjects;
+    if (previous && previous.size === live.size && [...live].every(id => previous.has(id))) return;
+    const known = new Set(live);
+    this.#liveLogicalProjects = known;
+    const operation = this.#seedQueue.then(async () => {
+      if (this.#disposed) throw new BrowserStateRetiredError();
+      const stores = [[undefined, this.#sharedController] as const, ...this.#controllers.entries()];
+      const results = await Promise.allSettled(stores.map(async ([browserStateId, controller]) => {
+        const before = controller.revision;
+        const revision = await controller.forgetLogicalProjects(known);
+        if (revision !== before) this.#notifyBrowser(browserStateId, revision);
+      }));
+      const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (failures.length) throw new AggregateError(failures, "Forgetting removed projects failed in a browser state store.");
+    });
+    this.#seedQueue = operation.then(() => undefined, () => undefined);
+    try {
+      await operation;
+    } catch (error) {
+      // A later identical set must retry rather than be skipped as already applied.
+      if (this.#liveLogicalProjects === known) this.#liveLogicalProjects = null;
+      throw error;
+    }
+  }
+
   async close() {
     this.#disposed = true;
     this.#workspaceReads.clear();
@@ -396,6 +426,7 @@ export default class WorkbenchBrowserStateRegistry {
         daemonRegistrationId: controller.daemonRegistrationId,
         aliases: this.#sharedController.readProjectAliases(),
       });
+      if (this.#liveLogicalProjects) await controller.forgetLogicalProjects(this.#liveLogicalProjects);
     } while (boundary !== this.#seedQueue);
     return controller;
   }

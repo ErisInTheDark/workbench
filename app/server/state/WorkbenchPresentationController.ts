@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchPresentationController: own app presentation admission, revision publication and disposal.
+ * - default WorkbenchPresentationController: own app presentation admission, project id and revision reads, revision
+ *   publication and disposal.
  */
 import {
   PresentationMutationSchema, type PresentationMutation,
@@ -23,6 +24,11 @@ export default class WorkbenchPresentationController {
   revision() {
     this.assertOpen();
     return this.repository.readRevision();
+  }
+
+  readProjectIds() {
+    this.assertOpen();
+    return this.repository.readProjectIds();
   }
 
   readAcceptedLaunch(draftId: string) {

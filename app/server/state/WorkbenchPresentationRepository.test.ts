@@ -593,6 +593,72 @@ test("equal legacy draft and folder ids from two daemons map to independent app 
   }
 });
 
+test("a folder re-keyed to a new identity carries its old project's history and layout, then the empty shell goes", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-rekey-");
+  const databasePath = path.join(temporary.path, "presentation.sqlite3");
+  const repository = new WorkbenchPresentationRepository({ databasePath });
+  const local = ProjectIdentityKeySchema.parse("local://c:/repo/.git");
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo", local) });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/repo", local) });
+    const shell = repository.read().projects[0]!.id;
+    const desktop = { daemonId: first, projectId };
+    const laptop = { daemonId: second, projectId };
+    const saved = repository.mutate({ kind: "putDraft", expectedRevision: null, draft: {
+      id: draftId, logicalProjectId: shell, target: desktop, prompt: "history", selection, updatedAt: 1 } }).drafts[0]!;
+    repository.mutate({ kind: "deleteDraft", draftId, expectedRevision: saved.revision });
+    repository.mutate({ kind: "setLocationsHidden", logicalProjectId: shell, targets: [laptop], hidden: true });
+    const shellFolder = "0f7f6f1e-81b6-4c30-bdc0-f83475982001";
+    repository.mutate({ kind: "saveLayout", scope: "project", logicalProjectId: shell,
+      expectedRevision: repository.read().revision,
+      folders: [{ id: shellFolder, scope: "project", logicalProjectId: shell, title: "old", position: 0 }],
+      members: [{ id: "0f7f6f1e-81b6-4c30-bdc0-f83475983001", scope: "project", logicalProjectId: shell,
+        folderId: shellFolder, position: 0, kind: "thread", draftId: null,
+        thread: { location: desktop, threadId: "thread" } }] });
+
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    const successor = repository.read().projects.find(project => project.matchKey === remote)!.id;
+    const successorFolder = "0f7f6f1e-81b6-4c30-bdc0-f83475982002";
+    repository.mutate({ kind: "saveLayout", scope: "project", logicalProjectId: successor,
+      expectedRevision: repository.read().revision, members: [],
+      folders: [{ id: successorFolder, scope: "project", logicalProjectId: successor, title: "new", position: 0 }] });
+    repository.mutate({ kind: "registerLocations", daemonId: second, hostname: "laptop", catalog: catalog("/laptop/repo") });
+
+    const snapshot = repository.read();
+    assert.deepEqual(snapshot.projects.map(project => project.id), [successor]);
+    assert.deepEqual(snapshot.hiddenLocations, [{ logicalProjectId: successor, target: laptop }]);
+    assert.deepEqual(snapshot.folders.map(folder => [folder.id, folder.logicalProjectId, folder.position]), [
+      [successorFolder, successor, 0], [shellFolder, successor, 1],
+    ]);
+    assert.deepEqual(snapshot.members.map(member => [member.logicalProjectId, member.folderId]), [[successor, shellFolder]]);
+    const database = new Database(databasePath, { readonly: true });
+    try {
+      assert.deepEqual(database.prepare("SELECT logical_project_id, phase FROM presentation_drafts").all(),
+        [{ logical_project_id: successor, phase: "deleted" }]);
+    } finally { database.close(); }
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
+test("a re-keyed project nothing else refers to is simply removed", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-rekey-empty-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop",
+      catalog: catalog("/repo", ProjectIdentityKeySchema.parse("local://c:/repo/.git")) });
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/repo") });
+    assert.deepEqual(repository.read().projects.map(project => project.matchKey), [remote]);
+    assert.deepEqual(repository.readProjectIds(), repository.read().projects.map(project => project.id));
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("a project layout cannot borrow another project's draft or thread target", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-layout-owner-");
   const root = temporary.path;

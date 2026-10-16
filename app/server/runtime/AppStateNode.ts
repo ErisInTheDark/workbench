@@ -1,6 +1,7 @@
 /*
  * Default export:
- * - AppStateNode: own typed app-state reads and mutations over the active database node.
+ * - AppStateNode: own typed app-state reads and mutations over the active database node, forgetting app-state for
+ *   logical projects the presentation removed.
  */
 import ReloadableNode from "workbench-shared/reload/ReloadableNode";
 
@@ -28,10 +29,21 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
       },
     });
     const presentation = new WorkbenchPresentationController(build.get("presentationDatabase"));
+    // App-state keyed to a logical project the presentation no longer has is unreachable; keep the stores in step.
+    const forgetRemovedProjects = () => {
+      void state.forgetLogicalProjects(new Set(presentation.readProjectIds())).catch((error: unknown) => {
+        logger.error("app", `Removed project state cleanup failed: ${error instanceof Error ? error.message.slice(0, 500) : "unknown error"}`);
+      });
+    };
+    let unsubscribe: (() => void) | null = null;
     return {
-      dispose: async () => { presentation.close(); await state.close(); },
+      dispose: async () => { unsubscribe?.(); presentation.close(); await state.close(); },
       registrations: { logger, state, presentation },
-      start: () => state.start(),
+      start: () => {
+        state.start();
+        unsubscribe = presentation.subscribe(forgetRemovedProjects);
+        forgetRemovedProjects();
+      },
     };
   },
   description: "Reload typed app-state reads, projections, and mutations without replacing SQLite.",

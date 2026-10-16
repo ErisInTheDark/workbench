@@ -165,6 +165,27 @@ test("logical project preference seeds a later browser without becoming a per-br
     && record.preference.value === "winter"));
 });
 
+test("gone logical projects leave shared and dormant browser stores when those stores next open", async context => {
+  const { directory, registry, shared } = await fixture(context);
+  const live = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const gone = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  for (const logicalProjectId of [live, gone]) {
+    for (const browser of [undefined, BROWSER_A]) await registry.mutateBrowser(browser, { action: "put", record: {
+      kind: "logicalProjectPreference", logicalProjectId, preference: { key: "theme", enabled: true, value: "winter" },
+    } });
+  }
+  await registry.close();
+  const reopened = new WorkbenchBrowserStateRegistry(shared, { browserStateDirectoryPath: path.join(directory, "browser-state") });
+  reopened.start();
+  try {
+    await reopened.forgetLogicalProjects(new Set([live]));
+    for (const browser of [undefined, BROWSER_A]) {
+      assert.deepEqual(records(await reopened.readBrowser(browser)).flatMap(record =>
+        record.kind === "logicalProjectPreference" ? [record.logicalProjectId] : []), [live]);
+    }
+  } finally { await reopened.close(); }
+});
+
 test("last project selection survives browser reopening without seeding another browser", async context => {
   const { directory, registry, shared } = await fixture(context);
   await registry.readBrowser(BROWSER_A);

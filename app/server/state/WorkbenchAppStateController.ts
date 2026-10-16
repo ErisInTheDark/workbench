@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, and serialized domain mutations.
+ * - default WorkbenchAppStateController: own app-state bootstrap, schema capability, revision reads, serialized domain
+ *   mutations, and forgetting state keyed to logical projects that no longer exist.
  */
 import {
   type WorkbenchProjectRemap,
@@ -322,6 +323,33 @@ export default class WorkbenchAppStateController {
         return mutations;
       });
       return this.read(revision - 1);
+    });
+    this.#mutationQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  /**
+   * Logical project ids are never reused, so state for one outside `live` is unreachable: delete its preferences and
+   * drop it from the saved selection. Resolves to the current revision; unchanged state commits nothing.
+   */
+  forgetLogicalProjects(live: ReadonlySet<string>) {
+    const operation = this.#mutationQueue.then(() => {
+      // Read only the logically keyed families; a full read would expand stored draft images.
+      const rows = this.#readRows(this.#repository.currentVersion().revision);
+      rows.logicalProjectPreferences = this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences, {}));
+      rows.lastProjectSelections = this.#repository.query(selectRows(appStateClientTables.lastProjectSelections, {}));
+      rows.lastProjectSelectionProjects = this.#repository.query(selectRows(appStateClientTables.lastProjectSelectionProjects, {}));
+      type ProjectKeyed = Extract<WorkbenchClientStateRecord, { kind: "logicalProjectPreference" | "lastProjectSelection" }>;
+      const stale = projectWorkbenchClientStateRows(rows).flatMap((change): ProjectKeyed[] => {
+        if (change.change !== "upsert") return [];
+        const { record } = change;
+        if (record.kind === "logicalProjectPreference") return live.has(record.logicalProjectId) ? [] : [record];
+        return record.kind === "lastProjectSelection" && record.selectedProjectIds?.some(id => !live.has(id)) ? [record] : [];
+      });
+      if (!stale.length) return this.revision;
+      return this.#repository.commit(revision => stale.flatMap(record => record.kind === "lastProjectSelection"
+        ? this.#put({ ...record, selectedProjectIds: record.selectedProjectIds?.filter(id => live.has(id)) ?? null }, revision)
+        : this.#delete(recordIdentity(record), revision)));
     });
     this.#mutationQueue = operation.then(() => undefined, () => undefined);
     return operation;

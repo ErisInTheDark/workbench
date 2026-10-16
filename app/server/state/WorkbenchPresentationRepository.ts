@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchPresentationRepositoryOptions: durable shared-presentation database path.
- * - default WorkbenchPresentationRepository: own project, draft, layout and import transactions, projecting compact launch history.
+ * - default WorkbenchPresentationRepository: own project, draft, layout and import transactions, projecting compact launch
+ *   history; folder registration merges projects whose folders all re-keyed into their successor identity.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -96,6 +97,11 @@ export default class WorkbenchPresentationRepository {
       WHERE daemon_id = ? AND source_kind = ? AND source_id = ?
     `);
     return sources.filter(source => Boolean(read.get(daemonId, source.kind, source.sourceId)));
+  }
+
+  /** Every logical project id that exists; anything else is gone for good. */
+  readProjectIds() {
+    return this.requireDatabase().prepare("SELECT id FROM presentation_projects ORDER BY label, id").pluck().all() as string[];
   }
 
   readRevision() {
@@ -397,7 +403,75 @@ export default class WorkbenchPresentationRepository {
       `).run(logicalId, revision,
         input.daemonId, location.project.id, logicalId);
     }
+    bumped = this.mergeFolderlessProjects() || bumped;
     if (changed && !bumped) this.nextRevision();
+  }
+
+  /**
+   * A project whose every folder re-keyed to another identity is an empty shell. With one successor (the owner of every
+   * folder its rows still name), its drafts, layout, hidden folders and layout receipts move there; with nothing left
+   * referring to it, it goes. Ambiguous shells stay for the projection to hide. Returns whether the revision moved.
+   */
+  private mergeFolderlessProjects() {
+    const db = this.requireDatabase();
+    const shells = db.prepare(`
+      SELECT id FROM presentation_projects p
+      WHERE NOT EXISTS (SELECT 1 FROM presentation_locations l WHERE l.logical_project_id = p.id)
+    `).pluck().all() as string[];
+    if (!shells.length) return false;
+    const successors = db.prepare(`
+      SELECT DISTINCT l.logical_project_id FROM presentation_locations l JOIN (
+        SELECT daemon_id, project_id FROM presentation_drafts WHERE logical_project_id = @shell
+        UNION SELECT daemon_id, project_id FROM presentation_hidden_locations WHERE logical_project_id = @shell
+        UNION SELECT daemon_id, project_id FROM presentation_layout_members
+          WHERE logical_project_id = @shell AND kind = 'thread'
+      ) named ON named.daemon_id = l.daemon_id AND named.project_id = l.project_id
+    `).pluck();
+    const referenced = db.prepare(`
+      SELECT EXISTS (SELECT 1 FROM presentation_drafts WHERE logical_project_id = @shell)
+        OR EXISTS (SELECT 1 FROM presentation_folders WHERE logical_project_id = @shell)
+        OR EXISTS (SELECT 1 FROM presentation_layout_members WHERE logical_project_id = @shell)
+        OR EXISTS (SELECT 1 FROM presentation_hidden_locations WHERE logical_project_id = @shell)
+    `).pluck();
+    let revision: number | null = null;
+    for (const shell of shells) {
+      const owners = successors.all({ shell }) as string[];
+      if (owners.length === 1) {
+        revision ??= this.nextRevision();
+        this.mergeProject(shell, owners[0]!, revision);
+      } else if (!referenced.get({ shell })) {
+        revision ??= this.nextRevision();
+        db.prepare("DELETE FROM presentation_projects WHERE id = ?").run(shell);
+      }
+    }
+    return revision !== null;
+  }
+
+  /** Move every row a project owns onto `successor`, project layout after the successor's own, then drop the project. */
+  private mergeProject(shell: string, successor: string, revision: number) {
+    const db = this.requireDatabase();
+    const ids = { shell, successor, revision };
+    for (const table of ["presentation_folders", "presentation_layout_members"] as const) {
+      const offset = db.prepare(`
+        SELECT COALESCE(MAX(position) + 1, 0) FROM ${table} WHERE scope = 'project' AND logical_project_id = @successor
+      `).pluck().get(ids) as number;
+      db.prepare(`
+        UPDATE ${table} SET logical_project_id = @successor, position = position + @offset, revision = @revision
+        WHERE scope = 'project' AND logical_project_id = @shell
+      `).run({ ...ids, offset });
+      db.prepare(`UPDATE ${table} SET logical_project_id = @successor, revision = @revision WHERE logical_project_id = @shell`)
+        .run(ids);
+    }
+    db.prepare("UPDATE presentation_drafts SET logical_project_id = @successor, revision = @revision WHERE logical_project_id = @shell")
+      .run(ids);
+    db.prepare(`
+      INSERT OR IGNORE INTO presentation_hidden_locations(logical_project_id, daemon_id, project_id)
+      SELECT @successor, daemon_id, project_id FROM presentation_hidden_locations WHERE logical_project_id = @shell
+    `).run({ shell, successor });
+    db.prepare("DELETE FROM presentation_hidden_locations WHERE logical_project_id = ?").run(shell);
+    db.prepare("UPDATE presentation_import_receipts SET target_id = @successor WHERE source_kind = 'layout' AND target_id = @shell")
+      .run({ shell, successor });
+    db.prepare("DELETE FROM presentation_projects WHERE id = ?").run(shell);
   }
 
   private requireTarget(target: { daemonId: string; projectId: string }, logicalProjectId: string) {

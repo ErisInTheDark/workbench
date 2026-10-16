@@ -110,6 +110,30 @@ test("last project selection preserves order and replaces explicit, empty and un
   } finally { await restarted.close(); }
 });
 
+test("forgetting gone logical projects deletes their preferences and drops them from the saved selection", async context => {
+  const fixture = await controllerFixture(context);
+  const live = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const gone = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const preference = (logicalProjectId: typeof live) => ({
+    kind: "logicalProjectPreference" as const, logicalProjectId,
+    preference: { enabled: true, key: "theme", value: "winter" } as const,
+  });
+  try {
+    await fixture.controller.mutate({ action: "put", record: preference(live) });
+    await fixture.controller.mutate({ action: "put", record: preference(gone) });
+    await fixture.controller.mutate({ action: "put", record: { kind: "lastProjectSelection", selectedProjectIds: [gone, live] } });
+    const before = fixture.controller.revision;
+    await fixture.controller.forgetLogicalProjects(new Set([live]));
+    const records = projectedRecords(fixture.controller.read());
+    assert.deepEqual(records.filter(record => record.kind === "logicalProjectPreference"), [preference(live)]);
+    assert.deepEqual(records.find(record => record.kind === "lastProjectSelection")?.selectedProjectIds, [live]);
+    const settled = fixture.controller.revision;
+    assert.ok(settled > before);
+    await fixture.controller.forgetLogicalProjects(new Set([live]));
+    assert.equal(fixture.controller.revision, settled, "nothing left to forget commits nothing");
+  } finally { await fixture.controller.close(); }
+});
+
 test("UUID conversion flattens saved aliases without resurrecting deleted drafts across restart", async context => {
   const fixture = await controllerFixture(context);
   const old = ProjectIdSchema.parse("remote://example.test/owner/repo");
