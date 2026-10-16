@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default VoiceSettingsStore: ordered model selection with legacy storage isolated at this boundary.
+ * - default VoiceSettingsStore: ordered model selection and audio retention with legacy storage isolated at this boundary.
  */
 import { deleteRows, selectRows, upsertRow } from "workbench-shared/database/workbench-database-statements";
 import { VoiceConfigurationSchema, createVoiceConfiguration, readVoiceModelSelection, type VoiceConfiguration, type VoiceModelSelection } from "workbench-shared/workbench/voice/voice-session-contract";
@@ -26,21 +26,27 @@ export default class VoiceSettingsStore {
     const rows = await this.database.query(selectRows(voiceSettings));
     const row = rows[0];
     if (!row) return { selection: null };
-    return createVoiceConfiguration({ harness: row.harness, model: row.model });
+    return { ...createVoiceConfiguration({ harness: row.harness, model: row.model }), recordAudio: row.record_audio === 1 };
   }
+  /** Audio retention lives on the selection row, so clearing the model also clears it. */
   private async writeCurrent(value: VoiceConfiguration) {
-    const settings = readVoiceModelSelection(VoiceConfigurationSchema.parse(value));
+    const parsed = VoiceConfigurationSchema.parse(value);
+    const settings = readVoiceModelSelection(parsed);
     if (!settings) {
       await this.database.executeTransaction([deleteRows(voiceProfileLink, { id: "voice" }), deleteRows(voiceSettings, { id: "voice" })]);
       return;
     }
+    const recordAudio = parsed.recordAudio === undefined ? {} : { record_audio: parsed.recordAudio ? 1 as const : 0 as const };
     await this.database.executeTransaction([
       upsertRow(workbenchHarnesses, { id: settings.harness }, { conflictColumns: ["id"], updateColumns: ["id"] }),
       upsertRow(voiceSettings, {
         id: "voice", harness: settings.harness, model: settings.model, agent_path: null,
         agent_source: null, reasoning_effort: "none",
-        service_tier: null, context_window_tokens: null,
-      }, { conflictColumns: ["id"], updateColumns: ["harness", "model", "agent_path", "agent_source", "reasoning_effort", "service_tier", "context_window_tokens"] }),
+        service_tier: null, context_window_tokens: null, ...recordAudio,
+      }, { conflictColumns: ["id"], updateColumns: [
+        "harness", "model", "agent_path", "agent_source", "reasoning_effort", "service_tier", "context_window_tokens",
+        ...parsed.recordAudio === undefined ? [] : ["record_audio" as const],
+      ] }),
       deleteRows(voiceProfileLink, { id: "voice" }),
     ]);
   }

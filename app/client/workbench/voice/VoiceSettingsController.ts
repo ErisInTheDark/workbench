@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - VoiceSettingsSnapshot: acknowledged configuration, installed-harness model catalogues and preparation state.
+ * - VoiceSettingsSnapshot: acknowledged configuration (model and durable audio retention), installed-harness model catalogues and preparation state.
  * - default VoiceSettingsController: ordered voice settings, stale-response fencing and disposal.
  */
 import type { WorkbenchHarness, WorkbenchModelOption } from "workbench-shared/types";
@@ -35,6 +35,8 @@ export default class VoiceSettingsController {
   private configurationRevision = 0;
   private catalogueRevision = 0;
   private writes: Promise<void> = Promise.resolve();
+  /** Selection the daemon last acknowledged, read inside the write queue so audio retention never rewrites a stale model. */
+  private saved: VoiceModelSelection | null = null;
   readonly ready: Promise<void>;
   private readonly unsubscribePreference: () => void;
 
@@ -63,9 +65,11 @@ export default class VoiceSettingsController {
     try {
       await this.writes;
       if (!this.current(revision)) return;
-      const selection = readVoiceModelSelection(await this.daemon.voice.configuration.read());
+      const configuration = await this.daemon.voice.configuration.read();
       if (!this.current(revision)) return;
-      this.publish({ selection });
+      const selection = readVoiceModelSelection(configuration);
+      this.saved = selection;
+      this.publish({ selection, recordAudio: configuration.recordAudio ?? false });
       await this.prepareSelection(revision);
     } catch (error) { this.failConfiguration(revision, error); }
   }
@@ -80,7 +84,22 @@ export default class VoiceSettingsController {
   }
 
   disable = () => this.setEnabled(false);
-  setRecordAudio(recordAudio: boolean) { this.publish({ recordAudio }); }
+  /** Saves audio retention on the daemon beside the model, showing the change while it saves. */
+  async setRecordAudio(recordAudio: boolean) {
+    if (!this.snapshot.selection) return;
+    const previous = this.snapshot.recordAudio;
+    this.publish({ recordAudio });
+    const write = this.writes.then(async () => {
+      if (this.disposed || !this.saved) return;
+      await this.daemon.voice.configuration.write({ ...createVoiceConfiguration(this.saved), recordAudio });
+    });
+    this.writes = write.then(() => undefined, () => undefined);
+    try { await write; }
+    catch (error) {
+      this.publish({ recordAudio: previous });
+      this.failConfiguration(this.configurationRevision, error);
+    }
+  }
   async setEnabled(enabled: boolean) {
     if (!this.preferences || !this.snapshot.canToggle) {
       this.failConfiguration(this.configurationRevision, new Error("Reload the app database to enable browser voice preferences."));
@@ -128,6 +147,7 @@ export default class VoiceSettingsController {
     const write = this.writes.then(async () => {
       if (this.disposed) return;
       await this.daemon.voice.configuration.write(createVoiceConfiguration(selection));
+      this.saved = selection;
     });
     // The awaiting caller below owns the visible failure; later writes still run.
     this.writes = write.then(() => undefined, () => undefined);

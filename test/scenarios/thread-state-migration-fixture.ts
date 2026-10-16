@@ -133,12 +133,15 @@ function compareRetainedFacts(database: Database.Database) {
         : value(column);
     };
     const list = columns.map(quote).join(", ");
-    const before = `SELECT ${columns.map(column => `${expected(column)} AS ${quote(column)}`).join(", ")} FROM source.${quote(table.name)} AS s`;
+    // Action and setting search rows are rebuilt from code definitions on every start, not retained data.
+    const retainedOnly = (alias: string) => table.name === "workbench_search_documents"
+      ? ` WHERE ${alias}"kind" NOT IN ('action', 'projectSetting')` : "";
+    const before = `SELECT ${columns.map(column => `${expected(column)} AS ${quote(column)}`).join(", ")} FROM source.${quote(table.name)} AS s${retainedOnly("s.")}`;
     const openWorld = table.name === "workbench_project_aliases";
     const after = openWorld
       // Identity conversion may add aliases; retained aliases must still resolve to their original owners.
       ? `SELECT ${list} FROM main.${quote(table.name)} WHERE alias IN (SELECT alias FROM source.${quote(table.name)})`
-      : `SELECT ${list} FROM main.${quote(table.name)}`;
+      : `SELECT ${list} FROM main.${quote(table.name)}${retainedOnly("")}`;
     const result = database.prepare(`
       WITH before AS (${before}), after AS (${after})
       SELECT (SELECT count(*) FROM (SELECT * FROM before EXCEPT SELECT * FROM after)) AS missing,

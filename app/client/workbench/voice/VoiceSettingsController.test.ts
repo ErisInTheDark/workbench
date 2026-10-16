@@ -29,7 +29,8 @@ function fixture() {
     voice: {
       configuration: {
         read: async () => saved,
-        write: async value => { saved = value; return { ok: true }; },
+        // Like the daemon store: a write that omits audio retention keeps the saved value.
+        write: async value => { saved = { ...value, recordAudio: value.recordAudio ?? saved.recordAudio }; return { ok: true }; },
       },
       prepare: async () => ({ ok: true }),
     },
@@ -78,21 +79,37 @@ test("voice enables only after a complete selection is saved and prepared", asyn
   assert.equal(controller.enabled, true);
 });
 
-test("audio retention is browser-memory opt-in, independent of shared settings", async context => {
+test("audio retention is saved on the daemon and a later model change cannot drop it", async context => {
   const h = fixture();
   const controller = new VoiceSettingsController(h.port, h.preferences);
   context.after(() => controller.dispose());
   await controller.ready;
+  await controller.loadModels();
+  await controller.selectModel("codex", model.id);
   assert.equal(controller.getSnapshot().recordAudio, false);
-  controller.setRecordAudio(true);
-  await controller.disable();
-  await controller.refresh();
+  const saving = controller.setRecordAudio(true);
   assert.equal(controller.getSnapshot().recordAudio, true);
-  assert.equal(h.saved().selection, null);
+  await saving;
+  await controller.selectModel("claude", model.id);
   const reopened = new VoiceSettingsController(h.port, h.preferences);
   context.after(() => reopened.dispose());
   await reopened.ready;
-  assert.equal(reopened.getSnapshot().recordAudio, false);
+  assert.equal(reopened.getSnapshot().recordAudio, true);
+  assert.equal(reopened.getSnapshot().selection?.harness, "claude");
+});
+
+test("a failed audio retention save reverts and stays visible", async context => {
+  context.mock.method(console, "warn", () => {});
+  const h = fixture();
+  const controller = new VoiceSettingsController(h.port, h.preferences);
+  context.after(() => controller.dispose());
+  await controller.ready;
+  await controller.loadModels();
+  await controller.selectModel("codex", model.id);
+  h.port.voice.configuration.write = async () => { throw new Error("disk full"); };
+  await controller.setRecordAudio(true);
+  assert.equal(controller.getSnapshot().recordAudio, false);
+  assert.match(controller.getSnapshot().error, /disk full/);
 });
 
 test("old app schemas keep voice usable but reject unsupported preference writes", async context => {

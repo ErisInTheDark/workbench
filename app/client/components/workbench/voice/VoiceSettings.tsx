@@ -70,7 +70,8 @@ function VoiceModel({ controller }: { controller: VoiceSettingsController }) {
         {pending ? <LoaderIcon size={12} /> : state.status === "ready" ? <CheckIcon size={14} className="text-success" /> : null}
       </span>
       <span className="ml-auto text-base">
-        <WorkbenchCheckbox label="Save audio locally" checked={state.recordAudio} onChange={value => controller.setRecordAudio(value)} />
+        <WorkbenchCheckbox label="Save audio locally" checked={state.recordAudio} disabled={!selection}
+          onChange={value => { void controller.setRecordAudio(value); }} />
       </span>
     </SettingsCardRow>
     {state.error ? <SettingsCardRow><p role="alert" className="m-0 text-danger">{state.error}</p></SettingsCardRow> : null}

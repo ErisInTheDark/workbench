@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - VoiceConfigurationSchema/VoiceConfiguration: reload-compatible configuration wire shape.
+ * - VoiceConfigurationSchema/VoiceConfiguration: reload-compatible configuration wire shape, including durable audio retention.
  * - VoiceModelSelection: the complete user-configurable transformer settings.
  * - readVoiceModelSelection/createVoiceConfiguration: isolate legacy composer-shaped transport.
  * - VoiceSessionEventSchema/VoiceSessionEvent: connection-local voice outcomes.
@@ -14,6 +14,8 @@ import type { WorkbenchComposerSettings } from "../../types";
 
 export const VoiceConfigurationSchema = z.object({
   selection: WorkbenchComposerProfileSelectionSchema.nullable(),
+  /** Keeps each session's audio beside its voice document. Writes that omit it keep the saved value. */
+  recordAudio: z.boolean().optional(),
 }).strict();
 export type VoiceConfiguration = z.infer<typeof VoiceConfigurationSchema>;
 export type VoiceModelSelection = Pick<WorkbenchComposerSettings, "harness" | "model">;

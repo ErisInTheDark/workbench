@@ -1,4 +1,4 @@
-/* Exports: none. Protect durable independent model selection and write ordering. */
+/* Exports: none. Protect durable independent model selection, audio retention and write ordering. */
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { rm } from "node:fs/promises";
@@ -9,6 +9,7 @@ import WorkbenchComposerProfileStore from "../WorkbenchComposerProfileStore";
 import VoiceSettingsStore from "./VoiceSettingsStore";
 import type { WorkbenchComposerProfile, WorkbenchComposerSettings } from "workbench-shared/types";
 import { upsertRow } from "workbench-shared/database/workbench-database-statements";
+import { createVoiceConfiguration } from "workbench-shared/workbench/voice/voice-session-contract";
 import { voiceProfileLink, voiceSettings } from "../lib/workbench/database/schema/voice-settings-schema";
 
 const settings: WorkbenchComposerSettings = {
@@ -44,6 +45,17 @@ test("voice retains its saved model independently of profile edits and deletion"
   await store.write({ selection: null });
   assert.deepEqual(await reopened.read(), { selection: null });
 });
+test("audio retention survives reopening and model changes that do not mention it", async context => {
+  const { store, database } = await fixture(context);
+  await store.write({ ...createVoiceConfiguration({ harness: "codex", model: "original" }), recordAudio: true });
+  await store.write(createVoiceConfiguration({ harness: "codex", model: "switched" }));
+  const reopened = new VoiceSettingsStore(database);
+  assert.equal((await reopened.read()).recordAudio, true);
+  assert.equal((await reopened.resolve()).model, "switched");
+  await reopened.write({ ...createVoiceConfiguration({ harness: "codex", model: "switched" }), recordAudio: false });
+  assert.equal((await store.read()).recordAudio, false);
+});
+
 test("a slow save cannot overwrite a later disable", async context => {
   const { database } = await fixture(context);
   let entered!: () => void;
