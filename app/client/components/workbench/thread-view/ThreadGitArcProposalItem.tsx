@@ -9,7 +9,7 @@ import { useEffect } from "react";
 import type { GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import type { GitCheckpointCommitCommandIntent, ThreadCommandExecutionOutcome } from "../../../workbench/thread/thread-command-matchers";
-import { ThreadReadonlyCommitCard, type CheckpointCommitCardState } from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard, { type CheckpointCommitCardState } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import { useThreadGitArcProposalObservation } from "./ThreadGitArcObservationContext";
 
@@ -39,10 +39,12 @@ function ThreadGitArcProposalPreview({
         : !isObserved && intent?.title.trim()
           ? { status: "summary", summary: { changes: null, description: intent.description, title: intent.title } }
           : { status: "pending" };
+  const fallbackTitle = cardState.status === "pending" ? intent?.title.trim() : undefined;
   return (
-    <ThreadReadonlyCommitCard
+    <ThreadCheckpointCommitCard
       {...links}
-      fallbackTitle={intent?.title}
+      expanded
+      message={fallbackTitle ? { availability: { description: false, title: true }, description: "", title: fallbackTitle } : undefined}
       sourceItemId={sourceItemId}
       state={cardState}
     />

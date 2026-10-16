@@ -1,9 +1,9 @@
 /*
  * Exports:
- * - default ThreadGitArcCommitList: share intersecting commit subjects and file links across arc cards.
+ * - default ThreadGitArcCommitList: list intersecting commits across arc cards as commit rows that open onto their changed files.
  */
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import ProjectFileLinkList from "../ProjectFileLinkList";
+import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 
 export default function ThreadGitArcCommitList({
   commits, projectFilePaths, projectId, projectRootPath, workspaceRoots,
@@ -15,15 +15,18 @@ export default function ThreadGitArcCommitList({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   return (
-    <div className="space-y-1 py-1 text-[0.9em] text-fg/muted">
+    <div className="py-1">
       {commits.map(({ commit, paths, subject }) => (
-        <div key={commit}>
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0 font-mono">{commit.slice(0, 8)}</span>
-            <span className="min-w-0 truncate text-text">{subject || "No commit subject"}</span>
-          </div>
-          {paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath ?? ""} workspaceRoots={workspaceRoots} /> : null}
-        </div>
+        <ThreadCheckpointCommitCard
+          key={commit}
+          paths={paths}
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          sourceItemId={`intersecting-commit:${commit}`}
+          state={{ status: "summary", summary: { changes: null, committedSha: commit, description: "", title: subject || "No commit subject" } }}
+          workspaceRoots={workspaceRoots}
+        />
       ))}
     </div>
   );

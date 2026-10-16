@@ -6,7 +6,7 @@ import type { GitPeerAddress, GitPeerTransfer } from "workbench-shared/workbench
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import Disclosure from "../../ui/Disclosure";
-import { ThreadCommitRow } from "../thread-view/ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard from "../thread-view/ThreadCheckpointCommitCard";
 import { useWorkbenchWorkspace } from "../WorkbenchWorkspaceContext";
 import { GitFastForwardIcon, GitMergeIcon, GitRebaseIcon } from "../workbench-icons";
 
@@ -33,8 +33,10 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
   const data = snapshot.value?.data;
   const remaining = full.value?.data;
   const Icon = mode === "fastForward" ? GitFastForwardIcon : mode === "merge" ? GitMergeIcon : GitRebaseIcon;
-  const row = (commit: NonNullable<typeof data>["commits"][number]) => <ThreadCommitRow key={commit.commit}
-    summary={{ title: commit.subject, committedSha: commit.commit, changes: null }} />;
+  const row = (commit: NonNullable<typeof data>["commits"][number]) => <ThreadCheckpointCommitCard key={commit.commit}
+    sourceItemId={`peer-commit:${commit.commit}`}
+    state={{ status: "summary", summary: { changes: null, committedSha: commit.commit, description: "", title: commit.subject } }} />;
+  const loadingRow = <ThreadCheckpointCommitCard sourceItemId="peer-commit:loading" state={{ status: "pending" }} />;
   const failure = unavailable ?? (!branch ? "Branch unavailable"
     : snapshot.phase === "failed" || snapshot.phase === "unavailable" ? "Commits unavailable" : null);
   return <div className="w-[min(26rem,80vw)]">
@@ -44,7 +46,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
     </div>
     {failure ? <p className="m-0 text-fg/muted">{failure}</p>
       : !data ? <div aria-label="Loading commits">
-        <ThreadCommitRow summary={null} /><ThreadCommitRow summary={null} /><ThreadCommitRow summary={null} />
+        {loadingRow}{loadingRow}{loadingRow}
       </div> : <>
         {snapshot.phase === "stale" ? <p className="m-0 mb-1 text-fg/muted">Preview out of date</p> : null}
         {data.total === 0 ? <p className="m-0 text-fg/muted">No new commits</p> : data.commits.slice(0, 3).map(row)}
@@ -54,7 +56,7 @@ export default function WorkbenchGitPeerTooltip({ location, peer, hostname, bran
             ? <p className="m-0 py-1 text-fg/muted">Commits unavailable</p>
             : remaining?.head === data.head && remaining.tip === data.tip
               ? remaining.commits.slice(3).map(row)
-              : <ThreadCommitRow summary={null} />}
+              : loadingRow}
         </Disclosure> : null}
       </>}
   </div>;

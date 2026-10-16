@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit history, grouped under persisted disclosures with stack-ordered commit all backed by observed summaries.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows; pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under its own group unless it is the whole panel.
  */
 "use client";
 
@@ -19,13 +19,12 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
-import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import Disclosure from "../../ui/Disclosure";
-import { ThreadReadonlyCommitCard } from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard, { type ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
 
 function plural(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -114,6 +113,7 @@ export default function ThreadGitArcProposalList({
   projectRootPath,
   proposals,
   stackLayers,
+  standalone = false,
   threadId,
   workspaceRoots,
 }: {
@@ -131,6 +131,8 @@ export default function ThreadGitArcProposalList({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
   /** Sealed layers, bottom first; their proposals render inside one disclosure per layer. */
   stackLayers: ReadonlyArray<{ layerId: string; proposalIds: readonly string[]; title: string }>;
+  /** Nothing else shares the panel, so accepted history alone may drop its group row. */
+  standalone?: boolean;
 }) {
   const daemon = useWorkbenchDaemonClient();
   const clientStateController = useWorkbenchClientStateController();
@@ -194,41 +196,42 @@ export default function ThreadGitArcProposalList({
     }
   };
 
-  const lone = proposals.length === 1 && proposedIds.length === 1 && !historicalCommits.length ? proposals[0]!.summary ?? null : null;
+  // A lone pending proposal is the whole list, so its own card is the persisted disclosure instead of a header.
+  const loneId = proposals.length === 1 && proposedIds.length === 1 && !historicalCommits.length && !layerGroups.length
+    ? proposedIds[0]!
+    : null;
+  const commitAllAction = showCommitAll || committing ? (
+    <span className="ml-auto inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
+      <PrimaryButton
+        data-thread-git-arc-commit-all="true"
+        shape="compact"
+        disabled={committing || !commitAllReady}
+        onClick={() => void commitInOrder(proposedIds)}
+        pendingHalo={committing}
+      >
+        {remaining ? `Committing… ${remaining} left` : committing ? "Committing…" : loneId ? "Commit" : "Commit all"}
+      </PrimaryButton>
+    </span>
+  ) : null;
   const summary = (
     <span className="flex min-w-0 w-full flex-wrap items-center gap-x-3 gap-y-1">
       <span className="flex min-w-0 grow basis-[16rem] items-center gap-1.5">
         {proposedIds.length ? <GitArcProposalIcon className="shrink-0" size={14} /> : <CheckCheckIcon className="shrink-0" size={14} />}
-        {lone
-          ? <span className="min-w-0 truncate font-medium text-text">{lone.title}</span>
-          : formatProposalCounts(acceptedCount, proposedIds.length)}
-        {lone?.changes ? <span className="ml-1.5 inline-flex shrink-0"><ThreadGitArcChangeTotals changes={lone.changes} /></span> : null}
+        {formatProposalCounts(acceptedCount, proposedIds.length)}
       </span>
-      {showCommitAll || committing ? (
-        <span className="ml-auto inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
-          <PrimaryButton
-            data-thread-git-arc-commit-all="true"
-            shape="compact"
-            disabled={committing || !commitAllReady}
-            onClick={() => void commitInOrder(proposedIds)}
-            pendingHalo={committing}
-          >
-            {remaining ? `Committing… ${remaining} left` : committing ? "Committing…" : lone ? "Commit" : "Commit all"}
-          </PrimaryButton>
-        </span>
-      ) : null}
+      {commitAllAction}
     </span>
   );
-  const anchor = (proposalId: string) => (
+  const anchor = (proposalId: string, disclosure?: ThreadCommitDisclosure) => (
     <div
-      className="scroll-mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+      className="scroll-mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
       data-thread-git-arc-proposal={proposalId}
       data-thread-git-arc-proposal-separator="true"
       key={proposalId}
     >
       <ThreadCheckpointCommitController
         cwd={cwd}
-        embedded
+        disclosure={disclosure}
         harness={harness}
         intent={null}
         projectFilePaths={projectFilePaths}
@@ -241,9 +244,37 @@ export default function ThreadGitArcProposalList({
       />
     </div>
   );
+  const acceptedRows = [
+    ...acceptedProposals.map(({ proposalId }) => anchor(proposalId)),
+    ...historicalCommits.map(commit => (
+      <div
+        className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
+        data-thread-git-commit={commit.commitSha}
+        key={`${commit.rootId}:${commit.sourceProposalId}`}
+      >
+        <ThreadCheckpointCommitCard
+          projectFilePaths={projectFilePaths}
+          projectId={projectId}
+          projectRootPath={projectRootPath}
+          sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
+          state={{
+            status: "summary",
+            summary: {
+              changes: null,
+              committedSha: commit.commitSha,
+              description: commit.description,
+              title: commit.title,
+            },
+          }}
+          workspaceRoots={workspaceRoots}
+        />
+      </div>
+    )),
+  ];
+  // Accepted history alone is the whole panel, so its rows need no group of their own.
+  const flattenAccepted = standalone && !proposedIds.length && !layerGroups.length && !trailingProposals.length;
   const anchors = [
-    // Unmounted anchors just park their cards, so a long accepted history costs nothing until opened.
-    ...(acceptedProposals.length || historicalCommits.length ? [(
+    ...(flattenAccepted ? acceptedRows : acceptedRows.length ? [(
       <Disclosure
         {...groupDisclosureProps}
         data-thread-git-arc-accepted-group="true"
@@ -253,31 +284,11 @@ export default function ThreadGitArcProposalList({
         summary={(
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             <span className="font-medium text-text">Accepted</span>
-            <span className="text-fg/muted">{plural(acceptedProposals.length + historicalCommits.length, "commit")}</span>
+            <span className="text-fg/muted">{plural(acceptedRows.length, "commit")}</span>
           </span>
         )}
       >
-        {acceptedProposals.map(({ proposalId }) => anchor(proposalId))}
-        {historicalCommits.map(commit => (
-          <div
-            className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
-            data-thread-git-commit={commit.commitSha}
-            key={`${commit.rootId}:${commit.sourceProposalId}`}
-          >
-            <ThreadReadonlyCommitCard
-              sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
-              state={{
-                status: "summary",
-                summary: {
-                  changes: null,
-                  committedSha: commit.commitSha,
-                  description: commit.description,
-                  title: commit.title,
-                },
-              }}
-            />
-          </div>
-        ))}
+        {acceptedRows}
       </Disclosure>
     )] : []),
     ...layerGroups.map((group) => {
@@ -332,7 +343,18 @@ export default function ThreadGitArcProposalList({
 
   return (
     <ThreadCheckpointCommitActionsContext.Provider value={commitActions}>
-      <Disclosure
+      {/* The header exists to commit or hide pending work; with none, the panel button already discloses the rest. */}
+      {loneId ? (
+        <div className="[&>*:first-child]:border-t-0">
+          {anchor(loneId, { closedAction: commitAllAction, onOpenChange: setOpen, open })}
+          {failureRow}
+        </div>
+      ) : !proposedIds.length ? (
+        <div className="py-1 [&>*:first-child]:border-t-0">
+          {failureRow}
+          {anchors}
+        </div>
+      ) : <Disclosure
         // Cards stay mounted while closed so they keep their edits and commit-all can reach them.
         keepMounted
         onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -342,8 +364,8 @@ export default function ThreadGitArcProposalList({
       >
         {open ? failureRow : null}
         {anchors}
-      </Disclosure>
-      {open ? null : failureRow}
+      </Disclosure>}
+      {loneId || !proposedIds.length || open ? null : failureRow}
     </ThreadCheckpointCommitActionsContext.Provider>
   );
 }

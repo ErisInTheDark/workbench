@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect commit-all availability in a collapsed proposals header.
+ * - No production exports; tests protect commit-all availability in a collapsed proposals header and how much grouping accepted history gets.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -56,6 +56,7 @@ function renderList(
     sourceProposalId: string;
     title: string;
   }> = [],
+  { standalone = false }: { standalone?: boolean } = {},
 ) {
   const commitActions = new ThreadCheckpointCommitActions();
   commitActions.setStored(status === "proposed" ? proposalIds.map(stored) : [], () => {});
@@ -68,6 +69,7 @@ function renderList(
       history,
       proposals: proposalIds.map(proposalId => ({ proposalId, status })),
       stackLayers: [],
+      standalone,
       threadId: "thread",
     })));
 }
@@ -89,31 +91,42 @@ test("a collapsed proposals header keeps commit all available, including for a s
   assert.doesNotMatch(oneTag, / disabled=""/u);
 });
 
-test("an open proposals header leaves a single proposal to its own card", () => {
+test("a lone proposal is its own disclosure, leaving commit to its open card", () => {
   const html = renderList(true, ["only"]);
-  assert.match(html, /<details[^>]*\bopen=/u);
+  assert.doesNotMatch(html, /<details/u);
+  assert.match(html, /aria-expanded="true"/u);
   assert.equal(commitAllTag(html), null);
 });
 
-test("accepted-only history renders its accepted disclosure without commit all", () => {
-  const html = renderList(true, ["one", "two"], "committed");
-  assert.match(html, /data-thread-git-arc-accepted-group="true"/u);
-  assert.match(html, /Accepted/u);
+const durableCommit = {
+  commitSha: "a".repeat(40),
+  description: "survives arc cleanup",
+  historyIndex: 0,
+  rootId: "root",
+  sourceProposalId: "accepted",
+  title: "durable commit",
+};
+
+test("accepted history alone opens straight onto closed commit rows", () => {
+  // A closed header preference must not hide history that has nothing to commit.
+  const html = renderList(false, [], "committed", [durableCommit], { standalone: true });
+  assert.doesNotMatch(html, /data-thread-git-arc-accepted-group/u);
+  assert.doesNotMatch(html, /<details/u);
+  assert.match(html, /aria-expanded="false"/u);
+  assert.match(html, /durable commit/u);
+  assert.doesNotMatch(html, /survives arc cleanup/u);
   assert.equal(commitAllTag(html), null);
 });
 
-test("durable accepted history renders without proposals", () => {
-  const html = renderList(true, [], "committed", [{
-    commitSha: "a".repeat(40),
-    description: "survives arc cleanup",
-    historyIndex: 0,
-    rootId: "root",
-    sourceProposalId: "accepted",
-    title: "durable commit",
-  }]);
-  assert.match(html, /data-thread-git-arc-accepted-group="true"/u);
-  assert.match(html, /1 commit/u);
-  assert.equal(commitAllTag(html), null);
+test("accepted history keeps its group when it shares the panel", () => {
+  const withClaims = renderList(true, [], "committed", [durableCommit]);
+  assert.match(withClaims, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(withClaims, /1 commit/u);
+  assert.equal(commitAllTag(withClaims), null);
+
+  const withPending = renderList(true, ["pending"], "proposed", [durableCommit], { standalone: true });
+  assert.match(withPending, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(withPending, /1 commit, 1 proposal/u);
 });
 
 test("live accepted proposals win over duplicate durable commits", () => {

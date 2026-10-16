@@ -165,6 +165,7 @@ export default function ThreadGitArcWork ({
           projectRootPath={projectRootPath}
           proposals={visibleProposals}
           stackLayers={claim?.stackLayers ?? []}
+          standalone={!sections.length}
           threadId={threadId}
           workspaceRoots={workspaceRoots}
         />

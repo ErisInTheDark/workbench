@@ -9,7 +9,7 @@ import type { FileUpdateChange } from "workbench-shared/workbench/thread/workben
 
 import { parseUnifiedDiff } from "workbench-shared/workbench/thread/unified-diff";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { ThreadCommitRow, type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard, { type ThreadCommitSummary } from "./ThreadCheckpointCommitCard";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import { DisclosureStaticRow } from "../../ui/Disclosure";
 import {
@@ -113,7 +113,17 @@ export default function ThreadGitArcCollapsedSummary ({
     >
       {content.kind === "commits" ? (
         <div className="py-1.5">
-          {content.commits.map(({ key, summary }) => <ThreadCommitRow key={key} summary={summary} />)}
+          {content.commits.map(({ key, summary }) => (
+            <ThreadCheckpointCommitCard
+              key={key}
+              projectFilePaths={projectFilePaths}
+              projectId={projectId}
+              projectRootPath={projectRootPath}
+              sourceItemId={`collapsed-commit:${key}`}
+              state={summary ? { status: "summary", summary } : { status: "pending" }}
+              workspaceRoots={workspaceRoots}
+            />
+          ))}
         </div>
       ) : content.kind === "files" ? (
         <ThreadFileChangePreviewList

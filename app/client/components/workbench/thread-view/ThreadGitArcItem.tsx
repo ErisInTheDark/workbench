@@ -34,7 +34,7 @@ import ThreadGitArcChangeTotals from "./ThreadGitArcChangeTotals";
 import ThreadGitArcEditDetails from "./ThreadGitArcEditDetails";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import ThreadGitArcStatusDetails from "./ThreadGitArcStatusDetails";
-import { ThreadReadonlyCommitCard } from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 
 const ACTION_LABELS = {
   adopt: { completed: "Adopted claims", failed: "Failed to adopt claims", inProgress: "Adopting claims", timedOut: "Timed out adopting claims" },
@@ -447,7 +447,7 @@ export default function ThreadGitArcItem ({
         {stackedProposals?.length ? (
           <div className="divide-y divide-[color-mix(in_srgb,var(--text)_8%,transparent)]" data-thread-git-arc-stacked-proposals="true">
             {stackedProposals.map((summary) => (
-              <ThreadReadonlyCommitCard
+              <ThreadCheckpointCommitCard
                 key={summary.proposalId}
                 projectFilePaths={projectFilePaths}
                 projectId={projectId}

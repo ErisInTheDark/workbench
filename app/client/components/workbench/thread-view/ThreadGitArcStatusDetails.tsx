@@ -6,7 +6,7 @@ import { useEffect, useMemo } from "react";
 import { parseGitArcStatus, type GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
-import { CheckIcon, EllipsisIcon } from "../workbench-icons";
+import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
@@ -38,20 +38,16 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
   return (
     <div className="min-w-0 py-1">
       {incomplete || !Object.keys(facts).length ? <p className="text-fg/muted">Some status facts are unavailable.</p> : null}
-      {(facts.pending ?? []).map(proposal => (
-        <div className="flex min-w-0 items-start gap-2 py-0.5" key={proposal.proposalId}>
-          <span className="sr-only">Pending</span>
-          <EllipsisIcon className="mt-1.5 shrink-0 text-fg/muted" size={16} />
-          <span className="min-w-0 break-words">{proposal.title}</span>
-        </div>
-      ))}
-      {(facts.accepted ?? []).map(proposal => (
-        <div className="flex min-w-0 items-baseline gap-2 py-0.5" key={proposal.proposalId}>
-          <span className="sr-only">Accepted</span>
-          <CheckIcon className="mt-1.5 shrink-0 self-start text-[color:var(--success)]" size={16} />
-          <span className="shrink-0 font-mono text-fg/muted">{proposal.commitSha.slice(0, 8)}</span>
-          <span className="min-w-0 break-words">{proposal.title}</span>
-        </div>
+      {[
+        ...(facts.pending ?? []).map(({ proposalId, title }) => ({ committedSha: null, proposalId, title })),
+        ...(facts.accepted ?? []).map(({ commitSha, proposalId, title }) => ({ committedSha: commitSha, proposalId, title })),
+      ].map(({ committedSha, proposalId, title }) => (
+        <ThreadCheckpointCommitCard
+          key={proposalId}
+          sourceItemId={`status-proposal:${proposalId}`}
+          state={{ status: "summary", summary: { changes: null, committedSha, description: "", title } }}
+          {...context}
+        />
       ))}
       {facts.dirtyClaims === undefined ? null : group("Dirty claims", facts.dirtyClaims, "dirty")}
       {facts.cleanClaims === undefined ? null : group("Clean claims", facts.cleanClaims, "clean")}

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its presentation inputs.
+ * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its link inputs.
  * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed summary until it loads; unobserved surfaces read for themselves), own edit and commit actions, and register commit-all readiness.
  */
 "use client";
@@ -21,6 +21,7 @@ import type { GitCheckpointCommitCommandIntent } from "../../../workbench/thread
 import ThreadCheckpointCommitCard, {
   canCommitCheckpointProposal,
   type CheckpointCommitCardState,
+  type ThreadCommitDisclosure,
 } from "./ThreadCheckpointCommitCard";
 import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointCommitOutcome } from "./ThreadCheckpointCommitActions";
 import { proposalIntentOwnsMessage } from "./thread-git-arc-presentation";
@@ -31,13 +32,12 @@ import type { ThreadGitArcProposalObservation, ThreadGitArcProposalVariant } fro
 
 export interface ThreadCheckpointCommitControllerProps {
   cwd: string | null;
-  embedded?: boolean;
+  disclosure?: ThreadCommitDisclosure;
   harness?: WorkbenchHarness;
   intent: GitCheckpointCommitCommandIntent | null;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
-  presentation?: "compact-commit" | "compact-preview" | "full";
   proposalId: string | null;
   sourceItemId: string;
   threadId: string;
@@ -46,13 +46,12 @@ export interface ThreadCheckpointCommitControllerProps {
 
 function ThreadCheckpointCommitController({
   cwd,
-  embedded,
+  disclosure,
   harness,
   intent,
   projectFilePaths,
   projectId,
   projectRootPath,
-  presentation,
   proposalId,
   sourceItemId,
   threadId,
@@ -438,35 +437,38 @@ function ThreadCheckpointCommitController({
 
   return (
     <ThreadCheckpointCommitCard
-      commitMode={commitMode}
-      committing={committing || acceptance === "landing"}
-      queued={acceptance === "queued"}
-      description={description}
-      embedded={embedded}
-      freshCommitAvailable={freshCommitAvailable}
-      includeNewer={includeNewer}
-      messageAvailability={{
-        title: commitMode === "amend" ? amendTitleHydrated.current : commitTitleHydrated.current,
-        description: commitMode === "amend" ? amendDescriptionHydrated.current : commitDescriptionHydrated.current,
+      controls={{
+        commitMode,
+        committing: committing || acceptance === "landing",
+        freshCommitAvailable,
+        includeNewer,
+        onCommit: () => void commit(),
+        onCommitModeChange: setCommitMode,
+        onDescriptionChange: changeDescription,
+        onIncludeNewerChange: setIncludeNewer,
+        onRetry: () => void loadProposal(),
+        onTitleChange: changeTitle,
+        onUnclaimedChange: changeUnclaimed,
+        onUnclaimedOpen: () => setIncludeUnclaimed(true),
+        queued: acceptance === "queued",
+        selectedUnclaimedPaths: unclaimedSelection?.proposalId === proposalId ? unclaimedSelection.changes.map(change => change.path) : [],
       }}
-      onCommit={() => void commit()}
-      onCommitModeChange={setCommitMode}
-      onDescriptionChange={changeDescription}
-      onIncludeNewerChange={setIncludeNewer}
-      onUnclaimedOpen={() => setIncludeUnclaimed(true)}
-      onUnclaimedChange={changeUnclaimed}
-      selectedUnclaimedPaths={unclaimedSelection?.proposalId === proposalId ? unclaimedSelection.changes.map(change => change.path) : []}
-      onRetry={() => void loadProposal()}
-      onTitleChange={changeTitle}
+      disclosure={disclosure}
+      message={{
+        availability: {
+          description: commitMode === "amend" ? amendDescriptionHydrated.current : commitDescriptionHydrated.current,
+          title: commitMode === "amend" ? amendTitleHydrated.current : commitTitleHydrated.current,
+        },
+        description,
+        title,
+      }}
       observationRef={setObservationTarget}
       paths={intent?.paths ?? []}
       projectFilePaths={projectFilePaths}
       projectId={projectId}
       projectRootPath={projectRootPath}
-      presentation={presentation}
       sourceItemId={sourceItemId}
       state={state}
-      title={title}
       workspaceRoots={workspaceRoots}
     />
   );
@@ -478,29 +480,16 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
   const harness = props.harness ?? presentation?.harness ?? defaultProviderKey;
   const resolvedIntent = props.intent ?? (props.proposalId ? presentation?.proposalIntents?.get(props.proposalId) ?? null : null);
   if (!props.cwd) {
-    const resolvedMode = resolvedIntent?.mode ?? proposalObservation.summary?.mode ?? "commit";
     return (
       <ThreadCheckpointCommitCard
-        commitMode={resolvedMode}
-        committing={false}
-        description={resolvedIntent?.description ?? ""}
-        embedded={props.embedded}
-        freshCommitAvailable={Boolean(resolvedIntent?.freshTitle?.trim())}
-        includeNewer={false}
-        onCommit={() => undefined}
-        onCommitModeChange={() => undefined}
-        onDescriptionChange={() => undefined}
-        onIncludeNewerChange={() => undefined}
-        onRetry={() => undefined}
-        onTitleChange={() => undefined}
+        density="compact"
+        message={{ description: resolvedIntent?.description ?? "", title: resolvedIntent?.title ?? "Commit proposal" }}
         paths={resolvedIntent?.paths ?? []}
-        presentation="compact-preview"
         projectFilePaths={props.projectFilePaths}
         projectId={props.projectId}
         projectRootPath={props.projectRootPath}
         sourceItemId={props.sourceItemId}
         state={{ status: "idle" }}
-        title={resolvedIntent?.title ?? "Commit proposal"}
         workspaceRoots={props.workspaceRoots}
       />
     );

@@ -99,21 +99,21 @@ function renderUnavailableProposal(unavailableReasonCode?: "committed-outside-pr
     ...(unavailableReasonCode ? { unavailableReasonCode } : {}),
   };
   return renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    commitMode: proposal.mode,
-    committing: false,
-    description: "",
-    freshCommitAvailable: false,
-    includeNewer: false,
-    onCommit: () => undefined,
-    onCommitModeChange: () => undefined,
-    onDescriptionChange: () => undefined,
-    onIncludeNewerChange: () => undefined,
-    onRetry: () => undefined,
-    onTitleChange: () => undefined,
+    controls: {
+      commitMode: proposal.mode,
+      committing: false,
+      freshCommitAvailable: false,
+      includeNewer: false,
+      onCommit: () => undefined,
+      onCommitModeChange: () => undefined,
+      onDescriptionChange: () => undefined,
+      onIncludeNewerChange: () => undefined,
+      onRetry: () => undefined,
+      onTitleChange: () => undefined,
+    },
     paths: proposal.paths,
     sourceItemId: "proposal-item",
     state: { proposal, status: "loaded" },
-    title: proposal.title,
   }));
 }
 
@@ -362,21 +362,22 @@ test("content amend proposals expose an amend-default fresh commit choice", () =
     unavailableReason: null,
   };
   const renderCard = (commitMode: "amend" | "commit", title = proposal.title, description = proposal.description) => renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    commitMode,
-    committing: false,
-    description,
-    freshCommitAvailable: true,
-    includeNewer: false,
-    onCommit: () => undefined,
-    onCommitModeChange: () => undefined,
-    onDescriptionChange: () => undefined,
-    onIncludeNewerChange: () => undefined,
-    onRetry: () => undefined,
-    onTitleChange: () => undefined,
+    controls: {
+      commitMode,
+      committing: false,
+      freshCommitAvailable: true,
+      includeNewer: false,
+      onCommit: () => undefined,
+      onCommitModeChange: () => undefined,
+      onDescriptionChange: () => undefined,
+      onIncludeNewerChange: () => undefined,
+      onRetry: () => undefined,
+      onTitleChange: () => undefined,
+    },
+    message: { description, title },
     paths: proposal.paths,
     sourceItemId: "proposal-item",
     state: { proposal, status: "loaded" },
-    title,
   }));
   const amendHtml = renderCard("amend");
   assert.match(amendHtml, /aria-label="Commit mode"/u);

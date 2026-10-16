@@ -1,19 +1,17 @@
 /*
- * No production exports. Tests protect proposal loading, usable known content, and action readiness.
+ * No production exports. Tests protect proposal loading, usable known content, action readiness, and the layout each known commit gets.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { GitCheckpointProposal } from "workbench-shared/workbench/git/checkpoint-contracts";
-import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
+import ThreadCheckpointCommitCard, { type ThreadCommitControls } from "./ThreadCheckpointCommitCard";
 import WorkbenchClientProvider from "../WorkbenchClientProvider";
-import type { WorkbenchClientController } from "../workbench-client-context";
 
-const pendingProps = {
+const controls = {
   commitMode: "commit",
   committing: false,
-  description: "",
   freshCommitAvailable: false,
   includeNewer: false,
   onCommit: () => undefined,
@@ -22,15 +20,25 @@ const pendingProps = {
   onIncludeNewerChange: () => undefined,
   onRetry: () => undefined,
   onTitleChange: () => undefined,
-  paths: [],
+} satisfies ThreadCommitControls;
+
+const pendingProps = {
+  controls,
   sourceItemId: "proposal",
   state: { status: "pending" },
-  title: "",
 } satisfies ComponentProps<typeof ThreadCheckpointCommitCard>;
 
+const proposed = {
+  amendTargetMessage: null, amendTargetSha: null, baseCommit: "a".repeat(40), changes: [],
+  committedSha: null, description: "proposal details", freshChanges: null, includeNewerAvailable: false,
+  mode: "commit", paths: [], proposalId: "proposal", status: "proposed",
+  supersededByProposalId: null, supersededBySha: null, title: "loaded proposal", unavailableReason: null,
+} satisfies GitCheckpointProposal;
+
 test("unloaded proposal fields are busy rather than editable empty content", () => {
-  for (const presentation of ["full", "compact-preview", "compact-commit"] as const) {
-    const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, { ...pendingProps, presentation }));
+  const readonlyPreview = { density: "compact", expanded: true, sourceItemId: "proposal", state: { status: "pending" } } as const;
+  for (const props of [pendingProps, readonlyPreview]) {
+    const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, props));
     assert.match(html, /aria-busy="true"/u);
     assert.doesNotMatch(html, /contenteditable="(?:true|plaintext-only)"|data-thread-checkpoint-commit-action/iu);
   }
@@ -38,7 +46,7 @@ test("unloaded proposal fields are busy rather than editable empty content", () 
 
 test("pending proposal enrichment preserves its known message", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    ...pendingProps, title: "keep this message", description: "already available",
+    ...pendingProps, message: { title: "keep this message", description: "already available" },
     paths: ["app/feature.ts"],
   }));
   assert.match(html, /keep this message/u);
@@ -48,21 +56,18 @@ test("pending proposal enrichment preserves its known message", () => {
 });
 
 test("cleared but hydrated proposal fields remain editable while enrichment is pending", () => {
-  for (const presentation of ["full", "compact-commit"] as const) {
-    const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-      ...pendingProps,
-      presentation,
-      messageAvailability: { title: true, description: true },
-    }));
-    assert.equal(html.match(/role="textbox"/gu)?.length, 2);
-    assert.match(html, /contenteditable="plaintext-only"/iu);
-    assert.match(html, /aria-busy="true"/u);
-  }
+  const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    ...pendingProps,
+    message: { availability: { title: true, description: true }, description: "", title: "" },
+  }));
+  assert.equal(html.match(/role="textbox"/gu)?.length, 2);
+  assert.match(html, /contenteditable="plaintext-only"/iu);
+  assert.match(html, /aria-busy="true"/u);
 });
 
 test("static previews do not claim to be loading and failures expose recovery instead of busy content", () => {
   const idle = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    ...pendingProps, presentation: "compact-preview", state: { status: "idle" }, title: "available preview",
+    density: "compact", message: { description: "", title: "available preview" }, sourceItemId: "proposal", state: { status: "idle" },
   }));
   assert.match(idle, /available preview/u);
   assert.doesNotMatch(idle, /aria-busy="true"|contenteditable="(?:true|plaintext-only)"|data-thread-checkpoint-commit-action/iu);
@@ -80,63 +85,96 @@ test("static previews do not claim to be loading and failures expose recovery in
 
 test("bounded summaries display their exact changed-file count", () => {
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-    ...pendingProps,
-    description: "",
-    presentation: "readonly",
+    expanded: true,
+    sourceItemId: "proposal",
     state: {
       status: "summary",
-      summary: {
-        changeCount: 1_300,
-        changes: null,
-        description: "",
-        title: "capture fixtures",
-      },
+      summary: { changeCount: 1_300, changes: null, description: "", title: "capture fixtures" },
     },
-    title: "capture fixtures",
   }));
 
   assert.match(html, />1300\b/u);
 });
 
-test("loaded proposed cards restore editing and commit actions only in interactive presentations", () => {
+test("loaded proposed cards restore editing and commit actions only with controls", () => {
+  const interactive = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    ...pendingProps, state: { status: "loaded", proposal: proposed },
+  }));
+  assert.doesNotMatch(interactive, /aria-busy="true"/u);
+  assert.match(interactive, /loaded proposal/u);
+  assert.match(interactive, /proposal details/u);
+  assert.match(interactive, /contenteditable="plaintext-only"/iu);
+  assert.match(interactive, /data-thread-checkpoint-commit-action="true"/u);
+
+  const readonly = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    sourceItemId: "proposal", state: { status: "loaded", proposal: proposed },
+  }));
+  assert.match(readonly, /loaded proposal/u);
+  assert.doesNotMatch(readonly, /contenteditable="(?:true|plaintext-only)"|data-thread-checkpoint-commit-action/iu);
+});
+
+test("a collapsible proposal shows its title, totals and actions once whether open or closed", () => {
   const proposal = {
-    amendTargetMessage: null, amendTargetSha: null, baseCommit: "a".repeat(40), changes: [],
-    committedSha: null, description: "proposal details", freshChanges: null, includeNewerAvailable: false,
-    mode: "commit", paths: [], proposalId: "proposal", status: "proposed",
-    supersededByProposalId: null, supersededBySha: null, title: "loaded proposal", unavailableReason: null,
+    ...proposed,
+    changes: [{ additions: 4, deletions: 2, diff: "", kind: { move_path: null, type: "update" }, path: "src/one.ts" }],
   } satisfies GitCheckpointProposal;
-  for (const presentation of ["full", "compact-commit", "compact-preview"] as const) {
-    const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
-      ...pendingProps, presentation, state: { status: "loaded", proposal },
-      title: proposal.title, description: proposal.description,
-    }));
-    assert.doesNotMatch(html, /aria-busy="true"/u);
-    assert.match(html, /loaded proposal/u);
-    if (presentation === "compact-preview") {
-      assert.doesNotMatch(html, /contenteditable="(?:true|plaintext-only)"|data-thread-checkpoint-commit-action/iu);
-    } else {
-      assert.match(html, /contenteditable="plaintext-only"/iu);
-      assert.match(html, /data-thread-checkpoint-commit-action="true"/u);
-    }
-  }
+  const render = (open: boolean) => renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    ...pendingProps,
+    disclosure: { closedAction: createElement("button", { "data-closed-action": "true" }), onOpenChange: () => undefined, open },
+    state: { status: "loaded", proposal },
+  }));
+  const count = (html: string, pattern: RegExp) => html.match(pattern)?.length ?? 0;
+
+  const closed = render(false);
+  assert.equal(count(closed, /loaded proposal/gu), 1);
+  assert.equal(count(closed, />\+4</gu), 1);
+  assert.match(closed, /aria-expanded="false"/u);
+  assert.match(closed, /data-closed-action="true"/u);
+  assert.doesNotMatch(closed, /proposal details|data-thread-checkpoint-commit-action/u);
+
+  const open = render(true);
+  assert.equal(count(open, /loaded proposal/gu), 1);
+  assert.equal(count(open, />\+4</gu), 1);
+  assert.equal(count(open, /data-thread-checkpoint-commit-action="true"/gu), 1);
+  assert.match(open, /aria-expanded="true"/u);
+  assert.match(open, /proposal details/u);
+  assert.doesNotMatch(open, /data-closed-action/u);
+});
+
+test("readonly commits are a closed disclosure when they have a body and a static row otherwise", () => {
+  const withBody = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    sourceItemId: "commit",
+    state: {
+      status: "summary",
+      summary: { changes: [{ additions: 2, deletions: 1, kind: "update", path: "app/a.ts" }], committedSha: "c".repeat(40), description: "the body", title: "titled commit" },
+    },
+  }));
+  assert.match(withBody, /aria-expanded="false"/u);
+  assert.match(withBody, /titled commit/u);
+  assert.match(withBody, /cccccccc/u);
+  assert.doesNotMatch(withBody, /the body|app\/a\.ts/u);
+
+  const titleOnly = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
+    sourceItemId: "commit",
+    state: { status: "summary", summary: { changes: null, committedSha: "d".repeat(40), description: "", title: "bare commit" } },
+  }));
+  assert.match(titleOnly, /bare commit/u);
+  assert.doesNotMatch(titleOnly, /aria-expanded/u);
 });
 
 test("accepted proposal amendments keep their pending action visible until completion", () => {
   const proposal = {
-    amendTargetMessage: null, amendTargetSha: null, amendability: { status: "available" },
-    baseCommit: "a".repeat(40), changes: [], committedSha: "b".repeat(40),
-    description: "accepted description", freshChanges: null, includeNewerAvailable: false,
-    mode: "commit", paths: [], proposalId: "accepted-proposal", status: "committed",
-    supersededByProposalId: null, supersededBySha: null, title: "accepted proposal", unavailableReason: null,
+    ...proposed, amendability: { status: "available" }, committedSha: "b".repeat(40),
+    description: "accepted description", proposalId: "accepted-proposal", status: "committed", title: "accepted proposal",
   } satisfies GitCheckpointProposal;
   const html = renderToStaticMarkup(createElement(ThreadCheckpointCommitCard, {
     ...pendingProps,
-    committing: true,
-    description: proposal.description,
+    controls: { ...controls, committing: true },
+    message: { description: proposal.description, title: "amended proposal" },
     state: { status: "loaded", proposal },
-    title: "amended proposal",
   }));
 
+  assert.match(html, /aria-expanded="true"/u);
   assert.match(html, /<button(?=[^>]*data-thread-checkpoint-commit-action="true")(?=[^>]*disabled="")[^>]*>/u);
   assert.match(html, /Amending\.\.\./u);
   assert.match(html, /data-workbench-spinning-border="true"/u);
