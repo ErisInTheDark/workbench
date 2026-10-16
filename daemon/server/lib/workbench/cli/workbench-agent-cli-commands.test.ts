@@ -1475,24 +1475,31 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     tool_name: "apply_patch",
     turn_id: "turn-one",
   });
-  const allowed = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
-    cwd: temporaryDirectoryPath,
-    env,
-  });
-  assert.equal(allowed.exitCode, 0);
-  assert.equal(allowed.stderr, "");
-  assert.deepEqual(JSON.parse(allowed.stdout), {});
+  const checkoutRoot = path.resolve(path.dirname(shellSourcePath), "../../../../..");
+  for (const [command, args] of [
+    ["bash", hookArgs],
+    [process.execPath, [path.join(checkoutRoot, "cli/dispatch.mjs"), ...hookArgs.slice(1)]],
+    [process.execPath, [path.join(checkoutRoot, "package/wb"), ...hookArgs.slice(1)]],
+  ] satisfies [string, string[]][]) {
+    const allowed = await execFileWithInput(command, args, hookInput("claimed.ts"), {
+      cwd: temporaryDirectoryPath,
+      env,
+    });
+    assert.equal(allowed.exitCode, 0, allowed.stderr);
+    assert.equal(allowed.stderr, "");
+    assert.deepEqual(JSON.parse(allowed.stdout), {}, `${command} ${args[0]}`);
 
-  const denied = await execFileWithInput("bash", hookArgs, hookInput("unclaimed.ts"), {
-    cwd: temporaryDirectoryPath,
-    env,
-  });
-  assert.equal(denied.exitCode, 0);
-  assert.equal(denied.stderr, "");
-  const deniedDecision = JSON.parse(denied.stdout) as { additionalContext?: string; hookSpecificOutput: { permissionDecision: string }; systemMessage?: string };
-  assert.equal(deniedDecision.hookSpecificOutput.permissionDecision, "deny");
-  assert.match(deniedDecision.systemMessage ?? "", /^workbench:file-change-failure:v1:/u);
-  assert.equal(deniedDecision.additionalContext, undefined);
+    const denied = await execFileWithInput(command, args, hookInput("unclaimed.ts"), {
+      cwd: temporaryDirectoryPath,
+      env,
+    });
+    assert.equal(denied.exitCode, 0, denied.stderr);
+    assert.equal(denied.stderr, "");
+    const deniedDecision = JSON.parse(denied.stdout) as { additionalContext?: string; hookSpecificOutput: { permissionDecision: string }; systemMessage?: string };
+    assert.equal(deniedDecision.hookSpecificOutput.permissionDecision, "deny");
+    assert.match(deniedDecision.systemMessage ?? "", /^workbench:file-change-failure:v1:/u);
+    assert.equal(deniedDecision.additionalContext, undefined);
+  }
 
   const unavailable = await execFileWithInput("bash", hookArgs, hookInput("unavailable.ts"), {
     cwd: temporaryDirectoryPath,

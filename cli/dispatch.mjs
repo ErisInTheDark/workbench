@@ -42,7 +42,7 @@ try {
         ...(view ? args.slice(1) : [command]),
       ], { cwd: root, interactive: view, nodeOptions: ["--disable-warning=ExperimentalWarning", "--import", "tsx"] });
     } else {
-      await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args]);
+      await new WorkbenchBootstrapCommand().run("bash", [path.join(root, "wb"), ...args], { interactive: true });
     }
   }
 } catch (error) {
