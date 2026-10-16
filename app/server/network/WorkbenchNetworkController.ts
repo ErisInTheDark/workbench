@@ -438,7 +438,7 @@ export default class WorkbenchNetworkController {
     this.failure = null;
     const operation = (action.action.startsWith("settings-")
       ? this.applySettings(action, caller)
-      : action.action === "access" || action.action === "access-prepare"
+      : action.action === "access" || action.action === "access-prepare" || action.action === "app-access"
         ? this.applyAccess(action, caller) : this.apply(action)).catch((error: unknown) => {
       this.report(error);
       throw error;
@@ -607,13 +607,17 @@ export default class WorkbenchNetworkController {
   }
 
   private async applyAccess(
-    action: Extract<WorkbenchNetworkAction, { action: "access" | "access-prepare" }>, caller?: SettingsCaller,
+    action: Extract<WorkbenchNetworkAction, { action: "access" | "access-prepare" | "app-access" }>, caller?: SettingsCaller,
   ): Promise<WorkbenchNetworkResult> {
     if (action.action === "access-prepare" && !caller) throw new Error("Access changes require an authenticated browser connection.");
-    const policy = { ...action, action: "access" as const };
-    const revokesCaller = caller?.deviceNodeId && !this.isHost(caller) && policy.access === "selected"
-      && !policy.grants.some(grant => grant.deviceNodeId === caller.deviceNodeId && grant.appNodeId === this.runtime.privateAccess.nodeId);
-    if (revokesCaller) throw new Error("Use this app's local host to remove access for your current device.");
+    const policy = action.action === "app-access" ? action : { ...action, action: "access" as const };
+    const keepsCaller = (device: string) => policy.action === "app-access"
+      ? this.configuration.group?.access !== "selected" || policy.deviceNodeIds.includes(device)
+      : policy.access !== "selected"
+        || policy.grants.some(grant => grant.deviceNodeId === device && grant.appNodeId === this.runtime.privateAccess.nodeId);
+    if (caller?.deviceNodeId && !this.isHost(caller) && !keepsCaller(caller.deviceNodeId)) {
+      throw new Error("Use this app's local host to remove access for your current device.");
+    }
     return await this.apply(policy);
   }
 

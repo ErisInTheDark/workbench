@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchNetworkAccessSettings: access card rows for owner-selected DNS hosting, ownership handover and remote app grants.
+ * - WorkbenchNetworkAccessSettings: network rule rows for DNS hosting, ownership handover, machine removal and per-app device grants.
  */
 "use client";
 import { useState } from "react";
@@ -12,7 +12,7 @@ import RadioRow from "../ui/RadioRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
 import PrimaryButton from "../ui/PrimaryButton";
 import { SettingsCardRow } from "../ui/SettingsCard";
-import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon } from "./workbench-icons";
+import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon, XIcon } from "./workbench-icons";
 
 type AvailabilityState = "running" | "connecting" | "node online" | "node offline" | "availability unknown";
 
@@ -24,7 +24,7 @@ function Availability({ state }: { state: AvailabilityState }) {
 
 export default function WorkbenchNetworkAccessSettings() {
   const network = useWorkbenchNetwork();
-  const [candidate, setCandidate] = useState<{ kind: "dns" | "owner"; nodeId: string } | null>(null);
+  const [candidate, setCandidate] = useState<{ kind: "dns" | "owner" | "remove"; nodeId: string } | null>(null);
   const [draft, setDraft] = useState<Pick<WorkbenchNetworkGroup, "revision" | "access" | "grants"> | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -35,6 +35,9 @@ export default function WorkbenchNetworkAccessSettings() {
   const owner = members.find(app => app.nodeId === group.ownerNodeId);
   const pendingTransfer = group.transfer?.phase !== "activated" ? group.transfer : undefined;
   const canManage = Boolean(snapshot.capabilities?.manageNetwork && !pendingTransfer);
+  const self = snapshot.runtime.privateAccess.nodeId;
+  /** The owner edits every app's column; any other app edits only its own. */
+  const canEdit = (appNodeId: string) => canManage || Boolean(snapshot.capabilities?.manageApp && !pendingTransfer && appNodeId === self);
   const busy = working || snapshot.busy || !!snapshot.change;
   const policy = draft ?? group;
   const stale = draft !== null && draft.revision !== group.revision;
@@ -65,8 +68,18 @@ export default function WorkbenchNetworkAccessSettings() {
   }
   function saveAccess() {
     if (!draft || stale) return;
-    void act({ action: "access", ...draft }, () => setDraft(null));
+    void act(canManage ? { action: "access", ...draft } : {
+      action: "app-access", revision: draft.revision,
+      deviceNodeIds: draft.grants.filter(grant => grant.appNodeId === self).map(grant => grant.deviceNodeId),
+    }, () => setDraft(null));
   }
+  const confirmation = candidate?.kind === "dns" ? {
+    title: `Use ${selected?.label} for DNS?`, action: "Use this app",
+    detail: `Update the wb.inthedark.boo nameserver in Tailscale to ${selected?.addresses[0]}. Keep this app running for private names to resolve.`,
+  } : candidate?.kind === "owner" ? {
+    title: `Transfer ownership to ${selected?.label}?`, action: "Transfer",
+    detail: "This transfers network management and certificate signing. App grants and the selected nameserver stay unchanged.",
+  } : { title: `Remove ${selected?.label} from the network?`, action: "Remove", detail: "Its access rules are removed with it." };
   return <>
     {pendingTransfer ? <SettingsCardRow label="Handover">
       <span className="min-w-0 flex-1 basis-60 text-fg/muted">Ownership handover to {members.find(app => app.nodeId === pendingTransfer.toNodeId)?.label ?? "the selected app"} is waiting to finish. DNS hosting and access grants are unchanged.</span>
@@ -74,7 +87,8 @@ export default function WorkbenchNetworkAccessSettings() {
         ? <PrimaryButton shape="compact" disabled={busy} onClick={() => { void act({ action: "transfer-owner", nodeId: pendingTransfer.toNodeId }, () => setCandidate(null)); }}>Resume handover</PrimaryButton> : null}
     </SettingsCardRow> : null}
     {!snapshot.capabilities?.manageNetwork ? <SettingsCardRow>
-      <span className="text-fg/muted">Managed by {owner?.label ?? "the owner app"}. Change network settings on that computer.</span>
+      <span className="text-fg/muted">Managed by {owner?.label ?? "the owner app"}. {policy.access === "selected"
+        ? "You can change which devices reach this app." : "Change network settings on that computer."}</span>
     </SettingsCardRow> : null}
     <SettingsCardRow label="Nameserver">
       {(["dns", "owner"] as const).map(kind => {
@@ -92,16 +106,24 @@ export default function WorkbenchNetworkAccessSettings() {
         </span>;
       })}
     </SettingsCardRow>
+    <SettingsCardRow label="Machines">
+      <span className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">{members.map(member => <span key={member.nodeId} className="inline-flex items-center gap-1.5">
+        <span className="font-medium text-text">{member.label}</span>
+        <Availability state={availability(member.nodeId)} />
+        {canManage && member.nodeId !== group.ownerNodeId && member.nodeId !== group.dnsNodeId
+          ? <IconButton size="small" display="hover-border" label={`Remove ${member.label} from the network`} disabled={busy}
+            onClick={() => setCandidate({ kind: "remove", nodeId: member.nodeId })}><XIcon className="size-3.5" /></IconButton> : null}
+      </span>)}</span>
+    </SettingsCardRow>
     {candidate && selected ? <SettingsCardRow>
       <div className="min-w-0 flex-1 basis-72 space-y-1">
-        <p className="m-0 font-medium text-text">{candidate.kind === "dns" ? `Use ${selected.label} for DNS?` : `Transfer ownership to ${selected.label}?`}</p>
-        <p className="m-0 text-fg/muted">{candidate.kind === "dns"
-          ? `Update the wb.inthedark.boo nameserver in Tailscale to ${selected.addresses[0]}. Keep this app running for private names to resolve.`
-          : "This transfers network management and certificate signing. App grants and the selected nameserver stay unchanged."}</p>
+        <p className="m-0 font-medium text-text">{confirmation.title}</p>
+        <p className="m-0 text-fg/muted">{confirmation.detail}</p>
       </div>
       <PrimaryButton shape="compact" disabled={busy} pendingHalo={busy} onClick={() => {
-        void act({ action: candidate.kind === "dns" ? "dns-app" : "transfer-owner", nodeId: selected.nodeId }, () => setCandidate(null));
-      }}>{candidate.kind === "dns" ? "Use this app" : "Transfer"}</PrimaryButton>
+        void act({ action: candidate.kind === "dns" ? "dns-app" : candidate.kind === "owner" ? "transfer-owner" : "remove-member", nodeId: selected.nodeId },
+          () => setCandidate(null));
+      }}>{confirmation.action}</PrimaryButton>
       <PrimaryButton shape="compact" disabled={busy} onClick={() => setCandidate(null)}>Cancel</PrimaryButton>
     </SettingsCardRow> : null}
     <SettingsCardRow label="Allowed devices">
@@ -124,7 +146,7 @@ export default function WorkbenchNetworkAccessSettings() {
             return <td key={app.nodeId} className="px-2 py-1 text-center [&_label]:justify-center" title={ownApp ? "Always allowed on this device" : undefined}><WorkbenchCheckbox
             label={<span className="sr-only">{deviceLabel(device)} access to {app.label}{ownApp ? " - Always allowed on this device" : ""}</span>}
             checked={ownApp || policy.grants.some(grant => grant.deviceNodeId === device.nodeId && grant.appNodeId === app.nodeId)}
-            disabled={ownApp || busy || !canManage || stale} onChange={checked => {
+            disabled={ownApp || busy || !canEdit(app.nodeId) || stale} onChange={checked => {
               const grants = policy.grants.filter(grant => grant.deviceNodeId !== device.nodeId || grant.appNodeId !== app.nodeId);
               if (checked) grants.push({ deviceNodeId: device.nodeId, appNodeId: app.nodeId });
               setDraft({ revision: group.revision, access: "selected", grants });
@@ -141,7 +163,7 @@ export default function WorkbenchNetworkAccessSettings() {
     </SettingsCardRow> : null}
     {draft ? <SettingsCardRow>
       <span className="flex-1 text-fg/muted">Unsaved access changes</span>
-      <IconButton size="small" display="hover-border" label="Save access" disabled={busy || stale || !canManage} onClick={saveAccess}><SaveIcon className="size-4" /></IconButton>
+      <IconButton size="small" display="hover-border" label="Save access" disabled={busy || stale || !(self && canEdit(self))} onClick={saveAccess}><SaveIcon className="size-4" /></IconButton>
       <IconButton size="small" display="hover-border" label="Reset access changes" disabled={busy} onClick={() => setDraft(null)}><ResetIcon className="size-4" /></IconButton>
     </SettingsCardRow> : null}
     {snapshot.capabilities?.manageApp && snapshot.runtime.privateAccess.nodeId && group.dnsNodeId !== snapshot.runtime.privateAccess.nodeId ? <SettingsCardRow label="Private address">

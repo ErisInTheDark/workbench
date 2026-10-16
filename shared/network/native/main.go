@@ -198,6 +198,14 @@ func (owner *networkProcess) apply(ctx context.Context, request pipeRequest) (ac
 			return actionResult{}, errors.New("network settings changed; refresh the access draft")
 		}
 		return actionResult{Kind: "ok"}, owner.group.change(ctx, "", input.Access, input.Grants, input.Revision)
+	case "app-access":
+		var input appAccessRequest
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		return actionResult{Kind: "ok"}, owner.group.changeAppAccess(ctx, input.DeviceNodeIDs, input.Revision)
+	case "remove-member":
+		var input struct { NodeID string `json:"nodeId"` }
+		if err := decodePipeValue(request.Payload, &input); err != nil { return actionResult{}, err }
+		return actionResult{Kind: "ok"}, owner.group.removeMember(ctx, input.NodeID)
 	case "create-setup":
 		var credentials legacyDNSCredentials
 		if err := decodePipeValue(request.Payload, &credentials); err != nil {

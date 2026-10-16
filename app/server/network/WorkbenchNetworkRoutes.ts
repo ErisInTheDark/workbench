@@ -96,7 +96,7 @@ export default class WorkbenchNetworkRoutes {
     const action = WorkbenchNetworkActionSchema.parse(input);
     if (this.closed) throw new NetworkActionAdmissionError(503, "Network settings are reloading.");
     const capability = this.controller.ingress(request.headers);
-    const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "create-setup"].includes(action.action);
+    const networkAction = ["dns-app", "access", "access-prepare", "transfer-owner", "remove-member", "create-setup"].includes(action.action);
     if (!capability || !this.sameOrigin(request)
       || (!capability.manageApp && action.action !== "daemon-discovery-refresh")
       || networkAction && !capability.manageNetwork

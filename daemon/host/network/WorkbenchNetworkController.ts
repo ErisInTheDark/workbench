@@ -223,7 +223,7 @@ export default class WorkbenchNetworkController {
 
   private async apply(action: WorkbenchNetworkAction): Promise<WorkbenchNetworkResult> {
     const transfer = this.configuration.group?.transfer;
-    if (transfer && transfer.phase !== "activated" && ["machine-name", "access", "dns-app", "create-setup", "remove-registration"].includes(action.action)) {
+    if (transfer && transfer.phase !== "activated" && ["machine-name", "access", "app-access", "remove-member", "dns-app", "create-setup", "remove-registration"].includes(action.action)) {
       throw new Error("Complete the pending ownership handover before changing network identity or policy.");
     }
     switch (action.action) {

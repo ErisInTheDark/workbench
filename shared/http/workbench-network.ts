@@ -164,6 +164,9 @@ export const WorkbenchNetworkActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("dns-app"), nodeId }).strict(),
   z.object({ action: z.literal("transfer-owner"), nodeId }).strict(),
   z.object({ action: z.literal("access"), revision: z.number().int().min(1), access: z.enum(["all", "selected"]), grants: WorkbenchNetworkGroupSchema.shape.grants }).strict(),
+  /** Devices allowed to reach this app; any member app may set its own, the owner signs it. */
+  z.object({ action: z.literal("app-access"), revision: z.number().int().min(1), deviceNodeIds: z.array(nodeId).max(4096) }).strict(),
+  z.object({ action: z.literal("remove-member"), nodeId }).strict(),
   z.object({ action: z.literal("pair-code") }).strict(),
   z.object({ action: z.literal("join"), code: z.string().min(1).max(32_768) }).strict(),
   z.object({ action: z.literal("approve"), requestId: z.string().min(1).max(64), approved: z.boolean() }).strict(),

@@ -50,6 +50,7 @@ test("handoffs require authenticated same-origin grants and cannot pin route dis
   authenticated = true;
   manageNetwork = false;
   assert.equal((await post({ action: "access-prepare", revision: 1, access: "selected", grants: [] })).status, 403);
+  assert.equal((await post({ action: "remove-member", nodeId: "laptop" })).status, 403);
   assert.equal(calls, 0);
   manageNetwork = true;
   deviceNodeId = "remote-owner";

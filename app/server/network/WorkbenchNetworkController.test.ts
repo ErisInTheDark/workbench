@@ -285,6 +285,31 @@ test("host access is inherent so saving restrictions needs no handoff or self-gr
     { ...source, deviceNodeId: "other-device" }), /host|local/i);
 });
 
+test("a remote device can set this app's own access but cannot drop itself from it", async context => {
+  const f = fixture();
+  context.after(() => f.owner.close());
+  f.seed({
+    mode: "tailnet-ip", hostServe: { enabled: true, port: 8080 },
+    privateAccess: { role: "member", label: "laptop", enabled: false, issuer: { address: "100.80.0.1", hostname: "desktop.wb.inthedark.boo" } },
+    members: [
+      { nodeId: "desktop", label: "desktop", addresses: ["100.80.0.1"], keyFingerprint: "a".repeat(64) },
+      { nodeId: "laptop", label: "laptop", addresses: ["100.80.0.3"], keyFingerprint: "b".repeat(64) },
+    ],
+    group: { id: "67e323d5-949a-4c41-956f-1fa28905f034", revision: 1, ownerNodeId: "desktop", dnsNodeId: "desktop", access: "selected", grants: [] },
+  });
+  await f.start();
+  f.publish({ ...f.owner.snapshot().runtime, host: { hostname: "laptop", address: "100.80.0.4", nodeId: "laptop-host" } });
+  const phone = { deviceNodeId: "phone", origin: "http://100.80.0.3:8080" };
+  const calls = f.calls.length;
+  await assert.rejects(f.owner.action({ action: "app-access", revision: 1, deviceNodeIds: ["tablet"] }, phone), /host|local/i);
+  assert.equal(f.calls.length, calls, "a self-revoking change never reaches the network owner");
+  const access = { action: "app-access" as const, revision: 1, deviceNodeIds: ["phone", "tablet"] };
+  assert.deepEqual(await f.owner.action(access, phone), { kind: "ok" });
+  assert.deepEqual(f.calls.at(-1), access);
+  assert.deepEqual(await f.owner.action({ ...access, deviceNodeIds: [] }, { deviceNodeId: "laptop-host", origin: phone.origin }), { kind: "ok" },
+    "the app's own host can change every device's access");
+});
+
 test("remote localhost selection is rejected before any configuration or forwarding mutation", async context => {
   const f = fixture();
   context.after(() => f.owner.close());

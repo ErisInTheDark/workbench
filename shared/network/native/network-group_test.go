@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,39 @@ func TestDirectoryConflicts(t *testing.T) {
 	directory = directoryFixture()
 	directory.Group.DNSNodeID = "missing"
 	if directory.validate() == nil { t.Fatal("unknown nameserver accepted") }
+}
+
+func TestAppAccessChangesOnlyThatAppsGrants(t *testing.T) {
+	directory := directoryFixture()
+	directory.Group.Access = "selected"
+	directory.Group.Grants = []networkGrant{{DeviceNodeID: "phone", AppNodeID: "desktop"}, {DeviceNodeID: "phone", AppNodeID: "nas"}}
+	next, err := withAppAccess(directory, "nas", []string{"laptop"}, 1)
+	if err != nil { t.Fatal(err) }
+	want := []networkGrant{{DeviceNodeID: "phone", AppNodeID: "desktop"}, {DeviceNodeID: "laptop", AppNodeID: "nas"}}
+	if next.Group.Revision != 2 || !slices.Equal(next.Group.Grants, want) {
+		t.Fatalf("app access replaced the wrong grants: %#v", next.Group)
+	}
+	if len(directory.Group.Grants) != 2 || directory.Group.Grants[1].AppNodeID != "nas" || directory.Group.Grants[1].DeviceNodeID != "phone" {
+		t.Fatal("app access mutated the previous directory snapshot")
+	}
+	if _, err := withAppAccess(directory, "nas", nil, 2); err == nil { t.Fatal("a stale access draft was accepted") }
+	if _, err := withAppAccess(directory, "stranger", nil, 1); err == nil { t.Fatal("an unenrolled app changed access") }
+}
+
+func TestRemovingAMemberDropsItAndItsGrants(t *testing.T) {
+	directory := directoryFixture()
+	directory.Group.DNSNodeID = "desktop"
+	directory.Members = append(directory.Members, networkMember{NodeID: "laptop", Label: "laptop", Addresses: []string{"100.80.0.3"}, KeyFingerprint: strings.Repeat("c", 64)})
+	directory.Group.Grants = []networkGrant{{DeviceNodeID: "phone", AppNodeID: "nas"}, {DeviceNodeID: "phone", AppNodeID: "laptop"}}
+	next, err := withoutMember(directory, "nas")
+	if err != nil { t.Fatal(err) }
+	if next.Group.Revision != 2 || len(next.Members) != 2 || slices.ContainsFunc(next.Members, func(member networkMember) bool { return member.NodeID == "nas" }) ||
+		!slices.Equal(next.Group.Grants, []networkGrant{{DeviceNodeID: "phone", AppNodeID: "laptop"}}) {
+		t.Fatalf("member removal left the app or its grants: %#v", next)
+	}
+	if len(directory.Members) != 3 || len(directory.Group.Grants) != 2 { t.Fatal("member removal mutated the previous directory snapshot") }
+	if _, err := withoutMember(directory, "desktop"); err == nil { t.Fatal("the network owner was removed") }
+	if _, err := withoutMember(directory, "missing"); err == nil { t.Fatal("removing an unknown app changed the directory") }
 }
 
 func TestBrowsingDeviceDirectoryExcludesWorkbenchAppNodes(t *testing.T) {

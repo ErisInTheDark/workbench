@@ -255,6 +255,20 @@ func (group *networkGroupController) ServeHTTP(response http.ResponseWriter, req
 			return
 		}
 		group.respond(response, request, struct{}{})
+	case "/access":
+		if !group.isOwner() { http.Error(response, "Contact the current owner.", http.StatusConflict); return }
+		var input appAccessRequest
+		if decodePipeValue(data, &input) != nil { http.Error(response, "Invalid access change.", http.StatusBadRequest); return }
+		// The caller's Tailscale identity is the only column it may change.
+		next, err := withAppAccess(*group.directory(), peerID, input.DeviceNodeIDs, input.Revision)
+		if err == nil { err = group.store(request.Context(), next) }
+		if err != nil {
+			group.authority.fail(err.Error())
+			http.Error(response, "Access change could not complete.", http.StatusConflict)
+			return
+		}
+		if err := group.publish(request.Context()); err != nil { group.authority.fail(err.Error()) }
+		group.respond(response, request, struct{}{})
 	case "/sync":
 		if !group.isOwner() { http.Error(response, "Contact the current owner.", http.StatusConflict); return }
 		member := false
@@ -632,6 +646,67 @@ func (group *networkGroupController) change(ctx context.Context, dnsNodeID, acce
 	if access != "" { directory.Group.Access, directory.Group.Grants = access, slices.Clone(grants) }
 	if err := group.store(ctx, directory); err != nil { return err }
 	return group.publish(ctx)
+}
+
+type appAccessRequest struct {
+	Revision uint64 `json:"revision"`
+	DeviceNodeIDs []string `json:"deviceNodeIds"`
+}
+
+// withAppAccess replaces the devices allowed to reach one app, leaving every other app's grants unchanged.
+func withAppAccess(directory networkDirectory, appNodeID string, devices []string, expected uint64) (networkDirectory, error) {
+	if directory.Group.Revision != expected { return networkDirectory{}, errors.New("network settings changed; refresh the access draft") }
+	if !slices.ContainsFunc(directory.Members, func(member networkMember) bool { return member.NodeID == appNodeID }) {
+		return networkDirectory{}, errors.New("app registration was not found")
+	}
+	grants := slices.DeleteFunc(slices.Clone(directory.Group.Grants), func(grant networkGrant) bool { return grant.AppNodeID == appNodeID })
+	for _, device := range devices { grants = append(grants, networkGrant{DeviceNodeID: device, AppNodeID: appNodeID}) }
+	directory.Group.Grants = grants
+	directory.Group.Revision++
+	return directory, directory.validate()
+}
+
+// withoutMember drops an app and every grant naming it.
+func withoutMember(directory networkDirectory, nodeID string) (networkDirectory, error) {
+	members := slices.DeleteFunc(slices.Clone(directory.Members), func(member networkMember) bool { return member.NodeID == nodeID })
+	if len(members) == len(directory.Members) { return networkDirectory{}, errors.New("app registration was not found") }
+	directory.Members = members
+	directory.Group.Grants = slices.DeleteFunc(slices.Clone(directory.Group.Grants), func(grant networkGrant) bool {
+		return grant.AppNodeID == nodeID || grant.DeviceNodeID == nodeID
+	})
+	directory.Group.Revision++
+	return directory, directory.validate()
+}
+
+// changeAppAccess sets which devices reach this app; a member asks the owner, which signs the change.
+func (group *networkGroupController) changeAppAccess(ctx context.Context, devices []string, expected uint64) error {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	directory := group.directory()
+	self := group.node.snapshot().NodeID
+	if directory == nil || self == nil { return errors.New("app registration is unavailable") }
+	if group.isOwner() {
+		next, err := withAppAccess(*directory, *self, devices, expected)
+		if err != nil { return err }
+		if err := group.store(ctx, next); err != nil { return err }
+		return group.publish(ctx)
+	}
+	for _, member := range directory.Members {
+		if member.NodeID == directory.Group.OwnerNodeID {
+			return group.request(ctx, member, "/access", appAccessRequest{Revision: expected, DeviceNodeIDs: devices}, nil)
+		}
+	}
+	return errors.New("network owner is unavailable")
+}
+
+func (group *networkGroupController) removeMember(ctx context.Context, nodeID string) error {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if !group.isOwner() { return errors.New("only the current network owner can remove machines") }
+	next, err := withoutMember(*group.directory(), nodeID)
+	if err != nil { return err }
+	if err := group.store(ctx, next); err != nil { return err }
+	return group.publishDNS(ctx)
 }
 
 func (group *networkGroupController) unpublish(ctx context.Context, peerID string, csr []byte) error {
