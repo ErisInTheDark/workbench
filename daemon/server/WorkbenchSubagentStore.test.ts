@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect store pagination and fresh-wrapper durability.
+ * No production exports. Protect exhaustive scoped reads and fresh-wrapper durability.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -52,7 +52,7 @@ function fixture() {
   return { database, observe, persistence, metadata, add };
 }
 
-test("SQL pages keep parent/project scope and do not repeat entries at equal timestamps", async (context) => {
+test("relationship reads include every child while retaining parent/project scope and stable ordering", async (context) => {
   const { database, observe, persistence, add } = fixture();
   context.after(() => database.close());
   const store = new WorkbenchSubagentStore(persistence);
@@ -63,22 +63,13 @@ test("SQL pages keep parent/project scope and do not repeat entries at equal tim
     children.push(await add(store, parent, `child-${index}`, Math.floor(index / 2)));
   }
   const other = await add(store, otherParent, "other-child");
-  const first = await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"] });
-  assert.equal(first.subagents.length, 20);
-  assert.ok(first.nextCursor);
-  const second = await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor });
-  assert.equal(second.subagents.length, 5);
-  assert.equal(second.nextCursor, null);
-  const combined = [...first.subagents, ...second.subagents];
-  assert.deepEqual(new Set(combined.map(record => record.threadId)), new Set(children.map(record => record.threadId)));
-  assert.ok(combined.every((record, index) => index === 0 || combined[index - 1]!.createdAt >= record.createdAt));
+  const { subagents } = await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"] });
+  const expected = [...children].sort((left, right) =>
+    right.createdAt - left.createdAt || left.threadId.localeCompare(right.threadId));
+  assert.deepEqual(subagents.map(record => record.threadId), expected.map(record => record.threadId));
   assert.equal((await store.list({ projectId: fixtureIdentityValues.ProjectId["project"] })).subagents.length, 26);
   assert.deepEqual((await store.list({ parentThreadId: otherParent, projectId: fixtureIdentityValues.ProjectId["project"] })).subagents, [other]);
-  await assert.rejects(store.list({ parentThreadId: otherParent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["another"], cursor: first.nextCursor }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], cursor: "not-json" }));
-  await assert.rejects(store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["project"], limit: 21 }));
-  await assert.rejects(store.list({ projectId: fixtureIdentityValues.ProjectId["project"], cursor: first.nextCursor }));
+  assert.deepEqual((await store.list({ parentThreadId: parent, projectId: fixtureIdentityValues.ProjectId["another"] })).subagents, []);
 });
 
 test("fresh store wrappers share durable reservations and never reuse allocated indexes", async (context) => {

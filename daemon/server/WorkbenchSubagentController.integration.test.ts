@@ -183,7 +183,7 @@ function createProjectResolver(expectedCwd: string) {
   };
 }
 
-test("creation reuses settled names while name targeting selects the new child and history survives", async (context) => {
+test("older children remain listable and name-addressable before settled history is paginated", async (context) => {
   const fixture = subagentFixture();
   const cwd = process.cwd();
   const provider = new FakeProvider(cwd);
@@ -206,7 +206,19 @@ test("creation reuses settled names while name targeting selects the new child a
     fixture.database.admitRecord(state);
     fixture.database.repository.writeRecords([state]);
   };
-  writeState(historical, true);
+  writeState(historical, false);
+  const settledIds = [historicalId];
+  for (let index = 0; index < 25; index++) {
+    const threadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(`settled-child-${index}`);
+    fixture.database.admitThread(testProjectIds.workbench, threadId);
+    const { reservationId: id, ...metadata } = await store.reserve({
+      ...reserved, reservationId: randomUUID(), name: `settled-${index}`, createdAt: index + 2,
+    });
+    const record = { ...metadata, threadId };
+    await store.replace(callerThreadId, id, record);
+    writeState(record, true);
+    settledIds.push(threadId);
+  }
   const stopped: string[] = [];
   const controller = new WorkbenchSubagentController({
     identities: fixture.identities, publicThreadId: fixture.publicThreadId, provider: () => provider,
@@ -230,18 +242,37 @@ test("creation reuses settled names while name targeting selects the new child a
     params: { callerThreadId, cwd, name: "mimi", title: "New work", profileId: profile().id,
       message: "Inspect the code.", userVisibleSimpleVersion: "Asked Mimi to inspect the code." },
   });
+  const listed = await controller.handleRequest({
+    id: 2, method: "workbench/subagent/list", params: { callerThreadId, cwd },
+  });
+  assert.deepEqual((listed.result as WorkbenchSubagentPage).subagents.map(record => record.threadId), [historicalId]);
+  assert.match((await create()).error?.message ?? "", /unsettled direct child/i);
+  const stopByName = () => controller.handleRequest({
+    id: 3, method: "workbench/subagent/stop", params: { callerThreadId, cwd, names: ["MIMI"] },
+  });
+  assert.equal((await stopByName()).error, undefined);
+  assert.deepEqual(stopped, [historicalId]);
+  writeState(historical, true);
   assert.deepEqual(await create(), { id: 1, result: { threadId: childThreadId } });
   assert.match((await create()).error?.message ?? "", /unsettled direct child/i);
-  const stop = await controller.handleRequest({
-    id: 2, method: "workbench/subagent/stop", params: { callerThreadId, cwd, names: ["MIMI"] },
-  });
-  assert.equal(stop.error, undefined);
-  assert.deepEqual(stopped, [childThreadId]);
-  const history = await controller.handleRequest({
-    id: 3, method: "workbench/subagent/list", params: { callerThreadId, cwd, settled: true },
-  });
-  assert.deepEqual((history.result as WorkbenchSubagentPage).subagents.map(record => record.threadId), [historicalId]);
-  assert.equal((await store.list({ projectId: testProjectIds.workbench, parentThreadId: callerThreadId })).subagents.length, 2);
+  assert.equal((await stopByName()).error, undefined);
+  assert.deepEqual(stopped, [historicalId, childThreadId]);
+  const readHistory = async (cursor?: string) => {
+    const result = await controller.handleRequest({
+      id: 4, method: "workbench/subagent/list", params: { callerThreadId, cwd, settled: true, cursor },
+    });
+    assert.equal(result.error, undefined);
+    return result.result as WorkbenchSubagentPage;
+  };
+  const first = await readHistory();
+  assert.equal(first.subagents.length, 20);
+  assert.ok(first.nextCursor);
+  const second = await readHistory(first.nextCursor);
+  assert.equal(second.subagents.length, 6);
+  assert.equal(second.nextCursor, null);
+  const historyIds = [...first.subagents, ...second.subagents].map(record => record.threadId);
+  assert.equal(new Set(historyIds).size, historyIds.length);
+  assert.deepEqual(new Set(historyIds), new Set(settledIds));
 });
 
 test("creates with the selected profile and delivers attributed initial input", async (context) => {

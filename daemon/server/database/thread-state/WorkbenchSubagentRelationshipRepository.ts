@@ -39,23 +39,15 @@ export default class WorkbenchSubagentRelationshipRepository {
   constructor(private readonly database: Database.Database) {}
 
   read(query: WorkbenchSubagentRelationshipRead): WorkbenchSubagentRelationship[] {
-    if (query.after && !query.parentThreadId) throw new Error("Subagent pagination requires a parent.");
-    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1)) throw new Error("Subagent read limit is invalid.");
     const conditions = ["relationship.project_id = ?", "relationship.relationship_kind = 'active'"];
-    const values: Array<string | number> = [query.projectId];
+    const values: string[] = [query.projectId];
     if (query.parentThreadId) {
       conditions.push("relationship.parent_thread_id = ?");
       values.push(query.parentThreadId);
     }
-    if (query.after) {
-      conditions.push("(relationship.created_at < ? OR (relationship.created_at = ? AND active.thread_id > ?))");
-      values.push(query.after.createdAt, query.after.createdAt, query.after.threadId);
-    }
-    if (query.limit !== undefined) values.push(query.limit);
     const rows = this.database.prepare(`${SELECT_RELATIONSHIPS}
       WHERE ${conditions.join(" AND ")}
       ORDER BY relationship.created_at ${query.parentThreadId ? "DESC" : "ASC"}, active.thread_id
-      ${query.limit === undefined ? "" : "LIMIT ?"}
     `).all(...values) as RelationshipRow[];
     return rows.map(row => {
       const record = this.readRow(row);

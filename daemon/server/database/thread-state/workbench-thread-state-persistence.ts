@@ -26,8 +26,6 @@ export type WorkbenchThreadStateGlobalDocument =
 export interface WorkbenchSubagentRelationshipRead {
   projectId: ProjectId;
   parentThreadId?: WorkbenchThreadId;
-  after?: { createdAt: number; threadId: WorkbenchThreadId };
-  limit?: number;
 }
 
 export interface WorkbenchSubagentPersistence {
