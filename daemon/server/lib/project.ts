@@ -585,7 +585,8 @@ async function walkProjects(currentDir: string, discoveryFolder: string, aliasPr
 
   const directories: typeof entries = [];
   for (const entry of entries) {
-    if (discoveryIgnoredNames.has(entry.name)) {
+    // Dot folders are tool-owned (package stores, caches); their links reach checkouts outside every discovery folder.
+    if (discoveryIgnoredNames.has(entry.name) || entry.name.startsWith(".")) {
       continue;
     }
 

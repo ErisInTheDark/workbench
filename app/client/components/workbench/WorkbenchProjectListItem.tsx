@@ -7,6 +7,7 @@
 
 import { useContext, type MouseEvent } from "react";
 import { createLogicalProjectRoute, createProjectRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import { isDaemonProject } from "workbench-shared/workbench/project/workbench-project-projection";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import type { DisplaySidebarProject, LogicalSidebarProject, ProjectSidebarProject } from "./project-sidebar-groups";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
@@ -32,6 +33,9 @@ function ProjectTooltipContent({ entry }: { entry: DisplaySidebarProject }) {
     <div className="flex max-h-full min-w-0 max-w-[min(30rem,calc(100vw-2rem))] flex-col gap-2">
       <div className="min-w-0">
         <p className="m-0 break-words text-[0.9rem] font-medium leading-[1.45] text-text">{logical ? project.displayName ?? project.label : project.name || project.id}</p>
+        {logical && isDaemonProject(project.matchKey) ? (
+          <p className="m-0 text-[0.72rem] text-fg/muted">{project.label}&apos;s own workspace for threads outside any repository.</p>
+        ) : null}
         <p className="m-0 whitespace-pre-wrap break-all font-mono text-[0.72rem] leading-[1.45] text-fg/muted">
           {logical ? project.locations.map(location => `${location.hostname}: ${location.rootPath}`).join("\n")
             : WorkbenchProjectLabel.getFullPath(project)}

@@ -1,7 +1,9 @@
 /*
  * Exports:
  * - projectLogicalProjects: build display identities from app-owned projects and daemon-qualified catalogs; this app's
- *   hidden folders move to `hiddenLocations`, so every downstream projection sees only visible folders.
+ *   hidden folders move to `hiddenLocations`, folders a connected daemon stopped cataloguing drop out, and identities
+ *   left without folders are not listed, so every downstream projection sees only live visible folders.
+ * - isDaemonProject: whether a logical project is a daemon's own scratch workspace.
  * - isDaemonOwnedProject: whether a logical project's folders are each daemon's own and can't be hidden.
  * - preferredLogicalLaunchLocation: choose a project's last used launch target without changing its combined view.
  * - preferredSelectedLaunchTarget: choose the newest accepted thread's available selected project and folder.
@@ -414,7 +416,7 @@ export function projectLogicalGroups(
   const unsettled = new Set(unsettledProjectIds);
   const unarchivedProjectIds = projects.flatMap(project => {
     // Each daemon's own project is a standing entry point, visible before it has any threads.
-    if (project.matchKey.startsWith("daemon://")) return [project.id];
+    if (isDaemonProject(project.matchKey)) return [project.id];
     const hasDaemonWork = projectDisplayLocations(project).some(location =>
       placement.get(location.target.daemonId)?.has(location.target.projectId));
     const hasAppDraft = presentation.drafts.some(draft =>
@@ -424,9 +426,14 @@ export function projectLogicalGroups(
   return { orderedProjectIds, unsettledProjectIds, unarchivedProjectIds };
 }
 
+/** A daemon's own scratch workspace project, one per daemon. */
+export function isDaemonProject(matchKey: string) {
+  return matchKey.startsWith("daemon://");
+}
+
 /** Workbench Library and daemon projects hold each daemon's own Workbench folder; apps never hide them. */
 export function isDaemonOwnedProject(matchKey: string) {
-  return matchKey === "workbench-library" || matchKey.startsWith("daemon://");
+  return matchKey === "workbench-library" || isDaemonProject(matchKey);
 }
 
 export function projectLogicalProjects(
@@ -480,7 +487,14 @@ export function projectLogicalProjects(
       .find(value => pathSuffixCounts.get(`${hostname.toLowerCase()}:/${value.toLowerCase()}`) === 1);
     return suffix ? `/${suffix}` : rootPath;
   };
-  for (const location of presentation.locations) {
+  const catalogued = (target: ProjectLocationReference) => {
+    const catalog = catalogs.get(target.daemonId);
+    return catalog?.find(candidate => candidate.id === target.projectId) ?? null;
+  };
+  // A connected daemon no longer cataloguing a folder retired it; offline daemons keep their folders.
+  const liveLocations = presentation.locations.filter(location =>
+    !catalogs.has(location.target.daemonId) || catalogued(location.target));
+  for (const location of liveLocations) {
     const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
     const parts = pathParts(location.rootPath);
     for (let count = 1; count <= parts.length; count += 1) {
@@ -499,15 +513,14 @@ export function projectLogicalProjects(
     return true;
   };
   const locations = new Map(presentation.projects.map(project => [project.id, [] as WorkbenchLogicalProject["locations"]]));
-  for (const location of presentation.locations) {
+  for (const location of liveLocations) {
     const owner = locations.get(location.logicalProjectId);
     if (!owner) continue;
-    if (hide(location.logicalProjectId, {
-      daemonId: location.target.daemonId, projectId: location.target.projectId,
-      hostname: hostnames.get(location.target.daemonId) ?? location.target.daemonId, rootPath: location.rootPath,
-    })) continue;
-    const project = catalogs.get(location.target.daemonId)?.find(candidate => candidate.id === location.target.projectId) ?? null;
+    const project = catalogued(location.target);
     const hostname = hostnames.get(location.target.daemonId) ?? location.target.daemonId;
+    if (hide(location.logicalProjectId, {
+      daemonId: location.target.daemonId, projectId: location.target.projectId, hostname, rootPath: location.rootPath,
+    })) continue;
     owner.push({
       target: location.target,
       daemonId: location.target.daemonId,
@@ -537,7 +550,7 @@ export function projectLogicalProjects(
       || left.rootPath.localeCompare(right.rootPath)
       || left.daemonId.localeCompare(right.daemonId));
   }
-  return presentation.projects.map(project => {
+  const listed = presentation.projects.flatMap((project): WorkbenchLogicalProject[] => {
     const remote = remotes.get(project.id);
     const withHost = remote ? `${remote.host}/${remote.path}` : "";
     const label = remote
@@ -554,28 +567,37 @@ export function projectLogicalProjects(
       || left.daemonId.localeCompare(right.daemonId));
     const showDaemon = new Set(projectLocations.map(location => location.daemonId)).size > 1;
     // A daemon project's root is a hidden scratch folder; its host is its whole location.
-    const daemonProject = project.matchKey.startsWith("daemon://");
+    const daemonProject = isDaemonProject(project.matchKey);
     for (const location of projectLocations) {
       if (daemonProject) location.displayPath = location.hostname;
       else if (showDaemon) location.displayPath = `${location.hostname}:${location.displayPath}`;
       else if (location.displayPath?.startsWith("/")) location.displayPath = location.displayPath.slice(1);
     }
     const preferred = projectLocations.find(location => location.project) ?? projectLocations[0];
-    const displayPath = daemonProject ? null : preferred?.displayPath ?? null;
     const observed = (observedByKey.get(project.matchKey) ?? []).filter(location => !hide(project.id, {
       daemonId: location.daemonId, projectId: location.projectId, hostname: location.hostname, rootPath: location.rootPath,
     }));
     const hidden = hiddenByProject.get(project.id);
-    return {
+    // An identity whose folders all moved or retired has nothing left to show.
+    if (!projectLocations.length && !observed.length && !hidden?.length) return [];
+    return [{
       id: project.id,
       matchKey: project.matchKey,
       label,
       storedLabel: project.label,
       displayName: daemonProject ? project.label : remote?.parts.at(-1) ?? preferred?.name ?? project.label,
-      displayPath,
+      displayPath: daemonProject ? null : preferred?.displayPath ?? null,
       locations: projectLocations,
       ...(observed.length ? { observedLocations: observed } : {}),
       ...(hidden?.length ? { hiddenLocations: hidden } : {}),
-    };
+    }];
   });
+  // A folder path only distinguishes projects that would otherwise read the same.
+  const nameCounts = new Map<string, number>();
+  for (const project of listed) {
+    const name = project.displayName?.toLocaleLowerCase() ?? "";
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+  return listed.map(project => (nameCounts.get(project.displayName?.toLocaleLowerCase() ?? "") ?? 0) > 1
+    ? project : { ...project, displayPath: null });
 }

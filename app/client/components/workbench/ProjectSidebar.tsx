@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState, type ComponentType, type MouseEvent } fro
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
 import { ProjectFolderAddress } from "workbench-shared/workbench/project/project-folder-address";
-import { isDaemonOwnedProject } from "workbench-shared/workbench/project/workbench-project-projection";
+import { isDaemonOwnedProject, isDaemonProject } from "workbench-shared/workbench/project/workbench-project-projection";
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import {
   groupProjectSelection, nextProjectSelectionTier, type DisplaySidebarProject,
@@ -43,7 +43,7 @@ function projectFolderMenu(
 ): WorkbenchContextMenuDefinition {
   const id = `project-folders:${project.id}`;
   const label = `${project.label} actions`;
-  if (project.matchKey.startsWith("daemon://")) {
+  if (isDaemonProject(project.matchKey)) {
     return { id, label, items: [{ id: "folders", label: "Daemon projects have no other folders", disabled: true, onSelect: () => {} }] };
   }
   const visibleLock = isDaemonOwnedProject(project.matchKey) ? "Each daemon's own Workbench folder always stays visible."

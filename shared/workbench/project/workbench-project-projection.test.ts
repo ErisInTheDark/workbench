@@ -1,5 +1,6 @@
 /*
- * No production exports. Protect one display identity, qualified locations, remote-label collisions and hidden folders.
+ * No production exports. Protect one display identity, qualified locations, remote-label collisions, hidden and retired
+ * folders, folderless identities and collision-only project paths.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -81,18 +82,17 @@ test("remote identity has one row, collisions show hosts, and unavailable locati
     defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
   };
   const projects = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/repo")]]]));
-  assert.equal(projects.length, 3);
-  assert.deepEqual(projects.slice(0, 2).map(project => project.label), [
+  // The local identity owns no folders, so there is nothing to list.
+  assert.deepEqual(projects.map(project => project.label), [
     "example.test/team/repo", "other.test/team/repo",
   ]);
-  assert.equal(projects[2]?.label, "C:/other");
   assert.deepEqual(projects[0]?.locations.map(location => [
     location.hostname, location.rootPath, location.project !== null,
   ]), [["desktop", "C:/repo", true], ["laptop", "/home/repo", false]]);
   assert.equal(projects[0]?.locations[1]?.target.daemonId, second);
   assert.equal(projects[0]?.displayName, "repo");
+  // Both projects read "repo", so the folder path tells them apart.
   assert.equal(projects[0]?.displayPath, "desktop:/repo");
-  assert.equal(projects[2]?.displayName, "C:/other");
   const source = (threadId: string, working: number) => ({
     projects: [{
       projectId: concrete, revision: 1, lastThreadUpdateAt: working,
@@ -146,7 +146,7 @@ test("hidden registered and observed folders leave every projection and only rem
   assert.deepEqual(project?.hiddenLocations?.map(location => [location.daemonId, location.projectId]),
     [[second, concrete], [second, observedId]]);
   // With one visible daemon left, the path no longer needs its host prefix.
-  assert.equal(project?.displayPath, "repo");
+  assert.equal(project?.locations[0]?.displayPath, "repo");
   const working = (threadId: string) => ({ projects: [{
     projectId: concrete, revision: 1, lastThreadUpdateAt: 1,
     counts: { completed: 0, needsAttention: 0, needsAttentionActive: 0, proposedCommit: 0, stopped: 0, working: 1 },
@@ -171,7 +171,63 @@ test("a local project's name stays separate from its shortest daemon folder addr
   };
   const project = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/git/app/bak")]]]))[0]!;
   assert.equal(project.displayName, "bak");
-  assert.equal(project.displayPath, "bak");
+  assert.equal(project.locations[0]?.displayPath, "bak");
+});
+
+test("a project only carries a folder path when another listed project reads the same", () => {
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [
+      { id: remoteId, matchKey: "remote://example.test/team/transition-rust", label: "example.test/team/transition-rust" },
+      { id: collisionId, matchKey: "local://c:/one/app/.git", label: "C:/one/app" },
+      { id: localId, matchKey: "local://c:/two/app/.git", label: "C:/two/app" },
+    ],
+    locations: [
+      { target: { daemonId: first, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/transition-rust", name: "transition", rootPath: "C:/rust/transition" },
+      { target: { daemonId: second, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/transition-rust", name: "transition-rust", rootPath: "/home/transition-rust" },
+      { target: { daemonId: first, projectId: ProjectIdSchema.parse("one") }, logicalProjectId: collisionId,
+        identityKey: "local://c:/one/app/.git", name: "app", rootPath: "C:/one/app" },
+      { target: { daemonId: first, projectId: ProjectIdSchema.parse("two") }, logicalProjectId: localId,
+        identityKey: "local://c:/two/app/.git", name: "App", rootPath: "C:/two/app" },
+    ],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const projects = projectLogicalProjects(snapshot, new Map());
+  assert.deepEqual(projects.map(project => [project.displayName, project.displayPath]), [
+    ["transition-rust", null], ["app", "one/app"], ["App", "two/app"],
+  ]);
+  assert.deepEqual(projects[0]?.locations.map(location => location.displayPath), [
+    "desktop:/transition", "laptop:/transition-rust",
+  ]);
+});
+
+test("folders a connected daemon stopped cataloguing drop out, while offline daemons keep theirs", () => {
+  const retiredId = LogicalProjectIdSchema.parse("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+  const snapshot: PresentationSnapshot = {
+    revision: 1, daemons: [{ id: first, hostname: "desktop" }, { id: second, hostname: "laptop" }],
+    projects: [
+      { id: remoteId, matchKey: "remote://example.test/team/repo", label: "example.test/team/repo" },
+      { id: retiredId, matchKey: "remote://file:///C:/sandbox/source", label: "C:/sandbox/wb" },
+    ],
+    locations: [
+      { target: { daemonId: first, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo" },
+      { target: { daemonId: first, projectId: ProjectIdSchema.parse("gone") }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/repo", name: "repo+old", rootPath: "C:/repo+old" },
+      { target: { daemonId: second, projectId: concrete }, logicalProjectId: remoteId,
+        identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "/home/repo" },
+      { target: { daemonId: first, projectId: ProjectIdSchema.parse("sandbox") }, logicalProjectId: retiredId,
+        identityKey: "remote://file:///C:/sandbox/source", name: "0123abcd", rootPath: "C:/sandbox/wb" },
+    ],
+    defaults: [], drafts: [], folders: [], members: [], divergences: [], sourceMappings: [],
+  };
+  const projects = projectLogicalProjects(snapshot, new Map([[first, [catalog("C:/repo")]]]));
+  assert.deepEqual(projects.map(project => project.id), [remoteId]);
+  assert.deepEqual(projects[0]?.locations.map(location => [location.hostname, location.rootPath, location.project !== null]), [
+    ["desktop", "C:/repo", true], ["laptop", "/home/repo", false],
+  ]);
 });
 
 test("a daemon's own project shows its host instead of its hidden workspace and stays listed without threads", () => {
@@ -244,8 +300,14 @@ test("remote project labels use the shortest unambiguous repository suffix", () 
     members: [], divergences: [], sourceMappings: [],
     projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "example.test/team/repo" }],
   };
-  const labels = (projects: PresentationSnapshot["projects"]) =>
-    projectLogicalProjects({ ...base, projects }, new Map()).map(project => project.label);
+  // Each identity owns one folder; folderless identities are not listed.
+  const labels = (projects: PresentationSnapshot["projects"]) => projectLogicalProjects({
+    ...base, projects,
+    locations: projects.map((project, index) => ({
+      target: { daemonId: first, projectId: ProjectIdSchema.parse(`folder-${index}`) }, logicalProjectId: project.id,
+      identityKey: project.matchKey, name: "repo", rootPath: `C:/folder-${index}/repo`,
+    })),
+  }, new Map()).map(project => project.label);
   assert.deepEqual(labels(base.projects), ["repo"]);
   assert.deepEqual(labels([
     ...base.projects,

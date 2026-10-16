@@ -7,6 +7,7 @@
 import { useContext, useEffect, useState } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
+import { isDaemonProject } from "workbench-shared/workbench/project/workbench-project-projection";
 import { getIdentityAccentHue, type IdentityAccentStyle } from "../../workbench/identity-accent-color";
 import { ComputerIcon, ProjectIcon } from "./workbench-icons";
 import {
@@ -67,9 +68,11 @@ export default function WorkbenchProjectIcon ({
   const { glyph, size, text } = VARIANT_CLASS_NAMES[variant];
   // Every icon kind occupies the same fixed frame so labels beside it share one start column.
   const className = `inline-flex ${size} shrink-0 rounded-[0.3rem] items-center justify-center overflow-hidden font-semibold leading-none`;
+  // An offline daemon has no catalogue folder, but its identity still names a daemon project.
+  const daemon = "matchKey" in target ? isDaemonProject(target.matchKey) : project?.kind === "daemon";
 
-  if (!project || project.kind === "daemon") {
-    const Glyph = project ? ComputerIcon : ProjectIcon;
+  if (!project || daemon) {
+    const Glyph = daemon ? ComputerIcon : ProjectIcon;
     return <span aria-hidden="true" className={className}><Glyph size={glyph} /></span>;
   }
 

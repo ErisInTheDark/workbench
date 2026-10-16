@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect canonical checkout filtering, external aliases, and clone exclusion.
+ * - No production exports; tests protect canonical checkout filtering, external aliases, hidden-folder skipping, and clone exclusion.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -32,6 +32,8 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   const linkedProjectRoot = path.join(projectsRoot, "manyworld");
   const directProjectRoot = path.join(projectsRoot, "stories", "notekeeper+kaia");
   const indirectProjectRoot = path.join(projectsRoot, ".machine-cache", "v3", "projects", "opaque-hash");
+  const storeOnlyProjectRoot = path.join(temporaryRoot, "external", "store-only");
+  const storeOnlyLinkRoot = path.join(projectsRoot, ".machine-cache", "v3", "projects", "other-hash");
   const workbenchLibraryRoot = path.join(temporaryRoot, "library");
   const originalProjectsRoot = process.env.WORKBENCH_PROJECTS_ROOT;
   const originalWorkbenchLibraryRoot = process.env.WORKBENCH_LIBRARY_ROOT;
@@ -67,6 +69,10 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
   await fs.symlink(canonicalProjectRoot, linkedProjectRoot, process.platform === "win32" ? "junction" : "dir");
   await fs.symlink(directProjectRoot, indirectProjectRoot, process.platform === "win32" ? "junction" : "dir");
   await fs.symlink(projectsRoot, configuredProjectsRoot, process.platform === "win32" ? "junction" : "dir");
+  // Tool caches such as pnpm's store registry link to checkouts living outside every discovery folder.
+  await fs.mkdir(storeOnlyProjectRoot, { recursive: true });
+  await git("init", "--quiet", storeOnlyProjectRoot);
+  await fs.symlink(storeOnlyProjectRoot, storeOnlyLinkRoot, process.platform === "win32" ? "junction" : "dir");
 
   process.env.WORKBENCH_PROJECTS_ROOT = configuredProjectsRoot;
   process.env.WORKBENCH_LIBRARY_ROOT = workbenchLibraryRoot;
@@ -111,6 +117,9 @@ test("preserves external Git aliases while suppressing indirect duplicates of di
     projects.some((project) => project.kind === "git" && project.relativePath === ".machine-cache/v3/projects/opaque-hash"),
     false,
   );
+  const storeOnlyRootPath = normalizePath(await fs.realpath(storeOnlyProjectRoot));
+  assert.equal(projects.some(project => project.rootPath === storeOnlyRootPath), false,
+    "a checkout reachable only through a hidden tool folder must not become a project");
 
   const agentProject = await resolveAgentEndpointProjectFromProjects(projects, indirectProjectRoot);
   assert.equal(agentProject.project.id, directProject.id);
