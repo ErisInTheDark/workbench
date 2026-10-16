@@ -15,6 +15,7 @@ interface MessageWaitState {
   callerThreadId: WorkbenchThreadId;
   senderThreadIds: readonly WorkbenchThreadId[];
   received: WorkbenchAgentMessage | null;
+  cancellation?: { signal: AbortSignal; listener: () => void };
   /** Another sender's message arrived; absent on states from older generations. */
   interrupted?: true;
 }
@@ -28,11 +29,6 @@ export interface WorkbenchMessageWaitHandoff {
 export type WorkbenchMessageWaitOutcome =
   | { kind: "message"; message: WorkbenchAgentMessage }
   | { kind: "interrupted" };
-
-function createInvocationCleanup(waits: WorkbenchMessageWaitHandoff["waits"], waitId: string) {
-  // Isolate this retained callback's closure from the generation's controller and promise.
-  return () => { waits.delete(waitId); };
-}
 
 function outcome(state: MessageWaitState): WorkbenchMessageWaitOutcome | null {
   if (state.received) return { kind: "message", message: state.received };
@@ -107,16 +103,21 @@ export default class WorkbenchMessageWaitController {
     this.lifetime.signal.throwIfAborted();
     if (this.listeners.has(input.waitId)) throw new Error("That message wait is already attached.");
     const waits = this.handoff.waits;
-    const state = waits.get(input.waitId) ?? {
+    const state: MessageWaitState = waits.get(input.waitId) ?? {
       callerThreadId: input.callerThreadId, senderThreadIds: input.senderThreadIds, received: null,
     };
     if (state.callerThreadId !== input.callerThreadId) throw new Error("That message wait belongs to another caller.");
     if (!outcome(state)) this.takeUndelivered(state);
     waits.set(input.waitId, state);
     const waitId = input.waitId;
-    // Retained cleanup closes only shared data, never a retired controller or its listeners.
-    const cancelInvocation = createInvocationCleanup(waits, waitId);
-    invocationSignal.addEventListener("abort", cancelInvocation, { once: true });
+    if (state.cancellation?.signal !== invocationSignal) {
+      const previous = state.cancellation;
+      if (previous) previous.signal.removeEventListener("abort", previous.listener);
+      // A JavaScript closure retains its module context even when it captures only shared data.
+      const listener = Map.prototype.delete.bind(waits, waitId);
+      invocationSignal.addEventListener("abort", listener, { once: true });
+      state.cancellation = { signal: invocationSignal, listener };
+    }
     const generationSignal = AbortSignal.any([signal, this.lifetime.signal, invocationSignal]);
     let cancel: (() => void) | undefined;
     try {
@@ -139,7 +140,8 @@ export default class WorkbenchMessageWaitController {
         && isWorkbenchAgentMcpRuntimeReloadInterruption(generationSignal.reason)
         && !invocationSignal.aborted;
       if (!reloading) {
-        invocationSignal.removeEventListener("abort", cancelInvocation);
+        state.cancellation.signal.removeEventListener("abort", state.cancellation.listener);
+        delete state.cancellation;
         waits.delete(waitId);
       }
     }

@@ -1,7 +1,8 @@
 /*
- * Exports: none. Protect message sender/recipient filtering, undelivered-mail pickup, interruption by other senders, independent waits, cancellation, and reload continuity.
+ * Exports: none. Protect message routing, undelivered mail, cancellation, and reload-safe wait lifetimes.
  */
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { test } from "node:test";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
@@ -130,6 +131,84 @@ test("terminal cancellation removes retained data while no generation is attache
   assert.equal(successor.hasWait("reload-cancelled"), false);
   owner.dispose();
   successor.dispose();
+});
+
+test("reloads share one invocation cleanup and completion releases it", async () => {
+  const caller = new AbortController();
+  let owner = new WorkbenchMessageWaitController();
+  try {
+    for (let generation = 0; generation < 3; generation++) {
+      const lifetime = new AbortController();
+      const waited = owner.wait(input("repeated"), lifetime.signal, caller.signal);
+      const handoff = owner.captureReloadState();
+      const reason = createWorkbenchAgentMcpRuntimeReloadInterruption();
+      lifetime.abort(reason);
+      await assert.rejects(waited, error => error === reason);
+      owner.dispose();
+      owner = new WorkbenchMessageWaitController(handoff);
+      assert.equal(getEventListeners(caller.signal, "abort").length, 1,
+        "a detached wait needs one cleanup, not one per retired generation");
+    }
+    owner.receive("caller", message("first", "between generations"));
+    assert.deepEqual(await owner.wait(input("repeated"), new AbortController().signal, caller.signal),
+      received("first", "between generations"));
+    assert.equal(getEventListeners(caller.signal, "abort").length, 0,
+      "completion must release the invocation's cleanup even after reloads");
+  } finally {
+    caller.abort();
+    owner.dispose();
+  }
+});
+
+test("a completed invocation cannot delete a later wait with the same ID", async () => {
+  const caller = new AbortController();
+  const nextCaller = new AbortController();
+  const generation = new AbortController();
+  const owner = new WorkbenchMessageWaitController();
+  const first = owner.wait(input("reused"), generation.signal, caller.signal);
+  const successor = new WorkbenchMessageWaitController(owner.captureReloadState());
+  generation.abort(createWorkbenchAgentMcpRuntimeReloadInterruption());
+  await assert.rejects(first);
+  owner.dispose();
+  successor.receive("caller", message("first"));
+  await successor.wait(input("reused"), new AbortController().signal, caller.signal);
+  const next = successor.wait(input("reused"), nextCaller.signal);
+  try {
+    caller.abort();
+    assert.equal(successor.hasWait("reused"), true, "old cancellation must not remove the new invocation");
+    successor.receive("caller", message("second"));
+    assert.deepEqual(await next, received("second"));
+  } finally {
+    nextCaller.abort();
+    await next.catch(() => undefined);
+    successor.dispose();
+  }
+});
+
+test("reattaching with a different invocation signal transfers cancellation ownership", async () => {
+  const caller = new AbortController();
+  const replacementCaller = new AbortController();
+  const generation = new AbortController();
+  const owner = new WorkbenchMessageWaitController();
+  const first = owner.wait(input("replacement"), generation.signal, caller.signal);
+  const successor = new WorkbenchMessageWaitController(owner.captureReloadState());
+  generation.abort(createWorkbenchAgentMcpRuntimeReloadInterruption());
+  await assert.rejects(first);
+  owner.dispose();
+  const next = successor.wait(input("replacement"), new AbortController().signal, replacementCaller.signal);
+  try {
+    caller.abort();
+    assert.equal(successor.hasWait("replacement"), true);
+    const reason = new Error("replacement caller disconnected");
+    replacementCaller.abort(reason);
+    await assert.rejects(next, error => error === reason);
+    assert.equal(successor.hasWait("replacement"), false);
+    assert.equal(getEventListeners(replacementCaller.signal, "abort").length, 0);
+  } finally {
+    replacementCaller.abort();
+    await next.catch(() => undefined);
+    successor.dispose();
+  }
 });
 
 test("message waits survive real command-generation replacement and finish their invocation lifetime", async () => {
