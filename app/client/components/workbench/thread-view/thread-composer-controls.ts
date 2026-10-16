@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadComposerEnterAction: distinguish draft creation shortcuts from newline and composition input.
- * - getThreadComposerStopControlState: derive snooze/stop action, visibility, and availability.
+ * - getThreadComposerStopControlState: derive settle/snooze/stop action, visibility, and availability.
  */
 
 export function getThreadComposerEnterAction(input: {
@@ -23,8 +23,9 @@ export function getThreadComposerStopControlState ({
   isCommentMode,
   isStopping,
   canSnooze = false,
+  canSettle = false,
   isApprovalBlocked = false,
-  preferStop = false,
+  shiftKey = false,
   snoozed = false,
 }: {
   hasPendingUserInputRequest: boolean;
@@ -32,15 +33,19 @@ export function getThreadComposerStopControlState ({
   isCommentMode: boolean;
   isStopping: boolean;
   canSnooze?: boolean;
+  canSettle?: boolean;
   isApprovalBlocked?: boolean;
-  preferStop?: boolean;
+  shiftKey?: boolean;
   snoozed?: boolean;
 }) {
   const canStop = isActiveThread || hasPendingUserInputRequest;
   const snoozeAvailable = canSnooze && !snoozed && !isApprovalBlocked;
+  const settleAvailable = canSettle && !canStop && !isApprovalBlocked;
+  const action = settleAvailable && (!shiftKey || !snoozeAvailable) ? "settle" as const
+    : snoozeAvailable && (!shiftKey || !canStop) ? "snooze" as const : "stop" as const;
   return {
-    action: snoozeAvailable && (!preferStop || !canStop) ? "snooze" as const : "stop" as const,
-    disabled: (!canStop && !snoozeAvailable) || isStopping,
-    visible: !isCommentMode && (canStop || snoozeAvailable || isStopping),
+    action,
+    disabled: (!canStop && !snoozeAvailable && !settleAvailable) || isStopping,
+    visible: !isCommentMode && (canStop || snoozeAvailable || settleAvailable || isStopping),
   };
 }

@@ -1508,6 +1508,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     }
     navigateToRoute(createSettledThreadExitRoute(currentRoute, ownerProjectId ?? ""));
   }, [navigateToRoute]);
+  const handleComposerThreadSettled = useCallback((settledTarget: WorkbenchThreadTarget, ownerProjectId: string) => {
+    const currentRoute = currentRouteRef.current;
+    if (currentRoute.view !== "thread"
+      || (!currentRoute.logical
+        && (currentRoute.threadOwnerProjectId || currentRoute.projectId) !== ownerProjectId)
+      || !isWorkbenchThreadTargetSelected(settledTarget, currentRoute.threadTarget)) {
+      return;
+    }
+    createThreadFromSidebar(ownerProjectId);
+  }, [createThreadFromSidebar]);
   const usesDesktopSidebarCollapse = !isMobile;
   const effectiveThreadTarget = mobileMosaicFallbackTarget?.kind === "thread" ? mobileMosaicFallbackTarget.target : route.threadTarget;
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
@@ -2542,6 +2552,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       mobileFullBleed={isDirectMobileThreadSurface}
                       onDraftHarnessChange={handleHarnessChange}
                       onOpenThread={(target) => { void openThreadFromExplorer(target, threadProjectId); }}
+                      onThreadSettled={handleComposerThreadSettled}
                       onSendMessage={sendThreadMessage}
                       onThreadComposerDraftChange={handleThreadComposerDraftChange}
                       onThreadComposerDraftClear={handleThreadComposerDraftClear}

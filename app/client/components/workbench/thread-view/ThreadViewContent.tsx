@@ -245,6 +245,7 @@ export default memo(function ThreadViewContent ({
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
   onOpenThread,
+  onThreadSettled,
   onSendMessage,
   onThreadComposerDraftChange,
   onThreadComposerDraftClear,
@@ -287,6 +288,7 @@ export default memo(function ThreadViewContent ({
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
   onOpenThread: (target: WorkbenchThreadTarget) => void;
+  onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
   onSendMessage: (
     thread: ThreadPayload,
     input: UserInput[],
@@ -989,6 +991,7 @@ export default memo(function ThreadViewContent ({
       highlightSources={inlineMentionSources}
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
+      onThreadSettled={onThreadSettled}
       onThreadComposerDraftChange={onThreadComposerDraftChange}
       onThreadComposerDraftClear={onThreadComposerDraftClear}
       onQuestionnaireError={onQuestionnaireError}

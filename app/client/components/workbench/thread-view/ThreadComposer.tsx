@@ -45,9 +45,11 @@ import {
   createWorkbenchThreadRecoveryInput,
   isWorkbenchThreadRecoveryEligible,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
-import { isWorkbenchThreadSnoozeAvailable, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import { isWorkbenchThreadSettlementAvailable, isWorkbenchThreadSnoozeAvailable, type WorkbenchThreadRouteTarget as WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import PrimaryButton from "../../ui/PrimaryButton";
-import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
+import { ListEndIcon, PlayIcon, QuestionnaireListIcon, SendHorizontalIcon, SettleThreadIcon, SnoozedThreadIcon, SquareIcon } from "../workbench-icons";
+import { useWorkbenchClientController } from "../workbench-client-context";
+import { useThread } from "../use-thread";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import SendActionBadge from "./SendActionBadge";
 import useWorkbenchQuestionnaire from "../use-workbench-questionnaire";
@@ -144,6 +146,7 @@ export default function ThreadComposer ({
   subscribeModelUpdates,
   onSendMessage,
   onStopThread,
+  onThreadSettled,
   onThreadComposerDraftChange,
   onThreadComposerDraftClear,
   onQuestionnaireError,
@@ -190,6 +193,7 @@ export default function ThreadComposer ({
     options?: Pick<WorkbenchSendThreadMessageOptions, "activatedSkillPaths" | "skipAutoCompact" | "onThreadLaunched" | "stayInCreate">,
   ) => Promise<void>;
   onStopThread: (threadId: string) => Promise<void> | void;
+  onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
   onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onQuestionnaireError?: (message: string) => void;
@@ -232,6 +236,8 @@ export default function ThreadComposer ({
     : { kind: "provider", harness: thread.harness, threadId: thread.id }, onQuestionnaireError);
   const threadController = questionnaire.thread;
   const sidebarEntry = threadController.entry;
+  const client = useWorkbenchClientController();
+  const summary = useThread.summary(sidebarEntry?.entryKind === "thread" ? sidebarEntry.identity.threadId : null);
   const threadState = useMemo(() => ({ status: thread.status, turns: [...turns] }), [thread.status, turns]);
   const threadLifecycle = sidebarEntry?.lifecycle ?? null;
   const pendingUserInputRequest = questionnaire.request;
@@ -353,8 +359,10 @@ export default function ThreadComposer ({
   const stopControlState = getThreadComposerStopControlState({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
     canSnooze: sidebarEntry?.entryKind === "thread" && isWorkbenchThreadSnoozeAvailable(sidebarEntry),
+    canSettle: Boolean(client.controls && summary && sidebarEntry?.entryKind === "thread"
+      && isWorkbenchThreadSettlementAvailable(sidebarEntry, { requiredTodoCount: summary.summary.facts.requiredTodoCount })),
     isApprovalBlocked,
-    preferStop: isShiftPressed,
+    shiftKey: isShiftPressed,
     snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
   });
   const isStopDisabled = isLaunchingDraft || stopControlState.disabled;
@@ -529,7 +537,12 @@ export default function ThreadComposer ({
     setIsStopping(true);
     setError("");
     try {
-      if (stopControlState.action === "snooze") {
+      if (stopControlState.action === "settle") {
+        if (sidebarEntry?.entryKind !== "thread") throw new Error("The thread is no longer available.");
+        const accepted = await client.controls?.threadAction(sidebarEntry.identity.threadId, { kind: "settle" });
+        if (!accepted) throw new Error("The thread changed before it could be settled.");
+        onThreadSettled?.({ kind: "provider", ...sidebarEntry.identity }, projectId);
+      } else if (stopControlState.action === "snooze") {
         await threadController.actions.snooze(questionnaireRequestKey || undefined);
       } else {
         await onStopThread(thread.id);
@@ -621,20 +634,24 @@ export default function ThreadComposer ({
     );
   };
 
-  const stopLabel = stopControlState.action === "snooze" ? "Snooze thread" : isActiveThread ? "Stop current turn" : "Dismiss questionnaire";
-  const stoppingLabel = stopControlState.action === "snooze" ? "Snoozing thread" : "Stopping current turn";
+  const stopPresentation = {
+    settle: { label: "Settle thread", pendingLabel: "Settling thread", Icon: SettleThreadIcon },
+    snooze: { label: "Snooze thread", pendingLabel: "Snoozing thread", Icon: SnoozedThreadIcon },
+    stop: { label: isActiveThread ? "Stop current turn" : "Dismiss questionnaire", pendingLabel: "Stopping current turn", Icon: SquareIcon },
+  }[stopControlState.action];
   const stopButton = showStopButton ? (
     <PrimaryButton
       type="button"
-      aria-label={isStopping ? stoppingLabel : stopLabel}
-      title={stopLabel}
+      aria-label={isStopping ? stopPresentation.pendingLabel : stopPresentation.label}
+      title={stopPresentation.label}
       disabled={isStopDisabled}
+      pendingHalo={isStopping}
       shape="circle"
       onClick={() => {
         void stop();
       }}
     >
-      {stopControlState.action === "snooze" ? <SnoozedThreadIcon size={18} /> : <SquareIcon size={18} />}
+      <stopPresentation.Icon size={18} />
     </PrimaryButton>
   ) : null;
   const resumeButton = canRecoverInterruptedTurn ? (

@@ -1,5 +1,5 @@
 /*
- * No production exports. Protect composer shortcuts and snooze/stop availability.
+ * No production exports. Protect composer shortcuts and settle/snooze/stop availability.
  */
 
 import assert from "node:assert/strict";
@@ -53,7 +53,7 @@ test("qualifying shift intent swaps questionnaire snooze for stop", () => {
     isCommentMode: false,
     isStopping: false,
     canSnooze: true,
-    preferStop: true,
+    shiftKey: true,
     snoozed: false,
   }), { action: "stop", disabled: false, visible: true });
 });
@@ -79,14 +79,32 @@ test("idle composers without questionnaires do not show stop", () => {
   }), { action: "stop", disabled: true, visible: false });
 });
 
+test("completed composers prefer settlement and shift selects available snooze", () => {
+  const completed = {
+    hasPendingUserInputRequest: false, isActiveThread: false, isCommentMode: false,
+    isStopping: false, canSettle: true, canSnooze: true, shiftKey: false,
+  };
+  assert.deepEqual(getThreadComposerStopControlState(completed),
+    { action: "settle", disabled: false, visible: true });
+  assert.deepEqual(getThreadComposerStopControlState({ ...completed, shiftKey: true }),
+    { action: "snooze", disabled: false, visible: true });
+  for (const unavailable of [{ canSnooze: false }, { snoozed: true }]) {
+    assert.equal(getThreadComposerStopControlState({ ...completed, ...unavailable, shiftKey: true }).action, "settle");
+  }
+  assert.equal(getThreadComposerStopControlState({ ...completed, canSettle: false }).action, "snooze");
+  assert.equal(getThreadComposerStopControlState({ ...completed, canSettle: false, canSnooze: false }).visible, false);
+  assert.equal(getThreadComposerStopControlState({ ...completed, isStopping: true }).disabled, true);
+  assert.equal(getThreadComposerStopControlState({ ...completed, isCommentMode: true }).visible, false);
+});
+
 test("idle snooze never becomes stop through shift and unavailable snooze stays hidden", () => {
-  const idle = { hasPendingUserInputRequest: false, isActiveThread: false, isCommentMode: false, isStopping: false, preferStop: true };
+  const idle = { hasPendingUserInputRequest: false, isActiveThread: false, isCommentMode: false, isStopping: false, shiftKey: true };
   assert.deepEqual(getThreadComposerStopControlState({ ...idle, canSnooze: true }),
     { action: "snooze", disabled: false, visible: true });
   for (const unavailable of [{ canSnooze: false }, { canSnooze: true, snoozed: true }]) {
     assert.equal(getThreadComposerStopControlState({ ...idle, ...unavailable }).visible, false);
   }
   assert.equal(getThreadComposerStopControlState({
-    ...idle, isActiveThread: true, preferStop: false, canSnooze: true, isApprovalBlocked: true,
+    ...idle, isActiveThread: true, shiftKey: false, canSnooze: true, isApprovalBlocked: true,
   }).action, "stop");
 });
