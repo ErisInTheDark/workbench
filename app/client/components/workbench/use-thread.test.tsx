@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; rendering tests protect project-qualified thread reads in project and global observation modes.
+ * - No production exports; tests protect project-qualified reads, title-history actions and hover-before-navigation store ownership.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,6 +15,10 @@ import { useThread } from "./use-thread";
 import ThreadStore, { type ThreadStoreActions } from "../../workbench/thread/ThreadStore";
 import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import ProjectFactsStore from "../../workbench/project/ProjectFactsStore";
+import WorkbenchThreadClient from "../../workbench/WorkbenchThreadClient";
+import type WorkbenchWorkspaceClient from "../../workbench/app/WorkbenchWorkspaceClient";
+import ThreadSummaryStore from "../../workbench/thread/ThreadSummaryStore";
+import { createThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -197,4 +201,80 @@ test("title history actions target their project and preserve rejection", async 
   renderToStaticMarkup(createElement(WorkbenchClientProvider, { client, children: createElement(Probe) }));
   await assert.rejects(history.reapply("old"));
   await assert.rejects(history.dismiss("old"));
+});
+
+test("title-history previews cannot poison parent and sibling navigation, even before summaries arrive", async t => {
+  for (const pending of [false, true]) await t.test(pending ? "summary initially pending" : "summary already available", async () => {
+    const projectId = fixtureIdentitySchemas.ProjectIdSchema.parse("project");
+    const parentId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent");
+    const parent: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+      activityAt: 1, entryKind: "thread", title: "Parent", identity: { harness: "codex", threadId: parentId },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    };
+    const children = ["first", "second"].map((id, directSubagentIndex): Extract<WorkbenchThreadSidebarEntry, { entryKind: "subagent" }> => ({
+      activityAt: 1, entryKind: "subagent", title: id,
+      identity: { harness: "codex", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(id) },
+      createdAt: 1, updatedAt: 1, cwd: "C:/repo", directSubagentIndex, name: id,
+      parentThreadId: parentId, pinned: false, profileId: "worker", profileName: "Worker", projectId,
+      lifecycle: { kind: "completed", reason: "providerInactive", settled: false },
+    }));
+    const family = [parent, ...children];
+    const workspace = {
+      rpc: { onReconnect: () => () => {} },
+      onDisconnect: () => () => {},
+      onWorkbenchNotification: () => () => {},
+      onThreadEvent: () => () => {},
+      observeThread: async (request: Parameters<WorkbenchWorkspaceClient["observeThread"]>[0]) => {
+        const root = request.target.kind === "subagent" ? request.target.parentThreadId : request.target.threadId;
+        return { observation: { ...request, entries: root === parentId ? family : [],
+          error: null, freshness: "fresh", revision: 1, version: 2, updateKind: "threadObservation" } };
+      },
+      releaseThread: async () => {},
+    } as unknown as WorkbenchWorkspaceClient;
+    const renderer = WorkbenchThreadClient({ workspace });
+    const summaries = new ThreadSummaryStore({ observe: () => { throw new Error("Static rendering does not subscribe."); } });
+    let available = !pending;
+    t.mock.method(summaries, "get", (id: string) => {
+      const entry = available ? family.find(entry => entry.identity.threadId === id) : null;
+      return entry ? {
+        location: { daemonId: fixtureIdentitySchemas.DaemonIdSchema.parse("11111111-1111-4111-8111-111111111111"), projectId },
+        logicalProjectId: null, summary: createThreadSummary(entry, {}),
+      } : null;
+    });
+    const previewClient = {
+      ...client, mounted: { ...client.mounted, getThreadStore: renderer.getThreadStore, threadSummaries: summaries },
+    };
+    function Preview({ threadId }: { threadId: typeof parentId }) {
+      useThread.titleHistory(projectId, "codex", threadId);
+      return null;
+    }
+    const preview = (threadId: typeof parentId) => renderToStaticMarkup(createElement(WorkbenchClientProvider, {
+      client: previewClient, children: createElement(Preview, { threadId }),
+    }));
+    const project = { id: projectId, name: "repo", rootPath: "C:/repo", roots: [] };
+    let release = () => {};
+    try {
+      assert.deepEqual(await renderer.openThread(parentId, { project, harness: "codex" }), { kind: "opened" });
+      for (const entry of family) preview(entry.identity.threadId);
+      available = true;
+      for (const selected of [parent, children[0]!, parent, children[1]!, children[0]!, children[0]!, parent]) {
+        preview(selected.identity.threadId);
+        release();
+        const target = selected.entryKind === "subagent"
+          ? { kind: "subagent" as const, parentThreadId: parentId, ...selected.identity }
+          : { kind: "provider" as const, ...selected.identity };
+        const store = renderer.getThreadStore(projectId, target);
+        release = store.acquire("summary");
+        await Promise.resolve();
+        assert.equal(store.getSlice("summary").error, null);
+        assert.equal(store.getSlice("summary").status, "ready");
+        assert.equal(store.getSlice("summary").head?.id, selected.identity.threadId);
+      }
+    } finally {
+      release();
+      summaries.dispose();
+      renderer.dispose();
+    }
+  });
 });

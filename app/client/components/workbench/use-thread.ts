@@ -3,7 +3,7 @@
  * - useThread: lease one thread store (summary or view interest) and read its summary slice and actions; transcript reads
  *   live on `useTranscript`. Members: `questionnaire` reads a leased store's pending input; `summary` leases one thread's
  *   batched summary for any thread display; `sidebarEntry` reads its project sidebar row; `titleHistory` reads previous
- *   titles with rename/dismiss intent; `fileIndex` reads the owning
+ *   titles through the summary-resolved family with rename/dismiss intent; `fileIndex` reads the owning
  *   folder's file suggestions; `models` reads the owner's account model cache; `attention` reads its questionnaire label; `subagent` reads a thread's subagent
  *   relationship; `claimIntersections/collisions/arc` select
  *   narrow Git arc facts from the owner's source sidebar.
@@ -114,7 +114,13 @@ useThread.sidebarEntry = function useThreadSidebarEntry(
 /** Previous titles plus project-qualified reapply and dismiss intent. */
 useThread.titleHistory = function useThreadTitleHistory(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId) {
   const client = useWorkbenchClientController();
-  const thread = useThread(projectId, { kind: "provider", harness, threadId });
+  const summary = useThread.summary(threadId);
+  const row = summary?.summary.row;
+  const target: WorkbenchThreadRouteTarget | null = !row ? null
+    : row.entryKind === "subagent"
+      ? { kind: "subagent", parentThreadId: row.parentThreadId, ...row.identity }
+      : { kind: "provider", ...row.identity };
+  const thread = useThread(projectId, target);
   const reapply = useCallback(async (title: string) => {
     if (!client.controls) throw new Error("Workbench controls are not ready.");
     await client.controls.setThreadTitle({ projectId, harness, threadId, title });
