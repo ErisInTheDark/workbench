@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchDatabaseRetentionController: own non-overlapping startup and daily database retention; disposal stops the pass between steps.
+ * - default WorkbenchDatabaseRetentionController: own non-overlapping startup and daily database retention; disposal stops the pass between steps,
+ *   and an in-flight pass reports pending work so the daemon does not sleep through it.
  */
 import type WorkbenchDatabaseController from "../WorkbenchDatabaseController.ts";
 
@@ -34,6 +35,10 @@ export default class WorkbenchDatabaseRetentionController {
     if (this.handle || this.disposal.signal.aborted) return;
     void this.run();
     this.handle = this.scheduling.every(() => { void this.run(); }, DAY_MS);
+  }
+
+  hasPendingWork() {
+    return this.active !== null;
   }
 
   async run() {

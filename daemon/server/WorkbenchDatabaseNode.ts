@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchDatabaseNode: own SQLite readiness, identity and transcript registrations, periodic memory breakdown, replacement and closure.
+ * - default WorkbenchDatabaseNode: own SQLite readiness, identity and transcript registrations, periodic memory breakdown, replacement and closure;
+ *   in-flight retention holds the daemon awake.
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -118,6 +119,7 @@ export default ReloadableNode.define<
           commit: shutdown,
         };
       },
+      hasPendingWork: () => retention.hasPendingWork(),
       registrations: { database, commandApprovals, threadIdentity, transcriptIdentity, transcript },
       start: async (_reportPhase, signal) => {
         signal?.throwIfAborted();

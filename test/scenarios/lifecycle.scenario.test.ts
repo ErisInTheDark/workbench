@@ -51,16 +51,9 @@ test("forward database migration preserves data and the real app can use it", {
   // Leave the outer twenty-one-minute runner budget room to retire children and clean up.
   timeout: 1_200_000,
 }, async t => {
-  const firstRetention = Promise.withResolvers<void>();
   const runtime = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal, {
     codexIdentity: false,
-    processEvent: event => {
-      reportLifecycleProcessEvent(event);
-      if (event.kind === "diagnostic"
-        && event.diagnostic.source === "database"
-        && event.diagnostic.operation === "retention"
-        && event.diagnostic.phase === "completed") firstRetention.resolve();
-    },
+    processEvent: reportLifecycleProcessEvent,
   });
   console.log(`migration fixture: ${runtime.root}`);
   const appDatabase = path.join(runtime.dataRootPath, "app", "app-state.sqlite3");
@@ -93,10 +86,7 @@ test("forward database migration preserves data and the real app can use it", {
       });
     } finally { await legacyApp.close(); }
     runtime.markPhase("reloading a host-owned daemon with retained discovery roots");
-    await runtime.exerciseManagedProcessReload(
-      path.resolve(process.cwd(), ".."),
-      () => firstRetention.promise,
-    );
+    await runtime.exerciseManagedProcessReload(path.resolve(process.cwd(), ".."));
     await runtime.stop();
     runtime.markPhase("verifying forward migration and retained data");
     await verifyThreadStateMigrationSource(captured);

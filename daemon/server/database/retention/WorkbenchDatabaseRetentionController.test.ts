@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect retention clocks, non-overlap, step-boundary disposal, and surfaced failures.
+ * No production exports. Tests protect retention clocks, non-overlap, sleep-holding pending work, step-boundary disposal, and surfaced failures.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -75,6 +75,7 @@ test("retention starts immediately, uses exact clocks, and never overlaps", asyn
   const controller = new WorkbenchDatabaseRetentionController(database, () => 10 * DAY_MS, fake.scheduling);
 
   controller.start();
+  assert.equal(controller.hasPendingWork(), true, "an in-flight pass holds the daemon awake");
   assert.deepEqual(calls, [{
     input: {
       expiredAt: 10 * DAY_MS,
@@ -93,6 +94,7 @@ test("retention starts immediately, uses exact clocks, and never overlaps", asyn
     fullCompaction: false, reclaimedPages: 0,
   });
   await controller.run();
+  assert.equal(controller.hasPendingWork(), false);
   await controller.dispose();
   assert.equal(fake.cleared, true);
 });
@@ -123,6 +125,7 @@ test("retention disposal stops the active pass at its current step without repor
     step.resolve();
     await disposal;
     assert.equal(disposed, true);
+    assert.equal(controller.hasPendingWork(), false);
     assert.equal(fake.cleared, true);
   } finally {
     console.error = original;
@@ -139,6 +142,7 @@ test("retention failures surface at the owner", async () => {
       runRetention: async () => { throw new Error("retention exploded"); },
     }, () => 0, createScheduler().scheduling);
     await failing.run();
+    assert.equal(failing.hasPendingWork(), false, "a failed pass must not hold the daemon awake");
   } finally {
     console.error = original;
   }

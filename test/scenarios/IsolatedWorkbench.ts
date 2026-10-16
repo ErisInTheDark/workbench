@@ -451,7 +451,7 @@ export default class IsolatedWorkbench {
     await this.startDaemon("lifecycle", this.signal);
   }
 
-  async exerciseManagedProcessReload(expectedProjectRoot: string, beforeReload?: () => Promise<void>) {
+  async exerciseManagedProcessReload(expectedProjectRoot: string) {
     this.signal.throwIfAborted();
     this.closed = false;
     this.releaseSignalCleanup ??= isolatedWorkbenchSignalCleanup.register(async () => {
@@ -490,7 +490,6 @@ export default class IsolatedWorkbench {
         path.resolve(project.rootPath).toLowerCase() === path.resolve(expectedProjectRoot).toLowerCase());
       assert.ok(includesExpectedProject(await request(initial, "project/catalog/read", {})),
         "Managed daemon must discover the retained checkout before reload");
-      await beforeReload?.();
       this.markPhase("requesting managed server:process reload");
       await request(initial, WORKBENCH_RELOAD_METHOD, { scopes: ["server:process"] });
       const replacementReady = () => {
