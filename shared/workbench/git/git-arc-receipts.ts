@@ -126,7 +126,6 @@ export function projectGitArcReceipt(input: GitArcReceipt): GitArcReceipt {
     ...(receipt.stackedProposals === undefined ? {} : { stackedProposals: receipt.stackedProposals }),
     ...(receipt.unchanged ? { unchanged: true } : {}),
     ...(visible(receipt.memberRefs) ? { memberRefs: receipt.memberRefs } : {}),
-    ...(visible(receipt.acceptedProposals) ? { acceptedProposals: receipt.acceptedProposals } : {}),
     ...(visible(receipt.invalidatedProposals) ? { invalidatedProposals: receipt.invalidatedProposals } : {}),
     ...(receipt.planningDrift?.some((drift) => drift.paths.length)
       ? { planningDrift: receipt.planningDrift.filter((drift) => drift.paths.length) } : {}),
@@ -191,10 +190,6 @@ export function formatGitArcTextReceipt(input: GitArcReceipt) {
   if (receipt.memberRefs?.length) {
     lines.push(`members ${receipt.memberRefs.length}`);
     for (const member of receipt.memberRefs) lines.push(`${escapeGitArcValue(member.rootId)}\t${member.ref}`);
-  }
-  if (receipt.acceptedProposals?.length) {
-    lines.push(`accepted ${receipt.acceptedProposals.length}`);
-    for (const accepted of receipt.acceptedProposals) lines.push(`${escapeGitArcValue(accepted.proposalId)}\t${accepted.commitSha}`);
   }
   if (receipt.invalidatedProposals?.length) {
     lines.push(`invalidated ${receipt.invalidatedProposals.length}`);

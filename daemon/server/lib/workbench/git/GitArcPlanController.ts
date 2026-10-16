@@ -19,6 +19,7 @@ import GitArcRegistry, {
 } from "./GitArcRegistry";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore, { type StoredCheckpoint } from "./GitCheckpointStore";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import {
@@ -376,6 +377,7 @@ export default class GitArcPlanController {
         : null,
       plan.paths,
       currentOwnership?.baselineClaims ?? [],
+      current?.stackTip,
     );
     const guardPaths = [...new Set([...claimPaths, ...(currentOwnership?.baselineClaims ?? [])])]
       .sort((left, right) => left.localeCompare(right));
@@ -543,13 +545,17 @@ export default class GitArcPlanController {
       throw new GitArcRejectionError({ reason: "adoptionRequiresDirty", paths: cleanAdoptions }, `Adopted plan paths are clean against current HEAD: ${cleanAdoptions.join(", ")}. Use ordinary addPaths, not adoptPaths.`);
     }
 
+    const ownership = current
+      ? await new GitArcClaimOwnershipController(repository, this.resolveThreadIdentity).project(current)
+      : null;
+    const guardPaths = [...new Set([...paths, ...(ownership?.baselineClaims ?? [])])].sort();
     const activeMetadata: CheckpointMetadata = {
       amendedFrom: plan.checkpointCommit,
       ...(metadata.intentDescription ? { intentDescription: metadata.intentDescription } : {}),
       intentName: metadata.intentName,
       kind: "arc",
       registryLifecycle: true,
-      scopePaths: paths,
+      scopePaths: guardPaths,
       version: 3,
     };
     const baselineTree = headIdentity?.identity.tree ?? await repository.resolveTree(null);
@@ -557,7 +563,8 @@ export default class GitArcPlanController {
     const releasedClaims = current ? liveClaims(current) : [];
     const registryMutation = await registry.prepareClaim({
       checkpointCommit: prepared.checkpointCommit,
-      claimedPaths: paths,
+      activeClaimedPaths: paths,
+      claimedPaths: guardPaths,
       harness,
       intentDescription: metadata.intentDescription ?? "",
       intentName: metadata.intentName ?? "Unnamed arc",
@@ -624,6 +631,7 @@ export default class GitArcPlanController {
         : null,
       plan.paths,
       currentOwnership?.baselineClaims ?? [],
+      current?.stackTip,
     );
     const successor = await this.prepareStashedSuccessor(repository, harness, threadId, current);
     const registryMutation = await registry.prepareSet({
@@ -786,14 +794,23 @@ export default class GitArcPlanController {
     retainedArc: GitArcRegistryEntry["retainedArc"] | null,
     planPaths: string[],
     baselineClaims: string[] = [],
+    stackTip?: string | null,
   ): Promise<GitArcRegistryEntry["retainedArc"] | null> {
     if (!retainedArc || retainedArc.phase === "resolved" || !retainedArc.claimedPaths.length) return retainedArc;
     const store = this.store(repository);
     const checkpoint = await store.readCheckpoint(harness, threadId, retainedArc.checkpointCommit);
     const outcome = await store.readOutcome(harness, threadId, checkpoint.checkpointCommit);
-    const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;
     const activeClaims = retainedArc.activeClaimedPaths ?? retainedArc.claimedPaths;
-    const dirtyPaths = await repository.listWorktreeChangedPaths(baseline, activeClaims);
+    let dirtyPaths: string[] = [];
+    if (activeClaims.length) {
+      const baseline = outcome?.acceptedProposals?.at(-1)?.headSha ?? checkpoint.parent;
+      const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
+      const tip = await stack.baselineTip({ stackTip }, checkpoint);
+      dirtyPaths = await repository.listWorktreeChangedPaths(
+        tip ? await stack.sealedTree(baseline, tip.commit) : baseline,
+        activeClaims,
+      );
+    }
     const plan = new GitArcPathSet(planPaths);
     const uncovered = dirtyPaths.filter((dirtyPath) => !plan.covers(dirtyPath));
     if (uncovered.length) {

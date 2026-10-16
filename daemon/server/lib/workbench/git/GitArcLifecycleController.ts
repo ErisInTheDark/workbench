@@ -168,7 +168,6 @@ export default class GitArcLifecycleController {
       addedClaims: activeClaimedPaths.filter((candidate) => !existingClaims.has(candidate)),
       removedClaims: existing.filter((candidate) => !nextClaims.has(candidate)),
       adoptedPaths: adoptions.paths,
-      acceptedProposals,
       unchanged: true,
       repoRoot: repository.root,
       skippedIgnoredPaths,
@@ -205,7 +204,8 @@ export default class GitArcLifecycleController {
         throw new GitArcRejectionError({ reason: "sealedStackContent", paths: exposed }, `Removed claims hold pending stack-layer content: ${exposed.join(", ")}. Keep them until the layer commits, or ask the coordinating thread to move them with a selected adopt.`);
       }
       const adopted = new GitArcPathSet(adoptions.paths);
-      const unexplained = dirtyPaths.filter((candidate) => !existingClaims.covers(candidate) && !adopted.covers(candidate));
+      const owned = new GitArcPathSet(guards);
+      const unexplained = dirtyPaths.filter((candidate) => !owned.covers(candidate) && !adopted.covers(candidate));
       if (unexplained.length) throw new GitCheckpointDirtyPathsError(unexplained, "New claims");
       const dirty = new GitArcPathSet(dirtyPaths);
       const cleanAdoptions = adoptions.paths.filter((scope) => !dirty.has(scope) && !dirty.contains(scope));

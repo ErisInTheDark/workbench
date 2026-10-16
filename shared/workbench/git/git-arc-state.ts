@@ -3,7 +3,7 @@
  * - GitArcClaimChanges: literal, normalised additions, removals and explicit adoptions.
  * - GitArcPlanningDrift: previous snapshot and changed retained paths, before refresh.
  * - GitArcScopeState: read-only planned and live scope facts.
- * - GitArcMutationResult: active or resolved publication and acceptance facts.
+ * - GitArcMutationResult: active or resolved scope publication facts.
  * - applyGitClaimChanges: validate subtraction of exact entries or folders containing them, and produce a minimal final scope.
  */
 import GitArcPathSet from "./GitArcPathSet";
@@ -44,7 +44,6 @@ export interface GitArcMutationResult {
   addedClaims: string[];
   removedClaims: string[];
   adoptedPaths: string[];
-  acceptedProposals: Array<{ proposalId: string; commitSha: string; headSha: string }>;
   unchanged: boolean;
   repoRoot: string;
   skippedIgnoredPaths: string[];

@@ -161,7 +161,7 @@ test("claim updates return only net changes while retaining counts and recovery 
       assert.equal(receipt.adoptedPathCount, 1);
       assert.deepEqual(receipt.additionalClaims ?? [], changed ? ["new.ts"] : []);
       assert.deepEqual(receipt.removedClaims ?? [], changed ? ["old.ts"] : []);
-      assert.deepEqual(receipt.acceptedProposals, acceptedProposals);
+      assert.equal(receipt.acceptedProposals, undefined);
       assert.deepEqual(receipt.planningDrift, [planningDrift]);
       assert.doesNotMatch(output.stdout, /unchanged\.ts/u);
     }

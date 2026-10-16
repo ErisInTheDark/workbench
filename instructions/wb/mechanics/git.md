@@ -21,7 +21,7 @@ scope and phases:
 - Registry owns current scope, including empty plans; a missing phase means active.
 </docs>
 <docs tools="git_arc_start git_plan_start git_arc_continue git_arc_claims">
-- Do not assume claims were acquired from a successful call; read the returned phases, claims and accepted IDs/SHAs.
+- Do not assume claims were acquired from success; read returned phases and claims. Use status for accepted IDs/SHAs.
 </docs>
 
 claims and safety:
@@ -35,7 +35,7 @@ claims and safety:
 - Adopt intentional command-caused dirt for inclusion in proposals.
 </docs>
 <docs tools="git_plan_claims git_plan_start">
-- Plan creation requires usable HEAD. Missing mechanics or failed commands do not authorise bypassing arc safety.
+- Missing mechanics or failed commands do not authorise bypassing arc safety.
 </docs>
 <docs tools="git_arc_stash git_arc_unstash">
 - Stashes own no live claims. Resume saved work only with user agreement.
@@ -86,7 +86,7 @@ waiting:
 continuing or editing claims:
 <docs tools="git_arc_continue">
 - Before another implementation pass without scope changes, call <tool id="git_arc_continue" /> with no ref. Unchanged continuation need not publish a successor.
-- Acceptance releases clean claims. Continuation uses the narrowed live set and reports accepted proposal IDs/commit SHAs. Resolved continuation succeeds without acquiring anything.
+- Acceptance releases clean claims. Continuation uses the narrowed live set; resolved continuation acquires nothing.
 </docs>
 <docs tools="git_arc_claims">
 - <tool id="git_arc_claims" /> with `inherit: true` and the scope arrays edits active claims, including continuation checks and accepted-outcome reconciliation: do not continue first. Omit unused arrays.

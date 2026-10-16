@@ -494,9 +494,6 @@ export default function ThreadGitArcItem ({
             renderContent={() => inventoryLists}
           />
         ) : inventoryLists : null}
-        {receipt?.acceptedProposals?.map((accepted) => (
-          <div key={`${accepted.proposalId}:${accepted.commitSha}`}>Accepted {accepted.proposalId} at {accepted.commitSha}</div>
-        ))}
         {receipt?.planningDrift?.map((drift) => (
           <div key={drift.previousRef}>
             <ThreadClaimedFileList

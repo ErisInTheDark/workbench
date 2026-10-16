@@ -136,3 +136,36 @@ test("strict addition reads only ownership before rejecting overlap and preserve
   assert.equal(await fs.readFile(selected, "utf8"), selectedBefore);
   assert.equal(await fs.readFile(dirty, "utf8"), "unclaimed work\n");
 });
+
+test("ordinary additions reactivate owned baseline guards without admitting unrelated or sibling dirt", async (context) => {
+  const fixture = await new GitTestFixtureCache().copy(SRC_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const controller = new WorkbenchGitCheckpointController();
+  const owner = { cwd: fixture.root, harness: "codex" as const, threadId: "stack-owner" };
+  const sibling = { ...owner, threadId: "stack-sibling" };
+  await controller.createAndStartPlan({ ...owner, intentName: "seal source", paths: ["src/one.test.ts"] });
+  await fs.writeFile(path.join(fixture.root, "src/one.test.ts"), "sealed source\n");
+  await controller.createProposal({ ...owner, title: "seal source", description: "" });
+  await controller.stackArc({ ...owner, title: "source layer" });
+  assert.deepEqual((await controller.readScope(owner))?.claimedPaths, []);
+  await controller.createAndStartPlan({ ...sibling, intentName: "sibling source", paths: ["sibling.txt"] });
+  await fs.writeFile(path.join(fixture.root, "sibling.txt"), "sibling work\n");
+  await fs.writeFile(path.join(fixture.root, "loose.txt"), "unclaimed work\n");
+
+  const registry = new GitArcRegistry(await WorkbenchGitRepository.open(fixture.root));
+  const before = await registry.read();
+  await assert.rejects(
+    controller.editArcClaims({ ...owner, inherit: true, addPaths: ["src/one.test.ts", "loose.txt"] }),
+    GitCheckpointDirtyPathsError,
+  );
+  await assert.rejects(
+    controller.editArcClaims({ ...owner, inherit: true, addPaths: ["src/one.test.ts", "sibling.txt"] }),
+    /overlap active sibling work/u,
+  );
+  assert.deepEqual(await registry.read(), before);
+  const added = await controller.editArcClaims({ ...owner, inherit: true, addPaths: ["src/one.test.ts"] });
+  assert.deepEqual(added.addedClaims, ["src/one.test.ts"]);
+  assert.deepEqual((await controller.readScope(owner))?.claimedPaths, ["src/one.test.ts"]);
+  assert.deepEqual((await controller.compare(owner)).changes, []);
+  assert.equal(await fs.readFile(path.join(fixture.root, "src/one.test.ts"), "utf8"), "sealed source\n");
+});

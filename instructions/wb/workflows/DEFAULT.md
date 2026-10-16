@@ -211,7 +211,7 @@ Before the first file edit in Implement mode:
 - Start drift below 2,000 plan-scoped additions + deletions: inspect <tool id="git_arc_diff" /> against the supplied ref.
 - Larger or binary drift: enter Inspect; reread affected current code and owners; rebase planned work, not Git history.
 - Preserve approval only if scope, behavior, structure, ownership, mechanics and validation match. When it does, enter Implement with <tool id="git_plan_start" /> and `{ inherit: true }`; otherwise revise in Brief and seek approval.
-- Acceptance narrows live scope; read every accepted proposal ID/SHA. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
+- Acceptance narrows live scope; check status for accepted IDs/SHAs. Changed approval boundaries return to Brief and <tool id="git_plan_claims" />.
 - Replacement plans must cover every dirty owned file. Never ask the user to clean another agent's work.
 <!-- Failure: agents erase valid work, ask permission for forgotten paths, or plan vague scope. -->
 Unexpected omitted paths:

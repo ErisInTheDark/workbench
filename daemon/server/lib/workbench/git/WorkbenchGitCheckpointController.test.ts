@@ -1001,8 +1001,6 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   });
   assert.equal(completed.phase, "resolved");
   assert.deepEqual(completed.scopePaths, []);
-  assert.deepEqual(completed.acceptedProposals.map(({ proposalId }) => proposalId), [firstProposal.proposalId, secondProposal.proposalId]);
-  completed.acceptedProposals.forEach(({ commitSha }) => assert.match(commitSha, /^[a-f0-9]{40}$/u));
   const resolvedComparison = await controller.compare({ cwd: source, harness: "codex", threadId: "partial-thread" });
   assert.deepEqual(resolvedComparison.scopePaths, ["one.txt", "two.txt"]);
   assert.deepEqual(resolvedComparison.changes, []);

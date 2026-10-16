@@ -341,7 +341,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
   ], nested: false }],
   ["GitArcLifecycleController.test.ts", { fixtures: [
     demand(SRC_ARC_READY_FIXTURE, 1),
-    demand(SRC_BASE_FIXTURE, 2),
+    demand(SRC_BASE_FIXTURE, 3),
   ], nested: false }],
   ["git-arc-claim-expansion.test.ts", { fixtures: [
     demand(SRC_BASE_FIXTURE, 1),
@@ -350,7 +350,7 @@ const specsByGitTestFile = new Map<string, GitTestFileSpec>([
     demand(EDIT_SESSION_ARC_READY_FIXTURE, 5),
   ], nested: false }],
   ["GitArcPlanController.test.ts", { fixtures: [
-    demand(THREAD_GIT_BASE_FIXTURE, 3),
+    demand(THREAD_GIT_BASE_FIXTURE, 7),
   ], nested: false }],
   ["GitClaimRenameReader.test.ts", { fixtures: [
     demand(THREAD_GIT_BASE_FIXTURE, process.platform === "win32" ? 4 : 5),
