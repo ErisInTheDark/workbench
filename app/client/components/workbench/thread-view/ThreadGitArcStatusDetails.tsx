@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadGitArcStatusDetails: render compact status and exact claim-loss evidence without inventing hidden paths.
+ * - default ThreadGitArcStatusDetails: render compact status (stack layers, pending and accepted commits as collapsed groups) and exact claim-loss evidence without inventing hidden paths.
  */
 import { useEffect, useMemo } from "react";
 import { parseGitArcStatus, type GitArcStatusPresentation } from "workbench-shared/workbench/git/git-arc-status";
@@ -9,7 +9,9 @@ import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown
 import ThreadCheckpointCommitCard from "./ThreadCheckpointCommitCard";
 import ThreadCheckpointCompareItem from "./ThreadCheckpointCompareItem";
 import ThreadClaimedFileList, { ThreadClaimMarkerIcon, type ThreadClaimMarker } from "./ThreadClaimedFileList";
+import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from "./ThreadGitArcCommitGroup";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
+import { CheckCheckIcon, GitArcProposalIcon, GitArcStackIcon } from "../workbench-icons";
 
 export default function ThreadGitArcStatusDetails ({ incomplete = false, output, status, projectFilePaths, projectId, projectRootPath, workspaceRoots }: {
   incomplete?: boolean;
@@ -27,6 +29,35 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
   const facts = status === undefined ? parsed?.success ? parsed.data : null : status;
   if (!facts) return <p className="text-danger">Status facts could not be read.</p>;
   const context = { projectFilePaths, projectId, projectRootPath, workspaceRoots };
+  const pendingCommits = (proposals: ReadonlyArray<{ proposalId: string; title: string }>) => proposals
+    .map(({ proposalId, title }) => ({ committedSha: null, proposalId, title }));
+  // Each kind of commit collapses into its own group, so long histories read as one line each.
+  const commitGroups = [
+    ...(facts.stacked ?? []).map(({ pending, title }, index) => ({
+      commits: pendingCommits(pending),
+      count: plural(pending.length, "proposal"),
+      icon: <GitArcStackIcon size={14} />,
+      iconLabel: "stack layer",
+      key: `stacked:${index}`,
+      title,
+    })),
+    {
+      commits: pendingCommits(facts.pending ?? []),
+      count: plural(facts.pending?.length ?? 0, "proposal"),
+      icon: <GitArcProposalIcon size={14} />,
+      iconLabel: "pending proposals",
+      key: "pending",
+      title: "Pending",
+    },
+    {
+      commits: (facts.accepted ?? []).map(({ commitSha, proposalId, title }) => ({ committedSha: commitSha, proposalId, title })),
+      count: plural(facts.accepted?.length ?? 0, "commit"),
+      icon: <CheckCheckIcon size={14} />,
+      iconLabel: "accepted commits",
+      key: "accepted",
+      title: "Accepted",
+    },
+  ];
   const group = (label: string, paths: number | string[], marker: ThreadClaimMarker) => typeof paths === "number"
     ? (
       <p className="m-0 flex items-center gap-1 py-1 text-fg/muted" key={label}>
@@ -38,17 +69,19 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
   return (
     <div className="min-w-0 py-1">
       {incomplete || !Object.keys(facts).length ? <p className="text-fg/muted">Some status facts are unavailable.</p> : null}
-      {[
-        ...(facts.pending ?? []).map(({ proposalId, title }) => ({ committedSha: null, proposalId, title })),
-        ...(facts.accepted ?? []).map(({ commitSha, proposalId, title }) => ({ committedSha: commitSha, proposalId, title })),
-      ].map(({ committedSha, proposalId, title }) => (
-        <ThreadCheckpointCommitCard
-          key={proposalId}
-          sourceItemId={`status-proposal:${proposalId}`}
-          state={{ status: "summary", summary: { changes: null, committedSha, description: "", title } }}
-          {...context}
-        />
-      ))}
+      {commitGroups.map(({ commits, count, icon, iconLabel, key, title }) => commits.length ? (
+        <ThreadGitArcCommitGroup count={count} data-thread-git-arc-status-group={key} icon={icon} iconLabel={iconLabel} inline key={key} title={title}>
+          {commits.map(({ committedSha, proposalId, title: commitTitle }) => (
+            <div className={threadGitArcCommitRowClassName} key={proposalId}>
+              <ThreadCheckpointCommitCard
+                sourceItemId={`status-proposal:${proposalId}`}
+                state={{ status: "summary", summary: { changes: null, committedSha, description: "", title: commitTitle } }}
+                {...context}
+              />
+            </div>
+          ))}
+        </ThreadGitArcCommitGroup>
+      ) : null)}
       {facts.dirtyClaims === undefined ? null : group("Dirty claims", facts.dirtyClaims, "dirty")}
       {facts.cleanClaims === undefined ? null : group("Clean claims", facts.cleanClaims, "clean")}
       {facts.unclaimedDirt === undefined ? null : group("Unclaimed dirt", facts.unclaimedDirt, "unclaimed")}

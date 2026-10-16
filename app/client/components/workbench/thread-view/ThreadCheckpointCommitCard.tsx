@@ -91,12 +91,10 @@ function summaryChangeRows(changes: readonly GitArcChangeTotal[], sourceItemId: 
   }));
 }
 
-/** The one-line commit: title, totals and short sha, or a skeleton while the title is unknown. */
-function CommitLine({ changes, committedSha, emphasis = false, title }: {
+/** The one-line commit at card title weight: title, totals and short sha, or a skeleton while the title is unknown. */
+function CommitLine({ changes, committedSha, title }: {
   changes: CommitLineChanges | null;
   committedSha: string | null;
-  /** Card-weight title, so a closed card line matches its open title. */
-  emphasis?: boolean;
   title: string | null;
 }) {
   if (title === null) {
@@ -108,21 +106,9 @@ function CommitLine({ changes, committedSha, emphasis = false, title }: {
   }
   return (
     <span className="flex min-w-0 items-baseline gap-2">
-      <span
-        className={`
-          min-w-0 truncate text-text
-          ${emphasis ? "font-medium" : ""}
-        `}
-      >
-        {title}
-      </span>
+      <span className="min-w-0 truncate font-medium text-text">{title}</span>
       {changes ? (
-        <span
-          className={`
-            shrink-0
-            ${emphasis ? "text-[0.87em]" : ""}
-          `}
-        >
+        <span className="shrink-0 text-[0.87em]">
           <ThreadGitArcChangeTotals changes={changes} />
         </span>
       ) : null}
@@ -484,29 +470,12 @@ export default function ThreadCheckpointCommitCard({
     sourceItemId,
   }))) : null;
 
-  const line = (
-    <CommitLine changes={lineChanges} committedSha={committedSha} title={titlePending ? null : title} />
-  );
   const articleProps = {
     "aria-busy": pending || undefined,
     "aria-label": "Checkpoint commit proposal",
     "data-thread-checkpoint-card": "true",
     "data-thread-checkpoint-card-layout": layout,
   } as const;
-
-  if (layout === "row") {
-    return (
-      <article {...articleProps} className="w-full" ref={observationRef}>
-        <DisclosureStaticRow
-          className="!py-0.5"
-          marker={<GitArcProposalIcon size={16} />}
-          markerLabel="commit"
-          summary={line}
-          summaryClassName="text-[0.88em] leading-[1.6] text-fg/muted"
-        />
-      </article>
-    );
-  }
 
   // The start chevron leads the whole card, so icon, message and changes keep one column open or closed.
   const toggleButton = (
@@ -526,6 +495,32 @@ export default function ThreadCheckpointCommitCard({
     </button>
   );
 
+  const closedLine = (
+    <>
+      {cardIcon}
+      <span
+        className={`
+          flex min-w-0 flex-1 items-center py-0.5
+          ${titleClassName}
+        `}
+      >
+        <CommitLine changes={lineChanges} committedSha={committedSha} title={titlePending ? null : title} />
+      </span>
+    </>
+  );
+
+  // A title-only commit is a closed card that cannot open; the chevron gutter keeps it aligned beside toggles.
+  if (layout === "row") {
+    return (
+      <article {...articleProps} className={`w-full ${cardPadding}`} ref={observationRef}>
+        <div className="flex min-w-0 items-start gap-1">
+          <span aria-hidden="true" className="size-5 shrink-0" />
+          <div className="flex min-w-0 flex-1 items-start gap-2">{closedLine}</div>
+        </div>
+      </article>
+    );
+  }
+
   // A closed toggle is only its line at the card's own padding, icon and title type, so opening moves nothing.
   if (layout === "toggle" && !open) {
     return (
@@ -538,15 +533,7 @@ export default function ThreadCheckpointCommitCard({
             tabIndex={-1}
             type="button"
           >
-            {cardIcon}
-            <span
-              className={`
-                flex min-w-0 flex-1 items-center py-0.5
-                ${titleClassName}
-              `}
-            >
-              <CommitLine changes={lineChanges} committedSha={committedSha} emphasis title={titlePending ? null : title} />
-            </span>
+            {closedLine}
           </button>
           {disclosure?.closedAction ?? null}
         </div>

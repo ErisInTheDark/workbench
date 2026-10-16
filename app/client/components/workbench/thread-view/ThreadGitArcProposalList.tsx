@@ -25,10 +25,7 @@ import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions"
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import Disclosure from "../../ui/Disclosure";
 import ThreadCheckpointCommitCard, { type ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
-
-function plural(count: number, noun: string) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
+import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from "./ThreadGitArcCommitGroup";
 
 /** Pure pending or pure committed lists read as one noun; mixed lists split commits from proposals. */
 function formatProposalCounts(committed: number, proposed: number) {
@@ -54,13 +51,6 @@ export function getThreadAcceptedGitHistory(
     historicalCommits,
   };
 }
-
-/** Group disclosures (stack layers, accepted commits) share one row line, summary and recessed well. */
-const groupDisclosureProps = {
-  className: "border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)]",
-  contentClassName: "mx-2 mb-2 overflow-hidden rounded-[0.65rem] bg-fg/4 [&>*:first-child]:border-t-0",
-  summaryClassName: "px-3 py-2 text-[0.76em] leading-[1.45]",
-};
 
 function readProposalsOpen(records: readonly WorkbenchClientStateRecord[]) {
   for (const record of records) {
@@ -224,7 +214,7 @@ export default function ThreadGitArcProposalList({
   );
   const anchor = (proposalId: string, disclosure?: ThreadCommitDisclosure) => (
     <div
-      className="scroll-mt-6 border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
+      className={`scroll-mt-6 ${threadGitArcCommitRowClassName}`}
       data-thread-git-arc-proposal={proposalId}
       data-thread-git-arc-proposal-separator="true"
       key={proposalId}
@@ -248,7 +238,7 @@ export default function ThreadGitArcProposalList({
     ...acceptedProposals.map(({ proposalId }) => anchor(proposalId)),
     ...historicalCommits.map(commit => (
       <div
-        className="border-t border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3"
+        className={threadGitArcCommitRowClassName}
         data-thread-git-commit={commit.commitSha}
         key={`${commit.rootId}:${commit.sourceProposalId}`}
       >
@@ -275,60 +265,48 @@ export default function ThreadGitArcProposalList({
   const flattenAccepted = standalone && !proposedIds.length && !layerGroups.length && !trailingProposals.length;
   const anchors = [
     ...(flattenAccepted ? acceptedRows : acceptedRows.length ? [(
-      <Disclosure
-        {...groupDisclosureProps}
+      <ThreadGitArcCommitGroup
+        count={plural(acceptedRows.length, "commit")}
         data-thread-git-arc-accepted-group="true"
+        icon={<CheckCheckIcon size={14} />}
+        iconLabel="accepted commits"
         key="accepted"
-        leading={<CheckCheckIcon size={14} />}
-        leadingLabel="accepted commits"
-        summary={(
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="font-medium text-text">Accepted</span>
-            <span className="text-fg/muted">{plural(acceptedRows.length, "commit")}</span>
-          </span>
-        )}
+        title="Accepted"
       >
         {acceptedRows}
-      </Disclosure>
+      </ThreadGitArcCommitGroup>
     )] : []),
     ...layerGroups.map((group) => {
       const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
       const pending = layerPendingIds.length;
       const lowest = group === lowestPendingGroup;
       return (
-        <Disclosure
-          {...groupDisclosureProps}
+        <ThreadGitArcCommitGroup
+          action={pending ? (
+            <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
+              <PrimaryButton
+                className="!px-3 !py-1 !text-[0.74rem]"
+                data-thread-git-arc-commit-layer={layer.layerId}
+                disabled={committing || !lowest || !commitLayerReady}
+                onClick={() => void commitInOrder(layerPendingIds)}
+                pendingHalo={committing && lowest}
+                title={lowest ? undefined : "Commit lower layers first."}
+              >
+                {committing && lowest ? "Committing…" : "Commit layer"}
+              </PrimaryButton>
+            </span>
+          ) : null}
+          count={formatProposalCounts(layerProposals.length - pending, pending)}
           data-thread-git-arc-stack-layer={layer.layerId}
+          icon={<GitArcStackIcon size={14} />}
+          iconLabel="stack layer"
           // Sealed cards stay mounted so commit-all can walk the whole stack while layers are closed.
           keepMounted
           key={layer.layerId}
-          leading={<GitArcStackIcon size={14} />}
-          leadingLabel="stack layer"
-          summary={(
-            <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-                <span className="min-w-0 truncate font-medium text-text">{layer.title}</span>
-                <span className="text-fg/muted">{formatProposalCounts(layerProposals.length - pending, pending)}</span>
-              </span>
-              {pending ? (
-                <span className="inline-flex min-w-0 items-center justify-end" data-thread-summary-action="true">
-                  <PrimaryButton
-                    className="!px-3 !py-1 !text-[0.74rem]"
-                    data-thread-git-arc-commit-layer={layer.layerId}
-                    disabled={committing || !lowest || !commitLayerReady}
-                    onClick={() => void commitInOrder(layerPendingIds)}
-                    pendingHalo={committing && lowest}
-                    title={lowest ? undefined : "Commit lower layers first."}
-                  >
-                    {committing && lowest ? "Committing…" : "Commit layer"}
-                  </PrimaryButton>
-                </span>
-              ) : null}
-            </span>
-          )}
+          title={layer.title}
         >
           {layerProposals.map(({ proposalId }) => anchor(proposalId))}
-        </Disclosure>
+        </ThreadGitArcCommitGroup>
       );
     }),
     ...trailingProposals.map(({ proposalId }) => anchor(proposalId)),
