@@ -90,28 +90,33 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
     <div className="@container/status py-4">
       {/* The live panel deliberately closes once scrolled out of view; other panels keep any edit in progress. */}
       <ThreadMeasuredContent onHidden={() => setPanel(current => current === LIVE ? null : current)}>
-        <div className={`
-          overflow-hidden rounded-[0.8rem] border transition-colors
-          ${open ? "border-fg-alpha/16 bg-fg/3" : "border-transparent"}
-        `}>
-          <div className={`flex min-w-0 items-center gap-2 px-3 py-1.5 @max-[32rem]/status:(gap-0.5 px-2) ${open ? "border-b border-fg-alpha/16" : ""}`}>
+        <>
+          <div className="flex min-w-0 items-center gap-2 py-1.5 @max-[32rem]/status:gap-0.5">
             {live || leading ? (
               <button
                 aria-controls={panelsId}
                 aria-expanded={activePanel === (live ? LIVE : leading?.panel)}
                 className="
-                  flex min-w-0 flex-1 cursor-pointer items-center py-0.5 text-left text-[0.92em] font-medium leading-[1.6] text-fg/muted
+                  flex min-w-0 flex-1 cursor-pointer items-center text-left text-[0.92em] font-medium leading-[1.6] text-fg/muted
                   transition-colors hover:text-text focus-visible:text-text focus-visible:outline-none
                 "
                 onClick={() => toggle(live ? LIVE : leading!.panel)}
                 type="button"
               >
-                <span aria-live="polite" className="flex min-w-0 overflow-hidden">{live ? live.title : leading!.content}</span>
+                <span
+                  aria-live="polite"
+                  className={`
+                    flex h-8 min-w-0 items-center overflow-hidden rounded-full border border-transparent px-2 transition
+                    ${activePanel === LIVE ? `${pressedControlClassName} text-text` : ""}
+                  `}
+                >
+                  {live ? live.title : leading!.content}
+                </span>
               </button>
             ) : <span className="flex-1" />}
             {inline ? <span className="flex max-w-[60%] shrink-0 items-center @max-[32rem]/status:hidden">{inline}</span> : null}
             {visiblePanels.length ? (
-              <span className="flex shrink-0 items-center">
+              <span className="flex shrink-0 items-center gap-1 @max-[32rem]/status:gap-0.5">
                 {visiblePanels.map(({ id, label, narrowOnly, pressedClassName, segments }) => {
                   const pressed = activePanel === id;
                   const control = (
@@ -139,7 +144,7 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
           </div>
           {open ? (
             // Panels grow to their content; only the streaming live terminal keeps a fixed height to scroll within.
-            <div className="relative grid min-w-0" id={panelsId}>
+            <div className="relative grid min-w-0 overflow-hidden rounded-[0.8rem] border border-fg-alpha/16 bg-fg/3" id={panelsId}>
               {live ? (
                 <div
                   aria-hidden={activePanel !== LIVE}
@@ -164,7 +169,7 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
               ) : null)}
             </div>
           ) : null}
-        </div>
+        </>
       </ThreadMeasuredContent>
     </div>
   );
