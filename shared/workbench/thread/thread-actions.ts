@@ -2,6 +2,7 @@
  * Exports:
  * - WorkbenchThreadMessageSchema/WorkbenchThreadMessage: user intent submitted to a WB thread.
  * - WorkbenchThreadMessageResultSchema/WorkbenchThreadMessageResult: accepted start or steer.
+ * - WorkbenchThreadMessageSubmitResultSchema/WorkbenchThreadMessageSubmitResult: user submission outcome, including a message queued behind compaction.
  * - WorkbenchThreadCreateSchema/WorkbenchThreadCreate: project/profile selection for creation.
  * - WorkbenchThreadTargetSchema/WorkbenchThreadTarget: existing WB thread selection.
  * - WorkbenchThreadPageSchema/WorkbenchThreadPage: opaque history continuation.
@@ -87,6 +88,11 @@ export const WorkbenchThreadMessageResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("steered"), turnId: z.string().min(1), warning: z.string().optional() }),
 ]);
 export type WorkbenchThreadMessageResult = z.infer<typeof WorkbenchThreadMessageResultSchema>;
+export const WorkbenchThreadMessageSubmitResultSchema = z.union([
+  WorkbenchThreadMessageResultSchema,
+  z.object({ kind: z.literal("queued"), warning: z.string().optional() }),
+]);
+export type WorkbenchThreadMessageSubmitResult = z.infer<typeof WorkbenchThreadMessageSubmitResultSchema>;
 
 export const WorkbenchThreadCreateSchema = z.object({
   projectId: z.string().min(1),
@@ -209,13 +215,13 @@ export const workbenchThreadActions = {
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },
   "thread/page/read": { params: WorkbenchThreadPageSchema, result: WorkbenchThreadPageResultSchema },
   "thread/reconcile": { params: WorkbenchThreadReconcileSchema, result: WorkbenchThreadReconcileResultSchema },
-  "thread/message/submit": { params: WorkbenchThreadMessageSchema, result: WorkbenchThreadMessageResultSchema },
+  "thread/message/submit": { params: WorkbenchThreadMessageSchema, result: WorkbenchThreadMessageSubmitResultSchema },
   "thread/title/set": { params: WorkbenchThreadTargetSchema.extend({ title: z.string() }), result: ok },
   "thread/compact": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/provider/delete": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/stop": { params: WorkbenchThreadStopSchema, result: ok },
   "thread/interrupt": { params: WorkbenchThreadInterruptSchema, result: ok },
-  "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageResultSchema },
+  "thread/steer/resend": { params: WorkbenchThreadSteerTargetSchema, result: WorkbenchThreadMessageSubmitResultSchema },
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/shell/stop": { params: WorkbenchThreadShellTargetSchema, result: ok },
   "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },

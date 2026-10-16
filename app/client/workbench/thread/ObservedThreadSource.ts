@@ -320,7 +320,7 @@ export default function createObservedThreadSource(
             overlay.startedTurnId = result.turn.id;
             options.onTurnAdmitted?.(result.turn.id);
           } else {
-            // A steer reaches the transcript as held or delivered steer history.
+            // Steers and messages queued behind compaction reach the transcript as held or delivered steer history.
             pending.delete(clientId);
             select(entry);
           }

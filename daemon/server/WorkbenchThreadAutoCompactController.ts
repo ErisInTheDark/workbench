@@ -2,13 +2,17 @@
  * Exports:
  * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy, including held questionnaire answers.
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy, including held questionnaire answers and user messages queued behind compaction.
  */
 import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchHarness } from "workbench-shared/types";
+import type {
+  WorkbenchThreadMessageResult, WorkbenchThreadMessageSubmitResult,
+} from "workbench-shared/workbench/thread/thread-actions";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
+import type { QueuedThreadMessage } from "./WorkbenchThreadCompactionController";
 import { hasThreadActiveFlag, isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
@@ -49,7 +53,7 @@ export default class WorkbenchThreadAutoCompactController {
   hasPendingWork() { return this.refreshes.size > 0; }
   constructor(
     private readonly admission: Pick<WorkbenchThreadAdmissionController, "run">,
-    private readonly compaction: Pick<WorkbenchThreadCompactionController, "compactInsideAdmission">,
+    private readonly compaction: Pick<WorkbenchThreadCompactionController, "compactInsideAdmission" | "enqueue">,
     private readonly ports: {
     readSettings(): Promise<ThreadAutoCompactSettings>;
     readEvidence(threadId: string): Promise<ThreadAutoCompactEvidence | null>;
@@ -115,16 +119,50 @@ export default class WorkbenchThreadAutoCompactController {
       }
       signal.throwIfAborted();
       const result = await admit();
-      const observed = this.observed.get(threadId);
-      if (observed) {
-        try {
-          await this.refresh(observed, provider);
-        } catch (error) {
-          if (!signal.aborted) this.warn(threadId, error);
-        }
-      }
+      await this.refreshAfterAdmission(threadId, provider);
       return result;
     });
+  }
+
+  /**
+   * A user message joins a running compaction's queue, or starts a due compaction as that queue's first message;
+   * either way the sender is released at once while compaction keeps admission. Otherwise it is delivered now.
+   */
+  async submit(
+    threadId: string,
+    provider: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive" | "compact"> },
+    message: QueuedThreadMessage,
+    deliver: (message: QueuedThreadMessage, options: { skipAutoCompact?: boolean }) => Promise<WorkbenchThreadMessageResult>,
+    options: { skipAutoCompact?: boolean } = {},
+  ): Promise<WorkbenchThreadMessageSubmitResult> {
+    this.lifetime.signal.throwIfAborted();
+    const deliverQueued = (merged: QueuedThreadMessage) => deliver(merged, { skipAutoCompact: true });
+    if (await this.compaction.enqueue(threadId, message, deliverQueued)) return { kind: "queued" };
+    if (options.skipAutoCompact) return await deliver(message, { skipAutoCompact: true });
+    const queued = Promise.withResolvers<boolean>();
+    const compaction = this.admission.run(threadId, async () => {
+      const signal = this.lifetime.signal;
+      signal.throwIfAborted();
+      if (!(await this.decide(threadId, provider)).willAutoCompact) {
+        queued.resolve(false);
+        return;
+      }
+      const compacting = this.compaction.compactInsideAdmission(threadId, provider, signal);
+      try {
+        queued.resolve(await this.compaction.enqueue(threadId, message, deliverQueued));
+      } catch (error) {
+        queued.reject(error);
+      }
+      await compacting;
+      await this.refreshAfterAdmission(threadId, provider);
+    });
+    // A failure after queueing is settled by the queue itself: its messages become undelivered.
+    void compaction.catch(error => {
+      queued.reject(error);
+      if (!this.lifetime.signal.aborted) this.warn(threadId, error);
+    });
+    if (await queued.promise) return { kind: "queued" };
+    return await deliver(message, {});
   }
 
   beginRuntimeDrain() {
@@ -162,6 +200,19 @@ export default class WorkbenchThreadAutoCompactController {
       dueAt,
       willAutoCompact: Boolean(runtime?.latestTurn && settled && !runtime.turnLive),
     };
+  }
+
+  private async refreshAfterAdmission(
+    threadId: string,
+    provider: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
+  ) {
+    const observed = this.observed.get(threadId);
+    if (!observed) return;
+    try {
+      await this.refresh(observed, provider);
+    } catch (error) {
+      if (!this.lifetime.signal.aborted) this.warn(threadId, error);
+    }
   }
 
   private async readProviderRuntime(

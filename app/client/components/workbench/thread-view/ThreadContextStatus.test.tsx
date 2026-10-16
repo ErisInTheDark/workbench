@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { DraftIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import WorkbenchClientContext from "../workbench-client-context";
 import ThreadContextStatus from "./ThreadContextStatus";
 
 const thread: ThreadPayload = {
@@ -42,6 +43,20 @@ function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentTh
     thread: currentThread,
   }));
 }
+
+test("a compaction this view did not start still blocks compacting again", () => {
+  const summaries = {
+    subscribe: () => () => {},
+    get: () => ({ summary: { facts: { compacting: true } } }),
+  };
+  const markup = renderToStaticMarkup(createElement(
+    WorkbenchClientContext.Provider,
+    { value: { controls: null, mounted: { threadSummaries: summaries } } as never },
+    createElement(ThreadContextStatus, { onCompactThread: async () => {}, thread: { ...thread, status: "idle" } }),
+  ));
+  assert.match(markup, /<button\b[^>]*disabled=""/u);
+  assert.match(markup, /aria-label="Compacting context"/u);
+});
 
 test("missing context usage stays silent without hiding compact", () => {
   const markup = render();

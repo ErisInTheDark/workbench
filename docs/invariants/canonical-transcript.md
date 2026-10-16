@@ -25,3 +25,4 @@
 - Reconcile providers separately from SQLite reads, one turn at a time. Opening recovers missing or expired turns, bootstraps empty local history, and follows known older-page cursors while observed. Never reread intact history. Acknowledge only capture gaps covered by completed recovery.
 - Transcript subscription bootstrap never reads inside provider ingest order. Opening views buffer settlements instead.
 Compaction is a Workbench item lifecycle, never a conversation turn. Manual and automatic compaction share admission and completion; native execution identity is evidence only.
+- Input sent during compaction waits in the compaction queue and is delivered once, merged, after compaction completes; failed compaction or delivery leaves undelivered steers.

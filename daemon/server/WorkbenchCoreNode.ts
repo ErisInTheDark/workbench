@@ -172,6 +172,7 @@ function createWorkbenchCoreFeature(
     record: transcript.record.bind(transcript),
     setCompacting: (threadId, compacting) => threadSummaries?.setCompacting(threadId, compacting),
     now: Date.now,
+    warn: message => console.warn(`[compaction] ${message.slice(0, 500)}`),
   });
   const autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
     readSettings: () => settings.readThreadAutoCompact(),

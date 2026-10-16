@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadContextStatus: render context-window usage and Codex compact action beside composer quota stats.
+ * - default ThreadContextStatus: render context-window usage and the compact action, pending while any compaction runs, beside composer quota stats.
  */
 "use client";
 
@@ -8,7 +8,9 @@ import { useState } from "react";
 
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
+import { useThread } from "../use-thread";
 import WorkbenchProgressWheel from "../WorkbenchProgressWheel";
+import WorkbenchSpinningBorder from "../WorkbenchSpinningBorder";
 import { CompactIcon } from "../workbench-icons";
 
 function formatTokenCount (value: number) {
@@ -50,8 +52,11 @@ export default function ThreadContextStatus ({
   snoozed?: boolean;
   thread: ThreadHead;
 }) {
-  const [isCompacting, setIsCompacting] = useState(false);
+  const [isRequestingCompaction, setIsRequestingCompaction] = useState(false);
   const [error, setError] = useState("");
+  // Automatic and other clients' compactions reach this view only as the live summary fact.
+  const summary = useThread.summary(thread.isDraft ? null : thread.id);
+  const isCompacting = isRequestingCompaction || Boolean(summary?.summary.facts.compacting);
   if (thread.isDraft && !launching) return null;
   const tokenUsage = thread.tokenUsage;
   const contextTokens = tokenUsage?.last.inputTokens ?? null;
@@ -92,7 +97,7 @@ export default function ThreadContextStatus ({
         {canCompact ? (
           <button
             type="button"
-            className="inline-flex h-8 items-center gap-2 rounded-full px-2.5 font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-fg/muted"
+            className="relative isolate inline-flex h-8 items-center gap-2 rounded-full px-2.5 font-medium text-fg/muted transition hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-fg/muted"
             disabled={compactDisabled}
             title={compactTitle}
             aria-label={compactTitle}
@@ -102,16 +107,17 @@ export default function ThreadContextStatus ({
               }
 
               setError("");
-              setIsCompacting(true);
+              setIsRequestingCompaction(true);
               void onCompactThread()
                 .catch((compactError) => {
                   setError(compactError instanceof Error ? compactError.message : "Unable to compact context.");
                 })
                 .finally(() => {
-                  setIsCompacting(false);
+                  setIsRequestingCompaction(false);
                 });
             }}
           >
+            {isCompacting ? <WorkbenchSpinningBorder radius="1rem" /> : null}
             <CompactIcon size={16} />
             <span>{isCompacting ? "Compacting" : "Compact"}</span>
           </button>

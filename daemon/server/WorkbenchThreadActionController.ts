@@ -10,7 +10,8 @@ import { installedProviderKeys } from "workbench-shared/workbench/provider/provi
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
-  type WorkbenchThreadMessage, type WorkbenchThreadShellTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
+  type WorkbenchThreadMessage, type WorkbenchThreadMessageSubmitResult,
+  type WorkbenchThreadShellTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
 import {
   ThreadReferenceSchema, WorkbenchItemIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId,
@@ -37,7 +38,7 @@ import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/th
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
-  autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe">;
+  autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit">;
   compaction: Pick<WorkbenchThreadCompactionController, "compact">;
   approvals: Pick<WorkbenchApprovalController, "list">;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
@@ -267,19 +268,18 @@ export default class WorkbenchThreadActionController {
     });
   }
 
-  private async message(input: WorkbenchThreadMessage) {
-    const { identity, harness, provider } = await this.target(input.threadId);
-    const providerInput = input.intent === "newTurn"
-      ? { ...input, threadId: identity.threadId }
-      : {
-          threadId: identity.threadId,
-          clientMessageId: input.clientMessageId,
-          input: input.input,
-          ...(input.context ? { context: input.context } : {}),
-          ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
-          intent: "continue" as const,
-        };
-    const result = await provider.threads.submit(providerInput);
+  private async message(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageSubmitResult> {
+    const { identity, provider } = await this.target(input.threadId);
+    const threadId = identity.threadId;
+    // Browser steer classification is advisory; the provider decides whether a continuation steers.
+    const result = await this.owners.autoCompact.submit(threadId, provider, {
+      clientMessageId: input.clientMessageId,
+      input: input.input,
+      intent: input.intent === "newTurn" ? "newTurn" : "continue",
+      ...(input.context ? { context: input.context } : {}),
+    }, (message, options) => provider.threads.submit({
+      ...message, threadId, ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
+    }), input.skipAutoCompact ? { skipAutoCompact: true } : {});
     const warnings: string[] = [];
     try {
       await this.owners.recordSkillActivations(identity.threadId, collectActivatedSkillPaths(input.input, input.context));

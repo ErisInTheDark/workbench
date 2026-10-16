@@ -27,6 +27,7 @@ const compaction = {
     scope: { itemId: "item", turnId: "turn" } as never,
     signal,
   }),
+  enqueue: async () => false,
 };
 
 test("accepted agent messages wake matching message waits and end others without registry cancellation, while user steers still cancel", async () => {

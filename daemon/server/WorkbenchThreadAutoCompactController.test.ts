@@ -1,4 +1,4 @@
-/* Exports: none. Protect conjunctive idle compaction, message ordering, overlap and failures. */
+/* Exports: none. Protect conjunctive idle compaction, message ordering, queued user messages, overlap and failures. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
@@ -7,6 +7,7 @@ import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-tu
 import type WorkbenchProvider from "./WorkbenchProvider";
 import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import WorkbenchThreadAutoCompactController, { type ThreadAutoCompactEvidence } from "./WorkbenchThreadAutoCompactController";
+import WorkbenchThreadCompactionController, { type QueuedThreadMessage } from "./WorkbenchThreadCompactionController";
 
 const compaction = {
   compactInsideAdmission: async (
@@ -17,6 +18,7 @@ const compaction = {
     scope: { itemId: "item", turnId: "turn" } as never,
     signal,
   }),
+  enqueue: async () => false,
 };
 
 function fixture() {
@@ -261,4 +263,62 @@ test("runtime drain rejects queued messages without admitting them after the ear
   await f.admission.dispose();
   assert.deepEqual(f.calls, []);
   assert.equal(f.admission.hasPendingWork(), false);
+});
+
+const queueThreadId = "00000000-0000-4000-8000-000000000011";
+
+/** A due thread whose compaction stays open until released, with the real compaction queue. */
+function queueFixture(due = true) {
+  const admission = new WorkbenchThreadAdmissionController();
+  const release = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const delivered = Promise.withResolvers<QueuedThreadMessage>();
+  const direct: QueuedThreadMessage[] = [];
+  const compaction = new WorkbenchThreadCompactionController(admission, {
+    record: async () => ({ changedThreadIds: [], compactionCompletions: [] }),
+    now: () => 1,
+  });
+  const owner = new WorkbenchThreadAutoCompactController(admission, compaction, {
+    readSettings: async () => DEFAULT_THREAD_AUTO_COMPACT_SETTINGS,
+    readEvidence: async () => ({ activityAt: 0, contextTokens: due ? 200_000 : 0 }),
+    readRuntime: async () => ({ latestTurn: null, status: "idle", turnLive: false }),
+    publish: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const provider = { threads: {
+    read: async () => ({ status: "idle" }) as ThreadPayload,
+    latestTurn: async () => ({ id: "00000000-0000-4000-8000-000000000012" }) as Turn,
+    isTurnLive: async () => false,
+    compact: async () => { entered.resolve(); await release.promise; },
+  } };
+  const deliver = async (message: QueuedThreadMessage, options: { skipAutoCompact?: boolean }) => {
+    if (options.skipAutoCompact && message.clientMessageId !== "direct") delivered.resolve(message);
+    else direct.push(message);
+    return { kind: "steered" as const, turnId: "turn" };
+  };
+  const message = (clientMessageId: string): QueuedThreadMessage => ({
+    clientMessageId, intent: "continue", input: [{ type: "text", text: clientMessageId, text_elements: [] }],
+  });
+  return { owner, provider, deliver, message, direct, entered: entered.promise, delivered: delivered.promise, release: release.resolve };
+}
+
+test("a send that makes compaction due returns queued at once and heads the merged delivery", async () => {
+  const f = queueFixture();
+  assert.deepEqual(await f.owner.submit(queueThreadId, f.provider, f.message("first"), f.deliver), { kind: "queued" });
+  await f.entered;
+  assert.deepEqual(await f.owner.submit(queueThreadId, f.provider, f.message("second"), f.deliver), { kind: "queued" },
+    "a running compaction absorbs follow-ups without waiting on admission");
+  f.release();
+  const merged = await f.delivered;
+  assert.deepEqual(merged.input.map(part => part.type === "text" ? part.text : part.type), ["first", "second"]);
+  assert.deepEqual(f.direct, []);
+  await f.owner.dispose();
+});
+
+test("a send with nothing to compact is delivered directly", async () => {
+  const f = queueFixture(false);
+  assert.deepEqual(await f.owner.submit(queueThreadId, f.provider, f.message("direct"), f.deliver), { kind: "steered", turnId: "turn" });
+  assert.deepEqual(f.direct.map(message => message.clientMessageId), ["direct"]);
+  await f.owner.dispose();
 });
