@@ -2,12 +2,14 @@
  * Exports:
  * - default MarkdownCommentMargin: comment threads beside the markdown editor: cards aligned to what they discuss,
  *   pushed apart so they never overlap and flowing around suggestion rows, or inline badges that open a card where the pane is too narrow. Notes are
- *   always editable in place; a focused thread offers a reply row signed with the configured name, and a draft card
- *   writes a new thread.
+ *   always editable and save as typed; a focused thread offers an empty row signed with the configured name that
+ *   becomes a note on its first character, and a draft card does the same for a new thread.
  */
 "use client";
 
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  createContext, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode,
+} from "react";
 import { COMMENT_AUTHOR_MAX_LENGTH, type MarkdownComment } from "../../../workbench/markdown/comment-markdown";
 import type {
   CommentDraftView,
@@ -133,24 +135,47 @@ function AuthorField({ onCommit, value }: { onCommit: (author: string) => void; 
 
 const bodyClassName = "text-[0.86rem] leading-snug text-text";
 
-/** One note, always editable: its author and body commit on blur or Enter. */
+/**
+ * Where typing should continue once the comment it just created renders: a note of a thread, or of the active thread
+ * when a draft became one.
+ */
+interface FocusRequest {
+  index: number;
+  threadId: string | null;
+}
+
+const CommentFocusContext = createContext<{ current: FocusRequest | null }>({ current: null });
+
+/** One note, always editable: its body saves as it is typed, and leaving it empty deletes it. */
 function CommentEntry({
   comment,
+  focusOnMount,
   onDelete,
   onEdit,
 }: {
   comment: MarkdownComment;
+  focusOnMount: boolean;
   onDelete: () => void;
   onEdit: (edit: { author: string | null; body: string }) => void;
 }) {
+  const focusRequest = useContext(CommentFocusContext);
+  useEffect(() => {
+    if (focusOnMount) focusRequest.current = null;
+  }, []);
   return (
     <div className="group/comment relative py-1">
       <AuthorField value={comment.author ?? ""} onCommit={(author) => onEdit({ author: author || null, body: comment.body })} />
       <FlushTextArea
         ariaLabel="Comment"
         value={comment.body}
+        focusOnMount={focusOnMount}
         className={bodyClassName}
-        onCommit={(body) => onEdit({ author: comment.author, body })}
+        onChange={(body) => {
+          if (body.trim()) onEdit({ author: comment.author, body });
+        }}
+        onLeave={(body) => {
+          if (!body.trim()) onDelete();
+        }}
       />
       <span className="absolute top-0.5 right-0 flex opacity-0 transition-opacity group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 coarse-touch:opacity-100">
         <IconButton label="Delete comment" size="compact" display="hover-border" tone="danger" onClick={onDelete}>
@@ -161,32 +186,41 @@ function CommentEntry({
   );
 }
 
-/** A comment row still being written, signed with the configured name until changed. */
+/**
+ * The empty row under a thread, signed with the configured name: its first typed character makes it a real note, typing
+ * carries on in that note, and a fresh empty row takes this one's place.
+ */
 function NewCommentEntry({
   autoFocus = false,
   defaultAuthor,
+  focusTarget,
   onCancel,
   onSubmit,
   placeholder,
 }: {
   autoFocus?: boolean;
   defaultAuthor: string;
+  /** The note this row becomes once typed into. */
+  focusTarget: FocusRequest;
   onCancel: () => void;
   onSubmit: (body: string, author: string | null) => void;
   placeholder: string;
 }) {
   const [author, setAuthor] = useState(defaultAuthor);
+  const focusRequest = useContext(CommentFocusContext);
   return (
     <div className="py-1">
       <AuthorField value={author} onCommit={setAuthor} />
       <FlushTextArea
         ariaLabel={placeholder}
-        autoFocus={autoFocus}
-        mode="submit"
+        focusOnMount={autoFocus}
         placeholder={placeholder}
+        value=""
         className={bodyClassName}
-        onCommit={(body) => {
-          if (body.trim()) onSubmit(body, author || null);
+        onChange={(body) => {
+          if (!body.trim()) return;
+          focusRequest.current = focusTarget;
+          onSubmit(body, author || null);
         }}
         onEscape={onCancel}
       />
@@ -229,19 +263,25 @@ function ThreadCard({
       <CheckIcon size={14} />
     </IconButton>
   );
+  const focusRequest = useContext(CommentFocusContext).current;
+  const focusIndex = focusRequest && (focusRequest.threadId ?? (active ? thread.id : null)) === thread.id
+    ? focusRequest.index : -1;
   const entries = (
     <div className="flex min-w-0 flex-1 flex-col [&>*+*]:(border-t border-fg-alpha/8)">
       {thread.comments.map((comment, index) => (
         <CommentEntry
-          key={`${index}:${comment.body}`}
+          key={index}
           comment={comment}
+          focusOnMount={index === focusIndex}
           onDelete={() => comments.deleteComment(thread.id, index)}
           onEdit={(edit) => comments.editComment(thread.id, index, edit)}
         />
       ))}
       {active ? (
         <NewCommentEntry
+          key={`reply-${thread.comments.length}`}
           defaultAuthor={defaultAuthor}
+          focusTarget={{ index: thread.comments.length, threadId: thread.id }}
           placeholder="Reply"
           onCancel={() => comments.setActive(null)}
           onSubmit={(body, author) => comments.reply(thread.id, body, author)}
@@ -275,6 +315,7 @@ function DraftCard({ comments, defaultAuthor, draft }: { comments: Comments; def
       <NewCommentEntry
         autoFocus
         defaultAuthor={defaultAuthor}
+        focusTarget={{ index: 0, threadId: null }}
         placeholder="Add a comment"
         onCancel={() => comments.cancelDraft()}
         onSubmit={(body, author) => comments.submitDraft(body, author)}
@@ -305,6 +346,7 @@ export default function MarkdownCommentMargin({
   const cards = useRef(new Map<string, HTMLElement>());
   const [heights, setHeights] = useState<Record<string, number>>({});
   const resizeObserver = useRef<ResizeObserver | null>(null);
+  const focusRequest = useRef<FocusRequest | null>(null);
 
   // Cards grow as replies are typed without this component re-rendering, so their size is observed, not read per render.
   useLayoutEffect(() => {
@@ -341,6 +383,7 @@ export default function MarkdownCommentMargin({
       : snapshot.threads.find((thread) => thread.id === snapshot.activeId) ?? null;
     const badgeTops = placeCards(snapshot.threads, Object.fromEntries(snapshot.threads.map(({ id }) => [id, 24])), null);
     return (
+      <CommentFocusContext.Provider value={focusRequest}>
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20" aria-label="Comments">
         {snapshot.threads.map((thread) => (
           <button
@@ -376,6 +419,7 @@ export default function MarkdownCommentMargin({
           </section>
         ) : null}
       </div>
+      </CommentFocusContext.Provider>
     );
   }
 
@@ -386,6 +430,7 @@ export default function MarkdownCommentMargin({
   const tops = placeCards(items, heights, snapshot.draft ? DRAFT_ID : snapshot.activeId, snapshot.obstacles);
 
   return (
+    <CommentFocusContext.Provider value={focusRequest}>
     <aside
       aria-label="Comments"
       className="absolute top-0"
@@ -424,5 +469,6 @@ export default function MarkdownCommentMargin({
         </section>
       ) : null}
     </aside>
+    </CommentFocusContext.Provider>
   );
 }

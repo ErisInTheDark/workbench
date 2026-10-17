@@ -1,8 +1,7 @@
 /*
  * Exports:
- * - default FlushTextArea: multi-line plain text that reads as text and grows with its content. Enter commits its
- *   draft (Shift+Enter breaks the line) and Escape restores the value. `edit` mode also commits on blur; `submit` mode
- *   clears after each commit and stays focused, for writing new entries.
+ * - default FlushTextArea: multi-line plain text that reads as text, grows with its content and reports every change
+ *   as it is typed. Enter (without Shift) or Escape leaves the field.
  */
 "use client";
 
@@ -10,32 +9,36 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 
 export default function FlushTextArea({
   ariaLabel,
-  autoFocus = false,
   className = "",
-  mode = "edit",
-  onCommit,
+  focusOnMount = false,
+  onChange,
   onEscape,
+  onLeave,
   placeholder,
-  value = "",
+  value,
 }: {
   ariaLabel: string;
-  autoFocus?: boolean;
   className?: string;
-  mode?: "edit" | "submit";
-  onCommit: (value: string) => void;
-  /** Runs after Escape has restored the value. */
+  /** Take focus with the caret at the end once mounted, such as when typing moved into a just-created field. */
+  focusOnMount?: boolean;
+  onChange: (value: string) => void;
   onEscape?: () => void;
+  /** The field's text when focus leaves it. */
+  onLeave?: (value: string) => void;
   placeholder?: string;
-  value?: string;
+  value: string;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
+  // While focused the typed text is shown as typed; the owner may store a normalized form of it.
+  const [typed, setTyped] = useState<string | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const cancelled = useRef(false);
-  const shown = draft ?? value;
+  const shown = typed ?? value;
 
   useEffect(() => {
-    if (autoFocus) textarea.current?.focus({ preventScroll: true });
-  }, [autoFocus]);
+    const element = textarea.current;
+    if (!focusOnMount || !element) return;
+    element.focus({ preventScroll: true });
+    element.setSelectionRange(element.value.length, element.value.length);
+  }, [focusOnMount]);
 
   useLayoutEffect(() => {
     const element = textarea.current;
@@ -44,27 +47,12 @@ export default function FlushTextArea({
     element.style.height = `${element.scrollHeight}px`;
   }, [shown]);
 
-  const commit = () => {
-    if (!cancelled.current && draft !== null && draft !== value) onCommit(draft);
-    cancelled.current = false;
-    setDraft(null);
-  };
-
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter" && !event.shiftKey) {
+    if ((event.key === "Enter" && !event.shiftKey) || event.key === "Escape") {
       event.preventDefault();
-      if (mode === "edit") event.currentTarget.blur();
-      else commit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      if (mode === "edit") {
-        cancelled.current = true;
-        event.currentTarget.blur();
-      } else {
-        setDraft(null);
-      }
-      onEscape?.();
+      event.currentTarget.blur();
+      if (event.key === "Escape") onEscape?.();
     }
   };
 
@@ -79,8 +67,14 @@ export default function FlushTextArea({
         block w-full resize-none overflow-hidden outline-none placeholder:text-fg/45
         ${className}
       `}
-      onBlur={mode === "edit" ? commit : undefined}
-      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => {
+        setTyped(null);
+        onLeave?.(event.currentTarget.value);
+      }}
+      onChange={(event) => {
+        setTyped(event.target.value);
+        onChange(event.target.value);
+      }}
       onKeyDown={handleKeyDown}
     />
   );
