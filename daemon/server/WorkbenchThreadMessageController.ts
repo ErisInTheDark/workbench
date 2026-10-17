@@ -75,6 +75,12 @@ export default class WorkbenchThreadMessageController {
 
   captureReloadState() { return this.waits.captureReloadState(); }
 
+  isWaitingFor(callerThreadId: WorkbenchThreadId, senderThreadId: WorkbenchThreadId) {
+    return this.waits.isWaitingFor(callerThreadId, senderThreadId);
+  }
+
+  subscribePending(listener: () => void) { return this.waits.subscribePending(listener); }
+
   receive(threadId: string, message: WorkbenchAgentMessage) { this.waits.receive(threadId, message); }
 
   delivered(threadId: string, message: WorkbenchAgentMessage) { this.waits.delivered(threadId, message); }

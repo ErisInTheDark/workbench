@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; Node tests cover multiplexed subagent wait ordering, immediate readiness, and shared questionnaire reads.
+ * - No production exports; protect subagent readiness, parent-message dependencies, subscription cleanup, and shared questionnaire reads.
  */
 import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
@@ -14,10 +14,129 @@ import WorkbenchSubagentController from "./WorkbenchSubagentController";
 import WorkbenchSubagentStore from "./WorkbenchSubagentStore";
 import { createThreadStateTestDatabase } from "./workbench-thread-state-test-database";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
+import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
 
 const callerThreadId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("parent-thread");
 const inactiveThreadId = "inactive-child";
 const questionnaireThreadId = "questionnaire-child";
+
+for (const order of ["child-first", "parent-first", "during-read", "cancel", "reload", "provider-only"] as const) {
+  test(`parent wait observes its selected child's message dependency (${order})`, async context => {
+    const cwd = process.cwd();
+    const projectId = testProjectIds.independent;
+    const childId = fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("waiting-child");
+    const record = summary({ cwd, projectId, name: "mira", threadId: childId });
+    const identity = (threadId: string) => ({
+      threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId), projectId, projectRoot: cwd, bindings: [],
+    });
+    const messages = new WorkbenchMessageWaitController();
+    const childAbort = new AbortController();
+    let childWait: ReturnType<WorkbenchMessageWaitController["wait"]> | undefined;
+    const startChild = () => childWait = messages.wait({
+      waitId: "child-wait", callerThreadId: childId, senderThreadIds: [callerThreadId],
+    }, childAbort.signal);
+    const subscribed = Promise.withResolvers<void>();
+    const reading = Promise.withResolvers<void>();
+    const releaseRead = Promise.withResolvers<void>();
+    let stateListener: ((projectId: string, entry: WorkbenchThreadSidebarEntry) => void) | undefined;
+    let reads = 0;
+    let messageSubscriptions = 0;
+    const controller = new WorkbenchSubagentController({
+      identities: { resolve: async ({ threadId }) => identity(threadId), knownThread: identity },
+      publicThreadId: async threadId => fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+      provider: () => { throw new Error("A waiting child has no completed turn to read."); },
+      stopThread: async () => { throw new Error("Do not stop the child."); },
+      onRelationshipCommitted: async () => {},
+      resolveProjectFromCwd: async () => ({ cwd, project: { id: projectId }, root: {} }) as AgentEndpointProjectResolution,
+      profileStore: { read: async () => ({ profiles: [] }), mutate: async () => ({ profiles: [] }) },
+      subagentStore: {
+        getOwnedMany: async () => [record],
+        list: async () => ({ subagents: [record], nextCursor: null }),
+        remove: async () => {}, replace: async () => {},
+        reserve: async input => ({ ...input, directSubagentIndex: 0 }),
+      },
+      messageWaits: {
+        isWaitingFor: (caller, sender) => messages.isWaitingFor(caller, sender),
+        subscribePending: listener => {
+          messageSubscriptions++;
+          const unsubscribe = messages.subscribePending(listener);
+          return () => { messageSubscriptions--; unsubscribe(); };
+        },
+      },
+      threadState: order === "provider-only" ? undefined : {
+        getEntry: async () => {
+          if (++reads === 2 && order === "during-read") {
+            reading.resolve();
+            await releaseRead.promise;
+          }
+          return null;
+        },
+        mutate: async () => { throw new Error("Do not change lifecycle."); },
+        subscribe: listener => {
+          stateListener = listener;
+          subscribed.resolve();
+          return () => { stateListener = undefined; };
+        },
+      },
+    });
+    context.after(async () => {
+      childAbort.abort();
+      await childWait?.catch(() => undefined);
+      messages.dispose();
+      await controller.dispose();
+    });
+    if (order === "child-first" || order === "provider-only") startChild();
+    const parentWait = controller.handleRequest({
+      id: 1, method: "workbench/subagent/wait",
+      params: { callerThreadId, cwd, threadIds: [childId], waitId: "parent-wait" },
+    });
+    if (order === "cancel" || order === "reload") {
+      await subscribed.promise;
+      if (order === "reload") controller.beginRuntimeDrain();
+      else await controller.handleRequest({ id: 2, method: "workbench/subagent/waitCancel", params: { waitId: "parent-wait" } });
+      assert.ok((await parentWait).error);
+      assert.equal(stateListener, undefined);
+      assert.equal(messageSubscriptions, 0);
+      return;
+    }
+    if (order === "during-read") {
+      await reading.promise;
+      startChild();
+      releaseRead.resolve();
+    } else if (order === "parent-first") {
+      await subscribed.promise;
+      for (const [caller, sender] of [[childId, "sibling"], ["unselected-child", callerThreadId]]) {
+        const unrelated = messages.wait({
+          waitId: "unrelated", callerThreadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(caller!),
+          senderThreadIds: [fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse(sender!)],
+        }, childAbort.signal);
+        messages.receive(caller!, { senderThreadId: sender!, senderName: "other", message: "reply" });
+        await unrelated;
+        assert.equal(messageSubscriptions, 1, "unrelated dependencies must leave the parent's wait subscribed");
+      }
+      startChild();
+    }
+    // A terminal event makes a missing dependency wake fail promptly rather than hang the suite.
+    if (order !== "parent-first") await Promise.race([subscribed.promise, parentWait]);
+    stateListener?.(projectId, {
+      ...record, entryKind: "subagent", identity: { harness: "codex", threadId: childId },
+      activityAt: 1, pinned: false,
+      lifecycle: { kind: "completed", reason: "agentCompleted", settled: false, agent: { agentStatus: "completed" } },
+    });
+    const result = await parentWait;
+    assert.deepEqual(result, { id: 1, result: { output: "mira is waiting for a message from you." } });
+    assert.equal(messages.isWaitingFor(childId, callerThreadId), true);
+    assert.equal(stateListener, undefined);
+    assert.equal(messageSubscriptions, 0);
+    assert.deepEqual(await controller.handleRequest({
+      id: 3, method: "workbench/subagent/wait",
+      params: { callerThreadId, cwd, threadIds: [childId], waitId: "parent-again" },
+    }), { id: 3, result: { output: "mira is waiting for a message from you." } });
+    messages.receive(childId, { senderThreadId: callerThreadId, senderName: "parent", message: "continue" });
+    assert.equal((await childWait)?.kind, "message");
+  });
+}
 
 const questionnaire: WorkbenchUserInputRequest = {
   id: "questionnaire-1",

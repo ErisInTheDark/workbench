@@ -495,6 +495,10 @@ function createWorkbenchCoreFeature(
   // Built after thread state below; its lifecycle listener must register before any subagent wait subscribes.
   let subagentQueues: WorkbenchSubagentQueueController | undefined;
   const subagents = new WorkbenchSubagentFeature({
+    messageWaits: {
+      isWaitingFor: (caller, sender) => messages.isWaitingFor(caller, sender),
+      subscribePending: listener => messages.subscribePending(listener),
+    },
     identities: threadIdentity,
     queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
     hasRequiredTodos,

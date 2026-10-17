@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchMessageWaitHandoff: data retained while message waits and undelivered mail re-enter replacement generations.
  * - WorkbenchMessageWaitOutcome: a selected sender's message, or an interruption by another sender's message.
- * - default WorkbenchMessageWaitController: own sender-filtered message readiness, undelivered mail, cancellation, and reload handoff.
+ * - default WorkbenchMessageWaitController: own sender-filtered readiness, observable pending dependencies, undelivered mail, cancellation, and reload handoff.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -44,6 +44,7 @@ export default class WorkbenchMessageWaitController {
   private readonly inbox: Map<string, WorkbenchAgentMessage[]>;
   private readonly lifetime = new AbortController();
   private readonly listeners = new Map<string, () => void>();
+  private readonly pendingListeners = new Set<() => void>();
 
   constructor(handoff?: WorkbenchMessageWaitHandoff) {
     this.handoff = handoff ?? { waits: new Map() };
@@ -53,6 +54,16 @@ export default class WorkbenchMessageWaitController {
   captureReloadState() { return this.handoff; }
 
   hasWait(waitId: string) { return this.handoff.waits.has(waitId); }
+
+  isWaitingFor(callerThreadId: WorkbenchThreadId, senderThreadId: WorkbenchThreadId) {
+    return [...this.handoff.waits.values()].some(state => state.callerThreadId === callerThreadId
+      && !outcome(state) && !state.cancellation?.signal.aborted && state.senderThreadIds.includes(senderThreadId));
+  }
+
+  subscribePending(listener: () => void) {
+    this.pendingListeners.add(listener);
+    return () => { this.pendingListeners.delete(listener); };
+  }
 
   /**
    * An admitted message wakes every unsettled wait that selects its sender. Otherwise it stays undelivered
@@ -132,6 +143,7 @@ export default class WorkbenchMessageWaitController {
         generationSignal.addEventListener("abort", cancel, { once: true });
         // No await between installing listeners and checking readiness.
         if (generationSignal.aborted) cancel();
+        else for (const listener of this.pendingListeners) listener();
       });
     } finally {
       if (cancel) generationSignal.removeEventListener("abort", cancel);
@@ -150,5 +162,6 @@ export default class WorkbenchMessageWaitController {
   dispose() {
     this.lifetime.abort(createWorkbenchAgentMcpRuntimeReloadInterruption());
     this.listeners.clear();
+    this.pendingListeners.clear();
   }
 }

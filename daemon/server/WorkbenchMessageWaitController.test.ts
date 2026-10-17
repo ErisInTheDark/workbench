@@ -1,5 +1,5 @@
 /*
- * Exports: none. Protect message routing, undelivered mail, cancellation, and reload-safe wait lifetimes.
+ * Exports: none. Protect message routing, pending sender dependencies, undelivered mail, cancellation, and reload-safe waits.
  */
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
@@ -16,6 +16,54 @@ const input = (waitId: string, caller = "caller", senders = ["first", "second"])
 });
 const message = (senderThreadId: string, text = "reply") => ({ senderThreadId, senderName: "luna", message: text });
 const received = (senderThreadId: string, text = "reply") => ({ kind: "message", message: message(senderThreadId, text) });
+
+test("pending sender dependencies notify observers and disappear on reply or cancellation", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  const caller = new AbortController();
+  const observed: boolean[] = [];
+  const unsubscribe = owner.subscribePending(() => observed.push(owner.isWaitingFor(id("child"), id("parent"))));
+  try {
+    const waited = owner.wait(input("dependency", "child", ["parent", "sibling"]), caller.signal);
+    assert.deepEqual(observed, [true]);
+    assert.equal(owner.isWaitingFor(id("other-child"), id("parent")), false);
+    assert.equal(owner.isWaitingFor(id("child"), id("other-parent")), false);
+    owner.receive("child", message("parent"));
+    assert.equal(owner.isWaitingFor(id("child"), id("parent")), false);
+    await waited;
+    const cancelled = owner.wait(input("cancelled-dependency", "child", ["parent"]), caller.signal);
+    caller.abort();
+    assert.equal(owner.isWaitingFor(id("child"), id("parent")), false);
+    await assert.rejects(cancelled);
+    owner.receive("child", message("parent"));
+    await owner.wait(input("ready-mail", "child", ["parent"]), new AbortController().signal);
+    assert.deepEqual(observed, [true, true]);
+  } finally {
+    unsubscribe();
+    caller.abort();
+    owner.dispose();
+  }
+});
+
+test("dependency reads survive detached reloads but exclude interrupted waits", async () => {
+  const owner = new WorkbenchMessageWaitController();
+  const caller = new AbortController();
+  const generation = new AbortController();
+  const waited = owner.wait(input("dependency-reload", "child", ["parent"]), generation.signal, caller.signal);
+  generation.abort(createWorkbenchAgentMcpRuntimeReloadInterruption());
+  await assert.rejects(waited);
+  const successor = new WorkbenchMessageWaitController(owner.captureReloadState());
+  owner.dispose();
+  try {
+    assert.equal(successor.isWaitingFor(id("child"), id("parent")), true);
+    successor.receive("child", message("sibling"));
+    assert.equal(successor.isWaitingFor(id("child"), id("parent")), false);
+    assert.deepEqual(await successor.wait(input("dependency-reload", "child", []), new AbortController().signal, caller.signal),
+      { kind: "interrupted" });
+  } finally {
+    caller.abort();
+    successor.dispose();
+  }
+});
 
 test("message waits ignore delivered earlier messages and other recipients, and retain the first matching reply", async () => {
   const owner = new WorkbenchMessageWaitController();
@@ -129,6 +177,7 @@ test("terminal cancellation removes retained data while no generation is attache
   await assert.rejects(waited);
   caller.abort(new Error("user steer"));
   assert.equal(successor.hasWait("reload-cancelled"), false);
+  assert.equal(successor.isWaitingFor(id("caller"), id("first")), false);
   owner.dispose();
   successor.dispose();
 });
