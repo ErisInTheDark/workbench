@@ -41,7 +41,7 @@ export interface OpenCodeEventControllerOptions {
     }>;
     syncCreatedNative?(nativeThreadId: string): Promise<{ threadId: WorkbenchThreadId } | null>;
     reconcileActivity?(signal: AbortSignal, wasTouched: (sessionID: string) => boolean): ReturnType<OpenCodeThreadOperations["reconcileActivity"]>;
-  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "settleExecution" | "executionIntentVersion" | "observeCompaction">;
+  } & Pick<OpenCodeThreadOperations, "acceptExecutionEvent" | "observeCompaction">;
   transcript: Pick<OpenCodeTranscriptAdapter, "appendText" | "recordCompaction" | "recordItem" | "recordTurnState">
     & Partial<Pick<OpenCodeTranscriptAdapter, "previewToolPatch">>;
 }
@@ -122,12 +122,6 @@ export default class OpenCodeEventController {
       }
       if (wasTouched(fact.sessionID)) continue;
       this.options.threads.markExecutionSettled(fact.sessionID);
-      // Fence before observing: the observation is what lets Workbench core request a continuation.
-      this.options.threads.settleExecution({
-        sessionID: fact.sessionID,
-        eventID: `reconnected:${fact.sessionID}:${turnId}:${fact.idleAt ?? 0}`,
-        turnId, status,
-      });
       await this.options.observe({
         projectId: fact.projectId, turnStarted: null, displayLabel: null,
         lifecycle: { threadId: fact.threadId, event: { kind: "turnCompleted", turnId, status } },
@@ -382,7 +376,6 @@ export default class OpenCodeEventController {
       case "session.execution.interrupted": {
         if (!this.options.threads.acceptExecutionEvent(sessionID, event.durable.seq)) return;
         const startingTurn = this.options.threads.currentTurn(sessionID);
-        const intentVersion = this.options.threads.executionIntentVersion(sessionID);
         this.clearPreviews(sessionID);
         const requestedInterrupt = this.options.threads.consumeRequestedInterrupt?.(sessionID) ?? false;
         const status = requestedInterrupt ? "interrupted"
@@ -409,10 +402,6 @@ export default class OpenCodeEventController {
             observedAt: event.created,
           });
         }
-        // Fence before observing: the observation is what lets Workbench core request a continuation.
-        this.options.threads.settleExecution({
-          sessionID, eventID: event.id, turnId: WorkbenchTurnIdSchema.parse(turn.id), status, intentVersion,
-        });
         await this.options.observe({
           turnStarted: null,
           lifecycle: {

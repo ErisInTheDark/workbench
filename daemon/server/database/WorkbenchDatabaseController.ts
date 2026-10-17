@@ -9,6 +9,7 @@ import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/id
 import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
 import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
 import type { ThreadSkillCommand } from "./skills/WorkbenchThreadSkillStore";
+import type { ThreadInstructionSelectionCommand } from "./thread-state/WorkbenchThreadInstructionSelectionStore";
 import type { ThreadGoalCommand } from "./goals/WorkbenchThreadGoalStore";
 import type { ThreadVisCommand } from "./vis/WorkbenchThreadVisStore";
 import type { ThreadTodoCommand } from "./todos/WorkbenchThreadTodoStore";
@@ -327,6 +328,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "threadSkills", command });
     if (response.type !== "threadSkills") throw new WorkbenchDatabaseFailure(`Unexpected thread skill response: ${response.type}`);
+    return response.result;
+  }
+
+  async executeThreadInstructionSelection(command: ThreadInstructionSelectionCommand) {
+    await this.start();
+    const response = await this.#request({ type: "threadInstructionSelection", command });
+    if (response.type !== "threadInstructionSelection") throw new WorkbenchDatabaseFailure(`Unexpected thread instruction selection response: ${response.type}`);
     return response.result;
   }
 

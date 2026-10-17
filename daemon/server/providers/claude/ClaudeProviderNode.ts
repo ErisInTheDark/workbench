@@ -30,7 +30,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         claudeProvider: {
           threads, tools, interactions: threads.interactions, context: threads.context, browse: threads.browse,
           usage: threads.usage,
-          recovery: { continueUnfinished: target => threads.continueUnfinished(target) },
           account: { limits: { read: () => configuration.accountLimits() } },
           configuration: {
             modelContext: { read: () => configuration.modelContext() },

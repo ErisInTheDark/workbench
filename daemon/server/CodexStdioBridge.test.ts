@@ -46,9 +46,6 @@ import { NativeThreadIdSchema, NativeTurnIdSchema, ProjectIdSchema, type NativeT
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import { resolveQuestionnaireHistoryItemId } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import CodexRecoveryController from "./CodexRecoveryController";
-import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
-import { recoverCodexTurn } from "./codex-turn-recovery";
 
 const fixtureIdentityValues = {
   NativeThreadId: {
@@ -3421,12 +3418,11 @@ test("live transcript recording and reload use only SQL and preserve image asset
     assert.deepEqual(publications.find(([event]) => event.method === "turn/completed")?.[1].lifecycle, {
       threadId: publicThreadId, event: { kind: "turnCompleted", turnId: publicTurnId, status: "interrupted" },
     });
-    for (const [event, , original] of publications.filter(([event]) => (
+    for (const [event] of publications.filter(([event]) => (
       event.method === "questionnaire/requested" || event.method === "questionnaire/resolved"
       || event.method === "turn/completed"
     ))) {
       assert.equal((event.params as { threadId: string }).threadId, publicThreadId);
-      assert.equal((original.params as { threadId: string }).threadId, "thread");
     }
     assert.ok(rootForReference(snapshot, "message"));
     assert.ok(rootForReference(snapshot, "dynamic-call"));
@@ -4190,7 +4186,7 @@ test("managed unloaded turn start resolves when MCP preparation requests a provi
   }
 });
 
-test("explicit refresh rebuilds the current instruction prefix and prepares MCP before replacement admission", async () => {
+test("admission of an existing thread rebuilds the current instruction prefix and prepares MCP before turn start", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-explicit-refresh-");
   const root = temporary.path;
   const agentPath = path.join(testWorkbenchLibraryRoot, "agents", "refresh.md");
@@ -4224,25 +4220,15 @@ test("explicit refresh rebuilds the current instruction prefix and prepares MCP 
     withThreadAdmission: async (_thread, pending, admit) => (await admit(pending)).result,
     prepareTurnStart: async () => { order.push("prepare:mcp"); },
   });
-  const failures: unknown[] = [];
-  const controller = new CodexRecoveryController({
-    coordinator: new WorkbenchTurnRecoveryController(() => undefined),
-    log: () => undefined,
-    reportFailure: async (_candidate, error) => { failures.push(error); },
-    runTask: async (_label, task) => task(),
-    recover: async candidate => recoverCodexTurn(candidate, {
-      request: async request => request.method === "thread/read"
-        ? { id: request.id, result: { thread } }
-        : await bridge.handleBridgeRequest(request),
-    }),
-  });
   try {
-    controller.observeRequest("codex", resumeRequest);
-    controller.observeRequest("codex", { id: "start", method: "turn/start", params: { cwd: root, threadId: "thread", input: [] } });
-    controller.observeNotification("codex", { method: "turn/started", params: { threadId: "thread", turn: { id: "original" } } });
-    await controller.requestResume("codex", "thread");
-    await controller.waitForIdle();
-    assert.deepEqual(failures, []);
+    const response = await bridge.handleBridgeRequest({
+      id: "admit", method: "workbench/codex/message/admit",
+      params: {
+        threadId: "thread", resumeRequest,
+        startRequest: { method: "turn/start", params: { cwd: root, threadId: "thread", input: [] } },
+      },
+    });
+    assert.equal(response.error, undefined);
     const resume = requests.find(request => request.method === "thread/resume");
     assert.ok(resume);
     assert.match(JSON.stringify(resume.params), /NEW REFRESH PREFIX/);

@@ -36,7 +36,6 @@ export const WORKBENCH_CORE_FEATURE_KEYS = [
   "vis",
   "transcriptReader",
   "transcriptReconciliation",
-  "turnRecoveryFailures",
   "workingTree",
   "accountLimits",
   "threadRuntime",

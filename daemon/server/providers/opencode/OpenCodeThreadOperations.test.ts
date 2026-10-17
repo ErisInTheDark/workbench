@@ -7,11 +7,9 @@ import {
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
-import WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import {
   createWorkbenchQuestionnaireResponseInput,
-  isWorkbenchUnfinishedTurnInput,
   WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import type OpenCodeManagedSessionController from "./OpenCodeManagedSessionController";
@@ -311,7 +309,7 @@ function operations(
         metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
         permissions: [],
       }),
-      refresh: lifecycle.refresh ?? (async () => undefined),
+      refresh: lifecycle.refresh ?? (async () => ({ activatedSkills: null })),
     },
     questionnaires: lifecycle.questionnaires as never ?? {
       canDeliver: () => false,
@@ -329,7 +327,6 @@ function operations(
       })),
     } as never,
     signal: lifecycle.signal ?? new AbortController().signal,
-    recovery: new WorkbenchTurnRecoveryController(() => undefined),
     rollover: {
       isActiveTool: () => false,
       toolFailed: async () => undefined,
@@ -485,7 +482,6 @@ test("an early created event waits for captured session ownership before history
 
 test("fails a public read when no OpenCode binding exists", async () => {
   const owner = new OpenCodeThreadOperations({
-    recovery: new WorkbenchTurnRecoveryController(() => undefined),
     reconciliation: { reconcile: async () => { throw new Error("Unexpected recovery"); } },
     readWorkingRecords: async () => [],
     readProviderCursor: async () => undefined,
@@ -500,7 +496,7 @@ test("fails a public read when no OpenCode binding exists", async () => {
         metadata: { workbench: { managed: true, provider: "opencode", version: 1 } },
         permissions: [],
       }),
-      refresh: async () => undefined,
+      refresh: async () => ({ activatedSkills: null }),
     },
     questionnaires: {
       canDeliver: () => false,
@@ -813,119 +809,18 @@ test("reconnected live usage continues from the persisted cumulative checkpoint"
   });
 });
 
-const target = { threadId, turnId };
-
-test("unfinished completion admits the hidden continuation once, while terminal task decisions and interruption do not", async () => {
-  for (const state of [
-    unfinished,
-    { kind: "completed", reason: "agentCompleted", settled: false, agent: { agentStatus: "completed", turnId } },
-    { kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId } },
-    { kind: "needsAttention", reason: "pendingInput", settled: false, requestKey: "question" },
-  ] as WorkbenchThreadLifecycle[]) {
-    const prompts: { text: string; metadata: { workbench: { input: Parameters<typeof isWorkbenchUnfinishedTurnInput>[0] } } }[] = [];
-    const owner = operations({
-      session: { prompt: async input => { prompts.push(input); return {}; } },
-      message: { list: async () => ({ data: [], cursor: {} }) },
-    }, {
-      record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }),
-    }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: state }) } });
-    await owner.syncNative(nativeThreadId);
-    const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const };
-    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), true);
-    owner.settleExecution(completion);
-    await owner.continueUnfinished(target);
-    await owner.continueUnfinished(target);
-    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), false);
-    assert.equal(owner.acceptExecutionEvent(nativeThreadId, 9), false);
-    for (const status of ["interrupted", "failed"] as const) {
-      owner.settleExecution({ ...completion, status });
-      await owner.continueUnfinished(target);
-    }
-    assert.equal(prompts.length, state === unfinished ? 1 : 0);
-    if (prompts.length) assert.equal(isWorkbenchUnfinishedTurnInput(prompts[0]!.metadata.workbench.input), true);
-    await owner.settle();
-  }
-});
-
-test("a fresh task decision suppresses a continuation requested against stale unfinished state", async () => {
-  let prompts = 0;
-  const owner = operations({
-    session: { prompt: async () => { prompts++; return {}; } },
-    message: { list: async () => ({ data: [], cursor: {} }) },
-  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
-  { controller: { getCanonicalThreadEntry: async () => ({
-    entryKind: "thread", lifecycle: { kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId } },
-  }) } });
-  await owner.syncNative(nativeThreadId);
-  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
-  await owner.continueUnfinished(target);
-  assert.equal(prompts, 0);
-});
-
-test("a task blocked during continuation preparation is not submitted", async () => {
-  let reads = 0;
-  let prompts = 0;
-  const owner = operations({
-    session: { prompt: async () => { prompts++; return {}; } },
-    message: { list: async () => ({ data: [], cursor: {} }) },
-  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
-  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread",
-    lifecycle: ++reads === 1 ? unfinished : {
-      kind: "needsAttention", reason: "agentBlocked", settled: false, agent: { agentStatus: "blocked", turnId },
-    },
-  }) } });
-  await owner.syncNative(nativeThreadId);
-  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
-  await owner.continueUnfinished(target);
-  assert.equal(prompts, 0);
-});
-
-test("failed continuation admission throws sanitized, does not retry, and disposal stops later requests", async () => {
-  const signal = new AbortController();
-  let records = 0;
+test("execution events are accepted once per durable sequence", async () => {
   const owner = operations({ message: { list: async () => ({ data: [], cursor: {} }) } }, {
-    record: async () => {
-      if (++records > 2) throw new Error("PRIVATE admission error");
-      return { threadId, latestTurnId: turnId, latestTurnState: "completed" };
-    },
-  }, { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { signal: signal.signal });
+    record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }),
+  });
   await owner.syncNative(nativeThreadId);
-  const completion = { sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" as const };
-  owner.settleExecution(completion);
-  const failure = await owner.continueUnfinished(target).then(() => null, (error: unknown) => error);
-  assert.ok(failure instanceof Error);
-  assert.doesNotMatch(failure.message, /PRIVATE/);
-  assert.equal(records, 3);
-  await owner.continueUnfinished(target);
-  assert.equal(records, 3, "a consumed completion is never retried");
-  owner.settleExecution(completion);
-  signal.abort();
-  await owner.continueUnfinished(target);
-  assert.equal(records, 3);
-});
-
-test("new user intent admitted before completion enforcement wins over the stale continuation", async () => {
-  const prompts: string[] = [];
-  const nextTurn = WorkbenchTurnIdSchema.parse("next-turn");
-  let recorded = turnId;
-  const owner = operations({
-    session: { prompt: async (input: { text: string }) => { prompts.push(input.text); return {}; } },
-    message: { list: async () => ({ data: [], cursor: {} }) },
-  }, { record: async () => ({ threadId, latestTurnId: recorded, latestTurnState: "completed" }) },
-  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } });
-  await owner.syncNative(nativeThreadId);
-  const version = owner.executionIntentVersion(nativeThreadId);
-  recorded = nextTurn;
-  await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
-    input: [{ type: "text", text: "new direction", text_elements: [] }] });
-  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed", intentVersion: version });
-  await owner.continueUnfinished(target);
-  assert.deepEqual(prompts, ["new direction"]);
+  assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), true);
+  assert.equal(owner.acceptExecutionEvent(nativeThreadId, 10), false);
+  assert.equal(owner.acceptExecutionEvent(nativeThreadId, 9), false);
   await owner.settle();
 });
 
-test("activated skills ride in the prompt once; hidden continuation retains only workflow instructions", async () => {
+test("activated skills ride in the prompt once, beside the submitted workflow instructions", async () => {
   const refreshes: Parameters<OpenCodeManagedSessionController["refresh"]>[0][] = [];
   const prompts: string[] = [];
   const owner = operations({
@@ -940,45 +835,9 @@ test("activated skills ride in the prompt once; hidden continuation retains only
   await owner.submit({ threadId, clientMessageId: "user", intent: "newTurn",
     input: [{ type: "skill", name: "review", path: "skills/review" }],
     context: { workflowIds: ["default"], activatedSkillPaths: ["skills/react"] } });
-  owner.markExecutionSettled(nativeThreadId);
-  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
-  await owner.continueUnfinished(target);
-  assert.equal(refreshes.length, 2);
+  assert.equal(refreshes.length, 1);
+  assert.deepEqual(refreshes[0]!.workflowIds, ["default"]);
   assert.match(prompts[0]!, /<wb:activated-skills>[\s\S]*skills\/react[\s\S]*skills\/review/u);
-  assert.deepEqual(refreshes[1]!.workflowIds, ["default"]);
-  // The bodies already sit in native history; continuation must not resend them.
-  assert.deepEqual(refreshes[1]!.activatedSkillPaths, []);
-  assert.doesNotMatch(prompts[1]!, /wb:activated-skills/u);
-  await owner.settle();
-});
-
-test("user intent arriving during continuation preparation cancels only the hidden prompt", async () => {
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const prompts: string[] = [];
-  let prepare = false;
-  const owner = operations({
-    session: { prompt: async (input: { text: string }) => { prompts.push(input.text); return {}; } },
-    message: { list: async () => ({ data: [], cursor: {} }) },
-  }, { record: async () => ({ threadId, latestTurnId: turnId, latestTurnState: "completed" }) },
-  { controller: { getCanonicalThreadEntry: async () => ({ entryKind: "thread", lifecycle: unfinished }) } },
-  { refresh: async () => {
-    if (prepare) { entered.resolve(); await release.promise; }
-    return { activatedSkills: null };
-  } });
-  await owner.submit({ threadId, clientMessageId: "first", intent: "newTurn",
-    input: [{ type: "text", text: "first", text_elements: [] }], context: { workflowIds: ["default"] } });
-  owner.markExecutionSettled(nativeThreadId);
-  prepare = true;
-  owner.settleExecution({ sessionID: nativeThreadId, eventID: "end", turnId, status: "completed" });
-  const continuation = owner.continueUnfinished(target);
-  await entered.promise;
-  const submission = owner.submit({ threadId, clientMessageId: "next", intent: "newTurn",
-    input: [{ type: "text", text: "new direction", text_elements: [] }] });
-  prepare = false;
-  release.resolve();
-  await Promise.all([continuation, submission]);
-  assert.deepEqual(prompts, ["first", "new direction"]);
   await owner.settle();
 });
 

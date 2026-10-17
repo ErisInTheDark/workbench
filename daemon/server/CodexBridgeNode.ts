@@ -77,7 +77,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const threadIdentity = build.get("threadIdentity");
     const threadState = build.get("threadState");
     const sqliteReader = new CodexStoredTranscriptAdapter(build.get("transcriptReader"));
-    const turnRecovery = build.get("codexRecovery");
     let bridge!: CodexStdioBridge;
     let recovery: Promise<void> | null = null;
     let generation = new AbortController();
@@ -173,10 +172,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
           ) : null,
         };
         const resumeRequest = codexInstructions.withThreadConfiguration(requests.resumeRequest, configuration);
-        turnRecovery.observeRequest("codex", resumeRequest);
         if (!requests.startRequest) return { ...requests, resumeRequest };
         const startRequest = codexInstructions.withThreadConfiguration(requests.startRequest, configuration);
-        turnRecovery.observeRequest("codex", startRequest);
         return { ...requests, resumeRequest, startRequest };
     };
     bridge = new CodexStdioBridge({
@@ -197,8 +194,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         `subagents: ${request.method}`,
       ),
       resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
-      onNotification: (notification, facts, nativeNotification) => {
-        turnRecovery.observeNotification("codex", nativeNotification);
+      onNotification: (notification, facts) => {
         context.broadcastProviderNotification("codex", notification);
         // Workbench core decides unfinished-turn continuation from the observed lifecycle.
         void persist(async () => {
@@ -368,7 +364,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
   provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "codexRecovery", "providerObservations", "agentContext"],
+  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "providerObservations", "agentContext"],
   safeAll: true,
   scope: "server:codex",
 });

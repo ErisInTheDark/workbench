@@ -2,7 +2,7 @@
  * Exports:
  * - OpenCodeThreadOperationsOptions: provider-local dependencies for native session operations.
  * - OpenCodeNativeActivity: one connection-recovery observation from native session state.
- * - default OpenCodeThreadOperations: own OpenCode thread admission, session interruption, canonical history and fenced continuation.
+ * - default OpenCodeThreadOperations: own OpenCode thread admission, session interruption and canonical history.
  */
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -40,15 +40,12 @@ import type { WorkbenchProviderCaller, WorkbenchToolTranscript, WorkbenchToolTra
 import type { OpenCodeToolContext } from "./opencode-workbench-rpc";
 import OpenCodeThreadWindowLoader from "./OpenCodeThreadWindowLoader";
 import type WorkbenchTranscriptReconciliationController from "../../WorkbenchTranscriptReconciliationController";
-import type WorkbenchTurnRecoveryController from "../../WorkbenchTurnRecoveryController";
 import type WorkbenchThreadContextRolloverController from "../../WorkbenchThreadContextRolloverController";
 import { getWorkbenchLifecycleTurnId } from "workbench-shared/workbench/thread/thread-state";
-import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type { WorkbenchThreadStateRecord } from "../../workbench-thread-state-record";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import {
-  createWorkbenchThreadRecoveryId, createWorkbenchUnfinishedTurnInput,
   isWorkbenchQuestionnaireResponsePart, WORKBENCH_THREAD_WORKING_STATUS_MESSAGE,
 } from "workbench-shared/workbench/thread/thread-recovery-message";
 import { createWorkbenchContextRolloverInput } from "workbench-shared/workbench/thread/thread-context-rollover";
@@ -89,7 +86,6 @@ export interface OpenCodeThreadOperationsOptions {
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   readWorkingRecords(): Promise<Array<Pick<WorkbenchThreadStateRecord, "identity" | "lifecycle">>>;
   readProviderCursor(threadId: string, turnId: string): Promise<string | null | undefined>;
-  recovery: Pick<WorkbenchTurnRecoveryController, "shouldContinue">;
   rollover: Pick<WorkbenchThreadContextRolloverController, "isActiveTool" | "toolFailed" | "toolStarted">;
 }
 
@@ -99,10 +95,7 @@ interface SessionExecution {
   turn: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null;
   eventSequence: number;
   intentVersion: number;
-  context?: Parameters<WorkbenchProviderThreads["submit"]>[0]["context"];
   admission: Promise<void> | null;
-  /** The last completed turn and the intent it ended, until continued or superseded. */
-  completion?: { eventID: string; turnId: WorkbenchTurnId; intentVersion: number } | null;
   /** Previous cumulative native usage; consecutive snapshots reveal one model step's context. */
   usageCheckpoint?: ThreadTokenUsage["total"];
   usageContextWindow?: number | null;
@@ -117,8 +110,6 @@ export interface OpenCodeNativeActivity {
   idleAt: number | null;
   maintenance: boolean;
 }
-
-const supersededContinuation = Symbol("superseded OpenCode continuation");
 
 function modelRef(model: string) {
   const separator = model.indexOf("/");
@@ -473,8 +464,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const execution = this.execution(native.binding.nativeThreadId);
     execution.intentVersion++;
     const context = { ...input.context, activatedSkillPaths: collectActivatedSkillPaths(input.input, input.context) };
-    // Hidden continuation replays instruction selections only; activated skill bodies already sit in history.
-    execution.context = { ...context, activatedSkillPaths: [] };
     return this.admit(execution, () => this.submitNative({ ...input, context }, native, execution));
   }
 
@@ -496,12 +485,9 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     input: Parameters<WorkbenchProviderThreads["submit"]>[0],
     { binding, identity }: Awaited<ReturnType<OpenCodeThreadOperations["native"]>>,
     execution: SessionExecution,
-    continuation?: () => boolean,
   ): Promise<WorkbenchThreadMessageResult> {
     const client = await this.options.acquire();
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-    if (continuation && (!continuation() || !entry || entry.entryKind === "draft"
-      || !this.options.recovery.shouldContinue(entry.lifecycle))) throw supersededContinuation;
     let session = this.sessions.get(binding.nativeThreadId);
     if (!session || !execution.turn) {
       const [freshSession, inbox, stored] = await Promise.all([
@@ -528,9 +514,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const workingStatus = toWorkbenchThreadUserInput(input.input).some(isWorkbenchQuestionnaireResponsePart);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : undefined;
     const subagentName = entry?.entryKind === "subagent" ? entry.name : null;
-    // After reload there may be no captured workflow context. Keep the session's installed
-    // instructions for hidden continuation instead of replacing them with an empty workflow.
-    const managed = !continuation || input.context ? await this.options.managed.refresh({
+    const managed = await this.options.managed.refresh({
       sessionID: binding.nativeThreadId,
       cwd: session.location.directory,
       projectId: identity.projectId,
@@ -541,10 +525,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       activatedSkillPaths: input.context?.activatedSkillPaths ?? [],
       workingStatus,
       subagentName,
-    }) : null;
+    });
     const nativePrompt = prompt(input.input);
     // Display reads metadata input, so the hidden skill block reaches only the model.
-    const skillText = managed?.activatedSkills
+    const skillText = managed.activatedSkills
       ? createWorkbenchActivatedSkillsInput(managed.activatedSkills).text : null;
     const promptText = skillText ? [nativePrompt.text, skillText].filter(Boolean).join("\n\n") : nativePrompt.text;
     const request = {
@@ -563,12 +547,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         input: input.input,
       },
     };
-    if (continuation && !continuation()) throw supersededContinuation;
-    if (continuation && input.context) {
-      const fresh = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-      if (!continuation() || !fresh || fresh.entryKind === "draft"
-        || !this.options.recovery.shouldContinue(fresh.lifecycle)) throw supersededContinuation;
-    }
     let resolvePromptOwner!: (owner: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null) => void;
     const promptOwner = new Promise<{ threadId: WorkbenchThreadId; turnId: WorkbenchTurnId } | null>(resolve => {
       resolvePromptOwner = resolve;
@@ -1007,55 +985,6 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       this.executions.set(nativeThreadId, execution);
     }
     return execution;
-  }
-
-  /** Fence a completed execution so Workbench core's later continuation request knows which intent it ended. */
-  settleExecution(input: {
-    sessionID: string; eventID: string; turnId: WorkbenchTurnId;
-    status: "completed" | "interrupted" | "failed";
-    intentVersion?: number;
-  }) {
-    const execution = this.execution(input.sessionID);
-    execution.completion = input.status === "completed" ? {
-      eventID: input.eventID, turnId: input.turnId, intentVersion: input.intentVersion ?? execution.intentVersion,
-    } : null;
-  }
-
-  /** Admit the hidden unfinished-turn prompt once, unless newer intent, steers or interruption superseded the turn. */
-  async continueUnfinished(target: WorkbenchUnfinishedTurnTarget) {
-    if (this.options.signal.aborted) return;
-    const { binding } = await this.native(target.threadId);
-    const sessionID = binding.nativeThreadId;
-    const execution = this.execution(sessionID);
-    const completion = execution.completion;
-    if (!completion || completion.turnId !== target.turnId) return;
-    execution.completion = null;
-    const current = () => !this.options.signal.aborted && !execution.active
-      && execution.turn?.turnId === completion.turnId && execution.intentVersion === completion.intentVersion
-      && !this.pendingSteerSessions.has(sessionID) && !this.requestedInterruptions.has(sessionID);
-    if (!current() || !execution.turn) return;
-    const threadId = execution.turn.threadId;
-    try {
-      await this.admit(execution, async () => {
-        if (!current()) return;
-        const native = await this.native(threadId);
-        const entry = await this.options.state.controller.getCanonicalThreadEntry(native.identity.projectId, threadId);
-        if (!current() || !entry || entry.entryKind === "draft"
-          || !this.options.recovery.shouldContinue(entry.lifecycle)) return;
-        await this.submitNative({
-          threadId, clientMessageId: createWorkbenchThreadRecoveryId(`opencode:${completion.eventID}`),
-          input: createWorkbenchUnfinishedTurnInput(), intent: "newTurn", context: execution.context,
-        }, native, execution, current);
-      });
-    } catch (error) {
-      if (error === supersededContinuation || this.options.signal.aborted) return;
-      // Native admission errors can carry session content; only their class crosses this edge.
-      throw new Error(`OpenCode unfinished-turn admission failed (${error instanceof Error ? error.name : "unknown error"}).`);
-    }
-  }
-
-  executionIntentVersion(nativeThreadId: string) {
-    return this.execution(nativeThreadId).intentVersion;
   }
 
   async resolveToolCaller(nativeThreadId: string, signal: AbortSignal) {

@@ -51,7 +51,6 @@ export interface DaemonProcessContext {
   logTurnRecovery(message: string): void;
   publishThreadState(connectionId: string, snapshot: WorkbenchThreadStateSnapshot): void;
   reportWebSocketDelivery(delivery: WorkbenchWebSocketDelivery): void;
-  reportTurnRecoveryFailure(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void>;
   refreshWorkbenchPromptFiles(): Promise<void>;
   reportDiagnostic(diagnostic: DaemonDiagnosticMessage["diagnostic"]): void;
   runTurnRecoveryTask(owner: WorkbenchTurnRecoveryController, label: string, task: () => Promise<void>): Promise<void>;

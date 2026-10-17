@@ -21,7 +21,11 @@ export type FakeThreadAction = {
 /** Responses, chat completions, Anthropic Messages, and Gemini streamGenerateContent respectively. */
 export type FakeThreadWire = "codex" | "opencode" | "claude" | "gemini";
 type ProviderWire = FakeThreadWire;
-type Tool = { type?: string; name?: string; namespace?: string; function?: { name?: string }; tools?: Tool[] };
+type Tool = {
+  type?: string; name?: string; namespace?: string; function?: { name?: string }; tools?: Tool[];
+  /** Gemini groups its function declarations under one tool entry. */
+  functionDeclarations?: Tool[];
+};
 type ModelRequest = {
   input?: Array<{ type?: string; call_id?: string; tools?: Tool[] }>;
   messages?: Array<{
@@ -33,6 +37,7 @@ type ModelRequest = {
   stream?: boolean;
   system?: string | Array<{ text?: string }>;
   systemInstruction?: { parts?: Array<{ text?: string }> };
+  contents?: Array<{ role?: string; parts?: Array<{ functionResponse?: { name?: string } }> }>;
   tools?: Tool[];
 };
 type PendingResult = { callId: string; provider: ProviderWire };
@@ -187,7 +192,7 @@ export default class FakeThreadModelServer {
       });
       if (provider === "opencode") this.openCodeResponse(response, { text: "Scenario" }, undefined, null);
       else if (provider === "claude") this.claudeResponse(response, body.model ?? "fake-model", { text: "Scenario" }, undefined, null);
-      else this.geminiResponse(response, { text: "Scenario" });
+      else this.geminiResponse(response, { text: "Scenario" }, undefined);
       response.end();
       return;
     }
@@ -219,8 +224,11 @@ export default class FakeThreadModelServer {
           && item.call_id === pending.callId)
         : pending.provider === "opencode"
           ? body.messages?.some(item => item.role === "tool" && item.tool_call_id === pending.callId)
-          : body.messages?.some(item => item.role === "user" && Array.isArray(item.content)
-            && item.content.some(part => part.type === "tool_result" && part.tool_use_id === pending.callId));
+          : pending.provider === "gemini"
+            // Gemini function calls carry no id; the response names the call it answers.
+            ? body.contents?.some(content => content.parts?.some(part => part.functionResponse?.name === pending.callId))
+            : body.messages?.some(item => item.role === "user" && Array.isArray(item.content)
+              && item.content.some(part => part.type === "tool_result" && part.tool_use_id === pending.callId));
       if (pending.provider !== provider || !observed) {
         this.recordFailure(new Error("Fake model tool result was not observed."));
         response.writeHead(409);
@@ -233,7 +241,6 @@ export default class FakeThreadModelServer {
       const system = JSON.stringify(body.messages?.[0] ?? body.system ?? body.systemInstruction ?? "").slice(0, 160);
       throw new Error(`Unexpected fake model request on ${provider} (tools: ${body.tools?.length ?? 0}, system: ${system}).`);
     }
-    if (provider === "gemini" && action.tool) throw new Error("Fake Gemini wire does not script tool calls.");
     if (action.hold && (action.reasoning === undefined || action.tool || action.text !== undefined || provider === "codex")) {
       throw new Error("A held fake response streams reasoning only, on a chat, Anthropic, or Gemini wire.");
     }
@@ -241,7 +248,7 @@ export default class FakeThreadModelServer {
       : body.input?.find(item => item.type === "additional_tools")?.tools ?? body.tools ?? [];
     const tools = advertised.flatMap(tool => tool.type === "namespace"
       ? (tool.tools ?? []).map(inner => ({ ...inner, namespace: tool.name }))
-      : [tool]);
+      : tool.functionDeclarations ?? [tool]);
     if (provider === "claude" && tools.some(tool => (tool.name ?? tool.function?.name) === "Bash")) {
       throw new Error("Claude exposed native Bash in fake mode.");
     }
@@ -258,7 +265,9 @@ export default class FakeThreadModelServer {
       throw new Error("Fake model tool wire type does not match its scripted action.");
     }
     this.actions.shift();
-    const callId = action.tool ? `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}` : null;
+    const callId = !action.tool ? null
+      : provider === "gemini" ? matches[0]?.name ?? null
+        : `${provider === "claude" ? "toolu" : "call"}_${randomUUID()}`;
     this.pendingResult = callId ? { callId, provider } : null;
     response.writeHead(200, {
       "Cache-Control": "no-store",
@@ -271,7 +280,7 @@ export default class FakeThreadModelServer {
     } else if (provider === "claude") {
       this.claudeResponse(response, body.model ?? "claude-sonnet-4-6", action, matches[0], callId);
     } else {
-      this.geminiResponse(response, action);
+      this.geminiResponse(response, action, matches[0]);
     }
     if (action.hold) {
       // The client owns the end of a held response; disconnecting before completion is the observed cut.
@@ -408,14 +417,18 @@ export default class FakeThreadModelServer {
     emit({ type: "message_stop" });
   }
 
-  private geminiResponse(response: ServerResponse, action: FakeThreadAction) {
+  private geminiResponse(response: ServerResponse, action: FakeThreadAction, tool: Tool | undefined) {
     const chunk = (parts: object[], finishReason?: string) => response.write(event({
       candidates: [{ content: { role: "model", parts }, ...(finishReason ? { finishReason } : {}) }],
       ...(finishReason ? { usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 } } : {}),
     }));
     if (action.reasoning !== undefined) chunk([{ text: action.reasoning, thought: true }]);
     if (action.hold) return;
-    chunk(action.text !== undefined ? [{ text: action.text }] : [], "STOP");
+    chunk([
+      ...(action.text !== undefined ? [{ text: action.text }] : []),
+      ...(action.tool && tool && "arguments" in action.tool
+        ? [{ functionCall: { name: tool.name, args: action.tool.arguments } }] : []),
+    ], "STOP");
   }
 
   async close() {

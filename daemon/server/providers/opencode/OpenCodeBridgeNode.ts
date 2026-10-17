@@ -76,7 +76,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       readWorkingRecords,
       readProviderCursor: (threadId, turnId) => build.get("database").readTranscriptProviderCursor!(threadId, turnId),
       signal: lifetime.signal,
-      recovery: build.get("turnRecovery"),
       rollover: build.get("threadContextRollover"),
     });
     const events = new OpenCodeEventController({
@@ -131,7 +130,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   provides: ["openCodeThreadOperations", "openCodeModelCatalog"],
   requires: [
     "openCodeService", "projectCatalog", "questionnaires", "threadIdentity", "transcriptIdentity",
-    "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database", "turnRecovery",
+    "threadState", "transcript", "transcriptReader", "providerObservations", "transcriptReconciliation", "database",
     "threadContextRollover",
   ],
   safeAll: true,

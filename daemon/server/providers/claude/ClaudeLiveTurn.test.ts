@@ -101,7 +101,6 @@ function fixture(
     },
     readTurn: async () => ({ id: turnId, status: "inProgress" }) as never,
     release: async () => { log.push("release"); },
-    settling: status => { log.push(`reported:${status}`); },
   };
   turn = new ClaudeLiveTurn({
     scope: "scope", cwd: "C:/repo", projectId, threadId, turnId, workingStatusInPrompt, usage, contextWindow,
@@ -123,8 +122,7 @@ test("a completed turn is accepted before its prompt and releases its process be
   await task;
   assert.deepEqual(log, [
     "turnStarted", "observe:acceptedIntent", "prompts:0", "status:active", "turn/started",
-    // Settlement is reported before the observation that lets Workbench core continue the turn.
-    "release", "settle:completed", "reported:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
+    "release", "settle:completed", "observe:turnCompleted:completed", "turn/completed", "status:idle",
   ]);
 });
 
@@ -252,7 +250,7 @@ test("a failed query settles failed and still publishes idle", async context => 
   const { task } = await turn.start("hi");
   push(new Error("native crash"));
   await task;
-  assert.deepEqual(log.slice(5), ["release", "settle:failed", "reported:failed", "observe:turnCompleted:failed:native crash", "turn/completed", "status:idle"]);
+  assert.deepEqual(log.slice(5), ["release", "settle:failed", "observe:turnCompleted:failed:native crash", "turn/completed", "status:idle"]);
 });
 
 test("a failed result forwards its provider errors", async () => {

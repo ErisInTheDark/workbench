@@ -1,5 +1,5 @@
 /*
- * No production exports. Tests protect provider handles across real graph replacement.
+ * No production exports. Tests protect provider handles across real graph replacement, shared message admission, instruction selection and hidden turns.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -17,6 +17,8 @@ import WorkbenchMessageWaitController from "./WorkbenchMessageWaitController";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
 import { getWorkbenchAgentCommandToolName } from "./lib/workbench/commands/workbench-agent-command-definition";
+import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
+import type { WorkbenchInstructionSelection, WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 
 const compaction = {
   compactInsideAdmission: async (
@@ -326,6 +328,106 @@ test("an accepted user message returns a warning when lifecycle publication fail
   assert.match(result.warning ?? "", /Provider warning/u);
   assert.match(result.warning ?? "", /could not update its thread state/u);
   assert.equal(warned.mock.callCount(), 1);
+});
+
+function selectionStore() {
+  const stored = new Map<string, WorkbenchInstructionSelection>();
+  return {
+    stored,
+    selection: new WorkbenchThreadInstructionSelectionController({
+      store: async command => {
+        if (command.kind === "record") stored.set(command.threadId, command.selection);
+        return stored.get(command.threadId) ?? null;
+      },
+      readThreadKind: async () => "thread",
+      now: () => 1,
+      warn: message => assert.fail(message),
+    }),
+  };
+}
+
+test("messages without a selection launch with the thread's accepted selection, keeping their own skills", async () => {
+  const received: Array<WorkbenchMessageContext | undefined> = [];
+  let reject = false;
+  const provider = { threads: {
+    submit: async (input: { context?: WorkbenchMessageContext }) => {
+      received.push(input.context);
+      if (reject) throw new Error("rejected");
+      return { kind: "steered", turnId: "turn" };
+    },
+    messageAgent: async (input: { context?: WorkbenchMessageContext }) => {
+      received.push(input.context);
+      return { kind: "steered", turnId: "turn" };
+    },
+  } } as unknown as WorkbenchProvider;
+  const { stored, selection } = selectionStore();
+  const handle = new WorkbenchProviderDispatcher(
+    async (_registration, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, instructionSelection: selection },
+  ).get("opencode");
+  const submit = (context?: WorkbenchMessageContext) => handle.threads.submit({
+    threadId: "thread", clientMessageId: "message", input: [], intent: "continue", ...(context ? { context } : {}),
+  });
+
+  await submit({ workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/a"] });
+  await handle.threads.messageAgent({ threadId: "thread", cwd: "C:/repo",
+    message: { message: "next", senderName: "luna", senderThreadId: "sender" } });
+  await submit({ activatedSkillPaths: ["skills/b"] });
+  reject = true;
+  await assert.rejects(submit({ workflowIds: [] }), /rejected/u);
+
+  assert.deepEqual(received, [
+    { workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/a"] },
+    { workflowIds: ["review"], workbenchOrigin: "http://wb" },
+    { workflowIds: ["review"], workbenchOrigin: "http://wb", activatedSkillPaths: ["skills/b"] },
+    { workflowIds: [] },
+  ]);
+  assert.deepEqual(stored.get("thread"), { workflowIds: ["review"], workbenchOrigin: "http://wb" });
+});
+
+test("a hidden turn checks currency after earlier admissions in its lane and starts only when still current", async () => {
+  const userEntered = Promise.withResolvers<void>();
+  const releaseUser = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const submitted: Array<{ intent: string; context?: WorkbenchMessageContext }> = [];
+  const admissions: Array<{ kind: string; firstMessagePreview?: string }> = [];
+  const provider = { threads: {
+    submit: async (input: { intent: string; clientMessageId: string; context?: WorkbenchMessageContext }) => {
+      if (input.clientMessageId === "user") { userEntered.resolve(); await releaseUser.promise; }
+      order.push(`submit:${input.clientMessageId}`);
+      submitted.push({ intent: input.intent, ...(input.context ? { context: input.context } : {}) });
+      return { kind: "started", turn: { id: input.clientMessageId } };
+    },
+  } } as unknown as WorkbenchProvider;
+  const admission = new WorkbenchThreadAdmissionController();
+  const { stored, selection } = selectionStore();
+  stored.set("thread", { workflowIds: ["review"] });
+  const dispatcher = new WorkbenchProviderDispatcher(async (_registration, operation) => operation(provider), {
+    interruptSteerWaits: () => undefined,
+    instructionSelection: selection,
+    messageAdmission: (threadId, _provider, admit) => admission.run(threadId, admit),
+    onMessageAdmitted: received => { admissions.push(received); },
+  });
+  const user = dispatcher.get("claude").threads.submit({ threadId: "thread", clientMessageId: "user", input: [], intent: "newTurn" });
+  await userEntered.promise;
+  let current = false;
+  const hidden = dispatcher.admitHiddenTurn("claude", {
+    threadId: "thread", clientMessageId: "hidden", input: [],
+    isCurrent: async () => { order.push("check"); return current; },
+  });
+  releaseUser.resolve();
+  await user;
+  assert.equal(await hidden, "superseded");
+  assert.deepEqual(order, ["submit:user", "check"]);
+
+  current = true;
+  assert.equal(await dispatcher.admitHiddenTurn("claude", {
+    threadId: "thread", clientMessageId: "hidden", input: [], isCurrent: async () => current,
+  }), "started");
+  assert.deepEqual(submitted.at(-1), { intent: "newTurn", context: { workflowIds: ["review"] } });
+  assert.deepEqual(admissions.map(received => received.kind), ["started", "started"]);
+  assert.equal(admissions[1]!.firstMessagePreview, undefined);
+  await admission.dispose();
 });
 
 test("tool capture finishes through the replacement owner with the original pinned identity", async () => {

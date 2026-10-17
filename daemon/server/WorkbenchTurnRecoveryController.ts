@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTurnRecoveryController: schedule provider-owned recovery and decide unfinished continuation.
+ * - default WorkbenchTurnRecoveryController: schedule reload-drained hidden-turn work and decide unfinished continuation.
  */
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 
@@ -8,7 +8,6 @@ export default class WorkbenchTurnRecoveryController {
   private readonly tasks = new Map<Promise<void>, {
     label: string; signal: AbortSignal; cancel(): void; startedAt: number;
   }>();
-  private readonly failures = new Map<Promise<void>, AbortSignal>();
   private accepting = true;
 
   constructor(
@@ -32,12 +31,6 @@ export default class WorkbenchTurnRecoveryController {
     this.tasks.set(task, { label, signal, cancel, startedAt: Date.now() });
   }
 
-  reportFailure(signal: AbortSignal, report: () => Promise<void>) {
-    const task = report().finally(() => { this.failures.delete(task); });
-    this.failures.set(task, signal);
-    return task;
-  }
-
   beginRuntimeDrain() { this.accepting = false; }
 
   expireRuntimeDrain() {
@@ -47,15 +40,12 @@ export default class WorkbenchTurnRecoveryController {
 
   resumeAfterFailedReload() { this.accepting = true; }
 
-  async waitForIdle(scope?: AbortSignal) {
-    await Promise.allSettled([...this.tasks].filter(([, task]) => (
-      !task.signal.aborted && (!scope || task.signal === scope)
-    )).map(([task]) => task));
-    await Promise.all([...this.failures].filter(([, signal]) => !scope || signal === scope).map(([task]) => task));
+  async waitForIdle() {
+    await Promise.allSettled([...this.tasks].filter(([, task]) => !task.signal.aborted).map(([task]) => task));
   }
 
-  listRuntimeDrainPending(now = Date.now(), scope?: AbortSignal) {
-    return [...this.tasks.values()].filter(task => !task.signal.aborted && (!scope || task.signal === scope))
+  listRuntimeDrainPending(now = Date.now()) {
+    return [...this.tasks.values()].filter(task => !task.signal.aborted)
       .map(({ label, startedAt }) => ({ ageMs: Math.max(0, now - startedAt), label }));
   }
 }

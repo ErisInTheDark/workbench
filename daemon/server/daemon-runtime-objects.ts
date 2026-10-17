@@ -75,7 +75,6 @@ import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityCon
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
 import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/workbench-transcript-types";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
-import type CodexRecoveryController from "./CodexRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
 import type WorkbenchProvider from "./WorkbenchProvider";
@@ -145,6 +144,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readApprovalOutcomes: import("./database/WorkbenchDatabaseController").default["readApprovalOutcomes"];
   executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
   executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
+  executeThreadInstructionSelection: import("./database/WorkbenchDatabaseController").default["executeThreadInstructionSelection"];
   executeThreadGoals: import("./database/WorkbenchDatabaseController").default["executeThreadGoals"];
   executeThreadTodos: import("./database/WorkbenchDatabaseController").default["executeThreadTodos"];
   readThreadRequiredTodoCounts: import("./database/WorkbenchDatabaseController").default["readThreadRequiredTodoCounts"];
@@ -325,8 +325,5 @@ export interface DaemonRuntimeObjects {
   threadState: WorkbenchThreadStateFeature;
   transcript: DaemonTranscriptRegistration;
   turnRecovery: WorkbenchTurnRecoveryController;
-  /** Mark the Workbench thread behind a failed native turn recovery; keeps that domain composition out of the process shell. */
-  turnRecoveryFailures: { report(cwd: string, harness: WorkbenchHarness, threadId: string): Promise<void> };
-  codexRecovery: CodexRecoveryController;
   webSocketRequests: WorkbenchWebSocketRequestController;
 }

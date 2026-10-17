@@ -93,6 +93,7 @@ const databaseReleases = Object.freeze({
   voiceRecordAudio: release(83, "9ae9c87621fc33e73150f44b1c01fb0572d6a0ae03d2d24803097254531fa316"),
   reusableSubagentNames: release(84, "1c3af4eebdcb2a6f409b774c7649b0fe2ef8f3d5c1f2d096c9960a8bda4bc329"),
   threadGitCommitTimes: release(85, "f2bed1b77075a66efb37e55d1658beb4a8f82fab8bdff7f6ae18eef9ebc8a387"),
+  threadInstructionSelections: release(86, "2d4797f687df0831ece04385c90c0f9e2a5f2d2acd1faabe99b60f292dbe3d4b"),
 });
 
 export default databaseReleases;

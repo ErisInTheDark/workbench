@@ -2,6 +2,8 @@
  * Exports:
  * - WorkbenchUserInputSchema/WorkbenchUserInput: submitted content, independent of provider packets.
  * - WorkbenchMessageContextSchema/WorkbenchMessageContext: instruction selections accompanying user intent.
+ * - WorkbenchInstructionSelectionSchema/WorkbenchInstructionSelection: a thread's durable instruction choices, without per-message skills.
+ * - readWorkbenchInstructionSelection: the selection a message context carries, or null when it carries none.
  * - createWorkbenchTextInput: plain text input without annotation spans.
  * - toWorkbenchThreadUserInput: normalise submitted text annotations for canonical thread content.
  */
@@ -48,3 +50,14 @@ export const WorkbenchMessageContextSchema = z.object({
   workbenchOrigin: z.string().nullable().optional(),
 });
 export type WorkbenchMessageContext = z.infer<typeof WorkbenchMessageContextSchema>;
+
+export const WorkbenchInstructionSelectionSchema = WorkbenchMessageContextSchema.omit({ activatedSkillPaths: true });
+export type WorkbenchInstructionSelection = z.infer<typeof WorkbenchInstructionSelectionSchema>;
+
+/** Skills alone are per-message; any selection field, even an empty workflow list, is a deliberate choice. */
+export function readWorkbenchInstructionSelection(context: WorkbenchMessageContext | undefined): WorkbenchInstructionSelection | null {
+  if (!context) return null;
+  const { activatedSkillPaths: _skills, ...rest } = context;
+  const selection = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
+  return Object.keys(selection).length ? WorkbenchInstructionSelectionSchema.parse(selection) : null;
+}

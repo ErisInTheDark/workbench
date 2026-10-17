@@ -4,6 +4,7 @@
  * - PROVIDER_SEARCH_PROOF/PROVIDER_SEARCH_PROOF_FILE: isolated project fixture read through WB search.
  * - PROVIDER_SHELL_PROOF_FILE: isolated project file written through the provider shell boundary.
  * - fakeCodexTool: script a Workbench tool through Codex code mode.
+ * - fakeOpenCodeTool: script a Workbench tool through OpenCode's execute tool.
  * - createProviderBoundaryJourney: build one ordered behavioural journey for every real provider.
  */
 import type { FakeThreadAction } from "./FakeThreadModelServer";
@@ -33,7 +34,7 @@ export function fakeCodexTool(name: string, args: Record<string, unknown>, textV
   };
 }
 
-function fakeOpenCodeTool(name: string, args: Record<string, unknown>, textValue?: string): FakeThreadAction {
+export function fakeOpenCodeTool(name: string, args: Record<string, unknown>, textValue?: string): FakeThreadAction {
   return {
     ...(textValue === undefined ? {} : { text: textValue }),
     tool: {

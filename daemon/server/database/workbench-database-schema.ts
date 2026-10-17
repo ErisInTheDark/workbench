@@ -66,6 +66,7 @@ import { threadGitSelectionSchemaHistory } from "../lib/workbench/database/schem
 import { itemApprovalSchemaHistory } from "../lib/workbench/database/schema/thread-approval-schema.ts";
 import { projectStoreSchemaHistory } from "../lib/workbench/database/schema/project-store-schema.ts";
 import { threadSkillSchemaHistory } from "../lib/workbench/database/schema/thread-skill-schema.ts";
+import { threadInstructionSelectionSchemaHistory } from "../lib/workbench/database/schema/thread-instruction-selection-schema.ts";
 import { threadGoalSchemaHistory } from "../lib/workbench/database/schema/thread-goal-schema.ts";
 import { threadAutoCompactSchemaHistory } from "../lib/workbench/database/schema/thread-auto-compact-schema.ts";
 import { agentFeedbackSchemaHistory } from "../lib/workbench/database/schema/agent-feedback-schema.ts";
@@ -143,6 +144,7 @@ export function defineRelationalThreadStateSchema(schemaVersion: number) {
       itemApprovalSchemaHistory,
       projectStoreSchemaHistory,
       threadSkillSchemaHistory,
+      threadInstructionSelectionSchemaHistory,
       threadGoalSchemaHistory,
       threadAutoCompactSchemaHistory,
       agentFeedbackSchemaHistory,

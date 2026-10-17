@@ -166,7 +166,7 @@ export type CodexStdioBridgeOptions = {
   initialState?: CodexStdioBridgeReloadState;
   instructions?: WorkbenchCodexInstructionPort;
   identities?: NativeTranscriptIdentityOwners;
-  onNotification: (notification: JsonRpcNotification, observation: WorkbenchProviderObservation, nativeNotification: JsonRpcNotification) => void;
+  onNotification: (notification: JsonRpcNotification, observation: WorkbenchProviderObservation) => void;
   providerObservations?: CodexProviderObservations;
   onTranscriptLiveUpdate?: (update: TranscriptLiveUpdate) => void;
   onInitialized?: () => void;
@@ -687,7 +687,7 @@ export default class CodexStdioBridge {
       const publication = providerObservations?.native(notification);
       onNotification(publication?.notification ?? notification, publication?.observation ?? {
         lifecycle: null, turnStarted: null, displayLabel: null,
-      }, notification);
+      });
     };
     this.onInitialized = onInitialized;
     this.prepareTurnStart = prepareTurnStart;

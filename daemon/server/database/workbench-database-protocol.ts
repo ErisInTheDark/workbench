@@ -90,6 +90,8 @@ import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/p
 import type { ThreadGitSelectionCommand, ThreadGitSelectionResult } from "./git/WorkbenchThreadGitSelectionStore.ts";
 import type { ProjectStoreCommand, ProjectStoreResult } from "./store/WorkbenchProjectStoreRepository.ts";
 import type { ThreadSkillCommand, ThreadSkillState } from "./skills/WorkbenchThreadSkillStore.ts";
+import type { ThreadInstructionSelectionCommand } from "./thread-state/WorkbenchThreadInstructionSelectionStore.ts";
+import type { WorkbenchInstructionSelection } from "workbench-shared/workbench/provider/provider-input";
 import type { ThreadGoalCommand, ThreadGoalState } from "./goals/WorkbenchThreadGoalStore.ts";
 import type { ThreadVisCommand, ThreadVisResult } from "./vis/WorkbenchThreadVisStore.ts";
 import type { ThreadTodoCommand, ThreadTodoResult } from "./todos/WorkbenchThreadTodoStore.ts";
@@ -120,6 +122,7 @@ export interface WorkbenchDatabaseMutationResult {
 export type WorkbenchDatabaseRequestPayload =
   | { type: "threadGitSelection"; command: ThreadGitSelectionCommand }
   | { type: "threadSkills"; command: ThreadSkillCommand }
+  | { type: "threadInstructionSelection"; command: ThreadInstructionSelectionCommand }
   | { type: "threadGoals"; command: ThreadGoalCommand }
   | { type: "threadVis"; command: ThreadVisCommand }
   | { type: "threadTodos"; command: ThreadTodoCommand }
@@ -280,6 +283,7 @@ export function isWorkbenchDatabaseReadRequest(request: WorkbenchDatabaseRequest
 export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadGitSelection"; result: ThreadGitSelectionResult }
   | { id: number; type: "threadSkills"; result: ThreadSkillState }
+  | { id: number; type: "threadInstructionSelection"; result: WorkbenchInstructionSelection | null }
   | { id: number; type: "threadGoals"; result: ThreadGoalState }
   | { id: number; type: "threadVis"; result: ThreadVisResult }
   | { id: number; type: "threadTodos"; result: ThreadTodoResult }

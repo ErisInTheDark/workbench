@@ -5,14 +5,11 @@ import assert from "node:assert/strict";
 import { randomInt, randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import Database from "better-sqlite3";
-import WorkbenchComposerProfileStore from "../../daemon/server/WorkbenchComposerProfileStore";
-import { compileWorkbenchDatabaseStatement, type WorkbenchDatabaseRow } from "../../shared/database/workbench-database-statements";
-import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
 import ThreadTranscriptProjectionController, { type ThreadTranscriptProjectionState } from "../../app/client/workbench/transcript/ThreadTranscriptProjectionController";
-import resolveWorkbenchDataRoot from "../../shared/workbench-data-root";
 import type { ThreadPayload, WorkbenchSteerHistoryEntry } from "../../shared/types";
 import type { Turn } from "../../shared/workbench/thread/workbench-thread-turn";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "../../shared/types";
@@ -26,7 +23,7 @@ import ProviderThreadJourney, { SharedRuntimeCheckpoints } from "./ProviderThrea
 import { parseThreadTestArguments, type ThreadTestMode } from "../thread-test-arguments";
 import {
   createProviderBoundaryJourney, PROVIDER_SEARCH_PROOF, PROVIDER_SEARCH_PROOF_FILE, PROVIDER_SHELL_PROOF_FILE,
-  fakeCodexTool, type ProviderBoundaryToolNames,
+  fakeCodexTool, fakeOpenCodeTool, type ProviderBoundaryToolNames,
 } from "./provider-boundary-journey";
 
 const modelId = "opencode-go/muse-spark-1.3-contributor";
@@ -112,7 +109,13 @@ async function verifyOpenCodeSteerCuts(input: {
       kind: "custom",
       settings: { agentPath, agentSource, harness, model, reasoningEffort, serviceTier, contextWindowTokens },
     };
-    fakeModel?.enqueue([{ reasoning: `Weighing ${answerProof}`, hold: true }, { text: steerProof }]);
+    // The steered answer ends the turn with its task unfinished, so Workbench continues it once; that continuation completes the task.
+    fakeModel?.enqueue([
+      { reasoning: `Weighing ${answerProof}`, hold: true },
+      { text: steerProof },
+      fakeOpenCodeTool("task_completed", {}),
+      { text: "" },
+    ]);
     const held = fakeModel?.nextHeld(signal);
     const threadId = await runtime.launchDraft(projectId, selection, [
       "Before answering, reason carefully and at length about every prime number below 400,",
@@ -134,6 +137,7 @@ async function verifyOpenCodeSteerCuts(input: {
       }
       const cut = fakeModel?.nextCut(signal);
       fakeModel?.expectNextPromptText(steerProof);
+      fakeModel?.expectNextPromptText("inappropriately ended the turn");
       const steered = await runtime.daemon.threads.message({
         threadId, clientMessageId: randomUUID(), intent: "steer", expectedTurnId: turnId,
         input: [{ type: "text", text: steer, text_elements: [] }],
@@ -141,7 +145,7 @@ async function verifyOpenCodeSteerCuts(input: {
       assert.deepEqual(steered, { kind: "steered", turnId });
       if (cut) assert.equal(await cut, wire, "The steer must end the held reasoning response");
       const projection = await owner.waitTurn(turnId);
-      assert.equal(projection.turns.length, 1, "A cut must continue the same Workbench turn");
+      assert.equal(projection.turns[0]?.id, turnId, "A cut must continue the same Workbench turn");
       const items = projection.turns[0]!.items;
       const reasoningIndex = items.findIndex(item => item.type === "reasoning");
       const steerIndex = items.findIndex(item => item.type === "userMessage"
@@ -153,6 +157,10 @@ async function verifyOpenCodeSteerCuts(input: {
       if (fakeModel) {
         assert.ok(items.slice(steerIndex + 1).some(item => item.type === "agentMessage"
           && JSON.stringify(item).includes(steerProof)), "The post-steer step must answer the steer");
+        const continued = await owner.waitForFact(() => owner.durable(), value =>
+          value.turns.some(turn => turn.id !== turnId && turn.status === "completed"));
+        assert.equal(continued.turns.length, 2, "Workbench must continue the unfinished turn exactly once");
+        assert.equal(fakeModel.queuedActions, 0, "The continuation must consume its scripted completion");
       } else {
         const answeredBeforeSteer = items.slice(reasoningIndex, steerIndex).some(item => item.type === "agentMessage");
         console.log(`[opencode paid] ${model} steer ${answeredBeforeSteer ? "waited for a boundary" : "cut reasoning"}`);
@@ -370,34 +378,25 @@ test("selected providers complete the shared thread boundary journey in one clon
     IsolatedWorkbench.command("opencode", ["debug", "paths", "db"], source, process.env, t.signal),
     IsolatedWorkbench.command("opencode", ["debug", "paths", "config"], source, process.env, t.signal),
   ]) : null;
-  const sourceDatabasePath = path.join(resolveWorkbenchDataRoot(), "daemon", "workbench.sqlite3");
-  const readCodexProfile = async () => {
-    const database = new Database(sourceDatabasePath, { readonly: true, fileMustExist: true });
-    const profiles = new WorkbenchComposerProfileStore({
-      query: async <Row extends WorkbenchDatabaseRow>(statement: Parameters<typeof compileWorkbenchDatabaseStatement>[1]) => {
-        const compiled = compileWorkbenchDatabaseStatement(
-          Object.fromEntries(workbenchDatabaseSchema.currentTables.map(table => [table.name, table])), statement,
-        );
-        return database.prepare(compiled.sql).all(...compiled.parameters) as Row[];
-      },
-      executeTransaction: async () => { throw new Error("Scenario source profiles are read-only."); },
-    });
-    try {
-      const profile = (await profiles.read()).profiles.find(entry => entry.name === "luna.low");
-      assert.ok(profile?.harness === "codex" && profile.reasoningEffort === "low",
-        "A stored luna.low Codex profile is required");
-      return profile;
-    } finally { await profiles.dispose(); database.close(); }
-  };
   const fakeModels: Partial<Record<Provider, FakeThreadModelServer>> = {};
   const profiles: Partial<Record<Provider, WorkbenchComposerProfile>> = {};
-  if (selectedSelection.codex) {
-    const baseProfile = await readCodexProfile();
-    profiles.codex = selectedSelection.codex === "paid" ? baseProfile : {
-      ...baseProfile, id: randomUUID(), name: "codex fake scenario",
-      description: "Scripted Codex provider diagnostic.",
-    };
-  }
+  // The scenario owns its profile: any listed model the installed Codex catalogue offers at low effort.
+  const readCachedCodexModel = async () => {
+    const cache = JSON.parse(await fs.readFile(
+      path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "models_cache.json"), "utf8",
+    )) as { models?: Array<{ slug?: unknown; visibility?: unknown; supported_reasoning_levels?: Array<{ effort?: unknown }> }> };
+    const model = cache.models?.find(entry => typeof entry.slug === "string" && entry.visibility === "list"
+      && entry.supported_reasoning_levels?.some(level => level.effort === "low"))?.slug;
+    assert.ok(typeof model === "string", "The installed Codex model cache must list a model supporting low effort");
+    return model;
+  };
+  if (selectedSelection.codex) profiles.codex = {
+    id: randomUUID(), name: `codex ${selectedSelection.codex} scenario`,
+    description: `Explicit ${selectedSelection.codex}-model Codex provider diagnostic.`,
+    scope: { kind: "global" }, harness: "codex", model: await readCachedCodexModel(),
+    reasoningEffort: "low", serviceTier: null, agentPath: null, agentSource: null,
+    createdAt: now, updatedAt: now,
+  };
   if (selectedSelection.opencode) profiles.opencode = {
     id: randomUUID(), name: `opencode ${selectedSelection.opencode} scenario`,
     description: `Explicit ${selectedSelection.opencode}-model OpenCode provider diagnostic.`,
@@ -883,6 +882,9 @@ test("selected providers complete the shared thread boundary journey in one clon
     if (provider !== "codex") {
       assert.equal(await fs.readFile(path.join(runtime.project, `${shellProofFile}-approved`), "utf8"), finalProof);
     }
+    // The transcript settles the turn before the provider's completion observation reaches thread state.
+    await waitForFact(() => runtime.threadSummary(threadId, scenarioSignal),
+      summary => summary?.summary.row.lifecycle.kind !== "working");
     const lifecycle = new Database(path.join(runtime.dataRootPath, "daemon", "workbench.sqlite3"), {
       readonly: true,
     });

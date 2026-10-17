@@ -1,15 +1,14 @@
 /*
  * Exports:
- * - WorkbenchProviderDispatcherOptions: shared message admission and post-admission hooks.
+ * - WorkbenchProviderDispatcherOptions: shared message admission, instruction selection and post-admission hooks.
  * - default WorkbenchProviderDispatcher: obtain reload-safe provider handles with one process-wide steer-wait interruption path.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import type { WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
-import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchProviderHandle from "./WorkbenchProviderHandle";
-import type { WorkbenchProviderHandleOptions } from "./WorkbenchProviderHandle";
+import type { WorkbenchProviderHandleOptions, WorkbenchProviderHiddenTurn } from "./WorkbenchProviderHandle";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 
 function interruptSteerWaits(threadId: string, senderThreadId?: string) {
@@ -28,24 +27,25 @@ export default class WorkbenchProviderDispatcher {
     private readonly options: WorkbenchProviderDispatcherOptions = {},
   ) {}
 
-  get(key: WorkbenchProviderKey): WorkbenchProvider {
+  private handle(key: WorkbenchProviderKey) {
     return new WorkbenchProviderHandle(key, this.run, {
       interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
+      instructionSelection: this.options.instructionSelection,
       messageAdmission: this.options.messageAdmission,
       onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
       onMessageAdmitted: this.options.onMessageAdmitted,
     });
   }
 
-  hydratesUsage(key: WorkbenchProviderKey) {
-    return new WorkbenchProviderHandle(key, this.run, {
-      interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
-    }).hydratesUsage();
+  get(key: WorkbenchProviderKey): WorkbenchProvider {
+    return this.handle(key);
   }
 
-  continueUnfinished(key: WorkbenchProviderKey, target: WorkbenchUnfinishedTurnTarget) {
-    return new WorkbenchProviderHandle(key, this.run, {
-      interruptSteerWaits: this.options.interruptSteerWaits ?? interruptSteerWaits,
-    }).continueUnfinishedTurn(target);
+  hydratesUsage(key: WorkbenchProviderKey) {
+    return this.handle(key).hydratesUsage();
+  }
+
+  admitHiddenTurn(key: WorkbenchProviderKey, turn: WorkbenchProviderHiddenTurn) {
+    return this.handle(key).admitHiddenTurn(turn);
   }
 }

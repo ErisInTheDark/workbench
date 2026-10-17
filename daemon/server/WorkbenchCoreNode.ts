@@ -42,7 +42,7 @@ import WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController
 import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ThreadReferenceSchema } from "workbench-shared/workbench/identity";
+import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
@@ -56,7 +56,8 @@ import WorkbenchVisController from "./vis/WorkbenchVisController";
 import { requireWorkbenchPowerShellExecutable } from "./windows-powershell-runtime";
 import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
-import WorkbenchUnfinishedTurnController from "./WorkbenchUnfinishedTurnController";
+import WorkbenchTurnContinuationController from "./WorkbenchTurnContinuationController";
+import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
 import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
 import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
@@ -200,7 +201,19 @@ function createWorkbenchCoreFeature(
     now: Date.now,
     warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
   });
+  const instructionSelection = new WorkbenchThreadInstructionSelectionController({
+    store: command => database.executeThreadInstructionSelection(command),
+    readThreadKind: async threadId => {
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      const entry = identity && threadState
+        ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
+      return entry && entry.entryKind !== "draft" ? entry.entryKind : null;
+    },
+    now: Date.now,
+    warn: message => console.warn(`[instruction-selection] ${message.slice(0, 500)}`),
+  });
   const providers = new WorkbenchProviderDispatcher(run, {
+    instructionSelection,
     messageAdmission: autoCompact.run.bind(autoCompact),
     onAgentMessageAdmitted: (threadId, message) => run(
       "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
@@ -570,6 +583,7 @@ function createWorkbenchCoreFeature(
     gitArcs: gitArc,
     hasRequiredTodos,
     compactThread: input => threadContextRollover.acceptSummary(input),
+    refreshThread: (harness, target) => continuations.refresh(harness, target),
     listSubagents: (projectId) => subagents.listRelationships(projectId),
     log: logThreadStateWarning,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
@@ -729,7 +743,7 @@ function createWorkbenchCoreFeature(
     },
     warn: message => logThreadStateWarning(message),
   });
-  const unfinishedTurns = new WorkbenchUnfinishedTurnController({
+  const continuations = new WorkbenchTurnContinuationController({
     coordinator: turnRecovery,
     readLifecycle: async (harness, threadId) => {
       const identity = await threadIdentity.resolve({ harness, threadId: ThreadReferenceSchema.parse(threadId) });
@@ -737,9 +751,12 @@ function createWorkbenchCoreFeature(
       const entry = await requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
       return entry && entry.entryKind !== "draft" ? { projectId: identity.projectId, lifecycle: entry.lifecycle } : null;
     },
-    continueUnfinished: async (harness, target) => {
+    canonicalTurnId: reference => threadIdentity.knownTurn(TurnReferenceSchema.parse(reference)).turnId,
+    interrupt: async (harness, threadId) => { await provider(harness).threads.interrupt(threadId); },
+    admitHiddenTurn: async (harness, turn) => {
       const key = installedProviderKeys.find(key => key === harness);
-      return key ? await providers.continueUnfinished(key, target) : "unsupported";
+      if (!key) throw new Error(`Provider ${harness} is unavailable.`);
+      return await providers.admitHiddenTurn(key, turn);
     },
     reportFailed: async (projectId, harness, threadId) => await requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
     log: context.logTurnRecovery,
@@ -770,6 +787,7 @@ function createWorkbenchCoreFeature(
     transcript,
     shells: getProcessWorkbenchAgentMcpRequestRegistry(),
     settlement: turnSettlement,
+    continuations,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
     skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, vis, recordSkillActivations,
@@ -935,14 +953,6 @@ function createWorkbenchCoreFeature(
     threadRuntime,
     threadSummaries: summaries,
     projectFiles,
-    turnRecoveryFailures: {
-      report: async (cwd, harness, threadId) => {
-        const project = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench turn recovery" });
-        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId: project.project.id, harness });
-        if (!identity) throw new Error("Turn recovery failure has no matching Workbench thread identity.");
-        await threadState.controller.reportRecoveryFailed(project.project.id, harness, identity.threadId);
-      },
-    },
     providerObservations: {
       observe: async (harness, facts) => {
         if (!lease.isCurrent()) return null;
@@ -951,7 +961,7 @@ function createWorkbenchCoreFeature(
         const observation = await threadState!.observeProviderNotification(harness, facts);
         if (!lease.isCurrent()) return null;
         const lifecycle = observation?.lifecycle ?? null;
-        unfinishedTurns.observe(harness, facts, lifecycle);
+        continuations.observe(harness, facts, lifecycle);
         return lifecycle;
       },
     },
@@ -999,7 +1009,7 @@ function createWorkbenchCoreFeature(
       summaries.dispose();
       vis.dispose();
       visBrowseLifetime.abort(new Error("Vis browser calls are reloading."));
-      unfinishedTurns.dispose();
+      continuations.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();
       await admission.dispose();

@@ -51,6 +51,7 @@ function fixture(providerWarning?: string) {
     transcript: { record: async observations => { recorded.push(...observations); return undefined as never; }, read: unused },
     shells: { stopShell: () => { throw new Error("Unexpected shell stop."); } },
     settlement: { settleIfOrphaned: async () => { stopOrder.push("settle"); return false; } },
+    continuations: { cancel: async () => undefined },
     providers: { get: key => { assert.equal(key, "codex"); return provider; } },
     projects: { resolveProjectById: unused },
     identities: { resolveTurn: unused, resolve: async () => ({
@@ -252,6 +253,23 @@ test("questionnaire-only stop interrupts provider work before dismissing the que
   });
   assert.deepEqual(f.stops, ["wb-thread"]);
   assert.deepEqual(f.stopOrder, ["interrupt", "settle", "mutation"]);
+});
+
+test("a stop settles Workbench hidden-turn admissions before interrupting, so a turn they start is interrupted", async () => {
+  const f = fixture();
+  const admitting = Promise.withResolvers<void>();
+  f.owners.continuations.cancel = async threadId => {
+    assert.equal(threadId, "wb-thread");
+    f.stopOrder.push("cancel");
+    await admitting.promise;
+    f.stopOrder.push("admitted");
+  };
+  const stopping = f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.stopOrder, ["cancel"]);
+  admitting.resolve();
+  await stopping;
+  assert.deepEqual(f.stopOrder, ["cancel", "admitted", "interrupt", "settle", "mutation"]);
 });
 
 for (const turn of [null, { id: "wb-turn", status: "interrupted" }]) {

@@ -18,7 +18,6 @@ import WorkbenchTranscriptController from "./database/transcript/WorkbenchTransc
 import WorkbenchTranscriptCaptureGapController from "./database/transcript/WorkbenchTranscriptCaptureGapController";
 import WorkbenchMemoryReporter from "./WorkbenchMemoryReporter";
 import CodexConfigurationNode from "./CodexConfigurationNode";
-import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
 import OpenCodeBridgeNode from "./providers/opencode/OpenCodeBridgeNode";
@@ -43,7 +42,7 @@ export default ReloadableNode.define<
   DaemonProviderNotification
 >()({
   access: "agent",
-  children: [CodexConfigurationNode, CodexRecoveryNode, WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode, WorkbenchExecReaperNode],
+  children: [CodexConfigurationNode,WorkbenchInstructionsNode, WorkbenchCodexInstructionNode, WorkbenchCoreNode, WorkbenchAgentCommandNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchMcpNode, WorkbenchBrowseNode, WorkbenchExecReaperNode],
   create: (context, build) => {
     const databasePath = join(context.dataRootPath, "daemon", "workbench.sqlite3");
     const handoffState = build.handoffState as DatabaseReloadState | undefined;

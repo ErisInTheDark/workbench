@@ -19,6 +19,7 @@ import {
 import type { DaemonTranscriptRegistration } from "./daemon-runtime-objects";
 import type { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
 import type WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
+import type WorkbenchTurnContinuationController from "./WorkbenchTurnContinuationController";
 import type { WorkbenchThreadLaunchLocation } from "workbench-shared/workbench/thread/thread-launch";
 import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -49,6 +50,8 @@ export interface WorkbenchThreadActionOwners {
   shells: Pick<WorkbenchAgentMcpRequestRegistry, "stopShell">;
   /** Settles a stopped turn whose runtime is already gone. */
   settlement: Pick<WorkbenchTurnSettlementController, "settleIfOrphaned">;
+  /** Workbench-started hidden turns (refresh, unfinished continuation) that a stop must win against. */
+  continuations: Pick<WorkbenchTurnContinuationController, "cancel">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
   identities: Pick<WorkbenchThreadIdentityController, "resolve" | "resolveTurn">;
@@ -305,6 +308,7 @@ export default class WorkbenchThreadActionController {
   /** Stop on a parent agent's behalf: interrupt the live turn, then mark stopped, dismissing the questionnaire that interruption retains. */
   async stopThread(threadId: WorkbenchThreadId) {
     const target = await this.target(threadId);
+    await this.owners.continuations.cancel(target.identity.threadId);
     const turn = await target.provider.threads.latestTurn(target.identity.threadId);
     if (turn?.status === "inProgress") await this.interruptThread(target);
     const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
@@ -314,6 +318,7 @@ export default class WorkbenchThreadActionController {
 
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {
     const target = await this.target(input.threadId);
+    await this.owners.continuations.cancel(target.identity.threadId);
     await this.interruptThread(target);
     await this.markStopped(target, input.requestKey, connectionId ?? "");
     return { ok: true };

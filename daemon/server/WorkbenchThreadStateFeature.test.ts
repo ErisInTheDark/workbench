@@ -132,13 +132,13 @@ function createFeature(options: Omit<ConstructorParameters<typeof WorkbenchThrea
     const operations = getOperations(harness);
     return {
       threads: operations, interactions: operations.interactions,
-      recovery: { refresh: threadId => options.harnesses.resumeThread(harness, threadId) },
       configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
     };
   };
   const feature = new WorkbenchThreadStateFeature({
     ...options, identities: options.database.identities,
     providers: { get: getProvider },
+    refreshThread: (harness, target) => { void options.harnesses.resumeThread(harness, target.threadId); },
     getProjectCatalog: () => {
       const catalog = options.getProjectCatalog();
       const admitted = options.database.sqlite.prepare("SELECT id FROM workbench_projects ORDER BY id").all() as { id: string }[];

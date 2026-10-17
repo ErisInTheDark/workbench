@@ -25,7 +25,6 @@ test("compaction execution settles without accepting a user turn or continuing i
       syncNative: async () => ({ threadId, latestTurnId: turnId, maintenance: true, turn: turn() }),
       markExecutionStarted: () => { active = true; },
       markExecutionSettled: () => { active = false; },
-      settleExecution: () => { assert.fail("Compaction cannot fence a continuation"); },
     },
     transcript: {
       appendText: () => undefined,
@@ -157,8 +156,6 @@ test("write settlement replaces its live preview on the same canonical item for 
 const executionLifecycle = {
   observeCompaction: () => null,
   acceptExecutionEvent: () => true,
-  settleExecution: () => undefined,
-  executionIntentVersion: () => 0,
   markExecutionSettled: (_sessionID: string) => undefined,
   markExecutionStarted: (_sessionID: string) => undefined,
   recordUsage: async () => null,
@@ -335,26 +332,6 @@ test("an OpenCode compaction failure fails the compaction it names", async () =>
   assert.deepEqual(reports, [{ threadId, turnId, phase: "failed", observedAt: 20, reference: null }]);
 });
 
-test("successful execution fences its completion before the lifecycle observation that may continue it", async () => {
-  const calls: string[] = [];
-  const controller = new OpenCodeEventController({
-    threads: {
-      ...executionLifecycle,
-      currentTurn: () => ({ threadId, turnId }),
-      syncNative: async () => ({ threadId, turn: turn() }),
-      settleExecution: () => { calls.push("settle"); },
-    } as never,
-    transcript: { appendText: () => undefined, recordItem: async () => "item" as never,
-      recordCompaction: async () => undefined, recordTurnState: async () => undefined },
-    observe: async () => { calls.push("observe"); },
-  });
-  await controller.accept(event({
-    id: "end", created: 3, type: "session.execution.succeeded", durable,
-    data: { sessionID: "session" },
-  }));
-  assert.deepEqual(calls, ["settle", "observe"]);
-});
-
 test("terminal notification waits for canonical settlement when native history still reports an active turn", async () => {
   const calls: string[] = [];
   const controller = new OpenCodeEventController({
@@ -362,7 +339,6 @@ test("terminal notification waits for canonical settlement when native history s
       ...executionLifecycle,
       currentTurn: () => ({ threadId, turnId }),
       syncNative: async () => ({ threadId, latestTurnId: turnId, turn: turn("inProgress") }),
-      settleExecution: () => { calls.push("settle"); },
     },
     transcript: {
       appendText: () => undefined,
@@ -377,7 +353,7 @@ test("terminal notification waits for canonical settlement when native history s
     data: { sessionID: "session" },
   }));
   assert.deepEqual(calls, [
-    "record:completed", "settle", "observe", "turn/completed", "thread/status/changed",
+    "record:completed", "observe", "turn/completed", "thread/status/changed",
   ]);
 });
 
@@ -395,7 +371,6 @@ test("connection reconciliation restores active work and settles missed terminal
       }],
       markExecutionStarted: () => { calls.push("started"); },
       markExecutionSettled: () => { calls.push("settled"); },
-      settleExecution: () => { calls.push("settle"); },
     } as never,
     transcript: {
       appendText: () => undefined, recordItem: async () => "item" as never,
@@ -415,7 +390,7 @@ test("connection reconciliation restores active work and settles missed terminal
   active = false;
   await controller.reconcileConnection(new AbortController().signal, () => false);
   assert.deepEqual(calls, [
-    "models/updated", "record:completed", "settled", "settle", "turnCompleted", "turn/completed", "thread/status/changed",
+    "models/updated", "record:completed", "settled", "turnCompleted", "turn/completed", "thread/status/changed",
   ]);
   assert.deepEqual(projects, [projectId]);
 });
@@ -435,7 +410,6 @@ test("terminal reconciliation uses one snapshot and never settles a newer user t
         return { threadId, latestTurnId: turnId, turn: turn() };
       },
       markExecutionSettled: () => { settled.push("settled"); },
-      settleExecution: () => { settled.push("fenced"); },
     },
     observe: async () => { settled.push("observed"); },
     transcript: { appendText: () => undefined, recordItem: async () => "item" as never,

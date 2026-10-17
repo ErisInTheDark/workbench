@@ -278,11 +278,6 @@ function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonPr
       void featureHost.run("webSocketRequests", (controller) => controller.completeDelivery(delivery), "WebSocket delivery receipt")
         .catch((error: unknown) => logError("websocket", `delivery receipt failed: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}`));
     },
-    reportTurnRecoveryFailure: async (cwd, harness, threadId) => await featureHost.run(
-      "turnRecoveryFailures",
-      (owner) => owner.report(cwd, harness, threadId),
-      "turn recovery: report failure",
-    ),
     refreshWorkbenchPromptFiles: ensureWorkbenchPromptFiles,
     reportDiagnostic,
     runTurnRecoveryTask: async (owner, label, task) => await featureHost.run(

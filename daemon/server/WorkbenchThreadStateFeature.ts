@@ -96,6 +96,8 @@ export interface WorkbenchThreadStateFeatureContext {
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   compactThread?(input: { cwd: string; summary: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): Promise<void>;
+  /** Schedule interrupting the live turn and resuming it with current instructions; rejects only when not scheduled. */
+  refreshThread?(harness: WorkbenchHarness, target: { threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): void;
   log?: (message: string) => void;
   /** Deletes expired settled threads' vis sessions and snapshots. */
   pruneThreadVis?(threadIds: readonly WorkbenchThreadId[]): Promise<void>;
@@ -414,9 +416,8 @@ export default class WorkbenchThreadStateFeature {
       }
       if (request.method === "workbench/thread/resume") {
         if (!turnId) throw new Error("The managed thread has no current turn to resume.");
-        const recovery = this.provider(resolved.harness).recovery;
-        if (!recovery) throw new Error(`Managed refresh is unavailable for ${resolved.harness} threads.`);
-        await recovery.refresh(resolved.thread.id);
+        if (!this.context.refreshThread) throw new Error("Managed refresh is not available until the core reload completes.");
+        this.context.refreshThread(resolved.harness, { threadId: WorkbenchThreadIdSchema.parse(resolved.thread.id), turnId });
         return { id, result: { accepted: true, threadId: resolved.thread.id, turnId } };
       }
       throw new Error("Unsupported managed thread command.");

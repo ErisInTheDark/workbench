@@ -4,7 +4,6 @@
  */
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
-import CodexRecoveryNode from "./CodexRecoveryNode";
 import ReloadableNode from "./ReloadableNode";
 import CodexBridgeNode from "./CodexBridgeNode";
 import WorkbenchToolRevisionController, { type WorkbenchToolRevisionState } from "./WorkbenchToolRevisionController";
@@ -30,7 +29,7 @@ interface WorkbenchTurnLifecycleState {
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
-  children: [CodexRecoveryNode, WorkbenchCoreNode, WorkbenchRepoNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchInstallationUpdateNode],
+  children: [WorkbenchCoreNode, WorkbenchRepoNode, WorkbenchAgentCommandNode, WorkbenchMcpNode, CodexBridgeNode, OpenCodeBridgeNode, ClaudeBridgeNode, WorkbenchWebSocketNode, WorkbenchInstallationUpdateNode],
   create: (context, build) => {
     const state = build.handoffState as WorkbenchTurnLifecycleState | undefined;
     const daemonSleep = new WorkbenchDaemonSleepController(context.sleep);

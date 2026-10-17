@@ -10,7 +10,6 @@ import type { SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agen
 import { randomUUID } from "node:crypto";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import type { WorkbenchSteerHistoryEntry } from "workbench-shared/types";
-import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type {
@@ -66,8 +65,6 @@ interface ClaudeLiveTurnIdentity {
   threadId: WorkbenchThreadId;
   turnId: WorkbenchTurnId;
   workingStatusInPrompt: boolean;
-  /** Workflows and activated skills the turn's instructions were built with; absent in older snapshots. */
-  context?: WorkbenchMessageContext;
 }
 
 export interface ClaudeLiveTurnSnapshot extends ClaudeLiveTurnIdentity {
@@ -90,8 +87,6 @@ export interface ClaudeLiveTurnCollaborators {
   readTurn(): Promise<Turn | null>;
   /** Detach from the live registry after the process is released and before settlement is published. */
   release(): Promise<void>;
-  /** The turn's settlement, reported before its lifecycle observation lets Workbench core continue it. */
-  settling(status: Settlement): void;
 }
 
 export interface ClaudeLiveTurnOptions extends ClaudeLiveTurnIdentity, ClaudeLiveTurnCollaborators {
@@ -106,7 +101,6 @@ export default class ClaudeLiveTurn {
     return new ClaudeLiveTurn({
       scope: snapshot.scope, cwd: snapshot.cwd, projectId: snapshot.projectId, threadId: snapshot.threadId,
       turnId: snapshot.turnId, workingStatusInPrompt: snapshot.workingStatusInPrompt,
-      ...(snapshot.context ? { context: snapshot.context } : {}),
       ...collaborators, usage: null, contextWindow: snapshot.launchedContextWindow,
     }, snapshot);
   }
@@ -153,7 +147,6 @@ export default class ClaudeLiveTurn {
     return {
       scope: this.scope, cwd: this.cwd, projectId: this.options.projectId, threadId: this.threadId,
       turnId: this.turnId, workingStatusInPrompt: this.workingStatusInPrompt,
-      ...(this.options.context ? { context: this.options.context } : {}),
       launchedContextWindow: this.options.contextWindow,
       undelivered: [...this.undelivered.values()],
       total: this.total, last: this.last, contextWindow: this.contextWindow,
@@ -354,7 +347,6 @@ export default class ClaudeLiveTurn {
     await this.options.transcript.settleTurn(this.turnId, status);
     // Interrupted and failed turns never reach a result but may still have billed calls.
     this.options.usageChanged();
-    this.options.settling(status);
     await this.options.observe({
       projectId: this.options.projectId, turnStarted: null, displayLabel: null,
       lifecycle: { threadId: this.threadId, event: {

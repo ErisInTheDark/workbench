@@ -1,15 +1,18 @@
 /*
  * Exports:
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
- * - WorkbenchProviderHandleOptions: post-admission hooks and shared message admission policy.
- * - default WorkbenchProviderHandle: forward operations through the current definition lease and wake waits after accepted steers.
+ * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
+ * - WorkbenchProviderHandleOptions: post-admission hooks, instruction selection and shared message admission policy.
+ * - default WorkbenchProviderHandle: forward operations through the current definition lease, supply thread instruction selections, and wake waits after accepted steers.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
-import type { WorkbenchUnfinishedTurnTarget } from "workbench-shared/workbench/provider/provider-recovery";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import type WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
+import type { WorkbenchMessageContext, WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 export interface WorkbenchProviderMessageAdmission {
   firstMessagePreview?: string;
@@ -19,8 +22,17 @@ export interface WorkbenchProviderMessageAdmission {
   turnId: string;
 }
 
+export interface WorkbenchProviderHiddenTurn {
+  threadId: string;
+  clientMessageId: string;
+  input: WorkbenchUserInput[];
+  /** Runs inside the thread's admission lane, after every earlier admission; false skips the turn. */
+  isCurrent(threads: Pick<WorkbenchProvider["threads"], "latestTurn" | "isTurnLive">): Promise<boolean>;
+}
+
 export interface WorkbenchProviderHandleOptions {
   interruptSteerWaits: (threadId: string, senderThreadId?: string) => void;
+  instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "record">;
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
   onMessageAdmitted?: (admission: WorkbenchProviderMessageAdmission) => Promise<void> | void;
@@ -45,6 +57,19 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     options?: { skipAutoCompact?: boolean },
   ) {
     return this.options.messageAdmission ? this.options.messageAdmission(threadId, provider, admit, options) : admit();
+  }
+
+  /** Inside the admission lane, so a selection recorded by an earlier message is the one this message sees. */
+  private async withSelection<T>(
+    threadId: string, context: WorkbenchMessageContext | undefined,
+    admit: (context: WorkbenchMessageContext | undefined) => Promise<T>,
+  ) {
+    const selection = this.options.instructionSelection;
+    if (!selection) return await admit(context);
+    const id = WorkbenchThreadIdSchema.parse(threadId);
+    const result = await admit(await selection.resolve(id, context));
+    await selection.record(id, context);
+    return result;
   }
 
   private publishMessageAdmission(
@@ -143,12 +168,16 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     submit: async input => {
       const { skipAutoCompact, ...providerInput } = input;
       const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
-        this.admitMessage(input.threadId, provider, () => provider.threads.submit(providerInput), { skipAutoCompact })
+        this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (
+          provider.threads.submit({ ...providerInput, ...(context ? { context } : {}) })
+        )), { skipAutoCompact })
       ), `${this.key}: threads.submit`));
       return await this.publishAcceptedUserMessage(input, result);
     },
     messageAgent: async input => {
-      const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => provider.threads.messageAgent(input)), `${this.key}: threads.messageAgent`);
+      const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(input.threadId, provider, () => (
+        this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) }))
+      )), `${this.key}: threads.messageAgent`);
       await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
       const admitted = this.admitted(input.threadId, result, input.message.senderThreadId);
       await this.publishMessageAdmission(input.threadId, admitted);
@@ -165,21 +194,26 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     materialize: (threadId, turnIds, signal) => this.run(providerRegistrations[this.key], provider => provider.threads.materialize(threadId, turnIds, signal), `${this.key}: threads.materialize`),
   };
 
-  readonly recovery: NonNullable<WorkbenchProvider["recovery"]> = {
-    refresh: threadId => this.run(providerRegistrations[this.key], provider => {
-      if (!provider.recovery?.refresh) throw new Error(`Provider ${this.key} does not support managed refresh.`);
-      return provider.recovery.refresh(threadId);
-    }, `${this.key}: recovery.refresh`),
-    continueUnfinished: async target => { await this.continueUnfinishedTurn(target); },
-  };
-
-  /** "unsupported" when this provider generation has no unfinished-turn continuation. */
-  continueUnfinishedTurn(target: WorkbenchUnfinishedTurnTarget) {
-    return this.run(providerRegistrations[this.key], async provider => {
-      if (!provider.recovery?.continueUnfinished) return "unsupported" as const;
-      await provider.recovery.continueUnfinished(target);
-      return "handled" as const;
-    }, `${this.key}: recovery.continueUnfinished`);
+  /** Start a Workbench-owned hidden turn with the thread's selection, unless newer work superseded it in the lane. */
+  async admitHiddenTurn(turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded"> {
+    const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(turn.threadId, provider, async () => {
+      if (!await turn.isCurrent(provider.threads)) return null;
+      return await this.withSelection(turn.threadId, undefined, context => provider.threads.submit({
+        threadId: turn.threadId, clientMessageId: turn.clientMessageId, input: turn.input, intent: "newTurn",
+        ...(context ? { context } : {}),
+      }));
+    }, { skipAutoCompact: true }), `${this.key}: threads.admitHiddenTurn`);
+    if (!result) return "superseded";
+    this.admitted(turn.threadId, result);
+    try {
+      await this.publishMessageAdmission(turn.threadId, {
+        kind: result.kind, turnId: result.kind === "started" ? result.turn.id : result.turnId,
+      });
+    } catch (error) {
+      // The provider already runs the turn; its own lifecycle observations still reach thread state.
+      console.warn(`[thread-state] hidden turn admission was not published: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}`);
+    }
+    return "started";
   }
 
   private singleFileOperation<T>(operation: (owner: NonNullable<WorkbenchProvider["singleFile"]>) => Promise<T>) {
