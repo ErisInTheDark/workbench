@@ -201,7 +201,7 @@ export default class WorkbenchAppRuntime {
           "app/server/launch.mjs",
           "scripts/installation/update-repair.mjs",
           "scripts/installation/update-journal.mjs",
-          "package.json",
+          "/package.json",
           "shared/package.json",
           "app/tray/**",
           "!app/tray/target/**",

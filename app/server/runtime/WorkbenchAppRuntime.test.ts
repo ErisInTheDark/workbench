@@ -208,6 +208,8 @@ test("separates reloadable imports, stable process imports and external build in
   assert.deepEqual(owners("app/package.json"), ["client:process"]);
   assert.deepEqual(owners("app/tsconfig.json"), ["client:process"]);
   assert.deepEqual(owners("package.json"), ["client:process"]);
+  assert.deepEqual(owners("package/package.json"), []);
+  assert.deepEqual(owners("unrelated/package.json"), []);
   assert.deepEqual(owners("shared/http/StaticHttpRequestController.ts"), ["client:http"]);
   assert.deepEqual(owners("shared/http/HttpServer.ts"), ["client:process"]);
   assert.ok(owners("shared/workbench-data-root.ts").includes("client:process"));
