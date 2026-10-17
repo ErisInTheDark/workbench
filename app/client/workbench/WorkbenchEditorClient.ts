@@ -70,7 +70,7 @@ import {
     type ParsedBlock,
 } from "./markdown/markdown-parse";
 import { serializeBlocksToMarkdown } from "./markdown/markdown-serialization";
-import { getCommentThreadKind, isCommentThreadElement } from "./markdown/review-markup";
+import { getCommentThreadKind, getSuggestionId, isCommentThreadElement } from "./markdown/review-markup";
 import { DEFAULT_MARKDOWN_STYLE, detectMarkdownStyle, type MarkdownStyle } from "./markdown/markdown-style";
 import {
     inspectDraftContent,
@@ -98,6 +98,8 @@ const RICH_TEXT_SAVED_STATUS_MESSAGE = "Saved.";
 const SAVE_GUARD_STATUS_MESSAGE = "Save blocked: markup mismatch. Check the console log.";
 const WRITE_CONFLICT_STATUS_MESSAGE = "File changed on disk. Reload or overwrite to save.";
 const TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS = 750;
+/** Half the gap between a suggestion row's columns: where its git markers sit. */
+const SUGGESTION_ROW_GUTTER_INSET_PX = 16;
 const TOOLBAR_INTERACTION_GRACE_MS = 220;
 
 export type EditorMode = "rich" | "plain";
@@ -155,6 +157,7 @@ export interface EditorToolbarState {
   editable: boolean;
   inline: InlineFormatState;
   reviewMode: ReviewMode;
+  showGitMarkers: boolean;
 }
 
 export interface WorkbenchEditorControllerOptions {
@@ -204,7 +207,6 @@ export interface WorkbenchEditorClientOptions {
   handleEditorKeyDown: (event: KeyboardEvent) => void;
   handleEditorPaste?: (event: ClipboardEvent) => void;
   handleEditorPointerDown: () => void;
-  handleEditorToggle: (event: Event) => void;
   handleOverwriteConflict: () => Promise<void>;
   handlePointerMove: (event: PointerEvent) => void;
   handleReloadConflict: () => Promise<void>;
@@ -229,7 +231,6 @@ interface WorkbenchEditorClient {
   clearPendingInlineFormats: () => void;
   comments: CommentController;
   dispose: () => void;
-  findSuggestionMemberForPanel: (node: Node | null) => HTMLElement | null;
   getDocumentAdapter: () => EditorDocumentAdapter;
   getCaretInlineContext: (range: Range) => CaretRenderContext | null;
   getSelectedRevisionToolbarContext: () => RevisionToolbarContext | null;
@@ -247,6 +248,7 @@ interface WorkbenchEditorClient {
   refreshToolbarState: () => void;
   scheduleReviewRefresh: () => void;
   setReviewMode: (mode: ReviewMode) => void;
+  setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
   startCommentDraft: () => boolean;
   subscribeToolbarState: (listener: () => void) => () => void;
@@ -904,9 +906,6 @@ function WorkbenchEditorClient(
     getMode: () => options.fileSessionState.mode,
     getVisualViewportMetrics,
     onSyncEditorAfterStructuralChange: syncEditorAfterStructuralChange,
-    resolveSuggestion: (id, action) => {
-      suggestionController.resolve(id, action);
-    },
     revisionHoverAcceptButton: toolbars.revisionAccept,
     revisionHoverRejectButton: toolbars.revisionReject,
     revisionHoverToolbar: toolbars.revisionHover,
@@ -1018,6 +1017,7 @@ function WorkbenchEditorClient(
       editable: Boolean(options.sessionState.currentPath) && options.fileSessionState.mode === "rich",
       inline: inlineFormatController.getActiveInlineFormats(),
       reviewMode,
+      showGitMarkers: !diffGutter.hidden,
     };
     const key = JSON.stringify(next);
     if (key === toolbarStateKey) {
@@ -1064,6 +1064,7 @@ function WorkbenchEditorClient(
     }
 
     const anchorMetrics = new Map<string, DiffAnchorMetrics>();
+    const anchorElements = new Map<string, HTMLElement>();
     for (const anchor of flattenLiveDiffAnchors(editor)) {
       const metrics = getAnchorMetrics(anchor.element, editorShell);
       if (metrics === null) {
@@ -1071,25 +1072,52 @@ function WorkbenchEditorClient(
       }
 
       anchorMetrics.set(anchor.path, metrics);
+      anchorElements.set(anchor.path, anchor.element);
     }
 
-    const markers: Array<{ bottom?: number; symbol: DiffMarkerSymbol; top: number }> = [];
+    const markers: Array<{ bottom?: number; left?: number; symbol: DiffMarkerSymbol; top: number }> = [];
+    const rowsSplit = editor.hasAttribute("data-suggest-split");
+    const gutterRect = diffGutter.getBoundingClientRect();
+    /** A suggestion row's blocks sit outside the text column; their markers sit in the gap before the suggested column. */
+    const rowOf = (path: string) => {
+      let element: HTMLElement | null = anchorElements.get(path) ?? null;
+      while (element && element.parentElement !== editor) element = element.parentElement;
+      return rowsSplit && element ? { element, id: getSuggestionId(element) } : null;
+    };
 
     for (const run of currentMarkerRuns) {
-      const runMetrics = run.paths
-        .map((path) => anchorMetrics.get(path))
-        .filter((metrics): metrics is DiffAnchorMetrics => Boolean(metrics));
-      const firstMetrics = runMetrics[0];
-      const lastMetrics = runMetrics[runMetrics.length - 1];
-      if (!firstMetrics || !lastMetrics) {
-        continue;
+      const segments: Array<{ id: string | null; left?: number; paths: string[] }> = [];
+      for (const path of run.paths) {
+        const row = rowOf(path);
+        const id = row?.id ?? null;
+        const last = segments.at(-1);
+        if (last && last.id === id) {
+          last.paths.push(path);
+          continue;
+        }
+        const left = id !== null && row
+          ? row.element.getBoundingClientRect().left - gutterRect.left - SUGGESTION_ROW_GUTTER_INSET_PX
+          : undefined;
+        segments.push({ id, left, paths: [path] });
       }
 
-      markers.push({
-        bottom: runMetrics.length > 1 ? lastMetrics.center : undefined,
-        symbol: run.symbol,
-        top: firstMetrics.center,
-      });
+      for (const segment of segments) {
+        const runMetrics = segment.paths
+          .map((path) => anchorMetrics.get(path))
+          .filter((metrics): metrics is DiffAnchorMetrics => Boolean(metrics));
+        const firstMetrics = runMetrics[0];
+        const lastMetrics = runMetrics[runMetrics.length - 1];
+        if (!firstMetrics || !lastMetrics) {
+          continue;
+        }
+
+        markers.push({
+          bottom: runMetrics.length > 1 ? lastMetrics.center : undefined,
+          left: segment.left,
+          symbol: run.symbol,
+          top: firstMetrics.center,
+        });
+      }
     }
 
     const lineHeight = getEditorLineHeight(editor);
@@ -1102,8 +1130,10 @@ function WorkbenchEditorClient(
 
     markers
       .sort((left, right) => left.top - right.top)
-      .forEach(({ bottom, symbol, top }) => {
-        diffGutter.append(createDiffMarker(symbol, top, bottom));
+      .forEach(({ bottom, left, symbol, top }) => {
+        const marker = createDiffMarker(symbol, top, bottom);
+        if (left !== undefined) marker.style.left = `${left}px`;
+        diffGutter.append(marker);
       });
   }
 
@@ -1209,6 +1239,10 @@ function WorkbenchEditorClient(
     highlights,
     isRichMode,
     layer: reviewLayer,
+    onLayoutChanged: () => {
+      commentController.scheduleRefresh();
+      scheduleDiffGutterRefresh();
+    },
     renderMarkdown: renderMarkdownFragment,
     runStructuralMutation: (mutate, hooks) => {
       runStructuralMutation(mutate, hooks);
@@ -1222,6 +1256,7 @@ function WorkbenchEditorClient(
     container: editorShell ?? editor,
     editor,
     getInlineRunContainer: (node) => options.controllerOptions.inlineFormat.getInlineRunContainer(node),
+    getObstacles: () => suggestionController.getRows(),
     highlights,
     isRichMode,
     runStructuralMutation: (mutate) => {
@@ -1235,6 +1270,11 @@ function WorkbenchEditorClient(
   function scheduleReviewRefresh() {
     suggestionController.scheduleRefresh();
     commentController.scheduleRefresh();
+  }
+
+  function setShowGitMarkers(show: boolean) {
+    diffGutter.hidden = !show;
+    refreshToolbarState();
   }
 
   function setReviewMode(mode: ReviewMode) {
@@ -1873,6 +1913,10 @@ function WorkbenchEditorClient(
     options.handleEditorClick(event);
   }, { signal });
 
+  editor.addEventListener("pointerleave", () => {
+    commentController.setHovered(null);
+  }, { signal });
+
   editor.addEventListener("pointerdown", () => {
     preservedToolbarSelection = null;
     options.handleEditorPointerDown();
@@ -1886,17 +1930,28 @@ function WorkbenchEditorClient(
     options.handlePointerMove(event);
   }, { signal });
 
-  editor.addEventListener("toggle", (event) => {
-    options.handleEditorToggle(event);
-  }, { capture: true, signal });
+  // Reflow without an edit (disclosure toggles, late images and fonts) still moves gutter markers, rows and cards.
+  // The editor's own box can keep its size through these (it fills the pane), so its resizes are no signal.
+  for (const type of ["toggle", "load"]) {
+    editor.addEventListener(type, () => {
+      options.handleViewportChanged();
+    }, { capture: true, signal });
+  }
+  document.fonts?.addEventListener("loadingdone", () => {
+    options.handleViewportChanged();
+  }, { signal });
 
   window.addEventListener("resize", () => {
     options.handleViewportChanged();
   }, { signal });
 
-  window.addEventListener("scroll", () => {
+  // The editor scrolls inside its pane, whose scroll events never bubble; capture sees any scroller holding it.
+  window.addEventListener("scroll", (event) => {
+    if (event.target instanceof Node && event.target !== document && !event.target.contains(editor)) {
+      return;
+    }
     options.handleViewportChanged();
-  }, { signal });
+  }, { capture: true, signal });
 
   window.visualViewport?.addEventListener("resize", () => {
     options.handleViewportChanged();
@@ -1987,7 +2042,6 @@ function WorkbenchEditorClient(
       reviewLayer.replaceChildren();
       lifecycle.dispose();
     },
-    findSuggestionMemberForPanel: suggestionController.findMemberForPanel,
     getDocumentAdapter: () => documentAdapter,
     getCaretInlineContext,
     getSelectedRevisionToolbarContext,
@@ -2005,6 +2059,7 @@ function WorkbenchEditorClient(
     refreshToolbarState,
     scheduleReviewRefresh,
     setReviewMode,
+    setShowGitMarkers,
     setSuggestionLayout: suggestionController.setLayout,
     startCommentDraft,
     subscribeToolbarState: (listener) => {

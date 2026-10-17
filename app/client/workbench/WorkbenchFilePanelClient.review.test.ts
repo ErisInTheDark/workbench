@@ -76,7 +76,7 @@ for (const { action, markdown } of [
     panel.panel.setReviewMode("suggest");
     await panel.caret("alpha| beta");
     await panel.type("X");
-    await panel.resolveRevision(action);
+    await panel.resolveSuggestion(action);
     assert.equal(await panel.save(), markdown);
     assert.equal(panel.editor.querySelector("[data-suggestion]"), null);
   }));
@@ -84,7 +84,7 @@ for (const { action, markdown } of [
 
 test("a suggestion read from markdown resolves to its original", () => withPanel("<del>\n\nold words\n\n</del>\n<ins>\n\nnew words\n\n</ins>\n", async panel => {
   await panel.caret("new| words");
-  await panel.resolveRevision("reject");
+  await panel.resolveSuggestion("reject");
   assert.equal(await panel.save(), "old words\n");
 }));
 

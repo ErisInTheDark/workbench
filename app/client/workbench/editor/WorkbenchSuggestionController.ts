@@ -1,10 +1,11 @@
 /*
  * Exports:
  * - ReviewMode: "edit" changes text directly; "suggest" turns every change into a suggestion.
- * - SuggestionLayout: where original versions show: beside the text when the pane has room, else below it.
+ * - SuggestionLayout: where suggestion rows place their original and suggested columns, outside the text column.
+ * - SuggestionRowBounds: vertical extent of a suggestion row, which comment cards keep clear of.
  * - WorkbenchSuggestionControllerOptions: editor surfaces and mutation hooks the controller drives.
- * - default WorkbenchSuggestionController: own suggestion groups: tag blocks as the user starts changing them, show each
- *   group's original in the layer, highlight the word diff, and resolve groups to one side.
+ * - default WorkbenchSuggestionController: own suggestion groups: tag blocks as the user starts changing them, lay each
+ *   group out as a row with its original and keep-side actions, highlight the word diff, and resolve groups to one side.
  */
 
 import { getSuggestionId, getSuggestionOld, nextSuggestionId, REVIEW_ATTRIBUTES } from "../markdown/review-markup";
@@ -13,10 +14,22 @@ import { diffWords, type TextSpan } from "./text-diff";
 
 export type ReviewMode = "edit" | "suggest";
 
+/**
+ * Where a suggestion row's two columns sit, in px from the editor shell's left edge. The row shows through a viewport
+ * (the visible part of the pane); a row wider than its viewport scrolls sideways.
+ */
 export interface SuggestionLayout {
-  mode: "beside" | "below";
-  /** Width of an original shown beside the text, in px. */
+  newLeft: number;
+  oldLeft: number;
+  viewportLeft: number;
+  viewportWidth: number;
   width: number;
+}
+
+/** Vertical extent of a suggestion row in editor-shell px, which comment cards must stay clear of. */
+export interface SuggestionRowBounds {
+  bottom: number;
+  top: number;
 }
 
 export interface WorkbenchSuggestionControllerOptions {
@@ -25,6 +38,8 @@ export interface WorkbenchSuggestionControllerOptions {
   highlights: EditorHighlightScope;
   isRichMode: () => boolean;
   layer: HTMLElement;
+  /** Rows moved, resized or scrolled; things placed around them need placing again. */
+  onLayoutChanged: () => void;
   renderMarkdown: (markdown: string) => HTMLElement;
   runStructuralMutation: (mutate: () => void, hooks?: { afterDomMutation?: () => void }) => void;
   scheduleFrame: (callback: () => void) => void;
@@ -32,7 +47,7 @@ export interface WorkbenchSuggestionControllerOptions {
 }
 
 interface WorkbenchSuggestionController {
-  findMemberForPanel: (node: Node | null) => HTMLElement | null;
+  getRows: () => readonly SuggestionRowBounds[];
   prepareForEdit: () => void;
   refresh: () => void;
   resolve: (id: string, action: "accept" | "reject") => void;
@@ -52,8 +67,25 @@ interface TextMap {
   text: string;
 }
 
-const PANEL_GAP_PX = 16;
-const PANEL_ATTRIBUTE = "data-suggestion-panel";
+const ROW_ATTRIBUTE = "data-suggestion-row";
+/** Room above a row's first block for the row's header of labels and actions. */
+const ROW_HEAD_PX = 44;
+const ROW_PAD_PX = 12;
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+/** Matches Tailwind's `md` breakpoint, below which the row band is styled solid. */
+const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
+
+function createCheckIcon() {
+  const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+  for (const [name, value] of Object.entries({
+    "aria-hidden": "true", fill: "none", height: "16", stroke: "currentColor", "stroke-linecap": "round",
+    "stroke-linejoin": "round", "stroke-width": "2", viewBox: "0 0 24 24", width: "16",
+  })) svg.setAttribute(name, value);
+  const path = document.createElementNS(SVG_NAMESPACE, "path");
+  path.setAttribute("d", "M20 6 9 17l-5-5");
+  svg.append(path);
+  return svg;
+}
 
 function isBreakNode(node: Node) {
   return node instanceof HTMLBRElement || (node instanceof Text && !(node.textContent ?? "").trim());
@@ -104,9 +136,13 @@ function spansToRanges(map: TextMap, spans: readonly TextSpan[]) {
 
 function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOptions): WorkbenchSuggestionController {
   const { editor, layer } = options;
-  let layout: SuggestionLayout = { mode: "below", width: 0 };
+  let layout: SuggestionLayout = { newLeft: 0, oldLeft: 0, viewportLeft: 0, viewportWidth: 0, width: 0 };
   let editedGroupId: string | null = null;
-  const paddedElements = new Set<HTMLElement>();
+  /** How far each scrollable row is scrolled sideways; rows start showing their suggested side. */
+  const rowScroll = new Map<string, number>();
+  let rows: SuggestionRowBounds[] = [];
+  let rowsKey = "";
+  const styledMembers = new Set<HTMLElement>();
   const renderedOld = new WeakMap<HTMLElement, string>();
 
   function topLevelChildren() {
@@ -192,6 +228,7 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     const onlyId = ids.size === 1 ? [...ids][0] : undefined;
     if (onlyId) {
       editedGroupId = onlyId;
+      rowScroll.delete(onlyId);
       return;
     }
 
@@ -229,48 +266,118 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     }
   }
 
-  function getPanel(id: string) {
-    const existing = layer.querySelector<HTMLElement>(`[${PANEL_ATTRIBUTE}="${id}"]`);
-    if (existing) return existing;
-
-    const panel = document.createElement("div");
-    panel.setAttribute(PANEL_ATTRIBUTE, id);
-    const label = document.createElement("p");
-    label.setAttribute(`${PANEL_ATTRIBUTE}-label`, "");
-    label.textContent = "Original";
-    const body = document.createElement("div");
-    body.setAttribute(`${PANEL_ATTRIBUTE}-body`, "");
-    panel.append(label, body);
-    layer.append(panel);
-    return panel;
+  function createElement(attribute: string, tag: keyof HTMLElementTagNameMap = "div", text = "") {
+    const element = document.createElement(tag);
+    element.setAttribute(attribute, "");
+    if (text) element.textContent = text;
+    return element;
   }
 
-  function renderPanelBody(panel: HTMLElement, old: string) {
-    const body = panel.querySelector<HTMLElement>(`[${PANEL_ATTRIBUTE}-body]`)!;
-    if (renderedOld.get(body) === old) return body;
+  function createAction(id: string, action: "accept" | "reject", label: string) {
+    const button = createElement(`${ROW_ATTRIBUTE}-action`, "button") as HTMLButtonElement;
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.dataset.suggestionAction = action;
+    button.append(createCheckIcon());
+    // A press keeps focus and selection in the editor; resolving places the caret itself.
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => resolve(id, action));
+    return button;
+  }
+
+  /**
+   * One row per suggestion in the layer: a band, a sideways scroller (used when the row is wider than its viewport),
+   * the read-only original, and a header over each column. Headers paint above the scroller so their buttons stay live.
+   */
+  function getRow(id: string) {
+    const existing = Array.from(layer.children).find((child) => child.getAttribute(ROW_ATTRIBUTE) === id);
+    if (existing instanceof HTMLElement) return existing;
+
+    const row = createElement(ROW_ATTRIBUTE);
+    row.setAttribute(ROW_ATTRIBUTE, id);
+    const scroller = createElement(`${ROW_ATTRIBUTE}-scroller`);
+    scroller.append(createElement(`${ROW_ATTRIBUTE}-scroll-width`));
+    scroller.addEventListener("scroll", () => {
+      rowScroll.set(id, scroller.scrollLeft);
+      applyRowScroll(id);
+      options.onLayoutChanged();
+    }, { passive: true });
+    const oldHead = createElement(`${ROW_ATTRIBUTE}-head`);
+    oldHead.dataset.side = "old";
+    oldHead.append(createElement(`${ROW_ATTRIBUTE}-label`, "span", "Original"), createAction(id, "reject", "Keep original"));
+    const newHead = createElement(`${ROW_ATTRIBUTE}-head`);
+    newHead.dataset.side = "new";
+    newHead.append(createElement(`${ROW_ATTRIBUTE}-label`, "span", "Suggested"), createAction(id, "accept", "Keep suggestion"));
+    row.append(createElement(`${ROW_ATTRIBUTE}-band`), scroller, createElement(`${ROW_ATTRIBUTE}-old`), oldHead, newHead);
+    layer.append(row);
+    return row;
+  }
+
+  function part(row: HTMLElement, name: "band" | "old" | "head" | "scroller" | "scroll-width", side?: "new" | "old") {
+    return row.querySelector<HTMLElement>(`[${ROW_ATTRIBUTE}-${name}]${side ? `[data-side="${side}"]` : ""}`)!;
+  }
+
+  /** Elements that move together when a row scrolls sideways, their unscrolled left edge, and how far it can scroll. */
+  const scrollTargets = new Map<string, { elements: Array<{ element: HTMLElement; left: number }>; max: number }>();
+
+  /** Scrolled columns move sideways and are cut off at the viewport's edges. */
+  function applyRowScroll(id: string) {
+    const targets = scrollTargets.get(id);
+    if (!targets) return;
+    const offset = -Math.min(targets.max, rowScroll.get(id) ?? targets.max);
+    const viewportRight = layout.viewportLeft + layout.viewportWidth;
+    for (const { element, left } of targets.elements) {
+      if (!targets.max) {
+        element.style.removeProperty("transform");
+        element.style.removeProperty("clip-path");
+        continue;
+      }
+      const shownLeft = left + offset;
+      const clipLeft = Math.max(0, layout.viewportLeft - shownLeft);
+      const clipRight = Math.max(0, shownLeft + layout.width - viewportRight);
+      element.style.transform = `translateX(${offset}px)`;
+      element.style.clipPath = `inset(-1em ${clipRight}px -1em ${clipLeft}px)`;
+    }
+  }
+
+  function renderOld(body: HTMLElement, old: string) {
+    if (renderedOld.get(body) === old) return;
     renderedOld.set(body, old);
     body.replaceChildren();
     if (!old) {
-      const empty = document.createElement("p");
-      empty.setAttribute(`${PANEL_ATTRIBUTE}-empty`, "");
-      empty.textContent = "Nothing here before";
-      body.append(empty);
-      return body;
+      body.append(createElement(`${ROW_ATTRIBUTE}-empty`, "p", "Nothing here before"));
+      return;
     }
     body.append(...Array.from(options.renderMarkdown(old).childNodes));
     for (const element of Array.from(body.querySelectorAll("[contenteditable]"))) element.removeAttribute("contenteditable");
-    return body;
   }
 
-  function clearPadding() {
-    for (const element of paddedElements) element.style.removeProperty("padding-bottom");
-    paddedElements.clear();
+  function place(element: HTMLElement, left: number, top: number, width: number) {
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    element.style.width = `${width}px`;
+  }
+
+  function clearMemberStyles() {
+    for (const element of styledMembers) {
+      element.style.removeProperty("margin-top");
+      element.style.removeProperty("padding-bottom");
+      element.style.removeProperty("transform");
+      element.style.removeProperty("clip-path");
+    }
+    styledMembers.clear();
   }
 
   function memberElements(group: SuggestionGroup) {
     return group.nodes.filter((node): node is HTMLElement => node instanceof HTMLElement && !(node instanceof HTMLBRElement));
   }
 
+  /**
+   * The suggestion's own blocks stay in the document and hold the caret; CSS moves them into the row's right column.
+   * The row header sits in space opened above them, and the shorter side is padded to the taller. A row wider than
+   * its viewport scrolls both columns together.
+   */
   function layoutGroup(group: SuggestionGroup) {
     const members = memberElements(group);
     const first = members[0];
@@ -279,30 +386,79 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
 
     for (const member of members) {
       member.toggleAttribute(REVIEW_ATTRIBUTES.suggestionEmpty, isEmptyMember(member));
+      styledMembers.add(member);
     }
+    first.style.marginTop = `${ROW_HEAD_PX + ROW_PAD_PX}px`;
 
-    const panel = getPanel(group.id);
-    const body = renderPanelBody(panel, group.old);
+    const row = getRow(group.id);
+    const oldBody = part(row, "old");
+    renderOld(oldBody, group.old);
     const top = first.offsetTop;
-    const groupHeight = last.offsetTop + last.offsetHeight - top;
-    panel.dataset.layout = layout.mode;
-    if (layout.mode === "beside") {
-      // The original's first line sits level with the suggestion's first line, its label above.
-      panel.style.top = `${top - body.offsetTop}px`;
-      panel.style.left = `${editor.offsetLeft - layout.width - PANEL_GAP_PX}px`;
-      panel.style.width = `${layout.width}px`;
-    } else {
-      panel.style.top = `${top + groupHeight + PANEL_GAP_PX / 2}px`;
-      panel.style.left = `${editor.offsetLeft}px`;
-      panel.style.width = `${editor.offsetWidth}px`;
+    const newBottom = last.offsetTop + last.offsetHeight;
+    const { newLeft, oldLeft, viewportLeft, viewportWidth, width } = layout;
+    const oldHead = part(row, "head", "old");
+    const newHead = part(row, "head", "new");
+    place(oldBody, oldLeft, top, width);
+    place(newHead, newLeft, top - ROW_HEAD_PX, width);
+    place(oldHead, oldLeft, top - ROW_HEAD_PX, width);
+
+    const contentBottom = Math.max(newBottom, top + oldBody.offsetHeight);
+    if (contentBottom > newBottom) {
+      last.style.paddingBottom = `${contentBottom - newBottom}px`;
     }
 
-    const extra = layout.mode === "beside" ? panel.offsetHeight - body.offsetTop - groupHeight : panel.offsetHeight + PANEL_GAP_PX;
-    if (extra > 0) {
-      last.style.paddingBottom = `${extra}px`;
-      paddedElements.add(last);
+    const bounds = { top: top - ROW_HEAD_PX - ROW_PAD_PX / 2, bottom: contentBottom + ROW_PAD_PX };
+    // The band spans the editor's pane, fading at its ends; on mobile it runs solid across the whole screen instead.
+    const fillsScreen = typeof window.matchMedia === "function" && window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+    const paneEdges = ((fillsScreen ? layer.closest("main") : null) ?? layer.parentElement?.parentElement)?.getBoundingClientRect();
+    const layerLeft = layer.getBoundingClientRect().left;
+    const band = part(row, "band");
+    place(
+      band,
+      paneEdges ? paneEdges.left - layerLeft : viewportLeft,
+      bounds.top,
+      paneEdges ? paneEdges.width : viewportWidth,
+    );
+    band.style.height = `${bounds.bottom - bounds.top}px`;
+
+    const rowLeft = Math.min(newLeft, oldLeft);
+    const rowSpan = Math.max(newLeft, oldLeft) + width - rowLeft;
+    const max = Math.max(0, Math.round(rowSpan - viewportWidth));
+    const scroller = part(row, "scroller");
+    scroller.hidden = max === 0;
+    place(scroller, viewportLeft, top - ROW_HEAD_PX, viewportWidth);
+    part(row, "scroll-width").style.width = `${rowSpan}px`;
+    scrollTargets.set(group.id, {
+      elements: [
+        ...members.map((element) => ({ element, left: newLeft })),
+        { element: newHead, left: newLeft },
+        { element: oldBody, left: oldLeft },
+        { element: oldHead, left: oldLeft },
+      ],
+      max,
+    });
+    if (max > 0 && scroller.scrollLeft !== Math.min(max, rowScroll.get(group.id) ?? max)) {
+      scroller.scrollLeft = Math.min(max, rowScroll.get(group.id) ?? max);
     }
-    return { body, members };
+    applyRowScroll(group.id);
+    return { body: oldBody, bounds, members };
+  }
+
+  function applyLayoutVariables() {
+    // Originals render at the editor's (zoomable) text size.
+    layer.style.fontSize = editor.style.fontSize;
+    // Until the pane is measured, suggestion blocks stay in the text column.
+    editor.toggleAttribute("data-suggest-split", layout.width > 0);
+    editor.style.setProperty("--suggest-new-offset", `${layout.newLeft - editor.offsetLeft}px`);
+    editor.style.setProperty("--suggest-col-width", `${layout.width}px`);
+  }
+
+  function publishRows(next: SuggestionRowBounds[]) {
+    const key = JSON.stringify(next);
+    if (key === rowsKey) return;
+    rowsKey = key;
+    rows = next;
+    options.onLayoutChanged();
   }
 
   function refresh() {
@@ -310,6 +466,7 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
       layer.replaceChildren();
       options.highlights.set("suggest-del", []);
       options.highlights.set("suggest-ins", []);
+      publishRows([]);
       return;
     }
 
@@ -326,17 +483,24 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     }
     if (editingId && !live.some((group) => group.id === editingId)) editedGroupId = null;
 
-    clearPadding();
+    clearMemberStyles();
+    applyLayoutVariables();
     const liveIds = new Set(live.map((group) => group.id));
-    for (const panel of Array.from(layer.querySelectorAll<HTMLElement>(`[${PANEL_ATTRIBUTE}]`))) {
-      if (!liveIds.has(panel.getAttribute(PANEL_ATTRIBUTE)!)) panel.remove();
+    for (const row of Array.from(layer.children)) {
+      const id = row.getAttribute(ROW_ATTRIBUTE) ?? "";
+      if (liveIds.has(id)) continue;
+      row.remove();
+      scrollTargets.delete(id);
+      rowScroll.delete(id);
     }
 
     const deleted: Range[] = [];
     const inserted: Range[] = [];
+    const nextRows: SuggestionRowBounds[] = [];
     for (const group of live) {
       const placed = layoutGroup(group);
       if (!placed) continue;
+      nextRows.push(placed.bounds);
       const before = readTextMap(group.old ? Array.from(placed.body.children) : []);
       const after = readTextMap(placed.members);
       const diff = diffWords(before.text, after.text);
@@ -345,6 +509,7 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     }
     options.highlights.set("suggest-del", deleted);
     options.highlights.set("suggest-ins", inserted);
+    publishRows(nextRows);
   }
 
   function scheduleRefresh() {
@@ -390,22 +555,19 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     refresh();
   }
 
-  function findMemberForPanel(node: Node | null) {
-    const element = node instanceof Element ? node : node?.parentElement ?? null;
-    const id = element?.closest(`[${PANEL_ATTRIBUTE}]`)?.getAttribute(PANEL_ATTRIBUTE);
-    return id ? collectGroups().find((group) => group.id === id)?.nodes.find((member): member is HTMLElement => member instanceof HTMLElement) ?? null : null;
-  }
-
   return {
-    findMemberForPanel,
+    getRows: () => rows,
     prepareForEdit,
     refresh,
     resolve,
     scheduleRefresh,
     setLayout: (next) => {
-      if (next.mode === layout.mode && next.width === layout.width) return;
+      if (JSON.stringify(next) === JSON.stringify(layout)) return;
       layout = next;
-      scheduleRefresh();
+      options.scheduleFrame(() => {
+        refresh();
+        options.onLayoutChanged();
+      });
     },
   };
 }

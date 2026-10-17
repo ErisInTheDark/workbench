@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - CommentMarginLayout: comment threads either sit in a margin column right of the text, or open from badges inline.
- * - EditorMarginLayout: where comments and suggestion originals go, and how far the text column shifts to make room.
+ * - EditorMarginLayout: where comments and suggestion rows go, and how far the text column shifts to make room.
  * - default useEditorMarginLayout: measure the pane around an editor shell and lay out its margins.
  */
 "use client";
@@ -23,13 +23,36 @@ export interface EditorMarginLayout {
 const MARGIN_GAP_PX = 16;
 const COMMENT_MIN_WIDTH_PX = 216;
 const COMMENT_MAX_WIDTH_PX = 320;
-const ORIGINAL_MIN_WIDTH_PX = 224;
+export const SUGGESTION_COLUMN_GAP_PX = 32;
+const SUGGESTION_COLUMN_MIN_WIDTH_PX = 300;
+/** On narrow panes the hidden column peeks in by this much, hinting that the row scrolls. */
+const SUGGESTION_PEEK_PX = 28;
 
 const INITIAL_LAYOUT: EditorMarginLayout = {
   comments: { mode: "inline" },
   shellOffset: null,
-  suggestion: { mode: "below", width: 0 },
+  suggestion: { newLeft: 0, oldLeft: 0, viewportLeft: 0, viewportWidth: 0, width: 0 },
 };
+
+/**
+ * A suggestion row is wider than the text column: two columns centred on it, as wide as the text each where the pane
+ * allows, kept inside the pane. A pane too narrow for two readable columns shows one at a time and scrolls the row.
+ */
+function measureSuggestionRow(paneWidth: number, shellLeft: number, editor: HTMLElement): SuggestionLayout {
+  const viewportWidth = paneWidth - MARGIN_GAP_PX * 2;
+  const viewportLeft = MARGIN_GAP_PX - shellLeft;
+  const rowWidth = Math.min(viewportWidth, editor.offsetWidth * 2 + SUGGESTION_COLUMN_GAP_PX);
+  const sharedWidth = Math.floor((rowWidth - SUGGESTION_COLUMN_GAP_PX) / 2);
+  if (sharedWidth < SUGGESTION_COLUMN_MIN_WIDTH_PX) {
+    const width = Math.max(0, viewportWidth - SUGGESTION_COLUMN_GAP_PX - SUGGESTION_PEEK_PX);
+    return { newLeft: viewportLeft + width + SUGGESTION_COLUMN_GAP_PX, oldLeft: viewportLeft, viewportLeft, viewportWidth, width };
+  }
+
+  const editorCentre = shellLeft + editor.offsetLeft + editor.offsetWidth / 2;
+  const rowLeft = Math.min(Math.max(MARGIN_GAP_PX, editorCentre - rowWidth / 2), paneWidth - MARGIN_GAP_PX - rowWidth);
+  const oldLeft = Math.round(rowLeft - shellLeft);
+  return { newLeft: oldLeft + sharedWidth + SUGGESTION_COLUMN_GAP_PX, oldLeft, viewportLeft, viewportWidth, width: sharedWidth };
+}
 
 function measure(shell: HTMLElement, editor: HTMLElement, hasThreads: boolean): EditorMarginLayout {
   const pane = shell.parentElement;
@@ -54,12 +77,12 @@ function measure(shell: HTMLElement, editor: HTMLElement, hasThreads: boolean): 
     }
   }
 
-  const originalSpace = (shellOffset ?? centredSpace) + editor.offsetLeft - MARGIN_GAP_PX;
-  const originalWidth = Math.min(editor.offsetWidth, originalSpace - MARGIN_GAP_PX / 2);
+  // A shell narrower than the pane is centred unless shifted for comments; a wider one keeps its own (mobile) position.
+  const shellLeft = shellOffset ?? (freeSpace > 0 ? centredSpace : shell.offsetLeft);
   return {
     comments,
     shellOffset,
-    suggestion: originalWidth >= ORIGINAL_MIN_WIDTH_PX ? { mode: "beside", width: Math.round(originalWidth) } : { mode: "below", width: 0 },
+    suggestion: measureSuggestionRow(paneWidth, shellLeft, editor),
   };
 }
 

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchShellTabFrameProps: the strip's facts for one tab: destination, focus, preview state and its actions.
  * - default WorkbenchShellTab: one shell tab pill; a real link to its destination, italic while it is the preview tab,
- *   with a close control (a dot while unsaved), middle-click close, double-click or double-tap to keep open, and a
+ *   with a close control (an amber asterisk while unsaved), middle-click close, double-click or double-tap to keep open, and a
  *   context menu.
  */
 "use client";
@@ -12,7 +12,7 @@ import { useRef, type ComponentProps, type ReactElement, type ReactNode } from "
 import type Tooltip from "../../ui/Tooltip";
 import ContextMenuCapability from "../ContextMenuCapability";
 import type { WorkbenchContextMenuAction } from "../WorkbenchContextMenuContext";
-import { XIcon } from "../workbench-icons";
+import { AsteriskIcon, XIcon } from "../workbench-icons";
 import { isWorkbenchTabDoubleTap, type WorkbenchTabTap } from "./workbench-tab-gestures";
 
 export interface WorkbenchShellTabFrameProps {
@@ -103,7 +103,7 @@ export default function WorkbenchShellTab({
         type="button"
       >
         {dirty ? <>
-          <span aria-hidden="true" className="size-2 rounded-full bg-accent group-hover/close:hidden" />
+          <AsteriskIcon size={12} aria-hidden="true" className="text-[color:var(--attention)] group-hover/close:hidden" />
           <XIcon size={12} className="hidden group-hover/close:block" />
         </> : (
           <XIcon

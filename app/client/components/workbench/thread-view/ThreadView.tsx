@@ -11,7 +11,7 @@ import { useThread } from "../use-thread";
 import { useTranscript } from "../use-transcript";
 import { resolveThreadViewHandoff, type ThreadViewDisplay } from "./thread-view-handoff";
 import ThreadViewContent from "./ThreadViewContent";
-import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
+import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import { useSettings } from "../use-settings";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 
@@ -81,7 +81,7 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
       </div>
     );
   }
-  if (!display || !props.projectId || (!holdingDraft && (thread.status !== "ready" || !thread.head || active.status !== "ready" || !active.head))) return <ThreadLoadingSkeleton />;
+  if (!display || !props.projectId || (!holdingDraft && (thread.status !== "ready" || !thread.head || active.status !== "ready" || !active.head))) return <WorkbenchLoadingSpinner label="Loading thread" />;
   return <>
     {settingsFailure?.owner === settings.projectId && settingsFailure
       ? <p role="alert" className="px-6 py-3 text-danger">{settingsFailure.message}</p> : null}

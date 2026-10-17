@@ -42,6 +42,10 @@ export interface CommentDraftView {
 export interface CommentMarginSnapshot {
   activeId: string | null;
   draft: CommentDraftView | null;
+  /** The thread under the pointer, in its card or its highlighted words. */
+  hoveredId: string | null;
+  /** Vertical spans comment cards must not overlap, such as suggestion rows spreading across the margin. */
+  obstacles: ReadonlyArray<{ bottom: number; top: number }>;
   threads: CommentThreadView[];
 }
 
@@ -49,6 +53,7 @@ export interface WorkbenchCommentControllerOptions {
   container: HTMLElement;
   editor: HTMLDivElement;
   getInlineRunContainer: (node: Node | null) => HTMLElement | null;
+  getObstacles: () => CommentMarginSnapshot["obstacles"];
   highlights: EditorHighlightScope;
   isRichMode: () => boolean;
   runStructuralMutation: (mutate: () => void) => void;
@@ -65,13 +70,16 @@ export interface WorkbenchCommentController {
   resolve: (id: string) => void;
   scheduleRefresh: () => void;
   setActive: (id: string | null) => void;
+  setHovered: (id: string | null) => void;
+  /** Light up the thread whose highlighted words are under the pointer. */
+  syncHoverFromPointer: (target: EventTarget | null) => void;
   startDraft: () => boolean;
   submitDraft: (body: string) => void;
   subscribe: (listener: () => void) => () => void;
   syncActiveFromSelection: () => void;
 }
 
-const EMPTY_SNAPSHOT: CommentMarginSnapshot = { activeId: null, draft: null, threads: [] };
+const EMPTY_SNAPSHOT: CommentMarginSnapshot = { activeId: null, draft: null, hoveredId: null, obstacles: [], threads: [] };
 const ANCHORED_ATTRIBUTE = "data-comment-anchored";
 const QUOTE_LIMIT = 120;
 
@@ -125,6 +133,7 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
   let snapshot = EMPTY_SNAPSHOT;
   let snapshotKey = "";
   let activeId: string | null = null;
+  let hoveredId: string | null = null;
   let draftRange: Range | null = null;
 
   function idOf(atom: HTMLElement) {
@@ -183,12 +192,17 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     for (const listener of listeners) listener();
   }
 
+  /** The active and hovered threads light up the words they discuss. */
   function paintActive(threads: readonly CommentThreadView[]) {
-    const atom = activeId ? findAtom(activeId) : null;
-    const anchor = atom ? anchorRangeOf(atom) : null;
-    options.highlights.set("comment-active", anchor ? [anchor] : []);
-    options.highlights.set("comment-draft", draftRange && !draftRange.collapsed ? [draftRange] : []);
     if (activeId && !threads.some((thread) => thread.id === activeId)) activeId = null;
+    if (hoveredId && !threads.some((thread) => thread.id === hoveredId)) hoveredId = null;
+    const anchors = [...new Set([activeId, hoveredId])].flatMap((id) => {
+      const atom = id ? findAtom(id) : null;
+      const anchor = atom ? anchorRangeOf(atom) : null;
+      return anchor ? [anchor] : [];
+    });
+    options.highlights.set("comment-active", anchors);
+    options.highlights.set("comment-draft", draftRange && !draftRange.collapsed ? [draftRange] : []);
   }
 
   function refresh() {
@@ -197,7 +211,7 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     const draft = draftRange
       ? { quote: quoteOf(draftRange.toString()), top: topOf(firstRectOf(draftRange) ?? draftBlockRect()) }
       : null;
-    const next: CommentMarginSnapshot = { activeId, draft, threads };
+    const next: CommentMarginSnapshot = { activeId, draft, hoveredId, obstacles: options.getObstacles(), threads };
     const key = JSON.stringify(next);
     if (key === snapshotKey) return;
     snapshotKey = key;
@@ -382,6 +396,22 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     refresh();
   }
 
+  function setHovered(id: string | null) {
+    if (hoveredId === id) return;
+    hoveredId = id;
+    refresh();
+  }
+
+  function syncHoverFromPointer(target: EventTarget | null) {
+    const mark = target instanceof Element ? target.closest("mark") : null;
+    if (!mark || !editor.contains(mark)) {
+      setHovered(null);
+      return;
+    }
+    const match = atoms().find((atom) => anchorRangeOf(atom)?.intersectsNode(mark));
+    setHovered(match ? idOf(match) : null);
+  }
+
   /** The caret inside highlighted words, or right beside a thread, activates that thread. */
   function syncActiveFromSelection() {
     const selection = window.getSelection();
@@ -408,6 +438,7 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     resolve,
     scheduleRefresh,
     setActive,
+    setHovered,
     startDraft,
     submitDraft,
     subscribe: (listener) => {
@@ -417,6 +448,7 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
       };
     },
     syncActiveFromSelection,
+    syncHoverFromPointer,
   };
 }
 

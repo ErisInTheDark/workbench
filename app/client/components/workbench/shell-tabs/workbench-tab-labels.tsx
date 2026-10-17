@@ -9,14 +9,14 @@ import { useContext, useEffect, useState, useSyncExternalStore, type ComponentPr
 import type { IconProps } from "../OutlinedIcon";
 
 import { getWorkbenchFileTabs, type WorkbenchRoute, type WorkbenchRouteView } from "workbench-shared/workbench/navigation/workbench-route";
-import { isSvgFile } from "workbench-shared/workbench/project/tree-utils";
 import { describeThreadEntry } from "../thread-entry-presentation";
 import ThreadTitleInput from "../ThreadTitleInput";
 import { useThread } from "../use-thread";
 import WorkbenchClientContext from "../workbench-client-context";
 import {
-  DraftThreadIcon, FeatherIcon, FolderClosedIcon, GearIcon, GitGraphIcon, ImageIcon, StatsIcon,
+  DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon,
 } from "../workbench-icons";
+import FileKindIcon from "../file-kind-icon";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
 import WorkbenchShellTab, { type WorkbenchShellTabFrameProps } from "./WorkbenchShellTab";
 
@@ -53,13 +53,12 @@ function FileTab({ frame, route }: WorkbenchTabKindProps) {
   const shown = frame.href && mounted ? mounted.projectNavigator.readRoute(frame.href) : route;
   const folderAddress = getWorkbenchFileTabs(shown).tabs[0]?.folderAddress ?? null;
   const folder = folderAddress?.at(-1)?.replace(/^\+/u, "") ?? null;
-  const Icon = isSvgFile(path) ? ImageIcon : FeatherIcon;
   return (
     <WorkbenchShellTab
       {...frame}
       detail={folder}
       dirty={dirty}
-      icon={<Icon size={ICON_SIZE} />}
+      icon={<FileKindIcon path={path} size={ICON_SIZE} />}
       label={fileName(path)}
       title={folder ? `${folder}: ${path}` : path}
     />

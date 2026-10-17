@@ -2096,7 +2096,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
                 : showSvgFileView
                 ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
-                : showSettingsView || showStatsView || routeView
+                : showSettingsView || showStatsView || routeView || showFileView
                 ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
                 : isDirectThreadSurface
                 ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
@@ -2122,13 +2122,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 hidden={!shouldShowShellHeader}
                 visibility={mobileShellHeaderVisibility}
               >
-                {/* The fade stops short of the left edge so the page's top-left glow shows through. */}
+                {/* On desktop the fade stops short of the left edge so the page's top-left glow shows through. */}
                 <div
                   aria-hidden="true"
                   className={`
                     pointer-events-none absolute inset-0 -z-10 md:backdrop-blur-none
                     bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]
-                    [mask-image:linear-gradient(to right, transparent, black calc(var(--spacing) * 20))]
+                    md:[mask-image:linear-gradient(to right, transparent, black calc(var(--spacing) * 20))]
                   `}
                 />
                 <div className="flex items-center gap-2">
@@ -2566,6 +2566,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     location={mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined}
                     onFocus={() => { }}
                     path={effectiveFilePath}
+                    shellHeaderVisibility={mobileShellHeaderVisibility}
                   />
                 ) : null}
               </section>

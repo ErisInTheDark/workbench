@@ -18,6 +18,7 @@ import type {
 } from "workbench-shared/types";
 import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
 import ChevronIcon from "./ChevronIcon";
+import FileKindIcon from "./file-kind-icon";
 import ContextMenuCapability from "./ContextMenuCapability";
 import {
   workbenchOptionHoverClassName,
@@ -101,17 +102,6 @@ function ExplorerModifiedDot ({ hidden = false }: { hidden?: boolean }) {
       data-role="tree-modified"
       hidden={hidden}
       className="inline-block h-2 w-2 shrink-0 rounded-full bg-[color:var(--attention)]"
-      aria-hidden="true"
-    />
-  );
-}
-
-function ExplorerFileSpacer () {
-  return (
-    <span
-      data-role="tree-spacer"
-      className="shrink-0"
-      style={{ width: "1.1rem", height: "1.1rem" }}
       aria-hidden="true"
     />
   );
@@ -419,7 +409,9 @@ export function ExplorerTree ({
                     onOpenFile?.(node.path);
                   }}
                 >
-                  <ExplorerFileSpacer />
+                  <span data-role="tree-spacer" aria-hidden="true" className="flex size-[1.1rem] shrink-0 items-center justify-center">
+                    <FileKindIcon path={node.path} size={16} />
+                  </span>
                   <span data-role="tree-label" className="min-w-0 truncate">{node.name}</span>
                   <ExplorerModifiedDot hidden={!isModified} />
                   <ExplorerChangeSummary summary={changeSummary} />

@@ -31,7 +31,6 @@ import {
 import type { WorkbenchCommentController } from "./editor/WorkbenchCommentController";
 import { isFormatCommand } from "./editor/WorkbenchFormatCommandController";
 import type { ReviewMode, SuggestionLayout } from "./editor/WorkbenchSuggestionController";
-import { getSuggestionId } from "./markdown/review-markup";
 import {
     formatTimestamp,
 } from "workbench-shared/workbench/project/tree-utils";
@@ -76,6 +75,7 @@ export interface WorkbenchFilePanelClient {
   runCommand: (command: EditorCommand) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   setReviewMode: (mode: ReviewMode) => void;
+  setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
   previewFontSize: (fontSize: number | null) => void;
   subscribe: (listener: WorkbenchFilePanelListener) => () => void;
@@ -124,12 +124,6 @@ function WorkbenchFilePanelClient(
   const fileSessionState = FileSessionState();
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
-
-  function findTopLevelBlock(node: Node) {
-    let current: Node | null = node;
-    while (current && current.parentNode !== editor) current = current.parentNode;
-    return current instanceof HTMLElement ? current : null;
-  }
 
   function runCommand(command: EditorCommand) {
     if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
@@ -287,28 +281,15 @@ function WorkbenchFilePanelClient(
     handleEditorPointerDown: () => {
       editorClient.clearPendingInlineFormats();
     },
-    handleEditorToggle: (event) => {
-      if (!(event.target instanceof HTMLDetailsElement)) {
-        return;
-      }
-
-      editorClient.scheduleDiffGutterRefresh();
-      editorClient.scheduleEditorChromeRefresh();
-    },
     handleOverwriteConflict: async () => {
       await saveCurrentFile({ force: true });
     },
     handlePointerMove: (event) => {
-      const target = event.target instanceof Node ? event.target : null;
-      const element = target instanceof Element ? target : target?.parentElement ?? null;
-      const inlineRevision = element?.closest<HTMLElement>("del, ins") ?? null;
-      const suggestionMember = element ? findTopLevelBlock(element) : null;
-      const revisionNode = inlineRevision && editor.contains(inlineRevision)
-        ? inlineRevision
-        : suggestionMember && getSuggestionId(suggestionMember) !== null
-          ? suggestionMember
-          : editorClient.findSuggestionMemberForPanel(target);
-      if (revisionNode) {
+      if (event.target instanceof Node && editor.contains(event.target)) {
+        editorClient.comments.syncHoverFromPointer(event.target);
+      }
+      const revisionNode = event.target instanceof Element ? event.target.closest<HTMLElement>("del, ins") : null;
+      if (revisionNode && editor.contains(revisionNode)) {
         editorClient.setHoveredRevisionNode(revisionNode);
         return;
       }
@@ -525,6 +506,7 @@ function WorkbenchFilePanelClient(
     runCommand,
     setFontSize,
     setReviewMode: editorClient.setReviewMode,
+    setShowGitMarkers: editorClient.setShowGitMarkers,
     setSuggestionLayout: editorClient.setSuggestionLayout,
     previewFontSize: editorClient.previewFontSize,
     subscribe,

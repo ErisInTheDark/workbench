@@ -14,7 +14,9 @@ import useFileDocument from "../../../workbench/file/use-file-document";
 import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFamily } from "../../../workbench/state/workbench-settings";
 import { useSettings } from "../use-settings";
+import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
+import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
 import MarkdownEditorToolbar from "../markdown-editor/MarkdownEditorToolbar";
@@ -42,7 +44,7 @@ const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
 
 /** Typography of rendered markdown, shared by the editor and the suggestion originals shown beside it. */
 const markdownProseClassName = `
-  text-[1.08rem] leading-[1.72] whitespace-normal
+  text-[1.08rem] leading-[1.72] whitespace-normal [text-underline-offset:0.32em]
   [& :is(p, blockquote, ul, ol, pre, h1, h2, h3, h4, h5, h6)]:(m-0 mb-4 text-justify)
   [& :is(h1, h2, h3, h4, h5, h6)]:(font-sans font-semibold leading-[1.15])
   [& h1]:text-[2.05em] [& h2]:text-[1.55em] [& h3]:text-[1.25em]
@@ -50,6 +52,7 @@ const markdownProseClassName = `
   [& ul]:list-disc [& ul ul]:list-[circle] [& ul ul ul]:list-[square]
   [& ol]:list-decimal
   [& blockquote]:text-fg/muted
+  [& hr]:(my-8 [margin-inline:10%] [border-color:color-mix(in srgb, var(--text), var(--app-bg-solid) 70%)])
   [& a]:(text-inherit decoration-accent decoration-[0.08em])
   [& code]:(font-mono text-[0.94em] bg-fg/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
   [& pre]:(overflow-x-auto whitespace-pre-wrap)
@@ -65,7 +68,7 @@ const markdownProseClassName = `
   [& ins[data-revision-hover-active=true]]:bg-success/24
   [& del]:(bg-danger/16 decoration-current decoration-[0.08em])
   [& del[data-revision-hover-active=true]]:bg-danger/24
-  [& mark]:(rounded-[0.15em] bg-[color-mix(in srgb, var(--attention) 24%, transparent)] text-inherit -mx-[0.04em] px-[0.04em])
+  [& mark]:(rounded-[0.15em] bg-[color-mix(in srgb, var(--attention) 6%, transparent)] text-inherit -mx-[0.04em] px-[0.04em])
   [& li > details]:block
   [& li > details > summary]:(flex [list-style: none] cursor-pointer)
   [& li > details > summary > span]:cursor-text
@@ -92,12 +95,17 @@ interface WorkbenchFilePanelProps {
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
   path: string;
+  /** The main pane's shell header slides away on mobile scroll; the toolbar below it slides with it. */
+  shellHeaderVisibility?: MobileShellHeaderVisibilityController;
   showManualFileActions?: boolean;
   titleLabel?: string;
 }
 
 const noSubscription = () => () => {};
 const noThreads = () => 0;
+const alwaysVisible = () => true;
+/** The toolbar tucks under the chrome's bottom padding, which is only its fade. */
+const CHROME_FADE_OVERLAP_PX = 12;
 
 /** Sticky chrome that sits above an element in its scroll container, such as the main pane's tab strip. */
 function findStickyChromeAbove(element: HTMLElement) {
@@ -118,7 +126,7 @@ function useStickyTopBelowChrome(enabled: boolean) {
     const element = ref.current;
     const chrome = enabled && element ? findStickyChromeAbove(element) : null;
     if (!chrome) return;
-    const update = () => setTop(chrome.offsetHeight);
+    const update = () => setTop(Math.max(0, chrome.offsetHeight - CHROME_FADE_OVERLAP_PX));
     update();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
     observer?.observe(chrome);
@@ -143,9 +151,15 @@ export default function WorkbenchFilePanel ({
   onPanelZoomDeltaChange,
   panelZoomDelta = 0,
   path,
+  shellHeaderVisibility,
   showManualFileActions = true,
   titleLabel,
 }: WorkbenchFilePanelProps) {
+  const shellHeaderVisible = useSyncExternalStore(
+    shellHeaderVisibility?.subscribe ?? noSubscription,
+    shellHeaderVisibility?.getVisible ?? alwaysVisible,
+    alwaysVisible,
+  );
   const settings = useSettings.forLocation(location);
   const editorFontClassName = EDITOR_FONT_CLASS_NAMES[settings.get("editorFontFamily")];
   const spellCheck = settings.get("editorSpellCheck");
@@ -178,7 +192,8 @@ export default function WorkbenchFilePanel ({
   const [client, setClient] = useState<WorkbenchFilePanelClient | null>(null);
   const [snapshot, setSnapshot] = useState<WorkbenchFilePanelSnapshot | null>(null);
   const file = useFileDocument(location, path);
-  const stickyToolbar = useStickyTopBelowChrome(!contained);
+  const loading = !file.snapshot.data && !file.snapshot.failure;
+  const stickyToolbar = useStickyTopBelowChrome(!contained && !loading);
 
   const panelIdSuffix = useMemo(() => path.replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 48) || "file", [path]);
 
@@ -303,7 +318,10 @@ export default function WorkbenchFilePanel ({
       <span className="sr-only">Discard the current draft</span>
     </IconButton>
   );
-  const toolbar = <MarkdownEditorToolbar client={client} />;
+  /** Header rows own their inset, so the toolbar can scroll edge to edge with its controls still inset. */
+  const headerInsetClassName = sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pr-6"
+    : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pr-6"
+      : "px-5 md:px-6";
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
@@ -328,14 +346,12 @@ export default function WorkbenchFilePanel ({
       onPointerDownCapture={onFocus}
     >
       {file.snapshot.failure ? <p role="alert">{file.snapshot.failure}</p> : null}
-      {!file.snapshot.data && file.snapshot.phase === "pending" ? <p role="status">Loading file...</p> : null}
       {file.snapshot.data && file.snapshot.phase !== "current" && !file.snapshot.failure
         ? <p role="status">Waiting for current disk data...</p> : null}
       {contained ? (
         <header
           className={`
             sticky top-0 z-10 -mx-5 py-3 md:-mx-6
-            ${sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pl-32 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}
             ${onHeaderPointerDragStart ? "cursor-grab active:cursor-grabbing" : ""}
             ${isMinimizedVertical ? "flex h-full items-center justify-center" : ""}
           `}
@@ -346,7 +362,7 @@ export default function WorkbenchFilePanel ({
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
           />
-          <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between ${isMinimizedVertical ? "rotate-90 whitespace-nowrap" : ""}`}>
+          <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between ${headerInsetClassName} ${isMinimizedVertical ? "rotate-90 whitespace-nowrap" : ""}`}>
             <div className="order-2 min-w-0 md:order-1">
               <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
                 {titleLabel ?? snapshot?.currentPath ?? path}
@@ -399,27 +415,34 @@ export default function WorkbenchFilePanel ({
               ) : null}
             </div>
           </div>
-          {isMinimized ? null : <div className="mt-1.5">{toolbar}</div>}
+          {isMinimized || loading ? null : <MarkdownEditorToolbar client={client} className={`mt-1.5 ${headerInsetClassName}`} />}
         </header>
       ) : (
         <>
-          <div
+          {loading ? null : <div
             ref={stickyToolbar.ref}
-            className="sticky z-10 -mx-5 px-5 md:-mx-6 md:px-6"
-            style={{ top: stickyToolbar.top }}
+            className={`
+              sticky z-[9] -mx-5 md:-mx-6
+              transition-[top,translate,opacity] duration-200 ease-out motion-reduce:transition-none
+              ${shellHeaderVisible ? "translate-y-0 opacity-100" : "pointer-events-none -translate-y-[calc(100%+1.5rem)] opacity-0"}
+            `}
+            style={{ top: shellHeaderVisible ? stickyToolbar.top : 0 }}
+            inert={!shellHeaderVisible}
             {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}
           >
+            {/* Reaches up under the shell header, whose own fade would otherwise let scrolled text show between the two, and fades out below like it. */}
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 3), transparent)]"
+              className="pointer-events-none absolute inset-x-0 -top-6 -bottom-6 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]"
             />
+            {/* Spans the pane edge to edge; the toolbar's own padding lines its controls up with the text column. */}
             <div
-              className="mx-auto md:max-w-[calc(var(--container-content)+2.5rem)] md:pl-[2rem]"
+              className="mx-auto md:max-w-[calc(var(--container-content)+5.5rem)]"
               style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
             >
-              {toolbar}
+              <MarkdownEditorToolbar client={client} className="px-5 md:pr-6 md:pl-[3.5rem]" />
             </div>
-          </div>
+          </div>}
           {/* In the main pane the shell tab names the file; save and discard float in reach only while there is work to keep. */}
           <div
             className={`
@@ -439,7 +462,9 @@ export default function WorkbenchFilePanel ({
         </>
       )}
 
-      <div className="relative min-h-0 flex-1 pt-3" hidden={isMinimized}>
+      {loading && !isMinimized ? <WorkbenchLoadingSpinner label="Loading file" /> : null}
+      {/* The editor mounts while loading, hidden, so its client is ready the moment content arrives. */}
+      <div className="relative min-h-0 flex-1 pt-3" hidden={isMinimized || loading}>
         <div
           ref={editorShellRef}
           className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto"
@@ -464,9 +489,8 @@ export default function WorkbenchFilePanel ({
                 bg-[color-mix(in srgb, var(--attention) 75%, transparent)]
               )
               [& > [data-suggestion]]:(relative)
-              [& > [data-suggestion]]:before:(
-                content-[''] absolute -left-[0.7rem] top-[0.2em] bottom-[0.2em] w-[0.16rem] rounded-full
-                bg-[color-mix(in srgb, var(--accent) 60%, transparent)]
+              [&[data-suggest-split] > [data-suggestion]]:(
+                ml-[var(--suggest-new-offset)] w-[var(--suggest-col-width)] max-w-none
               )
               [& > [data-suggestion-empty]]:after:(
                 content-['Suggested_deletion'] absolute left-0 top-0 pointer-events-none
@@ -480,17 +504,31 @@ export default function WorkbenchFilePanel ({
           />
           <div
             ref={reviewLayerRef}
-            aria-label="Suggestion originals"
+            aria-label="Suggestions"
             className={`
               pointer-events-none absolute inset-0 ${editorFontClassName} ${markdownProseClassName}
-              [& [data-suggestion-panel]]:(
-                pointer-events-auto absolute rounded-[0.9rem] px-3 pt-1.5 pb-0.5 opacity-60
-                bg-fg/4 transition-opacity duration-150 hover:opacity-95
+              [& [data-suggestion-row-band]]:(
+                absolute -z-10 bg-[color-mix(in srgb, var(--text) 4%, transparent)] md:bg-transparent
+                md:bg-[linear-gradient(to right, transparent, color-mix(in srgb, var(--text) 4%, transparent) calc(var(--spacing) * 8), color-mix(in srgb, var(--text) 4%, transparent) calc(100% - var(--spacing) * 8), transparent)]
               )
-              [& [data-suggestion-panel][data-layout=below]]:(border-t-2 border-dashed border-fg-alpha/10 rounded-t-none bg-transparent)
-              [& [data-suggestion-panel-label]]:(m-0 mb-1 font-sans text-[0.7rem] font-semibold tracking-[0.06em] uppercase text-fg/55 text-left)
-              [& [data-suggestion-panel-empty]]:(font-sans italic text-[0.85em] text-fg/50)
-              [& [data-suggestion-panel-body] > :last-child]:mb-2
+              [& [data-suggestion-row-scroller]]:(
+                pointer-events-auto absolute h-[44px] overflow-x-auto overflow-y-hidden [scrollbar-width:thin]
+              )
+              [& [data-suggestion-row-scroll-width]]:h-px
+              [& [data-suggestion-row-old]]:(absolute select-text opacity-55)
+              [& [data-suggestion-row-old] > :last-child]:mb-0
+              [& [data-suggestion-row-head]]:(
+                absolute flex h-[44px] items-center justify-between gap-2
+                font-sans text-[0.72rem] leading-none
+              )
+              [& [data-suggestion-row-label]]:(font-semibold tracking-[0.06em] uppercase text-fg/55)
+              [& [data-suggestion-row-action]]:(
+                pointer-events-auto inline-flex size-8 cursor-pointer items-center justify-center rounded-full text-fg/muted
+                border border-[color-mix(in srgb, var(--text) 10%, transparent)]
+                transition hover:(bg-fg/6 text-text border-[color-mix(in srgb, var(--text) 18%, transparent)])
+              )
+              [& [data-suggestion-row-head][data-side=new] [data-suggestion-row-action]]:(text-accent hover:(bg-accent-soft text-accent))
+              [& [data-suggestion-row-empty]]:(font-sans italic text-[0.85em] text-fg/50)
             `}
           />
           <MarkdownCommentMargin client={client} layout={marginLayout.comments} />

@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - default MarkdownCommentMargin: comment threads beside the markdown editor: cards aligned to what they discuss and
- *   pushed apart so they never overlap, or inline badges that open a card where the pane is too narrow. Threads take
+ * - default MarkdownCommentMargin: comment threads beside the markdown editor: cards aligned to what they discuss,
+ *   pushed apart so they never overlap and flowing around suggestion rows, or inline badges that open a card where the pane is too narrow. Threads take
  *   replies, edits and resolution; a draft card writes a new thread.
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
 import type { MarkdownComment } from "../../../workbench/markdown/comment-markdown";
 import type {
   CommentDraftView,
@@ -15,12 +15,12 @@ import type {
 } from "../../../workbench/editor/WorkbenchCommentController";
 import type { WorkbenchFilePanelClient } from "../../../workbench/WorkbenchFilePanelClient";
 import IconButton from "../../ui/IconButton";
-import { CheckIcon, MessageSquarePlusIcon, SquarePenIcon, Trash2Icon } from "../workbench-icons";
+import { CheckIcon, MessageSquareTextIcon, SquarePenIcon, Trash2Icon } from "../workbench-icons";
 import type { CommentMarginLayout } from "./use-editor-margin-layout";
 
 const CARD_GAP_PX = 10;
 const DRAFT_ID = "draft";
-const EMPTY_SNAPSHOT: CommentMarginSnapshot = { activeId: null, draft: null, threads: [] };
+const EMPTY_SNAPSHOT: CommentMarginSnapshot = { activeId: null, draft: null, hoveredId: null, obstacles: [], threads: [] };
 const noSubscription = () => () => {};
 const emptySnapshot = () => EMPTY_SNAPSHOT;
 
@@ -31,34 +31,80 @@ interface PlacedItem {
   top: number;
 }
 
+type Obstacles = CommentMarginSnapshot["obstacles"];
+
+/** A stretch of margin between obstacles; cards whose anchors fall in it stay in it while they fit. */
+interface MarginSection {
+  bottom: number;
+  items: PlacedItem[];
+  top: number;
+}
+
+/** Split the margin at obstacles. An anchor inside an obstacle belongs to the stretch after it. */
+function sectionsBetween(items: readonly PlacedItem[], obstacles: Obstacles): MarginSection[] {
+  const sorted = [...obstacles].sort((left, right) => left.top - right.top);
+  const sections: MarginSection[] = [];
+  let top = -Infinity;
+  for (const obstacle of sorted) {
+    sections.push({ bottom: obstacle.top - CARD_GAP_PX, items: [], top });
+    top = obstacle.bottom + CARD_GAP_PX;
+  }
+  sections.push({ bottom: Infinity, items: [], top });
+  for (const item of [...items].sort((left, right) => left.top - right.top)) {
+    const index = sorted.findIndex((obstacle) => item.top < obstacle.bottom);
+    sections[index < 0 ? sections.length - 1 : index]!.items.push(item);
+  }
+  return sections;
+}
+
 /**
- * Cards stack downwards from their anchors without overlapping. The focused card then sits exactly at its anchor:
- * cards after it are pushed down and cards before it pushed up only as far as needed.
+ * Cards stack downwards from their anchors without overlapping. The focused card then sits at its anchor: cards
+ * after it are pushed down and cards before it pushed up only as far as needed. Obstacles split the margin into
+ * sections: cards stay in their anchor's section, sliding up within it when they would run into the obstacle below,
+ * and only spill past an obstacle when the section is too short to hold them.
  */
-function placeCards(items: readonly PlacedItem[], heights: Readonly<Record<string, number>>, focusId: string | null) {
-  const sorted = [...items].sort((left, right) => left.top - right.top);
-  const tops = new Map(sorted.map((item) => [item.id, item.top]));
+function placeCards(
+  items: readonly PlacedItem[],
+  heights: Readonly<Record<string, number>>,
+  focusId: string | null,
+  obstacles: Obstacles = [],
+) {
   const height = (id: string) => heights[id] ?? 72;
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1]!;
-    tops.set(sorted[index]!.id, Math.max(sorted[index]!.top, tops.get(previous.id)! + height(previous.id) + CARD_GAP_PX));
-  }
+  const tops = new Map<string, number>();
+  let floor = -Infinity;
 
-  const focusIndex = sorted.findIndex((item) => item.id === focusId);
-  if (focusIndex < 0) {
-    return tops;
-  }
+  for (const section of sectionsBetween(items, obstacles)) {
+    const { items: sorted } = section;
+    const sectionTop = Math.max(section.top, floor);
+    const placed = sorted.map((item) => Math.max(item.top, sectionTop));
+    for (let index = 1; index < sorted.length; index += 1) {
+      placed[index] = Math.max(placed[index]!, placed[index - 1]! + height(sorted[index - 1]!.id) + CARD_GAP_PX);
+    }
 
-  tops.set(focusId!, sorted[focusIndex]!.top);
-  for (let index = focusIndex + 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1]!;
-    const minimum = tops.get(previous.id)! + height(previous.id) + CARD_GAP_PX;
-    tops.set(sorted[index]!.id, Math.max(sorted[index]!.top, minimum));
-  }
-  for (let index = focusIndex - 1; index >= 0; index -= 1) {
-    const next = sorted[index + 1]!;
-    const maximum = tops.get(next.id)! - height(sorted[index]!.id) - CARD_GAP_PX;
-    tops.set(sorted[index]!.id, Math.max(0, Math.min(tops.get(sorted[index]!.id)!, maximum)));
+    const focusIndex = sorted.findIndex((item) => item.id === focusId);
+    if (focusIndex >= 0) {
+      placed[focusIndex] = Math.max(sorted[focusIndex]!.top, sectionTop);
+      for (let index = focusIndex + 1; index < sorted.length; index += 1) {
+        placed[index] = Math.max(sorted[index]!.top, placed[index - 1]! + height(sorted[index - 1]!.id) + CARD_GAP_PX);
+      }
+      for (let index = focusIndex - 1; index >= 0; index -= 1) {
+        placed[index] = Math.min(placed[index]!, placed[index + 1]! - height(sorted[index]!.id) - CARD_GAP_PX);
+      }
+    }
+
+    // Slide up out of the obstacle below, but never above the section's top.
+    let limit = section.bottom;
+    for (let index = sorted.length - 1; index >= 0; index -= 1) {
+      placed[index] = Math.max(sectionTop, Math.min(placed[index]!, limit - height(sorted[index]!.id)));
+      limit = placed[index]! - CARD_GAP_PX;
+    }
+    for (let index = 1; index < sorted.length; index += 1) {
+      placed[index] = Math.max(placed[index]!, placed[index - 1]! + height(sorted[index - 1]!.id) + CARD_GAP_PX);
+    }
+
+    sorted.forEach((item, index) => tops.set(item.id, placed[index]!));
+    const last = sorted.at(-1);
+    if (last) floor = tops.get(last.id)! + height(last.id) + CARD_GAP_PX;
   }
   return tops;
 }
@@ -183,38 +229,58 @@ function CommentEntry({
   );
 }
 
+/** A darker strip across the card's top holding the words a comment highlights. */
+function CardHeader({ children, quote }: { children?: ReactNode; quote: string }) {
+  return (
+    <div className="-mx-3 -mt-2 mb-1 flex items-center gap-2 rounded-t-[0.9rem] bg-fg/5 px-3 py-1.5">
+      <p className="m-0 min-w-0 flex-1 truncate text-[0.76rem] text-fg/muted">{quote}</p>
+      {children}
+    </div>
+  );
+}
+
 function ThreadCard({ active, comments, thread }: { active: boolean; comments: Comments; thread: CommentThreadView }) {
+  const resolveButton = (
+    <IconButton
+      label="Resolve thread"
+      size="compact"
+      display="bordered"
+      className="shrink-0"
+      onClick={(event) => {
+        event.stopPropagation();
+        comments.resolve(thread.id);
+      }}
+    >
+      <CheckIcon size={14} />
+    </IconButton>
+  );
+  const entries = (
+    <div className="flex min-w-0 flex-1 flex-col [&>*+*]:(border-t border-fg-alpha/8)">
+      {thread.comments.map((comment, index) => (
+        <CommentEntry
+          key={`${index}:${comment.body}`}
+          comment={comment}
+          onDelete={() => comments.deleteComment(thread.id, index)}
+          onEdit={(body) => comments.editComment(thread.id, index, body)}
+        />
+      ))}
+    </div>
+  );
+
+  // Only comments on selected words carry a header; one left at a position starts straight with its notes.
   return (
     <>
-      <div className="flex items-start gap-2">
-        {thread.quote ? (
-          <p className="m-0 min-w-0 flex-1 truncate border-l-2 border-[color-mix(in_srgb,var(--attention)_60%,transparent)] pl-2 text-[0.76rem] text-fg/muted">
-            {thread.quote}
-          </p>
-        ) : <span className="flex-1" />}
-        <IconButton
-          label="Resolve thread"
-          size="compact"
-          display="hover-border"
-          className="-mt-0.5 -mr-1"
-          onClick={(event) => {
-            event.stopPropagation();
-            comments.resolve(thread.id);
-          }}
-        >
-          <CheckIcon size={14} />
-        </IconButton>
-      </div>
-      <div className="mt-1 flex flex-col [&>*+*]:(border-t border-fg-alpha/8)">
-        {thread.comments.map((comment, index) => (
-          <CommentEntry
-            key={`${index}:${comment.body}`}
-            comment={comment}
-            onDelete={() => comments.deleteComment(thread.id, index)}
-            onEdit={(body) => comments.editComment(thread.id, index, body)}
-          />
-        ))}
-      </div>
+      {thread.anchored && thread.quote ? (
+        <>
+          <CardHeader quote={thread.quote}>{resolveButton}</CardHeader>
+          {entries}
+        </>
+      ) : (
+        <div className="flex items-start gap-2">
+          {entries}
+          <span className="mt-0.5">{resolveButton}</span>
+        </div>
+      )}
       {active ? (
         <CommentBox
           placeholder="Reply"
@@ -230,11 +296,7 @@ function ThreadCard({ active, comments, thread }: { active: boolean; comments: C
 function DraftCard({ comments, draft }: { comments: Comments; draft: CommentDraftView }) {
   return (
     <>
-      {draft.quote ? (
-        <p className="m-0 truncate border-l-2 border-[color-mix(in_srgb,var(--attention)_60%,transparent)] pl-2 text-[0.76rem] text-fg/muted">
-          {draft.quote}
-        </p>
-      ) : null}
+      {draft.quote ? <CardHeader quote={draft.quote} /> : null}
       <CommentBox
         autoFocus
         placeholder="Add a comment"
@@ -247,10 +309,11 @@ function DraftCard({ comments, draft }: { comments: Comments; draft: CommentDraf
 }
 
 const cardClassName = `
-  absolute right-0 left-0 rounded-[0.9rem] border px-3 py-2 transition-[top,border-color,background-color] duration-150 ease-out
+  absolute right-0 left-0 rounded-[0.9rem] px-3 py-2 transition-[top,background-color] duration-150 ease-out
   motion-reduce:transition-none
-  bg-[color-mix(in_srgb,var(--app-bg-solid)_96%,var(--text)_4%)]
 `;
+const restingCardClassName = "bg-[color-mix(in_srgb,var(--app-bg-solid)_95%,var(--text)_5%)]";
+const litCardClassName = "bg-[color-mix(in_srgb,var(--app-bg-solid)_89%,var(--text)_11%)]";
 
 export default function MarkdownCommentMargin({
   client,
@@ -314,14 +377,14 @@ export default function MarkdownCommentMargin({
             style={{ top: badgeTops.get(thread.id) ?? thread.top }}
             onClick={() => comments.setActive(thread.id === snapshot.activeId ? null : thread.id)}
           >
-            <MessageSquarePlusIcon size={12} />
+            <MessageSquareTextIcon size={12} />
             {thread.comments.length > 1 ? thread.comments.length : null}
           </button>
         ))}
         {open ? (
           <section
             ref={cardRef(open.id)}
-            className={`${cardClassName} pointer-events-auto z-10 border-[color-mix(in_srgb,var(--attention)_45%,transparent)]`}
+            className={`${cardClassName} ${litCardClassName} pointer-events-auto z-10`}
             style={{ top: open.top + 28 }}
           >
             {snapshot.draft ? <DraftCard comments={comments} draft={snapshot.draft} /> : (
@@ -337,7 +400,7 @@ export default function MarkdownCommentMargin({
     ...snapshot.threads.map(({ id, top }) => ({ id, top })),
     ...(snapshot.draft ? [{ id: DRAFT_ID, top: snapshot.draft.top }] : []),
   ];
-  const tops = placeCards(items, heights, snapshot.draft ? DRAFT_ID : snapshot.activeId);
+  const tops = placeCards(items, heights, snapshot.draft ? DRAFT_ID : snapshot.activeId, snapshot.obstacles);
 
   return (
     <aside
@@ -347,18 +410,22 @@ export default function MarkdownCommentMargin({
     >
       {snapshot.threads.map((thread) => {
         const active = thread.id === snapshot.activeId;
+        const lit = active || thread.id === snapshot.hoveredId;
         return (
           <section
             key={thread.id}
             ref={cardRef(thread.id)}
             className={`
               ${cardClassName}
-              ${active ? "z-10 border-[color-mix(in_srgb,var(--attention)_45%,transparent)]" : "cursor-pointer border-fg-alpha/8 hover:border-fg-alpha/16"}
+              ${lit ? litCardClassName : restingCardClassName}
+              ${active ? "z-10" : "cursor-pointer"}
             `}
             style={{ top: tops.get(thread.id) ?? thread.top }}
             onClick={() => {
               if (!active) comments.setActive(thread.id);
             }}
+            onPointerEnter={() => comments.setHovered(thread.id)}
+            onPointerLeave={() => comments.setHovered(null)}
           >
             <ThreadCard active={active} comments={comments} thread={thread} />
           </section>
@@ -367,7 +434,7 @@ export default function MarkdownCommentMargin({
       {snapshot.draft ? (
         <section
           ref={cardRef(DRAFT_ID)}
-          className={`${cardClassName} z-10 border-[color-mix(in_srgb,var(--attention)_45%,transparent)]`}
+          className={`${cardClassName} ${litCardClassName} z-10`}
           style={{ top: tops.get(DRAFT_ID) ?? snapshot.draft.top }}
         >
           <DraftCard comments={comments} draft={snapshot.draft} />

@@ -3,7 +3,7 @@
  * - SaveBlockedError: thrown when the real save button is pressed but the save guard refuses to write.
  * - KeyModifiers: modifier keys for simulated key presses.
  * - default MountedFilePanel: mount the real file panel client in jsdom over fake disk, drive it with browser-shaped events
- *   and toolbar commands, resolve revisions, and prove saves reach disk.
+ *   and toolbar commands, resolve suggestions, and prove saves reach disk.
  */
 import { flushAnimationFrames } from "./jsdom-environment";
 
@@ -278,9 +278,12 @@ export default class MountedFilePanel {
     return this.client;
   }
 
-  /** Accept or reject the revision under the selection through the floating revision toolbar's buttons. */
-  async resolveRevision(action: "accept" | "reject") {
-    (action === "accept" ? this.surfaces.toolbars.revisionAccept : this.surfaces.toolbars.revisionReject).click();
+  /** Keep one side of the first suggestion row through its header button. */
+  async resolveSuggestion(action: "accept" | "reject") {
+    await settle({ frames: true });
+    const button = this.surfaces.editor.reviewLayer.querySelector<HTMLButtonElement>(`[data-suggestion-action="${action}"]`);
+    if (!button) throw new Error(`no suggestion row to ${action}`);
+    button.click();
     await settle({ frames: true });
   }
 

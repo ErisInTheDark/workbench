@@ -61,7 +61,9 @@
  *   svg editor tools, transforms, overlay toggles and save as.
  * - MagnetIcon/MagnetOffIcon: point snapping on and off.
  * - BoldIcon/ItalicIcon/CodeIcon/Heading1Icon/Heading2Icon/Heading3Icon/TextQuoteIcon/ListOrderedIcon: markdown toolbar glyphs.
- * - MessageSquarePlusIcon/MessageSquareDiffIcon/PencilIcon: comment, suggest-mode and edit-mode glyphs.
+ * - MessageSquareTextIcon/SparklesIcon: markdown comment and suggest-mode glyphs (FeatherIcon is edit mode).
+ * - FileIcon/FileTextIcon/FileCodeIcon/FileImageIcon: file kind glyphs for tabs and explorer rows.
+ * - DiffIcon: git change markers toggle.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
@@ -880,24 +882,52 @@ export function TextQuoteIcon(props: IconProps) {
 
 export function ListOrderedIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
-    <path d="M10 12h11" /><path d="M10 18h11" /><path d="M10 6h11" /><path d="M4 10h2" /><path d="M4 6h1v4" /><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" />
+    <path d="M11 5h10" /><path d="M11 12h10" /><path d="M11 19h10" /><path d="M4 4h1v5" /><path d="M4 9h2" />
+    <path d="M6.5 20H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02" />
   </OutlinedIcon>;
 }
 
-const squareBubblePath = "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z";
-
-export function MessageSquarePlusIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={squareBubblePath} /><path d="M12 8v6" /><path d="M9 11h6" /></OutlinedIcon>;
-}
-
-export function MessageSquareDiffIcon(props: IconProps) {
-  return <OutlinedIcon {...props}><path d={squareBubblePath} /><path d="M10 15h4" /><path d="M10 9h4" /><path d="M12 7v4" /></OutlinedIcon>;
-}
-
-export function PencilIcon(props: IconProps) {
+export function MessageSquareTextIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
-    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />
+    <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
+    <path d="M7 11h10" /><path d="M7 15h6" /><path d="M7 7h8" />
   </OutlinedIcon>;
+}
+
+export function SparklesIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
+    <path d="M20 2v4" /><path d="M22 4h-4" /><circle cx="4" cy="20" r="2" />
+  </OutlinedIcon>;
+}
+
+export function DiffIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M12 4 L12 14" /><path d="M7 20 L17 20" /><path d="M7 9 L17 9" /></OutlinedIcon>;
+}
+
+const filePaths = [
+  "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z",
+  "M14 2v5a1 1 0 0 0 1 1h5",
+];
+
+function FileOutlineIcon({ children, ...props }: IconProps) {
+  return <OutlinedIcon {...props}>{filePaths.map((path) => <path d={path} key={path} />)}{children}</OutlinedIcon>;
+}
+
+export function FileIcon(props: IconProps) {
+  return <FileOutlineIcon {...props} />;
+}
+
+export function FileTextIcon(props: IconProps) {
+  return <FileOutlineIcon {...props}><path d="M10 9H8" /><path d="M16 13H8" /><path d="M16 17H8" /></FileOutlineIcon>;
+}
+
+export function FileCodeIcon(props: IconProps) {
+  return <FileOutlineIcon {...props}><path d="M10 12.5 8 15l2 2.5" /><path d="m14 12.5 2 2.5-2 2.5" /></FileOutlineIcon>;
+}
+
+export function FileImageIcon(props: IconProps) {
+  return <FileOutlineIcon {...props}><circle cx="10" cy="12" r="2" /><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22" /></FileOutlineIcon>;
 }
 
 export function Undo2Icon(props: IconProps) {

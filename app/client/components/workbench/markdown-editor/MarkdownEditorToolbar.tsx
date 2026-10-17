@@ -12,21 +12,21 @@ import type { EditorToolbarState } from "../../../workbench/WorkbenchEditorClien
 import type { WorkbenchFilePanelClient } from "../../../workbench/WorkbenchFilePanelClient";
 import IconButton from "../../ui/IconButton";
 import Keybind, { isApplePlatform } from "../../ui/Keybind";
-import PressDragMenu from "../../ui/PressDragMenu";
+import RotatorButton, { type RotatorOption } from "../../ui/RotatorButton";
 import Tooltip from "../../ui/Tooltip";
-import ChevronIcon from "../ChevronIcon";
 import {
   BoldIcon,
   CodeIcon,
+  DiffIcon,
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
   ItalicIcon,
   ListIcon,
   ListOrderedIcon,
-  MessageSquareDiffIcon,
-  MessageSquarePlusIcon,
-  PencilIcon,
+  FeatherIcon,
+  MessageSquareTextIcon,
+  SparklesIcon,
   Redo2Icon,
   TextQuoteIcon,
   Undo2Icon,
@@ -37,6 +37,7 @@ const DISABLED_STATE: EditorToolbarState = {
   editable: false,
   inline: { bold: false, code: false, del: false, ins: false, italic: false },
   reviewMode: "edit",
+  showGitMarkers: true,
 };
 
 const noSubscription = () => () => {};
@@ -63,15 +64,14 @@ const GROUPS: ReadonlyArray<readonly ToolbarItem[]> = [
     { command: "ordered-list", icon: <ListOrderedIcon size={16} />, isActive: (state) => state.block === "ol" },
   ],
   [
-    { command: "comment", icon: <MessageSquarePlusIcon size={16} /> },
+    { command: "comment", icon: <MessageSquareTextIcon size={16} /> },
   ],
 ];
 
-const MODES: Record<ReviewMode, { description: string; icon: ReactNode; label: string }> = {
-  edit: { description: "Change the text directly", icon: <PencilIcon size={16} />, label: "Edit" },
-  suggest: { description: "Keep the original beside every change", icon: <MessageSquareDiffIcon size={16} />, label: "Suggest" },
-};
-const MODE_ORDER: readonly ReviewMode[] = ["edit", "suggest"];
+const MODE_OPTIONS: readonly RotatorOption<ReviewMode>[] = [
+  { icon: <FeatherIcon size={16} />, label: "Edit", value: "edit" },
+  { icon: <SparklesIcon size={16} />, label: "Suggest", value: "suggest" },
+];
 
 function CommandTooltip({ children, command }: { children: ComponentProps<typeof Tooltip>["children"]; command: EditorCommand }) {
   const { keybinds, label } = EDITOR_COMMANDS[command];
@@ -97,9 +97,12 @@ function ToolbarDivider() {
 }
 
 export default function MarkdownEditorToolbar({
+  className = "",
   client,
   trailing,
 }: {
+  /** Start and end padding live inside the scroller, so a toolbar spanning the screen never cuts controls off at its edges. */
+  className?: string;
   client: WorkbenchFilePanelClient | null;
   /** File actions shown at the toolbar's end. */
   trailing?: ReactNode;
@@ -109,7 +112,6 @@ export default function MarkdownEditorToolbar({
     client?.getToolbarState ?? disabledState,
     disabledState,
   );
-  const mode = MODES[state.reviewMode];
 
   const commandButton = ({ command, icon, isActive }: ToolbarItem) => (
     <CommandTooltip command={command} key={command}>
@@ -133,7 +135,7 @@ export default function MarkdownEditorToolbar({
     <div
       role="toolbar"
       aria-label="Markdown formatting"
-      className="flex min-w-0 items-center gap-0.5 overflow-x-auto py-1.5 [scrollbar-width:none]"
+      className={`flex min-w-0 items-center gap-0.5 overflow-x-auto py-1.5 [scrollbar-width:none] ${className}`}
       // Mouse presses keep focus and selection in the editor; touch presses record the selection to restore.
       onPointerDown={(event) => {
         if ((event.target as Element).closest("[data-editor-command]")) client?.beginToolbarInteraction(event.nativeEvent);
@@ -142,39 +144,14 @@ export default function MarkdownEditorToolbar({
         if ((event.target as Element).closest("[data-editor-command]")) client?.beginToolbarInteraction(event.nativeEvent);
       }}
     >
-      <PressDragMenu
-        label={`${mode.label} mode. Click to switch, or drag to choose.`}
-        heading="Editing mode"
+      <RotatorButton
+        ariaLabel="Editing mode"
         disabled={!state.editable}
-        triggerAppearance="plain"
-        triggerClassName={`
-          inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[0.8rem] font-medium
-          hover:bg-fg/5 disabled:opacity-45
-          ${state.reviewMode === "suggest" ? "bg-accent-soft text-accent" : "text-fg/muted hover:text-text"}
-        `}
-        items={MODE_ORDER.map((id) => ({
-          id,
-          checked: id === state.reviewMode,
-          content: (
-            <span className="flex items-center gap-2.5">
-              {MODES[id].icon}
-              <span className="flex flex-col">
-                <span className="font-medium">{MODES[id].label}</span>
-                <span className="text-[0.78rem] text-fg/muted">{MODES[id].description}</span>
-              </span>
-            </span>
-          ),
-        }))}
-        onActivate={() => client?.setReviewMode(state.reviewMode === "edit" ? "suggest" : "edit")}
-        onSelect={(id) => {
-          const next = MODE_ORDER.find((candidate) => candidate === id);
-          if (next) client?.setReviewMode(next);
-        }}
-      >
-        {mode.icon}
-        <span>{mode.label}</span>
-        <ChevronIcon aria-hidden="true" className="shrink-0 opacity-60" size={12} />
-      </PressDragMenu>
+        className={`h-8 py-0 text-[0.8rem] ${state.reviewMode === "suggest" ? "text-accent" : ""}`}
+        options={MODE_OPTIONS}
+        value={state.reviewMode}
+        onChange={(next) => client?.setReviewMode(next)}
+      />
       {GROUPS.map((group, index) => (
         <span className="flex shrink-0 items-center gap-0.5" key={index}>
           <ToolbarDivider />
@@ -182,6 +159,20 @@ export default function MarkdownEditorToolbar({
         </span>
       ))}
       <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        <Tooltip placement="bottom" delayMs={350} content={state.showGitMarkers ? "Hide git change markers" : "Show git change markers"}>
+          <IconButton
+            label="Git change markers"
+            title=""
+            size="small"
+            display="hover-border"
+            aria-pressed={state.showGitMarkers}
+            className="aria-pressed:bg-fg/8"
+            onClick={() => client?.setShowGitMarkers(!state.showGitMarkers)}
+          >
+            <DiffIcon size={16} />
+          </IconButton>
+        </Tooltip>
+        <ToolbarDivider />
         {commandButton({ command: "undo", icon: <Undo2Icon size={16} /> })}
         {commandButton({ command: "redo", icon: <Redo2Icon size={16} /> })}
         {trailing ? <><ToolbarDivider />{trailing}</> : null}

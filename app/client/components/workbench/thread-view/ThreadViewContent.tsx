@@ -80,7 +80,7 @@ import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
-import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
+import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import ThreadMessageBoard from "./ThreadMessageBoard";
 import { getLiveThreadActivity, getThreadTerminalEntries } from "./thread-live-activity";
 import ThreadRateLimits from "./ThreadRateLimits";
@@ -1180,7 +1180,7 @@ export default memo(function ThreadViewContent ({
                     {transcriptSourceMessage}
                   </div>
                 ) : (
-                  <ThreadLoadingSkeleton contained />
+                  <WorkbenchLoadingSpinner label="Loading thread" />
                 )
               )
             ) : null
