@@ -85,6 +85,28 @@ test("a read that reconciles an update before its observation callback still not
   store.dispose();
 });
 
+test("folder ownership includes observed worktrees without crossing daemons", () => {
+  const fake = fakeWorkspace();
+  const store = new ProjectFactsStore(fake.workspace, () => {});
+  const data = facts("beta");
+  const target = { daemonId, projectId: ProjectIdSchema.parse("worktree") };
+  const otherDaemon = DaemonIdSchema.parse(crypto.randomUUID());
+  const physical = {
+    id: target.projectId, kind: "git" as const, name: "worktree", rootPath: "/worktree",
+    relativePath: "worktree", roots: [], lastCommitTimeMs: null,
+  };
+  data.projects[0]!.observedLocations = [{ ...target, hostname: "local", rootPath: "/worktree", project: physical }];
+  data.projects[1]!.locations.push({
+    target: { ...target, daemonId: otherDaemon }, daemonId: otherDaemon,
+    hostname: "remote", name: "worktree", rootPath: "/worktree", project: physical,
+  });
+  fake.push("projects", data);
+  assert.equal(store.getForLocation(target)?.id, data.projects[0]!.id);
+  assert.equal(store.getForLocation({ ...target, daemonId: otherDaemon })?.id, data.projects[1]!.id);
+  assert.equal(store.getForLocation({ ...target, projectId: ProjectIdSchema.parse("missing") }), null);
+  store.dispose();
+});
+
 test("group tiers notify only when their phase or tiers change", () => {
   const fake = fakeWorkspace();
   const store = new ProjectFactsStore(fake.workspace, () => {});

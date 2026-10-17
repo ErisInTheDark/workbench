@@ -28,6 +28,7 @@ import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import WorkbenchProjectIcon from "../WorkbenchProjectIcon";
 import WorkbenchProjectLocationLabel from "../WorkbenchProjectLocationLabel";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
+import { useSettings } from "../use-settings";
 import {
   PanelCloseIcon,
   PanelExpandIcon,
@@ -38,7 +39,8 @@ import {
 type ThreadViewProps = ComponentProps<typeof ThreadView>;
 
 
-interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread"> {
+interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewportRef" | "thread" | "fontSizeRem"> {
+  fontSizePreview?: number | null;
   sidebarToggleInset?: "collapsed" | "expanded";
   isFocused: boolean;
   isMinimized?: boolean;
@@ -56,6 +58,7 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
 }
 
 export default function WorkbenchThreadPanel ({
+  fontSizePreview,
   sidebarToggleInset,
   isFocused,
   isMinimized = false,
@@ -73,6 +76,9 @@ export default function WorkbenchThreadPanel ({
   ...threadViewProps
 }: WorkbenchThreadPanelProps) {
   const client = useWorkbenchClientController();
+  const settings = useSettings.forThread(threadViewProps.threadTarget?.kind === "new" && thread?.isDraft
+    ? { kind: "draft", draftId: thread.id } : threadViewProps.threadTarget ?? null, location);
+  const baseFontSize = fontSizePreview ?? settings.get("editorFontSize");
   const outerDaemon = useWorkbenchDaemonClient();
   const threadContext = threadViewProps.threadTarget?.kind === "provider"
     || threadViewProps.threadTarget?.kind === "subagent"
@@ -115,7 +121,7 @@ export default function WorkbenchThreadPanel ({
     ? <WorkbenchRelativeTime label="Last activity" timestampMs={threadActivityTimestampMs} />
     : null;
 
-  const effectiveFontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number((threadViewProps.fontSizeRem + (zoomPreview ?? panelZoomDelta) * 0.08).toFixed(2))));
+  const effectiveFontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number((baseFontSize + (zoomPreview ?? panelZoomDelta) * 0.08).toFixed(2))));
   const rootViewKey = threadViewProps.viewInstanceKey ?? threadId;
   const selectedViewKey = threadViewProps.selectedThreadId && threadViewProps.selectedThreadId !== threadId
     ? threadViewProps.selectedThreadId : rootViewKey;
@@ -169,12 +175,12 @@ export default function WorkbenchThreadPanel ({
               <WorkbenchZoomButton
                 label="Thread text size"
                 disabled={isMinimized || !onPanelZoomDeltaChange}
-                min={Math.floor(Number(((MIN_EDITOR_FONT_SIZE - threadViewProps.fontSizeRem) / 0.08).toFixed(6)))}
-                max={Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - threadViewProps.fontSizeRem) / 0.08).toFixed(6)))}
+                min={Math.floor(Number(((MIN_EDITOR_FONT_SIZE - baseFontSize) / 0.08).toFixed(6)))}
+                max={Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - baseFontSize) / 0.08).toFixed(6)))}
                 step={1}
                 value={panelZoomDelta}
                 onPreview={setZoomPreview}
-                format={delta => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, threadViewProps.fontSizeRem + delta * 0.08)).toFixed(2)}rem`}
+                format={delta => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, baseFontSize + delta * 0.08)).toFixed(2)}rem`}
                 onChange={(value) => onPanelZoomDeltaChange?.(value)}
               />
             </div>
@@ -235,6 +241,7 @@ export default function WorkbenchThreadPanel ({
                   </span> : threadViewProps.threadOwnerContent}
                 contained
                 fontSizeRem={effectiveFontSizeRem}
+                settingsLocation={location}
                 scrollViewportRef={scrollViewportRef}
                 thread={thread}
               />

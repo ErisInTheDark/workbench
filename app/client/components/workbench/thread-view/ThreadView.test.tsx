@@ -10,6 +10,7 @@ import WorkbenchClientProvider from "../WorkbenchClientProvider";
 import type { WorkbenchClientController } from "../workbench-client-context";
 import ThreadView from "./ThreadView";
 import { EMPTY_THREAD_STORE_STATE } from "../../../workbench/thread/ThreadStore";
+import ProjectFactsStore from "../../../workbench/project/ProjectFactsStore";
 
 test("an unresolved existing-thread route shows its failure and retained owner", () => {
   const props = {
@@ -35,6 +36,11 @@ test("a retained thread head does not turn pending project ownership into a fail
   const client = {
     controls: null,
     mounted: {
+      projectFacts: new ProjectFactsStore({ observe: () => ({
+        getSnapshot: () => ({ phase: "pending", failure: null, value: null }), release: () => {},
+      }) }, () => {}),
+      threadOwnerFor: () => null,
+      subscribeChanges: () => () => {},
       getThreadStore: () => ({
         getSlice: (name: keyof typeof EMPTY_THREAD_STORE_STATE) => name === "summary"
           ? { ...EMPTY_THREAD_STORE_STATE.summary, status: "ready", head: { id: "thread", isDraft: false } }

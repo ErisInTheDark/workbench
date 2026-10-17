@@ -150,7 +150,6 @@ async function renderDetails(
       harness: "codex",
       materialized,
       fallbackProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
-      spellCheck: true,
       threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
     }),
     options.sidebarStore ?? null,

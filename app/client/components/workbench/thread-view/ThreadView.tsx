@@ -12,8 +12,14 @@ import { useTranscript } from "../use-transcript";
 import { resolveThreadViewHandoff, type ThreadViewDisplay } from "./thread-view-handoff";
 import ThreadViewContent from "./ThreadViewContent";
 import ThreadLoadingSkeleton from "./ThreadLoadingSkeleton";
+import { useSettings } from "../use-settings";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 
-export default function ThreadView({ thread: fallbackThread, routeOwned = false, routeError = "", ...props }: Omit<ComponentProps<typeof ThreadViewContent>, "rootTarget"> & { thread?: ThreadPayload | null; routeOwned?: boolean; routeError?: string }) {
+export default function ThreadView({ thread: fallbackThread, routeOwned = false, routeError = "", settingsLocation = null,
+  fontSizeRem, ...props }: Omit<ComponentProps<typeof ThreadViewContent>,
+    "rootTarget" | "composerSpellCheck" | "threadCodeBlockWrap" | "threadCodeDetails" | "onThreadCodeBlockWrapChange" | "fontSizeRem">
+  & { thread?: ThreadPayload | null; routeOwned?: boolean; routeError?: string;
+    settingsLocation?: ProjectLocationReference | null; fontSizeRem?: number }) {
   const requested = props.threadTarget ?? (fallbackThread?.isDraft
     ? { kind: "draft" as const, draftId: fallbackThread.id }
     : fallbackThread ? { kind: "provider" as const, harness: fallbackThread.harness, threadId: fallbackThread.id } : null);
@@ -45,6 +51,16 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   }) : null;
   if (display !== previousDisplay) setPreviousDisplay(display);
   const holdingDraft = display?.target.kind === "draft" && target?.kind === "provider";
+  const settings = useSettings.forThread(display?.target ?? target, settingsLocation);
+  const [settingsFailure, setSettingsFailure] = useState<{ owner: string | null; message: string } | null>(null);
+  const reportError = props.onQuestionnaireError;
+  const setCodeWrap = useCallback((value: boolean) => {
+    setSettingsFailure(null);
+    void settings.set("threadCodeBlockWrap", value).catch((error: Error) => {
+      if (reportError) reportError(error.message);
+      else setSettingsFailure({ owner: settings.projectId, message: error.message });
+    });
+  }, [settings, reportError]);
   const onSelectedThreadChange = props.onSelectedThreadChange;
   // A stable handler keeps the memoized content from re-rendering on every summary push this gate reads.
   const selectThread = useCallback((id: string) => {
@@ -67,8 +83,15 @@ export default function ThreadView({ thread: fallbackThread, routeOwned = false,
   }
   if (!display || !props.projectId || (!holdingDraft && (thread.status !== "ready" || !thread.head || active.status !== "ready" || !active.head))) return <ThreadLoadingSkeleton />;
   return <>
+    {settingsFailure?.owner === settings.projectId && settingsFailure
+      ? <p role="alert" className="px-6 py-3 text-danger">{settingsFailure.message}</p> : null}
     {holdingDraft && error ? <p role="alert" className="px-6 py-3 text-danger">{error}</p> : null}
     <ThreadViewContent {...props}
+      composerSpellCheck={settings.get("composerSpellCheck")}
+      threadCodeBlockWrap={settings.get("threadCodeBlockWrap")}
+      threadCodeDetails={settings.get("threadCodeDetails")}
+      onThreadCodeBlockWrapChange={setCodeWrap}
+      fontSizeRem={fontSizeRem ?? settings.get("editorFontSize")}
       projectId={display.projectId}
       rootTarget={display.target}
       threadTarget={holdingDraft ? display.target : props.threadTarget}

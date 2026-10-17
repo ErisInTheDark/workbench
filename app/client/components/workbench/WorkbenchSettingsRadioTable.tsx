@@ -8,7 +8,7 @@ import type { LogicalProjectId } from "workbench-shared/workbench/identity";
 import { WORKBENCH_SETTING_DEFINITIONS, type WorkbenchSettingKey } from "../../workbench/state/workbench-settings";
 import IconButton from "../ui/IconButton";
 import RadioRow from "../ui/RadioRow";
-import { useWorkbenchSettingsEditor } from "./use-workbench-settings-editor";
+import { useSettings } from "./use-settings";
 import { ResetIcon } from "./workbench-icons";
 
 export default function WorkbenchSettingsRadioTable({
@@ -25,7 +25,8 @@ export default function WorkbenchSettingsRadioTable({
   /** Heading for a group of related rows; a single self-describing row needs none. */
   title?: string;
 }) {
-  const settings = useWorkbenchSettingsEditor(logicalProjectId, onError);
+  const settings = useSettings(logicalProjectId);
+  const report = (error: Error) => onError(error.message);
   const unavailable = keys.some(key => settings.unavailable(key));
   return (
     <section className="space-y-2 py-3">
@@ -37,7 +38,7 @@ export default function WorkbenchSettingsRadioTable({
         <tbody>
           {keys.map(key => {
             const definition = WORKBENCH_SETTING_DEFINITIONS[key];
-            const value = settings.value(key);
+            const value = settings.get(key);
             return (
               <tr key={key} className="border-t border-fg/6 first:border-t-0">
                 <th scope="row" className="py-2 pr-4 text-left align-middle font-medium text-text">
@@ -50,7 +51,7 @@ export default function WorkbenchSettingsRadioTable({
                       ariaLabel={title ? `${title}: ${definition.label}` : definition.label}
                       size="comfortable"
                       disabled={unavailable}
-                      onChange={next => settings.change(key, next as never)}
+                      onChange={next => { void settings.set(key, next as never).catch(report); }}
                       options={(definition.options ?? []).map(option => ({
                         label: option.label, title: option.description, value: String(option.value),
                       }))}
@@ -58,7 +59,7 @@ export default function WorkbenchSettingsRadioTable({
                     />
                     {settings.overridden(key) ? (
                       <IconButton type="button" display="hover-border" size="small" disabled={unavailable}
-                        label={`Reset ${definition.label} to global`} onClick={() => settings.reset(key)}>
+                        label={`Reset ${definition.label} to global`} onClick={() => { void settings.reset(key).catch(report); }}>
                         <ResetIcon size={16} />
                       </IconButton>
                     ) : null}

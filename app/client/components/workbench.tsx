@@ -104,18 +104,10 @@ import {
 import type { MobilePaneDestination } from "../workbench/navigation/MobilePaneSwipeController";
 import { installBrowserLinkNavigation, useSearchParams } from "../workbench/navigation/browser-navigation";
 import {
-    createDefaultProjectWorkbenchSettings,
     MAX_EDITOR_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE,
-    readGlobalWorkbenchSettings,
-    readLogicalProjectWorkbenchSettings,
-    resolveWorkbenchSettings,
-    writeGlobalWorkbenchSetting,
-    writeLogicalProjectWorkbenchSetting,
-    type WorkbenchEditorFontFamily,
-    type WorkbenchGlobalSettings,
-    type WorkbenchSettingKey,
 } from "../workbench/state/workbench-settings";
+import { useSettings } from "./workbench/use-settings";
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
@@ -198,12 +190,6 @@ import { WorkbenchDaemonAssetOriginContext, WorkbenchOperationsContext as Workbe
 import WorkbenchZoomButton from "./workbench/WorkbenchZoomButton";
 
 installBrowserRandomUuidPolyfill();
-
-const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
-  mono: "font-mono",
-  sans: "font-sans",
-  serif: "font-serif",
-};
 
 function createUniqueFileLinkRootId (id: string, usedIds: Set<string>) {
   const baseId = id.trim() || "root";
@@ -336,10 +322,6 @@ function filterVisibleTreeNodes (nodes: TreeNode[]): TreeNode[] {
   return visibleNodes;
 }
 
-function clampEditorFontSize (value: number) {
-  return Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE, Number(value.toFixed(2))));
-}
-
 function getProjectTabLabel (projectName: string | null | undefined) {
   return projectName?.trim() || "Project";
 }
@@ -448,10 +430,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteDialogError, setDeleteDialogError] = useState("");
   const [projectActionError, setProjectActionError] = useState("");
-  const globalSettings = useMemo(
-    () => readGlobalWorkbenchSettings(clientState.records),
-    [clientState.records],
-  );
+  const globalSettings = useSettings();
   const [createDialogParentPath, setCreateDialogParentPath] = useState("");
   const [createEntryName, setCreateEntryName] = useState("");
   const [isCreatingEntry, setIsCreatingEntry] = useState(false);
@@ -673,15 +652,28 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ?? (selectionProjectIds.length === 1
       ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0])?.id ?? null
       : null);
-  const projectSettings = useMemo(() => (
-    settingsLogicalProjectId
-      ? readLogicalProjectWorkbenchSettings(settingsLogicalProjectId, clientState.records)
-      : createDefaultProjectWorkbenchSettings()
-  ), [settingsLogicalProjectId, clientState.records]);
-  const resolvedSettings = resolveWorkbenchSettings(globalSettings, projectSettings);
-  const [editorFontSizePreview, setEditorFontSizePreview] = useState<number | null>(null);
-  const displayedEditorFontSize = editorFontSizePreview ?? resolvedSettings.editorFontSize;
-  const showUnopenableFiles = resolvedSettings.showUnopenableFiles;
+  const shellSettings = useSettings(settingsLogicalProjectId);
+  const browseSettings = useSettings.forLocation(browseLocation, workbenchClient);
+  const settingsFallbackTarget = route.view === "mosaic"
+    ? getRouteMosaicFallbackTarget(routeMosaicNodeForControls, isMobileMosaicRoute) : null;
+  const settingsFileLocation = settingsFallbackTarget?.kind === "file" ? settingsFallbackTarget.source?.location ?? null
+    : route.view === "file" ? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null : null;
+  const fileSettings = useSettings.forLocation(settingsFileLocation, workbenchClient);
+  const settingsThreadTarget = settingsFallbackTarget?.kind === "thread" ? settingsFallbackTarget.target : route.threadTarget;
+  const threadSettings = useSettings.forThread(settingsThreadTarget?.kind === "new" && currentThread?.isDraft
+    ? { kind: "draft", draftId: DraftIdSchema.parse(currentThread.id) } : settingsThreadTarget,
+  settingsFallbackTarget?.kind === "thread" ? settingsFallbackTarget.source?.location ?? null
+    : routeLaunchLocation ?? route.logical?.location ?? browseLocation, workbenchClient);
+  const activeSettings = route.view === "file" || settingsFallbackTarget?.kind === "file" ? fileSettings
+    : route.view === "thread" || settingsFallbackTarget?.kind === "thread" ? threadSettings : shellSettings;
+  const fontSizeScopeKey = activeSettings.unavailable("editorFontSize") ? "unavailable" : activeSettings.projectId ?? "global";
+  const [editorFontSizePreview, setEditorFontSizePreview] = useState<{ scope: string; value: number } | null>(null);
+  const previewEditorFontSize = useCallback((value: number | null) => {
+    setEditorFontSizePreview(value === null ? null : { scope: fontSizeScopeKey, value });
+  }, [fontSizeScopeKey]);
+  const displayedFontSizePreview = editorFontSizePreview?.scope === fontSizeScopeKey
+    ? editorFontSizePreview?.value : undefined;
+  const showUnopenableFiles = browseSettings.get("showUnopenableFiles");
   const visibleTree = useMemo(
     () => {
       if (isProjectTreeLoading) {
@@ -693,7 +685,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     [explorer.tree, isProjectTreeLoading, showUnopenableFiles],
   );
   const projectTabLabel = getProjectTabLabel(viewedProjectDisplayName);
-  const editorFontClassName = EDITOR_FONT_CLASS_NAMES[resolvedSettings.editorFontFamily];
 
   useEffect(() => {
     document.title = pageTitle;
@@ -726,55 +717,16 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setCreateDialogError("");
   };
 
-  const updateGlobalSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
-    const nextValue = (key === "editorFontSize" && typeof value === "number"
-      ? clampEditorFontSize(value)
-      : value) as WorkbenchGlobalSettings[K];
-    void writeGlobalWorkbenchSetting(clientStateController, key, nextValue).catch((error: Error) => {
-      setSelectionError(error.message);
-    });
-  }, [clientStateController]);
-
-  const updateProjectSetting = useCallback(<K extends WorkbenchSettingKey> (key: K, value: WorkbenchGlobalSettings[K]) => {
-    if (!settingsLogicalProjectId) {
-      return;
-    }
-
-    const nextValue = (key === "editorFontSize" && typeof value === "number"
-      ? clampEditorFontSize(value)
-      : value) as WorkbenchGlobalSettings[K];
-    void writeLogicalProjectWorkbenchSetting(clientStateController, settingsLogicalProjectId, key, {
-      enabled: true,
-      value: nextValue,
-    }).catch((error: Error) => {
-      setSelectionError(error.message);
-    });
-  }, [settingsLogicalProjectId, clientStateController]);
-
-  const updateThreadCodeBlockWrapSetting = useCallback((nextValue: boolean) => {
-    if (settingsLogicalProjectId) {
-      updateProjectSetting("threadCodeBlockWrap", nextValue);
-      return;
-    }
-
-    updateGlobalSetting("threadCodeBlockWrap", nextValue);
-  }, [settingsLogicalProjectId, updateGlobalSetting, updateProjectSetting]);
-
+  const theme = shellSettings.get("theme");
   useEffect(() => {
-    document.documentElement.dataset.workbenchTheme = resolvedSettings.theme;
-  }, [resolvedSettings.theme]);
+    document.documentElement.dataset.workbenchTheme = theme;
+  }, [theme]);
 
   const updateEditorFontSize = useCallback((fontSize: number) => {
-    if (projectSettings.editorFontSize.enabled) {
-      updateProjectSetting("editorFontSize", fontSize);
-      return;
-    }
-    updateGlobalSetting("editorFontSize", fontSize);
-  }, [
-    projectSettings.editorFontSize.enabled,
-    updateGlobalSetting,
-    updateProjectSetting,
-  ]);
+    if (activeSettings.unavailable("editorFontSize")) return;
+    const settings = activeSettings.overridden("editorFontSize") ? activeSettings : globalSettings;
+    void settings.set("editorFontSize", fontSize).catch((error: Error) => setSelectionError(error.message));
+  }, [activeSettings, globalSettings]);
 
   const statsTab = route.view === "stats" ? route.statsTab ?? "usage" : "usage";
   // Threads on another machine open by id through their logical project, which knows every location.
@@ -799,19 +751,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     daemonId: browseLocation?.daemonId,
     projectId: browseProjectId,
   }), [browseDaemon, browseLocation?.daemonId, browseProjectId]);
-  // A file follows its own project's open overrides; folders without a known owner use the route's settings.
-  const fileOpenPolicyFor = useCallback((location: ProjectLocationReference | null) => {
-    const owner = location ? logicalProjects?.find(project => project.locations.some(item =>
-      item.target.daemonId === location.daemonId && item.target.projectId === location.projectId)) : null;
-    const settings = owner
-      ? resolveWorkbenchSettings(globalSettings, readLogicalProjectWorkbenchSettings(owner.id, clientState.records))
-      : resolvedSettings;
-    return {
-      openMarkdownFilesWith: settings.openMarkdownFilesWith,
-      openOtherFilesWith: settings.openOtherFilesWith,
-      openSvgFilesWith: settings.openSvgFilesWith,
-    };
-  }, [clientState.records, globalSettings, logicalProjects, resolvedSettings]);
+  const fileOpenPolicyFor = useSettings.fileOpenPolicy(workbenchClient);
   const openFileByPolicy = useFileActions({
     policyFor: fileOpenPolicyFor,
     browseLocation,
@@ -884,9 +824,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     toggleSidebar: () => {
       if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
     },
-    zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
-    zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [attachedProjectId, isMobile, navigateToRoute, newThreadRoute, resolvedSettings.editorFontSize, searchController,
+    zoomIn: () => updateEditorFontSize(activeSettings.get("editorFontSize") + 0.08),
+    zoomOut: () => updateEditorFontSize(activeSettings.get("editorFontSize") - 0.08),
+  }), [attachedProjectId, isMobile, navigateToRoute, newThreadRoute, activeSettings, searchController,
     updateEditorFontSize, viewedProjectId]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
@@ -1533,7 +1473,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         materialized={materializedThreadRootIds.has(rootThreadId)}
         onQuestionnaireError={setSelectionError}
         fallbackProjectId={activeProjectId}
-        spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
         parentThreadId={entry.entryKind === "subagent" ? entry.parentThreadId : undefined}
       />
@@ -1541,10 +1480,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [
     activeProjectId,
     materializedThreadRootIds,
-    resolvedSettings.composerSpellCheck,
   ]);
-  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
-    ? resolvedSettings.theme
+  const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = theme === "magical-girl" || theme === "winter"
+    ? theme
     : null;
   const shouldShowShellHeader = !showFullBleedMainView && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
@@ -2079,7 +2017,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             title={showUnopenableFiles ? "Hide files the workbench can't open" : "Show files the workbench can't open"}
                             className={workbenchNewEntryButtonClassName}
                             onClick={() => {
-                              updateProjectSetting("showUnopenableFiles", !showUnopenableFiles);
+                              void browseSettings.set("showUnopenableFiles", !showUnopenableFiles)
+                                .catch((error: Error) => setSelectionError(error.message));
                             }}
                           >
                             <FileVisibilityIcon visible={showUnopenableFiles} />
@@ -2210,12 +2149,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   </IconButton>
                   <WorkbenchShellTabs className="flex-1" fallback={newThreadRoute} />
                   <WorkbenchZoomButton
+                    key={fontSizeScopeKey}
                     label="Editor text size"
-                    disabled={!shouldShowShellHeader}
+                    disabled={!shouldShowShellHeader || activeSettings.unavailable("editorFontSize")}
                     min={MIN_EDITOR_FONT_SIZE}
                     max={MAX_EDITOR_FONT_SIZE}
-                    value={resolvedSettings.editorFontSize}
-                    onPreview={setEditorFontSizePreview}
+                    value={activeSettings.get("editorFontSize")}
+                    onPreview={previewEditorFontSize}
                     onChange={updateEditorFontSize}
                   />
                 </div>
@@ -2258,7 +2198,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           </span>
                         </span>
                       ) : null}
-                      composerSpellCheck={resolvedSettings.composerSpellCheck}
                       draftLeadingContent={projectRotator}
                       approvalModeSettings={approvalModeSettings}
                       draftTargetControl={route.logical && logicalThreadProject && threadForThreadView?.isDraft ? (
@@ -2300,7 +2239,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         />
                       ) : null}
                       onDraftSessionChange={session => { activeDraftSessionRef.current = session; }}
-                      fontSizeRem={displayedEditorFontSize}
+                      fontSizeRem={displayedFontSizePreview}
+                      settingsLocation={settingsFallbackTarget?.kind === "thread"
+                        ? settingsFallbackTarget.source?.location ?? null : routeLaunchLocation ?? browseLocation}
                       getThreadHref={(target) => route.logical
                         && (target.kind === "provider" || target.kind === "subagent")
                         ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, target,
@@ -2323,7 +2264,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       onThreadSettingsChange={setThreadComposerSettings}
                       selectedThreadId={selectedThreadIdForView}
                       onSelectedThreadChange={handleSelectedThreadChange}
-                      onThreadCodeBlockWrapChange={updateThreadCodeBlockWrapSetting}
                       projectId={threadProjectId}
                       threadTarget={effectiveThreadTarget ?? null}
                       projectFileCandidates={isForeignThreadProject ? [] : explorer.projectFileCandidates}
@@ -2334,8 +2274,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       projectRootPath={threadProjectRootPath}
                       projectRoots={threadProjectRoots}
                       scrollViewportRef={directThreadScrollViewportRef}
-                      threadCodeBlockWrap={resolvedSettings.threadCodeBlockWrap}
-                      threadCodeDetails={resolvedSettings.threadCodeDetails}
                       threadComposerDraft={activeThreadComposerDraft}
                       threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
                       viewInstanceKey={threadViewInstanceKey}
@@ -2443,7 +2381,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
                       const mosaicTarget = workspaceController.mosaicTargetForPanel(panelId);
                       const panelZoomDelta = mosaicPanel?.zoomDelta ?? 0;
-                      const panelFontSizeRem = clampEditorFontSize(displayedEditorFontSize + panelZoomDelta * 0.08);
                       const isMinimized = Boolean(mosaicPanel?.minimized);
                       const isMinimizedVertical = isMinimized && mosaicPanel?.parentDirection === "horizontal";
                       const sidebarToggleInset = showMosaicView && panelId === topLeftMosaicPanelId
@@ -2477,9 +2414,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           <WorkbenchFileView
                             contained={showMosaicView}
                             route={route}
-                            editorFontClassName={editorFontClassName}
-                            fontSizeRem={panelFontSizeRem}
-                            baseFontSizeRem={displayedEditorFontSize}
+                            fontSizePreview={!showMosaicView ? displayedFontSizePreview : undefined}
                             sidebarToggleInset={sidebarToggleInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
@@ -2500,28 +2435,20 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
                             panelZoomDelta={panelZoomDelta}
                             path={target.filePath}
-                            spellCheck={resolvedSettings.editorSpellCheck}
                           />
                         );
                       }
 
                       if (target.kind === "thread") {
-                        const panelLogicalProjectId = mosaicTarget?.source?.logicalProjectId
-                          ?? route.logical?.threadOwnerProjectId ?? route.logical?.projectId ?? null;
-                        const panelSettings = resolveWorkbenchSettings(globalSettings,
-                          panelLogicalProjectId
-                            ? readLogicalProjectWorkbenchSettings(panelLogicalProjectId, clientState.records)
-                            : createDefaultProjectWorkbenchSettings());
                         return (
                           <WorkbenchThreadPanel
                             routeOwned
-                            composerSpellCheck={resolvedSettings.composerSpellCheck}
                             getThreadHref={threadTarget => route.logical
                               && (threadTarget.kind === "provider" || threadTarget.kind === "subagent")
                               ? projectHref(createLogicalExistingThreadRoute(route.logical.projectId, threadTarget,
                                 route.logical.browseLocation ?? null))
                               : undefined}
-                            fontSizeRem={displayedEditorFontSize}
+                            fontSizePreview={!showMosaicView ? displayedFontSizePreview : undefined}
                             sidebarToggleInset={sidebarToggleInset}
                             isFocused={isFocused}
                             isMinimized={isMinimized}
@@ -2569,13 +2496,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                                 ? createLogicalMosaicRoute(route.logical.projectId, nextNode)
                                 : createMosaicRoute(route.projectId, nextNode));
                             }}
-                            onThreadCodeBlockWrapChange={nextValue => {
-                              void (panelLogicalProjectId
-                                ? writeLogicalProjectWorkbenchSetting(clientStateController, panelLogicalProjectId,
-                                  "threadCodeBlockWrap", { enabled: true, value: nextValue })
-                                : writeGlobalWorkbenchSetting(clientStateController, "threadCodeBlockWrap", nextValue))
-                                .catch((error: Error) => setSelectionError(error.message));
-                            }}
                             profileController={profileControllerFor(
                               target.target.kind === "provider" || target.target.kind === "subagent"
                                 ? workbenchClient.mounted?.threadOwnerFor(getWorkbenchThreadTargetRootId(target.target))
@@ -2588,8 +2508,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             projectFilePaths={explorer.projectFilePaths}
                             projectRootPath={explorer.rootPath}
                             projectRoots={explorer.roots}
-                            threadCodeBlockWrap={panelSettings.threadCodeBlockWrap}
-                            threadCodeDetails={panelSettings.threadCodeDetails}
                             threadTarget={target.target}
                             threadComposerDraft={getThreadComposerDraftForTarget(target.target)}
                             threadComposerDraftsByThreadId={threadComposerDraftsByThreadId}
@@ -2643,13 +2561,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 ) : showFileView && !shouldRenderMainLayout ? (
                   <WorkbenchFileView
                     route={route}
-                    editorFontClassName={editorFontClassName}
-                    fontSizeRem={displayedEditorFontSize}
+                    fontSizePreview={displayedFontSizePreview}
                     isFocused
                     location={mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined}
                     onFocus={() => { }}
                     path={effectiveFilePath}
-                    spellCheck={resolvedSettings.editorSpellCheck}
                   />
                 ) : null}
               </section>

@@ -11,7 +11,8 @@ import type { ProjectLocationReference } from "workbench-shared/workbench/projec
 import createFilePanelClient, { type WorkbenchFilePanelClient, type WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import useFileDocument from "../../../workbench/file/use-file-document";
 import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
-import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
+import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFamily } from "../../../workbench/state/workbench-settings";
+import { useSettings } from "../use-settings";
 import IconButton from "../../ui/IconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import {
@@ -30,11 +31,13 @@ import {
   SaveIcon,
 } from "../workbench-icons";
 
+const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
+  mono: "font-mono", sans: "font-sans", serif: "font-serif",
+};
+
 interface WorkbenchFilePanelProps {
   contained?: boolean;
-  editorFontClassName: string;
-  fontSizeRem: number;
-  baseFontSizeRem?: number;
+  fontSizePreview?: number | null;
   sidebarToggleInset?: "collapsed" | "expanded";
   isFocused: boolean;
   isMinimized?: boolean;
@@ -48,15 +51,12 @@ interface WorkbenchFilePanelProps {
   panelZoomDelta?: number;
   path: string;
   showManualFileActions?: boolean;
-  spellCheck: boolean;
   titleLabel?: string;
 }
 
 export default function WorkbenchFilePanel ({
-  baseFontSizeRem,
+  fontSizePreview,
   contained = false,
-  editorFontClassName,
-  fontSizeRem,
   sidebarToggleInset,
   isFocused,
   isMinimized = false,
@@ -70,9 +70,14 @@ export default function WorkbenchFilePanel ({
   panelZoomDelta = 0,
   path,
   showManualFileActions = true,
-  spellCheck,
   titleLabel,
 }: WorkbenchFilePanelProps) {
+  const settings = useSettings.forLocation(location);
+  const editorFontClassName = EDITOR_FONT_CLASS_NAMES[settings.get("editorFontFamily")];
+  const spellCheck = settings.get("editorSpellCheck");
+  const panelBaseFontSize = fontSizePreview ?? settings.get("editorFontSize");
+  const fontSizeRem = Math.min(MAX_EDITOR_FONT_SIZE, Math.max(MIN_EDITOR_FONT_SIZE,
+    Number((panelBaseFontSize + panelZoomDelta * 0.08).toFixed(2))));
   const editorRef = useRef<HTMLDivElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
@@ -193,7 +198,6 @@ export default function WorkbenchFilePanel ({
     clientRef.current?.setFontSize(fontSizeRem, { persist: false });
   }, [fontSizeRem]);
 
-  const panelBaseFontSize = baseFontSizeRem ?? fontSizeRem;
   const usesPanelZoom = Boolean(onPanelZoomDeltaChange);
   const previewZoom = useCallback((value: number | null) => {
     clientRef.current?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);

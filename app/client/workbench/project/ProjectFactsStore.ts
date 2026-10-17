@@ -70,7 +70,9 @@ export default class ProjectFactsStore {
   getProject = (id: string) => this.getProjects().find(project => project.id === id) ?? null;
   getForLocation = (location: ProjectLocationReference) => this.getProjects().find(project =>
     project.locations.some(item => item.daemonId === location.daemonId
-      && item.target.projectId === location.projectId)) ?? null;
+      && item.target.projectId === location.projectId)
+    || project.observedLocations?.some(item => item.daemonId === location.daemonId
+      && item.projectId === location.projectId)) ?? null;
   getSummary = (id: string): WorkbenchLogicalProjectSummary | null => this.getData()?.summaries[id] ?? null;
   getFolders = () => this.reconcile().folders;
   getGroups = () => this.reconcile().groupFacts;

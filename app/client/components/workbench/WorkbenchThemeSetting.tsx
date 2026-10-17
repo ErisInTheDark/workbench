@@ -9,7 +9,7 @@ import type { WorkbenchTheme } from "workbench-shared/workbench/settings/workben
 import { WORKBENCH_SETTING_DEFINITIONS } from "../../workbench/state/workbench-settings";
 import IconButton from "../ui/IconButton";
 import PressDragMenu from "../ui/PressDragMenu";
-import { useWorkbenchSettingsEditor } from "./use-workbench-settings-editor";
+import { useSettings } from "./use-settings";
 import { ChevronDownIcon, ResetIcon } from "./workbench-icons";
 
 const definition = WORKBENCH_SETTING_DEFINITIONS.theme;
@@ -30,8 +30,9 @@ export default function WorkbenchThemeSetting({ logicalProjectId, onError }: {
   logicalProjectId: LogicalProjectId | null;
   onError: (message: string) => void;
 }) {
-  const settings = useWorkbenchSettingsEditor(logicalProjectId, onError);
-  const value = settings.value("theme");
+  const settings = useSettings(logicalProjectId);
+  const report = (error: Error) => onError(error.message);
+  const value = settings.get("theme");
   const current = definition.options?.find(option => option.value === value);
   const unavailable = settings.unavailable("theme");
   return <section className="relative flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
@@ -52,7 +53,7 @@ export default function WorkbenchThemeSetting({ logicalProjectId, onError }: {
       }))}
       onSelect={id => {
         const option = definition.options?.find(item => item.value === id);
-        if (option) settings.change("theme", option.value);
+        if (option) void settings.set("theme", option.value).catch(report);
       }}
     >
       <span className="flex items-center gap-1">
@@ -63,7 +64,7 @@ export default function WorkbenchThemeSetting({ logicalProjectId, onError }: {
     {settings.overridden("theme") ? <IconButton
       type="button" display="hover-border" label="Reset Theme to global" title="Reset Theme to global"
       className="absolute right-2 top-1/2 -translate-y-1/2 lg:-right-12" disabled={unavailable}
-      onClick={() => settings.reset("theme")}
+      onClick={() => { void settings.reset("theme").catch(report); }}
     ><ResetIcon size={18} /></IconButton> : null}
     {unavailable ? <p className="m-0 w-full text-xs text-fg/muted">Available after the app database is reloaded.</p> : null}
   </section>;

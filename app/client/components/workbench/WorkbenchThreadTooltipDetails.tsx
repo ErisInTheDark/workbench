@@ -22,6 +22,7 @@ import useWorkbenchQuestionnaire from "./use-workbench-questionnaire";
 import { useProjects } from "./use-projects";
 import { useThread } from "./use-thread";
 import { useThreads } from "./use-threads";
+import { useSettings } from "./use-settings";
 import WorkbenchThreadReferenceList from "./WorkbenchThreadReferenceList";
 import { ThreadTooltipSection } from "./WorkbenchThreadTooltipContent";
 
@@ -46,7 +47,6 @@ export default function WorkbenchThreadTooltipDetails({
   materialized,
   onQuestionnaireError,
   fallbackProjectId,
-  spellCheck,
   threadId,
   parentThreadId,
 }: {
@@ -55,11 +55,12 @@ export default function WorkbenchThreadTooltipDetails({
   onQuestionnaireError?: (message: string) => void;
   /** The project to read the thread through when no sidebar or summary lists it. */
   fallbackProjectId: ProjectId | "";
-  spellCheck: boolean;
   threadId: WorkbenchThreadId;
   parentThreadId?: WorkbenchThreadId;
 }) {
   const sidebars = useThreads.sidebars();
+  const settings = useSettings.forThread(parentThreadId
+    ? { kind: "subagent", harness, parentThreadId, threadId } : { kind: "provider", harness, threadId });
   const summaries = useProjects.threads();
   const projectId = useMemo(() => sidebars.projects.find(({ entries }) => entries.some(candidate => (
     candidate.entryKind !== "draft" && candidate.identity.harness === harness && candidate.identity.threadId === threadId
@@ -149,7 +150,7 @@ export default function WorkbenchThreadTooltipDetails({
                 presentation="compact"
                 projectRootPath={projectRootPath}
                 request={pendingRequest.request}
-                spellCheck={spellCheck}
+                spellCheck={settings.get("composerSpellCheck")}
                 workspaceRoots={workspaceRoots}
               />
             ) : (
