@@ -13,7 +13,6 @@ import type {
   WorkbenchHarnessId,
   WorkbenchThreadGitCommit,
   WorkbenchThreadLifecycle,
-  WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import LoaderIcon from "../LoaderIcon";
@@ -48,7 +47,6 @@ export default function ThreadStatusArea({
   harness,
   live,
   onFeedbackDeleted,
-  onOpenThread,
   skills,
   threadId,
   threadLifecycle,
@@ -62,7 +60,6 @@ export default function ThreadStatusArea({
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
   onFeedbackDeleted: () => Promise<void>;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -143,7 +140,6 @@ export default function ThreadStatusArea({
               chrome="flush"
               intersections={intersections}
               logicalProjectId={logicalProjectId}
-              onOpenThread={onOpenThread}
               ownerProjectId={ownerProjectId}
             />
           ) : null}
@@ -192,7 +188,6 @@ export default function ThreadStatusArea({
                 chrome="flush"
                 intersections={intersections}
                 logicalProjectId={logicalProjectId}
-                onOpenThread={onOpenThread}
                 ownerProjectId={ownerProjectId}
               />
             )}

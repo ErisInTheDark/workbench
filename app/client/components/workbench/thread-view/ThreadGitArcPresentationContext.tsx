@@ -10,13 +10,12 @@ import { createContext } from "react";
 
 import type { GitCheckpointCommitCommandIntent } from "../../../workbench/thread/thread-command-matchers";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import type { WorkbenchGitArcPlanState, WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcPlanState } from "workbench-shared/workbench/thread/thread-state";
 
 export interface ThreadGitArcPresentation {
   gitArcPlan?: WorkbenchGitArcPlanState | null;
   harness: WorkbenchHarness;
   hasActiveGitArc?: boolean;
-  onOpenThread?: (target: WorkbenchThreadTarget) => void;
   projectId?: string | null;
   threadId?: string;
   proposalIntents?: ReadonlyMap<string, GitCheckpointCommitCommandIntent>;

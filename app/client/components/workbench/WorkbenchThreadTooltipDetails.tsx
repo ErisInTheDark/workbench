@@ -8,7 +8,6 @@ import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import type { WorkspaceFileLinkRoot } from "../../workbench/markdown/markdown-links";
-import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/thread-state";
 import { useMemo, useState } from "react";
 
 import ThreadCheckpointCommitActions from "./thread-view/ThreadCheckpointCommitActions";
@@ -46,7 +45,6 @@ export default function WorkbenchThreadTooltipDetails({
   harness,
   materialized,
   onQuestionnaireError,
-  onOpenThread,
   fallbackProjectId,
   spellCheck,
   threadId,
@@ -55,7 +53,6 @@ export default function WorkbenchThreadTooltipDetails({
   harness: WorkbenchHarness;
   materialized: boolean;
   onQuestionnaireError?: (message: string) => void;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
   /** The project to read the thread through when no sidebar or summary lists it. */
   fallbackProjectId: ProjectId | "";
   spellCheck: boolean;
@@ -118,7 +115,6 @@ export default function WorkbenchThreadTooltipDetails({
         intersections={observed.intersections}
         logicalProjectId={observed.logicalProjectId}
         mode={mode}
-        onOpenThread={onOpenThread}
         ownerProjectId={observed.ownerProjectId}
         presentation="compact"
       />

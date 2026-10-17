@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { useContext, type ContextType } from "react";
+import { useContext } from "react";
 
 import { describeGitArcFailure, type GitArcFailure } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -15,6 +15,7 @@ import ThreadInlineCode from "./ThreadInlineCode";
 import ThreadGitArcCommitList from "./ThreadGitArcCommitList";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
 import { useThread } from "../use-thread";
+import WorkbenchClientContext from "../workbench-client-context";
 
 function identityKey(harness: string, threadId: string) {
   return `${harness.toLowerCase()}\0${threadId.toLowerCase()}`;
@@ -38,11 +39,9 @@ function MissingConflictOwners({ owners }: { owners: readonly GitArcConflict["ow
 
 function LiveConflictOwners({
   conflicts,
-  onOpenThread,
   threadId,
 }: {
   conflicts: readonly GitArcConflict[];
-  onOpenThread: NonNullable<NonNullable<ContextType<typeof ThreadGitArcPresentationContext>>["onOpenThread"]>;
   threadId: string;
 }) {
   const { entries, logicalProjectId, ownerProjectId } = useThread.collisions(
@@ -60,7 +59,6 @@ function LiveConflictOwners({
             entry, identity: entry.identity, paths: [], projectId: ownerProjectId,
             logicalProjectId, title: entry.title,
           }))}
-          onOpenThread={onOpenThread}
         />
       ) : null}
       <MissingConflictOwners owners={missingOwners} />
@@ -82,6 +80,8 @@ export default function ThreadGitArcFailure({
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
   const presentationContext = useContext(ThreadGitArcPresentationContext);
+  // Live conflict owners lease thread rows and link to them, which needs a mounted client (not the render lab).
+  const hasClient = useContext(WorkbenchClientContext) !== null;
   const resolvedProjectId = projectId ?? presentationContext?.projectId ?? null;
   const presentation = describeGitArcFailure(failure);
   const conflicts = failure.code === "siblingClaimCollision" || failure.code === "planDrift" ? failure.conflicts : [];
@@ -132,10 +132,9 @@ export default function ThreadGitArcFailure({
             {failure.code === "planDrift" && failure.commits.length ? (
               <ThreadGitArcCommitList commits={failure.commits} projectFilePaths={projectFilePaths} projectId={resolvedProjectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />
             ) : null}
-            {conflicts.length && presentationContext?.threadId && presentationContext.onOpenThread ? (
+            {conflicts.length && presentationContext?.threadId && hasClient ? (
               <LiveConflictOwners
                 conflicts={conflicts}
-                onOpenThread={presentationContext.onOpenThread}
                 threadId={presentationContext.threadId}
               />
             ) : <MissingConflictOwners owners={conflicts.map(({ owner }) => owner)} />}

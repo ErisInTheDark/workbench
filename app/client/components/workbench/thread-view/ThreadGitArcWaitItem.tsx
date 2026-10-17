@@ -11,6 +11,7 @@ import type { ThreadCommandExecutionOutcome } from "../../../workbench/thread/th
 import { ObservedThreadGitArcIntersectionCard } from "./ThreadGitArcIntersectionCard";
 import ThreadGitArcItem from "./ThreadGitArcItem";
 import ThreadGitArcPresentationContext from "./ThreadGitArcPresentationContext";
+import WorkbenchClientContext from "../workbench-client-context";
 
 type GitArcItemProps = ComponentProps<typeof ThreadGitArcItem>;
 
@@ -36,6 +37,7 @@ export default function ThreadGitArcWaitItem({
   threadId: string;
 }) {
   const gitArcPresentation = useContext(ThreadGitArcPresentationContext);
+  const hasClient = useContext(WorkbenchClientContext) !== null;
   if (outcome !== "inProgress") {
     return (
       <ThreadGitArcItem
@@ -54,12 +56,12 @@ export default function ThreadGitArcWaitItem({
       />
     );
   }
-  if (!gitArcPresentation?.onOpenThread || !gitArcPresentation.projectId) return null;
+  // The live card leases sibling rows and links to them, which needs a mounted client (not the render lab).
+  if (!hasClient || !gitArcPresentation?.projectId) return null;
   return (
     <ObservedThreadGitArcIntersectionCard
       harness={gitArcPresentation.harness}
       mode="wait"
-      onOpenThread={gitArcPresentation.onOpenThread}
       threadId={threadId}
     />
   );

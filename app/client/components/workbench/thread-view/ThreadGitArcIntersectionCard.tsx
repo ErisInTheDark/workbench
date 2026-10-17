@@ -9,7 +9,6 @@ import type { LogicalProjectId, ProjectId } from "workbench-shared/workbench/ide
 import {
   type WorkbenchHarnessId,
   type WorkbenchThreadClaimIntersections,
-  type WorkbenchThreadTarget,
 } from "workbench-shared/workbench/thread/thread-state";
 import Disclosure from "../../ui/Disclosure";
 import { GitArcUnclaimIcon, GitArcWaitIcon } from "./GitArcIcon";
@@ -30,7 +29,6 @@ export default function ThreadGitArcIntersectionCard({
   intersections,
   logicalProjectId,
   mode = "plan",
-  onOpenThread,
   ownerProjectId,
   presentation = "full",
 }: {
@@ -42,7 +40,6 @@ export default function ThreadGitArcIntersectionCard({
   intersections: WorkbenchThreadClaimIntersections;
   logicalProjectId: LogicalProjectId | null;
   mode?: IntersectionMode;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
   /** Project owning the observed thread; without one the sibling threads cannot be linked. */
   ownerProjectId?: ProjectId | null;
   presentation?: "compact" | "full";
@@ -94,14 +91,14 @@ export default function ThreadGitArcIntersectionCard({
                 : "No active work intersects this plan."}
         </span>
       </h2>
-      <WorkbenchThreadReferenceList references={references(intersections.activeEntries, !stashed)} onOpenThread={onOpenThread} />
+      <WorkbenchThreadReferenceList references={references(intersections.activeEntries, !stashed)} />
       {!waiting && !compact && plannedThreadCount ? (
         <Disclosure
           contentClassName="pb-1"
           summary={`Also intersecting planned work in ${plannedThreadSummary}`}
           summaryClassName="px-3 py-2 text-[0.78em] font-medium leading-[1.45]"
         >
-          <WorkbenchThreadReferenceList references={references(intersections.plannedEntries, true)} onOpenThread={onOpenThread} />
+          <WorkbenchThreadReferenceList references={references(intersections.plannedEntries, true)} />
         </Disclosure>
       ) : null}
     </section>
@@ -112,7 +109,6 @@ export function ObservedThreadGitArcIntersectionCard({ harness, mode = "plan", t
   chrome?: "card" | "flush" | "notice";
   harness: WorkbenchHarnessId;
   mode?: IntersectionMode;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
   presentation?: "compact" | "full";
   threadId: string;
 }) {

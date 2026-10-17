@@ -1531,7 +1531,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         harness={entry.identity.harness}
         materialized={materializedThreadRootIds.has(rootThreadId)}
         onQuestionnaireError={setSelectionError}
-        onOpenThread={openThreadFromExplorer}
         fallbackProjectId={activeProjectId}
         spellCheck={resolvedSettings.composerSpellCheck}
         threadId={threadId}
@@ -1541,7 +1540,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }, [
     activeProjectId,
     materializedThreadRootIds,
-    openThreadFromExplorer,
     resolvedSettings.composerSpellCheck,
   ]);
   const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
@@ -2339,7 +2337,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                           : projectHref(createThreadRoute(activeProjectId, target))}
                       mobileFullBleed={isDirectMobileThreadSurface}
                       onDraftHarnessChange={handleHarnessChange}
-                      onOpenThread={(target) => { void openThreadFromExplorer(target, threadProjectId); }}
                       onThreadSettled={handleComposerThreadSettled}
                       onSendMessage={sendThreadMessage}
                       onThreadComposerDraftChange={handleThreadComposerDraftChange}
@@ -2554,7 +2551,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             isMinimizedVertical={isMinimizedVertical}
                             onDraftHarnessChange={nextHarness =>
                               handleHarnessChange(nextHarness, mosaicTarget?.source?.location)}
-                            onOpenThread={openThreadFromExplorer}
                             onCreateDraftThread={() => {
                               if (!controls || !route.mosaicNode || target.target.kind !== "new") return null;
                               if (route.logical && !mosaicTarget?.source?.location) {

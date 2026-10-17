@@ -149,7 +149,6 @@ async function renderDetails(
     createElement(WorkbenchThreadTooltipDetails, {
       harness: "codex",
       materialized,
-      onOpenThread: () => undefined,
       fallbackProjectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"),
       spellCheck: true,
       threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread"),
@@ -401,7 +400,6 @@ test("planned-work tooltips keep active intersection navigation and omit planned
   const fullHtml = renderWithClient(
     createElement(ObservedThreadGitArcIntersectionCard, {
       harness: "codex",
-      onOpenThread: () => undefined,
       threadId: "thread",
     }),
     planStore,
@@ -411,7 +409,6 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     references: getWorkbenchThreadClaimIntersections(planSnapshot.entries, planOwner.identity, "plan").plannedEntries.map(({ entry, paths }) => ({
       entry, identity: entry.identity, paths, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project"), title: entry.title,
     })),
-    onOpenThread: () => undefined,
   }), planStore);
   assert.match(plannedHtml, /data-project-file-relative-path="src\/feature\/other.ts"/u);
 });
@@ -438,7 +435,6 @@ test("a tooltip reads planned intersections from its owner's source during a pen
 test("a home-view intersection uses the known owner", () => {
   const html = renderWithClient(createElement(ObservedThreadGitArcIntersectionCard, {
     harness: "codex",
-    onOpenThread: () => undefined,
     threadId: "thread",
   }), planStore);
   assert.match(html, /data-workbench-sidebar-thread-link="true"/u);
@@ -467,7 +463,6 @@ test("Git arc waits show active claim owners without planned-only intersections"
     createElement(ObservedThreadGitArcIntersectionCard, {
       harness: "codex",
       mode: "wait",
-      onOpenThread: () => undefined,
       threadId: "thread",
     }),
     planStore,

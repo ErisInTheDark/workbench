@@ -244,7 +244,6 @@ export default memo(function ThreadViewContent ({
   isFocused = true,
   onDraftHarnessChange,
   onThreadCodeBlockWrapChange,
-  onOpenThread,
   onThreadSettled,
   onSendMessage,
   onThreadComposerDraftChange,
@@ -287,7 +286,6 @@ export default memo(function ThreadViewContent ({
   isFocused?: boolean;
   onDraftHarnessChange: (harness: WorkbenchHarness) => void;
   onThreadCodeBlockWrapChange: (nextValue: boolean) => void;
-  onOpenThread: (target: WorkbenchThreadTarget) => void;
   onThreadSettled?: (target: WorkbenchThreadTarget, ownerProjectId: string) => void;
   onSendMessage: (
     thread: ThreadPayload,
@@ -1089,7 +1087,6 @@ export default memo(function ThreadViewContent ({
         gitArcPlan: activeGitArcSelection?.gitArcPlan ?? null,
         harness: activeThread?.harness ?? thread.harness,
         hasActiveGitArc: activeGitArcSelection?.gitArc?.phase === "active",
-        onOpenThread,
         projectId,
         threadId: activeThread?.id ?? thread.id,
         proposalIntents: visibleGitArcProposalPresentation.intents,
@@ -1222,7 +1219,6 @@ export default memo(function ThreadViewContent ({
             key={activeThread.id}
             live={liveActivityView}
             onFeedbackDeleted={active.actions.clearAddressedFeedback}
-            onOpenThread={onOpenThread}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}

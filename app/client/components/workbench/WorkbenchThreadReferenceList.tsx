@@ -5,7 +5,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { WorkbenchThreadTarget, WorkbenchThreadWaitTarget } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadWaitTarget } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadSidebarRow as WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { createLogicalExistingThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
@@ -18,7 +18,6 @@ type ProviderThreadSidebarEntry = Exclude<WorkbenchThreadSidebarEntry, { entryKi
 
 export default function WorkbenchThreadReferenceList({
   label,
-  onOpenThread,
   references,
 }: {
   label?: string;
@@ -27,7 +26,6 @@ export default function WorkbenchThreadReferenceList({
     detail?: ReactNode;
     entry?: ProviderThreadSidebarEntry; logicalProjectId?: LogicalProjectId | null; paths?: readonly string[];
   })[];
-  onOpenThread?: (target: WorkbenchThreadTarget) => void;
 }) {
   const projectHref = useWorkbenchProjectNavigation();
   const sidebars = useThreads.sidebars();
@@ -51,7 +49,6 @@ export default function WorkbenchThreadReferenceList({
             compact
             entry={entry}
             href={href}
-            onActivate={onOpenThread}
             projectId={ProjectIdSchema.parse(projectId)}
             secondaryRow={paths.length ? <ProjectFileLinkList paths={paths} projectFilePaths={projectFilePaths} projectId={projectId} /> : undefined}
             showTooltip={false}
