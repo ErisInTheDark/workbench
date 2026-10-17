@@ -25,16 +25,16 @@ export interface WorkbenchShellTabFrameProps {
 }
 
 export default function WorkbenchShellTab({
-  actions = [], detail, dirty = false, href, icon, label, onClose, onKeepOpen, onSelectedActivate, preview, selected,
+  actions = [], dirty = false, href, icon, label, onClose, onKeepOpen, onSelectedActivate, preview, project, selected,
   tab, title, wrap,
 }: WorkbenchShellTabFrameProps & {
   /** Extra context-menu actions, such as renaming a thread. */
   actions?: WorkbenchContextMenuAction[];
-  /** A quieter suffix, such as the folder of a file from another folder. */
-  detail?: string | null;
   dirty?: boolean;
   icon: ReactNode;
   label: ReactNode;
+  /** A tiny row under the label naming the project (and folder) the destination belongs to. */
+  project?: ReactNode;
   /** Double-activating an already kept, focused tab, such as starting a rename. */
   onSelectedActivate?: () => void;
   title?: string;
@@ -58,7 +58,8 @@ export default function WorkbenchShellTab({
   const element = (
     <div
       className={`
-        group/shell-tab relative flex h-8 max-w-[11rem] shrink-0 md:max-w-[15rem] items-center rounded-lg pl-2.5 pr-1 text-[0.88rem]
+        group/shell-tab relative flex min-h-8 max-w-[11rem] shrink-0 md:max-w-[15rem] items-center rounded-lg py-1 pl-2.5 pr-1
+        text-[0.88rem]
         transition-colors
         ${selected ? "bg-fg/8 text-text" : "text-fg/muted hover:bg-fg/5 hover:text-text"}
       `}
@@ -70,7 +71,7 @@ export default function WorkbenchShellTab({
       <a
         aria-selected={selected}
         className={`
-          flex min-w-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+          flex min-w-0 flex-col justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
           after:absolute after:inset-0 after:content-['']
           ${preview ? "italic" : ""}
           ${selected ? "font-medium" : ""}
@@ -89,9 +90,11 @@ export default function WorkbenchShellTab({
         role="tab"
         title={title}
       >
-        <span className="inline-flex shrink-0 items-center">{icon}</span>
-        <span className="truncate">{label}</span>
-        {detail ? <span className="truncate text-[0.8em] text-fg/muted not-italic">{detail}</span> : null}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="inline-flex shrink-0 items-center">{icon}</span>
+          <span className="truncate">{label}</span>
+        </span>
+        {project ? <span className="flex min-w-0 font-normal not-italic text-[0.7rem] text-fg/muted">{project}</span> : null}
       </a>
       <button
         aria-label={dirty ? "Close, unsaved changes are kept as a draft" : "Close tab"}

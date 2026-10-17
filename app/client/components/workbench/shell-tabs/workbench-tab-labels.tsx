@@ -1,17 +1,21 @@
 /*
  * Exports:
  * - WorkbenchTabKindProps: the destination of one tab and the strip's frame facts.
- * - workbenchTabKinds: per-view tab renderers naming the destination with its icon, live state and extra actions.
+ * - workbenchTabKinds: per-view tab renderers naming the destination with its icon, live state, project row and extra
+ *   actions.
  */
 "use client";
 
 import { useContext, useEffect, useState, useSyncExternalStore, type ComponentProps, type ComponentType } from "react";
 import type { IconProps } from "../OutlinedIcon";
 
-import { getWorkbenchFileTabs, type WorkbenchRoute, type WorkbenchRouteView } from "workbench-shared/workbench/navigation/workbench-route";
+import type { WorkbenchRoute, WorkbenchRouteView } from "workbench-shared/workbench/navigation/workbench-route";
+import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { describeThreadEntry } from "../thread-entry-presentation";
 import ThreadTitleInput from "../ThreadTitleInput";
+import { useProject } from "../use-projects";
 import { useThread } from "../use-thread";
+import WorkbenchProjectLabel from "../WorkbenchProjectLabel";
 import WorkbenchClientContext from "../workbench-client-context";
 import {
   DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon,
@@ -39,7 +43,13 @@ function staticTab(label: string, Icon: ComponentType<IconProps>) {
   };
 }
 
-/** A file tab shows its draft's unsaved dot, and a preview tab with unsaved work keeps itself open. */
+/** The tiny project row a tab shows under its label, the same one sidebar thread rows carry. */
+function TabProjectRow({ location }: { location: ProjectLocationReference | null }) {
+  const project = useProject.forLocation(location);
+  return project ? <WorkbenchProjectLabel project={project} source={location ?? undefined} variant="thread" /> : null;
+}
+
+/** A file tab shows its draft's unsaved asterisk, and a preview tab with unsaved work keeps itself open. */
 function FileTab({ frame, route }: WorkbenchTabKindProps) {
   const mounted = useContext(WorkbenchClientContext)?.mounted;
   const location = mounted?.projectNavigator.fileLocationFor(route) ?? null;
@@ -49,18 +59,14 @@ function FileTab({ frame, route }: WorkbenchTabKindProps) {
     () => drafts?.getBuffer(path)?.dirty ?? false, () => false);
   const { onKeepOpen, preview } = frame;
   useEffect(() => { if (dirty && preview) onKeepOpen(); }, [dirty, onKeepOpen, preview]);
-  // Only a file outside the sidebar's folder keeps a folder in its href; name it by its last segment (worktrees are `+name`).
-  const shown = frame.href && mounted ? mounted.projectNavigator.readRoute(frame.href) : route;
-  const folderAddress = getWorkbenchFileTabs(shown).tabs[0]?.folderAddress ?? null;
-  const folder = folderAddress?.at(-1)?.replace(/^\+/u, "") ?? null;
   return (
     <WorkbenchShellTab
       {...frame}
-      detail={folder}
       dirty={dirty}
       icon={<FileKindIcon path={path} size={ICON_SIZE} />}
       label={fileName(path)}
-      title={folder ? `${folder}: ${path}` : path}
+      project={<TabProjectRow location={location} />}
+      title={path}
     />
   );
 }
@@ -89,6 +95,7 @@ function ThreadTab({ frame, route }: WorkbenchTabKindProps) {
         ? <ThreadTitleInput className="w-[12rem]" onDone={() => setRenaming(false)} onSave={rename} title={title} />
         : title}
       onSelectedActivate={rename ? () => setRenaming(true) : undefined}
+      project={thread ? <TabProjectRow location={thread.location} /> : null}
       wrap={identity && projectId && !renaming ? (element: TooltipTrigger) => (
         <WorkbenchThreadHoverTooltip thread={{ harness: identity.harness, projectId, threadId: identity.threadId }} title={title}>
           {element}

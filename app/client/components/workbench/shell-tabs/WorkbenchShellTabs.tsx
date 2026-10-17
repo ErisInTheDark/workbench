@@ -43,7 +43,7 @@ export default function WorkbenchShellTabs({ className = "", fallback }: {
       ref={listRef}
       aria-label="Open tabs"
       className={`
-        scrollbar-hover-reveal relative flex min-w-0 items-center gap-1 overflow-x-auto overscroll-x-contain
+        scrollbar-hover-reveal relative flex min-w-0 items-stretch gap-1 overflow-x-auto overscroll-x-contain
         ${className}
       `}
       role="tablist"
