@@ -13,6 +13,7 @@
  * - createLogicalProjectRoute/createLogicalFileRoute/createLogicalGitRoute/createLogicalThreadRoute/createLogicalExistingThreadRoute/createLogicalMosaicRoute: internal project, target and UUID routes.
  * - getWorkbenchThreadTargetRootId/getWorkbenchThreadTargetSelectedId/getWorkbenchMosaicThreadRootIds/isWorkbenchThreadTargetSelected: derive hydration and selection identities.
  * - parseWorkbenchRouteFromLocation/parseWorkbenchRouteFromPath: parse URL state without changing history.
+ * - salvageWorkbenchPath: the nearest valid path to a broken one, keeping its valid tabs, selection and folder.
  * - createWorkbenchHref/createHomeHref/createProjectHref/createFileHref/createThreadHref/createPinnedThreadHref/createHomeThreadHref/createSettingsHref/createStatsHref/createMosaicHref: build hrefs.
  * - isSameWorkbenchRoute/isSameDraftRouteIntent/routeHasSelection/isWorkbenchRouteOwnerOfThread: compare and fence route-owned transitions.
  */
@@ -571,6 +572,39 @@ function parseTabSegments(rawSegments: string[]): WorkbenchRoute {
     if (tab) return createStatsRoute(null, tab);
   }
   return createInvalidWorkbenchRoute(`Unknown workbench tab: ${decoded.value.join("/")}`);
+}
+
+/**
+ * The nearest path to a broken one that `isValid` accepts: its valid tabs (an unflagged list reads as one active tab,
+ * and the first survivor takes over a dropped active tab), then its project selection and folder alone, then its
+ * selection without the folder, then home.
+ */
+export function salvageWorkbenchPath(pathname: string, isValid: (path: string) => boolean): string {
+  const segments = pathname.split("/").filter(Boolean);
+  const marker = segments.indexOf(WORKBENCH_ROUTE_MARKER);
+  const prefix = marker < 0 ? segments : segments.slice(0, marker);
+  const groups: string[][] = [[]];
+  for (const segment of marker < 0 ? [] : segments.slice(marker + 1)) {
+    if (segment === "+") groups.push([]);
+    else groups.at(-1)!.push(segment);
+  }
+  const flagged = groups.some(group => isTabFlags(group[0]));
+  const tabGroups = flagged ? groups : [groups.flat()];
+  const tabs = tabGroups.flatMap(group => {
+    const flags = isTabFlags(group[0]) ? group[0]! : "";
+    const tail = flags ? group.slice(1) : group;
+    return tail.length && isValid(`/${WORKBENCH_ROUTE_MARKER}/*/${tail.join("/")}`)
+      ? [{ active: !flagged || flags.includes("*"), tail }] : [];
+  });
+  const active = Math.max(0, tabs.findIndex(tab => tab.active));
+  const tabPath = tabs.map((tab, index) => [...(index === active ? ["*"] : []), ...tab.tail].join("/")).join("/+/");
+  const folder = prefix.indexOf(WORKBENCH_FOLDER_MARKER);
+  const selections = folder < 0 ? [prefix] : [prefix, prefix.slice(0, folder)];
+  const candidates = selections.flatMap(selection => {
+    const head = selection.length ? `/${selection.join("/")}` : "";
+    return [...(tabs.length ? [`${head}/${WORKBENCH_ROUTE_MARKER}/${tabPath}`] : []), `${head}/${WORKBENCH_ROUTE_MARKER}/`];
+  });
+  return candidates.find(isValid) ?? "/";
 }
 
 /** The flagged tab list after the route marker, or null for an older route shape. */

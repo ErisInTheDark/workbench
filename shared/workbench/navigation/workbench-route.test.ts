@@ -8,8 +8,19 @@ import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema 
 import {
   createFileRoute, createHomeRoute, createHomeThreadRoute, createLogicalThreadRoute, createNewProjectRoute, createProjectSelectionRoute, createSettingsRoute,
   createStatsRoute, createThreadRoute, createToggledProjectSelectionRoute, createWorkbenchHref, isSameDraftRouteIntent,
-  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withFileTabs, withProjectSelection,
+  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, salvageWorkbenchPath, withFileTabs, withProjectSelection,
 } from "./workbench-route";
+
+test("a broken url salvages its valid tabs, then its selection and folder, then home", () => {
+  const valid = (path: string) => parseWorkbenchRouteFromPath(path).view !== "invalid";
+  // An unflagged tab list reads as its one active tab.
+  assert.equal(salvageWorkbenchPath("/workbench/@/file/workbench/*/notes.md", valid), "/workbench/@/*/file/workbench/*/notes.md");
+  // Broken tabs drop out; a surviving active tab stays active, else the first survivor takes over.
+  assert.equal(salvageWorkbenchPath("/a/+/b/@/stats/nope/+/file/x.md/+/*/settings", valid), "/a/+/b/@/file/x.md/+/*/settings");
+  assert.equal(salvageWorkbenchPath("/a/+/b/@/*/stats/nope/+/~/file/x.md/+/settings", valid), "/a/+/b/@/*/file/x.md/+/settings");
+  assert.equal(salvageWorkbenchPath("/a/*/%2Blab/@/*/stats/nope", valid), "/a/*/%2Blab/@/");
+  assert.equal(salvageWorkbenchPath("/a/+/a/@/*/stats", valid), "/");
+});
 
 test("stats tabs round-trip through their href, keep through selection changes, and default to usage", () => {
   for (const tab of ["usage", "workspaces", "tools"] as const) {

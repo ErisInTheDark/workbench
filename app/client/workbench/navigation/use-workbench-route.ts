@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - canCanonicalizeWorkbenchRoute: keep launch URLs intact until browser app state has loaded.
- * - useWorkbenchRoute: derive routes from browser history, persist local launch selection, and expose guarded canonical navigation.
+ * - useWorkbenchRoute: derive routes from browser history, persist local launch selection, and expose guarded canonical
+ *   navigation; a url that cannot open is replaced by its nearest salvageable one.
  * - useWorkbenchRouteIntent: apply one URL-derived route intent and its canonical replacement.
  */
 
@@ -9,7 +10,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { usePathname, useSearchParams } from "./browser-navigation";
 import {
-  LEGACY_TAB_SEARCH_PARAMS, type WorkbenchRoute,
+  LEGACY_TAB_SEARCH_PARAMS, salvageWorkbenchPath, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchClientController } from "../../components/workbench/workbench-client-context";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
@@ -71,6 +72,13 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
       navigateToRoute(route, { replace: true });
       return;
     }
+    // A url that cannot open is replaced by the nearest one that can, keeping its valid tabs, selection and folder.
+    if (route.view === "invalid") {
+      const reader = client.mounted?.projectNavigator ?? new WorkbenchProjectNavigation([], state.getProjectAliases());
+      const salvaged = salvageWorkbenchPath(pathname, path => reader.readRoute(path).view !== "invalid");
+      if (salvaged !== pathname) window.history.replaceState({ workbench: true }, "", `${salvaged}${window.location.hash}`);
+      return;
+    }
     // A replacement swaps the url's active tab for its canonical spelling in place.
     const canonical = href(route, { replace: true });
     if (!canonical) return;
@@ -83,7 +91,8 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     if (pathname !== "/" && pathname !== "/@/" && (canonicalPath !== pathname || hadLegacyTabs)) {
       window.history.replaceState({ workbench: true }, "", `${canonicalPath}${params.size ? `?${params}` : ""}${window.location.hash}`);
     }
-  }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route, stateSnapshot.schemaVersion]);
+  }, [pathname, locationSnapshot, client.controls, client.mounted, href, navigateToRoute, route, state,
+    stateSnapshot.schemaVersion]);
 
   const selectedProjectIdsKey = route.selectedProjectIds === null
     ? "unfiltered"
