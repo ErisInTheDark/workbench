@@ -32,6 +32,11 @@ const VARIANT_CLASS_NAMES = {
     size: "size-4",
     text: "text-[0.56rem]",
   },
+  tab: {
+    glyph: 12,
+    size: "size-3",
+    text: "text-[0.46rem]",
+  },
 } as const;
 
 function projectInitial (project: WorkbenchProjectOption) {

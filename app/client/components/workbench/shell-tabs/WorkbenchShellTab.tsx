@@ -71,7 +71,8 @@ export default function WorkbenchShellTab({
       <a
         aria-selected={selected}
         className={`
-          flex min-w-0 flex-col justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+          grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1.5 rounded-md outline-none
+          focus-visible:ring-2 focus-visible:ring-accent-soft
           after:absolute after:inset-0 after:content-['']
           ${preview ? "italic" : ""}
           ${selected ? "font-medium" : ""}
@@ -90,11 +91,11 @@ export default function WorkbenchShellTab({
         role="tab"
         title={title}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="inline-flex shrink-0 items-center">{icon}</span>
-          <span className="truncate">{label}</span>
-        </span>
-        {project ? <span className="flex min-w-0 font-normal not-italic text-[0.7rem] text-fg/muted">{project}</span> : null}
+        <span className="inline-flex items-center">{icon}</span>
+        <span className="truncate">{label}</span>
+        {project ? (
+          <span className="col-start-2 flex min-w-0 font-normal not-italic text-[0.68rem] text-fg/muted opacity-60">{project}</span>
+        ) : null}
       </a>
       <button
         aria-label={dirty ? "Close, unsaved changes are kept as a draft" : "Close tab"}

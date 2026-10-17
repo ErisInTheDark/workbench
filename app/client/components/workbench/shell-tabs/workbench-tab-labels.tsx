@@ -46,7 +46,7 @@ function staticTab(label: string, Icon: ComponentType<IconProps>) {
 /** The tiny project row a tab shows under its label, the same one sidebar thread rows carry. */
 function TabProjectRow({ location }: { location: ProjectLocationReference | null }) {
   const project = useProject.forLocation(location);
-  return project ? <WorkbenchProjectLabel project={project} source={location ?? undefined} variant="thread" /> : null;
+  return project ? <WorkbenchProjectLabel project={project} source={location ?? undefined} variant="tab" /> : null;
 }
 
 /** A file tab shows its draft's unsaved asterisk, and a preview tab with unsaved work keeps itself open. */

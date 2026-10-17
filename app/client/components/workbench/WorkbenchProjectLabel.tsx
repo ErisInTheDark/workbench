@@ -31,7 +31,8 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
   active?: boolean;
   project: WorkbenchProjectOption | WorkbenchLogicalProject;
   source?: ProjectLocationReference;
-  variant?: "card" | "heading" | "thread";
+  /** `tab` is the thread row's compact form, with a smaller icon. */
+  variant?: "card" | "heading" | "tab" | "thread";
 }) {
   if ("matchKey" in project) {
     const sourceLocation = source ? [
@@ -51,11 +52,11 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
           : `${sourceLocation.hostname}:${sourceLocation.rootPath}`
         : project.displayPath ?? null;
     return (
-      <span className="flex min-w-0 items-center gap-2" title={[
+      <span className={`flex min-w-0 items-center ${variant === "tab" ? "gap-1" : "gap-2"}`} title={[
         ...project.locations, ...(project.observedLocations ?? []),
       ].map(item => `${item.hostname}: ${item.rootPath}`).join("\n") || project.matchKey}>
         <WorkbenchProjectIcon project={project} variant={variant} />
-        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className={`flex min-w-0 flex-1 items-baseline ${variant === "tab" ? "gap-1" : "gap-2"}`}>
           <span className={`${workbenchThreadListLabelClassName} min-w-0 truncate text-text${active || variant === "heading" ? " font-semibold" : ""}`}>
             {name}
           </span>
@@ -68,10 +69,10 @@ const WorkbenchProjectLabel = Object.assign(function WorkbenchProjectLabel({
     );
   }
   const projectName = `${project.name || project.id}${project.kind === "workspace" ? " workspace" : ""}`;
-  if (variant === "thread") {
+  if (variant === "thread" || variant === "tab") {
     return (
       <span className="flex min-w-0 items-center gap-1.5 leading-tight" title={getWorkbenchProjectFullPath(project)}>
-        <WorkbenchProjectIcon project={project} variant="thread" />
+        <WorkbenchProjectIcon project={project} variant={variant} />
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span className="shrink-0 text-[0.68rem] font-medium text-fg/72">{projectName}</span>
           <span className="min-w-0 flex-1 truncate font-mono text-[0.64rem] font-normal text-fg/muted">{getWorkbenchProjectDisplayPath(project)}</span>
