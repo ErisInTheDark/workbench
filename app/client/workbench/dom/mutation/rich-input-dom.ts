@@ -6,6 +6,8 @@
  * - insertListItemAtParagraphPosition: replace a paragraph with a list item while merging adjacent unordered lists. Keywords: workbench, rich input, list item, paragraph, merge.
  */
 
+import { inheritSuggestionMembership } from "../../markdown/review-markup";
+
 export function ensureListItemHasEditableContent(item: HTMLLIElement) {
   const hasMeaningfulContent = (item.textContent ?? "").replaceAll("\u00a0", "").length > 0
     || item.querySelector("br, details, ul, ol, pre, blockquote, hr") !== null;
@@ -31,6 +33,7 @@ export function ensureParagraphHasEditableContent(paragraph: HTMLElement) {
 
 export function replaceParagraphWithHeading(paragraph: HTMLElement, level: number) {
   const heading = document.createElement(`h${level}`) as HTMLHeadingElement;
+  inheritSuggestionMembership(paragraph, heading);
   while (paragraph.firstChild) {
     heading.append(paragraph.firstChild);
   }
@@ -69,6 +72,7 @@ export function insertListItemAtParagraphPosition(paragraph: HTMLElement, item: 
   }
 
   const list = document.createElement("ul");
+  inheritSuggestionMembership(paragraph, list);
   list.append(item);
   paragraph.replaceWith(list);
 }

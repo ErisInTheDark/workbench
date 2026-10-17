@@ -15,7 +15,9 @@ import {
 import {
     createWorkbenchMarkupSignature,
     serializeWorkbenchDomToMarkdown,
+    type WorkbenchMarkupSerializationOptions,
 } from "./markdown-serialization";
+import type { MarkdownStyle } from "./markdown-style";
 
 interface SaveGuardMarkupInspection {
   markdown: string;
@@ -28,7 +30,8 @@ interface InspectSaveGuardMarkupOptions {
   isInlineRunContainer: (element: HTMLElement) => boolean;
   normalizeMarkup: (root: ParentNode) => void;
   renderMarkdown?: (markdown: string) => string;
-  serializeMarkdown?: (root: ParentNode, options: { isInlineRunContainer: (element: HTMLElement) => boolean; normalizeMarkup: (root: ParentNode) => void }) => string;
+  serializeMarkdown?: (root: ParentNode, options: WorkbenchMarkupSerializationOptions) => string;
+  style?: MarkdownStyle;
 }
 
 interface InspectDraftContentOptions {
@@ -50,6 +53,7 @@ export function inspectSaveGuardMarkup(options: InspectSaveGuardMarkupOptions): 
   const markdown = serializeMarkdown(editorSnapshot, {
     isInlineRunContainer,
     normalizeMarkup: normalizeForSaveGuard,
+    style: options.style,
   });
   const currentMarkup = createWorkbenchMarkupSignature(editorSnapshot, { isInlineRunContainer });
   const roundTripRoot = editorRoot.ownerDocument.createElement("div");

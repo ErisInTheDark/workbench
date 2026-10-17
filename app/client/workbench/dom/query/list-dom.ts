@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - isSingleBreakParagraph: detect a paragraph that represents one preserved visual line break. Keywords: workbench, list, paragraph, break.
+ * - isSingleBreakParagraph: detect a paragraph that represents one preserved visual line break; suggestion members never do. Keywords: workbench, list, paragraph, break.
  * - isIntentionalListBreakParagraph: detect preserved list-spacing paragraphs inserted between sibling lists. Keywords: workbench, list, break, paragraph.
  * - isListElement: narrow a DOM element to an ordered or unordered list. Keywords: workbench, list, dom, type guard.
  * - getDirectChildListElements: collect direct child lists without descending into nested structures. Keywords: workbench, list, children, dom.
@@ -11,7 +11,8 @@
  */
 
 export function isSingleBreakParagraph(element: HTMLElement) {
-  if (element.tagName !== "P") {
+  // An empty suggestion member is the new side of a suggested deletion, not a blank line.
+  if (element.tagName !== "P" || element.hasAttribute("data-suggestion")) {
     return false;
   }
 

@@ -52,6 +52,7 @@ function inlineNodeChildren(node: ParsedInlineNode) {
     case "insert":
     case "link":
     case "inlineComment":
+    case "mark":
       return node.children;
     default:
       return null;
@@ -67,7 +68,8 @@ function inlineNodeSemanticsEqual(previous: ParsedInlineNode, next: ParsedInline
     || previous.type === "em"
     || previous.type === "delete"
     || previous.type === "insert"
-    || previous.type === "inlineComment";
+    || previous.type === "inlineComment"
+    || previous.type === "mark";
 }
 
 function findFinalTextExtension(
@@ -108,7 +110,10 @@ function inlineVisibleText(node: ParsedInlineNode): string {
     case "insert":
     case "link":
     case "inlineComment":
+    case "mark":
       return node.children.map(inlineVisibleText).join("");
+    case "commentThread":
+      return "";
     case "projectFileLink":
       return node.label ?? node.relativePath;
     case "threadIcon":

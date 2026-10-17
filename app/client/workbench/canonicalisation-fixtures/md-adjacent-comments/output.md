@@ -1,1 +1,1 @@
-text <!-- first --> <!-- second --> more
+text <!-- first --><!-- second --> more

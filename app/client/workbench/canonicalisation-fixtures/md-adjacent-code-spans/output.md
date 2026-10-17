@@ -1,1 +1,1 @@
-```code``code``` and `triple` inline
+`code``code` and ```triple``` inline

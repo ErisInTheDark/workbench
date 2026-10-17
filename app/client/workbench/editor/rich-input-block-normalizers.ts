@@ -4,6 +4,7 @@
  * - normalizeRichInputBlocksOutsideSelection: apply hard-rule markdown block normalizers to non-selected rich editor blocks. Keywords: workbench, rich input, markdown, paste, selection, normalize.
  */
 
+import { inheritSuggestionMembership } from "../markdown/review-markup";
 import {
     ensureListItemHasEditableContent,
     ensureParagraphHasEditableContent,
@@ -96,8 +97,7 @@ function collectNormalizationCandidates(editor: HTMLElement, selectionRange: Ran
     const element = child;
     const isUnavailableBlock = isSelectionOccupiedBlock(element, selectionRange)
       || isSingleBreakBlock(element)
-      || isIntentionalListBreakBlock(element)
-      || element.dataset.blockComment === "true";
+      || isIntentionalListBreakBlock(element);
     if (
       isUnavailableBlock
     ) {
@@ -118,7 +118,6 @@ function collectNormalizationCandidates(editor: HTMLElement, selectionRange: Ran
       || isSelectionOccupiedBlock(element, selectionRange)
       || isSingleBreakBlock(element)
       || isIntentionalListBreakBlock(element)
-      || element.dataset.blockComment === "true"
       || element.closest("blockquote, pre");
     if (
       isUnavailableBlock
@@ -135,6 +134,7 @@ function collectNormalizationCandidates(editor: HTMLElement, selectionRange: Ran
 
 function replaceWithPlainTextElement(source: HTMLElement, tagName: keyof HTMLElementTagNameMap, text: string) {
   const replacement = source.ownerDocument.createElement(tagName);
+  inheritSuggestionMembership(source, replacement);
   if (text) {
     replacement.textContent = text;
   } else {
@@ -197,6 +197,7 @@ function normalizeFencedCodeBlock({ element }: BlockNormalizationCandidate) {
   }
 
   const pre = element.ownerDocument.createElement("pre");
+  inheritSuggestionMembership(element, pre);
   if (parsedFence.language) {
     pre.dataset.language = parsedFence.language;
   }
@@ -218,7 +219,9 @@ function normalizeHorizontalRuleBlock({ element, scope }: BlockNormalizationCand
     return false;
   }
 
-  element.replaceWith(element.ownerDocument.createElement("hr"));
+  const rule = element.ownerDocument.createElement("hr");
+  inheritSuggestionMembership(element, rule);
+  element.replaceWith(rule);
   return true;
 }
 
@@ -250,6 +253,7 @@ function insertListItemAtBlockPosition(block: HTMLElement, item: HTMLLIElement, 
   }
 
   const list = block.ownerDocument.createElement(listTagName);
+  inheritSuggestionMembership(block, list);
   list.append(item);
   block.replaceWith(list);
 }
@@ -294,6 +298,7 @@ function normalizeHeadingBlock({ element, scope }: BlockNormalizationCandidate) 
   }
 
   const heading = element.ownerDocument.createElement(`h${match[1].length}`) as HTMLHeadingElement;
+  inheritSuggestionMembership(element, heading);
   while (element.firstChild) {
     heading.append(element.firstChild);
   }

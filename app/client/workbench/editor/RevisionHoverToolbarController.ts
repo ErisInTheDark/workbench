@@ -1,17 +1,17 @@
 /*
  * Exports:
- * - RevisionHoverKind: supported revision node kinds for comments, insertions, and deletions. Keywords: revision, hover, comment, insertion, deletion.
- * - RevisionToolbarKind: toolbar display kinds including mixed revision selections. Keywords: revision, toolbar, selection, mixed.
- * - RevisionToolbarContext: resolved revision target nodes and anchor rect for toolbar positioning. Keywords: revision, toolbar, context, rect.
- * - RevisionHoverToolbarControllerOptions: DOM dependencies and callbacks required to coordinate revision hover behavior. Keywords: revision, hover, controller, options, DOM.
- * - RevisionHoverToolbarController: public revision hover controller surface used by the workbench client. Keywords: revision, hover, controller, toolbar.
- * - default RevisionHoverToolbarController: create the revision hover and selection toolbar controller for the rich-text workbench editor. Keywords: revision, hover, selection, toolbar, controller, default export.
+ * - RevisionHoverKind: revisions the floating toolbar resolves: inline insertions and deletions, and block suggestions.
+ * - RevisionToolbarKind: toolbar display kinds including mixed inline revision selections.
+ * - RevisionToolbarContext: resolved revision target nodes and anchor rect for toolbar positioning.
+ * - RevisionHoverToolbarControllerOptions: DOM dependencies and callbacks required to coordinate revision hover behaviour.
+ * - default RevisionHoverToolbarController: the floating accept/reject toolbar shown above revisions under the caret or pointer.
  */
 
 import type { VisualViewportMetrics } from "../dom/layout/viewport-metrics";
-import { restoreCaretToMarker } from "./WorkbenchInlineFormatController";
+import { REVIEW_ATTRIBUTES, getSuggestionId } from "../markdown/review-markup";
+import { restoreCaretToMarker } from "./inline-leaves";
 
-export type RevisionHoverKind = "comment" | "del" | "ins";
+export type RevisionHoverKind = "del" | "ins" | "suggestion";
 export type RevisionToolbarKind = RevisionHoverKind | "mixed";
 
 export interface RevisionToolbarContext {
@@ -31,6 +31,7 @@ export interface RevisionHoverToolbarControllerOptions {
     mutate: () => void,
     options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
   ) => void;
+  resolveSuggestion: (id: string, action: "accept" | "reject") => void;
   revisionHoverAcceptButton: HTMLButtonElement;
   revisionHoverRejectButton: HTMLButtonElement;
   revisionHoverToolbar: HTMLElement;
@@ -45,6 +46,27 @@ interface RevisionHoverToolbarController {
 }
 
 const REVISION_HOVER_PROXIMITY_PX = 18;
+const INLINE_REVISION_SELECTOR = "del, ins";
+
+const TOOLBAR_APPEARANCE: Record<RevisionToolbarKind, { accept: string; background: string; reject: string }> = {
+  del: { accept: "Accept deletion", background: "color-mix(in srgb, var(--danger) 20%, var(--bg) 80%)", reject: "Reject deletion" },
+  ins: { accept: "Accept insertion", background: "color-mix(in srgb, var(--success) 20%, var(--bg) 80%)", reject: "Reject insertion" },
+  mixed: { accept: "Accept selected revisions", background: "color-mix(in srgb, #d0ad12 22%, var(--bg) 78%)", reject: "Reject selected revisions" },
+  suggestion: { accept: "Keep the suggested version", background: "color-mix(in srgb, var(--accent) 20%, var(--bg) 80%)", reject: "Keep the original" },
+};
+
+function unionRect(elements: readonly HTMLElement[]) {
+  const rects = elements.map((element) => element.getBoundingClientRect()).filter((rect) => rect.width || rect.height);
+  if (!rects.length) {
+    return null;
+  }
+
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+  return new DOMRect(left, top, right - left, bottom - top);
+}
 
 function RevisionHoverToolbarController(
   options: RevisionHoverToolbarControllerOptions,
@@ -65,26 +87,26 @@ function RevisionHoverToolbarController(
   let activeRevisionNodes = new Set<HTMLElement>();
 
   function setHoveredRevisionNode(node: HTMLElement | null) {
-    if (hoveredRevisionNode === node) {
-      updateRevisionHoverToolbar();
-      return;
-    }
-
     hoveredRevisionNode = node;
     updateRevisionHoverToolbar();
   }
 
-  function getHoveredRevisionKind(element: HTMLElement | null): RevisionHoverKind | null {
+  function getRevisionKind(element: HTMLElement | null): RevisionHoverKind | null {
     if (!element) {
       return null;
     }
 
-    if (element.dataset.inlineComment === "true" || element.dataset.blockComment === "true") {
-      return "comment";
+    const tag = element.tagName.toLowerCase();
+    if (tag === "del" || tag === "ins") {
+      return tag;
     }
 
-    const tag = element.tagName.toLowerCase();
-    return tag === "del" || tag === "ins" ? tag : null;
+    return getSuggestionId(element) !== null ? "suggestion" : null;
+  }
+
+  function getSuggestionMembers(id: string) {
+    return Array.from(editor.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && getSuggestionId(element) === id);
   }
 
   function setActiveRevisionNodes(nodes: HTMLElement[]) {
@@ -98,57 +120,25 @@ function RevisionHoverToolbarController(
     }
   }
 
-  function getRevisionToolbarKind(nodes: HTMLElement[]): RevisionToolbarKind | null {
-    let hasComments = false;
-    let hasInsertions = false;
-    let hasDeletions = false;
-
-    for (const node of nodes) {
-      const kind = getHoveredRevisionKind(node);
-      if (kind === "comment") {
-        hasComments = true;
-      } else if (kind === "ins") {
-        hasInsertions = true;
-      } else if (kind === "del") {
-        hasDeletions = true;
-      }
-    }
-
-    if (hasComments && (hasInsertions || hasDeletions)) {
-      return null;
-    }
-
-    if (hasComments) {
-      return "comment";
-    }
-
-    if (hasInsertions && hasDeletions) {
-      return "mixed";
-    }
-
-    if (hasInsertions) {
-      return "ins";
-    }
-
-    if (hasDeletions) {
-      return "del";
-    }
-
+  function getMixedKind(nodes: HTMLElement[]): RevisionToolbarKind | null {
+    const kinds = new Set(nodes.map(getRevisionKind));
+    if (kinds.has("ins") && kinds.has("del")) return "mixed";
+    if (kinds.has("ins")) return "ins";
+    if (kinds.has("del")) return "del";
     return null;
   }
 
-  function getRevisionNodeFromSelectionNode(node: Node | null) {
-    if (!node) {
-      return null;
-    }
+  function closestEditorElement(node: Node | null, selector: string) {
+    const element = node instanceof HTMLElement ? node : node?.parentElement ?? null;
+    const match = element?.closest<HTMLElement>(selector) ?? null;
+    return match && editor.contains(match) ? match : null;
+  }
 
-    const element = node instanceof HTMLElement ? node : node.parentElement;
-    if (!element) {
-      return null;
-    }
-
-    const revisionNode = element.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]');
-    return revisionNode && editor.contains(revisionNode) ? revisionNode : null;
+  function getSuggestionContext(node: HTMLElement): RevisionToolbarContext | null {
+    const id = getSuggestionId(node);
+    const members = id === null ? [] : getSuggestionMembers(id);
+    const rect = unionRect(members);
+    return rect ? { kind: "suggestion", nodes: members, rect } : null;
   }
 
   function getSelectedRevisionToolbarContext(): RevisionToolbarContext | null {
@@ -164,64 +154,41 @@ function RevisionHoverToolbarController(
 
     const range = selection.getRangeAt(0);
     if (selection.isCollapsed) {
-      const node = getRevisionNodeFromSelectionNode(range.startContainer);
-      const kind = getHoveredRevisionKind(node);
-      if (!node || !kind || kind === "comment") {
-        return null;
+      const inline = closestEditorElement(range.startContainer, INLINE_REVISION_SELECTOR);
+      if (inline) {
+        const rect = inline.getBoundingClientRect();
+        const kind = getRevisionKind(inline);
+        return kind && (rect.width || rect.height) ? { kind, nodes: [inline], rect } : null;
       }
 
-      const rect = node.getBoundingClientRect();
-      if (!rect.width && !rect.height) {
-        return null;
-      }
-
-      return {
-        kind,
-        nodes: [node],
-        rect,
-      };
+      const member = closestEditorElement(range.startContainer, `[${REVIEW_ATTRIBUTES.suggestion}]`);
+      return member ? getSuggestionContext(member) : null;
     }
 
-    const nodes = Array.from(editor.querySelectorAll<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]'))
+    const nodes = Array.from(editor.querySelectorAll<HTMLElement>(INLINE_REVISION_SELECTOR))
       .filter((element) => range.intersectsNode(element));
-    if (!nodes.length) {
-      return null;
-    }
-
-    const kind = getRevisionToolbarKind(nodes);
+    const kind = nodes.length ? getMixedKind(nodes) : null;
     if (!kind) {
-      return null;
+      const member = closestEditorElement(range.commonAncestorContainer, `[${REVIEW_ATTRIBUTES.suggestion}]`);
+      return member ? getSuggestionContext(member) : null;
     }
 
     const rect = getExpandedRangeRect(range);
-    if (!rect.width && !rect.height) {
-      return null;
-    }
-
-    return { kind, nodes, rect };
+    return rect.width || rect.height ? { kind, nodes, rect } : null;
   }
 
   function getHoveredRevisionToolbarContext(): RevisionToolbarContext | null {
-    const kind = getHoveredRevisionKind(hoveredRevisionNode);
-    if (
-      !kind
-      || getMode() !== "rich"
-      || !hoveredRevisionNode?.isConnected
-      || !editor.contains(hoveredRevisionNode)
-    ) {
+    const kind = getRevisionKind(hoveredRevisionNode);
+    if (!kind || getMode() !== "rich" || !hoveredRevisionNode?.isConnected || !editor.contains(hoveredRevisionNode)) {
       return null;
+    }
+
+    if (kind === "suggestion") {
+      return getSuggestionContext(hoveredRevisionNode);
     }
 
     const rect = hoveredRevisionNode.getBoundingClientRect();
-    if (!rect.width && !rect.height) {
-      return null;
-    }
-
-    return {
-      kind,
-      nodes: [hoveredRevisionNode],
-      rect,
-    };
+    return rect.width || rect.height ? { kind, nodes: [hoveredRevisionNode], rect } : null;
   }
 
   function isPointWithinExpandedRect(rect: DOMRect, clientX: number, clientY: number, padding: number) {
@@ -232,82 +199,37 @@ function RevisionHoverToolbarController(
   }
 
   function isPointerNearRevisionHoverUi(clientX: number, clientY: number) {
-    const revisionKind = getHoveredRevisionKind(hoveredRevisionNode);
-    if (!revisionKind || !hoveredRevisionNode?.isConnected || !editor.contains(hoveredRevisionNode)) {
-      return false;
+    const context = getHoveredRevisionToolbarContext();
+    if (context && isPointWithinExpandedRect(context.rect, clientX, clientY, REVISION_HOVER_PROXIMITY_PX)) {
+      return true;
     }
 
-    const targetRect = hoveredRevisionNode.getBoundingClientRect();
-    if (targetRect.width || targetRect.height) {
-      if (isPointWithinExpandedRect(targetRect, clientX, clientY, REVISION_HOVER_PROXIMITY_PX)) {
-        return true;
-      }
-    }
+    return !revisionHoverToolbar.hidden
+      && isPointWithinExpandedRect(revisionHoverToolbar.getBoundingClientRect(), clientX, clientY, REVISION_HOVER_PROXIMITY_PX);
+  }
 
-    if (revisionHoverToolbar.hidden) {
-      return false;
-    }
-
-    const toolbarRect = revisionHoverToolbar.getBoundingClientRect();
-    return isPointWithinExpandedRect(toolbarRect, clientX, clientY, REVISION_HOVER_PROXIMITY_PX);
+  function hideToolbar() {
+    setActiveRevisionNodes([]);
+    revisionHoverToolbar.hidden = true;
+    delete revisionHoverToolbar.dataset.revisionKind;
+    revisionHoverToolbar.style.background = "";
   }
 
   function updateRevisionHoverToolbar() {
-    if (!canShowToolbar()) {
-      setActiveRevisionNodes([]);
-      revisionHoverToolbar.hidden = true;
-      delete revisionHoverToolbar.dataset.revisionKind;
-      revisionHoverToolbar.style.background = "";
-      return;
-    }
-
-    const context = getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext();
+    const context = canShowToolbar() ? getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext() : null;
     if (!context) {
-      setActiveRevisionNodes([]);
-      revisionHoverToolbar.hidden = true;
-      delete revisionHoverToolbar.dataset.revisionKind;
-      revisionHoverToolbar.style.background = "";
-      revisionHoverAcceptButton.hidden = false;
-      revisionHoverAcceptButton.textContent = "accept";
-      revisionHoverAcceptButton.setAttribute("aria-label", "Accept revision");
-      revisionHoverAcceptButton.title = "Accept revision";
-      revisionHoverRejectButton.hidden = false;
-      revisionHoverRejectButton.textContent = "reject";
-      revisionHoverRejectButton.setAttribute("aria-label", "Reject revision");
-      revisionHoverRejectButton.title = "Reject revision";
+      hideToolbar();
       return;
     }
 
-    setActiveRevisionNodes(context.nodes);
-    const isBulkSelection = context.nodes.length > 1;
-    const acceptLabel = context.kind === "comment"
-      ? isBulkSelection ? "Resolve selected comments" : "Resolve comment"
-      : context.kind === "del"
-      ? isBulkSelection ? "Accept selected deletions" : "Accept deletion"
-      : context.kind === "ins"
-        ? isBulkSelection ? "Accept selected insertions" : "Accept insertion"
-        : "Accept selected revisions";
-    const rejectLabel = context.kind === "del"
-      ? isBulkSelection ? "Reject selected deletions" : "Reject deletion"
-      : context.kind === "ins"
-        ? isBulkSelection ? "Reject selected insertions" : "Reject insertion"
-        : "Reject selected revisions";
+    setActiveRevisionNodes(context.kind === "suggestion" ? [] : context.nodes);
+    const appearance = TOOLBAR_APPEARANCE[context.kind];
     revisionHoverToolbar.dataset.revisionKind = context.kind;
-    revisionHoverToolbar.style.background = context.kind === "comment"
-      ? "color-mix(in srgb, var(--text) 10%, var(--bg) 90%)"
-      : context.kind === "del"
-      ? "color-mix(in srgb, var(--danger) 20%, var(--bg) 80%)"
-      : context.kind === "ins"
-        ? "color-mix(in srgb, var(--success) 20%, var(--bg) 80%)"
-        : "color-mix(in srgb, #d0ad12 22%, var(--bg) 78%)";
-    revisionHoverAcceptButton.hidden = false;
-    revisionHoverAcceptButton.textContent = context.kind === "comment" ? "resolve" : "accept";
-    revisionHoverAcceptButton.setAttribute("aria-label", acceptLabel);
-    revisionHoverAcceptButton.title = acceptLabel;
-    revisionHoverRejectButton.hidden = context.kind === "comment";
-    revisionHoverRejectButton.textContent = "reject";
-    revisionHoverRejectButton.setAttribute("aria-label", rejectLabel);
-    revisionHoverRejectButton.title = rejectLabel;
+    revisionHoverToolbar.style.background = appearance.background;
+    revisionHoverAcceptButton.setAttribute("aria-label", appearance.accept);
+    revisionHoverAcceptButton.title = appearance.accept;
+    revisionHoverRejectButton.setAttribute("aria-label", appearance.reject);
+    revisionHoverRejectButton.title = appearance.reject;
     revisionHoverToolbar.hidden = false;
 
     const viewport = getVisualViewportMetrics();
@@ -318,12 +240,13 @@ function RevisionHoverToolbarController(
       return;
     }
 
+    // Suggestions span whole blocks, so their toolbar sits at the start of the row rather than over its middle.
+    const anchorX = context.kind === "suggestion"
+      ? context.rect.left + revisionHoverToolbar.offsetWidth / 2
+      : context.rect.left + context.rect.width / 2;
     const leftEdge = viewport.left + 12;
     const rightEdge = viewport.left + viewport.width - revisionHoverToolbar.offsetWidth - 12;
-    const x = Math.min(
-      rightEdge,
-      Math.max(leftEdge, viewport.left + context.rect.left + context.rect.width / 2 - revisionHoverToolbar.offsetWidth / 2),
-    );
+    const x = Math.min(rightEdge, Math.max(leftEdge, viewport.left + anchorX - revisionHoverToolbar.offsetWidth / 2));
     const preferredTop = viewport.top + context.rect.top - revisionHoverToolbar.offsetHeight - 10;
     const fallbackTop = viewport.top + context.rect.bottom + 10;
     const maxTop = viewport.top + viewport.height - revisionHoverToolbar.offsetHeight - 12;
@@ -339,33 +262,29 @@ function RevisionHoverToolbarController(
   function applyHoveredRevisionAction(action: "accept" | "reject") {
     const context = getSelectedRevisionToolbarContext() ?? getHoveredRevisionToolbarContext();
     const targets = context?.nodes.filter((node) => node.parentNode && editor.contains(node)) ?? [];
-    if (!targets.length) {
-      setHoveredRevisionNode(null);
+    setHoveredRevisionNode(null);
+    setActiveRevisionNodes([]);
+    if (!context || !targets.length) {
       return;
     }
 
-    const firstTarget = targets[0];
-    if (!firstTarget?.parentNode) {
-      setHoveredRevisionNode(null);
+    if (context.kind === "suggestion") {
+      const id = getSuggestionId(targets[0]);
+      if (id !== null) {
+        options.resolveSuggestion(id, action);
+      }
       return;
     }
 
     const caretMarker = document.createElement("span");
     caretMarker.hidden = true;
-    firstTarget.parentNode.insertBefore(caretMarker, firstTarget);
-    setHoveredRevisionNode(null);
-    setActiveRevisionNodes([]);
+    targets[0]!.parentNode!.insertBefore(caretMarker, targets[0]!);
 
     onSyncEditorAfterStructuralChange(() => {
       for (const target of targets) {
-        const revisionKind = getHoveredRevisionKind(target);
+        const revisionKind = getRevisionKind(target);
         const parent = target.parentNode;
         if (!revisionKind || !parent) {
-          continue;
-        }
-
-        if (revisionKind === "comment") {
-          target.remove();
           continue;
         }
 

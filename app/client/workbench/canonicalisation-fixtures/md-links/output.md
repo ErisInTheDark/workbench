@@ -1,1 +1,1 @@
-see [the docs](https://example.com/docs) and [__bold label__](https://example.com)
+see [the docs](https://example.com/docs) and [**bold label**](https://example.com)

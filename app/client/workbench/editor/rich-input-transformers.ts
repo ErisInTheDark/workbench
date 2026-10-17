@@ -16,13 +16,11 @@ import {
 } from "../dom/query/text-position-dom";
 
 export interface RichInputTransformResult {
-  commentCaretMarker: HTMLElement | null;
   transformedBlock: HTMLElement | null;
   transformedListItem: HTMLLIElement | null;
 }
 
 interface RichInputTransformContext {
-  event: InputEvent;
   paragraph: HTMLElement;
   selection: Selection;
 }
@@ -30,7 +28,6 @@ interface RichInputTransformContext {
 type RichInputTransformer = (context: RichInputTransformContext) => RichInputTransformResult | null;
 
 const EMPTY_RICH_INPUT_TRANSFORM_RESULT: RichInputTransformResult = {
-  commentCaretMarker: null,
   transformedBlock: null,
   transformedListItem: null,
 };
@@ -76,40 +73,9 @@ function transformUnorderedListShortcut({ paragraph, selection }: RichInputTrans
   };
 }
 
-function transformBlockCommentShortcut({ event, paragraph, selection }: RichInputTransformContext): RichInputTransformResult | null {
-  if (event.data !== "!") {
-    return null;
-  }
-
-  const beforeText = getTextBeforeSelectionInElement(selection, paragraph);
-  if (beforeText !== "<!") {
-    return null;
-  }
-
-  const marker = document.createElement("span");
-  marker.dataset.commentCaret = "true";
-
-  if (!deleteLeadingTextFromElement(paragraph, 2)) {
-    return null;
-  }
-
-  paragraph.dataset.blockComment = "true";
-  if (paragraph.firstChild) {
-    paragraph.insertBefore(marker, paragraph.firstChild);
-  } else {
-    paragraph.append(marker, document.createElement("br"));
-  }
-
-  return {
-    ...EMPTY_RICH_INPUT_TRANSFORM_RESULT,
-    commentCaretMarker: marker,
-  };
-}
-
 const RICH_INPUT_TRANSFORMERS: RichInputTransformer[] = [
   transformHeadingShortcut,
   transformUnorderedListShortcut,
-  transformBlockCommentShortcut,
 ];
 
 export function runRichInputTransformers(
@@ -122,11 +88,7 @@ export function runRichInputTransformers(
     getMode: () => "rich" | "plain";
   },
 ): RichInputTransformResult {
-  if (getMode() !== "rich" || event.inputType !== "insertText") {
-    return EMPTY_RICH_INPUT_TRANSFORM_RESULT;
-  }
-
-  if (event.data !== " " && event.data !== "!") {
+  if (getMode() !== "rich" || event.inputType !== "insertText" || event.data !== " ") {
     return EMPTY_RICH_INPUT_TRANSFORM_RESULT;
   }
 
@@ -136,12 +98,11 @@ export function runRichInputTransformers(
   }
 
   const paragraph = getDirectEditorParagraph(editor, selection.getRangeAt(0).startContainer);
-  if (!paragraph || paragraph.dataset.blockComment === "true") {
+  if (!paragraph) {
     return EMPTY_RICH_INPUT_TRANSFORM_RESULT;
   }
 
   const context: RichInputTransformContext = {
-    event,
     paragraph,
     selection,
   };

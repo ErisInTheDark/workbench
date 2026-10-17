@@ -4,6 +4,7 @@
  * - createListItemDomEditor: bind pure list-item DOM selection and mutation helpers for grouping, indent or outdent, and top-level breakout transforms. Keywords: workbench, list item, selection, indent, outdent, breakout, dom.
  */
 
+import { inheritSuggestionMembership } from "../../markdown/review-markup";
 import {
     getDirectChildDetailsElement,
     getDirectChildListElements,
@@ -236,6 +237,10 @@ export function createListItemDomEditor({
       return paragraph;
     }
 
+    inheritSuggestionMembership(parentList, paragraph);
+    if (trailingList) {
+      inheritSuggestionMembership(parentList, trailingList);
+    }
     const parentListNextSibling = parentList.nextSibling;
     item.remove();
     const hasLeadingItems = parentList.children.length > 0;

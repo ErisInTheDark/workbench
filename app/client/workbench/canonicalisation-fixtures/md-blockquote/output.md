@@ -1,2 +1,2 @@
 > quoted line one
-> quoted line __two__
+> quoted line **two**

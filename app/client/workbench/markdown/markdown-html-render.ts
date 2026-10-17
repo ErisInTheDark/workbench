@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - markdownToHtml: render parsed workbench markdown into sanitized HTML for the rich editor and save guard. Keywords: markdown, html, editor, renderer.
+ * - markdownToHtml: render parsed workbench markdown into sanitized HTML for the rich editor and save guard. Editor
+ *   blocks carry their source lines, comment threads become atoms and suggestions become tagged block groups.
  */
 
 import {
@@ -13,27 +14,30 @@ import {
     projectFilePathStaticClassName,
 } from "../project/project-file-path";
 import {
-    parseBlockCommentBody,
+    parseCommentLine,
+    type MarkdownComment,
 } from "./comment-markdown";
 import {
     formatThreadStateChangeMode,
     parseBlocks,
     parseInlineMarkdown,
+    parseSourcedBlocks,
     parseThreadStateChangeMode,
     stripInlineCodeSpans,
     type MarkdownParseOptions,
     type ParsedBlock,
     type ParsedInlineNode,
     type ParsedListItem,
+    type SourcedBlock,
 } from "./markdown-parse";
+import {
+    REVIEW_ATTRIBUTES,
+    commentThreadHtml,
+    escapeAttribute,
+    nextSuggestionId,
+} from "./review-markup";
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
+const escapeHtml = escapeAttribute;
 
 function renderProjectFileLink(url: string, relativePath: string, {
   absolutePath = null,
@@ -100,6 +104,9 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
       case "insert":
         html += `<ins>${renderInlineHtml(node.children)}</ins>`;
         break;
+      case "mark":
+        html += `<mark>${renderInlineHtml(node.children)}</mark>`;
+        break;
       case "code":
         html += `<code>${escapeHtml(node.text)}</code>`;
         break;
@@ -110,6 +117,9 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
         html += `<a href="${escapeHtml(node.href)}" target="_blank" rel="noreferrer">${renderInlineHtml(node.children)}</a>`;
         break;
       }
+      case "commentThread":
+        html += commentThreadHtml("inline", node.comments);
+        break;
       case "inlineComment":
         html += `<span data-inline-comment="true">${renderInlineHtml(node.children)}</span>`;
         break;
@@ -140,8 +150,8 @@ function renderInline(markdown: string, options: MarkdownParseOptions = {}) {
   return renderInlineHtml(parseInlineMarkdown(markdown, options));
 }
 
-function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, options: MarkdownParseOptions = {}) {
-  return `<${block.type}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
+function renderListBlock(block: Extract<ParsedBlock, { type: "ul" | "ol" }>, options: MarkdownParseOptions, attributes: string) {
+  return `<${block.type}${attributes}>${block.items.map((item) => renderListItem(item, options)).join("")}</${block.type}>`;
 }
 
 function renderChildBlocks(blocks: ParsedBlock[], options: MarkdownParseOptions = {}): string {
@@ -185,7 +195,7 @@ function getTableCellAlignAttribute(alignment: Extract<ParsedBlock, { type: "tab
     : "";
 }
 
-function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, options: MarkdownParseOptions = {}) {
+function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, options: MarkdownParseOptions, attributes: string) {
   const header = block.header
     .map((cell, index) => `<th${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderInline(cell.text, options)}</th>`)
     .join("");
@@ -201,7 +211,7 @@ function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, option
     })
     .join("");
 
-  return `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table${attributes}><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}) {
@@ -218,7 +228,13 @@ function renderListItem(item: ParsedListItem, options: MarkdownParseOptions = {}
   return `<li${valueAttribute}><details open><summary>${content}</summary>${childContent}</details></li>`;
 }
 
-function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}): string {
+function renderCommentLines(texts: readonly string[], attributes = "") {
+  const comments = texts.flatMap((text): MarkdownComment[] => parseCommentLine(text) ?? []);
+  return commentThreadHtml("block", comments, attributes);
+}
+
+/** `attributes` decorate a top-level block's own element; nested blocks never carry them. */
+function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {}, attributes = ""): string {
   switch (block.type) {
     case "list-break":
       return Array.from(
@@ -228,22 +244,22 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {})
     case "break":
       return "<br>".repeat(block.count);
     case "heading":
-      return `<h${block.level}>${renderInline(block.text, options)}</h${block.level}>`;
+      return `<h${block.level}${attributes}>${renderInline(block.text, options)}</h${block.level}>`;
     case "blockquote":
-      return `<blockquote>${renderInline(block.text, options)}</blockquote>`;
+      return `<blockquote${attributes}>${renderInline(block.text, options)}</blockquote>`;
     case "comment":
-      return `<p data-block-comment="true">${escapeHtml(parseBlockCommentBody(block.text) ?? block.text)}</p>`;
+      return renderCommentLines([block.text], attributes);
     case "ul":
     case "ol":
       if (block.type === "ol" && isThreadSingleItemOrderedStep(block, options)) {
         return renderThreadSingleItemOrderedStep(block, options);
       }
 
-      return renderListBlock(block, options);
+      return renderListBlock(block, options, attributes);
     case "hr":
-      return "<hr>";
+      return `<hr${attributes}>`;
     case "code":
-      return `<pre data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
+      return `<pre${attributes} data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
     case "plan":
       return renderChildBlocks(parseBlocks(block.text, options), options);
     case "notice":
@@ -251,7 +267,9 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {})
     case "details":
       return `<p>${escapeHtml(block.source).replaceAll("\n", "<br>")}</p>`;
     case "table":
-      return renderTableBlock(block, options);
+      return renderTableBlock(block, options, attributes);
+    case "suggestion":
+      return renderSuggestion(block, options);
     case "paragraph":
     default: {
       const stateChangeMode = parseThreadStateChangeMode(block.text, options);
@@ -259,16 +277,67 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {})
         return renderThreadStateChange(stateChangeMode);
       }
 
-      return `<p>${renderInline(block.text, options)}</p>`;
+      return `<p${attributes}>${renderInline(block.text, options)}</p>`;
     }
   }
 }
 
+function sourceAttributes(entry: SourcedBlock) {
+  if (entry.source === null) {
+    return "";
+  }
+
+  return ` ${REVIEW_ATTRIBUTES.source}="${escapeHtml(entry.source)}"` + (entry.tight ? ` ${REVIEW_ATTRIBUTES.sourceTight}="true"` : "");
+}
+
+/** Consecutive comment lines are one thread. `groupAttributes` tag every top-level element, as suggestion members. */
+function renderEditorBlocks(entries: readonly SourcedBlock[], options: MarkdownParseOptions, groupAttributes = "") {
+  let html = "";
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const { block } = entry;
+    if (block.type === "break" || block.type === "list-break") {
+      html += renderBlockHtml(block, options);
+      continue;
+    }
+
+    if (block.type === "comment") {
+      const lines: string[] = [];
+      const sources: string[] = [];
+      while (entries[index]?.block.type === "comment") {
+        const commentEntry = entries[index]!;
+        lines.push((commentEntry.block as Extract<ParsedBlock, { type: "comment" }>).text);
+        sources.push(commentEntry.source ?? "");
+        index += 1;
+      }
+      index -= 1;
+      html += renderCommentLines(lines, sourceAttributes({ ...entry, source: sources.join("\n") }) + groupAttributes);
+      continue;
+    }
+
+    if (block.type === "suggestion" && groupAttributes) {
+      // A suggestion nested in a suggestion's new side reads as its own new side.
+      html += renderEditorBlocks(parseSourcedBlocks(block.new, options), options, groupAttributes);
+      continue;
+    }
+
+    html += renderBlockHtml(block, options, sourceAttributes(entry) + groupAttributes);
+  }
+
+  return html;
+}
+
+function renderSuggestion(block: Extract<ParsedBlock, { type: "suggestion" }>, options: MarkdownParseOptions) {
+  const groupAttributes = ` ${REVIEW_ATTRIBUTES.suggestion}="${nextSuggestionId()}" ${REVIEW_ATTRIBUTES.suggestionOld}="${escapeHtml(block.old)}"`;
+  const newSide = block.new ? renderEditorBlocks(parseSourcedBlocks(block.new, options), options, groupAttributes) : "";
+  return newSide || `<p${groupAttributes}><br></p>`;
+}
+
 export function markdownToHtml(markdown: string, options: MarkdownParseOptions = {}) {
-  const blocks = parseBlocks(markdown, options);
-  const html = blocks
-    .map((block) => renderBlockHtml(block, options))
-    .join("");
+  const html = (options.profile ?? "editor") === "editor"
+    ? renderEditorBlocks(parseSourcedBlocks(markdown, options), options)
+    : parseBlocks(markdown, options).map((block) => renderBlockHtml(block, options)).join("");
 
   return html || "<p><br></p>";
 }

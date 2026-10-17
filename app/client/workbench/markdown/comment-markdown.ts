@@ -1,58 +1,100 @@
-/**
+/*
  * Exports:
- * - isBlockCommentLine: detect whether a trimmed line is a full HTML comment block. Keywords: markdown, comment, block comment, parser.
- * - parseBlockCommentBody: extract the inner text from a full HTML comment block line. Keywords: markdown, comment, block comment, parse.
- * - formatBlockCommentLine: normalize comment body whitespace and format it as a single-line HTML comment. Keywords: markdown, comment, block comment, serialize.
- * - escapeMarkdownText: escape markdown control characters, revision/comment tag openers, strike runs and literal &nbsp; in plain text. Keywords: markdown, escape, inline text, serialization.
- * - isIntrawordUnderscore: detect underscore runs between word characters, which are literal rather than emphasis. Keywords: markdown, underscore, emphasis.
- * - formatInlineCommentMarkdown: normalize inline comment content and format it as an HTML comment. Keywords: markdown, inline comment, serialize, formatting.
+ * - MarkdownComment: one note of a comment thread; `raw` keeps the exact `<!-- -->` source it was read from.
+ * - parseComment: read the inside of one `<!-- -->` into an author and body.
+ * - formatComment: write one note as `<!-- @author: body -->`, reusing its raw source while it is unedited.
+ * - formatCommentThread: write a thread's notes back to back, which is what makes them one thread.
+ * - readCommentRun: read the comments glued together at a source index, as one thread.
+ * - parseCommentLine: read a line made only of comments, or null.
+ * - isBlockCommentLine: whether a line is made only of comments.
+ * - sameComments: compare threads by author and body.
  */
 
-export function isBlockCommentLine(text: string) {
-  const trimmed = text.trim();
-  return trimmed.startsWith("<!--") && trimmed.endsWith("-->");
+export interface MarkdownComment {
+  author: string | null;
+  body: string;
+  raw?: string;
 }
 
-export function parseBlockCommentBody(text: string) {
-  if (!isBlockCommentLine(text)) {
+const AUTHOR_PATTERN = /^@([^\s:@][^\s:]{0,39}):[ \t]*/u;
+const COMMENT_OPEN = "<!--";
+const COMMENT_CLOSE = "-->";
+
+export function parseComment(inner: string, raw?: string): MarkdownComment {
+  const trimmed = inner.trim();
+  const author = trimmed.match(AUTHOR_PATTERN);
+  return {
+    author: author ? author[1]! : null,
+    body: author ? trimmed.slice(author[0].length) : trimmed,
+    ...(raw === undefined ? {} : { raw }),
+  };
+}
+
+/** A body can never close its own comment early. */
+function sanitizeBody(body: string) {
+  return body.replaceAll("-->", "-- >").replaceAll("--!>", "-- !>").trim();
+}
+
+export function formatComment(comment: MarkdownComment) {
+  if (comment.raw !== undefined) {
+    const original = parseComment(comment.raw.slice(COMMENT_OPEN.length, -COMMENT_CLOSE.length));
+    if (original.author === comment.author && original.body === comment.body) {
+      return comment.raw;
+    }
+  }
+
+  const body = sanitizeBody(comment.body);
+  const prefix = comment.author ? `@${comment.author}: ` : "";
+  return `${COMMENT_OPEN} ${prefix}${body}${body || prefix ? " " : ""}${COMMENT_CLOSE}`;
+}
+
+export function formatCommentThread(comments: readonly MarkdownComment[]) {
+  return comments.map(formatComment).join("");
+}
+
+export function readCommentRun(source: string, index: number) {
+  const comments: MarkdownComment[] = [];
+  let cursor = index;
+  while (source.startsWith(COMMENT_OPEN, cursor)) {
+    const close = source.indexOf(COMMENT_CLOSE, cursor + COMMENT_OPEN.length);
+    if (close < 0) {
+      break;
+    }
+
+    const end = close + COMMENT_CLOSE.length;
+    comments.push(parseComment(source.slice(cursor + COMMENT_OPEN.length, close), source.slice(cursor, end)));
+    cursor = end;
+  }
+
+  return comments.length ? { comments, end: cursor } : null;
+}
+
+export function parseCommentLine(line: string) {
+  const comments: MarkdownComment[] = [];
+  let cursor = line.search(/\S/u);
+  if (cursor < 0) {
     return null;
   }
 
-  return text.trim().slice(4, -3).trim();
-}
+  while (cursor < line.length) {
+    const run = readCommentRun(line, cursor);
+    if (!run) {
+      return null;
+    }
 
-export function formatBlockCommentLine(body: string) {
-  const normalizedBody = body.replace(/\s*\n+\s*/g, " ").trim();
-  return normalizedBody ? `<!-- ${normalizedBody} -->` : "<!-- -->";
-}
-
-export function escapeMarkdownText(value: string) {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("*", "\\*")
-    .replace(/_/g, (underscore, index: number, text: string) => isIntrawordUnderscore(text, index) ? underscore : "\\_")
-    .replaceAll("`", "\\`")
-    .replaceAll("[", "\\[")
-    .replaceAll("]", "\\]")
-    .replace(/<(?=\/?(?:del|ins)>|!--)/g, "\\<")
-    .replace(/~(?=~)|(?<=~)~/g, "\\~")
-    .replace(/&(?=nbsp;)/g, "\\&");
-}
-
-/** An underscore run between word characters never opens emphasis (CommonMark), so it is literal text. */
-export function isIntrawordUnderscore(text: string, index: number) {
-  if (text[index] !== "_") {
-    return false;
+    comments.push(...run.comments);
+    cursor = run.end;
+    while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
   }
 
-  let start = index;
-  let end = index + 1;
-  while (text[start - 1] === "_") start -= 1;
-  while (text[end] === "_") end += 1;
-  return /[A-Za-z0-9]/.test(text[start - 1] ?? "") && /[A-Za-z0-9]/.test(text[end] ?? "");
+  return comments;
 }
 
-export function formatInlineCommentMarkdown(content: string) {
-  const commentBody = content.replace(/[ \t\u00a0]+$/g, "").trim();
-  return commentBody ? `<!-- ${commentBody} -->` : "<!-- -->";
+export function isBlockCommentLine(line: string) {
+  return parseCommentLine(line) !== null;
+}
+
+export function sameComments(left: readonly MarkdownComment[], right: readonly MarkdownComment[]) {
+  return left.length === right.length
+    && left.every((comment, index) => comment.author === right[index]!.author && comment.body === right[index]!.body);
 }

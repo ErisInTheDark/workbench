@@ -8,6 +8,7 @@
  * - MarkdownParseProfile: parser behavior profile for editor-stable markdown vs display-only thread markdown. Keywords: markdown, profile, thread, editor.
  * - MarkdownParseOptions: optional project-root, mention, and autolink context for richer thread parsing. Keywords: markdown, file link, skills, mentions, autolink.
  * - parseBlocks: parse markdown into block nodes for rendering and diffing. Keywords: markdown, parser, blocks.
+ * - SourcedBlock/parseSourcedBlocks: top-level editor blocks with the source lines each was read from.
  * - ThreadMarkdownSection/parseThreadMarkdownSections: split thread markdown source into prose, plan, and mode-change sections.
  * - isThreadMarkdownSectionBreak: identify the parsed blocks that end a thread prose section.
  * - parseInlineMarkdown: parse inline markdown into renderer-neutral nodes. Keywords: markdown, inline, parser.
@@ -25,8 +26,11 @@ import {
 import { attachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import {
     isBlockCommentLine,
-    isIntrawordUnderscore,
+    readCommentRun,
+    type MarkdownComment,
 } from "./comment-markdown";
+import { isIntrawordUnderscore } from "./markdown-escape";
+import { readSuggestionBlock } from "./markdown-suggestion";
 import {
     parsePlaintextProjectFileLink,
 } from "./markdown-file-autolinks";
@@ -64,7 +68,15 @@ export type ParsedBlock =
   | { type: "code"; language: string; text: string }
   | { type: "table"; alignments: ParsedTableAlignment[]; header: ParsedTableCell[]; rows: ParsedTableCell[][] }
   | { type: "comment"; text: string }
+  | { type: "suggestion"; old: string; new: string }
   | { type: "paragraph"; text: string };
+
+/** A top-level editor block with the exact lines it was read from; `tight` blocks followed the previous one without a blank line. */
+export interface SourcedBlock {
+  block: ParsedBlock;
+  source: string | null;
+  tight: boolean;
+}
 
 export type MarkdownParseProfile = "editor" | "thread";
 
@@ -78,6 +90,8 @@ export type ParsedInlineNode =
   | { type: "break" }
   | { type: "link"; children: ParsedInlineNode[]; external: boolean; href: string }
   | { type: "inlineComment"; children: ParsedInlineNode[] }
+  | { type: "commentThread"; comments: MarkdownComment[] }
+  | { type: "mark"; children: ParsedInlineNode[] }
   | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: string | null; iconType: string; source: string }
   | { type: "knownSkillMention"; text: string; title: string }
   | { type: "attachmentMention"; text: string; number: number | null }
@@ -653,6 +667,27 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
           type: "insert",
         });
         index = closeIndex + 6;
+        continue;
+      }
+    }
+
+    if (markdown.startsWith("<mark>", index)) {
+      const closeIndex = markdown.indexOf("</mark>", index + 6);
+      if (closeIndex !== -1) {
+        nodes.push({
+          children: parseInlineMarkdown(markdown.slice(index + 6, closeIndex), options),
+          type: "mark",
+        });
+        index = closeIndex + 7;
+        continue;
+      }
+    }
+
+    if (isEditorProfile(options) && markdown.startsWith("<!--", index)) {
+      const run = readCommentRun(markdown, index);
+      if (run) {
+        nodes.push({ comments: run.comments, type: "commentThread" });
+        index = run.end;
         continue;
       }
     }
@@ -1497,21 +1532,55 @@ interface ThreadMarkdownSectionBreakSpan {
   start: number;
 }
 
+type BlockSources = Map<ParsedBlock, { source: string; tight: boolean }>;
+
+function isBreakBlock(block: ParsedBlock) {
+  return block.type === "break" || block.type === "list-break";
+}
+
 function parseBlocksFromLines(
   lines: string[],
   options: MarkdownParseOptions = {},
   sectionBreaks?: ThreadMarkdownSectionBreakSpan[],
+  sources?: BlockSources,
 ): ParsedBlock[] {
   const blocks: ParsedBlock[] = [];
   let blankLineCount = 0;
+  let pending: { count: number; start: number; tight: boolean } | null = null;
+  let index = 0;
 
-  for (let index = 0; index < lines.length;) {
+  // Blocks pushed by one iteration own its lines; they are attributed when the next line is reached.
+  const attributePendingSource = () => {
+    if (!sources || !pending) return;
+    const source = lines.slice(pending.start, index).join("\n").replace(/(?:\n[ \t]*)+$/u, "");
+    for (let blockIndex = pending.count; blockIndex < blocks.length; blockIndex += 1) {
+      if (!isBreakBlock(blocks[blockIndex]!)) sources.set(blocks[blockIndex]!, { source, tight: pending.tight });
+    }
+    pending = null;
+  };
+
+  for (; index < lines.length;) {
+    attributePendingSource();
     const line = lines[index];
 
     if (!line.trim()) {
       blankLineCount += 1;
       index += 1;
       continue;
+    }
+
+    pending = { count: blocks.length, start: index, tight: blankLineCount === 0 && blocks.some((block) => !isBreakBlock(block)) };
+
+    if (isEditorProfile(options)) {
+      const suggestion = readSuggestionBlock(lines, index);
+      if (suggestion) {
+        maybePushCommentBreak(blocks, blankLineCount, "suggestion");
+        maybePushStandardBreak(blocks, blankLineCount, "suggestion");
+        blankLineCount = 0;
+        blocks.push({ type: "suggestion", ...suggestion.suggestion });
+        index = suggestion.nextIndex;
+        continue;
+      }
     }
 
     if (isThreadStateChangeLine(line, options)) {
@@ -1658,6 +1727,7 @@ function parseBlocksFromLines(
       index < lines.length
       && (lines[index].trim() || (isEditorProfile(options) && paragraphLines.length > 0 && HARD_BREAK_BLANK_LINE.test(lines[index])))
       && !isBlockCommentLine(lines[index])
+      && !(isEditorProfile(options) && readSuggestionBlock(lines, index))
       && !isThreadStateChangeLine(lines[index], options)
       && !isThreadPlanOpenLine(lines[index], options)
       && !isThreadPlanCloseLine(lines[index])
@@ -1680,6 +1750,7 @@ function parseBlocksFromLines(
     }
     blocks.push({ type: "paragraph", text: isEditorProfile(options) ? joinHardBreakLines(paragraphLines) : paragraphLines.join("\n") });
   }
+  attributePendingSource();
 
   if (blankLineCount > 0 && getLastNonBreakBlock(blocks)?.type === "comment") {
     blocks.push({ type: "break", count: blankLineCount });
@@ -1700,6 +1771,16 @@ function splitMarkdownLines(markdown: string, options: MarkdownParseOptions) {
 
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {
   return parseBlocksFromLines(splitMarkdownLines(markdown, options), options);
+}
+
+/** Editor blocks with their source lines, so unedited blocks can be written back exactly as they were read. */
+export function parseSourcedBlocks(markdown: string, options: MarkdownParseOptions = {}): SourcedBlock[] {
+  const sources: BlockSources = new Map();
+  const blocks = parseBlocksFromLines(splitMarkdownLines(markdown, options), options, undefined, sources);
+  return blocks.map((block) => {
+    const entry = sources.get(block);
+    return { block, source: entry?.source ?? null, tight: entry?.tight ?? false };
+  });
 }
 
 export type ThreadMarkdownSection = { kind: "plan" | "prose" | "stateChange"; markdown: string };

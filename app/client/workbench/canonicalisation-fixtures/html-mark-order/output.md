@@ -1,1 +1,1 @@
-*__em outside__* and *__strong outside__*
+_**em outside**_ and _**strong outside**_

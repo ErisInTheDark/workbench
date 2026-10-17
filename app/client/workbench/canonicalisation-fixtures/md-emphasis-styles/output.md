@@ -1,5 +1,5 @@
-*star em* and *underscore em*
+*star em* and _underscore em_
 
-__star strong__ and __underscore strong__
+**star strong** and __underscore strong__
 
-*__both at once__*
+***both at once***

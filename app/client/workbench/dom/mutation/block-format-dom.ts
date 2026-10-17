@@ -6,9 +6,10 @@
  * - toggleRootBlockTag: switch the root blocks a range touches to a block tag, or back to paragraphs when all already use it.
  * - toggleRootBlockList: wrap touched root blocks in a list, retag touched lists to the requested type, or unwrap their items.
  */
+import { inheritSuggestionMembership } from "../../markdown/review-markup";
 import { isListElement } from "../query/list-dom";
 
-export type BlockFormatTag = "h1" | "h2" | "blockquote";
+export type BlockFormatTag = "h1" | "h2" | "h3" | "blockquote";
 export type ListFormatTag = "ul" | "ol";
 
 export interface ListFormatDependencies {
@@ -32,6 +33,7 @@ function isTextBlock(element: HTMLElement) {
 /** Move an element's children into a fresh element of another tag; moved text nodes keep any saved selection valid. */
 function retagElement(element: HTMLElement, tag: string) {
   const replacement = element.ownerDocument.createElement(tag);
+  inheritSuggestionMembership(element, replacement);
   replacement.append(...Array.from(element.childNodes));
   element.replaceWith(replacement);
   return replacement;
@@ -50,6 +52,7 @@ function wrapBlockRuns(blocks: HTMLElement[], listTag: ListFormatTag) {
   for (const block of blocks) {
     if (!list || list.nextElementSibling !== block) {
       list = block.ownerDocument.createElement(listTag);
+      inheritSuggestionMembership(block, list);
       block.before(list);
     }
 

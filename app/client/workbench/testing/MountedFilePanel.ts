@@ -2,13 +2,16 @@
  * Exports:
  * - SaveBlockedError: thrown when the real save button is pressed but the save guard refuses to write.
  * - KeyModifiers: modifier keys for simulated key presses.
- * - default MountedFilePanel: mount the real file panel client in jsdom over fake disk, drive it with browser-shaped events, and prove saves reach disk.
+ * - default MountedFilePanel: mount the real file panel client in jsdom over fake disk, drive it with browser-shaped events
+ *   and toolbar commands, resolve revisions, and prove saves reach disk.
  */
 import { flushAnimationFrames } from "./jsdom-environment";
 
 import type { SaveConflictPayload, SaveFilePayload } from "workbench-shared/types";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { FileDocumentSnapshot, WorkbenchFileDocument } from "../file/WorkbenchFileStore";
+import type { EditorCommand } from "../editor/editor-commands";
+import { REVIEW_ATTRIBUTES } from "../markdown/review-markup";
 import FileDraftStore from "../state/FileDraftStore";
 import WorkbenchFilePanelClient from "../WorkbenchFilePanelClient";
 import type { WorkbenchEditorDomSurfaces } from "../workbench-dom";
@@ -91,9 +94,9 @@ function createSurfaces(host: HTMLElement): WorkbenchEditorDomSurfaces {
       resetDraft: { cancel: button(), dialog: dialog(), resetToHead: button(), resetToSaved: button() },
       saveConflict: { actual: text(), dialog: dialog(), expected: text(), keepEditing: button(), overwrite: button(), reload: button(), summary: text() },
     },
-    editor: { customCaret: element("div", host), diffGutter: element("div", host), editor: element("div", host) },
+    editor: { customCaret: element("div", host), diffGutter: element("div", host), editor: element("div", host), reviewLayer: element("div", host) },
     statusDisplay: { filePathLabel: text(), statusLine: text() },
-    toolbars: { floating: element("div", host), revisionAccept: button(), revisionHover: element("div", host), revisionReject: button() },
+    toolbars: { revisionAccept: button(), revisionHover: element("div", host), revisionReject: button() },
   };
 }
 
@@ -174,9 +177,23 @@ export default class MountedFilePanel {
     this.restoreWarn();
   }
 
-  /** Editor DOM with one top-level node per line, so goldens stay reviewable. */
+  /**
+   * Editor DOM with one top-level node per line, so goldens stay reviewable. Preserved-source bookkeeping is left out
+   * and suggestion ids are numbered by appearance, since only which blocks share one matters.
+   */
   get html() {
-    return Array.from(this.editor.childNodes, node => node instanceof Element ? node.outerHTML : node.textContent ?? "").join("\n");
+    const suggestionIds = new Map<string, string>();
+    return Array.from(this.editor.childNodes, node => {
+      if (!(node instanceof Element)) return node.textContent ?? "";
+      const copy = node.cloneNode(true) as Element;
+      for (const attribute of [REVIEW_ATTRIBUTES.source, REVIEW_ATTRIBUTES.sourceTight]) copy.removeAttribute(attribute);
+      const id = copy.getAttribute(REVIEW_ATTRIBUTES.suggestion);
+      if (id !== null) {
+        if (!suggestionIds.has(id)) suggestionIds.set(id, `s${suggestionIds.size + 1}`);
+        copy.setAttribute(REVIEW_ATTRIBUTES.suggestion, suggestionIds.get(id)!);
+      }
+      return copy.outerHTML;
+    }).join("\n");
   }
 
   /** Press the real save button; resolve with the markdown that reached disk or throw with the save-guard report. */
@@ -249,12 +266,21 @@ export default class MountedFilePanel {
     await settle();
   }
 
-  /** Click a floating-toolbar button carrying `command`, through the editor's real toolbar click handler. */
-  async toolbar(command: string) {
-    const button = element("button", this.surfaces.toolbars.floating);
-    button.dataset.command = command;
-    button.click();
-    button.remove();
+  /** Press a toolbar button the way the persistent toolbar does: a mouse press that keeps the selection, then the command. */
+  async toolbar(command: EditorCommand) {
+    this.client.beginToolbarInteraction(new MouseEvent("mousedown", { cancelable: true }));
+    this.client.runCommand(command);
+    await settle({ frames: true });
+  }
+
+  /** The panel client the React toolbar and comment margin drive. */
+  get panel() {
+    return this.client;
+  }
+
+  /** Accept or reject the revision under the selection through the floating revision toolbar's buttons. */
+  async resolveRevision(action: "accept" | "reject") {
+    (action === "accept" ? this.surfaces.toolbars.revisionAccept : this.surfaces.toolbars.revisionReject).click();
     await settle({ frames: true });
   }
 

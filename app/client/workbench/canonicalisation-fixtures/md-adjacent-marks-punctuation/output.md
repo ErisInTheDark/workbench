@@ -1,1 +1,1 @@
-__bold__, *italic*; `code`.
+**bold**, *italic*; `code`.

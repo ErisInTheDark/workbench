@@ -3,8 +3,8 @@
  * - WorkbenchFilePanelSnapshot: readonly mounted file panel state.
  * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
  * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
- * - WorkbenchFilePanelClient: imperative mounted file panel API.
- * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts and cleanup.
+ * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode and comment margin.
+ * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts, editor commands and cleanup.
  */
 
 import type { FileDocumentSnapshot, WorkbenchFileDocument } from "./file/WorkbenchFileStore";
@@ -18,22 +18,20 @@ import {
     getDirectChildSummaryTextElement,
 } from "./dom/mutation/structured-block-dom";
 import {
-    deleteTextImmediatelyBeforeSelection,
-    getTextBeforeSelectionInElement,
-} from "./dom/query/text-position-dom";
-import {
     captureEditorSelection,
     placeCaretInElement,
     restoreListItemSelection,
     restoreParagraphSelection,
 } from "./dom/selection/selection-dom";
+import { matchEditorCommand, type EditorCommand } from "./editor/editor-commands";
 import {
     getInlineRunContainer,
     isInlineRunContainer,
 } from "./editor/inline-run-containers";
-import {
-    restoreCaretToMarker,
-} from "./editor/WorkbenchInlineFormatController";
+import type { WorkbenchCommentController } from "./editor/WorkbenchCommentController";
+import { isFormatCommand } from "./editor/WorkbenchFormatCommandController";
+import type { ReviewMode, SuggestionLayout } from "./editor/WorkbenchSuggestionController";
+import { getSuggestionId } from "./markdown/review-markup";
 import {
     formatTimestamp,
 } from "workbench-shared/workbench/project/tree-utils";
@@ -42,6 +40,7 @@ import FileSessionState from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import SessionState from "./state/SessionState";
 import WorkbenchEditorClient, {
+    type EditorToolbarState,
     type EditorUIStateSnapshot,
 } from "./WorkbenchEditorClient";
 import WorkbenchEventBus from "./WorkbenchEventBus";
@@ -68,11 +67,19 @@ export interface WorkbenchFilePanelClientOptions {
 
 export interface WorkbenchFilePanelClient {
   acceptObservation: (snapshot: FileDocumentSnapshot) => void;
+  /** Keep the editor selection through a toolbar press; call on the press, before focus can move. */
+  beginToolbarInteraction: (event: Event) => void;
+  comments: WorkbenchCommentController;
   dispose: () => void;
   getSnapshot: () => WorkbenchFilePanelSnapshot;
+  getToolbarState: () => EditorToolbarState;
+  runCommand: (command: EditorCommand) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
+  setReviewMode: (mode: ReviewMode) => void;
+  setSuggestionLayout: (layout: SuggestionLayout) => void;
   previewFontSize: (fontSize: number | null) => void;
   subscribe: (listener: WorkbenchFilePanelListener) => () => void;
+  subscribeToolbarState: (listener: () => void) => () => void;
 }
 
 function WorkbenchFilePanelClient(
@@ -118,6 +125,28 @@ function WorkbenchFilePanelClient(
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
 
+  function findTopLevelBlock(node: Node) {
+    let current: Node | null = node;
+    while (current && current.parentNode !== editor) current = current.parentNode;
+    return current instanceof HTMLElement ? current : null;
+  }
+
+  function runCommand(command: EditorCommand) {
+    if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
+      return;
+    }
+
+    if (command === "undo") {
+      editHistoryManager.undoEditHistory();
+    } else if (command === "redo") {
+      editHistoryManager.redoEditHistory();
+    } else if (command === "comment") {
+      editorClient.startCommentDraft();
+    } else if (isFormatCommand(command)) {
+      editorClient.applyFormatCommand(command);
+    }
+  }
+
   function isDialogOpen(dialog: HTMLDivElement) {
     return !dialog.hidden;
   }
@@ -146,22 +175,16 @@ function WorkbenchFilePanelClient(
   const editorClient = WorkbenchEditorClient({
     controls: controlButtons,
     dialogs: dialogSurface,
-    editor: {
-      customCaret: editorSurface.customCaret,
-      diffGutter: editorSurface.diffGutter,
-      editor,
-    },
+    editor: editorSurface,
     statusDisplay,
     toolbars: toolbarSurface,
   }, {
     closeActiveDialog,
     controllerOptions: {
       inlineFormat: {
-        deleteTextImmediatelyBeforeSelection,
         getEditorHasFocus: () => editorHasFocus,
         getInlineRunContainer: (node) => getInlineRunContainer(editor, node),
         getIsComposing: () => isComposing,
-        getTextBeforeSelectionInElement,
         isInlineRunContainer: (element) => isInlineRunContainer(editor, element),
         syncCurrentDraftBuffer: () => {
           fileClient.syncCurrentDraftBuffer();
@@ -226,17 +249,9 @@ function WorkbenchFilePanelClient(
     handleEditorInput: (event) => {
       let transformedListItem: HTMLLIElement | null = null;
       let transformedBlock: HTMLElement | null = null;
-      let commentCaretMarker: HTMLElement | null = null;
 
       editorClient.runInputMutation(() => {
-        const {
-          transformedListItem: nextTransformedListItem,
-          transformedBlock: nextTransformedBlock,
-          commentCaretMarker: richInputCommentCaretMarker,
-        } = editorClient.handleRichInput(event);
-        transformedListItem = nextTransformedListItem;
-        transformedBlock = nextTransformedBlock;
-        commentCaretMarker = richInputCommentCaretMarker ?? editorClient.maybeActivateInlineCommentShortcut(event);
+        ({ transformedListItem, transformedBlock } = editorClient.handleRichInput(event));
       }, {
         afterDomMutation: () => {
           if (transformedListItem) {
@@ -248,10 +263,6 @@ function WorkbenchFilePanelClient(
 
           if (transformedBlock) {
             restoreParagraphSelection(transformedBlock);
-          }
-
-          if (commentCaretMarker) {
-            restoreCaretToMarker(commentCaretMarker);
           }
         },
       });
@@ -267,29 +278,10 @@ function WorkbenchFilePanelClient(
         return;
       }
 
-      const isPrimaryModifier = event.metaKey || event.ctrlKey;
-      if (!isPrimaryModifier) {
-        return;
-      }
-
-      if (!event.altKey && event.key.toLowerCase() === "z") {
+      const command = matchEditorCommand(event);
+      if (command) {
         event.preventDefault();
-        if (event.shiftKey) {
-          editHistoryManager.redoEditHistory();
-        } else {
-          editHistoryManager.undoEditHistory();
-        }
-        return;
-      }
-
-      if (!event.shiftKey && !event.altKey && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        editHistoryManager.redoEditHistory();
-        return;
-      }
-
-      if (editorClient.handleFormatKeyDown(event)) {
-        return;
+        runCommand(command);
       }
     },
     handleEditorPointerDown: () => {
@@ -307,10 +299,16 @@ function WorkbenchFilePanelClient(
       await saveCurrentFile({ force: true });
     },
     handlePointerMove: (event) => {
-      const revisionNode = event.target instanceof Element
-        ? event.target.closest<HTMLElement>('del, ins, [data-inline-comment="true"], [data-block-comment="true"]')
-        : null;
-      if (revisionNode && editor.contains(revisionNode)) {
+      const target = event.target instanceof Node ? event.target : null;
+      const element = target instanceof Element ? target : target?.parentElement ?? null;
+      const inlineRevision = element?.closest<HTMLElement>("del, ins") ?? null;
+      const suggestionMember = element ? findTopLevelBlock(element) : null;
+      const revisionNode = inlineRevision && editor.contains(inlineRevision)
+        ? inlineRevision
+        : suggestionMember && getSuggestionId(suggestionMember) !== null
+          ? suggestionMember
+          : editorClient.findSuggestionMemberForPanel(target);
+      if (revisionNode) {
         editorClient.setHoveredRevisionNode(revisionNode);
         return;
       }
@@ -345,6 +343,7 @@ function WorkbenchFilePanelClient(
     handleViewportChanged: () => {
       editorClient.scheduleDiffGutterRefresh();
       editorClient.scheduleEditorChromeRefresh();
+      editorClient.scheduleReviewRefresh();
     },
     isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue),
     listStructure: {
@@ -513,6 +512,8 @@ function WorkbenchFilePanelClient(
 
   return {
     acceptObservation,
+    beginToolbarInteraction: editorClient.beginToolbarInteraction,
+    comments: editorClient.comments,
     dispose: () => {
       fileClient.dispose();
       editorClient.dispose();
@@ -520,9 +521,14 @@ function WorkbenchFilePanelClient(
       lifecycle.dispose();
     },
     getSnapshot,
+    getToolbarState: editorClient.getToolbarState,
+    runCommand,
     setFontSize,
+    setReviewMode: editorClient.setReviewMode,
+    setSuggestionLayout: editorClient.setSuggestionLayout,
     previewFontSize: editorClient.previewFontSize,
     subscribe,
+    subscribeToolbarState: editorClient.subscribeToolbarState,
   };
 }
 

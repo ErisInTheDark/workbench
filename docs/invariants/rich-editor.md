@@ -1,3 +1,5 @@
 - Each rich-editor inline run has one full mark set and unformatted boundary whitespace; save-guard compares this canonical structure by round-tripping html -> markdown -> html.
 - Editor markdown keeps the newline after a line ending in two spaces, so soft breaks stay inside headings and list items and an empty line inside a block is written as two spaces. Paragraph lines that would open a block on reparse are backslash-escaped.
 - Every editor DOM state must save: markdown serialization never blocks the save guard nor changes the words a reader sees. `WorkbenchFilePanelClient.*.test.ts` sweep this through the mounted editor.
+- Unedited blocks save byte-for-byte from their source (`data-md-source`, trusted only while its render signature matches); rewritten blocks follow the file's detected style. Editing one block never rewrites another.
+- Review markup round-trips: comment threads are non-editable atoms (`data-comment-thread`) saved as `<!-- @name: body -->` runs, and suggestions are block groups (`data-suggestion`) saved as a `<del>` block plus `<ins>` block. Syntax is documented for agents in `instructions/wb/mechanics/agent-markdown.md`.

@@ -37,3 +37,30 @@ How:
 - ensure self-contained docs; assume no conversational context
 - write for now; aggressively trim trivially obtainable history
 - avoid tangent docs: no detail on rejections or failures
+
+<!--
+The Workbench markdown editor renders these as margin comment threads and side-by-side suggestions, and writes them
+back in exactly this form. Agents meet them in any markdown file a user reviewed, so the syntax lives here, next to the
+other markdown rules, as one example plus three rules instead of a separate skill.
+-->
+## Review markup in markdown files
+
+```md
+The <mark>fox</mark><!-- @user: too cliche? --><!-- @agent: reworded below -->
+<!-- @user: comment on whole paragraph -->
+
+<del>
+
+Original blocks.
+
+</del>
+<ins>
+
+Replacement blocks.
+
+</ins>
+```
+
+- Comment: `<!-- @name: text -->` right after `<mark>`ed words, or on own line after its block. Reply: next comment glued on, or next line
+- Suggestion: `<del>` block directly followed by `<ins>` block; omit either for pure insertion or deletion
+- Resolve by removing thread, or keeping one suggestion side; leave other review markup intact

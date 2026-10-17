@@ -1,15 +1,11 @@
 /*
  * Exports:
- * - WorkbenchListStructureControllerOptions: injected editor DOM helpers and callbacks needed for list and comment structural key handling. Keywords: workbench, list, comment, keydown, controller, dependency injection.
- * - WorkbenchListStructureController: public structural keydown handler surface for rich-editor list and comment edits. Keywords: workbench, list, comment, keydown, controller.
- * - default WorkbenchListStructureController: bind list and block-comment structural keydown behavior without owning broader editor history or formatting logic. Keywords: workbench, list, comment, structural edit, keydown, default export.
+ * - WorkbenchListStructureControllerOptions: injected editor DOM helpers and callbacks needed for list structural key handling.
+ * - WorkbenchListStructureController: public structural keydown handler surface for rich-editor list edits.
+ * - default WorkbenchListStructureController: bind Tab, Backspace and Enter list behaviour without owning broader editor history or formatting logic.
  */
 
-import { convertCommentBlockToParagraph } from "../dom/mutation/structured-block-dom";
-import { getDirectEditorParagraph } from "../dom/query/direct-editor-paragraph";
 import {
-    isSelectionAtElementEnd,
-    isSelectionAtElementStart,
     restoreListItemSelection,
     restoreParagraphSelection,
 } from "../dom/selection/selection-dom";
@@ -29,7 +25,6 @@ export interface WorkbenchListStructureControllerOptions {
     options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
   ) => void;
   unwrapTopLevelListItemToParagraph: (item: HTMLLIElement) => HTMLElement | null;
-  updateFloatingToolbar: () => void;
 }
 
 interface WorkbenchListStructureController {
@@ -50,36 +45,37 @@ function WorkbenchListStructureController(
     outdentListItems,
     syncEditorAfterStructuralChange,
     unwrapTopLevelListItemToParagraph,
-    updateFloatingToolbar,
   } = options;
 
-  function breakOutOfListItem(listItem: HTMLLIElement) {
-    if (isTopLevelListItem(listItem)) {
-      let paragraph: HTMLElement | null = null;
-      syncEditorAfterStructuralChange(() => {
-        paragraph = unwrapTopLevelListItemToParagraph(listItem);
-        editor.focus();
-      }, {
-        afterDomMutation: () => {
-          if (!paragraph) {
-            return;
-          }
-
-          restoreParagraphSelection(paragraph);
-          updateFloatingToolbar();
-        },
-      });
-      return true;
-    }
-
+  function moveItems(move: (items: HTMLLIElement[]) => HTMLLIElement[], items: HTMLLIElement[], collapsed: boolean) {
     let movedItems: HTMLLIElement[] = [];
     syncEditorAfterStructuralChange(() => {
-      movedItems = outdentListItems([listItem]);
+      movedItems = move(items);
       editor.focus();
     }, {
       afterDomMutation: () => {
-        restoreListItemSelection(movedItems, { collapsed: true, getListItemTextContainer });
-        updateFloatingToolbar();
+        if (movedItems.length) {
+          restoreListItemSelection(movedItems, { collapsed, getListItemTextContainer });
+        }
+      },
+    });
+    return true;
+  }
+
+  function breakOutOfListItem(listItem: HTMLLIElement) {
+    if (!isTopLevelListItem(listItem)) {
+      return moveItems(outdentListItems, [listItem], true);
+    }
+
+    let paragraph: HTMLElement | null = null;
+    syncEditorAfterStructuralChange(() => {
+      paragraph = unwrapTopLevelListItemToParagraph(listItem);
+      editor.focus();
+    }, {
+      afterDomMutation: () => {
+        if (paragraph) {
+          restoreParagraphSelection(paragraph);
+        }
       },
     });
     return true;
@@ -92,56 +88,12 @@ function WorkbenchListStructureController(
     }
 
     const selectedItems = getSelectedListItems(selection);
-    if (!selectedItems.length) {
+    if (!selectedItems.length || (selection.isCollapsed && !isSelectionAtListItemStart(selection, selectedItems[0]!))) {
       return false;
     }
 
-    if (selection.isCollapsed && !isSelectionAtListItemStart(selection, selectedItems[0])) {
-      return false;
-    }
-
-    const shouldCollapseSelection = selection.isCollapsed;
     event.preventDefault();
-
-    if (event.shiftKey) {
-      let movedItems: HTMLLIElement[] = [];
-      syncEditorAfterStructuralChange(() => {
-        movedItems = outdentListItems(selectedItems);
-        editor.focus();
-      }, {
-        afterDomMutation: () => {
-          if (!movedItems.length) {
-            return;
-          }
-
-          restoreListItemSelection(movedItems, {
-            collapsed: shouldCollapseSelection,
-            getListItemTextContainer,
-          });
-          updateFloatingToolbar();
-        },
-      });
-      return true;
-    }
-
-    let movedItems: HTMLLIElement[] = [];
-    syncEditorAfterStructuralChange(() => {
-      movedItems = indentListItems(selectedItems);
-      editor.focus();
-    }, {
-      afterDomMutation: () => {
-        if (!movedItems.length) {
-          return;
-        }
-
-        restoreListItemSelection(movedItems, {
-          collapsed: shouldCollapseSelection,
-          getListItemTextContainer,
-        });
-        updateFloatingToolbar();
-      },
-    });
-    return true;
+    return moveItems(event.shiftKey ? outdentListItems : indentListItems, selectedItems, selection.isCollapsed);
   }
 
   function handleListItemBackspace(event: KeyboardEvent) {
@@ -157,63 +109,6 @@ function WorkbenchListStructureController(
 
     event.preventDefault();
     return breakOutOfListItem(listItem);
-  }
-
-  function handleCommentBlockBackspace(event: KeyboardEvent) {
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const paragraph = getDirectEditorParagraph(editor, selection.getRangeAt(0).startContainer);
-    if (!paragraph || paragraph.dataset.blockComment !== "true" || !isSelectionAtElementStart(selection, paragraph)) {
-      return false;
-    }
-
-    event.preventDefault();
-    syncEditorAfterStructuralChange(() => {
-      convertCommentBlockToParagraph(paragraph);
-    }, {
-      afterDomMutation: () => {
-        restoreParagraphSelection(paragraph);
-        updateFloatingToolbar();
-      },
-    });
-    return true;
-  }
-
-  function handleCommentBlockEnter(event: KeyboardEvent) {
-    if (event.shiftKey) {
-      return false;
-    }
-
-    const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) {
-      return false;
-    }
-
-    const paragraph = getDirectEditorParagraph(editor, selection.getRangeAt(0).startContainer);
-    if (!paragraph || paragraph.dataset.blockComment !== "true" || !isSelectionAtElementEnd(selection, paragraph)) {
-      return false;
-    }
-
-    event.preventDefault();
-    let nextParagraph: HTMLParagraphElement | null = null;
-    syncEditorAfterStructuralChange(() => {
-      nextParagraph = document.createElement("p");
-      nextParagraph.append(document.createElement("br"));
-      paragraph.parentNode?.insertBefore(nextParagraph, paragraph.nextSibling);
-    }, {
-      afterDomMutation: () => {
-        if (!nextParagraph) {
-          return;
-        }
-
-        restoreParagraphSelection(nextParagraph);
-        updateFloatingToolbar();
-      },
-    });
-    return true;
   }
 
   function handleEmptyListItemEnter(event: KeyboardEvent) {
@@ -232,26 +127,16 @@ function WorkbenchListStructureController(
   }
 
   function handleListStructureKeyDown(event: KeyboardEvent) {
-    if (event.key === "Tab" && handleListTab(event)) {
-      return true;
+    if (event.key === "Tab") {
+      return handleListTab(event);
     }
 
     if (event.key === "Backspace") {
-      if (handleCommentBlockBackspace(event)) {
-        return true;
-      }
-      if (handleListItemBackspace(event)) {
-        return true;
-      }
+      return handleListItemBackspace(event);
     }
 
     if (event.key === "Enter") {
-      if (handleCommentBlockEnter(event)) {
-        return true;
-      }
-      if (handleEmptyListItemEnter(event)) {
-        return true;
-      }
+      return handleEmptyListItemEnter(event);
     }
 
     return false;

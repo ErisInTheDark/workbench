@@ -1,1 +1,1 @@
-__split bold__ and *italic*
+**split bold** and *italic*

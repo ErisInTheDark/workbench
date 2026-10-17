@@ -1,1 +1,1 @@
-__bold with__ *__italic inside__* __still bold__
+**bold with *italic inside* still bold**

@@ -53,6 +53,23 @@
   ::selection {
     background: var(--selection);
   }
+
+  /* Markdown editor review highlights, painted by the CSS Custom Highlight API so editable DOM never changes. */
+  ::highlight(suggest-del) {
+    color: color-mix(in srgb, var(--danger) 70%, var(--text));
+    background-color: color-mix(in srgb, var(--danger) 12%, transparent);
+    text-decoration: line-through color-mix(in srgb, var(--danger) 85%, transparent) 0.09em;
+  }
+
+  ::highlight(suggest-ins) {
+    background-color: color-mix(in srgb, var(--success) 10%, transparent);
+    text-decoration: underline dotted color-mix(in srgb, var(--success) 90%, transparent) 0.12em;
+  }
+
+  ::highlight(comment-active),
+  ::highlight(comment-draft) {
+    background-color: color-mix(in srgb, var(--attention) 42%, transparent);
+  }
 }
 
 @utility bg-checkerboard {

@@ -1,9 +1,9 @@
 /*
  * Exports:
  * - WorkbenchRichInputControllerOptions: injected editor element and mode access for rich-input transforms without coordinator ownership. Keywords: workbench, rich input, controller, options, mode.
- * - WorkbenchRichInputResult: structural rich-input transform result for markdown shortcut interception. Keywords: workbench, rich input, result, heading, list item, comment.
+ * - WorkbenchRichInputResult: structural rich-input transform result for markdown shortcut interception. Keywords: workbench, rich input, result, heading, list item.
  * - WorkbenchRichInputController: public event handler surface for rich-editor input transforms. Keywords: workbench, rich input, controller, handle.
- * - default WorkbenchRichInputController: bind editor-owned rich-input transformer and block-normalizer registries for markdown shortcuts and pasted markdown blocks. Keywords: workbench, rich input, controller, heading, list item, block comment, paste, default export.
+ * - default WorkbenchRichInputController: bind editor-owned rich-input transformer and block-normalizer registries for markdown shortcuts and pasted markdown blocks. Keywords: workbench, rich input, controller, heading, list item, paste, default export.
  */
 
 import {
@@ -37,7 +37,6 @@ function WorkbenchRichInputController(
       return {
         transformedListItem: null,
         transformedBlock: null,
-        commentCaretMarker: null,
       };
     }
 

@@ -4,17 +4,12 @@
  * - SaveConflictDialogDomSurface: required overwrite and reload dialog elements.
  * - ResetDraftDialogDomSurface: required draft-reset dialog elements.
  * - DialogDomSurface: grouped runtime dialog capabilities.
- * - ToolbarDomSurface: floating formatting toolbar elements.
- * - EditorDomSurface: React-owned editor elements.
+ * - ToolbarDomSurface: the floating accept/reject toolbar shown over revisions.
+ * - EditorDomSurface: React-owned editor elements; the review layer holds suggestion originals beside the text.
  * - StatusDisplaySurface: file path and status labels.
  * - ControlButtonsDomSurface: save and reset elements.
  * - WORKBENCH_STICKY_CHROME_ATTRIBUTE: marks sticky chrome the floating editor toolbars must stay below.
  * - WorkbenchEditorDomSurfaces: DOM capabilities consumed by the editor client.
- * - hasRequiredEditorDomSurface: validate editor elements before boot.
- * - hasRequiredStatusDisplaySurface: validate status elements before boot.
- * - hasRequiredControlButtonsDomSurface: validate control elements before boot.
- * - hasRequiredDialogDomSurface: validate dialog elements before boot.
- * - hasRequiredToolbarDomSurface: validate toolbar elements before boot.
  */
 
 export const WORKBENCH_STICKY_CHROME_ATTRIBUTE = "data-workbench-sticky-chrome";
@@ -55,7 +50,6 @@ export interface DialogDomSurface {
 }
 
 export interface ToolbarDomSurface {
-  floating: HTMLDivElement;
   revisionHover: HTMLDivElement;
   revisionAccept: HTMLButtonElement;
   revisionReject: HTMLButtonElement;
@@ -65,6 +59,7 @@ export interface EditorDomSurface {
   editor: HTMLDivElement;
   customCaret: HTMLDivElement;
   diffGutter: HTMLDivElement;
+  reviewLayer: HTMLDivElement;
 }
 
 export interface StatusDisplaySurface {
@@ -80,44 +75,7 @@ export interface ControlButtonsDomSurface {
 export interface WorkbenchEditorDomSurfaces {
   controls: ControlButtonsDomSurface;
   dialogs: DialogDomSurface;
-  editor: Pick<EditorDomSurface, "editor" | "customCaret" | "diffGutter">;
+  editor: EditorDomSurface;
   statusDisplay: StatusDisplaySurface;
   toolbars: ToolbarDomSurface;
-}
-
-export function hasRequiredEditorDomSurface(surface: Partial<EditorDomSurface> | null | undefined): surface is EditorDomSurface {
-  return Boolean(surface?.editor && surface?.customCaret && surface?.diffGutter);
-}
-
-export function hasRequiredStatusDisplaySurface(surface: Partial<StatusDisplaySurface> | null | undefined): surface is StatusDisplaySurface {
-  return Boolean(surface?.filePathLabel && surface?.statusLine);
-}
-
-export function hasRequiredControlButtonsDomSurface(surface: Partial<ControlButtonsDomSurface> | null | undefined): surface is ControlButtonsDomSurface {
-  return Boolean(surface?.resetDraftButton && surface?.saveFileButton);
-}
-
-export function hasRequiredDialogDomSurface(surface: Partial<DialogDomSurface> | null | undefined): surface is DialogDomSurface {
-  return Boolean(
-    surface?.saveConflict?.dialog
-      && surface?.saveConflict?.summary
-      && surface?.saveConflict?.expected
-      && surface?.saveConflict?.actual
-      && surface?.saveConflict?.keepEditing
-      && surface?.saveConflict?.reload
-      && surface?.saveConflict?.overwrite
-      && surface?.resetDraft?.dialog
-      && surface?.resetDraft?.cancel
-      && surface?.resetDraft?.resetToHead
-      && surface?.resetDraft?.resetToSaved,
-  );
-}
-
-export function hasRequiredToolbarDomSurface(surface: Partial<ToolbarDomSurface> | null | undefined): surface is ToolbarDomSurface {
-  return Boolean(
-    surface?.floating
-      && surface?.revisionHover
-      && surface?.revisionAccept
-      && surface?.revisionReject,
-  );
 }

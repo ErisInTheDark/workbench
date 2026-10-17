@@ -1,6 +1,6 @@
 # plan
 
-intro with __bold__, *em*, and `code`.
+intro with **bold**, *em*, and `code`.
 
 - step one
   - detail <!-- why -->

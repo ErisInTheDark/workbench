@@ -1,1 +1,1 @@
-before __padded bold__ after *tail* end
+before **padded bold** after *tail* end

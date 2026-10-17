@@ -1,1 +1,1 @@
-## heading with __bold__ and `code`
+## heading with **bold** and `code`

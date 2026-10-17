@@ -1,1 +1,1 @@
-`plain` __`bold in code`__ and __`code in bold`__
+`plain` **`bold in code`** and **`code in bold`**

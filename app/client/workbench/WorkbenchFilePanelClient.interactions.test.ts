@@ -102,11 +102,18 @@ test("typed html-looking text stays literal text", () => withPanel("", async pan
 test("typing a space before formatted text keeps the space", () => withPanel("hello **world**\n", async panel => {
   await panel.caret("hello |world");
   await panel.type("there ");
-  assert.equal(await panel.save(), "hello there __world__\n");
+  assert.equal(await panel.save(), "hello there **world**\n");
+}));
+
+test("typed html comment text stays literal text instead of becoming a comment", () => withPanel("", async panel => {
+  await caretAtEnd(panel);
+  await panel.type("<!-- not a note -->");
+  assert.equal(panel.editor.querySelector("[data-comment-thread]"), null);
+  assert.equal(await panel.save(), "\\<!-- not a note -->\n");
 }));
 
 for (const { name, keys, markdown } of [
-  { name: "bold", keys: { key: "b", ctrl: true }, markdown: "alpha __beta__ gamma\n" },
+  { name: "bold", keys: { key: "b", ctrl: true }, markdown: "alpha **beta** gamma\n" },
   { name: "italic", keys: { key: "i", ctrl: true }, markdown: "alpha *beta* gamma\n" },
   { name: "code", keys: { key: "`", ctrl: true }, markdown: "alpha `beta` gamma\n" },
   { name: "delete", keys: { key: "x", ctrl: true, shift: true }, markdown: "alpha <del>beta</del> gamma\n" },
@@ -137,33 +144,10 @@ test("boundary whitespace stays inside a fresh mark until the caret leaves its b
   await panel.press("b", { ctrl: true });
   const editing = panel.editor.firstElementChild!;
   assert.equal(editing.querySelector("strong")?.textContent, "beta ", "the block holding the caret keeps its raw run");
-  assert.equal(await panel.save(), "alpha __beta__ gamma\n\nnext\n");
+  assert.equal(await panel.save(), "alpha **beta** gamma\n\nnext\n");
   await panel.caret("ne|xt");
   assert.equal(editing.querySelector("strong")?.textContent, "beta", "leaving the block canonicalises its run");
-  assert.equal(await panel.save(), "alpha __beta__ gamma\n\nnext\n");
-}));
-
-test("typing the comment shortcut at a block start makes a block comment", () => withPanel("", async panel => {
-  await caretAtEnd(panel);
-  await panel.type("<! note");
-  assert.equal(panel.editor.querySelector("[data-block-comment='true']")?.textContent?.trim(), "note");
-  assert.equal(await panel.save(), "<!-- note -->\n");
-}));
-
-test("enter after a block comment continues in a paragraph and backspace turns it back to text", () => withPanel("<!-- note -->\n", async panel => {
-  await panel.caret("note|");
-  await panel.press("Enter");
-  await panel.type("body");
-  assert.equal(await panel.save(), "<!-- note -->\nbody\n");
-  await panel.caret("|note");
-  await panel.press("Backspace");
-  assert.equal(await panel.save(), "note\n\nbody\n");
-}));
-
-test("typing the comment shortcut mid-line starts an inline comment", () => withPanel("word\n", async panel => {
-  await panel.caret("word|");
-  await panel.type(" <!note");
-  assert.equal(await panel.save(), "word <!-- note -->\n");
+  assert.equal(await panel.save(), "alpha **beta** gamma\n\nnext\n");
 }));
 
 test("tab and shift tab at an item start nest and un-nest it", () => withPanel("- one\n- two\n", async panel => {
@@ -184,8 +168,9 @@ test("backspace at a top-level item start turns it into a paragraph", () => with
 for (const { command, markdown } of [
   { command: "h1", markdown: "# alpha\n\nbeta\n" },
   { command: "h2", markdown: "## alpha\n\nbeta\n" },
+  { command: "h3", markdown: "### alpha\n\nbeta\n" },
   { command: "quote", markdown: "> alpha\n\nbeta\n" },
-]) {
+] as const) {
   test(`${command} toolbar command toggles the caret's block and back`, () => withPanel("alpha\n\nbeta\n", async panel => {
     await panel.caret("al|pha");
     await panel.toolbar(command);

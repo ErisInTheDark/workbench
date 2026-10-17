@@ -60,6 +60,8 @@
  * - MousePointerIcon/PenToolIcon/CircleIcon/CircleDotIcon/FlipHorizontalIcon/FlipVerticalIcon/PaletteIcon/RulerIcon/SaveAsIcon:
  *   svg editor tools, transforms, overlay toggles and save as.
  * - MagnetIcon/MagnetOffIcon: point snapping on and off.
+ * - BoldIcon/ItalicIcon/CodeIcon/Heading1Icon/Heading2Icon/Heading3Icon/TextQuoteIcon/ListOrderedIcon: markdown toolbar glyphs.
+ * - MessageSquarePlusIcon/MessageSquareDiffIcon/PencilIcon: comment, suggest-mode and edit-mode glyphs.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
  * - FlagFilledIcon: thread goal glyph once a goal is set.
  * - ClipboardListIcon: thread todo glyph.
@@ -841,6 +843,60 @@ export function FoldVerticalIcon(props: IconProps) {
 export function UnfoldVerticalIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M12 22v-6" /><path d="M12 8V2" /><path d="M4 12H2" /><path d="M10 12H8" /><path d="M16 12h-2" /><path d="M22 12h-2" /><path d="m15 19-3 3-3-3" /><path d="m15 5-3-3-3 3" />
+  </OutlinedIcon>;
+}
+
+export function BoldIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" /></OutlinedIcon>;
+}
+
+export function ItalicIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M19 4h-9" /><path d="M14 20H5" /><path d="M15 4 9 20" /></OutlinedIcon>;
+}
+
+export function CodeIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></OutlinedIcon>;
+}
+
+const headingStem = ["M4 12h8", "M4 18V6", "M12 18V6"];
+
+export function Heading1Icon(props: IconProps) {
+  return <OutlinedIcon {...props}>{[...headingStem, "m17 12 3-2v8"].map((path) => <path d={path} key={path} />)}</OutlinedIcon>;
+}
+
+export function Heading2Icon(props: IconProps) {
+  return <OutlinedIcon {...props}>{[...headingStem, "M21 18h-4c0-4 4-3 4-6 0-1.5-2-2.5-4-1"].map((path) => <path d={path} key={path} />)}</OutlinedIcon>;
+}
+
+export function Heading3Icon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    {[...headingStem, "M17.5 10.5c1.7-1 3.5 0 3.5 1.5a2 2 0 0 1-2 2", "M17 17.5c2 1.5 4 .3 4-1.5a2 2 0 0 0-2-2"].map((path) => <path d={path} key={path} />)}
+  </OutlinedIcon>;
+}
+
+export function TextQuoteIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M17 5H3" /><path d="M21 12H8" /><path d="M21 19H8" /><path d="M3 12v7" /></OutlinedIcon>;
+}
+
+export function ListOrderedIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M10 12h11" /><path d="M10 18h11" /><path d="M10 6h11" /><path d="M4 10h2" /><path d="M4 6h1v4" /><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" />
+  </OutlinedIcon>;
+}
+
+const squareBubblePath = "M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z";
+
+export function MessageSquarePlusIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={squareBubblePath} /><path d="M12 8v6" /><path d="M9 11h6" /></OutlinedIcon>;
+}
+
+export function MessageSquareDiffIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d={squareBubblePath} /><path d="M10 15h4" /><path d="M10 9h4" /><path d="M12 7v4" /></OutlinedIcon>;
+}
+
+export function PencilIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" />
   </OutlinedIcon>;
 }
 

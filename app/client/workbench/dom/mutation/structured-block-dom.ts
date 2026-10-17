@@ -5,20 +5,23 @@
  * - ensureSummaryTextWrapper: create or return the direct summary text wrapper used for list-item summaries. Keywords: workbench, list, summary, wrapper.
  * - trimBoundaryBreaks: remove redundant leading and trailing BR nodes around otherwise meaningful block content. Keywords: workbench, block dom, br, cleanup.
  * - normalizeSummaryListArtifacts: lift stray list structures out of summary text into the owning details block. Keywords: workbench, list, summary, normalize.
- * - normalizeCommentBlockElement: canonicalize block comment markers on paragraph-like elements, including blocks holding only inline comments. Keywords: workbench, comment block, normalize, paragraph.
- * - removeAdjacentCommentSpacing: strip neighboring empty spacing nodes around a comment block paragraph. Keywords: workbench, comment block, spacing, cleanup.
- * - convertCommentBlockToParagraph: turn a block comment element back into a normal paragraph while preserving text. Keywords: workbench, comment block, paragraph, convert.
  * - normalizeListItemHierarchy: normalize a single list item into the details-plus-summary structured nesting form when needed. Keywords: workbench, list, hierarchy, details.
  * - normalizeNestedListHierarchy: normalize all list items under a root into structured nesting form. Keywords: workbench, list, hierarchy, normalize.
  * - mergeAdjacentSiblingLists: merge compatible sibling lists separated only by empty spacer nodes. Keywords: workbench, list, merge, cleanup.
  * - normalizeDivBlocks: unwrap block-holding divs and turn inline-only divs into paragraphs, since markdown has no div. Keywords: workbench, div, paste, normalize.
  * - normalizeRootInlineBlocks: wrap direct root inline content into stable paragraph blocks for markdown round-trip comparison. Keywords: workbench, editor, root, inline, paragraph, save guard.
- * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks. Keywords: workbench, block dom, comment block, list, sync.
- * - isBlockLikeChildElement: detect child elements that force a container to behave as block content. Keywords: workbench, block dom, predicate, inline container.
+ * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks; root paragraphs holding only comment threads become block threads. Keywords: workbench, block dom, list, sync.
+ * - isBlockLikeChildElement: detect child elements that force a container to behave as block content, block comment threads included. Keywords: workbench, block dom, predicate, inline container.
  * - hasDirectBlockLikeChildren: detect whether a container contains direct block-like children. Keywords: workbench, block dom, predicate, container.
  */
 
-import { parseBlockCommentBody } from "../../markdown/comment-markdown";
+import {
+    createCommentThreadElement,
+    getCommentThreadKind,
+    inheritSuggestionMembership,
+    isCommentThreadElement,
+    readThreadComments,
+} from "../../markdown/review-markup";
 import {
     getDirectChildDetailsElement,
     getDirectChildListElements,
@@ -151,60 +154,6 @@ export function normalizeSummaryListArtifacts(details: HTMLDetailsElement, summa
   for (const item of meaningfulItems) {
     targetList.insertBefore(item, insertionPoint);
   }
-}
-
-function setPlainBlockText(element: HTMLElement, text: string) {
-  element.replaceChildren();
-  if (text) {
-    element.append(document.createTextNode(text));
-    return;
-  }
-
-  element.append(document.createElement("br"));
-}
-
-/** Text of a block whose only content is inline comments, which markdown can only write as one block comment line. */
-function getInlineCommentOnlyText(element: HTMLElement) {
-  const comments = Array.from(element.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'));
-  if (!comments.length) {
-    return null;
-  }
-
-  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const isVisible = (node.textContent ?? "").trim().length > 0;
-    if (isVisible && !comments.some((comment) => comment.contains(node))) {
-      return null;
-    }
-  }
-
-  return comments.map((comment) => (comment.textContent ?? "").trim()).filter(Boolean).join(" ");
-}
-
-export function normalizeCommentBlockElement(element: HTMLElement) {
-  const inlineCommentText = element.dataset.blockComment === "true" ? null : getInlineCommentOnlyText(element);
-  if (inlineCommentText !== null) {
-    element.dataset.blockComment = "true";
-    setPlainBlockText(element, inlineCommentText);
-    return;
-  }
-
-  const parsedCommentBody = parseBlockCommentBody(element.textContent ?? "");
-  if (parsedCommentBody !== null) {
-    element.dataset.blockComment = "true";
-    setPlainBlockText(element, parsedCommentBody);
-    return;
-  }
-
-  if (element.dataset.blockComment === "true") {
-    const textContent = element.textContent ?? "";
-    if (!textContent.replaceAll("\u00a0", "").length) {
-      setPlainBlockText(element, "");
-    }
-    return;
-  }
-
-  element.removeAttribute("data-block-comment");
 }
 
 export function normalizeListItemHierarchy(item: HTMLLIElement) {
@@ -381,7 +330,6 @@ function isRootBreakNode(node: Node | null) {
   return node instanceof HTMLBRElement
     || (
       node instanceof HTMLElement
-      && node.dataset.blockComment !== "true"
       && isSingleBreakParagraph(node)
       && !isIntentionalListBreakParagraph(node)
     );
@@ -404,7 +352,7 @@ function isSerializableRootInlineNode(node: Node) {
     return false;
   }
 
-  return Boolean((node.textContent ?? "").trim() || node.querySelector("br"));
+  return Boolean((node.textContent ?? "").trim() || node.querySelector("br, [data-comment-thread]") || isCommentThreadElement(node));
 }
 
 function isIgnorableRootWhitespaceNode(node: Node) {
@@ -429,8 +377,9 @@ function getLastRootContentNode(root: ParentNode) {
   return node;
 }
 
+/** Blank lines around comment lines are kept by markdown, so they stay at the document edges too. */
 function isBlockCommentNode(node: Node | null) {
-  return node instanceof HTMLElement && node.dataset.blockComment === "true";
+  return isCommentThreadElement(node);
 }
 
 function isRemovableRootEdgeNode(node: Node | null) {
@@ -534,10 +483,29 @@ export function normalizeRootInlineBlocks(root: ParentNode) {
   trimRootBreaksDroppedByMarkdown(root);
 }
 
+/** Markdown can only write a block holding nothing but comments as comment lines, so such a block becomes a block thread. */
+function convertCommentOnlyBlocks(root: ParentNode) {
+  for (const block of Array.from(root.children)) {
+    if (!(block instanceof HTMLParagraphElement) || (block.textContent ?? "").replaceAll(" ", "").trim()) {
+      continue;
+    }
+
+    const threads = Array.from(block.querySelectorAll<HTMLElement>("[data-comment-thread]"));
+    if (!threads.length || block.querySelector("hr, img")) {
+      continue;
+    }
+
+    const thread = createCommentThreadElement(block.ownerDocument, "block", threads.flatMap(readThreadComments));
+    inheritSuggestionMembership(block, thread);
+    block.replaceWith(thread);
+  }
+}
+
 export function syncStructuredBlockStyles(
   root: ParentNode,
   options: StructuredBlockStyleSyncOptions = {},
 ) {
+  convertCommentOnlyBlocks(root);
   normalizeNestedListHierarchy(root);
   mergeAdjacentSiblingLists(root);
   options.canonicalizeInlineRunContainers?.(root);
@@ -548,77 +516,21 @@ export function syncStructuredBlockStyles(
       continue;
     }
 
-    const isCommentCandidate = /^(p|div)$/i.test(element.tagName);
-    if (!isCommentCandidate) {
-      element.removeAttribute("data-block-comment");
-      element.removeAttribute("data-single-break");
-      continue;
-    }
-
-    if (isSingleBreakParagraph(element)) {
+    if (/^(p|div)$/i.test(element.tagName) && isSingleBreakParagraph(element)) {
       element.dataset.singleBreak = "true";
     } else {
       element.removeAttribute("data-single-break");
     }
-
-    normalizeCommentBlockElement(element);
   }
-}
-
-export function removeAdjacentCommentSpacing(element: HTMLElement) {
-  let previousNode = element.previousSibling;
-  while (previousNode) {
-    const nextPreviousNode = previousNode.previousSibling;
-    if (previousNode.nodeType === Node.TEXT_NODE && !(previousNode.textContent ?? "").trim()) {
-      previousNode.remove();
-      previousNode = nextPreviousNode;
-      continue;
-    }
-
-    if (
-      previousNode instanceof HTMLBRElement
-      || (previousNode instanceof HTMLElement && isSingleBreakParagraph(previousNode))
-    ) {
-      previousNode.remove();
-      previousNode = nextPreviousNode;
-      continue;
-    }
-
-    break;
-  }
-
-  let nextNode = element.nextSibling;
-  while (nextNode) {
-    const nextNextNode = nextNode.nextSibling;
-    if (nextNode.nodeType === Node.TEXT_NODE && !(nextNode.textContent ?? "").trim()) {
-      nextNode.remove();
-      nextNode = nextNextNode;
-      continue;
-    }
-
-    if (
-      nextNode instanceof HTMLBRElement
-      || (nextNode instanceof HTMLElement && isSingleBreakParagraph(nextNode))
-    ) {
-      nextNode.remove();
-      nextNode = nextNextNode;
-      continue;
-    }
-
-    break;
-  }
-}
-
-export function convertCommentBlockToParagraph(paragraph: HTMLElement) {
-  const commentBody = parseBlockCommentBody(paragraph.textContent ?? "") ?? (paragraph.textContent ?? "");
-  paragraph.removeAttribute("data-block-comment");
-  setPlainBlockText(paragraph, commentBody);
-  removeAdjacentCommentSpacing(paragraph);
 }
 
 export function isBlockLikeChildElement(element: HTMLElement) {
   if (element.dataset.summaryText === "true") {
     return false;
+  }
+
+  if (isCommentThreadElement(element) && getCommentThreadKind(element) === "block") {
+    return true;
   }
 
   if (/^(ul|ol|li|details|summary|pre|hr)$/i.test(element.tagName)) {

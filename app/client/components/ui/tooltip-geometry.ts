@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - isTooltipPointerSupported: identify pointer input that can intentionally activate a hover tooltip. Keywords: tooltip, pointer, mouse, touch.
- * - TooltipPlacement: which side of its trigger a tooltip opens on.
- * - getTooltipPosition: place a tooltip beside (right) or above its trigger, clamped inside viewport gutters.
+ * - TooltipPlacement: which side of its trigger a tooltip prefers to open on.
+ * - getTooltipPosition: place a tooltip beside (right), above (top) or below (bottom) its trigger, flipping vertically
+ *   when the preferred side lacks room, clamped inside viewport gutters.
  * - isPointWithinTooltipArea: test trigger and optional interactive-surface pointer proximity. Keywords: tooltip, hover, proximity, interaction.
  */
 
@@ -34,7 +35,7 @@ export function isPointWithinTooltipArea(
     || Boolean(interactive && tooltipRect && pointWithinExpandedRect(x, y, tooltipRect, hoverDistancePx));
 }
 
-export type TooltipPlacement = "right" | "top";
+export type TooltipPlacement = "right" | "top" | "bottom";
 
 export function getTooltipPosition({
   anchorGapPx = TOOLTIP_ANCHOR_GAP_PX,
@@ -49,18 +50,20 @@ export function getTooltipPosition({
   anchorGapPx?: number;
   placement?: TooltipPlacement;
   tooltipHeight: number;
-  /** Only top placement centres on the measured width. */
+  /** Only vertical placements centre on the measured width. */
   tooltipWidth?: number;
   triggerRect: TooltipRect;
   viewportGutterPx?: number;
   viewportHeight: number;
   viewportWidth: number;
 }) {
-  if (placement === "top") {
+  if (placement === "top" || placement === "bottom") {
     const width = Math.max(tooltipWidth, 0);
     const above = Math.max(0, triggerRect.top - anchorGapPx - viewportGutterPx);
     const below = Math.max(0, viewportHeight - triggerRect.bottom - anchorGapPx - viewportGutterPx);
-    const opensAbove = tooltipHeight <= above || above >= below;
+    const opensAbove = placement === "top"
+      ? tooltipHeight <= above || above >= below
+      : tooltipHeight > below && above > below;
     const maxHeight = opensAbove ? above : below;
     const centred = triggerRect.left + (triggerRect.width - width) / 2;
     return {

@@ -8,7 +8,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 
 import {
-  parseBlockCommentBody,
+  parseCommentLine,
 } from "../../../workbench/markdown/comment-markdown";
 import {
   formatThreadStateChangeMode,
@@ -244,6 +244,14 @@ function renderThreadInlineNodes (
             {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
           </span>
         );
+      case "mark":
+        return (
+          <mark className="rounded-[0.2em] bg-[color-mix(in srgb, var(--attention) 22%, transparent)] px-[0.08em] text-inherit" key={key}>
+            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+          </mark>
+        );
+      case "commentThread":
+        return null;
       case "threadIcon":
         return (
           <ThreadInlineIcon
@@ -784,9 +792,11 @@ function renderThreadBlock (
           data-block-comment="true"
           key={keyPrefix}
         >
-          {parseBlockCommentBody(block.text) ?? block.text}
+          {parseCommentLine(block.text)?.map((comment) => comment.body).join(" ") ?? block.text}
         </p>
       );
+    case "suggestion":
+      return null;
     case "ul":
       return renderThreadListBlock(block, options, keyPrefix);
     case "ol":

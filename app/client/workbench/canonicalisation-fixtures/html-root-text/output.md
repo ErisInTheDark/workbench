@@ -1,4 +1,4 @@
-loose root text __with bold__
+loose root text **with bold**
 
 then a paragraph
 

@@ -1,1 +1,1 @@
-__bold__ *italic* <del>struck</del> <del>old struck</del>
+**bold** *italic* <del>struck</del> <del>old struck</del>

@@ -1,10 +1,11 @@
 /*
  * Exports:
- * - WorkbenchMarkupSerializationOptions: callbacks needed to serialize editor DOM and markup signatures without coordinator globals. Keywords: workbench, markdown, serialization, callbacks.
- * - createWorkbenchMarkupSignature: create a canonical rich-text markup signature for save-guard round-trip comparisons. Keywords: workbench, markup, signature, save guard.
- * - resolveOrderedListItemOrdinals: preserve explicit item values and derive implicit continuations for ordered-list serialization. Keywords: markdown, ordered list, ordinal, serialization.
- * - serializeListItemMainText: serialize the visible markdown text for a structured list item. Keywords: workbench, markdown, list, serialization.
- * - serializeWorkbenchDomToMarkdown: serialize a normalized workbench editor DOM subtree back to markdown text. Keywords: workbench, markdown, serialization, save guard.
+ * - WorkbenchMarkupSerializationOptions: callbacks and file style needed to serialize editor DOM and markup signatures.
+ * - createWorkbenchMarkupSignature: create a canonical rich-text markup signature for save-guard round-trip comparisons.
+ * - resolveOrderedListItemOrdinals: preserve explicit item values and derive implicit continuations for ordered-list serialization.
+ * - serializeListItemMainText: serialize the visible markdown text for a structured list item.
+ * - serializeWorkbenchDomToMarkdown: serialize a normalized editor DOM subtree back to a markdown file.
+ * - serializeBlocksToMarkdown: serialize detached top-level blocks as a markdown fragment, as suggestions store them.
  */
 
 import {
@@ -15,24 +16,32 @@ import {
     isListElement,
     isSingleBreakParagraph
 } from "../dom/query/list-dom";
+import { serializeCommentThreadForMarkupSignature, serializeInlineRunContainerForMarkupSignature } from "../editor/inline-leaves";
+import { serializeInlineNodes } from "../editor/inline-markdown-serialization";
+import { formatComment, parseCommentLine, sameComments } from "./comment-markdown";
+import { markdownToHtml } from "./markdown-html-render";
+import { parseBlocks } from "./markdown-parse";
+import { applyDocumentLineStyle, DEFAULT_MARKDOWN_STYLE, type MarkdownStyle } from "./markdown-style";
+import { formatSuggestion } from "./markdown-suggestion";
 import {
-    serializeInlineNodes,
-    serializeInlineRunContainerForMarkupSignature,
-} from "../editor/WorkbenchInlineFormatController";
-import {
-    formatBlockCommentLine,
-    isBlockCommentLine,
-    parseBlockCommentBody,
-} from "./comment-markdown";
+    REVIEW_ATTRIBUTES,
+    getSuggestionId,
+    getSuggestionOld,
+    isCommentThreadElement,
+    readThreadComments,
+} from "./review-markup";
 
 export interface WorkbenchMarkupSerializationOptions {
   isInlineRunContainer: (element: HTMLElement) => boolean;
   normalizeMarkup?: ((root: ParentNode) => void) | null;
+  style?: MarkdownStyle;
 }
 
 interface SerializedBlock {
-  kind: "block" | "list";
   isComment: boolean;
+  kind: "block" | "list";
+  /** The block was read right below the block before it, without a blank line between. */
+  tight: boolean;
   text: string;
 }
 
@@ -66,95 +75,6 @@ export function createWorkbenchMarkupSignature(
     .join("");
 }
 
-export function serializeWorkbenchDomToMarkdown(
-  sourceRoot: ParentNode,
-  options: WorkbenchMarkupSerializationOptions,
-) {
-  options.normalizeMarkup?.(sourceRoot);
-
-  const tokens: SerializedMarkdownToken[] = [];
-  let inlineNodes: Node[] = [];
-  let pendingBreakCount = 0;
-
-  const flushPendingBreaks = () => {
-    if (!pendingBreakCount) {
-      return;
-    }
-
-    tokens.push({ type: "break", count: pendingBreakCount });
-    pendingBreakCount = 0;
-  };
-
-  const flushInlineNodes = () => {
-    if (!inlineNodes.length) {
-      return;
-    }
-
-    const text = formatParagraphText(serializeInlineNodes(inlineNodes).trimEnd());
-    if (text) {
-      flushPendingBreaks();
-      tokens.push({
-        type: "block",
-        block: {
-          kind: "block",
-          isComment: isBlockCommentLine(text),
-          text,
-        },
-      });
-    }
-    inlineNodes = [];
-  };
-
-  for (const node of sourceRoot.childNodes) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      if ((node.textContent ?? "").trim()) {
-        inlineNodes.push(node);
-      }
-      continue;
-    }
-
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      continue;
-    }
-
-    const element = node as Element;
-
-    if (isIntentionalListBreakParagraph(element)) {
-      flushInlineNodes();
-      pendingBreakCount += 1;
-      continue;
-    }
-
-    if (element.tagName === "BR") {
-      flushInlineNodes();
-      pendingBreakCount += 1;
-      continue;
-    }
-
-    if (element instanceof HTMLElement && isSingleBreakParagraph(element)) {
-      flushInlineNodes();
-      pendingBreakCount += 1;
-      continue;
-    }
-
-    if (BLOCK_TAGS.has(element.tagName)) {
-      flushInlineNodes();
-      flushPendingBreaks();
-      const block = serializeBlockElement(element);
-      if (block.text) {
-        tokens.push({ type: "block", block });
-      }
-      continue;
-    }
-
-    inlineNodes.push(node);
-  }
-
-  flushInlineNodes();
-  flushPendingBreaks();
-  return serializeMarkdownTokens(tokens);
-}
-
 function isTrailingWhitespaceBoundaryTag(tag: string) {
   return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|li|summary)$/i.test(tag);
 }
@@ -179,6 +99,10 @@ function serializeMarkupNode(
   const tag = element.tagName.toLowerCase();
   const attributes = [];
 
+  if (element instanceof HTMLElement && isCommentThreadElement(element)) {
+    return serializeCommentThreadForMarkupSignature(element);
+  }
+
   if (element instanceof HTMLElement && isSingleBreakParagraph(element)) {
     return "<br>";
   }
@@ -190,20 +114,12 @@ function serializeMarkupNode(
     }
   }
 
-  if (element instanceof HTMLElement) {
-    if (element.dataset.inlineComment === "true") {
-      attributes.push("data-inline-comment=true");
-    }
-
-    if (element.dataset.blockComment === "true") {
-      attributes.push("data-block-comment=true");
-    }
+  if (element instanceof HTMLElement && getSuggestionId(element) !== null) {
+    attributes.push(`suggestion-old=${JSON.stringify(getSuggestionOld(element))}`);
   }
 
   if (tag === "pre") {
-    const language = element instanceof HTMLElement
-      ? element.dataset.language ?? ""
-      : element.getAttribute("data-language") ?? "";
+    const language = element.getAttribute("data-language") ?? "";
     if (language) {
       attributes.push(`data-language=${JSON.stringify(language)}`);
     }
@@ -239,8 +155,64 @@ function serializeMarkupNode(
   return `${openingTag}${children}</${tag}>`;
 }
 
-function serializeParagraph(node: Element) {
-  return serializeInlineNodes(node.childNodes);
+const SOURCE_SIGNATURE_LIMIT = 4000;
+const sourceSignatures = new Map<string, string>();
+
+/** The canonical structure a block's source renders to, so an unchanged block can be recognized and written back verbatim. */
+function getSourceSignature(source: string, options: WorkbenchMarkupSerializationOptions) {
+  const cached = sourceSignatures.get(source);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const root = document.createElement("div");
+  root.innerHTML = markdownToHtml(source);
+  options.normalizeMarkup?.(root);
+  const signature = createWorkbenchMarkupSignature(root, options);
+  if (sourceSignatures.size >= SOURCE_SIGNATURE_LIMIT) {
+    sourceSignatures.clear();
+  }
+  sourceSignatures.set(source, signature);
+  return signature;
+}
+
+function readPreservedSource(element: Element, options: WorkbenchMarkupSerializationOptions) {
+  const source = element.getAttribute(REVIEW_ATTRIBUTES.source);
+  if (source === null) {
+    return null;
+  }
+
+  if (isCommentThreadElement(element)) {
+    const lines = source.split("\n").map(parseCommentLine);
+    const comments = lines.every((line) => line !== null) ? lines.flat() : null;
+    return comments && sameComments(comments, readThreadComments(element as HTMLElement)) ? source : null;
+  }
+
+  let compared = element;
+  if (getSuggestionId(element) !== null) {
+    compared = element.cloneNode(true) as Element;
+    compared.removeAttribute(REVIEW_ATTRIBUTES.suggestion);
+  }
+  return getSourceSignature(source, options) === serializeMarkupNode(compared, options) ? source : null;
+}
+
+const tightJoins = new Map<string, boolean>();
+
+/** Whether two blocks written one line apart still read back as the same two blocks. */
+function canJoinTightly(previous: string, next: string) {
+  const key = `${previous}\u0000${next}`;
+  let joinable = tightJoins.get(key);
+  if (joinable === undefined) {
+    const contentBlocks = (markdown: string) => parseBlocks(markdown).filter((block) => block.type !== "break" && block.type !== "list-break");
+    joinable = JSON.stringify(contentBlocks(`${previous}\n${next}`)) === JSON.stringify([...contentBlocks(previous), ...contentBlocks(next)]);
+    if (tightJoins.size >= SOURCE_SIGNATURE_LIMIT) tightJoins.clear();
+    tightJoins.set(key, joinable);
+  }
+  return joinable;
+}
+
+function serializeParagraph(node: Element, style: MarkdownStyle) {
+  return serializeInlineNodes(node.childNodes, style);
 }
 
 const BLOCK_START_PATTERNS = [
@@ -284,17 +256,17 @@ function joinWithHardBreaks(lines: readonly string[]) {
   return lines.map((line, index) => index < lines.length - 1 ? `${line}  ` : line).join("\n");
 }
 
-export function serializeListItemMainText(item: Element) {
+export function serializeListItemMainText(item: Element, style: MarkdownStyle = DEFAULT_MARKDOWN_STYLE) {
   const details = getDirectChildDetailsElement(item);
   if (details) {
     const summary = getDirectChildSummaryElement(details);
-    return summary ? serializeParagraph(summary).trim() : "";
+    return summary ? serializeParagraph(summary, style).trim() : "";
   }
 
   const contentNodes = Array.from(item.childNodes).filter((node) => {
     return !(node instanceof Element && isListElement(node));
   });
-  return serializeInlineNodes(contentNodes).trim();
+  return serializeInlineNodes(contentNodes, style).trim();
 }
 
 function parseOrderedListOrdinal(value: string | null) {
@@ -319,7 +291,7 @@ export function resolveOrderedListItemOrdinals(
   });
 }
 
-function serializeListElement(node: Element, indent = 0): string {
+function serializeListElement(node: Element, style: MarkdownStyle, indent = 0): string {
   const listType = node.tagName.toLowerCase();
   if (listType !== "ul" && listType !== "ol") {
     return "";
@@ -336,8 +308,8 @@ function serializeListElement(node: Element, indent = 0): string {
 
   return items
     .map((item, index) => {
-      const prefix = listType === "ol" ? `${orderedOrdinals[index]}. ` : "- ";
-      const [firstLine = "", ...continuationLines] = serializeListItemMainText(item).split("\n");
+      const prefix = listType === "ol" ? `${orderedOrdinals[index]}. ` : `${style.bullet} `;
+      const [firstLine = "", ...continuationLines] = serializeListItemMainText(item, style).split("\n");
       const continuationIndent = " ".repeat(indent + prefix.length);
       const text = joinWithHardBreaks([
         trimLineEnd(firstLine),
@@ -345,7 +317,7 @@ function serializeListElement(node: Element, indent = 0): string {
       ]);
       const line = `${" ".repeat(indent)}${prefix}${text}`.trimEnd();
       const nested: string = getNestedBlockElementsForItem(item)
-        .map((childBlock) => serializeNestedListChildBlock(childBlock, indent + 2))
+        .map((childBlock) => serializeNestedListChildBlock(childBlock, style, indent + 2))
         .filter(Boolean)
         .join("\n");
 
@@ -363,10 +335,10 @@ function indentMarkdownLines(markdown: string, indent: number) {
     .join("\n");
 }
 
-function serializeNestedListChildBlock(element: Element, indent: number): string {
+function serializeNestedListChildBlock(element: Element, style: MarkdownStyle, indent: number): string {
   const markdown: string = isListElement(element)
-    ? serializeListElement(element)
-    : serializeBlockElement(element).text;
+    ? serializeListElement(element, style)
+    : serializeBlockElement(element, style).text;
 
   return indentMarkdownLines(markdown, indent);
 }
@@ -377,20 +349,8 @@ function getCodeBlockFence(code: string) {
   return "`".repeat(fenceLength);
 }
 
-function serializeBlockElement(node: Element): SerializedBlock {
+function serializeBlockElement(node: Element, style: MarkdownStyle): Omit<SerializedBlock, "tight"> {
   const tag = node.tagName.toLowerCase();
-  const rawText = node.textContent ?? "";
-  const parsedCommentBody = parseBlockCommentBody(rawText);
-
-  if (node instanceof HTMLElement && (node.dataset.blockComment === "true" || parsedCommentBody !== null)) {
-    // Block comment bodies render as literal text, so they are written without markdown escapes.
-    const commentBody = parsedCommentBody ?? rawText.replaceAll(" ", " ").replace(/\s+/g, " ").trim();
-    return {
-      kind: "block",
-      isComment: true,
-      text: formatBlockCommentLine(commentBody),
-    };
-  }
 
   switch (tag) {
     case "h1":
@@ -402,31 +362,26 @@ function serializeBlockElement(node: Element): SerializedBlock {
       return {
         kind: "block",
         isComment: false,
-        text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${joinWithHardBreaks(serializeParagraph(node).trim().split("\n").map(trimLineEnd))}`.trimEnd(),
+        text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${joinWithHardBreaks(serializeParagraph(node, style).trim().split("\n").map(trimLineEnd))}`.trimEnd(),
       };
     case "ul":
-      return {
-        kind: "list",
-        isComment: false,
-        text: serializeListElement(node),
-      };
     case "ol":
       return {
         kind: "list",
         isComment: false,
-        text: serializeListElement(node),
+        text: serializeListElement(node, style),
       };
     case "blockquote":
       return {
         kind: "block",
         isComment: false,
-        text: serializeParagraph(node)
+        text: serializeParagraph(node, style)
           .split("\n")
           .map((line) => `> ${line}`.trimEnd())
           .join("\n"),
       };
     case "pre": {
-      const language = node instanceof HTMLElement ? node.dataset.language ?? "" : "";
+      const language = node.getAttribute("data-language") ?? "";
       const code = node.textContent?.replace(/\n$/, "") ?? "";
       const fence = getCodeBlockFence(code);
       return {
@@ -447,9 +402,129 @@ function serializeBlockElement(node: Element): SerializedBlock {
       return {
         kind: "block",
         isComment: false,
-        text: formatParagraphText(serializeParagraph(node)),
+        text: formatParagraphText(serializeParagraph(node, style)),
       };
   }
+}
+
+function serializeTopLevelElement(element: Element, options: WorkbenchMarkupSerializationOptions): SerializedBlock {
+  const style = options.style ?? DEFAULT_MARKDOWN_STYLE;
+  const preserved = readPreservedSource(element, options);
+  const isComment = isCommentThreadElement(element);
+  const tight = element.getAttribute(REVIEW_ATTRIBUTES.sourceTight) === "true";
+  if (preserved !== null) {
+    return { isComment, kind: isListElement(element) ? "list" : "block", text: preserved, tight };
+  }
+
+  if (isComment) {
+    return { isComment: true, kind: "block", text: readThreadComments(element as HTMLElement).map(formatComment).join("\n"), tight };
+  }
+
+  return { ...serializeBlockElement(element, style), tight };
+}
+
+/** A suggestion is every node from its first tagged block to its last; the blocks between are its new side too. */
+function collectSuggestionGroup(nodes: readonly ChildNode[], start: number, id: string) {
+  let end = start;
+  for (let index = start; index < nodes.length; index += 1) {
+    if (getSuggestionId(nodes[index]) === id) end = index;
+  }
+  return nodes.slice(start, end + 1);
+}
+
+function serializeSuggestionGroup(group: readonly ChildNode[], options: WorkbenchMarkupSerializationOptions): SerializedBlock | null {
+  const first = group.find((node): node is HTMLElement => getSuggestionId(node) !== null)!;
+  const old = getSuggestionOld(first);
+  const next = serializeMarkdownTokens(collectTokens(group, options, { insideSuggestion: true }));
+  const text = next === old ? next : formatSuggestion({ old, new: next });
+  return text ? { isComment: false, kind: "block", text, tight: false } : null;
+}
+
+function collectTokens(
+  nodes: readonly ChildNode[],
+  options: WorkbenchMarkupSerializationOptions,
+  { insideSuggestion = false }: { insideSuggestion?: boolean } = {},
+) {
+  const style = options.style ?? DEFAULT_MARKDOWN_STYLE;
+  const tokens: SerializedMarkdownToken[] = [];
+  let inlineNodes: Node[] = [];
+  let pendingBreakCount = 0;
+
+  const flushPendingBreaks = () => {
+    if (!pendingBreakCount) {
+      return;
+    }
+
+    tokens.push({ type: "break", count: pendingBreakCount });
+    pendingBreakCount = 0;
+  };
+
+  const flushInlineNodes = () => {
+    if (!inlineNodes.length) {
+      return;
+    }
+
+    const text = formatParagraphText(serializeInlineNodes(inlineNodes, style).trimEnd());
+    if (text) {
+      flushPendingBreaks();
+      tokens.push({ type: "block", block: { kind: "block", isComment: false, text, tight: false } });
+    }
+    inlineNodes = [];
+  };
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if ((node.textContent ?? "").trim()) {
+        inlineNodes.push(node);
+      }
+      continue;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      continue;
+    }
+
+    const element = node as Element;
+    const suggestionId = insideSuggestion ? null : getSuggestionId(element);
+    if (suggestionId !== null) {
+      flushInlineNodes();
+      flushPendingBreaks();
+      const group = collectSuggestionGroup(nodes, index, suggestionId);
+      index += group.length - 1;
+      const block = serializeSuggestionGroup(group, options);
+      if (block) {
+        tokens.push({ type: "block", block });
+      }
+      continue;
+    }
+
+    if (
+      isIntentionalListBreakParagraph(element)
+      || element.tagName === "BR"
+      || (element instanceof HTMLElement && isSingleBreakParagraph(element))
+    ) {
+      flushInlineNodes();
+      pendingBreakCount += 1;
+      continue;
+    }
+
+    if (BLOCK_TAGS.has(element.tagName) || isCommentThreadElement(element)) {
+      flushInlineNodes();
+      flushPendingBreaks();
+      const block = serializeTopLevelElement(element, options);
+      if (block.text) {
+        tokens.push({ type: "block", block });
+      }
+      continue;
+    }
+
+    inlineNodes.push(node);
+  }
+
+  flushInlineNodes();
+  flushPendingBreaks();
+  return tokens;
 }
 
 function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
@@ -476,8 +551,13 @@ function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
     } else {
       const touchesComment = previousBlock.isComment || token.block.isComment;
       const betweenLists = previousBlock.kind === "list" && token.block.kind === "list";
+      // A block read right below its predecessor stays there while the pair still reads back as the same two blocks.
+      const rejoinsSource = !touchesComment
+        && pendingBreakCount === 0
+        && token.block.tight
+        && canJoinTightly(previousBlock.text, token.block.text);
       // Lists that touch in the DOM differ in type (same-type ones merge), and a blank line between them reparses as a list break.
-      const baseSeparator = touchesComment || (betweenLists && pendingBreakCount === 0) ? "\n" : "\n\n";
+      const baseSeparator = touchesComment || rejoinsSource || (betweenLists && pendingBreakCount === 0) ? "\n" : "\n\n";
       const extraBreakCount = touchesComment
         ? pendingBreakCount
         : betweenLists
@@ -494,5 +574,30 @@ function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
     markdown += "\n".repeat(pendingBreakCount);
   }
 
-  return `${markdown}\n`;
+  return markdown;
+}
+
+function serializeNodes(nodes: readonly ChildNode[], options: WorkbenchMarkupSerializationOptions) {
+  return serializeMarkdownTokens(collectTokens(nodes, options));
+}
+
+export function serializeWorkbenchDomToMarkdown(
+  sourceRoot: ParentNode,
+  options: WorkbenchMarkupSerializationOptions,
+) {
+  options.normalizeMarkup?.(sourceRoot);
+  const markdown = `${serializeNodes(Array.from(sourceRoot.childNodes), options)}\n`;
+  return applyDocumentLineStyle(markdown, options.style ?? DEFAULT_MARKDOWN_STYLE);
+}
+
+export function serializeBlocksToMarkdown(blocks: readonly Element[], options: WorkbenchMarkupSerializationOptions) {
+  const root = document.createElement("div");
+  for (const block of blocks) {
+    const copy = block.cloneNode(true) as Element;
+    copy.removeAttribute(REVIEW_ATTRIBUTES.suggestion);
+    copy.removeAttribute(REVIEW_ATTRIBUTES.suggestionOld);
+    root.append(copy);
+  }
+  options.normalizeMarkup?.(root);
+  return serializeNodes(Array.from(root.childNodes), options);
 }

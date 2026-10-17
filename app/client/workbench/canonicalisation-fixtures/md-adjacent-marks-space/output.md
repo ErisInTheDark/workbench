@@ -1,1 +1,1 @@
-__bold__ *italic* `code` __again__
+**bold** *italic* `code` **again**

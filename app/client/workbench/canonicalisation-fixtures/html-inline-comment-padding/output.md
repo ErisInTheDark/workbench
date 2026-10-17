@@ -1,1 +1,1 @@
-word <!-- note --> next
+word<!-- note -->next **bold<!-- inside -->still**
