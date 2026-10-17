@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import WebSocket from "ws";
 import WorkbenchProcessLogger from "workbench-shared/process/WorkbenchProcessLogger";
+import { createEmptyWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state";
 import { IDLE_RELOAD_OPERATION } from "workbench-shared/reload/workbench-reload";
 import WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes";
 import WorkbenchAppEventSocketController from "./WorkbenchAppEventSocketController";
@@ -94,14 +95,7 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
           await releaseMutation.promise;
         }
         return { daemonRegistrationId: "registration", revision: 1, oldestAvailableRevision: 0,
-          kind: "delta", rows: {
-            composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-            modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
-            lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
-            projectExpandedDirectories: [], projectPreferences: [],
-            projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
-            questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [],
-          } };
+          kind: "delta" as const, rows: createEmptyWorkbenchClientStateRows() };
       },
       subscribeBrowser: () => () => {},
     },

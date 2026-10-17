@@ -1,7 +1,9 @@
 /* No production exports. Protect pushed state, optimistic saves and identity-scoped revision fencing. */
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import type { WorkbenchClientStateResponse, WorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state";
+import {
+  createEmptyWorkbenchClientStateRows, type WorkbenchClientStateResponse, type WorkbenchClientStateRows,
+} from "workbench-shared/state/workbench-client-state";
 import { LogicalProjectIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { conformWorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state-conformance";
 import { createWorkspaceClientFixture } from "../app/workspace-client-fixture";
@@ -11,14 +13,7 @@ function response(revision: number, rows: Partial<WorkbenchClientStateRows> = {}
   kind: "snapshot" | "delta" = "delta"): WorkbenchClientStateResponse {
   return {
     daemonRegistrationId: "registration", kind, oldestAvailableRevision: 0, revision, schemaVersion: 0,
-    rows: {
-      composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
-      lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
-      projectExpandedDirectories: [], projectPreferences: [],
-      projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
-      questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [], ...rows,
-    },
+    rows: { ...createEmptyWorkbenchClientStateRows(), ...rows },
   };
 }
 

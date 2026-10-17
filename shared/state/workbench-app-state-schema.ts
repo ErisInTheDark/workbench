@@ -991,6 +991,67 @@ const fileDraftsHistory = initialHistory(defineTable("file_drafts", {
   ],
 })));
 
+/** Optional undo history of one live file draft; its frames replay from the first snapshot. */
+const fileDraftHistories = defineTable("file_draft_histories", {
+  daemon_registration_id: text().notNull(),
+  project_id: text().notNull(),
+  path: text().notNull(),
+  current_index: integer().notNull().nonNegative(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.path]),
+    foreignKey([table.daemon_registration_id, table.project_id, table.path], {
+      columns: ["daemon_registration_id", "project_id", "path"],
+      onDelete: "CASCADE",
+      table: "file_drafts",
+    }),
+  ],
+}));
+const fileDraftHistoriesHistory = defineTableHistory({
+  current: fileDraftHistories,
+  versions: [tableVersion({
+    migration: createTable(fileDraftHistories),
+    schemaVersion: appStateReleases.fileDraftHistory.version,
+    table: fileDraftHistories,
+  })],
+});
+
+const fileDraftHistoryFrames = defineTable("file_draft_history_frames", {
+  daemon_registration_id: text().notNull(),
+  project_id: text().notNull(),
+  path: text().notNull(),
+  position: integer().notNull().nonNegative(),
+  kind: enumText("snapshot", "patch").notNull(),
+  content: text(),
+  patch_start: integer().nonNegative(),
+  deleted_text: text(),
+  inserted_text: text(),
+  timestamp: integer().notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.daemon_registration_id, table.project_id, table.path, table.position]),
+    foreignKey([table.daemon_registration_id, table.project_id, table.path], {
+      columns: ["daemon_registration_id", "project_id", "path"],
+      onDelete: "CASCADE",
+      table: "file_draft_histories",
+    }),
+    check(sql`
+      (${table.kind} = ${literal("snapshot")} AND ${table.content} IS NOT NULL
+        AND ${table.patch_start} IS NULL AND ${table.deleted_text} IS NULL AND ${table.inserted_text} IS NULL)
+      OR (${table.kind} = ${literal("patch")} AND ${table.content} IS NULL
+        AND ${table.patch_start} IS NOT NULL AND ${table.deleted_text} IS NOT NULL AND ${table.inserted_text} IS NOT NULL)
+    `),
+  ],
+}));
+const fileDraftHistoryFramesHistory = defineTableHistory({
+  current: fileDraftHistoryFrames,
+  versions: [tableVersion({
+    migration: createTable(fileDraftHistoryFrames),
+    schemaVersion: appStateReleases.fileDraftHistory.version,
+    table: fileDraftHistoryFrames,
+  })],
+});
+
 const composerDraftsHistory = initialHistory(defineTable("composer_drafts", {
   daemon_registration_id: registrationForeignKey(),
   project_id: text().notNull(),
@@ -1335,6 +1396,8 @@ const histories = [
   projectSidebarFoldersHistory,
   projectExpandedDirectoriesHistory,
   fileDraftsHistory,
+  fileDraftHistoriesHistory,
+  fileDraftHistoryFramesHistory,
   composerDraftsHistory,
   composerDraftAttachmentsHistory,
   composerDraftReferencesHistory,
@@ -1352,6 +1415,8 @@ export const appStateClientTables = Object.freeze({
   composerDraftAttachments: composerDraftAttachmentsHistory.current,
   composerDraftReferences: composerDraftReferencesHistory.current,
   composerDrafts: composerDraftsHistory.current,
+  fileDraftHistories: fileDraftHistoriesHistory.current,
+  fileDraftHistoryFrames: fileDraftHistoryFramesHistory.current,
   fileDrafts: fileDraftsHistory.current,
   globalPreferences: globalPreferencesHistory.current,
   lastLaunchTarget: lastLaunchTargetHistory.current,

@@ -370,6 +370,11 @@ export default class WorkbenchAppStateController {
       rows.filter((row) => row.revision > sinceRevision)
     );
     const composerDrafts = changed(this.#repository.query(selectRows(appStateClientTables.composerDrafts)));
+    const fileDrafts = changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts)));
+    // Like other draft children, history rides along only for drafts that changed.
+    const fileDraftOwners = fileDrafts.filter(draft => !draft.deleted).map(draft => ({
+      where: { daemon_registration_id: draft.daemon_registration_id, project_id: draft.project_id, path: draft.path },
+    }));
     const lastProjectSelections = changed(
       this.#repository.query(selectRows(appStateClientTables.lastProjectSelections)),
     );
@@ -412,7 +417,11 @@ export default class WorkbenchAppStateController {
           },
         }))),
       composerDrafts,
-      fileDrafts: changed(this.#repository.query(selectRows(appStateClientTables.fileDrafts))),
+      fileDraftHistories: fileDraftOwners.flatMap(owner => this.#repository.query(selectRows(
+        appStateClientTables.fileDraftHistories, owner))),
+      fileDraftHistoryFrames: fileDraftOwners.flatMap(owner => this.#repository.query(selectRows(
+        appStateClientTables.fileDraftHistoryFrames, owner))),
+      fileDrafts,
       globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
       modelGroupDisclosures: changed(this.#repository.query(selectRows(appStateClientTables.modelGroupDisclosures))),
@@ -547,7 +556,8 @@ export default class WorkbenchAppStateController {
           path: record.path,
           project_id: record.projectId,
           revision,
-        }, { conflictColumns: ["daemon_registration_id", "project_id", "path"], updateColumns: ["baseline_content", "content", "expected_mtime_ms", "head_content", "mode", "deleted", "revision"] })];
+        }, { conflictColumns: ["daemon_registration_id", "project_id", "path"], updateColumns: ["baseline_content", "content", "expected_mtime_ms", "head_content", "mode", "deleted", "revision"] }),
+        ...this.#replaceFileDraftHistory(record)];
       case "composerDraft": {
         return [
           upsertRow(appStateTables.composerDrafts, {
@@ -633,7 +643,7 @@ export default class WorkbenchAppStateController {
           daemon_registration_id: identity.daemonRegistrationId, path: identity.path, project_id: identity.projectId,
         })];
       case "fileDraft":
-        return [updateRows(appStateTables.fileDrafts, {
+        return [...this.#deleteFileDraftHistory(identity), updateRows(appStateTables.fileDrafts, {
           baseline_content: null, content: null, deleted: 1, expected_mtime_ms: null,
           head_content: null, mode: null, revision,
         }, { daemon_registration_id: identity.daemonRegistrationId, path: identity.path, project_id: identity.projectId })];
@@ -709,6 +719,27 @@ export default class WorkbenchAppStateController {
         updateColumns: ["url", "position"] }));
     }
     return mutations;
+  }
+
+  #deleteFileDraftHistory(identity: Extract<WorkbenchClientStateIdentity | WorkbenchClientStateRecord, { kind: "fileDraft" }>) {
+    const owner = { daemon_registration_id: identity.daemonRegistrationId, project_id: identity.projectId, path: identity.path };
+    return [deleteRows(appStateTables.fileDraftHistoryFrames, owner), deleteRows(appStateTables.fileDraftHistories, owner)];
+  }
+
+  /** History only ever describes the content saved beside it, so every put replaces it, and one without history drops it. */
+  #replaceFileDraftHistory(record: Extract<WorkbenchClientStateRecord, { kind: "fileDraft" }>) {
+    const history = record.value.history;
+    if (!history) return this.#deleteFileDraftHistory(record);
+    const owner = { daemon_registration_id: record.daemonRegistrationId, project_id: record.projectId, path: record.path };
+    return [
+      ...this.#deleteFileDraftHistory(record),
+      insertRow(appStateTables.fileDraftHistories, { ...owner, current_index: history.currentIndex }),
+      ...history.frames.map((frame, position) => insertRow(appStateTables.fileDraftHistoryFrames, frame.kind === "snapshot"
+        ? { ...owner, position, kind: "snapshot", content: frame.content, patch_start: null,
+          deleted_text: null, inserted_text: null, timestamp: Math.round(frame.timestamp) }
+        : { ...owner, position, kind: "patch", content: null, patch_start: frame.start,
+          deleted_text: frame.deletedText, inserted_text: frame.insertedText, timestamp: Math.round(frame.timestamp) })),
+    ];
   }
 
   #replaceComposerReferences(record: Extract<WorkbenchClientStateRecord, { kind: "composerDraft" }>) {

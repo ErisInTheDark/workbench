@@ -8,6 +8,8 @@ import type {
   WorkbenchClientStateIdentity,
   WorkbenchClientStateRecord,
   WorkbenchClientStateRows,
+  WorkbenchFileDraftHistory,
+  WorkbenchFileDraftHistoryFrame,
   WorkbenchGlobalPreference,
   WorkbenchProjectPreference,
   WorkbenchSidebarPreference,
@@ -191,6 +193,25 @@ export function projectWorkbenchClientStateRows(
     add(row.revision, 0, { kind: "lastProjectSelection", selectedProjectIds }, identity);
   }
 
+  const fileDraftKey = (row: { daemon_registration_id: string; project_id: string; path: string }) =>
+    `${row.daemon_registration_id}\0${row.project_id}\0${row.path}`;
+  const fileDraftFrames = new Map<string, WorkbenchFileDraftHistoryFrame[]>();
+  for (const row of [...rows.fileDraftHistoryFrames].sort((left, right) => left.position - right.position)) {
+    const frames = fileDraftFrames.get(fileDraftKey(row)) ?? [];
+    frames.push(row.kind === "snapshot"
+      ? { kind: "snapshot", content: row.content!, timestamp: row.timestamp }
+      : { kind: "patch", start: row.patch_start!, deletedText: row.deleted_text!, insertedText: row.inserted_text!,
+        timestamp: row.timestamp });
+    fileDraftFrames.set(fileDraftKey(row), frames);
+  }
+  const fileDraftHistories = new Map<string, WorkbenchFileDraftHistory>();
+  for (const row of rows.fileDraftHistories) {
+    const frames = fileDraftFrames.get(fileDraftKey(row)) ?? [];
+    if (frames[0]?.kind === "snapshot" && row.current_index < frames.length) {
+      fileDraftHistories.set(fileDraftKey(row), { currentIndex: row.current_index, frames });
+    }
+  }
+
   for (const row of rows.fileDrafts) {
     const identity = {
       daemonRegistrationId: row.daemon_registration_id,
@@ -198,6 +219,7 @@ export function projectWorkbenchClientStateRows(
       path: row.path,
       projectId: row.project_id,
     };
+    const history = fileDraftHistories.get(fileDraftKey(row));
     if (row.deleted) remove(row.revision, identity);
     else add(row.revision, 0, {
       ...identity,
@@ -207,6 +229,7 @@ export function projectWorkbenchClientStateRows(
         expectedMtimeMs: row.expected_mtime_ms,
         headContent: row.head_content,
         mode: row.mode!,
+        ...(history ? { history } : {}),
       },
     });
   }

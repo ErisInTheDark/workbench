@@ -4,12 +4,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { EditHistoryState } from "../state/edit-history";
 import TextFileDocumentController, { type TextFileDocumentPort } from "./TextFileDocumentController";
 
 function harness({ disk = "<svg/>", mtimeMs = 1, draft = null as { content: string; mtimeMs: number | null } | null } = {}) {
   const file = { content: disk, mtimeMs };
   const saves: Array<{ content: string; expectedMtimeMs: number; force: boolean }> = [];
-  const drafts: { stored: { content: string; mtimeMs: number | null } | null; writes: number } = { stored: draft, writes: 0 };
+  const drafts: { stored: { content: string; mtimeMs: number | null } | null; history: EditHistoryState | null; writes: number } = {
+    stored: draft, history: null, writes: 0,
+  };
   let clock = 0;
   const port: TextFileDocumentPort = {
     read: async () => ({ ...file }),
@@ -21,14 +24,46 @@ function harness({ disk = "<svg/>", mtimeMs = 1, draft = null as { content: stri
       return { kind: "saved", mtimeMs: file.mtimeMs };
     },
     drafts: {
-      read: () => drafts.stored,
-      write: ({ content, mtimeMs }) => { drafts.stored = { content, mtimeMs }; drafts.writes += 1; },
-      clear: async () => { drafts.stored = null; },
+      read: () => drafts.stored && { ...drafts.stored, history: drafts.history },
+      write: ({ content, history, mtimeMs }) => { drafts.stored = { content, mtimeMs }; drafts.history = history; drafts.writes += 1; },
+      clear: async () => { drafts.stored = null; drafts.history = null; },
     },
   };
   const controller = new TextFileDocumentController(port, () => clock);
-  return { controller, drafts, file, saves, tick: (ms: number) => { clock += ms; } };
+  return {
+    controller, drafts, file, port, saves, tick: (ms: number) => { clock += ms; },
+    reopen: () => new TextFileDocumentController(port, () => clock),
+  };
 }
+
+test("undo history survives reopening the document from its stored draft", async () => {
+  const h = harness();
+  await h.controller.load();
+  h.controller.edit("<svg>a</svg>");
+  h.tick(5000);
+  h.controller.edit("<svg>ab</svg>");
+  h.controller.dispose();
+
+  const reopened = h.reopen();
+  await reopened.load();
+  assert.equal(reopened.getSnapshot().content, "<svg>ab</svg>");
+  assert.equal(reopened.getSnapshot().canUndo, true);
+  reopened.undo();
+  assert.equal(reopened.getSnapshot().content, "<svg>a</svg>");
+  reopened.undo();
+  assert.equal(reopened.getSnapshot().content, "<svg/>");
+  assert.equal(reopened.getSnapshot().canUndo, false);
+  reopened.redo();
+  assert.equal(reopened.getSnapshot().content, "<svg>a</svg>");
+});
+
+test("a stored history that no longer leads to the draft restarts at the draft", async () => {
+  const h = harness({ draft: { content: "<svg>mine</svg>", mtimeMs: 1 } });
+  h.drafts.history = { currentIndex: 0, frames: [{ type: "snapshot", content: "<svg>other</svg>", selection: null, timestamp: 0 }] };
+  await h.controller.load();
+  assert.equal(h.controller.getSnapshot().content, "<svg>mine</svg>");
+  assert.equal(h.controller.getSnapshot().canUndo, false);
+});
 
 test("a stored draft reopens dirty and keeps saves guarded by the disk version it was based on", async () => {
   const h = harness({ disk: "<svg>new</svg>", mtimeMs: 5, draft: { content: "<svg>mine</svg>", mtimeMs: 3 } });

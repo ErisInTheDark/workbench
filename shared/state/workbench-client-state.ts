@@ -10,6 +10,7 @@
  * - WorkbenchProjectPreference: typed project override.
  * - WorkbenchSidebarPreference: typed sidebar preference.
  * - WorkbenchFileDraftValue: recoverable file edits.
+ * - WorkbenchFileDraftHistory/WorkbenchFileDraftHistoryFrame: persisted undo history of one file draft.
  * - WorkbenchComposerDraftValue: recoverable composer input.
  * - WorkbenchQuestionnaireDraftValue: recoverable questionnaire answers.
  * - WorkbenchClientStateRecord: persisted browser state variants.
@@ -20,6 +21,7 @@
  * - WorkbenchClientStateAttachmentIdentity: composer or questionnaire image owner.
  * - workbenchClientStateAttachmentUrl: browser-scoped image URL for one saved attachment.
  * - WorkbenchClientStateRows: schema-derived wire rows.
+ * - createEmptyWorkbenchClientStateRows: one empty row list per admitted app-state table.
  * - WorkbenchClientStateResponse: versioned snapshots and deltas.
  * - WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION: minimum server schema supporting ordered launch selection.
  * - WORKBENCH_BROWSER_STATE_HEADER: browser namespace header.
@@ -138,12 +140,24 @@ interface ProjectScoped extends DaemonScoped {
   projectId: string;
 }
 
+export type WorkbenchFileDraftHistoryFrame =
+  | { kind: "snapshot"; content: string; timestamp: number }
+  | { kind: "patch"; start: number; deletedText: string; insertedText: string; timestamp: number };
+
+/** Undo history leading to the draft's content; frames replay from the first snapshot. */
+export interface WorkbenchFileDraftHistory {
+  currentIndex: number;
+  frames: WorkbenchFileDraftHistoryFrame[];
+}
+
 export interface WorkbenchFileDraftValue {
   baselineContent: string;
   content: string;
   expectedMtimeMs: number | null;
   headContent: string | null;
   mode: "plain" | "rich";
+  /** Absent from older clients; a draft saved without history keeps none. */
+  history?: WorkbenchFileDraftHistory;
 }
 
 export interface WorkbenchComposerDraftValue {
@@ -205,6 +219,10 @@ export function readWorkbenchLaunchSelection(
 export type WorkbenchClientStateRows = {
   -readonly [Name in keyof typeof appStateClientTables]: SelectRow<(typeof appStateClientTables)[Name]>[];
 };
+
+export function createEmptyWorkbenchClientStateRows(): WorkbenchClientStateRows {
+  return Object.fromEntries(Object.keys(appStateClientTables).map(name => [name, []])) as unknown as WorkbenchClientStateRows;
+}
 
 interface WorkbenchClientStateVersion {
   attachmentsAsUrls?: boolean;
@@ -294,6 +312,15 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
       baselineContent: z.string(), content: z.string(),
       expectedMtimeMs: z.number().nullable(), headContent: z.string().nullable(),
       mode: z.enum(["plain", "rich"]),
+      history: z.object({
+        currentIndex: z.number().int().nonnegative(),
+        frames: z.array(z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("snapshot"), content: z.string(), timestamp: z.number() }),
+          z.object({ kind: z.literal("patch"), start: z.number().int().nonnegative(), deletedText: z.string(),
+            insertedText: z.string(), timestamp: z.number() }),
+        ])).min(1),
+      }).refine(history => history.currentIndex < history.frames.length && history.frames[0]?.kind === "snapshot",
+        "History must start with a snapshot and point inside its frames.").optional(),
     }) }),
   z.object({ kind: z.literal("composerDraft"), ...projectAddress, threadId: address,
     value: z.object({ attachments: z.array(attachment),

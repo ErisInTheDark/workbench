@@ -11,8 +11,12 @@ import {
     markdownToHtml as renderMarkdownToHtml,
 } from "../markdown/markdown-html-render";
 import type { EditorMode } from "../WorkbenchEditorClient";
+import type { WorkbenchFileDraftHistory } from "workbench-shared/state/workbench-client-state";
 import {
-    createInitialEditHistory,
+    normalizeEditHistory,
+    trimEditHistory,
+    cloneEditHistory,
+    type EditHistoryState,
 } from "./edit-history";
 import {
     cloneDraftBuffer,
@@ -39,6 +43,29 @@ export interface FileDraftStore {
   subscribe: (listener: FileDraftStoreListener) => () => void;
 }
 
+/** Cursor positions are DOM paths for one editor instance, so only the text history is stored. */
+function toStoredHistory(history: EditHistoryState): WorkbenchFileDraftHistory {
+  const trimmed = trimEditHistory(cloneEditHistory(history)!);
+  return {
+    currentIndex: trimmed.currentIndex,
+    frames: trimmed.frames.map(frame => frame.type === "snapshot"
+      ? { kind: "snapshot", content: frame.content, timestamp: frame.timestamp }
+      : { kind: "patch", ...frame.patch, timestamp: frame.timestamp }),
+  };
+}
+
+function fromStoredHistory(history: WorkbenchFileDraftHistory | undefined, content: string): EditHistoryState {
+  return normalizeEditHistory(history ? {
+    currentIndex: history.currentIndex,
+    frames: history.frames.map(frame => frame.kind === "snapshot"
+      ? { type: "snapshot", content: frame.content, selection: null, timestamp: frame.timestamp }
+      : {
+        type: "patch", selection: null, timestamp: frame.timestamp,
+        patch: { start: frame.start, deletedText: frame.deletedText, insertedText: frame.insertedText },
+      }),
+  } : null, content);
+}
+
 function buildPersistedDraftRecord(
   daemonRegistrationId: string,
   projectId: string,
@@ -56,6 +83,7 @@ function buildPersistedDraftRecord(
       expectedMtimeMs: buffer.expectedMtimeMs,
       headContent: buffer.headContent,
       mode: buffer.mode,
+      history: toStoredHistory(buffer.history),
     },
   };
 }
@@ -93,7 +121,7 @@ function FileDraftStore(
       editorState: createEditorStateFromContent(record.value.content, record.value.mode),
       expectedMtimeMs: record.value.expectedMtimeMs,
       headContent: record.value.headContent,
-      history: createInitialEditHistory(record.value.content),
+      history: fromStoredHistory(record.value.history, record.value.content),
       mode: record.value.mode,
       pendingWriteConflict: null,
       saveIssue: null,

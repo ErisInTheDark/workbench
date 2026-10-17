@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
+import { createEmptyWorkbenchClientStateRows, type WorkbenchClientStateResponse } from "workbench-shared/state/workbench-client-state";
 import type { WorkspaceObservation, WorkspaceObservationDelta } from "workbench-shared/workbench/workspace/workspace-observation";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import WorkbenchPresentationRepository from "../state/WorkbenchPresentationRepository";
@@ -202,14 +202,7 @@ test("daemon compaction settings route to the selected installation without a pr
 
 function state(revision: number): WorkbenchClientStateResponse {
   return { daemonRegistrationId: "registration", revision, kind: "snapshot", oldestAvailableRevision: 0,
-    rows: {
-      composerDraftAttachments: [], composerDraftReferences: [], composerDrafts: [], fileDrafts: [], globalPreferences: [],
-      modelPreferences: [], modelGroupDisclosures: [], lastLaunchTarget: [],
-      lastProjectSelectionProjects: [], lastProjectSelections: [], logicalProjectPreferences: [],
-      projectExpandedDirectories: [], projectPreferences: [],
-      projectSidebarFolders: [], projectSidebarPreferences: [], questionnaireDraftAnswers: [],
-      questionnaireDraftAttachments: [], questionnaireDraftSelections: [], questionnaireDrafts: [],
-    } };
+    rows: createEmptyWorkbenchClientStateRows() };
 }
 
 test("selected logical projects relay demand to every location and clear it on deselection and disposal", async context => {

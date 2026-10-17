@@ -46,7 +46,6 @@ import type WorkbenchClientStateController from "./workbench/state/WorkbenchClie
 import type { ClientDraftIdentity } from "./workbench/state/draft-persistence";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import WorkbenchFileStore from "./workbench/file/WorkbenchFileStore";
-import { createInitialEditHistory } from "./workbench/state/edit-history";
 import type { TextFileDocumentPort } from "./workbench/file/TextFileDocumentController";
 import LifecycleScope from "./workbench/state/LifecycleScope";
 import { DEFAULT_EDITOR_FONT_SIZE } from "./workbench/state/workbench-settings";
@@ -994,11 +993,11 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
         drafts: {
           read: () => {
             const buffer = drafts.getBuffer(path);
-            return buffer?.dirty ? { content: buffer.content, mtimeMs: buffer.expectedMtimeMs } : null;
+            return buffer?.dirty ? { content: buffer.content, mtimeMs: buffer.expectedMtimeMs, history: buffer.history } : null;
           },
-          write: ({ baseline, content, mtimeMs }) => drafts.setBuffer(path, {
+          write: ({ baseline, content, history, mtimeMs }) => drafts.setBuffer(path, {
             baselineContent: baseline, content, dirty: true, editorState: content, expectedMtimeMs: mtimeMs, headContent: null,
-            history: createInitialEditHistory(content), mode: "plain", pendingWriteConflict: null, saveIssue: null,
+            history, mode: "plain", pendingWriteConflict: null, saveIssue: null,
           }),
           clear: () => drafts.clearBuffer(path),
         },

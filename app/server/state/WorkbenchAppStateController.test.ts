@@ -50,6 +50,36 @@ function projectedRecords(response: WorkbenchClientStateResponse) {
   ));
 }
 
+test("file draft undo history survives saves, deltas and restart, and leaves with its draft", async context => {
+  const fixture = await controllerFixture(context);
+  const identity = { kind: "fileDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId,
+    projectId: "project", path: "icon.svg" };
+  const history = { currentIndex: 1, frames: [
+    { kind: "snapshot" as const, content: "<svg/>", timestamp: 1 },
+    { kind: "patch" as const, start: 4, deletedText: "/", insertedText: "><path/></svg", timestamp: 2 },
+    { kind: "patch" as const, start: 10, deletedText: "", insertedText: " d=\"M0 0\"", timestamp: 3 },
+  ] };
+  const value = { baselineContent: "<svg/>", content: "<svg><path/></svg>", expectedMtimeMs: 7,
+    headContent: null, mode: "plain" as const };
+  const read = (response: WorkbenchClientStateResponse) => projectedRecords(response).find(record => record.kind === "fileDraft");
+  try {
+    const saved = await fixture.controller.mutate({ action: "put", record: { ...identity, value: { ...value, history } } });
+    assert.equal(conformWorkbenchClientStateResponse(saved).success, true);
+    assert.deepEqual(read(saved), { ...identity, value: { ...value, history } });
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(read(restarted.read()), { ...identity, value: { ...value, history } });
+    // A save without history (an older client) must not leave history describing other content.
+    await restarted.mutate({ action: "put", record: { ...identity, value } });
+    assert.deepEqual(read(restarted.read()), { ...identity, value });
+    await restarted.mutate({ action: "put", record: { ...identity, value: { ...value, history } } });
+    await restarted.mutate({ action: "delete", identity });
+    assert.equal(read(restarted.read()), undefined);
+  } finally { await restarted.close(); }
+});
+
 test("composer attachments preserve supplied order through unchanged URLs, uploads and reopen", async context => {
   const fixture = await controllerFixture(context);
   const identity = { kind: "composerDraft" as const, daemonRegistrationId: fixture.daemonRegistrationId,
