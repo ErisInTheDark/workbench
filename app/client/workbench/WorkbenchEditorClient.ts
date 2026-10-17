@@ -1265,6 +1265,16 @@ function WorkbenchEditorClient(
     commentController.scheduleRefresh();
   }
 
+  /**
+   * Lay out suggestion rows, gutter markers and comment cards before the next paint. After the whole document is
+   * rendered again (undo, redo, reset), waiting a frame would paint it unsplit first and then visibly jump.
+   */
+  function refreshReviewLayoutNow() {
+    suggestionController.refresh();
+    renderDiffGutter();
+    commentController.refresh();
+  }
+
   function setShowGitMarkers(show: boolean) {
     diffGutter.hidden = !show;
     refreshToolbarState();
@@ -1315,7 +1325,7 @@ function WorkbenchEditorClient(
 
       syncStructuredBlockStyles();
       editor.scrollTop = 0;
-      scheduleReviewRefresh();
+      refreshReviewLayoutNow();
     },
     restoreSelection,
     scheduleDiffGutterRefresh,
@@ -1492,9 +1502,8 @@ function WorkbenchEditorClient(
       } else {
         editor.textContent = request.content;
       }
-
-      editor.scrollTop = 0;
     });
+    refreshReviewLayoutNow();
   }
 
   function handlePendingInlineBeforeInput(event: InputEvent) {

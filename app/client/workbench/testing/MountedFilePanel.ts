@@ -176,15 +176,18 @@ export default class MountedFilePanel {
   }
 
   /**
-   * Editor DOM with one top-level node per line, so goldens stay reviewable. Preserved-source bookkeeping is left out
-   * and suggestion ids are numbered by appearance, since only which blocks share one matters.
+   * Editor DOM with one top-level node per line, so goldens stay reviewable. Preserved-source bookkeeping and review
+   * layout (row spacing, empty and anchored markers) are left out, and suggestion ids are numbered by appearance, since
+   * only which blocks share one matters.
    */
   get html() {
     const suggestionIds = new Map<string, string>();
+    const presentation = [REVIEW_ATTRIBUTES.source, REVIEW_ATTRIBUTES.sourceTight, REVIEW_ATTRIBUTES.suggestionEmpty, "style"];
     return Array.from(this.editor.childNodes, node => {
       if (!(node instanceof Element)) return node.textContent ?? "";
       const copy = node.cloneNode(true) as Element;
-      for (const attribute of [REVIEW_ATTRIBUTES.source, REVIEW_ATTRIBUTES.sourceTight]) copy.removeAttribute(attribute);
+      for (const attribute of presentation) copy.removeAttribute(attribute);
+      for (const anchored of Array.from(copy.querySelectorAll("[data-comment-anchored]"))) anchored.removeAttribute("data-comment-anchored");
       const id = copy.getAttribute(REVIEW_ATTRIBUTES.suggestion);
       if (id !== null) {
         if (!suggestionIds.has(id)) suggestionIds.set(id, `s${suggestionIds.size + 1}`);
