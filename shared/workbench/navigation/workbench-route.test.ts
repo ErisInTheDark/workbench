@@ -8,8 +8,19 @@ import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema 
 import {
   createFileRoute, createHomeRoute, createHomeThreadRoute, createLogicalThreadRoute, createNewProjectRoute, createProjectSelectionRoute, createSettingsRoute,
   createStatsRoute, createThreadRoute, createToggledProjectSelectionRoute, createWorkbenchHref, isSameDraftRouteIntent,
-  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, salvageWorkbenchPath, withFileTabs, withProjectSelection,
+  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, salvageWorkbenchPath, withFileDestination, withFileTabs, withProjectSelection,
 } from "./workbench-route";
+
+test("a file tab swaps to its folder index and back, keeping its folder", () => {
+  const file = parseWorkbenchRouteFromPath("/a/@/*/file/%2Blab/*/docs/notes.md");
+  const index = withFileDestination(file, "docs/notes.md", true);
+  const href = createWorkbenchHref(index);
+  assert.equal(href, "/a/@/*/index/%2Blab/*/docs/notes.md");
+  const reopened = parseWorkbenchRouteFromPath(href);
+  assert.equal(reopened.fileIndex, true);
+  assert.equal(isSameWorkbenchRoute(reopened, file), false);
+  assert.equal(createWorkbenchHref(withFileDestination(reopened, "docs/other.md")), "/a/@/*/file/%2Blab/*/docs/other.md");
+});
 
 test("a broken url salvages its valid tabs, then its selection and folder, then home", () => {
   const valid = (path: string) => parseWorkbenchRouteFromPath(path).view !== "invalid";

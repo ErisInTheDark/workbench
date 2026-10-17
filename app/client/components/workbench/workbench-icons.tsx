@@ -20,6 +20,7 @@
  * - BinIcon: discard glyph.
  * - ZoomInIcon: text-size control.
  * - ChevronLeftIcon/BackArrowIcon: left chevron and its mobile back-navigation alias.
+ * - ChevronRightIcon/CornerLeftUpIcon: next and up-a-level glyphs.
  * - SidebarCollapseIcon/SidebarExpandIcon: sidebar visibility controls.
  * - PanelMinimizeIcon/PanelExpandIcon/PanelCloseIcon: mosaic panel controls.
  * - HomeIcon/StatsIcon/GearIcon: main navigation glyphs.
@@ -398,6 +399,14 @@ export function ZoomInIcon(props: IconProps) {
 
 export function ChevronLeftIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="m15 18-6-6 6-6" /></OutlinedIcon>;
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m9 18 6-6-6-6" /></OutlinedIcon>;
+}
+
+export function CornerLeftUpIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M14 9 9 4 4 9" /><path d="M20 20h-7a4 4 0 0 1-4-4V4" /></OutlinedIcon>;
 }
 
 export function PanelLeftCloseIcon(props: IconProps) {

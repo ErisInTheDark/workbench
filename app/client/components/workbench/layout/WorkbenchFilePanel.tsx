@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces: a persistent
- *   markdown toolbar ending in save and hold-to-confirm reset, and the editor with its comment margin and suggestion
- *   originals; mosaic panels add a titled header.
+ *   markdown toolbar ending in the folder index, save and hold-to-confirm reset, and the editor with its comment margin
+ *   and suggestion originals, followed by a row stepping between the folder's documents; mosaic panels add a titled
+ *   header instead of the index and steps.
  */
 "use client";
 
@@ -16,6 +17,10 @@ import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFam
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
+import Tooltip from "../../ui/Tooltip";
+import { useWorkbenchSwapTab } from "../../../workbench/navigation/use-workbench-project-navigation";
+import { withFileDestination, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import DocumentPager from "../markdown-editor/DocumentPager";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
@@ -32,6 +37,7 @@ import {
 } from "../workbench-dialogs";
 import { dialogButtonClassName } from "../workbench-dialog-styles";
 import {
+  BookBookmarkIcon,
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
@@ -95,6 +101,8 @@ interface WorkbenchFilePanelProps {
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
   path: string;
+  /** The main pane's file tab; with it the panel offers the folder index and steps between the folder's documents. */
+  route?: WorkbenchRoute;
   /** The main pane's shell header slides away on mobile scroll; the toolbar below it slides with it. */
   shellHeaderVisibility?: MobileShellHeaderVisibilityController;
   showManualFileActions?: boolean;
@@ -151,6 +159,7 @@ export default function WorkbenchFilePanel ({
   onPanelZoomDeltaChange,
   panelZoomDelta = 0,
   path,
+  route,
   shellHeaderVisibility,
   showManualFileActions = true,
   titleLabel,
@@ -283,9 +292,24 @@ export default function WorkbenchFilePanel ({
     client?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);
   }, [client, usesPanelZoom, panelBaseFontSize]);
 
-  /** Save and reset sit at the toolbar's end, beside undo and redo. */
+  const swapTab = useWorkbenchSwapTab();
+  /** The folder index, save and reset sit at the toolbar's end, beside undo and redo. */
   const fileActions = client && snapshot ? (
     <>
+      {route ? (
+        <Tooltip placement="bottom" delayMs={350} content="Folder index">
+          <IconButton
+            type="button"
+            title=""
+            label="Folder index"
+            size="small"
+            display="hover-border"
+            onClick={() => swapTab(withFileDestination(route, route.filePath, true))}
+          >
+            <BookBookmarkIcon size={16} />
+          </IconButton>
+        </Tooltip>
+      ) : null}
       <CommandTooltip command="save">
         <IconButton
           type="button"
@@ -535,6 +559,7 @@ export default function WorkbenchFilePanel ({
             aria-hidden="true"
             hidden
           />
+          {route ? <div className="col-start-2 pb-10"><DocumentPager location={location} route={route} /></div> : null}
         </div>
       </div>
 

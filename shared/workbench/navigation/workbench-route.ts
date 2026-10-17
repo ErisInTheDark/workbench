@@ -5,6 +5,7 @@
  * - LEGACY_TAB_SEARCH_PARAMS: query names of the old tab strip, read once and then dropped.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
  * - WorkbenchFileTab/withFileTabs/getWorkbenchFileTabs: a file route's own folder address (old urls could list several file tabs).
+ * - withFileDestination: the same file tab showing another entry of its folder, or that folder's index.
  * - formatWorkbenchTab: one destination as its tab after the route marker (thread, file with its folder, settings, ...).
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
  * - createDiscardedDraftExitRoute: leave only the draft still viewed when deletion completes.
@@ -58,6 +59,8 @@ export interface WorkbenchRoute {
   /** Open file tabs in order; absent means the single `filePath` tab in the route folder. */
   fileTabs?: readonly WorkbenchFileTab[];
   fileTabIndex?: number;
+  /** The tab shows the index of `filePath`'s folder, focused on that entry, instead of the file itself. */
+  fileIndex?: boolean;
   /** Sidebar folder selection from the `*` url slot. Absent means inherit; null means explicitly no folder. */
   folderAddress?: string[] | null;
   mosaicNode: WorkbenchMosaicNode | null;
@@ -260,6 +263,17 @@ export function createFileRoute(projectId: string, filePath: string): WorkbenchR
     threadTarget: null,
     view: "file",
   };
+}
+
+/**
+ * The same tab showing another entry of its folder: a file, or with `index` the folder index focused on `filePath`.
+ * The tab keeps its own folder address.
+ */
+export function withFileDestination(route: WorkbenchRoute, filePath: string, index = false): WorkbenchRoute {
+  const { tabs, index: at } = getWorkbenchFileTabs(route);
+  const { fileIndex: _index, ...base } = route;
+  const destination: WorkbenchRoute = { ...base, view: "file", filePath, ...(index ? { fileIndex: true } : {}) };
+  return withFileTabs(destination, [{ filePath, folderAddress: tabs[at]?.folderAddress ?? null }], 0);
 }
 
 /** Focus `index` among `tabs`; a lone tab in the route folder collapses back to a plain file route. */
@@ -552,7 +566,7 @@ function parseTabSegments(rawSegments: string[]): WorkbenchRoute {
             : null;
     return parsed?.success ? createHomeThreadRoute(owner, parsed.data) : createInvalidWorkbenchRoute("Invalid thread tab.");
   }
-  if (mode === "file") {
+  if (mode === "file" || mode === "index") {
     const fileSegments = rawSegments.slice(1);
     const marker = fileSegments.indexOf(WORKBENCH_FOLDER_MARKER);
     const folder = marker < 0 ? { ok: true as const, value: null } : decodeRouteSegments(fileSegments.slice(0, marker));
@@ -561,7 +575,7 @@ function parseTabSegments(rawSegments: string[]): WorkbenchRoute {
     if (path.ok === false) return createInvalidWorkbenchRoute(path.error);
     const filePath = path.value.join("/");
     if (!filePath || folder.value?.length === 0) return createInvalidWorkbenchRoute("File tabs need a path and, when marked, a folder.");
-    const route = createFileRoute("", filePath);
+    const route = { ...createFileRoute("", filePath), ...(mode === "index" ? { fileIndex: true } : {}) };
     return folder.value ? withFileTabs(route, [{ filePath, folderAddress: folder.value }], 0) : route;
   }
   if (mode === "settings" && !rest.length) return createSettingsRoute("");
@@ -889,7 +903,7 @@ export function formatWorkbenchTab(route: WorkbenchRoute): string | undefined {
     if (!route.filePath) return undefined;
     const { tabs, index } = getWorkbenchFileTabs(route);
     const folder = tabs[index]?.folderAddress;
-    return `file/${folder?.length ? `${folder.map(encodeRouteSegment).join("/")}/${WORKBENCH_FOLDER_MARKER}/` : ""}${encodeWorkbenchRoutePath(route.filePath)}`;
+    return `${route.fileIndex ? "index" : "file"}/${folder?.length ? `${folder.map(encodeRouteSegment).join("/")}/${WORKBENCH_FOLDER_MARKER}/` : ""}${encodeWorkbenchRoutePath(route.filePath)}`;
   }
   if (route.view === "settings" || route.view === "new-project" || route.view === "git") return route.view;
   if (route.view === "stats") return route.statsTab && route.statsTab !== "usage" ? `stats/${route.statsTab}` : "stats";
@@ -938,6 +952,7 @@ export function isSameWorkbenchRoute(left: WorkbenchRoute, right: WorkbenchRoute
     && areDeeplyEqual(left.selectedProjectIds, right.selectedProjectIds)
     && areDeeplyEqual(left.folderAddress ?? null, right.folderAddress ?? null)
     && left.filePath === right.filePath
+    && Boolean(left.fileIndex) === Boolean(right.fileIndex)
     && areDeeplyEqual(left.fileTabs ?? null, right.fileTabs ?? null)
     && (left.fileTabIndex ?? 0) === (right.fileTabIndex ?? 0)
     && areDeeplyEqual(left.mosaicNode, right.mosaicNode)

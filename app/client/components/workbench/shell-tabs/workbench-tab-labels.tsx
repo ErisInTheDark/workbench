@@ -18,9 +18,10 @@ import { useThread } from "../use-thread";
 import WorkbenchProjectLabel from "../WorkbenchProjectLabel";
 import WorkbenchClientContext from "../workbench-client-context";
 import {
-  DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon,
+  BookBookmarkIcon, DraftThreadIcon, FolderClosedIcon, GearIcon, GitGraphIcon, StatsIcon,
 } from "../workbench-icons";
 import FileKindIcon from "../file-kind-icon";
+import { folderOf } from "../../../workbench/file/use-folder-entries";
 import WorkbenchThreadHoverTooltip from "../WorkbenchThreadHoverTooltip";
 import WorkbenchShellTab, { type WorkbenchShellTabFrameProps } from "./WorkbenchShellTab";
 
@@ -49,7 +50,10 @@ function TabProjectRow({ location }: { location: ProjectLocationReference | null
   return project ? <WorkbenchProjectLabel project={project} source={location ?? undefined} variant="tab" /> : null;
 }
 
-/** A file tab shows its draft's unsaved asterisk, and a preview tab with unsaved work keeps itself open. */
+/**
+ * A file tab shows its draft's unsaved asterisk, and a preview tab with unsaved work keeps itself open. Turned into its
+ * folder index, it names the folder instead.
+ */
 function FileTab({ frame, route }: WorkbenchTabKindProps) {
   const mounted = useContext(WorkbenchClientContext)?.mounted;
   const location = mounted?.projectNavigator.fileLocationFor(route) ?? null;
@@ -59,6 +63,18 @@ function FileTab({ frame, route }: WorkbenchTabKindProps) {
     () => drafts?.getBuffer(path)?.dirty ?? false, () => false);
   const { onKeepOpen, preview } = frame;
   useEffect(() => { if (dirty && preview) onKeepOpen(); }, [dirty, onKeepOpen, preview]);
+  if (route.fileIndex) {
+    const folder = folderOf(path);
+    return (
+      <WorkbenchShellTab
+        {...frame}
+        icon={<BookBookmarkIcon size={ICON_SIZE} />}
+        label={folder ? fileName(folder) : "index"}
+        project={<TabProjectRow location={location} />}
+        title={`Index of ${folder || "the project"}`}
+      />
+    );
+  }
   return (
     <WorkbenchShellTab
       {...frame}

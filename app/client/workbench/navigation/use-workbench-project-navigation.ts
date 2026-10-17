@@ -5,6 +5,7 @@
  * - useWorkbenchNavigationState: the url route, focused tab, tab strip and navigator behind hrefs and tab controls.
  * - useWorkbenchProjectNavigation: bind public href generation (path plus tab strip) to the mounted project navigator, re-rendering when its addresses change.
  * - useWorkbenchNavigate: push or replace a destination through the same hrefs links render.
+ * - useWorkbenchSwapTab: turn the focused tab into another destination in place, as a new history entry.
  */
 import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import WorkbenchClientContext, { type WorkbenchClientController } from "../../components/workbench/workbench-client-context";
@@ -74,6 +75,19 @@ export function useWorkbenchProjectNavigation(explicitClient?: WorkbenchClientCo
       && isMobileSidebarRequested(search);
     return keepSidebar ? mobileSidebarHref(new URL(href, "http://workbench.local")) : href;
   }, [navigation, current, currentTab, search, strip, revision]);
+}
+
+/**
+ * Turn the focused tab into another destination in place (a file into its folder index, a document into its sibling),
+ * as a new history entry so back returns to it.
+ */
+export function useWorkbenchSwapTab(explicitClient?: WorkbenchClientController) {
+  const { current, currentTab, navigation, strip } = useWorkbenchNavigationState(explicitClient);
+  const navigate = useWorkbenchNavigate(explicitClient);
+  return useCallback((route: WorkbenchRoute) => {
+    const next = navigation.tabFor(route, current);
+    navigate(route, next && currentTab ? { tab: { strip: WorkbenchTabStrip.replace(strip, currentTab, next) } } : {});
+  }, [current, currentTab, navigate, navigation, strip]);
 }
 
 export function useWorkbenchNavigate(explicitClient?: WorkbenchClientController) {
