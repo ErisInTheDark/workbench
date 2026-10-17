@@ -51,7 +51,7 @@ test("a sidebar Workbench file open preserves the selection in the generated URL
   const action: { current: FileOpenAction | null } = { current: null };
   function Harness() {
     action.current = useFileActions({
-      policy: defaultPolicy, browseLocation: location, currentProjectId: location.projectId,
+      policyFor: () => defaultPolicy, browseLocation: location, currentProjectId: location.projectId,
       defaultDaemon: null, selectedDaemon: null, logicalProjects: projects, route: current,
       onInvalidLocation: () => assert.fail("Valid file location rejected."),
       navigateToRoute: route => { href = navigator.href(route, current, "inherit"); },
@@ -64,6 +64,35 @@ test("a sidebar Workbench file open preserves the selection in the generated URL
   const reopened = navigator.readRoute(href);
   assert.deepEqual(reopened.selectedProjectIds, [first, second]);
   assert.deepEqual(navigator.fileLocationFor(reopened), location);
+});
+
+test("a file opens with its own folder's policy, not the policy of the route it was clicked from", async () => {
+  const daemonId = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
+  const fileFolder = { daemonId, projectId: ProjectIdSchema.parse("story-folder") };
+  const asked: Array<typeof fileFolder | null> = [];
+  const navigated: WorkbenchRoute[] = [];
+  const vscodeOpens: string[] = [];
+  const action: { current: FileOpenAction | null } = { current: null };
+  function Harness() {
+    action.current = useFileActions({
+      // The route's project defaults markdown to VS Code; only the file's folder says Workbench.
+      policyFor: location => {
+        asked.push(location);
+        return location?.projectId === fileFolder.projectId ? defaultPolicy : { ...defaultPolicy, openMarkdownFilesWith: "vscode" };
+      },
+      browseLocation: fileFolder, currentProjectId: fileFolder.projectId, logicalProjects: [],
+      defaultDaemon: { nativeFiles: { open: async ({ path }: { path: string }) => { vscodeOpens.push(path); return { ok: true }; } } } as WorkbenchDaemonClient,
+      selectedDaemon: null, onInvalidLocation: () => assert.fail("Valid file location rejected."),
+      navigateToRoute: route => { navigated.push(route); },
+      route: createProjectRoute("thread-owner"),
+    });
+    return null;
+  }
+  renderToStaticMarkup(createElement(Harness));
+  assert.equal(await action.current?.({ path: "stories/ch01.md" }), true);
+  assert.deepEqual(asked, [fileFolder]);
+  assert.equal(navigated[0]?.filePath, "stories/ch01.md");
+  assert.deepEqual(vscodeOpens, []);
 });
 
 test("file-open policy routes each file kind by its own row and keeps absolute targets external", () => {
@@ -96,7 +125,7 @@ test("file actions use the rendering panel owner across navigation and external 
   const action: { current: FileOpenAction | null } = { current: null };
   function Harness() {
     action.current = useFileActions({
-      policy: defaultPolicy,
+      policyFor: () => defaultPolicy,
       browseLocation: null,
       currentProjectId: "browse-project",
       defaultDaemon,

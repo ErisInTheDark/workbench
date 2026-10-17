@@ -4,7 +4,7 @@
  * - FileOpenAction: shared file-opening action signature.
  * - FileActionContext: share one file-open action without DOM delegation.
  * - FileScopeContext: identify the project and daemon owning rendered file controls.
- * - useFileActions: route file opens through the per-file-kind Workbench or VS Code policy.
+ * - useFileActions: route file opens through the per-file-kind Workbench or VS Code policy of the file's own folder.
  * - useFile: derive file-pill display and its owner-scoped open action.
  * - resolveFileOpenDestination: choose the destination for a file target.
  * - resolveWorkbenchFileRoute: route a file through its concrete project owner.
@@ -82,7 +82,7 @@ export function resolveWorkbenchFileRoute({
 }
 
 export function useFileActions({
-  policy,
+  policyFor,
   browseLocation,
   currentProjectId,
   defaultDaemon,
@@ -92,7 +92,8 @@ export function useFileActions({
   route,
   selectedDaemon,
 }: {
-  policy: WorkbenchFileOpenPolicy;
+  /** The open policy of the folder a file lives in; project overrides belong to the file, not the route showing it. */
+  policyFor: (location: ProjectLocationReference | null) => WorkbenchFileOpenPolicy;
   browseLocation: ProjectLocationReference | null;
   currentProjectId: string | null;
   defaultDaemon: WorkbenchDaemonClient | null;
@@ -113,7 +114,7 @@ export function useFileActions({
       return false;
     }
     const location = parsedLocation?.data ?? browseLocation;
-    const destination = resolveFileOpenDestination(target, policy);
+    const destination = resolveFileOpenDestination(target, policyFor(location));
     if (!destination) return false;
 
     if (destination === "workbench") {
@@ -143,7 +144,7 @@ export function useFileActions({
       console.error("Unable to open file in VS Code.");
       return false;
     }
-  }, [policy, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
+  }, [policyFor, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
     onInvalidLocation, route, selectedDaemon]);
 }
 

@@ -799,13 +799,21 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     daemonId: browseLocation?.daemonId,
     projectId: browseProjectId,
   }), [browseDaemon, browseLocation?.daemonId, browseProjectId]);
-  const fileOpenPolicy = useMemo(() => ({
-    openMarkdownFilesWith: resolvedSettings.openMarkdownFilesWith,
-    openOtherFilesWith: resolvedSettings.openOtherFilesWith,
-    openSvgFilesWith: resolvedSettings.openSvgFilesWith,
-  }), [resolvedSettings.openMarkdownFilesWith, resolvedSettings.openOtherFilesWith, resolvedSettings.openSvgFilesWith]);
+  // A file follows its own project's open overrides; folders without a known owner use the route's settings.
+  const fileOpenPolicyFor = useCallback((location: ProjectLocationReference | null) => {
+    const owner = location ? logicalProjects?.find(project => project.locations.some(item =>
+      item.target.daemonId === location.daemonId && item.target.projectId === location.projectId)) : null;
+    const settings = owner
+      ? resolveWorkbenchSettings(globalSettings, readLogicalProjectWorkbenchSettings(owner.id, clientState.records))
+      : resolvedSettings;
+    return {
+      openMarkdownFilesWith: settings.openMarkdownFilesWith,
+      openOtherFilesWith: settings.openOtherFilesWith,
+      openSvgFilesWith: settings.openSvgFilesWith,
+    };
+  }, [clientState.records, globalSettings, logicalProjects, resolvedSettings]);
   const openFileByPolicy = useFileActions({
-    policy: fileOpenPolicy,
+    policyFor: fileOpenPolicyFor,
     browseLocation,
     currentProjectId: explorer.currentProjectId,
     defaultDaemon: controls?.daemon ?? null,
@@ -1235,8 +1243,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
   const createDialogParentLabel = createDialogParentPath || "project";
   const canOpenFileFromExplorer = useCallback((path: string) => (
-    resolveFileOpenDestination({ path }, fileOpenPolicy) !== null
-  ), [fileOpenPolicy]);
+    resolveFileOpenDestination({ path }, fileOpenPolicyFor(browseLocation)) !== null
+  ), [browseLocation, fileOpenPolicyFor]);
   const mobileMosaicFallbackTarget = route.view === "mosaic"
     ? getRouteMosaicFallbackTarget(route.mosaicNode, isMobile)
     : null;
