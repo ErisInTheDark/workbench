@@ -21,7 +21,7 @@ import type {
     WorkbenchSendThreadMessageOptions,
 } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
-import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type FolderId } from "workbench-shared/workbench/identity";
+import { DaemonIdSchema, DraftIdSchema, ProjectIdSchema, ThreadReferenceSchema, type DaemonId, type FolderId } from "workbench-shared/workbench/identity";
 import WorkbenchMainLayout, {
     type WorkbenchDropPlacement,
     type WorkbenchMainLayout as WorkbenchMainLayoutState,
@@ -459,7 +459,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mobilePaneSlideRef = useRef<((destination: MobilePaneDestination) => void) | null>(null);
   const [settingsPageTitle, setSettingsPageTitle] = useState("General");
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
-  const [settingsSection, setSettingsSection] = useState<string | null>(null);
+  const [settingsTarget, setSettingsTarget] = useState<{ section: string; daemonId: DaemonId } | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [pendingDeleteFilePath, setPendingDeleteFilePath] = useState("");
   const [isDeletingFile, setIsDeletingFile] = useState(false);
@@ -1338,7 +1338,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     selectionProjectIds.length ? selectionProjectIds : null,
   ), [selectionProjectIds]);
   const showSettingsView = route.view === "settings";
-  useEffect(() => { if (!showSettingsView) setSettingsSection(null); }, [showSettingsView]);
+  useEffect(() => { if (!showSettingsView) setSettingsTarget(null); }, [showSettingsView]);
   const selectedSettingsProject = selectionProjectIds.length === 1
     ? displayedLogicalProjects?.find(project => project.id === selectionProjectIds[0]) ?? null
     : null;
@@ -1509,10 +1509,15 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ? logicalThreadProject.id : null;
   const approvalModeSettings = useMemo(() => logicalThreadDaemonProjectId ? {
     onOpenSettings: () => {
-      setSettingsSection("settings-auto-approve");
-      navigateToRoute(withProjectSelection(createSettingsRoute(""), [logicalThreadDaemonProjectId]), { selection: "exact" });
+      const daemonId = threadFileScope.daemonId;
+      if (!daemonId) return;
+      setSettingsTarget({ section: "settings-auto-approve", daemonId });
+      navigateToRoute({
+        ...withProjectSelection(createSettingsRoute(""), route.selectedProjectIds),
+        folderAddress: route.folderAddress,
+      }, { selection: "exact" });
     },
-  } : null, [logicalThreadDaemonProjectId, navigateToRoute]);
+  } : null, [logicalThreadDaemonProjectId, navigateToRoute, route.selectedProjectIds, route.folderAddress, threadFileScope.daemonId]);
   const showThreadOwnerLabel = Boolean(routeOwnerMetadata
     && !(selectedLogicalProject?.id === logicalThreadProject?.id
       && selectedLogicalProject?.locations.length === 1));
@@ -2476,7 +2481,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       await workbenchClient.mounted?.refreshInstallationProjects(daemonId);
                     }}
                     onPageChange={setSettingsPageTitle}
-                    initialSection={settingsSection}
+                    initialSection={settingsTarget?.section}
+                    initialDaemonId={settingsTarget?.daemonId}
                     selectionPending={dynamicSelectionPending
                       || (selectionProjectIds.length === 1 && !selectedSettingsProject
                         && presentationState?.phase !== "failed")}

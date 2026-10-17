@@ -108,6 +108,7 @@ export default function WorkbenchSettingsView({
   getDaemon,
   getFolderDaemon,
   initialSection = null,
+  initialDaemonId = null,
   logicalProject,
   projects,
   onError,
@@ -124,6 +125,7 @@ export default function WorkbenchSettingsView({
   getFolderDaemon: (location: ProjectLocationReference) => WorkbenchDaemonClient | null;
   /** Section to open and scroll to on mount, such as `settings-auto-approve`. */
   initialSection?: string | null;
+  initialDaemonId?: DaemonId | null;
   /** The single selected project, which picks the default machine and enables React Scan for Workbench's own source. */
   logicalProject: { id: LogicalProjectId; label: string; iconProject: WorkbenchLogicalProject } | null;
   /** Projects the sidebar reaches; Editing & files can give each its own overrides. */
@@ -140,8 +142,9 @@ export default function WorkbenchSettingsView({
   const defaultDaemonId = daemons.find(item => item.id === projectDaemonId)?.id
     ?? daemons.find(item => item.id === attachedDaemonId)?.id ?? daemons[0]?.id ?? null;
   const [chosenPlace, setPlace] = useState<Place>(() => initialPlace(
-    initialSection ?? (globalThis.location?.hash.slice(1) || null), defaultDaemonId));
+    initialSection ?? (globalThis.location?.hash.slice(1) || null), initialDaemonId ?? defaultDaemonId));
   const place: Place = chosenPlace.kind === "machine" && !daemons.some(item => item.id === chosenPlace.daemonId)
+    && chosenPlace.daemonId !== initialDaemonId
     ? { kind: "app", page: "general" } : chosenPlace;
   const [chosenFolderKey, setChosenFolderKey] = useState("");
   const [collapsed, setCollapsed] = useState<ReadonlySet<DaemonId>>(() => new Set());
