@@ -32,7 +32,7 @@ export interface EditHistoryManagerOptions {
 }
 
 interface EditHistoryManager {
-  applyHistoryState: (history: EditHistoryState, nextIndex: number) => void;
+  applyHistoryState: (history: EditHistoryState, nextIndex: number, selection: EditHistorySelection | null) => void;
   recordEditHistory: (previousContent: string, nextContent: string, selection: EditHistorySelection | null) => void;
   redoEditHistory: () => void;
   undoEditHistory: () => void;
@@ -40,16 +40,14 @@ interface EditHistoryManager {
 }
 
 function EditHistoryManager(options: EditHistoryManagerOptions): EditHistoryManager {
+  /** Selection changes arrive after the edit that caused them, so between edits this holds the next edit's `before`. */
   function updateHistorySelection(selection: EditHistorySelection | null) {
     const history = options.getHistory();
-    if (!history?.frames.length) {
-      return;
-    }
-
-    history.frames[history.currentIndex].selection = cloneHistorySelection(selection);
+    if (history) history.selection = cloneHistorySelection(selection);
   }
 
   function recordEditHistory(previousContent: string, nextContent: string, selection: EditHistorySelection | null) {
+    const before = cloneHistorySelection(options.getHistory()?.selection ?? null);
     if (previousContent === nextContent) {
       updateHistorySelection(selection);
       return;
@@ -59,11 +57,11 @@ function EditHistoryManager(options: EditHistoryManagerOptions): EditHistoryMana
     if (nextHistory.currentIndex < nextHistory.frames.length - 1) {
       nextHistory.frames = nextHistory.frames.slice(0, nextHistory.currentIndex + 1);
     }
+    nextHistory.selection = cloneHistorySelection(selection);
 
     const patch = createHistoryPatch(previousContent, nextContent);
     if (!patch) {
       options.setHistory(nextHistory);
-      updateHistorySelection(selection);
       return;
     }
 
@@ -79,51 +77,46 @@ function EditHistoryManager(options: EditHistoryManagerOptions): EditHistoryMana
       }
     }
 
+    const selections = { after: cloneHistorySelection(selection), before };
     const shouldCreateSnapshot = countHistoryStatesSinceSnapshot(nextHistory) >= options.historyKeyframeInterval - 1;
     nextHistory.frames.push(shouldCreateSnapshot
-      ? {
-        type: "snapshot",
-        content: nextContent,
-        selection: cloneHistorySelection(selection),
-        timestamp,
-      }
-      : {
-        type: "patch",
-        patch,
-        selection: cloneHistorySelection(selection),
-        timestamp,
-      });
+      ? { type: "snapshot", content: nextContent, timestamp, ...selections }
+      : { type: "patch", patch, timestamp, ...selections });
     nextHistory.currentIndex = nextHistory.frames.length - 1;
     options.setHistory(trimEditHistory(nextHistory));
   }
 
-  function applyHistoryState(history: EditHistoryState, nextIndex: number) {
+  function applyHistoryState(history: EditHistoryState, nextIndex: number, selection: EditHistorySelection | null) {
     const clampedIndex = Math.max(0, Math.min(nextIndex, history.frames.length - 1));
     const nextContent = materializeHistoryContent(history, clampedIndex);
     history.currentIndex = clampedIndex;
+    history.selection = cloneHistorySelection(selection);
     options.setHistory(history);
-    options.applyHistoryReplay({
-      content: nextContent,
-      selection: history.frames[clampedIndex]?.selection ?? null,
-    });
+    options.applyHistoryReplay({ content: nextContent, selection });
   }
 
+  /** Undo returns the selection to where the undone change began. */
   function undoEditHistory() {
     const history = options.getHistory();
     if (!history || history.currentIndex <= 0) {
       return;
     }
 
-    applyHistoryState(normalizeEditHistory(history, options.getCurrentContent()), history.currentIndex - 1);
+    const undone = history.frames[history.currentIndex];
+    applyHistoryState(normalizeEditHistory(history, options.getCurrentContent()), history.currentIndex - 1,
+      undone?.before ?? null);
   }
 
+  /** Redo leaves the selection where the redone change left it. */
   function redoEditHistory() {
     const history = options.getHistory();
     if (!history || history.currentIndex >= history.frames.length - 1) {
       return;
     }
 
-    applyHistoryState(normalizeEditHistory(history, options.getCurrentContent()), history.currentIndex + 1);
+    const redone = history.frames[history.currentIndex + 1];
+    applyHistoryState(normalizeEditHistory(history, options.getCurrentContent()), history.currentIndex + 1,
+      redone?.after ?? null);
   }
 
   return {

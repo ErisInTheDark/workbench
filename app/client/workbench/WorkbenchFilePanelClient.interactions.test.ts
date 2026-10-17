@@ -211,3 +211,25 @@ test("undo walks back through savable states to the document before typing", () 
   }
   assert.equal(seen.at(-1), "start\n", `undo states: ${JSON.stringify(seen)}`);
 }));
+
+async function historyUntil(panel: MountedFilePanel, markdown: string, redo = false) {
+  for (let step = 0; step < 40 && await panel.save() !== markdown; step += 1) await panel.press("z", { ctrl: true, shift: redo });
+  assert.equal(await panel.save(), markdown);
+}
+
+test("undo and redo put the caret where the change was made", () => withPanel("first line\n\nsecond line\n", async panel => {
+  await panel.caret("second| line");
+  await panel.type(" big");
+  await panel.caret("first| line");
+  await historyUntil(panel, "first line\n\nsecond line\n");
+  assert.equal(panel.caretText, "second| line");
+  await historyUntil(panel, "first line\n\nsecond big line\n", true);
+  assert.equal(panel.caretText, "second big| line");
+}));
+
+test("undoing a split paragraph puts the caret back at the split", () => withPanel("first line\n\nsecond line\n", async panel => {
+  await panel.caret("second| line");
+  await panel.press("Enter");
+  await historyUntil(panel, "first line\n\nsecond line\n");
+  assert.equal(panel.caretText, "second| line");
+}));

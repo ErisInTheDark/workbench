@@ -22,6 +22,7 @@ export interface EditHistoryPatch {
   start: number;
 }
 
+/** A block's element-child position path from the editor, and the characters before the point inside that block. */
 export interface EditHistorySelectionPoint {
   offset: number;
   path: number[];
@@ -32,23 +33,29 @@ export interface EditHistorySelection {
   start: EditHistorySelectionPoint;
 }
 
-export type EditHistoryFrame =
+/** Where the selection was when the change began and once it was made; undo restores `before`, redo `after`. */
+interface EditHistoryFrameSelections {
+  after?: EditHistorySelection | null;
+  before?: EditHistorySelection | null;
+}
+
+export type EditHistoryFrame = EditHistoryFrameSelections & (
   | {
     type: "snapshot";
     content: string;
-    selection: EditHistorySelection | null;
     timestamp: number;
   }
   | {
     type: "patch";
     patch: EditHistoryPatch;
-    selection: EditHistorySelection | null;
     timestamp: number;
-  };
+  });
 
 export interface EditHistoryState {
   currentIndex: number;
   frames: EditHistoryFrame[];
+  /** The selection as it is now; it becomes the next change's `before` and is where a reopened file resumes. */
+  selection?: EditHistorySelection | null;
 }
 
 export const HISTORY_MERGE_WINDOW_MS = 1600;
@@ -76,21 +83,25 @@ export function cloneHistoryPatch (patch: EditHistoryPatch): EditHistoryPatch {
   return { ...patch };
 }
 
+function cloneFrameSelections (frame: EditHistoryFrameSelections): EditHistoryFrameSelections {
+  return { after: cloneHistorySelection(frame.after ?? null), before: cloneHistorySelection(frame.before ?? null) };
+}
+
 export function cloneHistoryFrame (frame: EditHistoryFrame): EditHistoryFrame {
   if (frame.type === "snapshot") {
     return {
       type: "snapshot",
       content: frame.content,
-      selection: cloneHistorySelection(frame.selection),
       timestamp: frame.timestamp,
+      ...cloneFrameSelections(frame),
     };
   }
 
   return {
     type: "patch",
     patch: cloneHistoryPatch(frame.patch),
-    selection: cloneHistorySelection(frame.selection),
     timestamp: frame.timestamp,
+    ...cloneFrameSelections(frame),
   };
 }
 
@@ -102,6 +113,7 @@ export function cloneEditHistory (history: EditHistoryState | null): EditHistory
   return {
     currentIndex: history.currentIndex,
     frames: history.frames.map((frame) => cloneHistoryFrame(frame)),
+    selection: cloneHistorySelection(history.selection ?? null),
   };
 }
 
@@ -111,9 +123,9 @@ export function createInitialEditHistory (content: string, selection: EditHistor
     frames: [{
       type: "snapshot",
       content,
-      selection: cloneHistorySelection(selection),
       timestamp: Date.now(),
     }],
+    selection: cloneHistorySelection(selection),
   };
 }
 
@@ -199,6 +211,7 @@ export function createHistoryPatch (previousContent: string, nextContent: string
   };
 }
 
+/** Typing or deleting runs join into one frame that keeps where the run began and ends where it stopped. */
 export function mergeHistoryPatches (
   previousFrame: Extract<EditHistoryFrame, { type: "patch" }>,
   nextPatch: EditHistoryPatch,
@@ -209,34 +222,31 @@ export function mergeHistoryPatches (
     return null;
   }
 
+  const merged = (patch: EditHistoryPatch): EditHistoryFrame => ({
+    type: "patch",
+    timestamp: nextTimestamp,
+    patch,
+    before: cloneHistorySelection(previousFrame.before ?? null),
+    after: cloneHistorySelection(nextSelection),
+  });
   const previousPatch = previousFrame.patch;
   const previousInsertOnly = previousPatch.deletedText === "" && previousPatch.insertedText.length > 0;
   const nextInsertOnly = nextPatch.deletedText === "" && nextPatch.insertedText.length > 0;
   if (previousInsertOnly && nextInsertOnly) {
     if (nextPatch.start === previousPatch.start + previousPatch.insertedText.length) {
-      return {
-        type: "patch",
-        timestamp: nextTimestamp,
-        selection: cloneHistorySelection(nextSelection),
-        patch: {
-          start: previousPatch.start,
-          deletedText: "",
-          insertedText: `${previousPatch.insertedText}${nextPatch.insertedText}`,
-        },
-      };
+      return merged({
+        start: previousPatch.start,
+        deletedText: "",
+        insertedText: `${previousPatch.insertedText}${nextPatch.insertedText}`,
+      });
     }
 
     if (nextPatch.start === previousPatch.start) {
-      return {
-        type: "patch",
-        timestamp: nextTimestamp,
-        selection: cloneHistorySelection(nextSelection),
-        patch: {
-          start: previousPatch.start,
-          deletedText: "",
-          insertedText: `${nextPatch.insertedText}${previousPatch.insertedText}`,
-        },
-      };
+      return merged({
+        start: previousPatch.start,
+        deletedText: "",
+        insertedText: `${nextPatch.insertedText}${previousPatch.insertedText}`,
+      });
     }
   }
 
@@ -244,29 +254,19 @@ export function mergeHistoryPatches (
   const nextDeleteOnly = nextPatch.insertedText === "" && nextPatch.deletedText.length > 0;
   if (previousDeleteOnly && nextDeleteOnly) {
     if (nextPatch.start === previousPatch.start) {
-      return {
-        type: "patch",
-        timestamp: nextTimestamp,
-        selection: cloneHistorySelection(nextSelection),
-        patch: {
-          start: previousPatch.start,
-          insertedText: "",
-          deletedText: `${previousPatch.deletedText}${nextPatch.deletedText}`,
-        },
-      };
+      return merged({
+        start: previousPatch.start,
+        insertedText: "",
+        deletedText: `${previousPatch.deletedText}${nextPatch.deletedText}`,
+      });
     }
 
     if (nextPatch.start + nextPatch.deletedText.length === previousPatch.start) {
-      return {
-        type: "patch",
-        timestamp: nextTimestamp,
-        selection: cloneHistorySelection(nextSelection),
-        patch: {
-          start: nextPatch.start,
-          insertedText: "",
-          deletedText: `${nextPatch.deletedText}${previousPatch.deletedText}`,
-        },
-      };
+      return merged({
+        start: nextPatch.start,
+        insertedText: "",
+        deletedText: `${nextPatch.deletedText}${previousPatch.deletedText}`,
+      });
     }
   }
 
@@ -298,13 +298,12 @@ export function trimEditHistory (history: EditHistoryState) {
   }
 
   const snapshotContent = materializeHistoryContent(history, sliceStart);
-  const snapshotSelection = cloneHistorySelection(history.frames[sliceStart]?.selection ?? null);
-  const snapshotTimestamp = history.frames[sliceStart]?.timestamp ?? Date.now();
+  const baseFrame = history.frames[sliceStart];
   const trimmedFrames: EditHistoryFrame[] = [{
     type: "snapshot",
     content: snapshotContent,
-    selection: snapshotSelection,
-    timestamp: snapshotTimestamp,
+    timestamp: baseFrame?.timestamp ?? Date.now(),
+    ...cloneFrameSelections(baseFrame ?? {}),
   }, ...history.frames.slice(sliceStart + 1).map((frame) => cloneHistoryFrame(frame))];
 
   history.frames = trimmedFrames.slice(0, HISTORY_STATE_LIMIT);

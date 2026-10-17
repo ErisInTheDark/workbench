@@ -58,9 +58,9 @@ function fromStoredHistory(history: WorkbenchFileDraftHistory | undefined, conte
   return normalizeEditHistory(history ? {
     currentIndex: history.currentIndex,
     frames: history.frames.map(frame => frame.kind === "snapshot"
-      ? { type: "snapshot", content: frame.content, selection: null, timestamp: frame.timestamp }
+      ? { type: "snapshot", content: frame.content, timestamp: frame.timestamp }
       : {
-        type: "patch", selection: null, timestamp: frame.timestamp,
+        type: "patch", timestamp: frame.timestamp,
         patch: { start: frame.start, deletedText: frame.deletedText, insertedText: frame.insertedText },
       }),
   } : null, content);

@@ -34,9 +34,10 @@ test("undo history persists with its draft and restores without stored cursor po
   const state = new WorkbenchClientStateController({ mode: "memory" });
   const writer = FileDraftStore(() => "alpha", undefined, state);
   const selection = { start: { offset: 2, path: [0] }, end: { offset: 2, path: [0] } };
-  const history = { currentIndex: 1, frames: [
-    { type: "snapshot" as const, content: "<svg/>", selection, timestamp: 1 },
-    { type: "patch" as const, patch: { start: 4, deletedText: "/", insertedText: "><g/></svg" }, selection, timestamp: 2 },
+  const history = { currentIndex: 1, selection, frames: [
+    { type: "snapshot" as const, content: "<svg/>", timestamp: 1 },
+    { type: "patch" as const, patch: { start: 4, deletedText: "/", insertedText: "><g/></svg" }, before: selection,
+      after: selection, timestamp: 2 },
   ] };
   writer.setBuffer("icon.svg", {
     baselineContent: "<svg/>", content: "<svg><g/></svg>", dirty: true, editorState: "<svg><g/></svg>",
@@ -47,7 +48,7 @@ test("undo history persists with its draft and restores without stored cursor po
 
   const reader = FileDraftStore(() => "alpha", undefined, state);
   assert.deepEqual(reader.getBuffer("icon.svg")?.history, {
-    currentIndex: 1, frames: history.frames.map(frame => ({ ...frame, selection: null })),
+    currentIndex: 1, selection: null, frames: history.frames.map(frame => ({ ...frame, after: null, before: null })),
   });
 
   await state.put({ ...draft("stale.svg", "<svg>now</svg>"), value: { ...draft("stale.svg", "<svg>now</svg>").value,

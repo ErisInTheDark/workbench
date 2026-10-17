@@ -3,8 +3,8 @@
  * - getCaretRangeFromPoint: resolve a collapsed caret range from viewport coordinates when the browser exposes point-based caret APIs. Keywords: workbench, selection, caret, range, pointer.
  * - placeCaretInElement: focus the editor and place the caret inside a target element at a pointer position or its end fallback. Keywords: workbench, selection, caret, pointer, summary.
  * - getNodePathFromEditor: serialize a node location relative to the editor root as child indexes. Keywords: workbench, selection, path, editor, history.
- * - serializeSelectionPoint: convert a DOM boundary point into edit-history path data relative to the editor root. Keywords: workbench, selection, serialize, history, cursor.
- * - resolveSelectionPoint: map a stored edit-history path back to a live DOM boundary point inside the editor root. Keywords: workbench, selection, resolve, history, cursor.
+ * - serializeSelectionPoint: convert a DOM boundary point into a block position plus character offset that survives re-rendering. Keywords: workbench, selection, serialize, history, cursor.
+ * - resolveSelectionPoint: map a stored block position and character offset back to a live DOM boundary point. Keywords: workbench, selection, resolve, history, cursor.
  * - captureEditorSelection: snapshot the current live selection when both endpoints are inside the editor root. Keywords: workbench, selection, capture, history, editor.
  * - placeCaretAtEditorEnd: focus the editor and collapse the live selection to its trailing edge. Keywords: workbench, selection, caret, editor, collapse.
  * - restoreEditorSelection: restore a saved edit-history selection inside the editor or fall back to the editor end. Keywords: workbench, selection, restore, history, editor.
@@ -77,44 +77,82 @@ export function getNodePathFromEditor(editor: HTMLElement, node: Node) {
   return current === editor ? path : null;
 }
 
+const SELECTION_BLOCK_TAGS = /^(P|DIV|H[1-6]|BLOCKQUOTE|LI|PRE|SUMMARY|TD|TH)$/u;
+
+function closestSelectionBlock(editor: HTMLElement, node: Node) {
+  for (let current: Node | null = node; current && current !== editor; current = current.parentNode) {
+    if (current instanceof HTMLElement && SELECTION_BLOCK_TAGS.test(current.tagName)) return current;
+  }
+  return editor;
+}
+
+/** Text, line breaks and non-editable atoms in document order; one atom or break counts as one character. */
+function* selectionUnits(root: Node): Generator<Node> {
+  for (let child = root.firstChild; child; child = child.nextSibling) {
+    if (child instanceof Text || child instanceof HTMLBRElement
+      || (child instanceof HTMLElement && child.getAttribute("contenteditable") === "false")) {
+      yield child;
+    } else {
+      yield* selectionUnits(child);
+    }
+  }
+}
+
+function unitLength(unit: Node) {
+  return unit instanceof Text ? unit.length : 1;
+}
+
+/**
+ * Selection points name their block by element position and the characters before them inside it, so they survive
+ * the editor re-rendering the same markdown with differently split text nodes (as undo and redo do).
+ */
 export function serializeSelectionPoint(editor: HTMLElement, node: Node, offset: number): EditHistorySelectionPoint | null {
   if (node !== editor && !editor.contains(node)) {
     return null;
   }
 
-  const path = node === editor ? [] : getNodePathFromEditor(editor, node);
-  if (!path) {
-    return null;
+  const block = closestSelectionBlock(editor, node);
+  const path: number[] = [];
+  for (let current: Element = block; current !== editor; current = current.parentElement!) {
+    path.unshift(Array.prototype.indexOf.call(current.parentElement!.children, current) as number);
   }
 
-  return {
-    path,
-    offset,
-  };
+  const boundary = document.createRange();
+  boundary.setStart(node, offset);
+  let characters = 0;
+  for (const unit of selectionUnits(block)) {
+    if (unit === node) return { path, offset: characters + offset };
+    const parent = unit.parentNode!;
+    const end = unit instanceof Text ? [unit, unit.length] as const
+      : [parent, Array.prototype.indexOf.call(parent.childNodes, unit) as number + 1] as const;
+    if (boundary.comparePoint(end[0], end[1]) > 0) break;
+    characters += unitLength(unit);
+  }
+  return { path, offset: characters };
 }
 
 export function resolveSelectionPoint(editor: HTMLElement, point: EditHistorySelectionPoint) {
-  let current: Node = editor;
-
+  let block: Element = editor;
   for (const index of point.path) {
-    if (index < 0 || index >= current.childNodes.length) {
-      return null;
+    const next = block.children[index];
+    if (!next) return null;
+    block = next;
+  }
+
+  let remaining = Math.max(0, point.offset);
+  let last: Node | null = null;
+  for (const unit of selectionUnits(block)) {
+    if (unit instanceof Text) {
+      if (remaining <= unit.length) return { node: unit as Node, offset: remaining };
+    } else if (remaining === 0) {
+      return { node: unit.parentNode!, offset: Array.prototype.indexOf.call(unit.parentNode!.childNodes, unit) as number };
     }
-
-    current = current.childNodes[index];
+    remaining -= unitLength(unit);
+    last = unit;
   }
 
-  if (current.nodeType === Node.TEXT_NODE) {
-    return {
-      node: current,
-      offset: Math.max(0, Math.min(point.offset, current.textContent?.length ?? 0)),
-    };
-  }
-
-  return {
-    node: current,
-    offset: Math.max(0, Math.min(point.offset, current.childNodes.length)),
-  };
+  if (last instanceof Text) return { node: last as Node, offset: last.length };
+  return { node: block as Node, offset: block.childNodes.length };
 }
 
 function isNodeWithinEditor(editor: HTMLElement, node: Node | null) {

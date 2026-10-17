@@ -146,7 +146,7 @@ function WorkbenchFileClient(
       : null;
     editorDocument.refreshStatusMessage();
     editorDocument.scheduleDiffGutterRefresh();
-    editorDocument.restoreSelection(state.history.frames[state.history.currentIndex]?.selection ?? null);
+    editorDocument.restoreSelection(state.history.selection ?? null);
     eventBus.emit("fileOpened", {
       path: filePath,
       source: "draft",

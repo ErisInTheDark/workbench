@@ -59,7 +59,7 @@ test("undo history survives reopening the document from its stored draft", async
 
 test("a stored history that no longer leads to the draft restarts at the draft", async () => {
   const h = harness({ draft: { content: "<svg>mine</svg>", mtimeMs: 1 } });
-  h.drafts.history = { currentIndex: 0, frames: [{ type: "snapshot", content: "<svg>other</svg>", selection: null, timestamp: 0 }] };
+  h.drafts.history = { currentIndex: 0, frames: [{ type: "snapshot", content: "<svg>other</svg>", timestamp: 0 }] };
   await h.controller.load();
   assert.equal(h.controller.getSnapshot().content, "<svg>mine</svg>");
   assert.equal(h.controller.getSnapshot().canUndo, false);

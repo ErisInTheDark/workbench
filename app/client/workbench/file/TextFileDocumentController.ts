@@ -97,7 +97,7 @@ export default class TextFileDocumentController {
     const base = joins ? index - 1 : index;
     const frames = this.#history.frames.slice(0, base + 1);
     const patch = createHistoryPatch(materializeHistoryContent(this.#history, base), content);
-    if (patch) frames.push({ type: "patch", patch, selection: null, timestamp: at });
+    if (patch) frames.push({ type: "patch", patch, timestamp: at });
     this.#history = trimEditHistory({ currentIndex: frames.length - 1, frames });
     this.#coalesce = key !== null && patch ? { key, at } : null;
     this.#publish({ content });

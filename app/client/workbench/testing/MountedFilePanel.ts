@@ -273,6 +273,21 @@ export default class MountedFilePanel {
     await settle({ frames: true });
   }
 
+  /** The caret's block text with `|` where a collapsed caret sits, or null without one in the editor. */
+  get caretText() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) return null;
+    const range = selection.getRangeAt(0);
+    const block = closestBlock(range.startContainer, this.editor);
+    if (!block) return null;
+    const before = document.createRange();
+    before.setStart(block, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    const text = block.textContent ?? "";
+    const offset = before.toString().length;
+    return `${text.slice(0, offset)}|${text.slice(offset)}`;
+  }
+
   /** The panel client the React toolbar and comment margin drive. */
   get panel() {
     return this.client;
