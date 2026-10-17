@@ -1233,7 +1233,7 @@ function WorkbenchEditorClient(
     // Undo and redo cover both columns; other editor shortcuts stay off the original so it keeps editor markup.
     onOriginalKeyDown: (event) => {
       const command = matchEditorCommand(event);
-      if (command === "undo" || command === "redo") options.handleEditorKeyDown(event);
+      if (command === "undo" || command === "redo" || command === "save") options.handleEditorKeyDown(event);
       else if (command) event.preventDefault();
     },
     renderMarkdown: renderMarkdownFragment,
@@ -1776,16 +1776,12 @@ function WorkbenchEditorClient(
       return;
     }
 
-    if (event.defaultPrevented) {
+    // The editor runs its own shortcuts; this saves from the panel's other fields (comments, suggestion originals).
+    if (event.defaultPrevented || matchEditorCommand(event) !== "save") {
       return;
     }
 
-    const isPrimaryModifier = event.metaKey || event.ctrlKey;
-    if (!isPrimaryModifier || event.key.toLowerCase() !== "s") {
-      return;
-    }
-
-    if (!options.getEditorHasFocus()) {
+    if (!(editorShell ?? editor).contains(document.activeElement)) {
       return;
     }
 

@@ -2,11 +2,12 @@
  * Exports:
  * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, comments and
  *   history, acting on the editor selection without taking it.
+ * - CommandTooltip: an editor command's label and this platform's keybind chip, for buttons outside the toolbar too.
  */
 "use client";
 
 import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { describeKeybind, EDITOR_COMMANDS, type EditorCommand } from "../../../workbench/editor/editor-commands";
+import { describeKeybind, EDITOR_COMMANDS, shownKeybind, type EditorCommand } from "../../../workbench/editor/editor-commands";
 import type { ReviewMode } from "../../../workbench/editor/WorkbenchSuggestionController";
 import type { EditorToolbarState } from "../../../workbench/WorkbenchEditorClient";
 import type { WorkbenchFilePanelClient } from "../../../workbench/WorkbenchFilePanelClient";
@@ -73,9 +74,10 @@ const MODE_OPTIONS: readonly RotatorOption<ReviewMode>[] = [
   { icon: <SparklesIcon size={16} />, label: "Suggest", value: "suggest" },
 ];
 
-function CommandTooltip({ children, command }: { children: ComponentProps<typeof Tooltip>["children"]; command: EditorCommand }) {
-  const { keybinds, label } = EDITOR_COMMANDS[command];
-  const keybind = keybinds[0];
+/** A command's label with the keybind chip this platform shows for it. */
+export function CommandTooltip({ children, command }: { children: ComponentProps<typeof Tooltip>["children"]; command: EditorCommand }) {
+  const { label } = EDITOR_COMMANDS[command];
+  const keybind = shownKeybind(command, isApplePlatform());
   return (
     <Tooltip
       placement="bottom"

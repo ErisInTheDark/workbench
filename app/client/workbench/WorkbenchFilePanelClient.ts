@@ -131,6 +131,11 @@ function WorkbenchFilePanelClient(
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
 
   function runCommand(command: EditorCommand) {
+    if (command === "save") {
+      if (sessionState.currentPath) void saveCurrentFile();
+      return;
+    }
+
     if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
       return;
     }

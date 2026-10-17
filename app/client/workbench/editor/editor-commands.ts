@@ -2,7 +2,8 @@
  * Exports:
  * - EditorCommand: every command the markdown toolbar and editor shortcuts run.
  * - EditorKeybind: one key chord; `mod` is Ctrl, or Cmd on Apple platforms.
- * - EDITOR_COMMANDS: label and keybinds of each command; the first keybind is the one shown.
+ * - EDITOR_COMMANDS: label and keybinds of each command.
+ * - shownKeybind: the keybind a command's chip shows on this platform (Ctrl+Y redo elsewhere, ⌘⇧Z on Apple).
  * - matchEditorCommand: the command a keydown triggers, if any.
  * - describeKeybind: the key labels of a chord, for keybind chips.
  */
@@ -21,10 +22,13 @@ export type EditorCommand =
   | "ordered-list"
   | "comment"
   | "undo"
-  | "redo";
+  | "redo"
+  | "save";
 
 export interface EditorKeybind {
   alt?: boolean;
+  /** The platform this chord is the one shown on; chords without one show everywhere they come first. */
+  shownOn?: "apple" | "other";
   /** Matched against `KeyboardEvent.code`, for keys whose `key` changes with shift or layout. */
   code?: string;
   /** Matched against the lowercased `KeyboardEvent.key`. */
@@ -52,8 +56,18 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
   "ordered-list": { label: "Numbered list", keybinds: [{ mod: true, shift: true, code: "Digit7" }] },
   comment: { label: "Comment", keybinds: [{ mod: true, alt: true, code: "KeyM" }] },
   undo: { label: "Undo", keybinds: [{ mod: true, key: "z" }] },
-  redo: { label: "Redo", keybinds: [{ mod: true, shift: true, key: "z" }, { mod: true, key: "y" }] },
+  redo: {
+    label: "Redo",
+    keybinds: [{ mod: true, shift: true, key: "z", shownOn: "apple" }, { mod: true, key: "y", shownOn: "other" }],
+  },
+  save: { label: "Save", keybinds: [{ mod: true, key: "s" }] },
 };
+
+/** The chord a command's keybind chip shows on this platform: the one marked for it, else the first. */
+export function shownKeybind(command: EditorCommand, apple: boolean) {
+  const { keybinds } = EDITOR_COMMANDS[command];
+  return keybinds.find((keybind) => keybind.shownOn === (apple ? "apple" : "other")) ?? keybinds[0] ?? null;
+}
 
 function matchesKeybind(event: KeyboardEvent, keybind: EditorKeybind) {
   if (!(event.ctrlKey || event.metaKey)) return false;

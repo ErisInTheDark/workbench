@@ -212,6 +212,32 @@ test("undo walks back through savable states to the document before typing", () 
   assert.equal(seen.at(-1), "start\n", `undo states: ${JSON.stringify(seen)}`);
 }));
 
+test("ctrl+s saves and ctrl+y redoes", () => withPanel("start\n", async panel => {
+  await panel.caret("start|");
+  await panel.type("!");
+  const writes = panel.disk.writes.length;
+  await panel.press("s", { ctrl: true });
+  assert.equal(panel.disk.writes.length, writes + 1);
+  assert.equal(panel.disk.writes.at(-1), "start!\n");
+  await historyUntil(panel, "start\n");
+  await panel.press("y", { ctrl: true });
+  assert.notEqual(await panel.save(), "start\n");
+}));
+
+test("ctrl+s also saves from the panel's other fields, such as a comment", () => withPanel("start\n", async panel => {
+  await panel.caret("start|");
+  await panel.type("!");
+  const field = document.createElement("textarea");
+  panel.editor.parentElement!.append(field);
+  field.focus();
+  const writes = panel.disk.writes.length;
+  field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ctrlKey: true, key: "s" }));
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  assert.equal(panel.disk.writes.at(-1), "start!\n");
+  assert.equal(panel.disk.writes.length, writes + 1);
+  field.remove();
+}));
+
 async function historyUntil(panel: MountedFilePanel, markdown: string, redo = false) {
   for (let step = 0; step < 40 && await panel.save() !== markdown; step += 1) await panel.press("z", { ctrl: true, shift: redo });
   assert.equal(await panel.save(), markdown);

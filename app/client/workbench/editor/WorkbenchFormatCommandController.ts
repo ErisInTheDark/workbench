@@ -18,7 +18,7 @@ import type { EditorMode } from "../WorkbenchEditorClient";
 import type { EditorCommand } from "./editor-commands";
 import type { PendingInlineFormatKey } from "./WorkbenchInlineFormatController";
 
-export type FormatCommand = Exclude<EditorCommand, "comment" | "undo" | "redo">;
+export type FormatCommand = Exclude<EditorCommand, "comment" | "undo" | "redo" | "save">;
 
 export function isFormatCommand(command: EditorCommand): command is FormatCommand {
   return command !== "comment" && command !== "undo" && command !== "redo";

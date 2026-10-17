@@ -16,12 +16,11 @@ import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFam
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
-import Tooltip from "../../ui/Tooltip";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
-import MarkdownEditorToolbar from "../markdown-editor/MarkdownEditorToolbar";
+import MarkdownEditorToolbar, { CommandTooltip } from "../markdown-editor/MarkdownEditorToolbar";
 import useEditorMarginLayout from "../markdown-editor/use-editor-margin-layout";
 import {
   workbenchDiffGutterClassName,
@@ -287,7 +286,7 @@ export default function WorkbenchFilePanel ({
   /** Save and reset sit at the toolbar's end, beside undo and redo. */
   const fileActions = client && snapshot ? (
     <>
-      <Tooltip placement="bottom" delayMs={350} content="Save">
+      <CommandTooltip command="save">
         <IconButton
           type="button"
           title=""
@@ -300,7 +299,7 @@ export default function WorkbenchFilePanel ({
         >
           <SaveIcon size={16} />
         </IconButton>
-      </Tooltip>
+      </CommandTooltip>
       <DraftResetButton
         hasDraft={snapshot.dirty}
         savedDiffersFromHead={snapshot.savedDiffersFromHead}
