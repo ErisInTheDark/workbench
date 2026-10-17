@@ -2,8 +2,8 @@
  * Exports:
  * - default WorkbenchStatsTabs: the stats view's tab row for the app shell header; each tab is a real link to its url.
  */
-import type { MouseEvent } from "react";
-import { WORKBENCH_STATS_TABS, type WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
+import { createStatsRoute, WORKBENCH_STATS_TABS, type WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
+import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";
 import Tabs, { Tab } from "../../ui/Tabs";
 
 const LABELS: Record<WorkbenchStatsTab, { label: string; title: string }> = {
@@ -12,19 +12,15 @@ const LABELS: Record<WorkbenchStatsTab, { label: string; title: string }> = {
   tools: { label: "Tools", title: "Tool calls against the prompt tokens they cost" },
 };
 
-export default function WorkbenchStatsTabs({ href, onSelect, tab }: {
-  href: (tab: WorkbenchStatsTab) => string | undefined;
-  onSelect: (event: MouseEvent<HTMLAnchorElement>, tab: WorkbenchStatsTab) => void;
-  tab: WorkbenchStatsTab;
-}) {
+export default function WorkbenchStatsTabs({ tab }: { tab: WorkbenchStatsTab }) {
+  const href = useWorkbenchProjectNavigation();
   return (
     <Tabs className="-ml-2 flex min-w-0 items-center gap-0.5 overflow-x-auto" label="Statistics">
       {WORKBENCH_STATS_TABS.map((candidate) => (
         <Tab
           as="a"
-          href={href(candidate)}
+          href={href(createStatsRoute(null, candidate))}
           key={candidate}
-          onClick={(event) => onSelect(event, candidate)}
           selected={candidate === tab}
           title={LABELS[candidate].title}
           variant="header"

@@ -69,7 +69,6 @@ interface WorkbenchThreadSidebarProps {
     folderId?: FolderId;
     location?: ProjectLocationReference;
   }) => void;
-  onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectId: ProjectId | "";
   renderThreadTooltipDetails?: (entry: WorkbenchThreadSidebarEntry) => ReactNode;
   showMosaicView: boolean;
@@ -77,7 +76,6 @@ interface WorkbenchThreadSidebarProps {
   presentation?: PresentationSnapshot | null;
   controls?: WorkbenchControls | null;
   selectedLocation?: ProjectLocationReference | null;
-  onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
   projects?: readonly WorkbenchProjectOption[];
   selectedProjectIds?: readonly string[];
   selectedOwnerProjectId?: string;
@@ -94,7 +92,6 @@ export default memo(function WorkbenchThreadSidebar({
   onAttachFeedback,
   onBeginPointerDrag,
   onCreateThread,
-  onOpenThread,
   projectId,
   renderThreadTooltipDetails,
   showMosaicView,
@@ -102,7 +99,6 @@ export default memo(function WorkbenchThreadSidebar({
   presentation,
   controls,
   selectedLocation,
-  onOpenQualifiedThread,
   projects = [],
   selectedProjectIds,
   selectedOwnerProjectId,
@@ -161,8 +157,6 @@ export default memo(function WorkbenchThreadSidebar({
           onCreateThreadPointerDragStart: showMosaicView ? (event) => {
             onBeginPointerDrag(event, { harness, type: "new-thread" });
           } : undefined,
-          onOpenQualifiedThread,
-          onOpenThread,
           presentation,
           projectId: ownerProjectId,
           projects,

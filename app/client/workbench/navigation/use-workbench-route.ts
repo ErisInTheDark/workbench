@@ -5,7 +5,7 @@
  * - useWorkbenchRouteIntent: apply one URL-derived route intent and its canonical replacement.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { usePathname, useSearchParams } from "./browser-navigation";
 import {
@@ -14,8 +14,7 @@ import {
 import type { WorkbenchClientController } from "../../components/workbench/workbench-client-context";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
-import { useWorkbenchProjectNavigation } from "./use-workbench-project-navigation";
-import { isMobileSidebarRequested, keepsMobileMainPane, mobileSidebarHref } from "../state/mobile-pane-url-state";
+import { useWorkbenchNavigate, useWorkbenchProjectNavigation, type WorkbenchNavigateOptions } from "./use-workbench-project-navigation";
 import {
   readWorkbenchLaunchSelection,
   WORKBENCH_LAST_PROJECT_SELECTION_SCHEMA_VERSION,
@@ -32,6 +31,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
   const state = useWorkbenchClientStateController();
   const stateSnapshot = useWorkbenchClientStateSnapshot();
   const href = useWorkbenchProjectNavigation(client);
+  const navigateToRoute = useWorkbenchNavigate(client);
   const navigation = client.mounted?.navigation;
   const navigationState = useSyncExternalStore(
     navigation?.subscribe ?? emptySubscribe,
@@ -61,29 +61,6 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
     resolved.logical?.projectId, resolved.logical?.threadOwnerProjectId,
     resolved.view, resolved.error, pathname === "/launch" ? launchSelectionKey : undefined,
   ]);
-
-  const navigateToRoute = useCallback((nextRoute: WorkbenchRoute,
-    options: {
-      replace?: boolean; selection?: "inherit" | "exact";
-      /** A sidebar-only change (project or folder selection) keeps an open mobile sidebar open over the same main pane. */
-      keepMobileSidebar?: boolean;
-    } = {}) => {
-    const routeHref = href(nextRoute, options.selection);
-    // Canonical replacements keep the mobile sidebar open too, so a reload there returns to the sidebar.
-    const keepSidebar = (options.replace || (options.keepMobileSidebar && keepsMobileMainPane(route, nextRoute)))
-      && isMobileSidebarRequested(window.location.search);
-    const nextHref = routeHref !== undefined && keepSidebar
-      ? mobileSidebarHref(new URL(routeHref, window.location.origin)) : routeHref;
-    if (nextHref === undefined || nextHref === locationSnapshot) {
-      return;
-    }
-
-    if (options.replace) {
-      window.history.replaceState({ workbench: true }, "", nextHref);
-    } else {
-      window.history.pushState({ workbench: true }, "", nextHref);
-    }
-  }, [href, locationSnapshot, route]);
 
   useEffect(() => {
     // Prefer the catalogue once available, including when an old junction URL
@@ -140,7 +117,7 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
 export function useWorkbenchRouteIntent(
   client: WorkbenchClientController,
   intent: WorkbenchRoute,
-  navigateToRoute: (route: WorkbenchRoute, options?: { replace?: boolean }) => void,
+  navigateToRoute: (route: WorkbenchRoute, options?: WorkbenchNavigateOptions) => void,
 ) {
   const navigate = useRef(navigateToRoute);
   navigate.current = navigateToRoute;

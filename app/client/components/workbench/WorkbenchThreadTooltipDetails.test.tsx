@@ -308,7 +308,7 @@ test("available questionnaire and plan details survive pending thread observatio
     sidebarStore: planStore,
   });
   assert.match(html, /data-thread-tooltip-questionnaire="live"/u);
-  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.match(html, /href="\/@\/thread\/project\/@\/active%20intersection"/u);
 });
 
 test("known questionnaire gets its own busy section before the request is admitted", async () => {
@@ -393,10 +393,10 @@ test("planned-work tooltips keep active intersection navigation and omit planned
     proposalId: null,
     sidebarStore: planStore,
   });
-  assert.match(compactHtml, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.match(compactHtml, /href="\/@\/thread\/project\/@\/active%20intersection"/u);
   assert.match(compactHtml, /data-project-file-project-id="project"[^>]*data-project-file-relative-path="src\/feature\/card.tsx"/u);
   assert.doesNotMatch(compactHtml, /data-project-file-relative-path="docs\/unrelated.ts"/u);
-  assert.doesNotMatch(compactHtml, /href="\/project\/@\/thread\/planned%20intersection"|<details/u);
+  assert.doesNotMatch(compactHtml, /href="\/@\/thread\/project\/@\/planned%20intersection"|<details/u);
 
   const fullHtml = renderWithClient(
     createElement(ObservedThreadGitArcIntersectionCard, {
@@ -459,7 +459,7 @@ test("waiting references reuse compact rows and keep unloaded targets navigable"
   }), planStore);
   assert.match(html, /active intersection/u);
   assert.doesNotMatch(html, /stale title/u);
-  assert.match(html, /href="[^"]*\/thread\/missing%20wait"[^>]*>Missing wait</u);
+  assert.match(html, /href="\/@\/thread\/other\/@\/missing%20wait"[^>]*>Missing wait</u);
 });
 
 test("Git arc waits show active claim owners without planned-only intersections", () => {
@@ -476,7 +476,7 @@ test("Git arc waits show active claim owners without planned-only intersections"
   assert.match(html, /data-thread-git-arc-intersection-card="wait"/u);
   assert.match(html, /data-project-file-relative-path="src\/feature\/card.tsx"/u);
   assert.doesNotMatch(html, /data-project-file-relative-path="(?:docs\/unrelated.ts|src\/feature\/other.ts)"/u);
-  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.match(html, /href="\/@\/thread\/project\/@\/active%20intersection"/u);
   assert.doesNotMatch(html, /planned%20intersection|<details/u);
 });
 
@@ -494,7 +494,7 @@ test("stashed tooltips identify live claim owners without listing paths or plann
     pendingRequest: null, proposalId: null, sidebarStore: store,
   });
   assert.match(html, /data-thread-git-arc-intersection-card="stashed"/u);
-  assert.match(html, /href="\/project\/@\/thread\/active%20intersection"/u);
+  assert.match(html, /href="\/@\/thread\/project\/@\/active%20intersection"/u);
   assert.doesNotMatch(html, /data-project-file-relative-path=|planned%20intersection|<details/u);
 
   const clearHtml = await renderDetails(false, "C:/workspace", true, {
@@ -561,5 +561,5 @@ test("tooltips list the threads a thread waits for", async () => {
     }],
   });
   assert.match(html, /Waiting for/u);
-  assert.match(html, /href="[^"]*\/thread\/blocker"[^>]*>Blocking work</u);
+  assert.match(html, /href="\/@\/thread\/project\/@\/blocker"[^>]*>Blocking work</u);
 });

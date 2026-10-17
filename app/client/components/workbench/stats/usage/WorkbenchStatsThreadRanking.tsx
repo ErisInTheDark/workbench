@@ -22,7 +22,7 @@ export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
   threads: readonly Thread[] | null;
 }) {
   // Live thread details load from this machine, so hover cards show only for local threads.
-  const { isLocal, metric, openThread, projectName, showProjects, threadRoute } = useStats();
+  const { isLocal, metric, projectName, showProjects, threadRoute } = useStats();
   const projectHref = useWorkbenchProjectNavigation();
   const [hovered, setHovered] = useState<{ thread: string; model: string } | null>(null);
   const measure = (item: { costUsd: number; tokens: number }) => metric === "cost" ? item.costUsd : item.tokens;
@@ -64,7 +64,6 @@ export default function WorkbenchStatsThreadRanking({ modelHues, threads }: {
                   <a
                     className="min-w-0 truncate rounded-sm font-medium text-text hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                     href={projectHref(threadRoute(thread))}
-                    onClick={(event) => openThread(event, thread)}
                   >
                     {thread.title || thread.threadId}
                   </a>

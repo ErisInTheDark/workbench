@@ -213,11 +213,11 @@ export default class WorkbenchProjectNavigation {
     return resolved.logical?.location ?? this.folderForRoute(resolved);
   }
 
+  /** `inherit` keeps the current sidebar selection for every destination except home and project views, which are selections. */
   href(route: WorkbenchRoute, current?: WorkbenchRoute,
     selection: "inherit" | "exact" = "exact"): string | undefined {
     const fileLocation = route.view === "file" ? this.fileLocationFor(route) : null;
-    const intent = selection === "inherit" && current && (route.view === "file" || route.view === "thread"
-      && (current.selectedProjectIds !== null || route.selectedProjectIds === null))
+    const intent = selection === "inherit" && current && route.view !== "home" && route.view !== "project"
       ? withProjectSelection(route, current.selectedProjectIds) : route;
     let withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
       ? { ...intent, folderAddress: [...current.folderAddress] }

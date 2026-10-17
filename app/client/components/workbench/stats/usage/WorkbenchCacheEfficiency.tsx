@@ -16,7 +16,7 @@ const MINIMUM_UNCACHED_FOR_HIT_RATE = 500_000;
 
 export default function WorkbenchCacheEfficiency() {
   // Live thread details load from this machine, so hover cards show only for local threads.
-  const { isLocal, openThread, projectName, showProjects, threadRoute } = useStats();
+  const { isLocal, projectName, showProjects, threadRoute } = useStats();
   const { data: stats, loading } = useStats.usage();
   const cache = stats?.cacheEfficiency;
   const projectHref = useWorkbenchProjectNavigation();
@@ -77,7 +77,6 @@ export default function WorkbenchCacheEfficiency() {
                     <a
                       className="rounded-sm hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
                       href={projectHref(threadRoute(thread))}
-                      onClick={(event) => openThread(event, thread)}
                     >
                       {thread.title || thread.threadId}
                     </a>

@@ -15,6 +15,7 @@ import {
   type ProjectCreateResult,
   type ProjectTemplate,
 } from "workbench-shared/workbench/project/project-creation";
+import { useWorkbenchNavigate } from "../../../workbench/navigation/use-workbench-project-navigation";
 import PrimaryButton from "../../ui/PrimaryButton";
 import type { WorkbenchRouteViewProps } from "../route-views/workbench-route-views";
 import { useWorkbenchClientController } from "../workbench-client-context";
@@ -36,8 +37,9 @@ const REJECTION_MESSAGES: Record<Extract<ProjectCreateResult, { accepted: false 
   "inside-project": "That folder is inside an existing project. Choose a folder outside it.",
 };
 
-export default function WorkbenchNewProjectView ({ route, navigateToRoute }: WorkbenchRouteViewProps) {
+export default function WorkbenchNewProjectView ({ route }: WorkbenchRouteViewProps) {
   const mounted = useWorkbenchClientController().mounted;
+  const navigateToRoute = useWorkbenchNavigate();
   const nameId = useId();
   const [name, setName] = useState("");
   const [template, setTemplate] = useState<ProjectTemplate>("none");

@@ -4,14 +4,16 @@
  */
 "use client";
 
-import type { ComponentProps, MouseEvent, ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import type { WorkbenchLogicalThreadRow, WorkbenchProjectOption } from "workbench-shared/types";
-import { createHomeRoute, type WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
+import {
+  createNewProjectRoute, createSettingsRoute, createStatsRoute, createToggledProjectSelectionRoute, type WorkbenchRoute,
+} from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type WorkbenchBrowseSessionController from "../../workbench/browse/WorkbenchBrowseSessionController";
 import type WorkbenchSearchController from "../../workbench/search/WorkbenchSearchController";
-import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
+import { useWorkbenchNavigate, useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
 import IconButton from "../ui/IconButton";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
 import WorkbenchGitSidebar from "./git/WorkbenchGitSidebar";
@@ -29,14 +31,12 @@ import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActio
 
 type ThreadSidebarProps = ComponentProps<typeof WorkbenchThreadSidebar>;
 type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>;
-type LinkClick = (event: MouseEvent<HTMLAnchorElement>) => void;
-
 export default function WorkbenchSidebarPane({
   activeDragPayload, activeProjectId, appRuntime, askAgentWithReferences, browseLocation, browseProjectId,
-  browseSessionController, collapsed, createThread, explorerSection, harness, navigateToRoute, newProjectRoute,
-  onAttachFeedback, onBeginPointerDrag, onOpenQualifiedThread, onOpenStats, onOpenSettings, onOpenThread,
-  onPresentationDraftDeleted, onSelectProjectLink, onThreadSettled, physicalProjects, projectSourceError,
-  renderThreadTooltipDetails, route, searchController, settingsHref, showGitView, showMosaicView, statsRoute,
+  browseSessionController, collapsed, createThread, explorerSection, harness,
+  onAttachFeedback, onBeginPointerDrag, onOpenQualifiedThread, onOpenThread,
+  onPresentationDraftDeleted, onThreadSettled, physicalProjects, projectSourceError,
+  renderThreadTooltipDetails, route, searchController, showGitView, showMosaicView,
   viewedProjectId,
 }: {
   activeDragPayload: ThreadSidebarProps["activeDragPayload"];
@@ -51,31 +51,31 @@ export default function WorkbenchSidebarPane({
   /** The folder's explorer tree, rendered only while a folder is selected. */
   explorerSection: ReactNode;
   harness: ThreadSidebarProps["harness"];
-  navigateToRoute: (route: WorkbenchRoute, options?: { keepMobileSidebar?: boolean }) => void;
-  newProjectRoute: WorkbenchRoute;
   onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
   onBeginPointerDrag: ThreadSidebarProps["onBeginPointerDrag"];
+  /** Context-menu "Open" for a listed thread row; row clicks follow their hrefs. */
   onOpenQualifiedThread: (row: WorkbenchLogicalThreadRow, selectedLogicalProjectId: string | null) => void;
-  onOpenStats: LinkClick;
-  onOpenSettings: LinkClick;
-  onOpenThread: ThreadSidebarProps["onOpenThread"];
+  onOpenThread: ActionsProps["onOpenThread"];
   onPresentationDraftDeleted: NonNullable<ActionsProps["onPresentationDraftDeleted"]>;
-  onSelectProjectLink: ComponentProps<typeof ProjectSidebar>["onProjectLinkClick"];
   onThreadSettled: ActionsProps["onThreadSettled"];
   physicalProjects: readonly WorkbenchProjectOption[];
   projectSourceError: string;
   renderThreadTooltipDetails: ThreadSidebarProps["renderThreadTooltipDetails"];
   route: WorkbenchRoute;
   searchController: WorkbenchSearchController;
-  settingsHref: string;
   showGitView: boolean;
   showMosaicView: boolean;
-  statsRoute: WorkbenchRoute;
   viewedProjectId: string;
 }) {
   const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
+  const navigate = useWorkbenchNavigate();
   const selection = useProjects.selection(route, physicalProjects, browseLocation);
+  const projectOrder = (selection.displayedLogicalProjects ?? physicalProjects).map(project => project.id);
+  const toggleProject = (projectId: string) => navigate(
+    createToggledProjectSelectionRoute(route, selection.selectionProjectIds, projectId, projectOrder),
+    { selection: "exact", keepMobileSidebar: true },
+  );
   const unarchivedProjectIds = new Set(selection.unarchivedProjectIds);
   const unsettledProjectIds = new Set(selection.unsettledProjectIds);
   const presentation = client.mounted?.presentationClient?.snapshot();
@@ -107,8 +107,7 @@ export default function WorkbenchSidebarPane({
               as="a"
               label="Open statistics"
               display="hover-border"
-              href={projectHref(statsRoute)}
-              onClick={onOpenStats}
+              href={projectHref(createStatsRoute(null))}
               title="Open statistics"
             >
               <StatsIcon size={20} />
@@ -118,8 +117,7 @@ export default function WorkbenchSidebarPane({
               as="a"
               label="Open settings"
               display="hover-border"
-              href={settingsHref}
-              onClick={onOpenSettings}
+              href={projectHref(createSettingsRoute(""))}
               title="Open settings"
             >
               <GearIcon size={20} />
@@ -146,20 +144,10 @@ export default function WorkbenchSidebarPane({
               logicalProjects={selection.displayedLogicalProjects}
               logicalError={[presentation?.error, projectSourceError].filter(Boolean).join(" ") || null}
               logicalLoading={presentation?.phase === "loading"}
-              onProjectLinkClick={onSelectProjectLink}
-              onHomeClick={event => {
-                if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-                event.preventDefault();
-                navigateToRoute(createHomeRoute());
-              }}
-              createProjectHref={projectHref(newProjectRoute)}
+              onToggleProject={toggleProject}
+              createProjectHref={projectHref(createNewProjectRoute())}
               createProjectSelected={route.view === "new-project"}
               homeSelected={route.view === "home"}
-              onCreateProject={event => {
-                if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                event.preventDefault();
-                navigateToRoute(newProjectRoute);
-              }}
               projects={physicalProjects}
             />
             <section className="shrink-0 pb-3">
@@ -182,13 +170,10 @@ export default function WorkbenchSidebarPane({
                   presentation={presentation?.data}
                   controls={client.controls}
                   selectedLocation={browseLocation}
-                  onOpenQualifiedThread={row => onOpenQualifiedThread(row,
-                    route.selectedProjectIds === null ? null : row.logicalProjectId)}
                   currentTarget={route.view === "thread" ? route.threadTarget : null}
                   harness={harness}
                   onBeginPointerDrag={onBeginPointerDrag}
                   onCreateThread={createThread}
-                  onOpenThread={onOpenThread}
                   projectId={browseProjectId}
                   projects={physicalProjects}
                   renderThreadTooltipDetails={renderThreadTooltipDetails}
@@ -205,7 +190,7 @@ export default function WorkbenchSidebarPane({
             folders={folderOptions}
             label="Choose folder"
             onSelect={location => {
-              navigateToRoute({
+              navigate({
                 ...route,
                 folderAddress: navigator?.folderAddressFor(location, route) ?? null,
               }, { keepMobileSidebar: true });
@@ -213,11 +198,7 @@ export default function WorkbenchSidebarPane({
             selected={browseLocation}
           >
             {browseLocation && gitRoute ? <WorkbenchGitSidebar active={showGitView} location={browseLocation} route={gitRoute}
-              onAskAgent={askAgentWithReferences} onNavigate={event => {
-              if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-              event.preventDefault();
-              navigateToRoute(gitRoute);
-            }} /> : (
+              onAskAgent={askAgentWithReferences} /> : (
               <p className="m-0 px-2 py-1 text-[0.8rem] leading-5 text-fg/muted">
                 Choose a folder to see its working tree and files.
               </p>

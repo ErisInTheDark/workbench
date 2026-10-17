@@ -144,13 +144,7 @@ export default function WorkbenchGitFileList ({ onSelect }: { onSelect (): void 
         return <Disclosure key={id} summaryClassName="py-1" summary={owner ? (
           <WorkbenchThreadListItem entry={owner.entry} projectId={ProjectIdSchema.parse(owner.projectId)}
             compact={false} presentation="disclosure-summary" href={undefined} showTooltip={false}
-            action={href ? {
-              Icon: OpenThreadIcon, label: "Open", href, onClick: event => {
-                if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                event.preventDefault();
-                window.history.pushState({ workbench: true }, "", href);
-              }
-            } : undefined} />
+            action={href ? { Icon: OpenThreadIcon, label: "Open", href } : undefined} />
         ) : <span className="text-sm text-fg/muted">Claimed thread unavailable</span>}>
           {files.filter(file => file.ownerIds.includes(id)).map(row)}
         </Disclosure>;

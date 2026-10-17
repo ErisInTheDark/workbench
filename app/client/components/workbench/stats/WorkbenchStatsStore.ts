@@ -6,11 +6,10 @@
  * - StatsState: the view's filters, derived scope, and actions.
  * - StatsThreadLocation/StatsProjectLocation: where a stats row's thread or project lives once merged across machines.
  * - StatsFeedbackReport/StatsFeedbackReportSnapshot: one feedback report addressed through the thread that filed it, and its read state.
- * - StatsInputs: app-owned facts the stats view feeds the store (project scope, routes).
+ * - StatsInputs: app-owned facts the stats view feeds the store (project scope, thread routes).
  * - default WorkbenchStatsStore: app-wide stats owner; own stats filters, lease one cross-machine workspace observation per demanded
  *   section request, and lease single feedback report reads.
  */
-import type { MouseEvent } from "react";
 import type { WorkbenchHarness, WorkbenchProjectOption } from "workbench-shared/types";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -80,7 +79,6 @@ export interface StatsInputs {
   readonly scope: StatsProjectScope;
   readonly projects: readonly Project[];
   readonly addressFeedback: (projectId: string, references: readonly WorkbenchThreadAddressedFeedback[]) => void;
-  readonly openRoute: (event: MouseEvent<HTMLAnchorElement>, route: WorkbenchRoute) => void;
   /** Local threads open in their project; others open by id through their logical project. */
   readonly threadRoute: (thread: StatsThreadLocation, logicalProjectId: string | null) => WorkbenchRoute;
 }
@@ -133,7 +131,6 @@ export interface StatsState {
   /** The logical project another machine's row belongs to, for opening it by id; null for local rows. */
   remoteLogicalProject(projectId: string, daemonId: string | null | undefined): string | null;
   threadRoute(thread: StatsThreadLocation): WorkbenchRoute;
-  openThread(event: MouseEvent<HTMLAnchorElement>, thread: StatsThreadLocation): void;
   setMode(mode: "selected" | "all"): void;
   setRange(range: WorkbenchStatsRange): void;
   pickPeriod(startedAt: number, extend: boolean): void;
@@ -202,7 +199,7 @@ export default class WorkbenchStatsStore {
     provider: null, range: "7d", tokenTypes: [...STATS_TOKEN_TYPES], workspaceProject: null,
   };
   #inputs: StatsInputs = {
-    scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {}, openRoute: () => {},
+    scope: EMPTY_SCOPE, projects: [], addressFeedback: () => {},
     threadRoute: () => { throw new Error("Stats threads cannot open before the view supplies routes."); },
   };
   readonly #workspace: WorkbenchWorkspaceClient | null;
@@ -448,7 +445,6 @@ export default class WorkbenchStatsStore {
       },
       remoteLogicalProject,
       threadRoute,
-      openThread: (event, thread) => inputs.openRoute(event, threadRoute(thread)),
       tokenTypes: filters.tokenTypes,
       workspaceProject: this.#workspaceProject(),
       workspaceProjects: this.#workspaceProjects(),

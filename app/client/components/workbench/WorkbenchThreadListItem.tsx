@@ -45,10 +45,9 @@ import { getThreadRowActions, type ThreadRowAction } from "./thread-row-actions"
  * A placed row whose thread summary has not landed: its title and activity show at once, a spinner holds the status
  * slot, and badges, actions and tooltip details wait for the summary.
  */
-export function WorkbenchPendingThreadListItem({ activityAt, href, onActivate, project, title }: {
+export function WorkbenchPendingThreadListItem({ activityAt, href, project, title }: {
   activityAt: number;
   href?: string;
-  onActivate?: () => void;
   project?: WorkbenchProjectOption | WorkbenchLogicalProject;
   title: string;
 }) {
@@ -60,11 +59,6 @@ export function WorkbenchPendingThreadListItem({ activityAt, href, onActivate, p
         tabIndex={-1}
         aria-label={`${project ? `${"matchKey" in project ? project.label : project.id}, ` : ""}${title}, loading`}
         className="absolute inset-0 z-10 cursor-pointer rounded-[0.8rem] border border-transparent outline-none"
-        onClick={onActivate ? (event: MouseEvent<HTMLAnchorElement>) => {
-          if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-          event.preventDefault();
-          onActivate();
-        } : undefined}
       />
       <div className="pointer-events-none relative z-10 grid min-h-11 min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center py-1 pr-2 pl-2 md:min-h-8">
         <LoaderIcon className="mr-1.5 text-fg/muted" size={16} />
@@ -129,7 +123,7 @@ export default function WorkbenchThreadListItem({
   tooltipDetails,
   trailing,
 }: {
-  action?: { Icon: ThreadStatusIcon; label: string; href: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void };
+  action?: { Icon: ThreadStatusIcon; label: string; href: string };
   anchorRef?: Ref<HTMLAnchorElement>;
   attentionLabel?: string;
   className?: string;
@@ -234,10 +228,8 @@ export default function WorkbenchThreadListItem({
   </> : null;
   const actionButton = actionOverride ? (
     <a href={actionOverride.href} aria-label={actionOverride.label} title={actionOverride.label}
-      className={actionClassName} onPointerDown={event => event.stopPropagation()} onClick={event => {
-        event.stopPropagation();
-        actionOverride.onClick?.(event);
-      }}>{actionContent}</a>
+      className={actionClassName} onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}>{actionContent}</a>
   ) : showActions && actionDisplay ? (
     <button type="button" aria-label={actionDisplay.label} title={actionDisplay.label} className={actionClassName} onClick={(event) => {
       event.stopPropagation();
@@ -302,10 +294,16 @@ export default function WorkbenchThreadListItem({
               event.preventDefault();
               onActivate(target);
             } : undefined}
-            onKeyDown={onActivate ? (event) => {
-              if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onActivate(target); return; }
+            onKeyDown={(event) => {
+              // Rows are tabs and options, so Space activates them like Enter does; a click follows the row's href.
+              if ((onActivate || href) && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                if (onActivate) onActivate(target);
+                else event.currentTarget.click();
+                return;
+              }
               onKeyDown?.(event);
-            } : onKeyDown}
+            }}
             onDragStart={onDragStart}
             onPointerDown={onPointerDown}
           />

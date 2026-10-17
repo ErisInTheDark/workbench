@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentType, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 
 import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { DaemonId, ProjectId } from "workbench-shared/workbench/identity";
@@ -100,11 +100,10 @@ function SelectedProjectIcons({ entries }: { entries: readonly DisplaySidebarPro
 }
 
 /** A sidebar navigation option styled like the thread section's "Create new thread" row. */
-function ProjectSectionLink({ href, icon: Icon, label, onClick, selected }: {
+function ProjectSectionLink({ href, icon: Icon, label, selected }: {
   href?: string;
   icon: ComponentType<IconProps>;
   label: string;
-  onClick (event: MouseEvent<HTMLAnchorElement>): void;
   selected: boolean;
 }) {
   return (
@@ -115,7 +114,6 @@ function ProjectSectionLink({ href, icon: Icon, label, onClick, selected }: {
         ${selected ? `${workbenchOptionSelectedClassName} font-semibold text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
       `}
       href={href}
-      onClick={onClick}
       title={label}
     >
       <Icon className="shrink-0" size={16} />
@@ -137,9 +135,7 @@ export default function ProjectSidebar ({
   createProjectHref,
   createProjectSelected,
   homeSelected,
-  onCreateProject,
-  onHomeClick,
-  onProjectLinkClick,
+  onToggleProject,
   projects,
 }: {
   activeProjectId: string;
@@ -154,9 +150,8 @@ export default function ProjectSidebar ({
   createProjectHref?: string;
   createProjectSelected: boolean;
   homeSelected: boolean;
-  onCreateProject (event: MouseEvent<HTMLAnchorElement>): void;
-  onHomeClick (event: MouseEvent<HTMLAnchorElement>): void;
-  onProjectLinkClick (event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
+  /** A plain click toggles the project in the selection; its link (middle-click, new tab) opens just that project. */
+  onToggleProject (projectId: string): void;
   projects: readonly WorkbenchProjectOption[];
 }) {
   const { preferences } = useWorkbenchSidebarPreferences();
@@ -241,12 +236,11 @@ export default function ProjectSidebar ({
       >
         <nav aria-label="Projects" className="flex flex-col gap-1">
           <div className="mt-1 flex min-w-0 gap-1">
-            <ProjectSectionLink href="/" icon={HomeIcon} label="Home" onClick={onHomeClick} selected={homeSelected} />
+            <ProjectSectionLink href="/" icon={HomeIcon} label="Home" selected={homeSelected} />
             <ProjectSectionLink
               href={createProjectHref}
               icon={FolderClosedIcon}
               label="New project"
-              onClick={onCreateProject}
               selected={createProjectSelected}
             />
           </div>
@@ -256,7 +250,11 @@ export default function ProjectSidebar ({
               contextMenu={folderMenus.get(entry.project.id) ?? null}
               entry={entry}
               key={entry.project.id}
-              onProjectLinkClick={onProjectLinkClick}
+              onProjectLinkClick={(event, projectId) => {
+                if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+                event.preventDefault();
+                onToggleProject(projectId);
+              }}
               selected={selectedSet.has(entry.project.id)}
             />
           ))}

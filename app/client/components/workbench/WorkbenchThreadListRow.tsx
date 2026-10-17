@@ -66,8 +66,6 @@ export interface ThreadListRowContext {
   isShiftPressed: boolean;
   logicalProjects?: readonly WorkbenchLogicalProject[];
   onAttachFeedback?: (ownerProjectId: string, target: WorkbenchThreadTarget, reference: WorkbenchThreadAddressedFeedback) => Promise<void>;
-  onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
-  onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   projectHref: (route: WorkbenchRoute) => string | undefined;
   projectsById: ReadonlyMap<string, WorkbenchProjectOption | WorkbenchLogicalProject>;
   readRowForPayload: (payload: WorkbenchThreadRowDragPayload) => WorkbenchLogicalThreadRow | undefined;
@@ -139,7 +137,6 @@ export default function WorkbenchThreadListRow({
         href={ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(target.kind === "provider"
           ? createLogicalExistingThreadRoute(null, target)
           : createLogicalThreadRoute(null, LogicalProjectIdSchema.parse(entryProjectId), member.location, target))}
-        onActivate={() => ctx.onOpenThread(target, sourceProjectId)}
         project={ctx.showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined}
         title={member.title}
       />
@@ -154,8 +151,6 @@ export default function WorkbenchThreadListRow({
       : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)
     : createHomeThreadRoute(entryProjectId, target));
   const eyebrow = ctx.showProjectEyebrow ? logicalProject ?? project ?? undefined : undefined;
-  const onActivate = (activatedTarget: WorkbenchThreadTarget) => qualified
-    ? ctx.onOpenQualifiedThread?.(qualified) : ctx.onOpenThread(activatedTarget, sourceProjectId);
 
   if (presentation === "preview") {
     return (
@@ -164,7 +159,6 @@ export default function WorkbenchThreadListRow({
         dimmedOverride={false}
         entry={entry}
         href={href}
-        onActivate={onActivate}
         project={eyebrow}
         projectId={sourceProjectId}
         projectSource={qualified?.location}
@@ -280,7 +274,6 @@ export default function WorkbenchThreadListRow({
       onAction={(action) => readOnly ? undefined : qualified
         ? ctx.actions.onActionFor(entry, action)
         : ctx.actions.onAction(entry, action, sourceProjectId)}
-      onActivate={onActivate}
       onDragStart={readOnly ? undefined : onDragStart}
       onPointerDown={readOnly ? undefined : onPointerDown}
       project={eyebrow}

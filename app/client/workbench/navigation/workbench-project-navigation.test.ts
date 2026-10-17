@@ -6,7 +6,7 @@ import test from "node:test";
 import type { WorkbenchLogicalProject } from "workbench-shared/types";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import {
-  createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute,
+  createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute, createHomeRoute, createNewProjectRoute,
   createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
   createLogicalExistingThreadRoute, createLogicalFileRoute,
   createLogicalThreadRoute, withProjectSelection, withFileTabs, getWorkbenchFileTabs,
@@ -168,6 +168,40 @@ test("thread links inherit selection while an explicit project toggle changes it
   const toggled = createToggledProjectSelectionRoute(current, [first], second, [first, second]);
   assert.equal(navigation.href(toggled, current, "inherit"), "/one/@/thread/t1");
   assert.equal(navigation.href(toggled, current, "exact"), "/one/+/two/@/thread/one/@/t1");
+});
+
+test("every destination keeps the sidebar selection unless it is itself a selection", () => {
+  const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");
+  const second = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  const navigation = new WorkbenchProjectNavigation([], [], [
+    { id: first, matchKey: "remote://github.com/team/one", label: "one", locations: [] },
+    { id: second, matchKey: "remote://github.com/team/two", label: "two", locations: [] },
+  ]);
+  const multi = navigation.readRoute("/one/+/two/@/thread/one/@/new");
+  const unfiltered = navigation.readRoute("/");
+  const reopen = (route: Parameters<typeof navigation.href>[0], current: typeof multi) => {
+    const href = navigation.href(route, current, "inherit");
+    assert.ok(href, route.view);
+    return navigation.readRoute(href);
+  };
+  for (const destination of [
+    createSettingsRoute(""), createSettingsRoute("elsewhere"), createStatsRoute(null, "tools"), createNewProjectRoute(),
+    createLogicalThreadRoute(first, first, null, { kind: "new" }), createLogicalFileRoute(second, null, "notes.md"),
+  ]) {
+    const opened = reopen(destination, multi);
+    assert.equal(opened.view, destination.view);
+    assert.deepEqual(opened.selectedProjectIds, [first, second], destination.view);
+  }
+  const thread = reopen(createLogicalThreadRoute(first, first, null, { kind: "new" }), unfiltered);
+  assert.equal(thread.selectedProjectIds, null);
+  assert.equal(thread.logical?.threadOwnerProjectId, first);
+  assert.equal(reopen(createSettingsRoute(""), unfiltered).selectedProjectIds, null);
+
+  assert.equal(reopen(createHomeRoute(), multi).selectedProjectIds, null);
+  assert.deepEqual(reopen(createLogicalProjectRoute(second), multi).selectedProjectIds, [second]);
+  assert.deepEqual(reopen(withProjectSelection(createSettingsRoute(""), [second]), multi).selectedProjectIds, [first, second]);
+  assert.deepEqual(navigation.readRoute(navigation.href(
+    withProjectSelection(createSettingsRoute(""), [second]), multi, "exact")!).selectedProjectIds, [second]);
 });
 
 test("statistics keep a logical multi-project selection and stay on statistics when the selection changes", () => {

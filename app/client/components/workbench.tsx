@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type {
@@ -44,13 +44,9 @@ import {
     createMosaicRoute,
     createPinnedThreadRoute,
     createProjectRoute,
-    createNewProjectRoute,
     createSettingsRoute,
     createSettledThreadExitRoute,
-    createStatsRoute,
     createThreadRoute,
-    createToggledProjectSelectionRoute,
-    createWorkbenchHref,
     getWorkbenchMosaicThreadRootIds,
     getWorkbenchThreadTargetRootId,
     getWorkbenchThreadTargetSelectedId,
@@ -59,7 +55,6 @@ import {
     isWorkbenchThreadTargetSelected,
     withProjectSelection,
     type WorkbenchRoute,
-    type WorkbenchStatsTab,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { projectFolderOptions } from "workbench-shared/workbench/project/project-folder-address";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
@@ -105,7 +100,7 @@ import {
     mobileSidebarHref,
 } from "../workbench/state/mobile-pane-url-state";
 import type { MobilePaneDestination } from "../workbench/navigation/MobilePaneSwipeController";
-import { useSearchParams } from "../workbench/navigation/browser-navigation";
+import { installBrowserLinkNavigation, useSearchParams } from "../workbench/navigation/browser-navigation";
 import {
     createDefaultProjectWorkbenchSettings,
     MAX_EDITOR_FONT_SIZE,
@@ -392,16 +387,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const {
     displayedLogicalProjects, selectionProjectIds, selectedLogicalProject, selectedLogicalProjects, selectedPhysicalProjects,
   } = projectSelection;
-  const settingsRoute = useMemo(() => withProjectSelection(
-    createSettingsRoute(""),
-    selectionProjectIds.length ? selectionProjectIds : null,
-  ), [selectionProjectIds]);
-  const settingsHref = projectHref(settingsRoute) ?? createWorkbenchHref(settingsRoute);
-  // Statistics keep the sidebar's project selection so the view can scope to it.
-  const statsRoute = useMemo(() => withProjectSelection(
-    createStatsRoute(null),
-    selectionProjectIds.length ? selectionProjectIds : null,
-  ), [selectionProjectIds]);
+  useEffect(() => installBrowserLinkNavigation(), []);
   const dynamicSelectionPending = projectSelection.pending;
   const currentThread = useThreads.current(workbenchClient);
   const threadDocuments = useThreads.documents(workbenchClient);
@@ -795,48 +781,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     updateProjectSetting,
   ]);
 
-  const openSettingsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) return;
-    event.preventDefault();
-    navigateToRoute(settingsRoute);
-  }, [navigateToRoute, settingsRoute]);
-
-  const openStatsFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) {
-      return;
-    }
-
-    event.preventDefault();
-    navigateToRoute(statsRoute);
-  }, [navigateToRoute, statsRoute]);
-
   const statsTab = route.view === "stats" ? route.statsTab ?? "usage" : "usage";
-  const statsTabRoute = useCallback((tab: WorkbenchStatsTab) => (
-    withProjectSelection(createStatsRoute(null, tab), route.selectedProjectIds)
-  ), [route.selectedProjectIds]);
-  const openStatsTabFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, tab: WorkbenchStatsTab) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    navigateToRoute(statsTabRoute(tab));
-  }, [navigateToRoute, statsTabRoute]);
-
-  const openStatsRouteFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, target: WorkbenchRoute) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    navigateToRoute(target);
-  }, [navigateToRoute]);
   // Threads on another machine open by id through their logical project, which knows every location.
   const statsThreadRoute = useCallback((thread: { projectId: string; threadId: string }, logicalProjectId: string | null) => {
     const reference = ThreadReferenceSchema.safeParse(thread.threadId).data;
@@ -850,27 +795,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     seedNewThreadReferences(projectId, references);
     navigateToRoute(createThreadRoute(projectId, { kind: "new" }));
   }, [navigateToRoute]);
-
-  const selectProjectFromLink = useCallback((event: MouseEvent<HTMLAnchorElement>, projectId: string, logical = false) => {
-    if (
-      event.button !== 0
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-    ) {
-      return;
-    }
-
-    if (!projectId) {
-      return;
-    }
-
-    event.preventDefault();
-    const order = (displayedLogicalProjects ?? explorer.projects).map(project => project.id);
-    navigateToRoute(createToggledProjectSelectionRoute(route, selectionProjectIds, projectId, order),
-      { selection: "exact", keepMobileSidebar: true });
-  }, [displayedLogicalProjects, explorer.projects, navigateToRoute, route, selectionProjectIds]);
 
   const onInvalidFileLocation = useCallback(() => {
     setSelectionError("The thread's file location is invalid.");
@@ -959,14 +883,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     hasProject: Boolean(viewedProjectId),
     home: () => navigateToRoute(createHomeRoute()),
     openSearch: () => searchController.open(),
-    openSettings: () => navigateToRoute(settingsRoute),
+    openSettings: () => navigateToRoute(createSettingsRoute("")),
     toggleSidebar: () => {
       if (!isMobile) document.querySelector<HTMLElement>("[aria-label='Hide sidebar'], [aria-label='Show sidebar']")?.click();
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
   }), [attachedProjectId, isMobile, logicalProjects, navigateToRoute, selectedPhysicalProjects, selectionProjectIds,
-    settingsRoute, resolvedSettings.editorFontSize, searchController, updateEditorFontSize, viewedProjectId,
+    resolvedSettings.editorFontSize, searchController, updateEditorFontSize, viewedProjectId,
     workbenchClient.mounted]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
@@ -1333,10 +1257,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const showFileView = route.view === "file" || mobileMosaicFallbackTarget?.kind === "file";
   // New full-page views belong in workbenchRouteViews, not new show* booleans; settings/stats/git should migrate there.
   const routeView = workbenchRouteViews[route.view] ?? null;
-  const newProjectRoute = useMemo(() => withProjectSelection(
-    createNewProjectRoute(),
-    selectionProjectIds.length ? selectionProjectIds : null,
-  ), [selectionProjectIds]);
   const showSettingsView = route.view === "settings";
   useEffect(() => { if (!showSettingsView) setSettingsTarget(null); }, [showSettingsView]);
   const selectedSettingsProject = selectionProjectIds.length === 1
@@ -1670,14 +1590,14 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return;
     }
     if (target.kind === "settings") {
-      navigateToRoute(settingsRoute, options);
+      navigateToRoute(createSettingsRoute(""), options);
       return;
     }
 
     navigateToRoute(route.logical?.projectId
       ? createLogicalProjectRoute(route.logical.projectId)
       : createProjectRoute(explorer.currentProjectId || route.projectId), options);
-  }, [browseLocation, explorer.currentProjectId, navigateToRoute, route, settingsRoute]);
+  }, [browseLocation, explorer.currentProjectId, navigateToRoute, route]);
   const navigateToMosaicNode = useCallback((mosaicNode: WorkbenchMosaicNode, options?: { replace?: boolean }) => {
     if (!route.logical?.projectId) {
       navigateToRoute(createMosaicRoute(explorer.currentProjectId || route.projectId, mosaicNode), options);
@@ -2111,7 +2031,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
           ) : null}
           <MobilePaneTrack
             isMobile={isMobile}
-            navigateToRoute={navigateToRoute}
             pane={mobilePane}
             route={route}
             slideRef={mobilePaneSlideRef}
@@ -2127,28 +2046,21 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               collapsed={isEffectiveDesktopSidebarCollapsed}
               createThread={createThreadFromSidebar}
               harness={harness}
-              navigateToRoute={navigateToRoute}
-              newProjectRoute={newProjectRoute}
               onAttachFeedback={clientState.schemaVersion >= appStateReleases.composerDraftReferences.version
                 ? handleAttachFeedbackToThread
                 : undefined}
               onBeginPointerDrag={beginWorkbenchPointerDrag}
               onOpenQualifiedThread={openQualifiedThread}
-              onOpenSettings={openSettingsFromLink}
-              onOpenStats={openStatsFromLink}
               onOpenThread={openThreadFromExplorer}
               onPresentationDraftDeleted={handlePresentationDraftDeleted}
-              onSelectProjectLink={selectProjectFromLink}
               onThreadSettled={handleThreadSettled}
               physicalProjects={explorer.projects}
               projectSourceError={workbenchMount.projectSourceError}
               renderThreadTooltipDetails={renderThreadTooltipDetails}
               route={route}
               searchController={searchController}
-              settingsHref={settingsHref}
               showGitView={showGitView}
               showMosaicView={showMosaicView}
-              statsRoute={statsRoute}
               viewedProjectId={viewedProjectId}
               explorerSection={<section className="shrink-0 pb-3">
                     <WorkbenchSidebarSectionDisclosure
@@ -2294,7 +2206,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                         {routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
                       </p>
                       {showStatsView ? (
-                        <WorkbenchStatsTabs href={(tab) => projectHref(statsTabRoute(tab))} onSelect={openStatsTabFromLink} tab={statsTab} />
+                        <WorkbenchStatsTabs tab={statsTab} />
                       ) : null}
                       <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
                         {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
@@ -2506,12 +2418,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                   )
                 ) : null}
                 {routeView && !shouldRenderMainLayout ? (
-                  <routeView.Component key={route.view} route={route} navigateToRoute={navigateToRoute} />
+                  <routeView.Component key={route.view} route={route} />
                 ) : null}
                 {showStatsView && !shouldRenderMainLayout ? (
                   <WorkbenchStatsView
                     onAddressFeedback={askAgentWithReferences}
-                    onOpenRoute={openStatsRouteFromLink}
                     threadRoute={statsThreadRoute}
                     projects={explorer.projects}
                     scope={statsScope}

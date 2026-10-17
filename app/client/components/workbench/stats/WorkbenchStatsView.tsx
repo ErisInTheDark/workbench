@@ -25,10 +25,9 @@ const TABS: Record<WorkbenchStatsTab, { Lead?: ComponentType; Body: ComponentTyp
   workspaces: { Body: WorkbenchStatsWorkspacesTab },
 };
 
-export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, projects, scope, tab, threadRoute }: {
+export default function WorkbenchStatsView({ onAddressFeedback, projects, scope, tab, threadRoute }: {
   /** Opens a new thread in the project, its composer seeded with the prompt. */
   onAddressFeedback: StatsInputs["addressFeedback"];
-  onOpenRoute: StatsInputs["openRoute"];
   threadRoute: StatsInputs["threadRoute"];
   projects: readonly WorkbenchProjectOption[];
   /** The sidebar selection, resolved onto this daemon's projects. */
@@ -42,7 +41,7 @@ export default function WorkbenchStatsView({ onAddressFeedback, onOpenRoute, pro
 
   // Panels lease sections during render-time subscription, so app facts must land before they paint.
   useLayoutEffect(() => {
-    store.setInputs({ addressFeedback: onAddressFeedback, openRoute: onOpenRoute, projects, scope, threadRoute });
+    store.setInputs({ addressFeedback: onAddressFeedback, projects, scope, threadRoute });
   });
 
   // Commands only nudge the daemon; their effects stream back through the observations. They run on every

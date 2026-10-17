@@ -87,7 +87,8 @@ type ProjectRowProps = {
   entry: DisplaySidebarProject;
   href?: string;
   id?: string;
-  onProjectLinkClick(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
+  /** Hosts that act on the row themselves (search results) handle the click; others follow the href. */
+  onProjectLinkClick?(event: MouseEvent<HTMLAnchorElement>, projectId: string, logical?: boolean): void;
   presentation?: "row";
   role?: "option";
   selected?: boolean;
@@ -168,12 +169,12 @@ function ProjectRow({
           />
         </svg>
         <a
-          aria-label={`${role === "option" || href ? "Open" : selected ? "Deselect" : "Select"} ${logical ? project.label : project.name || project.id}`}
+          aria-label={`${role === "option" ? "Open" : selected ? "Deselect" : "Select"} ${logical ? project.label : project.name || project.id}`}
           aria-selected={role === "option" ? selected : undefined}
           className="absolute inset-0 z-20 cursor-pointer rounded-[0.8rem] border border-transparent outline-none focus-visible:ring-2 focus-visible:ring-accent-soft"
           href={href ?? projectHref(logical ? createLogicalProjectRoute(project.id) : createProjectRoute(project.id))}
           id={id}
-          onClick={(event) => onProjectLinkClick(event, project.id, logical)}
+          onClick={onProjectLinkClick ? (event) => onProjectLinkClick(event, project.id, logical) : undefined}
           role={role}
           tabIndex={tabIndex}
         />

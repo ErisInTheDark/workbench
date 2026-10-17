@@ -1,6 +1,6 @@
 /* Exports: default WorkbenchGitSidebar: render selected-project unclaimed Git status, peer folders' new commits and navigation. */
 "use client";
-import { useEffect, type MouseEvent } from "react";
+import { useEffect } from "react";
 import type { PresentationDraftReference } from "workbench-shared/state/workbench-presentation-state";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
@@ -83,10 +83,9 @@ function GitPeerRows ({ location, onAskAgent }: {
   </>;
 }
 
-export default function WorkbenchGitSidebar ({ active, location, route, onAskAgent, onNavigate }: {
+export default function WorkbenchGitSidebar ({ active, location, route, onAskAgent }: {
   active: boolean; location: ProjectLocationReference; route: WorkbenchRoute;
   onAskAgent(projectId: string, references: readonly PresentationDraftReference[]): void;
-  onNavigate (event: MouseEvent<HTMLAnchorElement>): void;
 }) {
   const state = useWorkingTree();
   const snapshot = useWorkingTreeSnapshot();
@@ -102,7 +101,7 @@ export default function WorkbenchGitSidebar ({ active, location, route, onAskAge
         : dirty ? "Uncommitted changes" : "No changes";
   return <section className="shrink-0 pb-3">
     <WorkbenchSidebarSectionDisclosure icon={GitGraphIcon} preferenceKey="gitOpen" title="Git">
-      <a href={projectHref(route, "exact")} onClick={onNavigate} aria-current={active ? "page" : undefined} className={`
+      <a href={projectHref(route, { selection: "exact" })} aria-current={active ? "page" : undefined} className={`
         ${workbenchOptionRowClassName} min-h-9 w-full md:min-h-8
         ${active ? `${workbenchOptionSelectedClassName} text-text` : `${workbenchOptionHoverClassName} border-transparent text-fg/muted hover:text-text`}
       `}>

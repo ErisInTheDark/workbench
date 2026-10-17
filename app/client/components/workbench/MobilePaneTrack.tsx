@@ -7,6 +7,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode, type Touch as ReactTouch, type TouchEvent } from "react";
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import MobilePaneSwipeController, { type MobilePaneDestination } from "../../workbench/navigation/MobilePaneSwipeController";
+import { useWorkbenchNavigate } from "../../workbench/navigation/use-workbench-project-navigation";
 import { mobileSidebarHref, type MobilePane } from "../../workbench/state/mobile-pane-url-state";
 
 const BLOCKED_TARGETS = "input,textarea,select,button,a,label,summary,[contenteditable],[role='button'],[role='link'],[role='textbox'],[role='combobox'],[role='slider'],[role='spinbutton'],[role='switch']";
@@ -46,15 +47,15 @@ function clampPosition(positionPx: number, width: number) {
   return Math.min(0, Math.max(-width, positionPx));
 }
 
-export default function MobilePaneTrack({ children, isMobile, navigateToRoute, pane, route, slideRef }: {
+export default function MobilePaneTrack({ children, isMobile, pane, route, slideRef }: {
   children: ReactNode;
   isMobile: boolean;
-  navigateToRoute: (destination: WorkbenchRoute) => void;
   pane: MobilePane;
   route: WorkbenchRoute;
   /** Filled with the slide-then-navigate action while mobile, for controls outside the swipe gesture. */
   slideRef?: MutableRefObject<((destination: MobilePaneDestination) => void) | null>;
 }) {
+  const navigateToRoute = useWorkbenchNavigate();
   const [controller] = useState(() => new MobilePaneSwipeController());
   const [motion, setMotion] = useState<Motion | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);

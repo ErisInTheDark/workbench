@@ -25,7 +25,6 @@ export function testStatsScope(overrides: Partial<StatsProjectScope> = {}): Stat
 }
 
 export const testStatsRoutes = {
-  openRoute: () => {},
   threadRoute: (thread: { projectId: string; threadId: string }) => createThreadRoute(thread.projectId, thread.threadId),
 };
 

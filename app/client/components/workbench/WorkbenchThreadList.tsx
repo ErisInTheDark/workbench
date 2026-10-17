@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type {
-  WorkbenchControls, WorkbenchLogicalProject, WorkbenchLogicalThreadRow, WorkbenchProjectOption, WorkbenchThreadListingSlot,
+  WorkbenchControls, WorkbenchLogicalProject, WorkbenchProjectOption, WorkbenchThreadListingSlot,
 } from "workbench-shared/types";
 import type { WorkbenchProjectThreadRowSidebars as WorkbenchProjectThreadSidebars } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { useWorkbenchClientController } from "./workbench-client-context";
@@ -191,8 +191,6 @@ export default function WorkbenchThreadList ({
   onAttachFeedback,
   onCreateThread,
   onCreateThreadPointerDragStart,
-  onOpenQualifiedThread,
-  onOpenThread,
   presentation,
   projectId,
   projects,
@@ -232,8 +230,6 @@ export default function WorkbenchThreadList ({
     location?: ProjectLocationReference;
   }) => void;
   onCreateThreadPointerDragStart?: (event: import("react").PointerEvent<HTMLAnchorElement>) => void;
-  onOpenQualifiedThread?: (row: WorkbenchLogicalThreadRow) => void;
-  onOpenThread: (target: WorkbenchThreadTarget, ownerProjectId?: string) => void;
   presentation?: PresentationSnapshot | null;
   projectId?: string;
   projects: readonly (WorkbenchProjectOption | WorkbenchLogicalProject)[];
@@ -399,7 +395,7 @@ export default function WorkbenchThreadList ({
   const rowContext: ThreadListRowContext = {
     actions, activeDragPayload, allowMainPanelDrop, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
     firstThreadKey: navigableEntries[0]?.threadKey ?? null, homeDisplayOrderSupported, isShiftPressed, logicalProjects,
-    onAttachFeedback, onOpenQualifiedThread, onOpenThread, projectHref, projectsById, readRowForPayload: rowForPayload,
+    onAttachFeedback, projectHref, projectsById, readRowForPayload: rowForPayload,
     registerRow: (threadKey, node) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); },
     renderThreadTooltipDetails, selectedOwnerProjectId, setLayoutError, showProjectEyebrow, updateProjectLayout,
   };
