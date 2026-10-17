@@ -1,11 +1,59 @@
-/* No exports. Protects consistent fixture capture and cancellation of SQLite copies. */
+/* No exports. Protects consistent fixture capture, copy cancellation and independent recovery fidelity checks. */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import WorkbenchTemporaryDirectory from "../../shared/WorkbenchTemporaryDirectory";
 import test, { type TestContext } from "node:test";
 import Database from "better-sqlite3";
-import { captureThreadStateMigrationSource } from "./thread-state-migration-fixture";
+import { captureThreadStateMigrationSource, compareRetainedFacts } from "./thread-state-migration-fixture";
+import { installWorkbenchDatabaseSchema } from "../../daemon/server/database/workbench-database-schema";
+
+test("fidelity accepts only catalogue recovery while retaining thread and relationship facts", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("project-recovery-fidelity-");
+  const database = new Database(path.join(temporary.path, "current.sqlite3"));
+  const sourcePath = path.join(temporary.path, "source.sqlite3");
+  const old = "00000000-0000-4000-8000-000000000001";
+  const shadow = "00000000-0000-4000-8000-000000000002";
+  try {
+    installWorkbenchDatabaseSchema(database);
+    database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local://c:/repo')").run(old);
+    database.prepare(`INSERT INTO workbench_projects(id, identity_key, kind, name, relative_path, icon_source_key)
+      VALUES (?, 'local://c:/main/.git', 'git', 'repo', 'repo', 'generation')`).run(shadow);
+    database.prepare(`INSERT INTO workbench_project_roots
+      (project_id, root_id, root_index, name, relative_path, root_path, identity_key)
+      VALUES (?, 'repo', 0, 'repo', 'repo', 'C:/repo', 'local://c:/main/.git')`).run(shadow);
+    for (const thread of ["parent", "child"]) database.prepare(`INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES (?, ?, 'C:/repo', 'keep this title', 0, 1, 1, 1)`).run(thread, old);
+    database.exec("INSERT INTO workbench_subagent_parents VALUES ('parent', 1)");
+    database.prepare(`INSERT INTO workbench_subagent_relationships
+      (id, parent_thread_id, relationship_kind, project_id, name_key, direct_subagent_index, created_at, updated_at)
+      VALUES ('child-link', 'parent', 'active', ?, 'child', 0, 1, 1)`).run(old);
+    database.exec("INSERT INTO workbench_active_subagent_relationships VALUES ('child-link', 'active', 'child')");
+    await database.backup(sourcePath);
+    database.transaction(() => {
+      database.prepare("UPDATE workbench_project_roots SET project_id = ? WHERE project_id = ?").run(old, shadow);
+      database.prepare(`UPDATE workbench_projects SET kind = 'git', identity_key = 'local://c:/main/.git',
+        name = 'repo', relative_path = 'repo', icon_source_key = 'generation' WHERE id = ?`).run(old);
+      database.prepare("DELETE FROM workbench_projects WHERE id = ?").run(shadow);
+      database.prepare("INSERT INTO workbench_project_aliases VALUES (?, ?)").run(shadow, old);
+      database.prepare("INSERT INTO workbench_project_aliases VALUES ('local://c:/repo', ?)").run(old);
+    })();
+    database.prepare("ATTACH DATABASE ? AS source").run(sourcePath);
+    assert.ok(compareRetainedFacts(database) > 0);
+    database.exec("UPDATE workbench_threads SET title = 'lost title' WHERE id = 'parent'");
+    assert.throws(() => compareRetainedFacts(database), /workbench_threads/);
+    database.exec("UPDATE workbench_threads SET title = 'keep this title' WHERE id = 'parent'");
+    database.exec("UPDATE workbench_subagent_relationships SET name_key = 'lost name'");
+    assert.throws(() => compareRetainedFacts(database), /workbench_subagent_relationships/);
+    database.exec("UPDATE workbench_subagent_relationships SET name_key = 'child'");
+    database.exec("DELETE FROM workbench_active_subagent_relationships");
+    assert.throws(() => compareRetainedFacts(database), /workbench_active_subagent_relationships/);
+  } finally {
+    database.close();
+    await temporary.dispose();
+  }
+});
 
 async function source(context: TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("scenario-capture-");
@@ -47,6 +95,11 @@ test("capture finishes one consistent snapshot while another connection keeps wr
     assert.equal(copy.prepare("SELECT count(*) FROM facts").pluck().get(), 400);
     assert.equal(copy.pragma("integrity_check", { simple: true }), "ok");
   } finally { copy.close(); }
+  assert.ok((await fs.stat(`${captured.databasePath}.source`)).isFile(), "Retain a pristine test baseline even without a runtime upgrade backup");
+  const pristine = new Database(`${captured.databasePath}.source`, { readonly: true, fileMustExist: true });
+  try {
+    assert.deepEqual(pristine.prepare("SELECT DISTINCT value FROM facts").pluck().all(), [0]);
+  } finally { pristine.close(); }
   assert.ok(Number(fixture.writer.prepare("SELECT value FROM facts LIMIT 1").pluck().get()) > 0);
 });
 

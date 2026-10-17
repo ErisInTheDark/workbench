@@ -226,3 +226,88 @@ test("reconciliation failure rolls back split consolidation and all owning refer
     assert.deepEqual(database.pragma("foreign_key_check"), []);
   } finally { database.close(); }
 });
+
+function historicalFixture(databasePath = ":memory:") {
+  const fixtureState = fixture(databasePath);
+  const { database } = fixtureState;
+  database.prepare("DELETE FROM workbench_project_roots WHERE project_id = ?").run(oldKey);
+  database.prepare(`UPDATE workbench_projects SET kind = 'historical', identity_key = 'local://c:/repo',
+    name = NULL, relative_path = NULL, icon_source_key = NULL WHERE id = ?`).run(oldKey);
+  database.prepare("UPDATE workbench_project_roots SET identity_key = ? WHERE project_id = ?").run(newIdentityKey, newKey);
+  database.prepare(`INSERT INTO workbench_threads
+    (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+    VALUES ('child', ?, 'C:/repo', 'child work', 0, 1, 2, 3)`).run(oldKey);
+  database.exec("INSERT INTO workbench_subagent_parents VALUES ('thread', 1)");
+  database.prepare(`INSERT INTO workbench_subagent_relationships
+    (id, parent_thread_id, relationship_kind, project_id, name_key, direct_subagent_index, created_at, updated_at)
+    VALUES ('relationship', 'thread', 'active', ?, 'child', 0, 1, 2)`).run(oldKey);
+  database.exec(`INSERT INTO workbench_active_subagent_relationships VALUES ('relationship', 'active', 'child')`);
+  for (const id of ["thread", "child"]) {
+    database.prepare(`INSERT INTO workbench_pending_import_threads
+      (thread_id, harness_id, native_location, native_thread_id, discovered_at, last_seen_at)
+      VALUES (?, 'codex', 'C:/repo', ?, 1, 2)`).run(id, `native-${id}`);
+  }
+  new WorkbenchSearchRepository(database).replaceProjects([{ id: newKey, name: "repo", rootPath: "C:/repo" }]);
+  return fixtureState;
+}
+
+test("startup recovers historical checkout history without discovery and leaves native bindings intact", async () => {
+  const { database, receipt } = historicalFixture();
+  try {
+    receipt(oldKey, "shared", "completed");
+    receipt(newKey, "shared", "completed");
+    const bindings = database.prepare("SELECT * FROM workbench_pending_import_threads").all();
+    const relationships = database.prepare("SELECT * FROM workbench_subagent_relationships").all();
+    const migration = new WorkbenchProjectIdentityMigration(database);
+    migration.repairHistoricalOwners();
+    const repository = new WorkbenchProjectRepository(database);
+    assert.equal(repository.resolve(newKey), oldKey);
+    const catalog = repository.readRetained(["C:/"]).catalog;
+    assert.equal(catalog.find(item => item.project.id === oldKey)?.project.rootPath, "C:/repo");
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_pending_import_threads").all(), bindings);
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_subagent_relationships").all(), relationships);
+    assert.deepEqual(database.prepare("SELECT DISTINCT project_id FROM workbench_threads").pluck().all(), [oldKey]);
+    assert.equal(database.prepare("SELECT count(*) FROM git_claim_imports").pluck().get(), 1);
+    const before = database.serialize();
+    migration.repairHistoricalOwners();
+    assert.deepEqual(database.serialize(), before);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});
+
+test("historical repair preserves independent owners, conflicting receipts and contradictory locations", async context => {
+  context.mock.method(console, "warn", () => undefined);
+  for (const conflict of ["state", "receipt", "location", "ambiguous"] as const) {
+    const { database, receipt } = historicalFixture();
+    try {
+      if (conflict === "state") database.prepare(`INSERT INTO workbench_threads
+        (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+        VALUES ('independent', ?, 'C:/repo', 'keep', 0, 1, 1, 1)`).run(newKey);
+      if (conflict === "receipt") {
+        receipt(oldKey, "shared", "completed", "a");
+        receipt(newKey, "shared", "completed", "b");
+      }
+      if (conflict === "location") database.exec("UPDATE workbench_threads SET project_root = 'C:/elsewhere' WHERE id = 'child'");
+      if (conflict === "ambiguous") database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local://c:/repo')")
+        .run("3e909d14-071b-467d-877a-000000000003");
+      const before = database.serialize();
+      new WorkbenchProjectIdentityMigration(database).repairHistoricalOwners();
+      assert.deepEqual(database.serialize(), before);
+    } finally { database.close(); }
+  }
+});
+
+test("historical repair rolls back catalogue, aliases and claim changes together", () => {
+  const { database, receipt } = historicalFixture();
+  try {
+    receipt(newKey, "unique", "completed");
+    database.exec(`CREATE TRIGGER reject_historical_repair BEFORE DELETE ON workbench_projects
+      BEGIN SELECT RAISE(ABORT, 'injected historical repair failure'); END`);
+    const before = database.serialize();
+    assert.throws(() => new WorkbenchProjectIdentityMigration(database).repairHistoricalOwners(), /injected historical repair failure/);
+    assert.deepEqual(database.serialize(), before);
+    database.exec("DROP TRIGGER reject_historical_repair");
+    assert.equal(new WorkbenchProjectIdentityMigration(database).repairHistoricalOwners(), 1);
+    assert.deepEqual(database.pragma("foreign_key_check"), []);
+  } finally { database.close(); }
+});

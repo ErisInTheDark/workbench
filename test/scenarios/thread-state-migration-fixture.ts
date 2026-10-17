@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - captureThreadStateMigrationSource: capture a consistent database directly into its private runtime location.
- * - verifyThreadStateMigrationSource: compare an init-only migration of the pre-upgrade checkpoint against it, then check the daemon-run database.
+ * - captureThreadStateMigrationSource: capture a consistent runtime database and an independent pristine test baseline.
+ * - verifyThreadStateMigrationSource: compare init-only startup against the pristine baseline, then check the daemon-run database.
  * - isolateThreadStateMigrationSource: rewrite the verified capture's filesystem addresses in place.
+ * - compareRetainedFacts: verify every retained relational fact against an attached pristine source.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -13,6 +14,7 @@ import { workbenchDatabaseSchema } from "../../daemon/server/database/workbench-
 import WorkbenchDatabaseController from "../../daemon/server/database/WorkbenchDatabaseController";
 import { tableForeignKeys } from "../../shared/database/schema/schema-definition";
 import databaseReleases from "../../shared/workbench/database/schema/releases";
+import { nativeLocationKey } from "../../daemon/server/database/thread-identity/native-location-key";
 
 type CopyOptions = {
   signal?: AbortSignal;
@@ -21,6 +23,7 @@ type CopyOptions = {
 
 export async function captureThreadStateMigrationSource(sourceDatabasePath: string, databasePath: string, options: CopyOptions = {}) {
   options.signal?.throwIfAborted();
+  const checkpointPath = `${databasePath}.source`;
   const database = new Database(sourceDatabasePath, {
     readonly: true, fileMustExist: true,
   });
@@ -46,6 +49,7 @@ export async function captureThreadStateMigrationSource(sourceDatabasePath: stri
         },
       });
       options.signal?.throwIfAborted();
+      await fs.copyFile(databasePath, checkpointPath, fs.constants.COPYFILE_EXCL);
     } catch (error) {
       try { await fs.unlink(databasePath); }
       catch (cleanupError) {
@@ -54,7 +58,7 @@ export async function captureThreadStateMigrationSource(sourceDatabasePath: stri
       throw error;
     }
   } finally { database.close(); }
-  return { databasePath, version };
+  return { databasePath, version, checkpointPath };
 }
 
 const quote = (name: string) => `"${name.replaceAll("\"", "\"\"")}"`;
@@ -101,7 +105,22 @@ async function findPreUpgradeCheckpoint(databasePath: string, version: number) {
 }
 
 /** Compare every retained relational fact of `main` against `source`, natively in SQLite. */
-function compareRetainedFacts(database: Database.Database) {
+export function compareRetainedFacts(database: Database.Database) {
+  database.function("migration_location", { deterministic: true }, (value: string) => nativeLocationKey(value));
+  const projectColumns = database.prepare("PRAGMA source.table_info(workbench_projects)").all() as Array<{ name: string }>;
+  const recovery = projectColumns.some(column => column.name === "identity_key") ? `recovered AS (
+    SELECT shadow.id AS shadow, historical.id AS owner, layout.layout_id
+    FROM source.workbench_projects shadow
+    JOIN source.workbench_project_roots root ON root.project_id = shadow.id
+    JOIN main.workbench_project_aliases alias ON alias.alias = shadow.id
+    JOIN source.workbench_projects historical ON historical.id = alias.project_id
+    LEFT JOIN source.workbench_sidebar_project_layouts layout ON layout.project_id = shadow.id
+    WHERE shadow.kind = 'git' AND historical.kind = 'historical'
+      AND historical.identity_key LIKE 'local://%'
+      AND migration_location(substr(historical.identity_key, 9)) = migration_location(root.root_path)
+      AND (SELECT count(*) FROM source.workbench_project_roots r WHERE r.project_id = shadow.id) = 1
+      AND NOT EXISTS (SELECT 1 FROM source.workbench_project_roots r WHERE r.project_id = historical.id)
+  )` : "recovered AS (SELECT NULL AS shadow, NULL AS owner, NULL AS layout_id WHERE 0)";
   let verified = 0;
   const retained = workbenchDatabaseSchema.currentTables.filter(table =>
     !table.name.startsWith("workbench_thread_state_")
@@ -117,6 +136,11 @@ function compareRetainedFacts(database: Database.Database) {
     if (table.name === "workbench_projects") remapped.add("id");
     const value = (column: string) => remapped.has(column) ? owner(`s.${quote(column)}`) : `s.${quote(column)}`;
     const expected = (column: string) => {
+      if (table.name === "git_claim_imports" && (column === "state" || column === "run_id")) {
+        return `CASE WHEN s.state = 'processing' AND EXISTS (
+          SELECT 1 FROM recovered r WHERE s.project_id IN (r.shadow, r.owner)
+        ) THEN ${column === "state" ? "'pending'" : "NULL"} ELSE ${value(column)} END`;
+      }
       if (table.name !== "workbench_search_documents" || !remapped.has("project_id")) return value(column);
       // Project-scoped search keys embed the owner, so a remapped owner rewrites them.
       const project = value("project_id");
@@ -134,16 +158,35 @@ function compareRetainedFacts(database: Database.Database) {
     };
     const list = columns.map(quote).join(", ");
     // Action and setting search rows are rebuilt from code definitions on every start, not retained data.
-    const retainedOnly = (alias: string) => table.name === "workbench_search_documents"
-      ? ` WHERE ${alias}"kind" NOT IN ('action', 'projectSetting')` : "";
-    const before = `SELECT ${columns.map(column => `${expected(column)} AS ${quote(column)}`).join(", ")} FROM source.${quote(table.name)} AS s${retainedOnly("s.")}`;
+    const retainedOnly = (alias: string, source = false) => {
+      const conditions: string[] = [];
+      if (table.name === "workbench_search_documents") {
+        conditions.push(`${alias}"kind" NOT IN ('action', 'projectSetting')`);
+        if (source) conditions.push("s.project_id NOT IN (SELECT shadow FROM recovered)");
+      }
+      if (source && table.name === "workbench_projects") conditions.push("s.id NOT IN (SELECT owner FROM recovered)");
+      if (source && table.name === "workbench_sidebar_project_layouts") conditions.push("s.project_id NOT IN (SELECT shadow FROM recovered)");
+      if (source && table.name === "workbench_sidebar_layouts") conditions.push("s.id NOT IN (SELECT layout_id FROM recovered WHERE layout_id IS NOT NULL)");
+      if (source && table.name === "git_claim_imports") conditions.push(`NOT EXISTS (
+        SELECT 1 FROM recovered r JOIN source.git_claim_imports other
+          ON other.root_id = s.root_id AND other.checkpoint_ref = s.checkpoint_ref
+        WHERE (s.project_id = r.shadow AND other.project_id = r.owner
+          AND (other.state = 'completed' OR (s.state <> 'completed' AND other.updated_at >= s.updated_at)))
+          OR (s.project_id = r.owner AND other.project_id = r.shadow AND s.state <> 'completed'
+          AND (other.state = 'completed' OR other.updated_at > s.updated_at))
+      )`);
+      return conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
+    };
+    const deduplicate = ["git_claim_thread_file_days", "workbench_sidebar_pinned_imports"].includes(table.name);
+    const before = `SELECT ${deduplicate ? "DISTINCT " : ""}${columns.map(column => `${expected(column)} AS ${quote(column)}`).join(", ")}
+      FROM source.${quote(table.name)} AS s${retainedOnly("s.", true)}`;
     const openWorld = table.name === "workbench_project_aliases";
     const after = openWorld
       // Identity conversion may add aliases; retained aliases must still resolve to their original owners.
       ? `SELECT ${list} FROM main.${quote(table.name)} WHERE alias IN (SELECT alias FROM source.${quote(table.name)})`
       : `SELECT ${list} FROM main.${quote(table.name)}${retainedOnly("")}`;
     const result = database.prepare(`
-      WITH before AS (${before}), after AS (${after})
+      WITH ${recovery}, before AS (${before}), after AS (${after})
       SELECT (SELECT count(*) FROM (SELECT * FROM before EXCEPT SELECT * FROM after)) AS missing,
         (SELECT count(*) FROM (SELECT * FROM after EXCEPT SELECT * FROM before)) AS added,
         (SELECT count(*) FROM before) AS beforeCount, (SELECT count(*) FROM after) AS afterCount
@@ -197,19 +240,18 @@ async function verifyMigrationFidelity(checkpoint: string, version: number) {
  * No full integrity_check: index/table drift would mean a SQLite or disk fault, not a migration defect.
  */
 export async function verifyThreadStateMigrationSource(source: Awaited<ReturnType<typeof captureThreadStateMigrationSource>>) {
-  const checkpoint = await findPreUpgradeCheckpoint(source.databasePath, source.version);
-  const pending = source.version < workbenchDatabaseSchema.currentVersion;
-  assert.ok(checkpoint || !pending, "An upgraded database must leave its verified pre-upgrade checkpoint");
-  const verified = checkpoint ? await verifyMigrationFidelity(checkpoint, source.version) : 0;
+  if (source.version < workbenchDatabaseSchema.currentVersion) {
+    assert.ok(await findPreUpgradeCheckpoint(source.databasePath, source.version),
+      "An upgraded database must leave its verified pre-upgrade checkpoint");
+  }
+  const verified = await verifyMigrationFidelity(source.checkpointPath, source.version);
   const database = new Database(source.databasePath, { fileMustExist: true });
   try {
     assert.equal(database.pragma("user_version", { simple: true }), workbenchDatabaseSchema.currentVersion);
     assert.deepEqual(database.pragma("foreign_key_check"), [], "Retained database foreign keys must remain valid");
     assert.deepEqual(database.pragma("quick_check"), [{ quick_check: "ok" }], "Retained database quick_check must pass");
   } finally { database.close(); }
-  console.log(`database schema ${source.version} -> ${workbenchDatabaseSchema.currentVersion}; ${checkpoint
-    ? `${verified} relational tables verified against an init-only migration of the pre-upgrade checkpoint`
-    : "no data-changing startup steps, nothing to compare"}`);
+  console.log(`database schema ${source.version} -> ${workbenchDatabaseSchema.currentVersion}; ${verified} relational tables verified against pristine pre-startup facts`);
 }
 
 export async function isolateThreadStateMigrationSource(

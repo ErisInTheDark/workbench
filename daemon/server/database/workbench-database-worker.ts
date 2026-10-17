@@ -1,5 +1,5 @@
 /*
- * No production exports. This worker owns the one better-sqlite3 connection, schema installation, domain repositories including proposal diff cache, readiness proof, and close boundary.
+ * No production exports. This worker owns the SQLite connection, schema installation, pre-cache project recovery, domain repositories, readiness proof, and close boundary.
  */
 import { parentPort } from "node:worker_threads";
 import path from "node:path";
@@ -794,6 +794,7 @@ parentPort.on("message", async (request: WorkbenchDatabaseRequest) => {
       await migrateWorkbenchDatabase(database, workbenchDatabaseSchema, {
         beforeMigration: acknowledgeCheckpoint, diagnosticEvent: postDiagnostic,
       });
+      new WorkbenchProjectIdentityMigration(connection).repairHistoricalOwners();
       await new WorkbenchTranscriptTimestampRepair(connection).run(acknowledgeCheckpoint);
       // Serving writes always enforce foreign keys; only checkpointed restore,
       // migration and repair steps rewrite data outside that guarantee.

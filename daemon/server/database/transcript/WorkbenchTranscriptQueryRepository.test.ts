@@ -101,6 +101,28 @@ test("stored transcript queries isolate wb ids, include archived bodies and repo
   } finally { db.close(); }
 });
 
+test("archive listing, filtering and coverage follow sidebar placement rather than stale provider metadata", () => {
+  const { db, read } = fixture();
+  try {
+    db.exec(`INSERT INTO workbench_thread_states
+      (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      VALUES ('wb-one', 'topLevel', 'codex', 'one', 1, 1);
+      INSERT INTO workbench_top_level_thread_states
+      (thread_id, thread_kind, archived, pinned, snoozed)
+      VALUES ('wb-one', 'topLevel', 0, 0, 0)`);
+    const visible = read({ action: "threads", queries: [], archived: false });
+    assert.deepEqual(visible.rows.map(row => row.threadId), ["wb-one"]);
+    assert.equal(visible.rows[0]?.counts.archived, 0);
+    assert.equal(visible.coverage.threads, 1);
+    assert.equal(read({ queries: ["i"], archived: false }).rows.length, 2);
+    assert.equal(read({ action: "turns", threads: ["wb-one"], archived: false }).rows.length, 1);
+    db.exec("UPDATE workbench_threads SET archived = 0 WHERE id = 'wb-one'; UPDATE workbench_top_level_thread_states SET archived = 1");
+    const archived = read({ action: "threads", queries: [], archived: true });
+    assert.equal(archived.coverage.threads, 2);
+    assert.equal(archived.rows.find(row => row.threadId === "wb-one")?.counts.archived, 1);
+  } finally { db.close(); }
+});
+
 test("query cursors preserve equal-time ordering, exclude new inserts and reject changed filters", () => {
   const { db, read, add } = fixture();
   try {

@@ -57,6 +57,49 @@ test("two concrete checkouts sharing one remote retain separate project owners",
   } finally { database.close(); }
 });
 
+test("discovery retains a historical local checkout owner when Git identity changes", () => {
+  const { database, repository } = setup();
+  const id = "00000000-0000-4000-8000-000000000003";
+  try {
+    database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local:///repo')")
+      .run(id);
+    database.prepare(`INSERT INTO workbench_threads
+      (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+      VALUES ('retained', ?, '/repo', 'retained', 0, 1, 1, 1)`).run(id);
+    const current = discovery([project("/repo", "local:///main/.git"), project("/main", "local:///main/.git")]);
+    for (const owner of [repository, new WorkbenchProjectRepository(database)]) {
+      const result = owner.reconcile(current);
+      assert.equal(result.catalog.find(item => item.project.rootPath === "/repo")?.project.id, id);
+      assert.notEqual(result.catalog.find(item => item.project.rootPath === "/main")?.project.id, id);
+      assert.equal(owner.resolve("local:///repo"), id);
+    }
+    assert.equal(database.prepare("SELECT project_id FROM workbench_threads").pluck().get(), id);
+  } finally { database.close(); }
+});
+
+test("historical checkout admission does not guess between owners or contradict retained locations", context => {
+  context.mock.method(console, "warn", () => undefined);
+  for (const conflict of ["ambiguous", "location"] as const) {
+    const { database, repository } = setup();
+    try {
+      const id = "00000000-0000-4000-8000-000000000003";
+      database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local:///repo')").run(id);
+      if (conflict === "ambiguous") {
+        database.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local:///repo')")
+          .run("00000000-0000-4000-8000-000000000004");
+      } else {
+        database.prepare(`INSERT INTO workbench_threads
+          (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+          VALUES ('retained', ?, '/elsewhere', 'retained', 0, 1, 1, 1)`).run(id);
+      }
+      const result = repository.reconcile(discovery([project("/repo", "local:///main/.git")]));
+      assert.equal(result.catalog.length, 0);
+      assert.deepEqual(result.excludedRootPaths, ["/repo"]);
+      assert.equal(database.prepare("SELECT kind FROM workbench_projects WHERE id = ?").pluck().get(id), "historical");
+    } finally { database.close(); }
+  }
+});
+
 test("a reused discovery address cannot hide a new checkout or steal its retained alias", () => {
   const { database, repository } = setup();
   try {

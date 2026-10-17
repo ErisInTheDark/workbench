@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectIdentityMigration: convert project owners, restore fixed-id projects and consolidate proven empty split owners before serving.
+ * - default WorkbenchProjectIdentityMigration: convert project owners and transactionally recover historical checkout owners before serving.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -14,17 +14,72 @@ import type { UsageSchemaRows } from "workbench-shared/workbench/database/schema
 import { nativeLocationKey } from "../thread-identity/native-location-key.ts";
 import WorkbenchSearchRepository from "../search/WorkbenchSearchRepository.ts";
 import type { WorkbenchProjectDiscovery } from "./workbench-project-persistence.ts";
-import { FIXED_PROJECT_IDS } from "./WorkbenchProjectRepository.ts";
+import WorkbenchProjectRepository, { FIXED_PROJECT_IDS } from "./WorkbenchProjectRepository.ts";
 
 const uuid = z.string().uuid();
 const isLegacy = (project: ProjectSchemaRows["projects"]) => !FIXED_PROJECT_IDS.has(project.id) && !uuid.safeParse(project.id).success;
 const shadowTables = new Set([
   "workbench_project_roots", "workbench_project_aliases", "git_claim_thread_file_days",
   "git_claim_imports", "workbench_sidebar_project_layouts", "workbench_sidebar_pinned_imports",
+  "workbench_search_documents",
 ]);
 
 export default class WorkbenchProjectIdentityMigration {
   constructor(private readonly database: Database.Database) {}
+
+  repairHistoricalOwners() {
+    const projects = this.database.prepare("SELECT * FROM workbench_projects").all() as ProjectSchemaRows["projects"][];
+    if (!projects.some(project => project.kind === "historical" && project.identity_key?.startsWith("local://"))) return 0;
+    const roots = this.database.prepare("SELECT * FROM workbench_project_roots ORDER BY project_id, root_index")
+      .all() as ProjectSchemaRows["roots"][];
+    const rootsByProject = Map.groupBy(roots, root => root.project_id);
+    const owners = new WorkbenchProjectRepository(this.database);
+    const candidates = projects.filter(project => project.kind === "git"
+      && rootsByProject.get(project.id)?.length === 1);
+    const byLocation = Map.groupBy(candidates, project => nativeLocationKey(rootsByProject.get(project.id)![0]!.root_path));
+    const possible = [...byLocation.values()].flatMap(group => {
+      if (group.length !== 1) return [];
+      const current = group[0]!;
+      const root = rootsByProject.get(current.id)![0]!;
+      const historical = owners.historicalOwnersAt(root.root_path, projects);
+      return historical.length === 1 ? [{ current, root, historical: historical[0]! }] : [];
+    });
+    if (!possible.length) return 0;
+    const references = this.projectReferences();
+    return this.database.transaction(() => {
+      let repaired = 0;
+      for (const { current, root, historical } of possible) {
+        if (rootsByProject.has(historical.id)
+          || this.hasIndependentState(current.id, references)
+          || !owners.historicalLocationAgrees(historical.id, root.root_path)
+          || this.receiptsConflict(current.id, historical.id)) continue;
+        const foreignRoot = ["git_claim_thread_file_days", "git_claim_imports"].some(table =>
+          this.database.prepare(`SELECT 1 FROM "${table}" WHERE project_id IN (?, ?) AND root_id <> ? LIMIT 1`)
+            .get(historical.id, current.id, root.root_id));
+        if (foreignRoot) continue;
+        if (this.database.prepare("SELECT 1 FROM workbench_project_aliases WHERE alias IN (?, ?) LIMIT 1")
+          .get(current.id, historical.id)) continue;
+        const legacyAlias = this.database.prepare("SELECT project_id FROM workbench_project_aliases WHERE alias = ?")
+          .pluck().get(historical.identity_key);
+        if (legacyAlias && legacyAlias !== historical.id) continue;
+        this.database.prepare(`INSERT INTO workbench_project_roots
+          (project_id, root_id, root_index, name, relative_path, root_path, identity_key)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`).run(historical.id, root.root_id, root.root_index, root.name,
+            root.relative_path, root.root_path, root.identity_key ?? current.identity_key);
+        this.database.prepare(`UPDATE workbench_projects SET
+          kind = ?, name = ?, relative_path = ?, workspace_path = ?, last_commit_time_ms = ?,
+          icon_source_key = ?, icon_root_id = ?, icon_path = ?, icon_checked_at = ?, identity_key = ?
+          WHERE id = ?`).run(current.kind, current.name, current.relative_path, current.workspace_path,
+            current.last_commit_time_ms, current.icon_source_key, current.icon_root_id, current.icon_path,
+            current.icon_checked_at, current.identity_key, historical.id);
+        this.database.prepare("INSERT INTO workbench_project_aliases(alias, project_id) VALUES (?, ?) ON CONFLICT(alias) DO NOTHING")
+          .run(historical.identity_key, historical.id);
+        this.mergeShadow(current.id, historical.id);
+        repaired++;
+      }
+      return repaired;
+    }).immediate();
+  }
 
   private projectReferences() {
     // Conversion runs before the final schema upgrade. Its references must
@@ -125,8 +180,9 @@ export default class WorkbenchProjectIdentityMigration {
     return this.database.prepare("SELECT * FROM workbench_project_roots WHERE project_id = ? ORDER BY root_index").all(id) as ProjectSchemaRows["roots"][];
   }
 
-  private hasIndependentState(id: string) {
-    for (const { table, column } of this.projectReferences()) {
+  private hasIndependentState(id: string, references = this.projectReferences()) {
+    if (this.database.prepare("SELECT 1 FROM workbench_threads WHERE project_id = ? LIMIT 1").get(id)) return true;
+    for (const { table, column } of references) {
       if (!shadowTables.has(table) && this.database.prepare(`SELECT 1 FROM "${table}" WHERE "${column}" = ? LIMIT 1`).get(id)) return true;
     }
     return Boolean(this.database.prepare(`SELECT 1 FROM workbench_sidebar_project_layouts p
@@ -190,6 +246,7 @@ export default class WorkbenchProjectIdentityMigration {
   }
 
   private mergeShadow(source: string, destination: string) {
+    this.database.prepare("DELETE FROM workbench_search_documents WHERE project_id = ?").run(source);
     this.database.prepare(`INSERT OR IGNORE INTO git_claim_thread_file_days
       (project_id, root_id, harness_id, thread_id, claimed_path, claimed_day)
       SELECT ?, root_id, harness_id, thread_id, claimed_path, claimed_day FROM git_claim_thread_file_days WHERE project_id = ?`).run(destination, source);
@@ -212,6 +269,7 @@ export default class WorkbenchProjectIdentityMigration {
     this.database.prepare("DELETE FROM workbench_sidebar_project_layouts WHERE project_id = ?").run(source);
     if (layout) this.database.prepare("DELETE FROM workbench_sidebar_layouts WHERE id = ?").run(layout);
     this.database.prepare("UPDATE workbench_project_aliases SET project_id = ? WHERE project_id = ?").run(destination, source);
+    this.database.prepare("UPDATE workbench_projects SET icon_root_id = NULL, icon_path = NULL WHERE id = ?").run(source);
     for (const table of ["git_claim_thread_file_days", "git_claim_imports", "workbench_project_roots"]) {
       this.database.prepare(`DELETE FROM "${table}" WHERE project_id = ?`).run(source);
     }

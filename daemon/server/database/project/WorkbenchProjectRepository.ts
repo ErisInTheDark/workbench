@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchProjectRepository: own project parents, aliases, catalogue reconciliation, and icon settlement.
+ * - default WorkbenchProjectRepository: own project parents, historical location admission, aliases, catalogue reconciliation, and icon settlement.
  * - FIXED_PROJECT_IDS: kinds catalogued under a fixed id equal to the kind, exempt from uuid conversion.
  */
 import { randomUUID } from "node:crypto";
@@ -86,6 +86,23 @@ export default class WorkbenchProjectRepository {
   readAliases(): WorkbenchProjectAlias[] {
     const rows = this.database.prepare("SELECT alias, project_id FROM workbench_project_aliases ORDER BY alias").all() as ProjectSchemaRows["aliases"][];
     return rows.map(row => ({ alias: row.alias, projectId: ProjectIdSchema.parse(row.project_id) }));
+  }
+
+  historicalOwnersAt(rootPath: string, projects: readonly ProjectSchemaRows["projects"][]) {
+    const location = nativeLocationKey(rootPath);
+    return projects.filter(project => project.kind === "historical"
+      && project.identity_key?.startsWith("local://")
+      && nativeLocationKey(project.identity_key.slice("local://".length)) === location);
+  }
+
+  historicalLocationAgrees(projectId: string, rootPath: string) {
+    const location = nativeLocationKey(rootPath);
+    const roots = this.database.prepare("SELECT root_path FROM workbench_project_roots WHERE project_id = ?")
+      .all(projectId) as Array<{ root_path: string }>;
+    const threads = this.database.prepare("SELECT DISTINCT project_root FROM workbench_threads WHERE project_id = ?")
+      .all(projectId) as Array<{ project_root: string }>;
+    return roots.every(root => nativeLocationKey(root.root_path) === location)
+      && threads.every(thread => nativeLocationKey(thread.project_root) === location);
   }
 
   private retainAlias(alias: string, projectId: ProjectId) {
@@ -222,7 +239,10 @@ export default class WorkbenchProjectRepository {
           project.roots.some(next => nativeLocationKey(next.rootPath) === nativeLocationKey(root.root_path)));
       };
       const atLocation = retainedProjects.filter(row => (row.kind === "git" || row.kind === "workspace") && sameLocation(row));
-      const historical = retainedProjects.filter(row => row.kind === "historical" && row.identity_key === project.identityKey);
+      const historicalLocations = project.kind === "git"
+        ? this.historicalOwnersAt(project.rootPath, retainedProjects) : [];
+      const historical = historicalLocations.length ? historicalLocations
+        : retainedProjects.filter(row => row.kind === "historical" && row.identity_key === project.identityKey);
       // The library and the daemon project each own one fixed id named after their kind.
       const fixedId = FIXED_PROJECT_IDS.has(project.kind) ? project.kind : null;
       let owner = atLocation[0] ?? (fixedId
@@ -230,6 +250,9 @@ export default class WorkbenchProjectRepository {
       let conflict = "";
       if (atLocation.length > 1) conflict = "multiple retained owners at the checkout";
       if (historical.length > 1 && !atLocation.length) conflict = "ambiguous historical project identity";
+      if (!atLocation.length && historicalLocations.some(row => !this.historicalLocationAgrees(row.id, project.rootPath))) {
+        conflict = "historical project location contradicts retained threads";
+      }
       const id = ProjectIdSchema.parse(owner?.id ?? fixedId ?? randomUUID());
       const addresses: string[] = [];
       for (const { alias: address } of discovery.aliases.filter(alias =>

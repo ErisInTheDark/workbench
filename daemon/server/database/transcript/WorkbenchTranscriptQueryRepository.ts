@@ -24,6 +24,7 @@ interface ItemRow {
   title: string; kind: string; createdAt: number; ordTime: number; turnIndex: number; position: number;
 }
 const BATCH_SIZE = 200;
+const archivedPlacement = "COALESCE((SELECT archived FROM workbench_top_level_thread_states WHERE thread_id = th.id), th.archived)";
 const itemJoins = `FROM thread_items i
   JOIN thread_turns tr ON tr.id = i.turn_id
   JOIN workbench_threads th ON th.id = i.thread_id
@@ -100,7 +101,7 @@ export default class WorkbenchTranscriptQueryRepository {
     const bind = (key: string, value: string | number) => { bindings[key] = value; return `@${key}`; };
     if (query.threads.length) clauses.push(`th.id IN (${query.threads.map((value, index) => bind(`thread${index}`, value)).join(",")})`);
     if (query.project) clauses.push(`th.project_id = ${bind("project", query.project)}`);
-    if (query.archived !== null) clauses.push(`th.archived = ${bind("archived", Number(query.archived))}`);
+    if (query.archived !== null) clauses.push(`${archivedPlacement} = ${bind("archived", Number(query.archived))}`);
     if (query.settled !== null) clauses.push(`COALESCE(lc.settled, 0) = ${bind("settled", Number(query.settled))}`);
     if (query.harness) clauses.push(items || query.action === "turns"
       ? `tr.harness_id = ${bind("harness", query.harness)}`
@@ -167,7 +168,7 @@ export default class WorkbenchTranscriptQueryRepository {
     } else {
       const matching = this.textPredicate("th.title", query, bindings);
       const values = this.database.prepare(`SELECT th.id, th.project_id AS projectId, th.title, th.activity_at AS createdAt,
-        th.archived, COALESCE(lc.settled, 0) AS settled
+        ${archivedPlacement} AS archived, COALESCE(lc.settled, 0) AS settled
         FROM workbench_threads th LEFT JOIN workbench_thread_lifecycle lc ON lc.thread_id = th.id
         WHERE th.rowid <= @ceiling AND ${where} AND ${matching} ORDER BY th.activity_at DESC, th.id LIMIT @limit OFFSET @offset`).all(bindings) as { id: string; projectId: string; title: string; createdAt: number; archived: number; settled: number }[];
       rows = values.map(row => ({ kind: "thread", id: row.id, threadId: row.id, turnId: null, projectId: row.projectId,

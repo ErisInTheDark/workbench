@@ -115,6 +115,52 @@ test("fresh database is ready without a prepared project catalogue", async () =>
   }
 });
 
+test("opening recovers a historical checkout before serving without backups or repeat repair writes", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-historical-project-");
+  const databasePath = join(temporary.path, "workbench.sqlite3");
+  const historical = testProjectIds.project;
+  const replacement = testProjectIds.other;
+  const seed = new Database(databasePath);
+  installWorkbenchDatabaseSchema(seed);
+  seed.prepare("INSERT INTO workbench_projects(id, identity_key) VALUES (?, 'local://c:/repo')").run(historical);
+  seed.prepare(`INSERT INTO workbench_projects(id, identity_key, kind, name, relative_path, icon_source_key)
+    VALUES (?, 'local://c:/main/.git', 'git', 'repo', 'repo', 'generation')`).run(replacement);
+  seed.prepare(`INSERT INTO workbench_project_roots
+    (project_id, root_id, root_index, name, relative_path, root_path, identity_key)
+    VALUES (?, 'repo', 0, 'repo', 'repo', 'C:/repo', 'local://c:/main/.git')`).run(replacement);
+  seed.prepare(`INSERT INTO workbench_threads
+    (id, project_id, project_root, title, transcript_content_version, created_at, updated_at, activity_at)
+    VALUES ('retained', ?, 'C:/repo', 'retained history', 0, 1, 1, 1)`).run(historical);
+  seed.close();
+  try {
+    for (let opening = 0; opening < 2; opening++) {
+      const controller = new WorkbenchDatabaseController({
+        databasePath,
+        beforeMigration: () => { assert.fail("A catalogue repair must not create a full database backup"); },
+      });
+      try {
+        await controller.start();
+        assert.equal(await controller.resolveProjectIdentity(replacement), historical);
+        const catalog = await controller.readRetainedProjectCatalog(["C:/"]);
+        assert.equal(catalog.catalog[0]?.project.id, historical);
+        assert.equal(catalog.catalog[0]?.project.rootPath, "C:/repo");
+        const history = await controller.queryTranscript(TranscriptQuerySchema.parse({ action: "threads", project: historical }));
+        assert.equal(history.rows[0]?.threadId, "retained");
+      } finally { await controller.close(); }
+      assert.ok(!(await readdir(temporary.path)).includes("backups"));
+      if (opening === 0) {
+        const guard = new Database(databasePath);
+        try {
+          for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+            guard.exec(`CREATE TRIGGER no_repeated_project_${operation} BEFORE ${operation} ON workbench_projects
+              BEGIN SELECT RAISE(ABORT, 'repeated project repair'); END`);
+          }
+        } finally { guard.close(); }
+      }
+    }
+  } finally { await temporary.dispose(); }
+});
+
 test("retention protects current observers while reclaiming a historical database", async (context) => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-retention-reclaim-");
   const databasePath = join(temporary.path, "workbench.sqlite3");
