@@ -11,7 +11,7 @@ import WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type { WorkbenchComposerProfile, WorkbenchComposerProfileTargetSelection } from "workbench-shared/types";
 import { getProjectQualifiedThreadDisplayKey, getThreadDisplayFolderKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
 import { projectWorkbenchThreadDisplaySection } from "workbench-shared/workbench/thread/thread-display-order";
-import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchGitArcLifecycleState, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import { WorkbenchThreadStateMutationResultSchema, WorkbenchThreadTitleMutationResultSchema, type WorkbenchGitArcLifecycleState, type WorkbenchThreadGitCommit, type WorkbenchThreadSidebarEntry, type WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import WorkbenchThreadStateStore, { type WorkbenchStoredThreadTitleHistory, type WorkbenchThreadStateGlobalDocumentId, type WorkbenchThreadStatePersistence } from "./WorkbenchThreadStateStore";
 import { normalizeProviderSidebarEntry as normalizeSidebarEntry } from "./WorkbenchThreadStateFeature";
@@ -20,7 +20,7 @@ import { createWorkbenchProjectThreadSummary } from "workbench-shared/workbench/
 import { projectWorkbenchThreadStateEntry } from "./workbench-thread-state-record";
 import { projectWorkbenchThreadDraft } from "./WorkbenchThreadDraftStore";
 
-import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
+import { ProjectIdSchema, WorkbenchTurnIdSchema, WorkbenchThreadIdSchema, type ProjectId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 
@@ -139,6 +139,24 @@ class MemoryThreadStatePersistence implements WorkbenchThreadStatePersistence {
 
   async readTitleHistories(projectId: string) {
     return structuredClone(this.titleHistories.get(projectId) ?? []);
+  }
+
+  readonly gitCommitReads: string[][] = [];
+  readonly gitCommits = new Map<string, WorkbenchThreadGitCommit[]>();
+
+  async readGitCommits(threadIds: readonly WorkbenchThreadId[]) {
+    this.gitCommitReads.push([...threadIds]);
+    return threadIds.flatMap(threadId => {
+      const commits = this.gitCommits.get(threadId);
+      return commits?.length ? [{ commits: structuredClone(commits), threadId }] : [];
+    });
+  }
+
+  async recordGitCommitTimes(threadId: WorkbenchThreadId, times: ReadonlyArray<{ commitSha: string; committedAt: string; rootId: string }>) {
+    this.gitCommits.set(threadId, (this.gitCommits.get(threadId) ?? []).map(commit => {
+      const time = commit.committedAt ? undefined : times.find(({ commitSha, rootId }) => commitSha === commit.commitSha && rootId === commit.rootId);
+      return time ? { ...commit, committedAt: time.committedAt } : commit;
+    }));
   }
 
   async readGlobal(id: WorkbenchThreadStateGlobalDocumentId) {
@@ -2629,13 +2647,18 @@ test("resolved Git history expires after 24 hours independently of thread settle
       pruned.push(identities);
       cleaned = true;
     },
-    reconcileProject: async (_projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
+    reconcileProject: async (projectId, _signal, acceptProviderSnapshot, acceptGitArcSnapshot) => {
       await acceptProviderSnapshot("codex", [providerEntry], { complete: true });
-      if (cleaned) await acceptGitArcSnapshot({ arcs: [], plans: [] });
+      if (cleaned) {
+        // Pruning alone must leave the projection; only the next Git snapshot may change it.
+        afterPrune = controller.peekProject(projectId);
+        await acceptGitArcSnapshot({ arcs: [], plans: [] });
+      }
       return [];
     },
     storageRoot: temporary.path,
   });
+  let afterPrune: WorkbenchThreadSidebarSnapshot | null = null;
   await controller.readProject(fixtureProjectIds.project);
   await waitFor(async () => (await controller.getSnapshot(fixtureProjectIds.project)).freshness === "fresh", "Initial resolved state did not reconcile.");
 
@@ -2647,7 +2670,8 @@ test("resolved Git history expires after 24 hours independently of thread settle
   await controller.refresh(fixtureProjectIds.project);
   await waitFor(() => pruned.length === 1, "Resolved Git state did not expire after 24 hours.");
   assert.deepEqual(pruned[0], [providerEntry.identity]);
-  const retained = (await controller.getSnapshot(fixtureProjectIds.project)).entries.find(entry => entry.entryKind !== "draft");
+  await waitFor(() => afterPrune !== null, "Reconciliation after pruning never reached the Git snapshot.");
+  const retained = afterPrune!.entries.find(entry => entry.entryKind !== "draft");
   assert.equal(retained?.lifecycle.settled, false);
   assert.deepEqual(retained?.entryKind === "thread" ? retained.gitArc?.proposals : null, providerEntry.gitArc?.proposals);
   await controller.dispose();
@@ -4459,6 +4483,8 @@ test("restart reevaluates a persisted dependency when its ready target loaded fi
     readArchiveEligible: before => persistence.readArchiveEligible(before),
     readGlobal: async (id) => await persistence.readGlobal(id),
     readTitleHistories: async (projectId) => await persistence.readTitleHistories(projectId),
+    readGitCommits: async (threadIds) => await persistence.readGitCommits(threadIds),
+    recordGitCommitTimes: async (threadId, times) => await persistence.recordGitCommitTimes(threadId, times),
     readProject: async (projectId) => {
       if (projectId === "alpha") await sourceReadGate;
       return await persistence.readProject(projectId);
@@ -4738,4 +4764,77 @@ test("manual status persists, restores settled threads, and rejects provider-own
   assert.deepEqual(entry?.entryKind === "thread" ? entry.lifecycle : null, stoppedLifecycle);
   await controller.dispose();
   await temporary.dispose();
+});
+
+test("only an observed thread's untimed commits learn their times from Git, after the observation is served, once", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-commit-time-backfill-");
+  const root = temporary.path;
+  const commit = (sha: string, historyIndex: number, committedAt?: string) => ({
+    ...(committedAt ? { committedAt } : {}),
+    commitSha: sha.repeat(40), description: "", historyIndex, rootId: "root", sourceProposalId: sha, title: sha,
+  });
+  const recorded = "2026-10-01T00:00:00.000Z";
+  const backfilled = "2026-10-16T00:00:00.000Z";
+  await seedProjectState(root, "project", {
+    drafts: [],
+    records: [pinnedRecord("a", "A"), pinnedRecord("unobserved", "Unobserved")],
+    version: 3,
+  });
+  const persistence = testPersistence(root);
+  persistence.gitCommits.set("a", [commit("a", 0, recorded), commit("b", 1), commit("c", 2)]);
+  persistence.gitCommits.set("unobserved", [commit("d", 0)]);
+  const requests: Array<Array<{ commitShas: string[]; rootId: string }>> = [];
+  let answer!: (times: ReadonlyMap<string, string>) => void;
+  const times = new Promise<ReadonlyMap<string, string>>((resolve) => { answer = resolve; });
+  let publishes = 0;
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog,
+    onProject: () => { publishes += 1; },
+    readGitCommitTimes: async (_projectId, request) => {
+      requests.push(request);
+      return await times;
+    },
+    reconcileProject: async () => [],
+    storageRoot: root,
+  });
+  const observe = async (threadId: string) => {
+    const served = await controller.readWorkspaceThread({
+      projectId: fixtureProjectIds["project"], subscriptionId: "observer",
+      target: { kind: "provider", threadId: WorkbenchThreadIdSchema.parse(threadId) },
+    });
+    const entry = served.entries[0];
+    return entry?.entryKind === "thread" ? (entry.gitCommits ?? []).map(({ committedAt }) => committedAt) : null;
+  };
+  const settle = async () => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  try {
+    // Loading the project holds no commit history and reads none.
+    const snapshot = await controller.getSnapshot(fixtureProjectIds["project"]);
+    assert.ok(snapshot.entries.every((entry) => entry.entryKind === "draft" || entry.gitCommits === undefined));
+    await settle();
+    assert.deepEqual(persistence.gitCommitReads, []);
+    assert.equal(requests.length, 0);
+
+    // The observation reads only its own thread's history from SQL and is served before Git answers.
+    assert.deepEqual(await observe("a"), [recorded, undefined, undefined]);
+    assert.deepEqual(persistence.gitCommitReads, [["a"]]);
+    await waitFor(() => requests.length === 1, "backfill never asked Git for commit times");
+    assert.deepEqual(requests, [[{ commitShas: ["b".repeat(40), "c".repeat(40)], rootId: "root" }]]);
+
+    const before = publishes;
+    answer(new Map([[`root\0${"b".repeat(40)}`, backfilled]]));
+    await waitFor(() => publishes > before, "backfill never nudged observations to re-read");
+    assert.deepEqual(persistence.gitCommits.get("a")?.map(({ committedAt }) => committedAt), [recorded, backfilled, undefined]);
+    assert.deepEqual(await observe("a"), [recorded, backfilled, undefined]);
+
+    // Re-observing never asks Git again, even for the commit it could not find; the unobserved thread is never read.
+    await settle();
+    assert.equal(requests.length, 1);
+    assert.ok(persistence.gitCommitReads.every((threadIds) => !threadIds.includes(WorkbenchThreadIdSchema.parse("unobserved"))));
+  } finally {
+    await controller.dispose();
+    await temporary.dispose();
+  }
 });

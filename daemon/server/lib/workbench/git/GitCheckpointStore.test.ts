@@ -45,12 +45,12 @@ function proposalMetadata(
   };
 }
 
-function commitIdentity(message: string): GitCommitIdentity {
+function commitIdentity(message: string, committerDate = "0 +0000"): GitCommitIdentity {
   return {
     authorDate: "0 +0000",
     authorEmail: "agent@example.com",
     authorName: "agent",
-    committerDate: "0 +0000",
+    committerDate,
     committerEmail: "agent@example.com",
     committerName: "agent",
     message,
@@ -106,11 +106,12 @@ test("proposal summary groups read only the requested thread proposal namespaces
     { ref: `${providerLegacy}/proposal-two`, value: committedCommit },
     { ref: `${proposalNamespace("codex", "unrelated-thread")}/unrelated`, value: "4".repeat(40) },
   ], new Map([
-    [proposedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-one", "proposed", null)))],
+    [proposedCommit, commitIdentity(proposalMessage(proposalMetadata("proposal-one", "proposed", null)), "1792200000 +1300")],
+    // The committed state commit is written at acceptance, so its committer date is the acceptance time.
     [committedCommit, commitIdentity(proposalMessage({
       ...proposalMetadata("proposal-two", "committed", committedSha), description: "why", mode: "amend", paths: ["two.ts"],
       changes: [{ additions: 3, deletions: 1, kind: "update", path: "two.ts" }],
-    }))],
+    }), "1792200000 +1300")],
   ]));
   const store = new GitCheckpointStore(repository as unknown as WorkbenchGitRepository, async ({ threadId }) => (
     threadId === "target-thread" || threadId === "wb-target-thread"
@@ -129,12 +130,12 @@ test("proposal summary groups read only the requested thread proposal namespaces
   assert.deepEqual(summaries, [[
     // Proposals written before totals were recorded summarise without them.
     {
-      changes: null, committedSha: null, description: "", livePaths: ["changed.ts"], mode: "commit",
+      changes: null, committedAt: null, committedSha: null, description: "", livePaths: ["changed.ts"], mode: "commit",
       paths: ["changed.ts"], proposalId: "proposal-one", status: "proposed", title: "proposal-one",
     },
     {
       changes: [{ additions: 3, deletions: 1, kind: "update", path: "two.ts" }],
-      committedSha, description: "why", livePaths: ["changed.ts"], mode: "amend", paths: ["two.ts"],
+      committedAt: new Date(1792200000 * 1000).toISOString(), committedSha, description: "why", livePaths: ["changed.ts"], mode: "amend", paths: ["two.ts"],
       proposalId: "proposal-two", status: "committed", title: "proposal-two",
     },
   ]]);

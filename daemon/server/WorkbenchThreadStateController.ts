@@ -187,6 +187,14 @@ export interface WorkbenchThreadStateControllerOptions {
       threadId: WorkbenchThreadId;
     }>,
   ) => Promise<ReadonlyArray<{ harness: WorkbenchHarnessId; threadId: WorkbenchThreadId }> | void>;
+  /**
+   * Git commit times keyed `${rootId}\0${commitSha}`, for durable commits stored without one. Missing commits are
+   * omitted. Implementations read one repository at a time.
+   */
+  readGitCommitTimes?: (
+    projectId: ProjectId,
+    requests: Array<{ commitShas: string[]; rootId: string }>,
+  ) => Promise<ReadonlyMap<string, string>>;
   renameThread?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, title: string) => Promise<string>;
   interruptQuestionnaire?: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) => Promise<boolean>;
   reconcileProject: (
@@ -265,6 +273,7 @@ function describeInvalidRequest(input: object, issue: { code: string; message: s
 
 export default class WorkbenchThreadStateController {
   private static readonly RESOLVED_GIT_RETENTION_MS = 24 * 60 * 60 * 1_000;
+  private static readonly GIT_COMMIT_TIME_CHUNK = 100;
   private active = true;
   private readonly archives: WorkbenchThreadArchiveController;
   private readonly homeDisplayOrder: WorkbenchHomeThreadDisplayOrderStore;
@@ -280,6 +289,10 @@ export default class WorkbenchThreadStateController {
   private readonly subscribers = new Set<(projectId: ProjectId, entry: WorkbenchThreadSidebarEntry) => void>();
   private readonly projectSubscribers = new Set<(projectId: ProjectId) => void>();
   private readonly waitingByThreadKey = new Map<string, "subagents" | "other">();
+  /** Process-wide serial chain: at most one commit-time backfill chunk reads Git at once. */
+  private gitCommitTimeBackfill: Promise<void> = Promise.resolve();
+  /** Observed threads whose untimed commits were already sent to Git this process. */
+  private readonly gitCommitTimeAttempts = new Set<string>();
 
   private inlineAttachment(url: string) {
     const match = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(url);
@@ -428,6 +441,8 @@ export default class WorkbenchThreadStateController {
       readProject: projectId => this.readPersistence(() => persistence.readProject(projectId)),
       readNavigationSummary: projectId => this.readPersistence(() => persistence.readNavigationSummary(projectId)),
       readTitleHistories: projectId => this.readPersistence(() => persistence.readTitleHistories(projectId)),
+      readGitCommits: threadIds => this.readPersistence(() => persistence.readGitCommits(threadIds)),
+      recordGitCommitTimes: (threadId, times) => this.writePersistence(() => persistence.recordGitCommitTimes(threadId, times)),
       writeGlobal: (id, document) => this.writePersistence(() => persistence.writeGlobal(id, document)),
       writeProject: (projectId, document, histories) => this.writePersistence(() => persistence.writeProject(projectId, document, histories)),
     };
@@ -555,30 +570,57 @@ export default class WorkbenchThreadStateController {
     return entry.gitArc ? null : entry.lifecycle.settled ? entry.settledAt ?? null : null;
   }
 
-  private expiredGitRecords(state: ProjectState) {
+  /** Expired threads with the durable proposal ids each root's retention must see covered, read for just them. */
+  private async expiredGitRecords(state: ProjectState) {
     const cutoff = this.now() - WorkbenchThreadStateController.RESOLVED_GIT_RETENTION_MS;
-    return [...state.entries.entries()].flatMap(([key, entry]) => {
+    const expired = [...state.entries.entries()].flatMap(([key, entry]) => {
       if (entry.entryKind === "draft") return [];
       const resolvedAt = this.gitRetentionEpoch(entry);
-      const commitsByRoot = new Map<string, string[]>();
-      for (const commit of entry.gitCommits ?? []) {
-        const proposalIds = commitsByRoot.get(commit.rootId) ?? [];
-        proposalIds.push(commit.sourceProposalId);
-        commitsByRoot.set(commit.rootId, proposalIds);
-      }
       return resolvedAt !== null
         && resolvedAt < cutoff
         && (entry.gitHistoryCleanedAt === null || entry.gitHistoryCleanedAt < resolvedAt)
-        ? [{
-          ...(commitsByRoot.size ? {
-            durableProposalIds: [...commitsByRoot].map(([rootId, proposalIds]) => ({ proposalIds, rootId })),
-          } : {}),
-          identity: entry.identity,
-          key,
-          resolvedAt,
-        }]
+        ? [{ identity: entry.identity, key, resolvedAt }]
         : [];
     });
+    if (!expired.length) return [];
+    const history = new Map((await this.options.threadStateStore.readGitCommits(expired.map(({ identity }) => identity.threadId)))
+      .map(({ commits, threadId }) => [threadId, commits]));
+    return expired.map((record) => {
+      const byRoot = Map.groupBy(history.get(record.identity.threadId) ?? [], ({ rootId }) => rootId);
+      return byRoot.size ? {
+        ...record,
+        durableProposalIds: [...byRoot].map(([rootId, commits]) => ({ proposalIds: commits.map(({ sourceProposalId }) => sourceProposalId), rootId })),
+      } : record;
+    });
+  }
+
+  /** Prunes expired threads' Git history and marks the cleaned ones; returns a bounded failure, if any. */
+  private async pruneExpiredGitHistory(projectId: ProjectId, state: ProjectState) {
+    const prune = this.options.pruneExpiredGitState;
+    if (!prune) return null;
+    try {
+      const expiredRecords = await this.expiredGitRecords(state);
+      if (!expiredRecords.length) return null;
+      const deferred = await prune(projectId, expiredRecords.map(({ identity, ...record }) => ({
+        ...identity,
+        ...("durableProposalIds" in record ? { durableProposalIds: record.durableProposalIds } : {}),
+      })));
+      const deferredKeys = new Set((Array.isArray(deferred) ? deferred : []).map(({ harness, threadId }) => `${harness}:${threadId}`));
+      const gitHistoryCleanedAt = this.now();
+      const cleanedKeys: string[] = [];
+      for (const expired of expiredRecords) {
+        if (deferredKeys.has(expired.key)) continue;
+        const current = state.entries.get(expired.key);
+        if (!current || current.entryKind === "draft" || this.gitRetentionEpoch(current) !== expired.resolvedAt) continue;
+        state.entries.set(expired.key, { ...current, gitHistoryCleanedAt });
+        cleanedKeys.push(expired.key);
+      }
+      if (cleanedKeys.length) await this.persist(projectId, state, cleanedKeys);
+      return null;
+    } catch (error) {
+      this.options.log?.(`Git retention failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
+      return `git-retention: ${sanitizeError(error)}`;
+    }
   }
 
   private acceptedIntentEntry(input: { harness: WorkbenchHarnessId; threadId: WorkbenchThreadId; title: string; turnId: WorkbenchTurnId; pinned?: boolean }): WorkbenchThreadSidebarEntry {
@@ -1526,6 +1568,55 @@ export default class WorkbenchThreadStateController {
     return loaded;
   }
 
+  /**
+   * Durable commit history lives only in SQL: an observed thread family reads its own here, and nothing else holds it.
+   * Commits stored before times were recorded are handed to the backfill, which never delays this read.
+   */
+  private async withGitCommits(projectId: ProjectId, state: ProjectState, entries: readonly WorkbenchThreadSidebarEntry[]) {
+    const threadIds = entries.flatMap(entry => entry.entryKind === "draft" ? [] : [entry.identity.threadId]);
+    const history = new Map((await this.options.threadStateStore.readGitCommits(threadIds)).map(({ commits, threadId }) => [threadId, commits]));
+    if (!history.size) return [...entries];
+    for (const [threadId, commits] of history) this.backfillGitCommitTimes(projectId, state, threadId, commits);
+    return entries.map(entry => {
+      const gitCommits = entry.entryKind === "draft" ? undefined : history.get(entry.identity.threadId);
+      return gitCommits ? { ...entry, gitCommits } : entry;
+    });
+  }
+
+  /**
+   * Learns times for one observed thread's untimed commits from Git, attempted once per process, through one serial
+   * chain in bounded chunks; commits Git cannot find stay untimed.
+   */
+  private backfillGitCommitTimes(projectId: ProjectId, state: ProjectState, threadId: WorkbenchThreadId, commits: readonly WorkbenchThreadGitCommit[]) {
+    const read = this.options.readGitCommitTimes;
+    const untimed = commits.filter(commit => !commit.committedAt);
+    if (!read || !untimed.length || this.gitCommitTimeAttempts.has(threadId)) return;
+    this.gitCommitTimeAttempts.add(threadId);
+    const chunkSize = WorkbenchThreadStateController.GIT_COMMIT_TIME_CHUNK;
+    this.gitCommitTimeBackfill = this.gitCommitTimeBackfill.then(async () => {
+      const times = new Map<string, string>();
+      try {
+        for (let offset = 0; offset < untimed.length; offset += chunkSize) {
+          // Hand the event loop back before every chunk, including the first, so the observation is served first.
+          await new Promise(resolve => setImmediate(resolve));
+          if (!this.active) return;
+          const requests = [...Map.groupBy(untimed.slice(offset, offset + chunkSize), commit => commit.rootId)]
+            .map(([rootId, chunk]) => ({ commitShas: chunk.map(({ commitSha }) => commitSha), rootId }));
+          for (const [commitKey, committedAt] of await read(projectId, requests)) times.set(commitKey, committedAt);
+        }
+        if (!times.size || !this.active) return;
+        await this.options.threadStateStore.recordGitCommitTimes(threadId, untimed.flatMap(({ commitSha, rootId }) => {
+          const committedAt = times.get(`${rootId}\0${commitSha}`);
+          return committedAt ? [{ commitSha, committedAt, rootId }] : [];
+        }));
+        // Observations still watching this project re-read the corrected history; nothing is sent otherwise.
+        if (this.active) this.publish(projectId, state);
+      } catch (error) {
+        this.options.log?.(`Git commit time backfill failed project=${sanitizeLogValue(projectId)} thread=${sanitizeLogValue(threadId)} error=${sanitizeError(error)}`);
+      }
+    });
+  }
+
   private loadProjectStorage(projectId: ProjectId) {
     return this.enqueue(`${projectId}:storage:read`, async (): Promise<StoredProjectState> => {
       const stored = await this.options.threadStateStore.readProject(projectId);
@@ -1607,8 +1698,9 @@ export default class WorkbenchThreadStateController {
     const context = this.selectThreadContext(request.projectId, request.target.kind === "subagent"
       ? { kind: "provider", threadId: request.target.parentThreadId }
       : request.target, state, false);
+    const entries = context ? await this.withGitCommits(request.projectId, state, context.entries) : [];
     return {
-      entries: context?.entries ?? [],
+      entries,
       error: context ? null : state.error?.slice(0, 500) ?? null,
       freshness: context ? "fresh" : state.freshness,
       projectId: request.projectId,
@@ -1730,34 +1822,7 @@ export default class WorkbenchThreadStateController {
     const startEntries = new Map(state.entries);
     const reconcilePromise = (async () => {
       try {
-        let retentionFailure: string | null = null;
-        const expiredRecords = this.expiredGitRecords(state);
-        if (expiredRecords.length && this.options.pruneExpiredGitState) {
-          try {
-            const deferred = await this.options.pruneExpiredGitState(projectId, expiredRecords.map(({ durableProposalIds, identity }) => ({
-              ...identity,
-              ...(durableProposalIds ? { durableProposalIds } : {}),
-            })));
-            const deferredKeys = new Set((Array.isArray(deferred) ? deferred : []).map(({ harness, threadId }) => `${harness}:${threadId}`));
-            const gitHistoryCleanedAt = this.now();
-            const cleanedKeys: string[] = [];
-            for (const expired of expiredRecords) {
-              if (deferredKeys.has(expired.key)) continue;
-              const current = state.entries.get(expired.key);
-              if (
-                !current
-                || current.entryKind === "draft"
-                || this.gitRetentionEpoch(current) !== expired.resolvedAt
-              ) continue;
-              state.entries.set(expired.key, { ...current, gitHistoryCleanedAt });
-              cleanedKeys.push(expired.key);
-            }
-            if (cleanedKeys.length) await this.persist(projectId, state, cleanedKeys);
-          } catch (error) {
-            retentionFailure = `git-retention: ${sanitizeError(error)}`;
-            this.options.log?.(`Git retention failed project=${sanitizeLogValue(projectId)} error=${sanitizeError(error)}`);
-          }
-        }
+        const retentionFailure = await this.pruneExpiredGitHistory(projectId, state);
         const failures = await this.options.reconcileProject(projectId, abort.signal, async (harness, entries, options) => {
           if (!this.active || generation !== state.generation) return;
           const previousEntries = new Map(state.entries);
@@ -1856,7 +1921,6 @@ export default class WorkbenchThreadStateController {
           activityAt: existing.activityAt,
           ...(parsed.data.gitArc === undefined && existing.gitArc !== undefined ? { gitArc: existing.gitArc } : {}),
           ...(parsed.data.gitArcPlan === undefined && existing.gitArcPlan !== undefined ? { gitArcPlan: existing.gitArcPlan } : {}),
-          ...(parsed.data.gitCommits === undefined && existing.gitCommits !== undefined ? { gitCommits: existing.gitCommits } : {}),
         }
         : parsed.data;
       if (providerEntry.entryKind === "subagent") {
@@ -1921,12 +1985,10 @@ export default class WorkbenchThreadStateController {
     for (const [key, entry] of state.entries) {
       if (entry.entryKind === "draft") continue;
       const observedGitArc = arcs.get(key) ?? null;
-      const gitCommits = this.mergeGitCommits(entry.gitCommits ?? [], observedGitArc ?? entry.gitArc ?? null);
       const next = parseWorkbenchThreadStateEntry({
         ...entry,
         gitArc: observedGitArc,
         gitArcPlan: plans.get(key) ?? null,
-        gitCommits,
         lifecycle: gitArcPreventsThreadSettlement(observedGitArc) && entry.lifecycle.settled
           ? { ...entry.lifecycle, settled: false as const }
           : entry.lifecycle,
@@ -1936,31 +1998,6 @@ export default class WorkbenchThreadStateController {
       changed = true;
     }
     return changed;
-  }
-
-  private mergeGitCommits(
-    history: readonly WorkbenchThreadGitCommit[],
-    arc: WorkbenchGitArcLifecycleState | null,
-  ): WorkbenchThreadGitCommit[] {
-    const commits = new Map(history.map(commit => [`${commit.rootId}\0${commit.sourceProposalId}`, commit]));
-    let nextIndex = history.reduce((maximum, commit) => Math.max(maximum, commit.historyIndex + 1), 0);
-    for (const proposal of arc?.proposals ?? []) {
-      const summary = proposal.summary;
-      if (proposal.status !== "committed" || !proposal.rootId || !summary?.committedSha) continue;
-      const key = `${proposal.rootId}\0${proposal.proposalId}`;
-      const previous = commits.get(key);
-      commits.set(key, {
-        commitSha: summary.committedSha,
-        description: summary.description,
-        historyIndex: previous?.historyIndex ?? nextIndex++,
-        rootId: proposal.rootId,
-        sourceProposalId: proposal.proposalId,
-        title: summary.title,
-      });
-    }
-    return [...commits.values()].sort((left, right) => left.historyIndex - right.historyIndex
-      || left.rootId.localeCompare(right.rootId)
-      || left.sourceProposalId.localeCompare(right.sourceProposalId));
   }
 
   /** Serializes by key through the shared lock manager; a flow already inside the key reenters instead of queueing behind itself. */

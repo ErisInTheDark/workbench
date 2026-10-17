@@ -88,6 +88,7 @@ export interface WorkbenchThreadStateFeatureContext {
       harness: WorkbenchHarness;
       threadId: WorkbenchThreadId;
     }>): Promise<{ deferredIdentities: Array<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }> }>;
+    readCommitTimes?(cwd: string, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>): Promise<ReadonlyMap<string, string>>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
   /** Whether the thread still holds required follow-up todos, which keep it from settling. */
@@ -209,6 +210,13 @@ export default class WorkbenchThreadStateFeature {
           const result = await context.gitArcs.pruneThreadHistories!(project.rootPath, identities);
           const deferred = new Set(result.deferredIdentities.map(({ harness, threadId }) => `${harness}:${threadId}`));
           return identities.filter(({ harness, threadId }) => deferred.has(`${harness}:${threadId}`));
+        },
+      } : {}),
+      ...(context.gitArcs.readCommitTimes ? {
+        readGitCommitTimes: async (projectId, requests) => {
+          if (!this.projectWorktreeAvailable(projectId)) return new Map();
+          const project = await context.resolveProjectById(projectId);
+          return await context.gitArcs.readCommitTimes!(project.rootPath, requests);
         },
       } : {}),
       reconcileProject: (projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot) => this.reconcileProject(projectId, signal, acceptProviderSnapshot, acceptGitArcSnapshot),

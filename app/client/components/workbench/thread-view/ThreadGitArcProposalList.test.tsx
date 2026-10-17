@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - No production exports; tests protect commit-all availability in a collapsed proposals header and how much grouping accepted history gets.
+ * - No production exports; tests protect commit-all availability in a collapsed proposals header and how accepted history groups by age.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
 import type { WorkbenchClientStateRecord } from "workbench-shared/state/workbench-client-state";
+import type { WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchClientStateController, { type WorkbenchClientStateSnapshot } from "../../../workbench/state/WorkbenchClientStateController";
 import { WorkbenchClientStateContext } from "../workbench-client-state-context";
 import ThreadCheckpointCommitActions, { type ThreadCheckpointStoredProposal } from "./ThreadCheckpointCommitActions";
@@ -48,14 +49,7 @@ function renderList(
   open: boolean,
   proposalIds: readonly string[],
   status: "committed" | "proposed" = "proposed",
-  history: Array<{
-    commitSha: string;
-    description: string;
-    historyIndex: number;
-    rootId: string;
-    sourceProposalId: string;
-    title: string;
-  }> = [],
+  history: WorkbenchThreadGitCommit[] = [],
   { standalone = false }: { standalone?: boolean } = {},
 ) {
   const commitActions = new ThreadCheckpointCommitActions();
@@ -120,13 +114,20 @@ test("accepted history alone opens straight onto closed commit rows", () => {
 
 test("accepted history keeps its group when it shares the panel", () => {
   const withClaims = renderList(true, [], "committed", [durableCommit]);
-  assert.match(withClaims, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(withClaims, /data-thread-git-arc-accepted-group="older"/u);
   assert.match(withClaims, /1 commit/u);
   assert.equal(commitAllTag(withClaims), null);
 
   const withPending = renderList(true, ["pending"], "proposed", [durableCommit], { standalone: true });
-  assert.match(withPending, /data-thread-git-arc-accepted-group="true"/u);
+  assert.match(withPending, /data-thread-git-arc-accepted-group="older"/u);
   assert.match(withPending, /1 commit, 1 proposal/u);
+});
+
+test("accepted history spanning several ages groups each age even when it is the whole panel", () => {
+  const today = { ...durableCommit, committedAt: new Date().toISOString(), commitSha: "b".repeat(40), historyIndex: 1, sourceProposalId: "today", title: "today commit" };
+  const html = renderList(false, [], "committed", [durableCommit, today], { standalone: true });
+  const groups = [...html.matchAll(/data-thread-git-arc-accepted-group="([a-z]+)"/gu)].map(([, bucket]) => bucket);
+  assert.deepEqual(groups, ["older", "today"]);
 });
 
 test("live accepted proposals win over duplicate durable commits", () => {

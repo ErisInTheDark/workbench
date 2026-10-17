@@ -1,7 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateGitRepository: own permanent accepted commits and replaceable Git observation cache.
- * - WorkbenchThreadGitObservations: permanent commits plus independently absent, null or populated arc and plan cache.
+ * - default WorkbenchThreadStateGitRepository: own permanent accepted commits (promoted from live arcs, read per thread on
+ *   demand, timed, looked up by sha) and the replaceable Git observation cache.
+ * - WorkbenchThreadGitObservations: independently absent, null or populated arc and plan cache.
+ * - WorkbenchThreadGitCommitTime: one Git-learned time for a permanent commit stored without one.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -12,10 +14,16 @@ import {
   type WorkbenchThreadGitCommit,
 } from "workbench-shared/workbench/thread/thread-state";
 
+/** A commit time learned from Git for a permanent commit stored without one. */
+export interface WorkbenchThreadGitCommitTime {
+  commitSha: string;
+  committedAt: string;
+  rootId: string;
+}
+
 export interface WorkbenchThreadGitObservations {
   gitArc?: WorkbenchGitArcLifecycleState | null;
   gitArcPlan?: WorkbenchGitArcPlanState | null;
-  gitCommits?: WorkbenchThreadGitCommit[];
 }
 
 type ObservationKind = "arc" | "plan";
@@ -67,6 +75,7 @@ type GitCommitRow = {
   commit_sha: string;
   title: string;
   description: string;
+  committed_at: string | null;
 };
 interface GitReadBatch {
   entries: Map<string, GitEntry[]>;
@@ -111,11 +120,6 @@ export default class WorkbenchThreadStateGitRepository {
           ORDER BY proposal_index, change_index
         `).all(...ids) as GitProposalChangeRow[]
         : [];
-      const commits = this.database.prepare(`
-        SELECT * FROM workbench_thread_git_commits
-        WHERE thread_id IN (${placeholders})
-        ORDER BY history_index, root_id, source_proposal_id
-      `).all(...ids) as GitCommitRow[];
       const batch: GitReadBatch = {
         entries: Map.groupBy(entries, entry => entry.observation_id),
         paths: Map.groupBy(paths, entry => entry.entry_id),
@@ -124,21 +128,55 @@ export default class WorkbenchThreadStateGitRepository {
         proposalChanges: Map.groupBy(proposalChanges, entry => entry.entry_id),
       };
       const byThread = Map.groupBy(observations, observation => observation.thread_id);
-      const commitsByThread = Map.groupBy(commits, commit => commit.thread_id);
-      for (const id of ids) {
-        const observations = this.decode(byThread.get(id) ?? [], batch);
-        const history = (commitsByThread.get(id) ?? []).map((commit) => WorkbenchThreadGitCommitSchema.parse({
+      for (const id of ids) result.set(id, this.decode(byThread.get(id) ?? [], batch));
+    }
+    return result;
+  }
+
+  /** Permanent accepted commits per thread, in acceptance order; threads without any are absent. */
+  readCommits(threadIds: readonly string[]): Map<string, WorkbenchThreadGitCommit[]> {
+    const result = new Map<string, WorkbenchThreadGitCommit[]>();
+    for (let offset = 0; offset < threadIds.length; offset += 400) {
+      const ids = threadIds.slice(offset, offset + 400);
+      const rows = this.database.prepare(`
+        SELECT * FROM workbench_thread_git_commits
+        WHERE thread_id IN (${ids.map(() => "?").join(",")})
+        ORDER BY history_index, root_id, source_proposal_id
+      `).all(...ids) as GitCommitRow[];
+      for (const [threadId, commits] of Map.groupBy(rows, row => row.thread_id)) {
+        result.set(threadId, commits.map(commit => WorkbenchThreadGitCommitSchema.parse({
+          ...(commit.committed_at === null ? {} : { committedAt: commit.committed_at }),
           commitSha: commit.commit_sha,
           description: commit.description,
           historyIndex: commit.history_index,
           rootId: commit.root_id,
           sourceProposalId: commit.source_proposal_id,
           title: commit.title,
-        }));
-        result.set(id, history.length ? { ...observations, gitCommits: history } : observations);
+        })));
       }
     }
     return result;
+  }
+
+  /** Fills only commits still stored without a time. */
+  recordCommitTimes(threadId: string, times: readonly WorkbenchThreadGitCommitTime[]) {
+    const update = this.database.prepare(`
+      UPDATE workbench_thread_git_commits SET committed_at = ?
+      WHERE thread_id = ? AND root_id = ? AND commit_sha = ? AND committed_at IS NULL
+    `);
+    this.database.transaction(() => {
+      for (const { commitSha, committedAt, rootId } of times) update.run(committedAt, threadId, rootId, commitSha);
+    })();
+  }
+
+  /** Threads of one stored project whose permanent history holds the commit. */
+  findCommitOwners(storedProjectId: string, commitSha: string) {
+    return (this.database.prepare(`
+      SELECT DISTINCT commits.thread_id FROM workbench_thread_git_commits commits
+      JOIN workbench_threads thread ON thread.id = commits.thread_id
+      WHERE thread.project_id = ? AND commits.commit_sha = ?
+      ORDER BY commits.thread_id
+    `).all(storedProjectId, commitSha) as Array<{ thread_id: string }>).map(({ thread_id }) => thread_id);
   }
 
   private decode(observations: readonly GitObservationRow[], batch: GitReadBatch): WorkbenchThreadGitObservations {
@@ -195,9 +233,12 @@ export default class WorkbenchThreadStateGitRepository {
       { checkpointCommit, intentName, intentDescription, updatedAt }
     );
     const member = ({ harness, repoRoot, rootId, rootIds, threadId }: ArcMember | PlanMember) => ({ harness, threadId, repoRoot, rootId, rootIds });
-    const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status, summary }) => (
-      { proposalId, status, ...(rootId === undefined ? {} : { rootId }), ...(summary === undefined ? {} : { summary }) }
-    ));
+    // Acceptance time lives on the permanent commit row, never in the replaceable proposal cache.
+    const proposals = (values: WorkbenchGitArcLifecycleState["proposals"]) => values.map(({ proposalId, rootId, status, summary }) => {
+      if (!summary) return { proposalId, status, ...(rootId === undefined ? {} : { rootId }) };
+      const { committedAt: _committedAt, ...cached } = summary;
+      return { proposalId, status, ...(rootId === undefined ? {} : { rootId }), summary: cached };
+    });
     const result: WorkbenchThreadGitObservations = {};
     if (value.gitArc !== undefined) {
       const arc = value.gitArc;
@@ -219,30 +260,24 @@ export default class WorkbenchThreadStateGitRepository {
         } : {}),
       });
     }
-    if (value.gitCommits !== undefined) {
-      result.gitCommits = value.gitCommits.map(commit => WorkbenchThreadGitCommitSchema.parse(commit));
-    }
     return result;
   }
 
+  /** Replaces the cache and promotes the live arc's committed proposals into permanent history, which only grows. */
   replace(threadId: string, value: WorkbenchThreadGitObservations) {
-    const { gitArc: arc, gitArcPlan: plan, gitCommits = [] } = this.project(value);
+    const { gitArc: arc, gitArcPlan: plan } = this.project(value);
     this.database.transaction(() => {
-      this.writeCommits(threadId, [
-        ...gitCommits,
-        ...this.committedProposals(arc, this.nextHistoryIndex(threadId, gitCommits)),
-      ]);
+      this.writeCommits(threadId, this.committedProposals(value.gitArc, this.nextHistoryIndex(threadId)));
       this.writeObservation(threadId, "arc", arc);
       this.writeObservation(threadId, "plan", plan);
     })();
   }
 
-  private nextHistoryIndex(threadId: string, commits: readonly WorkbenchThreadGitCommit[]) {
-    const row = this.database.prepare(`
+  private nextHistoryIndex(threadId: string) {
+    return (this.database.prepare(`
       SELECT COALESCE(MAX(history_index) + 1, 0) AS next_index
       FROM workbench_thread_git_commits WHERE thread_id = ?
-    `).get(threadId) as { next_index: number };
-    return Math.max(row.next_index, ...commits.map(({ historyIndex }) => historyIndex + 1), 0);
+    `).get(threadId) as { next_index: number }).next_index;
   }
 
   private committedProposals(arc: WorkbenchGitArcLifecycleState | null | undefined, start: number) {
@@ -251,6 +286,7 @@ export default class WorkbenchThreadStateGitRepository {
       const summary = proposal.summary;
       return proposal.status === "committed" && proposal.rootId && summary?.committedSha
         ? [{
+          ...(summary.committedAt ? { committedAt: summary.committedAt } : {}),
           commitSha: summary.committedSha,
           description: summary.description,
           historyIndex: start + index,
@@ -265,17 +301,18 @@ export default class WorkbenchThreadStateGitRepository {
   private writeCommits(threadId: string, commits: readonly WorkbenchThreadGitCommit[]) {
     const upsert = this.database.prepare(`
       INSERT INTO workbench_thread_git_commits(
-        thread_id, root_id, source_proposal_id, history_index, commit_sha, title, description
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        thread_id, root_id, source_proposal_id, history_index, commit_sha, title, description, committed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(thread_id, root_id, source_proposal_id) DO UPDATE SET
         commit_sha = excluded.commit_sha,
         title = excluded.title,
-        description = excluded.description
+        description = excluded.description,
+        committed_at = COALESCE(workbench_thread_git_commits.committed_at, excluded.committed_at)
     `);
     for (const commit of commits) {
       upsert.run(
         threadId, commit.rootId, commit.sourceProposalId, commit.historyIndex,
-        commit.commitSha, commit.title, commit.description,
+        commit.commitSha, commit.title, commit.description, commit.committedAt ?? null,
       );
     }
   }

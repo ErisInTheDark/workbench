@@ -126,33 +126,41 @@ test("stashed Git observations preserve retained paths without restoring live cl
   }
 });
 
-test("accepted commit history survives arc replacement and amends in place", () => {
+/** Observes one committed proposal in the live arc, which is how permanent history grows. */
+function promote(repository: WorkbenchThreadStateGitRepository, threadId: string, commit: {
+  committedAt?: string; commitSha: string; description?: string; proposalId: string; title: string;
+}) {
+  const arc = observations().gitArc!;
+  repository.replace(threadId, {
+    gitArc: {
+      ...arc,
+      proposals: [{
+        proposalId: commit.proposalId, rootId: "root-a", status: "committed",
+        summary: {
+          changes: null, ...(commit.committedAt ? { committedAt: commit.committedAt } : {}), committedSha: commit.commitSha,
+          description: commit.description ?? "", mode: "commit", title: commit.title,
+        },
+      }],
+    },
+  });
+}
+
+test("accepted commit history survives arc replacement, amends in place, and never rides the cache read", () => {
   const { database, repository, threadId } = fixture();
   try {
-    const accepted = {
-      commitSha: "c".repeat(40),
-      description: "first description",
-      historyIndex: 0,
-      rootId: "root-a",
-      sourceProposalId: "accepted-proposal",
-      title: "first title",
-    };
-    repository.replace(threadId, { gitArc: null, gitCommits: [accepted] });
+    promote(repository, threadId, { commitSha: "c".repeat(40), description: "first description", proposalId: "accepted-proposal", title: "first title" });
     repository.replace(threadId, { gitArc: null });
-    assert.deepEqual(repository.read(threadId), { gitArc: null, gitCommits: [accepted] });
-
-    const amended = {
-      ...accepted,
-      commitSha: "d".repeat(40),
-      description: "amended description",
-      historyIndex: 99,
-      title: "amended title",
+    assert.deepEqual(repository.read(threadId), { gitArc: null });
+    const accepted = {
+      commitSha: "c".repeat(40), description: "first description", historyIndex: 0, rootId: "root-a",
+      sourceProposalId: "accepted-proposal", title: "first title",
     };
-    repository.replace(threadId, { gitArc: null, gitCommits: [amended] });
-    assert.deepEqual(repository.read(threadId), {
-      gitArc: null,
-      gitCommits: [{ ...amended, historyIndex: 0 }],
-    });
+    assert.deepEqual(repository.readCommits([threadId]).get(threadId), [accepted]);
+
+    promote(repository, threadId, { commitSha: "d".repeat(40), description: "amended description", proposalId: "accepted-proposal", title: "amended title" });
+    assert.deepEqual(repository.readCommits([threadId]).get(threadId), [
+      { ...accepted, commitSha: "d".repeat(40), description: "amended description", title: "amended title" },
+    ]);
     assert.equal((database.prepare(`
       SELECT COUNT(*) AS count FROM workbench_thread_git_commits WHERE thread_id = ?
     `).get(threadId) as { count: number }).count, 1);
@@ -178,17 +186,48 @@ test("committed live proposals promote into permanent history before arc replace
       },
     });
     repository.replace(threadId, { gitArc: null });
-    assert.deepEqual(repository.read(threadId), {
-      gitArc: null,
-      gitCommits: [{
-        commitSha: "e".repeat(40),
-        description: "keep details",
-        historyIndex: 0,
-        rootId: "root-b",
-        sourceProposalId: "second",
-        title: "second proposal",
-      }],
-    });
+    assert.deepEqual(repository.readCommits([threadId]).get(threadId), [{
+      commitSha: "e".repeat(40),
+      description: "keep details",
+      historyIndex: 0,
+      rootId: "root-b",
+      sourceProposalId: "second",
+      title: "second proposal",
+    }]);
+  } finally {
+    database.close();
+  }
+});
+
+test("accepted commit times live on permanent history, and the first known time is kept", () => {
+  const { database, repository, threadId, otherThreadId } = fixture();
+  try {
+    const committedAt = "2026-10-16T03:00:00.000Z";
+    const timesOf = () => repository.readCommits([threadId]).get(threadId)?.map((commit) => commit.committedAt);
+    promote(repository, threadId, { committedAt, commitSha: "e".repeat(40), proposalId: "timed", title: "timed" });
+    assert.equal(repository.read(threadId).gitArc?.proposals[0]?.summary?.committedAt, undefined);
+    assert.deepEqual(timesOf(), [committedAt]);
+
+    // Re-observing without a time, or with a later one, never replaces a recorded time.
+    promote(repository, threadId, { commitSha: "e".repeat(40), proposalId: "timed", title: "timed" });
+    promote(repository, threadId, { committedAt: "2026-10-17T00:00:00.000Z", commitSha: "e".repeat(40), proposalId: "timed", title: "timed" });
+    assert.deepEqual(timesOf(), [committedAt]);
+
+    // Backfilled times fill only rows stored without one, and only for the named thread.
+    promote(repository, threadId, { commitSha: "f".repeat(40), proposalId: "legacy", title: "legacy" });
+    promote(repository, otherThreadId, { commitSha: "f".repeat(40), proposalId: "legacy", title: "legacy" });
+    const backfilled = "2026-10-01T00:00:00.000Z";
+    repository.recordCommitTimes(threadId, [
+      { commitSha: "e".repeat(40), committedAt: backfilled, rootId: "root-a" },
+      { commitSha: "f".repeat(40), committedAt: backfilled, rootId: "root-a" },
+    ]);
+    assert.deepEqual(timesOf(), [committedAt, backfilled]);
+    assert.deepEqual(repository.readCommits([otherThreadId]).get(otherThreadId)?.map((commit) => commit.committedAt), [undefined]);
+
+    // Durable owners are found by sha within the thread's project.
+    const { project_id: projectId } = database.prepare("SELECT project_id FROM workbench_threads WHERE id = ?").get(threadId) as { project_id: string };
+    assert.deepEqual(repository.findCommitOwners(projectId, "f".repeat(40)), [threadId, otherThreadId].sort());
+    assert.deepEqual(repository.findCommitOwners(projectId, "e".repeat(40)), [threadId]);
   } finally {
     database.close();
   }

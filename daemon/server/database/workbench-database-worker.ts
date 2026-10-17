@@ -508,6 +508,9 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     case "readThreadStateNavigationSummary":
     case "readThreadStateProject":
     case "readThreadStateTitleHistories":
+    case "readThreadGitCommits":
+    case "recordThreadGitCommitTimes":
+    case "findThreadGitCommitOwners":
     case "writeThreadStateProject":
     case "readThreadStateGlobal":
     case "writeThreadStateGlobal":
@@ -528,6 +531,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
           case "readThreadStateNavigationSummary": return { id: request.id, type: "threadStateNavigationSummary", summary: repository.readNavigationSummary(request.projectId) };
           case "readThreadStateProject": return { id: request.id, type: "threadStateProject", document: repository.readProject(request.projectId) };
           case "readThreadStateTitleHistories": return { id: request.id, type: "threadStateTitleHistories", histories: repository.readTitleHistories(request.projectId) };
+          case "readThreadGitCommits": return { id: request.id, type: "threadGitCommits", threads: repository.readGitCommits(request.threadIds) };
+          case "recordThreadGitCommitTimes":
+            repository.recordGitCommitTimes(request.threadId, request.times);
+            return { id: request.id, type: "mutationResult", result: { changes: request.times.length } };
+          case "findThreadGitCommitOwners": return { id: request.id, type: "threadGitCommitOwners", threadIds: repository.findGitCommitOwners(request.projectId, request.commitSha) };
           case "readThreadStateGlobal": return { id: request.id, type: "threadStateGlobal", document: repository.readGlobal(request.documentId) };
           case "writeThreadStateProject":
             repository.writeProject(request.projectId, request.document, request.titleHistories);

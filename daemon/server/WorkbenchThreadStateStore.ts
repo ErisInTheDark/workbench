@@ -7,7 +7,8 @@
  * - default WorkbenchThreadStateStore: adapt consumer objects to relational persistence.
  */
 import { z } from "zod";
-import type { WorkbenchHarnessId, WorkbenchProjectThreadSummary } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchHarnessId, WorkbenchProjectThreadSummary, WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadGitCommitTime } from "./database/thread-state/WorkbenchThreadStateGitRepository";
 import type { WorkbenchThreadTitleHistoryEntry } from "workbench-shared/workbench/thread/thread-title-history";
 import { ThreadDisplayLayoutSchema } from "workbench-shared/workbench/thread/thread-display-layout";
 import { parseProjectDocument } from "./database/thread-state/workbench-thread-state-document-source";
@@ -33,6 +34,9 @@ export interface WorkbenchThreadStatePersistence {
   readGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<unknown | null>;
   readProject(projectId: ProjectId): Promise<unknown | null>;
   readTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]>;
+  /** Permanent accepted commits of just these threads; project reads never carry them. */
+  readGitCommits(threadIds: readonly WorkbenchThreadId[]): Promise<Array<{ commits: WorkbenchThreadGitCommit[]; threadId: WorkbenchThreadId }>>;
+  recordGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]): Promise<void>;
   writeGlobal(id: WorkbenchThreadStateGlobalDocumentId, document: object): Promise<void>;
   writeProject(projectId: ProjectId, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
 }
@@ -44,6 +48,8 @@ export interface WorkbenchThreadStateStoreDatabase {
   readThreadStateArchiveEligible(activeBefore: number): Promise<Array<{ projectId: ProjectId; record: WorkbenchThreadStateRecord }>>;
   readThreadStateProject(projectId: ProjectId): Promise<WorkbenchThreadStateProjectDocument>;
   readThreadStateTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]>;
+  readThreadGitCommits(threadIds: readonly WorkbenchThreadId[]): Promise<Array<{ commits: WorkbenchThreadGitCommit[]; threadId: WorkbenchThreadId }>>;
+  recordThreadGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]): Promise<void>;
   writeThreadStateProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]): Promise<void>;
   readThreadStateGlobal(id: WorkbenchThreadStateGlobalDocumentId): Promise<WorkbenchThreadStateGlobalDocument | null>;
   writeThreadStateGlobal(document: WorkbenchThreadStateGlobalDocument): Promise<void>;
@@ -86,6 +92,14 @@ export default class WorkbenchThreadStateStore implements WorkbenchThreadStatePe
 
   async readTitleHistories(projectId: ProjectId): Promise<WorkbenchStoredThreadTitleHistory[]> {
     return this.database.readThreadStateTitleHistories(projectId);
+  }
+
+  readGitCommits(threadIds: readonly WorkbenchThreadId[]) {
+    return this.database.readThreadGitCommits(threadIds);
+  }
+
+  recordGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]) {
+    return this.database.recordThreadGitCommitTimes(threadId, times);
   }
 
   async writeProject(projectId: ProjectId, document: object, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {

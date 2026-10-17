@@ -131,9 +131,12 @@ function projectLifecycleState(
     harness: entry.harness,
     intentDescription: lifecycle.intentDescription,
     intentName: lifecycle.intentName,
-    proposals: summaries.flatMap(({ changes, committedSha, description, mode, paths, proposalId, status, title }) => (
+    proposals: summaries.flatMap(({ changes, committedAt, committedSha, description, mode, paths, proposalId, status, title }) => (
       status === "proposed" || status === "committed"
-        ? [{ paths, proposalId, status, summary: { changes, committedSha, description, mode, title } }]
+        ? [{
+          paths, proposalId, status,
+          summary: { changes, ...(committedAt ? { committedAt } : {}), committedSha, description, mode, title },
+        }]
         : []
     )),
     ...(stackLayers.length ? { stackLayers } : {}),

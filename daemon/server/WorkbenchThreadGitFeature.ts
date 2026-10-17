@@ -9,7 +9,7 @@
 import type http from "node:http";
 import { ThreadReferenceSchema, type WorkbenchThreadId, type ProjectId } from "workbench-shared/workbench/identity";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
-import type { WorkbenchGitArcLifecycleState, WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 
 import WorkbenchThreadGit from "./lib/workbench/git/WorkbenchThreadGit";
 import type {
@@ -42,7 +42,6 @@ export type CommitThreadLookup =
 
 interface CommitThreadRecord {
   gitArc?: WorkbenchGitArcLifecycleState | null;
-  gitCommits?: readonly WorkbenchThreadGitCommit[];
   threadId: string;
 }
 
@@ -57,7 +56,7 @@ interface ThreadGitPort {
 export interface WorkbenchThreadGitFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   createThreadGit?: (options: { cwd: string; targetWorktree?: string; threadId: WorkbenchThreadId }) => Promise<ThreadGitPort>;
-  selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "readThreadStateProject">;
+  selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "findThreadGitCommitOwners" | "readThreadStateProject">;
   resolveProjectFromCwd(cwd: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "read" | "run">;
   /** `wb git integrate`: live claims per thread, and re-running a blocked check whenever claims change. */
@@ -130,10 +129,14 @@ function readPaths(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-export function findCommitThreadId(records: readonly CommitThreadRecord[], commitSha: string): CommitThreadLookup {
-  const owners = new Set<string>();
+/** `durableOwners` are threads whose permanent history holds the commit; records add live proposal evidence. */
+export function findCommitThreadId(
+  records: readonly CommitThreadRecord[],
+  commitSha: string,
+  durableOwners: readonly string[] = [],
+): CommitThreadLookup {
+  const owners = new Set<string>(durableOwners);
   for (const record of records) {
-    if (record.gitCommits?.some(commit => commit.commitSha === commitSha)) owners.add(record.threadId);
     if (record.gitArc) {
       for (const arc of [record.gitArc, ...record.gitArc.members ?? []]) {
         if (arc.proposals.some(proposal => proposal.summary?.committedSha === commitSha)) owners.add(record.threadId);
@@ -215,12 +218,14 @@ export default class WorkbenchThreadGitFeature {
         return await this.options.transitions.read(repository.root, async () => {
           const resolvedCommit = await repository.readCommitAt(commitish);
           if (!resolvedCommit) throw new Error(`Git commit is unavailable: ${commitish}`);
-          const document = await selectionStore.readThreadStateProject(projectId);
+          const [document, durableOwners] = await Promise.all([
+            selectionStore.readThreadStateProject(projectId),
+            selectionStore.findThreadGitCommitOwners(projectId, resolvedCommit.commit),
+          ]);
           const match = findCommitThreadId(document.records.map(record => ({
             gitArc: record.gitArc,
-            gitCommits: record.gitCommits,
             threadId: record.identity.threadId,
-          })), resolvedCommit.commit);
+          })), resolvedCommit.commit, durableOwners);
           if (match.kind === "missing") throw new Error(`No Workbench thread owns commit ${resolvedCommit.commit}.`);
           if (match.kind === "ambiguous") {
             throw new Error(`Commit ${resolvedCommit.commit} belongs to multiple Workbench threads: ${match.threadIds.join(", ")}`);

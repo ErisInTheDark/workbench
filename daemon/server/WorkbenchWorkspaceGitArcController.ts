@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
- * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations and history retention; admit agent file changes.
+ * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations, history retention and durable-commit time reads; admit agent file changes.
  * - WorkspaceGitArcMemberState: active repository plus root identity.
  * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
  * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
@@ -360,6 +360,32 @@ export default class WorkbenchWorkspaceGitArcController {
       "write",
       { harness, project, threadId },
     );
+  }
+
+  /**
+   * Committer times keyed `${rootId}\0${commitSha}`. Each repository is read alone under its own read transition, so
+   * a backfill never holds several repositories or runs Git processes in parallel.
+   */
+  async readCommitTimes(
+    project: AgentEndpointProjectResolution,
+    requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>,
+  ) {
+    const times = new Map<string, string>();
+    for (const member of await this.resolveRepoMembers(project)) {
+      const own = requests.filter(({ rootId }) => member.roots.some(root => root.id === rootId));
+      if (!own.length) continue;
+      const [{ result }] = await this.runMembers([member], async () => await this.local.readCommitTimes({
+        commits: unique(own.flatMap(({ commitShas }) => commitShas)),
+        cwd: member.repoRoot,
+      }), undefined, "read");
+      for (const { commitShas, rootId } of own) {
+        for (const commitSha of commitShas) {
+          const committedAt = result.get(commitSha);
+          if (committedAt) times.set(`${rootId}\0${commitSha}`, committedAt);
+        }
+      }
+    }
+    return times;
   }
 
   async pruneThreadHistories(

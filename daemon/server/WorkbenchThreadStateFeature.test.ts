@@ -1571,7 +1571,14 @@ test("provider reconciliation cannot overwrite a newer resolved Git arc projecti
     updatedAt: "2026-08-23T00:01:00.000Z",
   });
   assert.equal(thread.gitArcPlan, null);
-  assert.deepEqual(thread.gitCommits, [{
+  // The accepted proposal became permanent history, which only the thread observation carries.
+  assert.equal(thread.gitCommits, undefined);
+  const observed = await feature.controller.readWorkspaceThread({
+    projectId: fixtureIdentityValues.ProjectId["project"], subscriptionId: "observer",
+    target: { kind: "provider", threadId: fixtureIdentitySchemas.WorkbenchThreadIdSchema.parse("thread-one") },
+  });
+  const observedThread = observed.entries[0];
+  assert.deepEqual(observedThread?.entryKind === "thread" ? observedThread.gitCommits : null, [{
     commitSha: "f".repeat(40),
     description: "accepted description",
     historyIndex: 0,

@@ -58,6 +58,8 @@ import type {
 } from "./thread-state/workbench-thread-state-persistence.ts";
 import type { WorkbenchThreadStateRecord } from "../workbench-thread-state-record.ts";
 import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore.ts";
+import type { WorkbenchThreadGitCommitTime } from "./thread-state/WorkbenchThreadStateGitRepository.ts";
+import type { WorkbenchThreadGitCommit } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchThreadLayoutOwner } from "./thread-state/WorkbenchThreadStateLayoutRepository.ts";
 import type { ThreadDisplayLayout } from "workbench-shared/workbench/thread/thread-display-layout";
 import type { WorkbenchComposerProfileSelectionState } from "workbench-shared/workbench/thread/thread-state";
@@ -166,6 +168,9 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readThreadStateNavigationSummary"; projectId: ProjectId }
   | { type: "readThreadStateProject"; projectId: ProjectId }
   | { type: "readThreadStateTitleHistories"; projectId: ProjectId }
+  | { type: "readThreadGitCommits"; threadIds: readonly WorkbenchThreadId[] }
+  | { type: "recordThreadGitCommitTimes"; threadId: WorkbenchThreadId; times: readonly WorkbenchThreadGitCommitTime[] }
+  | { type: "findThreadGitCommitOwners"; projectId: ProjectId; commitSha: string }
   | { type: "writeThreadStateProject"; projectId: ProjectId; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
   | { type: "readThreadStateGlobal"; documentId: WorkbenchThreadStateGlobalDocument["id"] }
   | { type: "writeThreadStateGlobal"; document: WorkbenchThreadStateGlobalDocument }
@@ -232,7 +237,8 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readRetainedProjectCatalog", "readProjectAliases", "resolveProjectIdentity", "readThreadLaunch",
   "resolveThreadIdentity", "resolveNativeThreadIdentity", "listThreadIdentities", "resolveTurnIdentity",
   "resolveTranscriptItemIdentity", "readThreadStateNavigationSummary", "readThreadStateProject",
-  "readThreadStateTitleHistories", "readThreadStateGlobal", "readThreadStateRecords",
+  "readThreadStateTitleHistories", "readThreadGitCommits", "findThreadGitCommitOwners",
+  "readThreadStateGlobal", "readThreadStateRecords",
   "readThreadStateDrafts", "readThreadStateProfile", "readThreadStateLayout",
   "readThreadStatePinnedImports", "readThreadStateArchiveDeadline", "readThreadStateActivity",
   "readThreadStateSnoozeSources", "readThreadStateArchiveEligible", "readSubagents",
@@ -310,6 +316,8 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadStateNavigationSummary"; summary: import("workbench-shared/workbench/thread/thread-state").WorkbenchProjectThreadSummary }
   | { id: number; type: "threadStateProject"; document: WorkbenchThreadStateProjectDocument }
   | { id: number; type: "threadStateTitleHistories"; histories: WorkbenchStoredThreadTitleHistory[] }
+  | { id: number; type: "threadGitCommits"; threads: Array<{ commits: WorkbenchThreadGitCommit[]; threadId: WorkbenchThreadId }> }
+  | { id: number; type: "threadGitCommitOwners"; threadIds: string[] }
   | { id: number; type: "threadStateGlobal"; document: WorkbenchThreadStateGlobalDocument | null }
   | { id: number; type: "threadStateRecords"; records: WorkbenchThreadStateRecord[] }
   | { id: number; type: "threadStateDrafts"; drafts: WorkbenchStoredThreadDraft[] }

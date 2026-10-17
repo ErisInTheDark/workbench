@@ -10,6 +10,7 @@
 import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { type GitCommitIdentity, type GitRefUpdate } from "./WorkbenchGitRepository";
 import GitArcHistoryRewriter from "./GitArcHistoryRewriter";
+import { parseGitRawDate } from "./GitObjectWriter";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import {
   type ArcOutcome,
@@ -41,6 +42,8 @@ import {
 export interface GitArcProposalSummary {
   /** Null when the proposal predates recorded totals. */
   changes: GitArcChangeTotal[] | null;
+  /** ISO time the committed state was written, i.e. acceptance; null unless committed. */
+  committedAt: string | null;
   committedSha: string | null;
   description: string;
   livePaths: string[];
@@ -101,10 +104,13 @@ function normalizeProposalMetadata(metadata: ProposalMetadata): ProposalMetadata
     : metadata;
 }
 
-function proposalSummary(metadata: ProposalMetadata): GitArcProposalSummary {
+/** `stateCommitterDate` is the proposal state commit's committer date: when its current status was written. */
+function proposalSummary(metadata: ProposalMetadata, stateCommitterDate: string): GitArcProposalSummary {
   const normalized = normalizeProposalMetadata(metadata);
+  const writtenAt = normalized.status === "committed" ? parseGitRawDate(stateCommitterDate) : null;
   return {
     changes: normalized.changes ?? null,
+    committedAt: writtenAt === null ? null : new Date(writtenAt).toISOString(),
     committedSha: normalized.committedSha,
     description: normalized.description,
     livePaths: normalized.livePaths,
@@ -259,7 +265,7 @@ export default class GitCheckpointStore {
       if (!byId.has(proposalId)) {
         byId.set(proposalId, {
           acceptedAt: Number(identity.committerDate.split(" ", 1)[0]) || 0,
-          summary: proposalSummary(metadata),
+          summary: proposalSummary(metadata, identity.committerDate),
         });
       }
     }
@@ -288,7 +294,7 @@ export default class GitCheckpointStore {
       });
       const commits = await this.repository.readCommits(selections.flatMap((selection) => selection.flatMap(({ entry }) => entry ? [entry.value] : [])));
       const missing = (proposalId: string): GitArcProposalSummary => ({
-        changes: null, committedSha: null, description: "", livePaths: [], mode: "commit", paths: [],
+        changes: null, committedAt: null, committedSha: null, description: "", livePaths: [], mode: "commit", paths: [],
         proposalId, status: "unavailable", title: "",
       });
       return selections.map((selection) => selection.map(({ entry, proposalId }): GitArcProposalSummary => {
@@ -297,7 +303,7 @@ export default class GitCheckpointStore {
         if (!identity) return missing(proposalId);
         const parsed = parseMarkedMetadata<ProposalMetadata>(identity.message, PROPOSAL_METADATA_MARKER);
         if (!parsed || parsed.proposalId !== proposalId) return missing(proposalId);
-        return proposalSummary(parsed);
+        return proposalSummary(parsed, identity.committerDate);
       }));
     });
   }

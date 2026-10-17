@@ -20,7 +20,7 @@ import {
 } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchThreadIdentityRepository from "../thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchProjectRepository from "../project/WorkbenchProjectRepository.ts";
-import WorkbenchThreadStateGitRepository from "./WorkbenchThreadStateGitRepository.ts";
+import WorkbenchThreadStateGitRepository, { type WorkbenchThreadGitCommitTime } from "./WorkbenchThreadStateGitRepository.ts";
 import WorkbenchThreadStateQuestionnaireRepository from "./WorkbenchThreadStateQuestionnaireRepository.ts";
 import type {
   WorkbenchStoredThreadDraft, WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
@@ -173,6 +173,23 @@ export default class WorkbenchThreadStateRelationalRepository {
       newThreadProfile: this.readProjectProfile(projectId),
       displayOrder: this.layouts.read({ kind: "project", projectId })?.displayOrder ?? {},
     }))();
+  }
+
+  /** Permanent accepted commits of the selected threads only; project reads never carry them. */
+  readGitCommits(threadIds: readonly WorkbenchThreadId[]) {
+    const history = this.git.readCommits(threadIds);
+    return threadIds.flatMap(threadId => {
+      const commits = history.get(threadId);
+      return commits ? [{ commits, threadId }] : [];
+    });
+  }
+
+  recordGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]) {
+    this.git.recordCommitTimes(threadId, times);
+  }
+
+  findGitCommitOwners(projectId: ProjectId, commitSha: string) {
+    return this.git.findCommitOwners(this.projects.requireStoredReference(projectId), commitSha);
   }
 
   readTitleHistories(projectId: ProjectId): WorkbenchStoredThreadTitleHistory[] {
@@ -646,7 +663,6 @@ export default class WorkbenchThreadStateRelationalRepository {
     const observations = {
       ...(record.gitArc === undefined ? {} : { gitArc: record.gitArc }),
       ...(record.gitArcPlan === undefined ? {} : { gitArcPlan: record.gitArcPlan }),
-      ...(record.gitCommits === undefined ? {} : { gitCommits: record.gitCommits }),
     };
     // Live observations carry Git-derived facts the startup cache never stores; compare only the persisted subset.
     if (!isDeepStrictEqual(this.git.read(threadId), this.git.project(observations))) this.git.replace(threadId, observations);

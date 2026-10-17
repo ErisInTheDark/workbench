@@ -34,6 +34,7 @@ import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsReposito
 import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
 import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
+import type { WorkbenchThreadGitCommitTime } from "./thread-state/WorkbenchThreadStateGitRepository";
 import type { WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import type {
     WorkbenchGitClaimImportCandidate,
@@ -726,6 +727,28 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "readThreadStateTitleHistories", projectId });
     if (response.type !== "threadStateTitleHistories") throw new WorkbenchDatabaseFailure(`Unexpected title history response: ${response.type}`);
     return response.histories;
+  }
+
+  async readThreadGitCommits(threadIds: readonly WorkbenchThreadId[]) {
+    if (!threadIds.length) return [];
+    await this.start();
+    const response = await this.#request({ type: "readThreadGitCommits", threadIds });
+    if (response.type !== "threadGitCommits") throw new WorkbenchDatabaseFailure(`Unexpected thread commit response: ${response.type}`);
+    return response.threads;
+  }
+
+  async recordThreadGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]) {
+    if (!times.length) return;
+    await this.start();
+    const response = await this.#request({ type: "recordThreadGitCommitTimes", threadId, times });
+    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected commit time response: ${response.type}`);
+  }
+
+  async findThreadGitCommitOwners(projectId: ProjectId, commitSha: string) {
+    await this.start();
+    const response = await this.#request({ type: "findThreadGitCommitOwners", projectId, commitSha });
+    if (response.type !== "threadGitCommitOwners") throw new WorkbenchDatabaseFailure(`Unexpected commit owner response: ${response.type}`);
+    return response.threadIds;
   }
 
   async writeThreadStateProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {

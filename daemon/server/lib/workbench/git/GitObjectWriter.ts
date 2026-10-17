@@ -3,6 +3,7 @@
  * - default GitObjectWriter: write loose Git objects and commits in-process; returns null where Git itself must decide.
  * - GitCommitActorOverrides: optional author/committer fields applied over Git's default identity.
  * - formatGitRawDate: Git's raw date form with the local offset, e.g. `1759633402 +1300`.
+ * - parseGitRawDate: epoch milliseconds of a Git raw date.
  */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -40,6 +41,14 @@ export function formatGitRawDate(date: Date) {
   const magnitude = Math.abs(offset);
   const zone = `${offset < 0 ? "-" : "+"}${String(Math.floor(magnitude / 60)).padStart(2, "0")}${String(magnitude % 60).padStart(2, "0")}`;
   return `${Math.floor(date.getTime() / 1000)} ${zone}`;
+}
+
+/** Epoch milliseconds of a Git raw date, or null when it is not one. */
+export function parseGitRawDate(value: string) {
+  const match = /^(\d+) [+-]\d{4}$/u.exec(value.trim());
+  if (!match) return null;
+  const timestamp = Number(match[1]) * 1_000;
+  return Number.isSafeInteger(timestamp) && timestamp >= 0 ? timestamp : null;
 }
 
 /** Git strips these from both ends of identity fields and drops `<`, `>` and newlines inside them. */

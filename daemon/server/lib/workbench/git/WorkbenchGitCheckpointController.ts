@@ -10,6 +10,7 @@
  * - GitArcInspectionSnapshot: one shared repository, HEAD, tree and registry view per inspection.
  * - GitCheckpointDirtyPathsError/GitCheckpointIgnoredPathsError: rejected ownership paths.
  * - GitCheckpointCreateResult/GitCheckpointCompareResult/GitCheckpointDiffResult/GitCheckpointProposalReceipt/GitArcRetentionResult: controller results.
+ * Notable members: readCommitTimes reads committer times for durable-commit backfill.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -67,6 +68,7 @@ import { collectGitArcDrift } from "./git-arc-drift";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
 import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
+import { parseGitRawDate } from "./GitObjectWriter";
 import {
   type ArcOutcome,
   CHECKPOINT_METADATA_MARKER,
@@ -810,6 +812,19 @@ export default class WorkbenchGitCheckpointController {
       harness: normalizeHarness(rawHarness),
       threadId,
     }));
+  }
+
+  /** ISO committer times by sha, through one object stream; missing or malformed commits are omitted. */
+  async readCommitTimes({ commits, cwd }: { commits: readonly string[]; cwd: string }) {
+    const times = new Map<string, string>();
+    if (!commits.length) return times;
+    const repository = await WorkbenchGitRepository.open(cwd);
+    const read = await GitObjectReadSession.run(() => repository.readCommits([...commits]));
+    for (const [commit, identity] of read.commits) {
+      const committedAt = parseGitRawDate(identity.committerDate);
+      if (committedAt !== null) times.set(commit, new Date(committedAt).toISOString());
+    }
+    return times;
   }
 
   async canPruneThreadHistory({

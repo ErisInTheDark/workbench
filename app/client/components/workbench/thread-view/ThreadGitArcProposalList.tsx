@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows; pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under its own group unless it is the whole panel.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows; pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under one group per commit age unless a single age is the whole panel.
  */
 "use client";
 
@@ -26,6 +26,7 @@ import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController
 import Disclosure from "../../ui/Disclosure";
 import ThreadCheckpointCommitCard, { type ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from "./ThreadGitArcCommitGroup";
+import { groupCommitsByAge } from "./thread-git-commit-age";
 
 /** Pure pending or pure committed lists read as one noun; mixed lists split commits from proposals. */
 function formatProposalCounts(committed: number, proposed: number) {
@@ -234,48 +235,57 @@ export default function ThreadGitArcProposalList({
       />
     </div>
   );
-  const acceptedRows = [
-    ...acceptedProposals.map(({ proposalId }) => anchor(proposalId)),
-    ...historicalCommits.map(commit => (
-      <div
-        className={threadGitArcCommitRowClassName}
-        data-thread-git-commit={commit.commitSha}
-        key={`${commit.rootId}:${commit.sourceProposalId}`}
-      >
-        <ThreadCheckpointCommitCard
-          projectFilePaths={projectFilePaths}
-          projectId={projectId}
-          projectRootPath={projectRootPath}
-          sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
-          state={{
-            status: "summary",
-            summary: {
-              changes: null,
-              committedSha: commit.commitSha,
-              description: commit.description,
-              title: commit.title,
-            },
-          }}
-          workspaceRoots={workspaceRoots}
-        />
-      </div>
-    )),
+  const historyRow = (commit: WorkbenchThreadGitCommit) => (
+    <div
+      className={threadGitArcCommitRowClassName}
+      data-thread-git-commit={commit.commitSha}
+      key={`${commit.rootId}:${commit.sourceProposalId}`}
+    >
+      <ThreadCheckpointCommitCard
+        projectFilePaths={projectFilePaths}
+        projectId={projectId}
+        projectRootPath={projectRootPath}
+        sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
+        state={{
+          status: "summary",
+          summary: {
+            changes: null,
+            committedSha: commit.commitSha,
+            description: commit.description,
+            title: commit.title,
+          },
+        }}
+        workspaceRoots={workspaceRoots}
+      />
+    </div>
+  );
+  // A live summary from the startup cache has no time yet; its permanent row may already know it.
+  const recordedTimes = new Map(history.map(({ commitSha, committedAt, rootId }) => [`${rootId}\0${commitSha}`, committedAt]));
+  // Chronological: durable history in acceptance order, then this arc's own accepted proposals.
+  const acceptedEntries = [
+    ...historicalCommits.map(commit => ({ committedAt: commit.committedAt, row: () => historyRow(commit) })),
+    ...acceptedProposals.map(({ proposalId, rootId, summary }) => ({
+      committedAt: summary?.committedAt ?? recordedTimes.get(`${rootId}\0${summary?.committedSha}`),
+      row: () => anchor(proposalId),
+    })),
   ];
-  // Accepted history alone is the whole panel, so its rows need no group of their own.
-  const flattenAccepted = standalone && !proposedIds.length && !layerGroups.length && !trailingProposals.length;
+  const ageGroups = groupCommitsByAge(acceptedEntries, ({ committedAt }) => committedAt, new Date());
+  // Accepted history alone is the whole panel, so a single age group needs no group row of its own.
+  const flattenAccepted = standalone && ageGroups.length === 1
+    && !proposedIds.length && !layerGroups.length && !trailingProposals.length;
   const anchors = [
-    ...(flattenAccepted ? acceptedRows : acceptedRows.length ? [(
+    ...(flattenAccepted ? ageGroups[0]!.entries.map(({ row }) => row()) : ageGroups.map(({ bucket, entries, title }) => (
       <ThreadGitArcCommitGroup
-        count={plural(acceptedRows.length, "commit")}
-        data-thread-git-arc-accepted-group="true"
+        count={plural(entries.length, "commit")}
+        data-thread-git-arc-accepted-group={bucket}
         icon={<CheckCheckIcon size={14} />}
         iconLabel="accepted commits"
-        key="accepted"
-        title="Accepted"
+        key={`accepted:${bucket}`}
+        title={title}
       >
-        {acceptedRows}
+        {entries.map(({ row }) => row())}
       </ThreadGitArcCommitGroup>
-    )] : []),
+    ))),
     ...layerGroups.map((group) => {
       const { layer, pendingIds: layerPendingIds, proposals: layerProposals } = group;
       const pending = layerPendingIds.length;

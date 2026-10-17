@@ -267,6 +267,11 @@ export default class WorkbenchGitArcFeature {
     };
   }
 
+  async readCommitTimes(cwd: string, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>) {
+    if (!requests.length) return new Map<string, string>();
+    return await this.workspaceController.readCommitTimes(await this.resolveProject(cwd), requests);
+  }
+
   async findLifecycleState(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchGitArcLifecycleState | null> {
     const project = await this.resolveProject(cwd);
     const owner = await this.gitThreadIdentity(project, harness, threadId);

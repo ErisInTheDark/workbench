@@ -282,6 +282,8 @@ export type WorkbenchThreadLifecycle = z.infer<typeof WorkbenchThreadLifecycleSc
 const WorkbenchGitArcProposalSummarySchema = z.object({
   /** Null on proposals written before change totals were recorded. */
   changes: z.array(GitArcChangeTotalSchema).nullable(),
+  /** ISO acceptance time of a committed proposal; absent while proposed or when unrecorded. */
+  committedAt: z.string().datetime().optional(),
   committedSha: z.string().regex(/^[a-f0-9]{40,64}$/u).nullable(),
   description: z.string(),
   mode: z.enum(["amend", "commit"]),
@@ -299,6 +301,8 @@ const WorkbenchGitArcProposalStateSchema = z.object({
 export type WorkbenchGitArcProposalState = z.infer<typeof WorkbenchGitArcProposalStateSchema>;
 
 export const WorkbenchThreadGitCommitSchema = z.object({
+  /** ISO commit time; absent until recorded or backfilled from Git. */
+  committedAt: z.string().datetime().optional(),
   commitSha: z.string().regex(/^[a-f0-9]{40,64}$/u),
   description: z.string(),
   historyIndex: z.number().int().nonnegative(),

@@ -14,6 +14,7 @@ import {
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import type { WorkbenchGitClaimImportDiscovery } from "../../../database/stats/WorkbenchStatsImportRepository";
 import GitObjectReadSession from "./GitObjectReadSession";
+import { parseGitRawDate } from "./GitObjectWriter";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 
 export interface GitClaimHistoryDiscovery {
@@ -52,13 +53,6 @@ function sortComparable(paths: Iterable<string>) {
     .map(({ value }) => value);
 }
 
-function parseGitActorDate(value: string) {
-  const match = /^(\d+) [+-]\d{4}$/u.exec(value.trim());
-  if (!match) return null;
-  const timestamp = Number(match[1]) * 1_000;
-  return Number.isSafeInteger(timestamp) && timestamp >= 0 ? timestamp : null;
-}
-
 function relativeWithin(candidate: string, root: string) {
   const absolute = path.resolve(candidate);
   const relative = path.relative(root, absolute).replace(/\\/gu, "/");
@@ -93,7 +87,7 @@ export default class GitClaimHistoryReader {
         if (!identity.message.trimStart().startsWith(CHECKPOINT_METADATA_MARKER)) unsupported += 1;
         continue;
       }
-      const observedAt = parseGitActorDate(identity.committerDate);
+      const observedAt = parseGitRawDate(identity.committerDate);
       if (observedAt === null) {
         unsupported += 1;
         continue;

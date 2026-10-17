@@ -394,6 +394,45 @@ test("the git startup cache retains compact summaries while live stack facts nev
   } finally { database.close(); }
 });
 
+test("permanent commit history is promoted on write but only read per thread, never with project records", () => {
+  const database = openDatabase();
+  try {
+    const [threadId] = seedIdentities(database, "project", "arc");
+    const record = (title: string): WorkbenchThreadStateRecord => ({
+      entryKind: "thread", identity: { harness: "codex", threadId: threadId! }, title, activityAt: 1,
+      lifecycle: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+      metadata: { archived: false, pinned: false, snoozed: false },
+      providerObserved: true, settledAt: null, gitHistoryCleanedAt: null, mcpGeneration: null,
+      profile: null, snoozedUntil: null, titleHistory: [{ title, usedAt: 1 }],
+      gitArc: {
+        checkpointCommit: "a".repeat(40), claimedPaths: [], intentDescription: "", intentName: "arc", phase: "resolved",
+        proposals: [{
+          proposalId: "proposal", rootId: "root", status: "committed",
+          summary: { changes: null, committedAt: "2026-10-16T00:00:00.000Z", committedSha: "b".repeat(40), description: "", mode: "commit", title: "landed" },
+        }],
+        stashedPaths: [],
+        updatedAt: "now",
+      },
+    });
+    const repository = new WorkbenchThreadStateRelationalRepository(database);
+    repository.writeRecords([record("first")]);
+    const history = [{
+      committedAt: "2026-10-16T00:00:00.000Z", commitSha: "b".repeat(40), description: "", historyIndex: 0,
+      rootId: "root", sourceProposalId: "proposal", title: "landed",
+    }];
+    assert.deepEqual(repository.readGitCommits([threadId!]), [{ commits: history, threadId }]);
+    assert.ok(repository.readProject(testProjectIds.project).records.every((stored) => stored.gitCommits === undefined));
+
+    // An unchanged arc never touches permanent history on later writes.
+    database.exec(`
+      CREATE TEMP TRIGGER reject_history_rewrite BEFORE UPDATE ON workbench_thread_git_commits
+      BEGIN SELECT RAISE(ABORT, 'history rewritten'); END
+    `);
+    repository.commit({ projectId: testProjectIds.project, records: [record("updated")] });
+    assert.deepEqual(repository.readGitCommits([threadId!]), [{ commits: history, threadId }]);
+  } finally { database.close(); }
+});
+
 test("affected-record writes preserve unchanged caches and roll back an entire failed batch", () => {
   const database = openDatabase();
   try {
