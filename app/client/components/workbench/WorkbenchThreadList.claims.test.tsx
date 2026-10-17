@@ -110,6 +110,7 @@ function createActions(): ComponentProps<typeof WorkbenchThreadList>["actions"] 
     error: "",
     getThreadContextMenu: () => ({ id: "home-thread-menu", items: [], label: "Thread actions" }),
     getThreadContextMenuFor: () => null,
+    getPendingThreadContextMenu: () => ({ id: "pending-thread-menu", items: [], label: "Thread actions" }),
     onAction: () => undefined,
     onActionFor: () => undefined,
     onAutoFocusFolderComplete: () => undefined,

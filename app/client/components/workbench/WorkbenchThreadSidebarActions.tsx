@@ -58,6 +58,20 @@ function targetForEntry(entry: ThreadListEntry): Extract<WorkbenchThreadTarget, 
     : { harness: entry.identity.harness, kind: "provider", threadId: entry.identity.threadId };
 }
 
+function copyIdItem(identifier: string): WorkbenchContextMenuDefinition["items"][number] {
+  return {
+    icon: <CopyIcon size={16} />,
+    id: "copy-id",
+    label: "Copy ID",
+    onSelect: () => { void writeTextToClipboard(identifier); },
+  };
+}
+
+/** A listed thread whose row has not loaded only knows its identity, so its menu offers what needs nothing more. */
+function getPendingThreadContextMenu(threadId: string, title: string): WorkbenchContextMenuDefinition {
+  return { id: `thread:${threadId}`, items: [copyIdItem(threadId)], label: `Thread actions for ${title}`, placementScope: "thread-list" };
+}
+
 function boundedFolderMutationError(error: unknown) {
   return (error instanceof Error ? error.message : "The thread folder mutation failed.").slice(0, 500);
 }
@@ -69,6 +83,7 @@ interface WorkbenchThreadSidebarActionsValue {
   getThreadContextMenu: (entry: ThreadListEntry, ownerProjectId: ProjectId, folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition;
   getThreadContextMenuFor: (entry: ThreadListEntry,
     folderScope?: "pinned" | "project") => WorkbenchContextMenuDefinition | null;
+  getPendingThreadContextMenu: (threadId: string, title: string) => WorkbenchContextMenuDefinition;
   onAction: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction, ownerProjectId: ProjectId) => void;
   onActionFor: (entry: ThreadListEntry, action: import("./thread-row-actions").ThreadRowAction) => void;
   onAutoFocusFolderComplete: () => void;
@@ -227,12 +242,7 @@ function WorkbenchThreadSidebarActionsProvider({
       });
     }
 
-    items.push({
-      icon: <CopyIcon size={16} />,
-      id: "copy-id",
-      label: "Copy ID",
-      onSelect: () => { void writeTextToClipboard(identifier); },
-    });
+    items.push(copyIdItem(identifier));
 
     const localDisplayKey = isPinnedDraftSummaryEntry(entry) ? getThreadDisplayDraftKey(entry.draftId) : getWorkbenchThreadDisplayKey(entry);
     const useProjectFolder = folderScope === "project"
@@ -433,6 +443,7 @@ function WorkbenchThreadSidebarActionsProvider({
     autoFocusFolderId,
     error: actionError,
     getThreadContextMenu,
+    getPendingThreadContextMenu,
     getThreadContextMenuFor: (entry, folderScope) => {
       const row = qualifiedForEntry(entry);
       return row ? getThreadContextMenu(entry, row.location.projectId, folderScope,

@@ -134,6 +134,8 @@ export default function WorkbenchThreadListRow({
     return (
       <WorkbenchPendingThreadListItem
         activityAt={member.activityAt}
+        contextMenu={presentation === "row" && member.ref.kind === "thread"
+          ? ctx.actions.getPendingThreadContextMenu(member.ref.identity.threadId, member.title) : null}
         href={ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(target.kind === "provider"
           ? createLogicalExistingThreadRoute(null, target)
           : createLogicalThreadRoute(null, LogicalProjectIdSchema.parse(entryProjectId), member.location, target))}
