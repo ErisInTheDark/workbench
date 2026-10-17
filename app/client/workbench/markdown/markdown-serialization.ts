@@ -90,7 +90,7 @@ export function serializeWorkbenchDomToMarkdown(
       return;
     }
 
-    const text = serializeInlineNodes(inlineNodes).replace(/\n{3,}/g, "\n\n").trimEnd();
+    const text = formatParagraphText(serializeInlineNodes(inlineNodes).trimEnd());
     if (text) {
       flushPendingBreaks();
       tokens.push({
@@ -240,7 +240,48 @@ function serializeMarkupNode(
 }
 
 function serializeParagraph(node: Element) {
-  return serializeInlineNodes(node.childNodes).replace(/\n{3,}/g, "\n\n");
+  return serializeInlineNodes(node.childNodes);
+}
+
+const BLOCK_START_PATTERNS = [
+  /^#{1,6}(?:[ \t]|$)/,
+  /^>/,
+  /^[-*+](?:[ \t]|$)/,
+  /^\d+[.)](?:[ \t]|$)/,
+  /^`{3,}[^`]*$/,
+  /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/,
+];
+
+/** A paragraph line that would open another block when reparsed gets a backslash before its first character. */
+function escapeBlockStart(line: string) {
+  const indent = line.match(/^ */)?.[0] ?? "";
+  const content = line.slice(indent.length);
+  return BLOCK_START_PATTERNS.some((pattern) => pattern.test(content)) ? `${indent}\\${content}` : line;
+}
+
+/** Empty visual lines are written as two spaces, which keeps their newline inside the paragraph. */
+function formatParagraphText(text: string) {
+  if (!text) {
+    return "";
+  }
+
+  return text
+    .split("\n")
+    .map((line) => {
+      const content = trimLineEnd(line);
+      return content ? escapeBlockStart(content) : "  ";
+    })
+    .join("\n");
+}
+
+/** Spaces before a line break never render, and two of them would read as a hard break. */
+function trimLineEnd(line: string) {
+  return line.replace(/[ \t]+$/, "");
+}
+
+/** Joins soft-broken lines of a single-line block with hard breaks: two spaces before each kept newline. */
+function joinWithHardBreaks(lines: readonly string[]) {
+  return lines.map((line, index) => index < lines.length - 1 ? `${line}  ` : line).join("\n");
 }
 
 export function serializeListItemMainText(item: Element) {
@@ -253,7 +294,7 @@ export function serializeListItemMainText(item: Element) {
   const contentNodes = Array.from(item.childNodes).filter((node) => {
     return !(node instanceof Element && isListElement(node));
   });
-  return serializeInlineNodes(contentNodes).replace(/\n{3,}/g, "\n\n").trimEnd().trim();
+  return serializeInlineNodes(contentNodes).trim();
 }
 
 function parseOrderedListOrdinal(value: string | null) {
@@ -296,10 +337,13 @@ function serializeListElement(node: Element, indent = 0): string {
   return items
     .map((item, index) => {
       const prefix = listType === "ol" ? `${orderedOrdinals[index]}. ` : "- ";
-      const text = serializeListItemMainText(item);
-      const line = text
-        ? `${" ".repeat(indent)}${prefix}${text}`.trimEnd()
-        : `${" ".repeat(indent)}${prefix}`;
+      const [firstLine = "", ...continuationLines] = serializeListItemMainText(item).split("\n");
+      const continuationIndent = " ".repeat(indent + prefix.length);
+      const text = joinWithHardBreaks([
+        trimLineEnd(firstLine),
+        ...continuationLines.map((line) => `${continuationIndent}${trimLineEnd(line)}`),
+      ]);
+      const line = `${" ".repeat(indent)}${prefix}${text}`.trimEnd();
       const nested: string = getNestedBlockElementsForItem(item)
         .map((childBlock) => serializeNestedListChildBlock(childBlock, indent + 2))
         .filter(Boolean)
@@ -339,7 +383,8 @@ function serializeBlockElement(node: Element): SerializedBlock {
   const parsedCommentBody = parseBlockCommentBody(rawText);
 
   if (node instanceof HTMLElement && (node.dataset.blockComment === "true" || parsedCommentBody !== null)) {
-    const commentBody = parsedCommentBody ?? serializeParagraph(node).replace(/\n+/g, " ").trim();
+    // Block comment bodies render as literal text, so they are written without markdown escapes.
+    const commentBody = parsedCommentBody ?? rawText.replaceAll(" ", " ").replace(/\s+/g, " ").trim();
     return {
       kind: "block",
       isComment: true,
@@ -357,7 +402,7 @@ function serializeBlockElement(node: Element): SerializedBlock {
       return {
         kind: "block",
         isComment: false,
-        text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${serializeParagraph(node).trim()}`.trimEnd(),
+        text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${joinWithHardBreaks(serializeParagraph(node).trim().split("\n").map(trimLineEnd))}`.trimEnd(),
       };
     case "ul":
       return {
@@ -402,7 +447,7 @@ function serializeBlockElement(node: Element): SerializedBlock {
       return {
         kind: "block",
         isComment: false,
-        text: serializeParagraph(node),
+        text: formatParagraphText(serializeParagraph(node)),
       };
   }
 }
@@ -429,10 +474,13 @@ function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
       }
       markdown += token.block.text;
     } else {
-      const baseSeparator = previousBlock.isComment || token.block.isComment ? "\n" : "\n\n";
-      const extraBreakCount = previousBlock.isComment || token.block.isComment
+      const touchesComment = previousBlock.isComment || token.block.isComment;
+      const betweenLists = previousBlock.kind === "list" && token.block.kind === "list";
+      // Lists that touch in the DOM differ in type (same-type ones merge), and a blank line between them reparses as a list break.
+      const baseSeparator = touchesComment || (betweenLists && pendingBreakCount === 0) ? "\n" : "\n\n";
+      const extraBreakCount = touchesComment
         ? pendingBreakCount
-        : previousBlock.kind === "list" && token.block.kind === "list"
+        : betweenLists
           ? Math.max(0, pendingBreakCount - 1)
           : pendingBreakCount;
       markdown += `${baseSeparator}${"\n".repeat(extraBreakCount)}${token.block.text}`;
@@ -446,7 +494,5 @@ function serializeMarkdownTokens(tokens: SerializedMarkdownToken[]) {
     markdown += "\n".repeat(pendingBreakCount);
   }
 
-  return markdown.endsWith("\n")
-    ? markdown
-    : `${markdown}\n`;
+  return `${markdown}\n`;
 }

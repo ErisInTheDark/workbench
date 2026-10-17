@@ -25,6 +25,7 @@ import {
 import { attachmentReferences } from "workbench-shared/workbench/thread/attachment-references";
 import {
     isBlockCommentLine,
+    isIntrawordUnderscore,
 } from "./comment-markdown";
 import {
     parsePlaintextProjectFileLink,
@@ -121,6 +122,22 @@ const THREAD_BLOCK_TAG_BOUNDARY_PATTERN = new RegExp(
   ].join("|"),
   "g",
 );
+
+const HARD_BREAK_SUFFIX = / {2,}$/;
+const HARD_BREAK_BLANK_LINE = /^ {2,}$/;
+
+function isEditorProfile(options: MarkdownParseOptions) {
+  return (options.profile ?? "editor") === "editor";
+}
+
+/** Editor markdown keeps the newline after a line ending in two spaces, so the next line stays in the same block. */
+function endsWithHardBreak(line: string) {
+  return HARD_BREAK_SUFFIX.test(line);
+}
+
+function joinHardBreakLines(lines: readonly string[]) {
+  return lines.map((line) => line.replace(HARD_BREAK_SUFFIX, "")).join("\n");
+}
 
 function findClosingToken(source: string, token: string, fromIndex: number) {
   for (let index = fromIndex; index < source.length; index += 1) {
@@ -287,10 +304,17 @@ export function formatThreadStateChangeMode(mode: string) {
     .join(" ");
 }
 
-function sanitizeMarkdownHref(value: string) {
+/** Schemes that run code when followed; the editor keeps every other href verbatim so relative links round-trip. */
+const EXECUTABLE_HREF_SCHEME = /^\s*(?:javascript|vbscript|data):/i;
+
+function sanitizeMarkdownHref(value: string, options: MarkdownParseOptions) {
   const trimmed = normalizeMarkdownHref(value);
   if (!trimmed) {
     return null;
+  }
+
+  if (isEditorProfile(options)) {
+    return EXECUTABLE_HREF_SCHEME.test(trimmed.replace(/[\u0000-\u001f]/g, "")) ? null : trimmed;
   }
 
   if (
@@ -350,18 +374,6 @@ function isWhitespace(value: string | undefined) {
 
 function isPunctuation(value: string | undefined) {
   return !!value && /[\p{P}\p{S}]/u.test(value);
-}
-
-function isIntrawordUnderscore(source: string, index: number) {
-  if (source[index] !== "_") {
-    return false;
-  }
-
-  let start = index;
-  let end = index + 1;
-  while (source[start - 1] === "_") start -= 1;
-  while (source[end] === "_") end += 1;
-  return isWordCharacter(source[start - 1]) && isWordCharacter(source[end]);
 }
 
 function isGlobLikeAsterisk(source: string, index: number) {
@@ -597,7 +609,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
       continue;
     }
 
-    if ((options.profile ?? "editor") === "thread" && isIntrawordUnderscore(markdown, index)) {
+    if (isIntrawordUnderscore(markdown, index)) {
       pushTextNode(nodes, "_");
       index += 1;
       continue;
@@ -612,6 +624,12 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
     if ((options.profile ?? "editor") === "thread" && markdown.startsWith("</icon>", index)) {
       pushTextNode(nodes, "</icon>");
       index += "</icon>".length;
+      continue;
+    }
+
+    if (isEditorProfile(options) && markdown.startsWith("&nbsp;", index)) {
+      pushTextNode(nodes, " ");
+      index += "&nbsp;".length;
       continue;
     }
 
@@ -646,6 +664,19 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
         nodes.push({
           children: parseInlineMarkdown(commentBody, options),
           type: "inlineComment",
+        });
+        index = closeIndex + 3;
+        continue;
+      }
+    }
+
+    if (markdown.startsWith("***", index) || markdown.startsWith("___", index)) {
+      const marker = markdown.slice(index, index + 3);
+      const closeIndex = findClosingToken(markdown, marker, index + 3);
+      if (closeIndex !== -1) {
+        nodes.push({
+          children: [{ children: parseInlineMarkdown(markdown.slice(index + 3, closeIndex), options), type: "em" }],
+          type: "strong",
         });
         index = closeIndex + 3;
         continue;
@@ -776,7 +807,7 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
             continue;
           }
 
-          const url = sanitizeMarkdownHref(rawUrl);
+          const url = sanitizeMarkdownHref(rawUrl, options);
           if (url) {
             nodes.push({
               children: parseInlineMarkdown(label, { ...options, suppressPlaintextAutolinks: true }),
@@ -890,7 +921,8 @@ interface ParsedCodeFenceOpenLine {
 
 function parseCodeFenceOpenLine(line: string): ParsedCodeFenceOpenLine | null {
   const match = line.match(/^( {0,3})(`{3,})(.*)$/);
-  if (!match) {
+  // CommonMark: a backtick fence's info string cannot contain backticks, so such lines are inline code instead.
+  if (!match || match[3].includes("`")) {
     return null;
   }
 
@@ -1031,7 +1063,8 @@ function parseListItemChildren(
         break;
       }
 
-      childLines.push("");
+      // Keep padding beyond the content indent: an editor hard-break line is whitespace that must survive nesting.
+      childLines.push(stripIndent(line, contentIndent));
       index += 1;
       continue;
     }
@@ -1068,14 +1101,26 @@ function parseSpecificListBlock(
       break;
     }
 
+    const textLines = [line.text];
+    index += 1;
+    // Hard-break continuation lines sit at the item's content indent (or are blank padding) and extend its text.
+    while (
+      isEditorProfile(options)
+      && endsWithHardBreak(textLines.at(-1)!)
+      && index < lines.length
+      && (HARD_BREAK_BLANK_LINE.test(lines[index]) || (lines[index].trim() && getIndentWidth(lines[index]) >= line.contentIndent))
+    ) {
+      textLines.push(stripIndent(lines[index], line.contentIndent));
+      index += 1;
+    }
+
     const item: ParsedListItem = {
       contentIndent: line.contentIndent,
       marker: line.marker,
       ordinal: type === "ol" ? line.marker.slice(0, -1) : null,
-      text: line.text,
+      text: isEditorProfile(options) ? joinHardBreakLines(textLines) : line.text,
       children: [],
     };
-    index += 1;
 
     const children = parseListItemChildren(lines, index, indent, line.contentIndent, options);
     item.children = children.blocks;
@@ -1541,12 +1586,17 @@ function parseBlocksFromLines(
       maybePushCommentBreak(blocks, blankLineCount, "heading");
       maybePushStandardBreak(blocks, blankLineCount, "heading");
       blankLineCount = 0;
+      const headingLines = [headingMatch[2]];
+      index += 1;
+      while (isEditorProfile(options) && endsWithHardBreak(headingLines.at(-1)!) && index < lines.length) {
+        headingLines.push(lines[index]);
+        index += 1;
+      }
       blocks.push({
         type: "heading",
         level: headingMatch[1].length,
-        text: headingMatch[2],
+        text: isEditorProfile(options) ? joinHardBreakLines(headingLines) : headingMatch[2],
       });
-      index += 1;
       continue;
     }
 
@@ -1606,7 +1656,7 @@ function parseBlocksFromLines(
     blankLineCount = 0;
     while (
       index < lines.length
-      && lines[index].trim()
+      && (lines[index].trim() || (isEditorProfile(options) && paragraphLines.length > 0 && HARD_BREAK_BLANK_LINE.test(lines[index])))
       && !isBlockCommentLine(lines[index])
       && !isThreadStateChangeLine(lines[index], options)
       && !isThreadPlanOpenLine(lines[index], options)
@@ -1628,7 +1678,7 @@ function parseBlocksFromLines(
       index += 1;
       continue;
     }
-    blocks.push({ type: "paragraph", text: paragraphLines.join("\n") });
+    blocks.push({ type: "paragraph", text: isEditorProfile(options) ? joinHardBreakLines(paragraphLines) : paragraphLines.join("\n") });
   }
 
   if (blankLineCount > 0 && getLastNonBreakBlock(blocks)?.type === "comment") {
@@ -1639,7 +1689,13 @@ function parseBlocksFromLines(
 }
 
 function splitMarkdownLines(markdown: string, options: MarkdownParseOptions) {
-  return normalizeThreadBlockTagBoundaries(markdown, options).replace(/\r\n/g, "\n").split("\n");
+  const lines = normalizeThreadBlockTagBoundaries(markdown, options).replace(/\r\n/g, "\n").split("\n");
+  // The file's final newline terminates the last line; it is not a blank line after a trailing block comment.
+  if (isEditorProfile(options) && lines.length > 1 && lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  return lines;
 }
 
 export function parseBlocks(markdown: string, options: MarkdownParseOptions = {}): ParsedBlock[] {

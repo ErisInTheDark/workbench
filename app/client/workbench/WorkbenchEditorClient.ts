@@ -24,6 +24,7 @@ import {
     unwrapTransparentSpans,
 } from "./dom/mutation/dom-normalization";
 import {
+    normalizeDivBlocks,
     normalizeRootInlineBlocks,
     syncStructuredBlockStyles as syncStructuredBlockDomStyles,
 } from "./dom/mutation/structured-block-dom";
@@ -898,6 +899,11 @@ function WorkbenchEditorClient(
     },
     editor,
     getMode: () => options.fileSessionState.mode,
+    listFormat: {
+      getSelectedListItems: options.listStructure.getSelectedListItems,
+      isTopLevelListItem: options.listStructure.isTopLevelListItem,
+      unwrapTopLevelListItemToParagraph: options.listStructure.unwrapTopLevelListItemToParagraph,
+    },
     syncEditorAfterStructuralChange,
     toggleCodeSelection: (selection, range) => {
       codeFormatController.toggleCodeSelection(selection, range);
@@ -1095,6 +1101,7 @@ function WorkbenchEditorClient(
     replaceTag(root, "strike", "del");
     replaceTag(root, "s", "del");
     unwrapTransparentSpans(root);
+    normalizeDivBlocks(root);
     normalizeRootInlineBlocks(root);
     syncStructuredBlockStyles(root);
     (root as Node).normalize();

@@ -5,12 +5,13 @@
  * - ensureSummaryTextWrapper: create or return the direct summary text wrapper used for list-item summaries. Keywords: workbench, list, summary, wrapper.
  * - trimBoundaryBreaks: remove redundant leading and trailing BR nodes around otherwise meaningful block content. Keywords: workbench, block dom, br, cleanup.
  * - normalizeSummaryListArtifacts: lift stray list structures out of summary text into the owning details block. Keywords: workbench, list, summary, normalize.
- * - normalizeCommentBlockElement: canonicalize block comment markers on paragraph-like elements. Keywords: workbench, comment block, normalize, paragraph.
+ * - normalizeCommentBlockElement: canonicalize block comment markers on paragraph-like elements, including blocks holding only inline comments. Keywords: workbench, comment block, normalize, paragraph.
  * - removeAdjacentCommentSpacing: strip neighboring empty spacing nodes around a comment block paragraph. Keywords: workbench, comment block, spacing, cleanup.
  * - convertCommentBlockToParagraph: turn a block comment element back into a normal paragraph while preserving text. Keywords: workbench, comment block, paragraph, convert.
  * - normalizeListItemHierarchy: normalize a single list item into the details-plus-summary structured nesting form when needed. Keywords: workbench, list, hierarchy, details.
  * - normalizeNestedListHierarchy: normalize all list items under a root into structured nesting form. Keywords: workbench, list, hierarchy, normalize.
  * - mergeAdjacentSiblingLists: merge compatible sibling lists separated only by empty spacer nodes. Keywords: workbench, list, merge, cleanup.
+ * - normalizeDivBlocks: unwrap block-holding divs and turn inline-only divs into paragraphs, since markdown has no div. Keywords: workbench, div, paste, normalize.
  * - normalizeRootInlineBlocks: wrap direct root inline content into stable paragraph blocks for markdown round-trip comparison. Keywords: workbench, editor, root, inline, paragraph, save guard.
  * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks. Keywords: workbench, block dom, comment block, list, sync.
  * - isBlockLikeChildElement: detect child elements that force a container to behave as block content. Keywords: workbench, block dom, predicate, inline container.
@@ -162,7 +163,32 @@ function setPlainBlockText(element: HTMLElement, text: string) {
   element.append(document.createElement("br"));
 }
 
+/** Text of a block whose only content is inline comments, which markdown can only write as one block comment line. */
+function getInlineCommentOnlyText(element: HTMLElement) {
+  const comments = Array.from(element.querySelectorAll<HTMLElement>('[data-inline-comment="true"]'));
+  if (!comments.length) {
+    return null;
+  }
+
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const isVisible = (node.textContent ?? "").trim().length > 0;
+    if (isVisible && !comments.some((comment) => comment.contains(node))) {
+      return null;
+    }
+  }
+
+  return comments.map((comment) => (comment.textContent ?? "").trim()).filter(Boolean).join(" ");
+}
+
 export function normalizeCommentBlockElement(element: HTMLElement) {
+  const inlineCommentText = element.dataset.blockComment === "true" ? null : getInlineCommentOnlyText(element);
+  if (inlineCommentText !== null) {
+    element.dataset.blockComment = "true";
+    setPlainBlockText(element, inlineCommentText);
+    return;
+  }
+
   const parsedCommentBody = parseBlockCommentBody(element.textContent ?? "");
   if (parsedCommentBody !== null) {
     element.dataset.blockComment = "true";
@@ -287,53 +313,51 @@ function isListMergeSeparatorNode(node: Node | null) {
     && !isIntentionalListBreakParagraph(node);
 }
 
-function getNextMeaningfulSibling(node: ChildNode | null) {
-  let current = node;
+/** Containers whose direct children can be lists; inline content is never walked, so its spaces stay put. */
+const LIST_HOLDER_TAGS = /^(DIV|UL|OL|LI|DETAILS|BLOCKQUOTE)$/;
 
+function skipWhitespaceText(node: ChildNode | null) {
+  let current = node;
   while (current?.nodeType === Node.TEXT_NODE && !(current.textContent ?? "").trim()) {
-    const nextSibling = current.nextSibling;
-    current.remove();
-    current = nextSibling;
+    current = current.nextSibling;
   }
 
   return current;
 }
 
 export function mergeAdjacentSiblingLists(root: ParentNode) {
-  const childElements = root instanceof Element || root instanceof DocumentFragment
-    ? Array.from(root.children)
-    : [];
-
-  for (const childElement of childElements) {
-    mergeAdjacentSiblingLists(childElement);
+  for (const childElement of Array.from(root.children)) {
+    if (LIST_HOLDER_TAGS.test(childElement.tagName)) {
+      mergeAdjacentSiblingLists(childElement);
+    }
   }
 
-  let current = getNextMeaningfulSibling(root.firstChild);
+  let current = skipWhitespaceText(root.firstChild);
 
   while (current) {
     if (!isMergeableListElement(current)) {
-      current = getNextMeaningfulSibling(current.nextSibling);
+      current = skipWhitespaceText(current.nextSibling);
       continue;
     }
 
-    const separator = getNextMeaningfulSibling(current.nextSibling);
+    const separator = skipWhitespaceText(current.nextSibling);
     const nextList = isListMergeSeparatorNode(separator)
-      ? getNextMeaningfulSibling(separator?.nextSibling ?? null)
+      ? skipWhitespaceText(separator?.nextSibling ?? null)
       : separator;
 
     if (isMergeableListElement(nextList) && nextList.tagName === current.tagName) {
+      while (current.nextSibling && current.nextSibling !== nextList) {
+        current.nextSibling.remove();
+      }
       while (nextList.firstChild) {
         current.append(nextList.firstChild);
       }
 
       nextList.remove();
-      if (separator && isListMergeSeparatorNode(separator)) {
-        separator.remove();
-      }
       continue;
     }
 
-    current = getNextMeaningfulSibling(current.nextSibling);
+    current = skipWhitespaceText(current.nextSibling);
   }
 }
 
@@ -434,6 +458,27 @@ function trimRootBreaksDroppedByMarkdown(root: ParentNode) {
     while (isRemovableRootEdgeNode(root.lastChild)) {
       root.lastChild?.remove();
     }
+  }
+}
+
+/** Markdown has no div: wrappers holding blocks are unwrapped and inline-only divs become paragraphs, deepest first. */
+export function normalizeDivBlocks(root: ParentNode) {
+  for (const div of Array.from(root.querySelectorAll("div")).reverse()) {
+    if (!(div instanceof HTMLDivElement) || !div.parentNode) {
+      continue;
+    }
+
+    if (hasDirectBlockLikeChildren(div)) {
+      div.replaceWith(...Array.from(div.childNodes));
+      continue;
+    }
+
+    const paragraph = div.ownerDocument.createElement("p");
+    for (const attribute of div.getAttributeNames()) {
+      paragraph.setAttribute(attribute, div.getAttribute(attribute) ?? "");
+    }
+    paragraph.append(...Array.from(div.childNodes));
+    div.replaceWith(paragraph);
   }
 }
 

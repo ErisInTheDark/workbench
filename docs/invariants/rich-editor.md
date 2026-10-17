@@ -1,1 +1,3 @@
 - Each rich-editor inline run has one full mark set and unformatted boundary whitespace; save-guard compares this canonical structure by round-tripping html -> markdown -> html.
+- Editor markdown keeps the newline after a line ending in two spaces, so soft breaks stay inside headings and list items and an empty line inside a block is written as two spaces. Paragraph lines that would open a block on reparse are backslash-escaped.
+- Every editor DOM state must save: markdown serialization never blocks the save guard nor changes the words a reader sees. `WorkbenchFilePanelClient.*.test.ts` sweep this through the mounted editor.

@@ -1,0 +1,2 @@
+- item in paragraph
+- plain item

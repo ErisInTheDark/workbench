@@ -166,7 +166,7 @@ function normalizeQuoteBlock({ element, scope }: BlockNormalizationCandidate) {
 function parseFence(text: string) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const opener = lines[0]?.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-  if (!opener) {
+  if (!opener || (opener[2][0] === "`" && opener[3].includes("`"))) {
     return null;
   }
 

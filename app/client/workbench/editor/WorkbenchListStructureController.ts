@@ -72,9 +72,15 @@ function WorkbenchListStructureController(
       return true;
     }
 
+    let movedItems: HTMLLIElement[] = [];
     syncEditorAfterStructuralChange(() => {
-      document.execCommand("outdent", false);
+      movedItems = outdentListItems([listItem]);
       editor.focus();
+    }, {
+      afterDomMutation: () => {
+        restoreListItemSelection(movedItems, { collapsed: true, getListItemTextContainer });
+        updateFloatingToolbar();
+      },
     });
     return true;
   }

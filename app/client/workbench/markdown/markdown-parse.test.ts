@@ -143,13 +143,9 @@ test("thread identifiers keep underscore runs literal while midword stars still 
   );
 });
 
-test("editor profile retains its existing intraword emphasis rule", () => {
+test("editor identifiers keep underscore runs literal so saving never rewrites them", () => {
   assert.deepEqual(
-    parseInlineMarkdown("word_part_name", { profile: "editor" }),
-    [
-      { type: "text", text: "word" },
-      { type: "em", children: [{ type: "text", text: "part" }] },
-      { type: "text", text: "name" },
-    ],
+    parseInlineMarkdown("word_part_name and mcp__wb__tool", { profile: "editor" }),
+    [{ type: "text", text: "word_part_name and mcp__wb__tool" }],
   );
 });

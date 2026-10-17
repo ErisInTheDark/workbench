@@ -5,6 +5,13 @@
  * - default WorkbenchFormatCommandController: create the editor-owned formatting command controller for rich-editor inline and block formatting actions. Keywords: workbench, format, command, toolbar, keydown, rich editor, default export.
  */
 
+import {
+    toggleRootBlockList,
+    toggleRootBlockTag,
+    type BlockFormatTag,
+    type ListFormatDependencies,
+    type ListFormatTag,
+} from "../dom/mutation/block-format-dom";
 import type { EditorMode } from "../WorkbenchEditorClient";
 import type { PendingInlineFormatKey } from "./WorkbenchInlineFormatController";
 
@@ -15,6 +22,7 @@ export interface WorkbenchFormatCommandControllerOptions {
   editor: HTMLDivElement;
   getMode: () => EditorMode;
   clearPendingInlineFormats: () => void;
+  listFormat: ListFormatDependencies;
   syncEditorAfterStructuralChange: (
     mutate: () => void,
     options?: { afterDomMutation?: () => void; afterSelectionRestore?: () => void },
@@ -111,35 +119,50 @@ function WorkbenchFormatCommandController(
     });
   }
 
-  function runEditorCommand(command: string, value: string | null = null) {
+  /** Run a block-level edit, then put the selection back on the same (moved) text nodes before the run is canonicalised. */
+  function runBlockCommand(apply: (selection: Selection) => void) {
     if (options.getMode() !== "rich") {
       return;
     }
 
-    if (command === "bold") {
-      wrapSelection("strong");
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !options.editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
       return;
     }
 
-    if (command === "italic") {
-      wrapSelection("em");
-      return;
-    }
-
+    const { startContainer, startOffset, endContainer, endOffset } = selection.getRangeAt(0);
     options.syncEditorAfterStructuralChange(() => {
       options.clearPendingInlineFormats();
-      document.execCommand(command, false, value ?? undefined);
-      options.editor.focus();
+      apply(selection);
+      if (options.editor.contains(startContainer) && options.editor.contains(endContainer)) {
+        const range = document.createRange();
+        range.setStart(startContainer, startOffset);
+        range.setEnd(endContainer, endOffset);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    });
+  }
+
+  function toggleBlock(tag: BlockFormatTag) {
+    runBlockCommand((selection) => {
+      toggleRootBlockTag(options.editor, selection.getRangeAt(0), tag);
+    });
+  }
+
+  function toggleList(tag: ListFormatTag) {
+    runBlockCommand((selection) => {
+      toggleRootBlockList(options.editor, selection, tag, options.listFormat);
     });
   }
 
   function applyToolbarCommand(command: string) {
     switch (command) {
       case "bold":
-        runEditorCommand("bold");
+        wrapSelection("strong");
         break;
       case "italic":
-        runEditorCommand("italic");
+        wrapSelection("em");
         break;
       case "inline-code":
         wrapSelection("code");
@@ -154,19 +177,17 @@ function WorkbenchFormatCommandController(
         wrapSelection("ins");
         break;
       case "h1":
-        runEditorCommand("formatBlock", "<h1>");
-        break;
       case "h2":
-        runEditorCommand("formatBlock", "<h2>");
+        toggleBlock(command);
         break;
       case "unordered-list":
-        runEditorCommand("insertUnorderedList");
+        toggleList("ul");
         break;
       case "ordered-list":
-        runEditorCommand("insertOrderedList");
+        toggleList("ol");
         break;
       case "quote":
-        runEditorCommand("formatBlock", "<blockquote>");
+        toggleBlock("blockquote");
         break;
       default:
         break;
@@ -181,13 +202,13 @@ function WorkbenchFormatCommandController(
 
     if (event.key.toLowerCase() === "b") {
       event.preventDefault();
-      runEditorCommand("bold");
+      wrapSelection("strong");
       return true;
     }
 
     if (event.key.toLowerCase() === "i") {
       event.preventDefault();
-      runEditorCommand("italic");
+      wrapSelection("em");
       return true;
     }
 

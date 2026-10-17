@@ -545,16 +545,16 @@ function WorkbenchInlineFormatController(
       }
     }
 
-    const caretMarker = createInlineSelectionMarker("caret");
+    // The caret is placed on the live text node before the mutation canonicalises the run, so the active-run
+    // canonicaliser carries it through the rebuild; a marker held here would be detached by that rebuild.
     options.syncEditorAfterStructuralChange(() => {
       insertionRange.insertNode(rootNode);
-      textNode.parentNode?.insertBefore(caretMarker, textNode.nextSibling);
-      rootNode.parentNode?.normalize();
+      const caret = document.createRange();
+      caret.setStart(textNode, textNode.length);
+      caret.collapse(true);
+      insertionSelection.removeAllRanges();
+      insertionSelection.addRange(caret);
       preservePendingInlineFormatSelectionChanges = 2;
-    }, {
-      afterDomMutation: () => {
-        restoreCaretToMarker(caretMarker);
-      },
     });
     return true;
   }
@@ -973,11 +973,67 @@ export function serializeInlineRunContainerForMarkupSignature(
 }
 
 export function serializeInlineNodes(nodes: ArrayLike<Node>) {
-  return normalizeInlineLeavesForSerialization(
+  const leaves = resolveNonBreakingSpaces(normalizeInlineLeavesForSerialization(
     flattenInlineContent(Array.from(nodes)),
-  )
-    .map((leaf) => serializeInlineLeafToMarkdown(leaf))
+  ));
+  return leaves
+    .map((leaf, index) => serializeInlineLeafToMarkdown(leaf, touchesWordCharacter(leaves, index)))
     .join("");
+}
+
+/** Whether a marked leaf sits directly against plain word characters, where `_` delimiters would read as literal. */
+function touchesWordCharacter(leaves: InlineLeaf[], index: number) {
+  const isPlainWordEdge = (leaf: InlineLeaf | undefined, edge: "first" | "last") => {
+    if (leaf?.type !== "text" || leaf.marks.length || !leaf.text) {
+      return false;
+    }
+    return /[A-Za-z0-9]/.test(edge === "first" ? leaf.text[0] : leaf.text.at(-1)!);
+  };
+
+  return isPlainWordEdge(leaves[index - 1], "last") || isPlainWordEdge(leaves[index + 1], "first");
+}
+
+function isCodeTextLeaf(leaf: Extract<InlineLeaf, { type: "text" }>) {
+  return leaf.marks.some((mark) => mark.tag === "code");
+}
+
+function getNeighbourCharacter(leaves: InlineLeaf[], fromIndex: number, direction: 1 | -1) {
+  for (let index = fromIndex + direction; index >= 0 && index < leaves.length; index += direction) {
+    const leaf = leaves[index];
+    if (leaf.type === "break") {
+      return null;
+    }
+    if (leaf.type === "text" && leaf.text) {
+      return direction === 1 ? leaf.text[0] : leaf.text.at(-1)!;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Browsers type nbsp at the end of a text run, where a plain space might collapse. A lone nbsp on a run edge between
+ * visible characters renders like a space, so it is written as one; nbsp inside a run is kept and serializes as `&nbsp;`.
+ */
+function resolveNonBreakingSpaces(leaves: InlineLeaf[]) {
+  return leaves.map((leaf, leafIndex) => {
+    if (leaf.type !== "text" || isCodeTextLeaf(leaf) || !leaf.text.includes(" ")) {
+      return leaf;
+    }
+
+    const characters = [...leaf.text];
+    const text = characters.map((character, index) => {
+      const onRunEdge = index === 0 || index === characters.length - 1;
+      if (character !== " " || !onRunEdge) {
+        return character;
+      }
+
+      const previous = index > 0 ? characters[index - 1] : getNeighbourCharacter(leaves, leafIndex, -1);
+      const next = index < characters.length - 1 ? characters[index + 1] : getNeighbourCharacter(leaves, leafIndex, 1);
+      return previous && next && !/\s/u.test(previous) && !/\s/u.test(next) ? " " : character;
+    }).join("");
+    return { ...leaf, text };
+  });
 }
 
 function createInlineSelectionMarker(role: "caret" | "selection-start" | "selection-end") {
@@ -1019,6 +1075,16 @@ function normalizeInlineLeavesForMarkupSignature(
   trimTrailingWhitespace: boolean,
 ) {
   const mergedLeaves = normalizeInlineLeavesForSerialization(leaves);
+  // Whitespace just before a line break never renders, so it is not structure either.
+  for (let index = mergedLeaves.length - 2; index >= 0; index -= 1) {
+    const leaf = mergedLeaves[index];
+    if (leaf.type === "text" && mergedLeaves[index + 1].type === "break") {
+      leaf.text = leaf.text.replace(/[ \t ]+$/g, "");
+      if (!leaf.text) {
+        mergedLeaves.splice(index, 1);
+      }
+    }
+  }
   let leadingBreakCount = 0;
   while (mergedLeaves[0]?.type === "break") {
     mergedLeaves.shift();
@@ -1037,6 +1103,15 @@ function normalizeInlineLeavesForMarkupSignature(
       leadingBreakCount,
       trailingBreakCount,
     };
+  }
+
+  // Block-edge whitespace is invisible and markdown drops it from headings and list items, so it is not structure.
+  const firstLeaf = mergedLeaves[0];
+  if (firstLeaf?.type === "text") {
+    firstLeaf.text = firstLeaf.text.replace(/^[ \t ]+/g, "");
+    if (!firstLeaf.text) {
+      mergedLeaves.shift();
+    }
   }
 
   const lastLeaf = mergedLeaves.at(-1);
@@ -1107,20 +1182,20 @@ function serializeInlineLeafForMarkupSignature(leaf: InlineLeaf) {
   return content;
 }
 
-function serializeInlineLeafToMarkdown(leaf: InlineLeaf) {
+function serializeInlineLeafToMarkdown(leaf: InlineLeaf, touchesWord: boolean) {
   if (leaf.type === "marker") {
     return "";
   }
 
-  const isCodeLeaf = leaf.type === "text" && leaf.marks.some((mark) => mark.tag === "code");
+  const isCodeLeaf = leaf.type === "text" && isCodeTextLeaf(leaf);
   let content = leaf.type === "break"
     ? "\n"
     : isCodeLeaf
       ? leaf.text
-      : escapeMarkdownText(leaf.text);
+      : escapeMarkdownText(leaf.text).replaceAll(" ", "&nbsp;");
 
   for (let index = leaf.marks.length - 1; index >= 0; index -= 1) {
-    content = wrapMarkdownWithInlineMark(content, leaf.marks[index]);
+    content = wrapMarkdownWithInlineMark(content, leaf.marks[index], touchesWord && index === 0);
   }
 
   return content;
@@ -1153,10 +1228,11 @@ function createInlineMarkElement(mark: InlineMark) {
   return element;
 }
 
-function wrapMarkdownWithInlineMark(content: string, mark: InlineMark) {
+/** `outermostTouchesWord` picks `**` for strong, since `__` directly against word characters cannot open or close emphasis. */
+function wrapMarkdownWithInlineMark(content: string, mark: InlineMark, outermostTouchesWord: boolean) {
   switch (mark.tag) {
     case "strong":
-      return `__${content}__`;
+      return outermostTouchesWord ? `**${content}**` : `__${content}__`;
     case "em":
       return content.includes("*") ? `_${content}_` : `*${content}*`;
     case "code":
@@ -1213,12 +1289,16 @@ function getInlineMarkForElement(element: Element): InlineMark | null {
   const tag = element.tagName.toLowerCase();
   switch (tag) {
     case "strong":
+    case "b":
       return { tag: "strong" };
     case "em":
+    case "i":
       return { tag: "em" };
     case "code":
       return { tag: "code" };
     case "del":
+    case "s":
+    case "strike":
       return { tag: "del" };
     case "ins":
       return { tag: "ins" };
@@ -1555,6 +1635,11 @@ function flattenInlineContent(nodes: Iterable<Node>, marks: InlineMark[] = [], l
 
     const mark = getInlineMarkForElement(element);
     if (mark) {
+      // Back-to-back comments are separate notes; a space keeps their text from merging into one comment.
+      const previousLeaf = leaves.at(-1);
+      if (mark.tag === "comment" && previousLeaf && leafHasCommentMark(previousLeaf) && !marks.some((outer) => outer.tag === "comment")) {
+        leaves.push({ type: "text", marks: [...marks], text: " " });
+      }
       flattenInlineContent(element.childNodes, [...marks, mark], leaves);
       continue;
     }
