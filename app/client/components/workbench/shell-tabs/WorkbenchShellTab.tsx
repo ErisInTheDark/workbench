@@ -58,7 +58,7 @@ export default function WorkbenchShellTab({
   const element = (
     <div
       className={`
-        group/shell-tab relative flex min-h-8 max-w-[11rem] shrink-0 md:max-w-[15rem] items-center rounded-lg py-1 pl-2.5 pr-1
+        group/shell-tab relative flex min-h-[2.875rem] max-w-[11rem] shrink-0 md:max-w-[15rem] items-center rounded-lg py-1 pl-2.5 pr-1
         text-[0.88rem]
         transition-colors
         ${selected ? "bg-fg/8 text-text" : "text-fg/muted hover:bg-fg/5 hover:text-text"}

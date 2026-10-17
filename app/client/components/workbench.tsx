@@ -2092,18 +2092,24 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
             <main
               ref={mainPaneRef}
-              className={`scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
-                ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
-                : showSvgFileView
-                ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
-                : showSettingsView || showStatsView || routeView || showFileView
-                ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
-                : isDirectThreadSurface
-                ? " overflow-hidden px-0 pb-0 md:h-screen md:min-h-0 md:overflow-hidden"
-                : showFullBleedMainView
-                  ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-0 md:pb-0"
-                  : " overflow-y-auto px-5 md:h-auto md:min-h-screen md:overflow-visible md:px-6"
-                }`}
+              // `--main-pad-x` is the view's side padding; the shell header cancels it so it sits in the same place in every view.
+              className={`
+                scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto
+                px-(--main-pad-x)
+                ${isDirectThreadSurface ? "" : "[scrollbar-gutter:stable]"}
+                ${showGitView
+                  ? "min-h-0 overflow-hidden pb-0 md:h-screen [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
+                  : showSvgFileView
+                  ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-hidden [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
+                  : showSettingsView || showStatsView || routeView || showFileView
+                  ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-y-auto [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
+                  : isDirectThreadSurface
+                  ? "overflow-hidden pb-0 md:h-screen md:min-h-0 md:overflow-hidden [--main-pad-x:0px]"
+                  : showFullBleedMainView
+                    ? "overflow-y-auto md:h-screen md:min-h-0 md:overflow-hidden md:pb-0 [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:0px]"
+                    : "overflow-y-auto md:h-auto md:min-h-screen md:overflow-visible [--main-pad-x:calc(var(--spacing)*5)] md:[--main-pad-x:calc(var(--spacing)*6)]"
+                }
+              `}
             >
               <ThreadScrollViewport
                 ref={directThreadScrollViewportRef}
@@ -2116,7 +2122,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               >
               <WorkbenchMobileShellHeader
                 className={`
-              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none ${isDirectMobileThreadSurface ? "pl-5 pr-5" : "-mx-5 pl-5 pr-5"} md:-mx-6 md:pr-6 ${isEffectiveDesktopSidebarCollapsed ? "md:pl-20" : "md:pl-11"}
+              sticky top-0 z-10 transform-gpu py-3 transition-[translate,opacity] duration-200 ease-out will-change-translate motion-reduce:transition-none -mx-(--main-pad-x) pl-5 pr-5 md:pr-6 ${isEffectiveDesktopSidebarCollapsed ? "md:pl-20" : "md:pl-11"}
               md:translate-y-0 md:opacity-100
             `}
                 hidden={!shouldShowShellHeader}
