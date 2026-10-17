@@ -89,9 +89,7 @@ function createSurfaces(host: HTMLElement): WorkbenchEditorDomSurfaces {
   const button = () => element("button", host);
   const text = () => element("p", host);
   return {
-    controls: { resetDraftButton: button(), saveFileButton: button() },
     dialogs: {
-      resetDraft: { cancel: button(), dialog: dialog(), resetToHead: button(), resetToSaved: button() },
       saveConflict: { actual: text(), dialog: dialog(), expected: text(), keepEditing: button(), overwrite: button(), reload: button(), summary: text() },
     },
     editor: { customCaret: element("div", host), diffGutter: element("div", host), editor: element("div", host), reviewLayer: element("div", host) },
@@ -196,11 +194,11 @@ export default class MountedFilePanel {
     }).join("\n");
   }
 
-  /** Press the real save button; resolve with the markdown that reached disk or throw with the save-guard report. */
+  /** Save the way the toolbar's save button does; resolve with the markdown that reached disk or throw with the save-guard report. */
   async save() {
     const before = this.disk.writes.length;
     this.guardReports.length = 0;
-    this.surfaces.controls.saveFileButton.click();
+    await this.client.save();
     await settle();
     if (this.disk.writes.length === before) {
       const report = this.guardReports.at(-1);

@@ -210,12 +210,9 @@ export interface WorkbenchEditorClientOptions {
   handleOverwriteConflict: () => Promise<void>;
   handlePointerMove: (event: PointerEvent) => void;
   handleReloadConflict: () => Promise<void>;
-  handleResetCurrentDraftToSaved: () => Promise<void>;
-  handleResetCurrentFileToHead: () => Promise<void>;
   handleSaveCurrentFile: () => Promise<void>;
   handleSelectionChange: () => void;
   handleViewportChanged: () => void;
-  isSaveButtonInvalid?: () => boolean;
   listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "syncEditorAfterStructuralChange">;
   mutationRuntime: WorkbenchEditorMutationRuntimeOptions;
   sessionState: SessionState;
@@ -240,7 +237,6 @@ interface WorkbenchEditorClient {
   handlePendingInlineSelectionChange: () => void;
   handleRichInput: (event: Event) => WorkbenchRichInputResult;
   handleListStructureKeyDown: (event: KeyboardEvent) => boolean;
-  hideResetDraftDialog: () => void;
   hideSaveConflictDialog: () => void;
   isPointerNearRevisionHoverUi: (clientX: number, clientY: number) => boolean;
   maybeClearPendingInlineFormatsForKey: (event: KeyboardEvent) => void;
@@ -263,9 +259,7 @@ interface WorkbenchEditorClient {
   setHoveredRevisionNode: (node: HTMLElement | null) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   previewFontSize: (fontSize: number | null) => void;
-  setSaveButtonState: () => void;
   setStatusMessage: (message: string) => void;
-  showResetDraftDialog: () => void;
   showSaveConflict: (conflict: SaveConflictPayload) => void;
   subscribe: (listener: EditorUIStateListener) => () => void;
   syncStructuredBlockStyles: (root?: ParentNode) => void;
@@ -719,10 +713,9 @@ function WorkbenchEditorClient(
   const reviewLayer = surfaces.editor.reviewLayer;
   const editorShell = diffGutter.parentElement;
   const statusDisplay = surfaces.statusDisplay;
-  const controls = surfaces.controls;
   const dialogSurface = surfaces.dialogs;
   const toolbars = surfaces.toolbars;
-  const dialogs = [dialogSurface.saveConflict.dialog, dialogSurface.resetDraft.dialog] as const;
+  const dialogs = [dialogSurface.saveConflict.dialog] as const;
   let lastLoggedSaveIssue: SaveGuardIssue | null = null;
   let preservedToolbarSelection: EditHistorySelection | null = null;
   let lastNonMouseToolbarInteractionAt = 0;
@@ -802,13 +795,6 @@ function WorkbenchEditorClient(
     }
 
     return minimumTop;
-  }
-
-  function setSaveButtonState() {
-    const isInvalid = options.isSaveButtonInvalid?.() ?? Boolean(options.fileSessionState.saveIssue);
-    controls.saveFileButton.dataset.invalid = isInvalid ? "true" : "false";
-    controls.saveFileButton.disabled = !options.sessionState.currentPath;
-    controls.resetDraftButton.disabled = !options.sessionState.currentPath;
   }
 
   function formatChangeSummary(change: ChangeSummary | null | undefined) {
@@ -1574,25 +1560,12 @@ function WorkbenchEditorClient(
     hideDialog(dialogSurface.saveConflict.dialog);
   }
 
-  function hideResetDraftDialog() {
-    hideDialog(dialogSurface.resetDraft.dialog);
-  }
-
   function showSaveConflict(conflict: SaveConflictPayload) {
     dialogSurface.saveConflict.summary.textContent = "Reload from disk to discard your unsaved editor state, or overwrite anyway to write what is currently in the editor.";
     dialogSurface.saveConflict.expected.textContent = `Expected ${conflict.expectedUpdatedAt}`;
     dialogSurface.saveConflict.actual.textContent = `Disk now has ${conflict.actualUpdatedAt}`;
     showDialog(dialogSurface.saveConflict.dialog, dialogSurface.saveConflict.keepEditing);
-    setSaveButtonState();
     emit();
-  }
-
-  function showResetDraftDialog() {
-    if (!options.sessionState.currentPath) {
-      return;
-    }
-
-    showDialog(dialogSurface.resetDraft.dialog, dialogSurface.resetDraft.cancel);
   }
 
   function changeFontSize(delta: number) {
@@ -1767,14 +1740,6 @@ function WorkbenchEditorClient(
     preserveToolbarSelection(event);
   }
 
-  controls.saveFileButton.addEventListener("click", () => {
-    void options.handleSaveCurrentFile();
-  }, { signal });
-
-  controls.resetDraftButton.addEventListener("click", () => {
-    showResetDraftDialog();
-  }, { signal });
-
   dialogSurface.saveConflict.keepEditing.addEventListener("click", () => {
     hideSaveConflictDialog();
     editor.focus();
@@ -1788,19 +1753,6 @@ function WorkbenchEditorClient(
   dialogSurface.saveConflict.overwrite.addEventListener("click", () => {
     hideSaveConflictDialog();
     void options.handleOverwriteConflict();
-  }, { signal });
-
-  dialogSurface.resetDraft.cancel.addEventListener("click", () => {
-    hideResetDraftDialog();
-    editor.focus();
-  }, { signal });
-
-  dialogSurface.resetDraft.resetToSaved.addEventListener("click", () => {
-    void options.handleResetCurrentDraftToSaved();
-  }, { signal });
-
-  dialogSurface.resetDraft.resetToHead.addEventListener("click", () => {
-    void options.handleResetCurrentFileToHead();
   }, { signal });
 
   document.addEventListener("keydown", (event) => {
@@ -1982,7 +1934,6 @@ function WorkbenchEditorClient(
     }
 
     syncEditorLabel();
-    setSaveButtonState();
     refreshStatusMessage();
     refreshToolbarState();
     scheduleDiffGutterRefresh();
@@ -2013,7 +1964,6 @@ function WorkbenchEditorClient(
       || previousSnapshot.pendingWriteConflict !== snapshot.pendingWriteConflict
       || previousSnapshot.saveIssue !== snapshot.saveIssue
     ) {
-      setSaveButtonState();
       refreshStatusMessage();
     }
   });
@@ -2022,7 +1972,6 @@ function WorkbenchEditorClient(
   applyEditorFontSize();
   syncEditorModePresentation();
   syncEditorLabel();
-  setSaveButtonState();
   statusDisplay.statusLine.textContent = state.statusMessage;
 
   refreshToolbarState();
@@ -2051,7 +2000,6 @@ function WorkbenchEditorClient(
     handlePendingInlineSelectionChange,
     handleRichInput,
     handleListStructureKeyDown,
-    hideResetDraftDialog,
     hideSaveConflictDialog,
     isPointerNearRevisionHoverUi,
     maybeClearPendingInlineFormatsForKey,
@@ -2079,9 +2027,7 @@ function WorkbenchEditorClient(
     setHoveredRevisionNode,
     setFontSize,
     previewFontSize,
-    setSaveButtonState,
     setStatusMessage,
-    showResetDraftDialog,
     showSaveConflict,
     subscribe,
     syncStructuredBlockStyles,

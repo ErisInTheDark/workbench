@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces: a persistent
- *   markdown toolbar, the editor with its comment margin and suggestion originals, and save/discard controls (a
- *   titled header in mosaic panels, a floating pill in the main pane while there is local work).
+ *   markdown toolbar ending in save and hold-to-confirm reset, and the editor with its comment margin and suggestion
+ *   originals; mosaic panels add a titled header.
  */
 "use client";
 
@@ -16,8 +16,10 @@ import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFam
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
+import Tooltip from "../../ui/Tooltip";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
+import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
 import MarkdownEditorToolbar from "../markdown-editor/MarkdownEditorToolbar";
 import useEditorMarginLayout from "../markdown-editor/use-editor-margin-layout";
@@ -31,7 +33,6 @@ import {
 } from "../workbench-dialogs";
 import { dialogButtonClassName } from "../workbench-dialog-styles";
 import {
-  BinIcon,
   PanelCloseIcon,
   PanelExpandIcon,
   PanelMinimizeIcon,
@@ -173,8 +174,6 @@ export default function WorkbenchFilePanel ({
   const reviewLayerRef = useRef<HTMLDivElement>(null);
   const filePathLabelRef = useRef<HTMLParagraphElement>(null);
   const statusLineRef = useRef<HTMLParagraphElement>(null);
-  const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
-  const saveFileButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
   const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
   const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
@@ -182,10 +181,6 @@ export default function WorkbenchFilePanel ({
   const saveConflictKeepEditingButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictReloadButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictOverwriteButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftDialogRef = useRef<HTMLDivElement>(null);
-  const resetDraftCancelButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftHeadButtonRef = useRef<HTMLButtonElement>(null);
-  const resetDraftSavedButtonRef = useRef<HTMLButtonElement>(null);
   const revisionHoverToolbarRef = useRef<HTMLDivElement>(null);
   const revisionHoverAcceptButtonRef = useRef<HTMLButtonElement>(null);
   const revisionHoverRejectButtonRef = useRef<HTMLButtonElement>(null);
@@ -206,8 +201,6 @@ export default function WorkbenchFilePanel ({
       || !reviewLayerRef.current
       || !filePathLabelRef.current
       || !statusLineRef.current
-      || !resetDraftButtonRef.current
-      || !saveFileButtonRef.current
       || !saveConflictDialogRef.current
       || !saveConflictSummaryRef.current
       || !saveConflictExpectedRef.current
@@ -215,10 +208,6 @@ export default function WorkbenchFilePanel ({
       || !saveConflictKeepEditingButtonRef.current
       || !saveConflictReloadButtonRef.current
       || !saveConflictOverwriteButtonRef.current
-      || !resetDraftDialogRef.current
-      || !resetDraftCancelButtonRef.current
-      || !resetDraftHeadButtonRef.current
-      || !resetDraftSavedButtonRef.current
       || !revisionHoverToolbarRef.current
       || !revisionHoverAcceptButtonRef.current
       || !revisionHoverRejectButtonRef.current
@@ -227,10 +216,6 @@ export default function WorkbenchFilePanel ({
     }
 
     const surfaces: WorkbenchEditorDomSurfaces = {
-      controls: {
-        resetDraftButton: resetDraftButtonRef.current,
-        saveFileButton: saveFileButtonRef.current,
-      },
       dialogs: {
         saveConflict: {
           actual: saveConflictActualRef.current,
@@ -240,12 +225,6 @@ export default function WorkbenchFilePanel ({
           overwrite: saveConflictOverwriteButtonRef.current,
           reload: saveConflictReloadButtonRef.current,
           summary: saveConflictSummaryRef.current,
-        },
-        resetDraft: {
-          cancel: resetDraftCancelButtonRef.current,
-          dialog: resetDraftDialogRef.current,
-          resetToHead: resetDraftHeadButtonRef.current,
-          resetToSaved: resetDraftSavedButtonRef.current,
         },
       },
       editor: {
@@ -305,19 +284,31 @@ export default function WorkbenchFilePanel ({
     client?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);
   }, [client, usesPanelZoom, panelBaseFontSize]);
 
-  const hasLocalWork = Boolean(snapshot?.dirty || snapshot?.hasSaveIssue || snapshot?.hasPendingWriteConflict);
-  const saveButton = (
-    <IconButton ref={saveFileButtonRef} type="button" title="Save current file" label="Save current file" display="hover-border" data-invalid="false">
-      <SaveIcon size={20} />
-      <span className="sr-only">Save current file</span>
-    </IconButton>
-  );
-  const discardButton = (
-    <IconButton ref={resetDraftButtonRef} type="button" title="Discard the current draft" label="Discard the current draft" display="hover-border">
-      <BinIcon size={20} />
-      <span className="sr-only">Discard the current draft</span>
-    </IconButton>
-  );
+  /** Save and reset sit at the toolbar's end, beside undo and redo. */
+  const fileActions = client && snapshot ? (
+    <>
+      <Tooltip placement="bottom" delayMs={350} content="Save">
+        <IconButton
+          type="button"
+          title=""
+          label="Save current file"
+          size="small"
+          display="hover-border"
+          data-invalid={snapshot.hasSaveIssue ? "true" : "false"}
+          disabled={!snapshot.currentPath}
+          onClick={() => { void client.save(); }}
+        >
+          <SaveIcon size={16} />
+        </IconButton>
+      </Tooltip>
+      <DraftResetButton
+        hasDraft={snapshot.dirty}
+        savedDiffersFromHead={snapshot.savedDiffersFromHead}
+        onDeleteDraft={client.deleteDraft}
+        onRestoreFromGit={client.restoreFromGit}
+      />
+    </>
+  ) : null;
   /** Header rows own their inset, so the toolbar can scroll edge to edge with its controls still inset. */
   const headerInsetClassName = sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pr-6"
     : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pr-6"
@@ -397,10 +388,6 @@ export default function WorkbenchFilePanel ({
                   />
                 </div>
               ) : null}
-              <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-                {saveButton}
-                {discardButton}
-              </div>
               {onClose ? (
                 <IconButton
                   type="button"
@@ -415,7 +402,13 @@ export default function WorkbenchFilePanel ({
               ) : null}
             </div>
           </div>
-          {isMinimized || loading ? null : <MarkdownEditorToolbar client={client} className={`mt-1.5 ${headerInsetClassName}`} />}
+          {isMinimized || loading ? null : (
+            <MarkdownEditorToolbar
+              client={client}
+              className={`mt-1.5 ${headerInsetClassName}`}
+              trailing={showManualFileActions ? fileActions : null}
+            />
+          )}
         </header>
       ) : (
         <>
@@ -440,25 +433,16 @@ export default function WorkbenchFilePanel ({
               className="mx-auto md:max-w-[calc(var(--container-content)+5.5rem)]"
               style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
             >
-              <MarkdownEditorToolbar client={client} className="px-5 md:pr-6 md:pl-[3.5rem]" />
+              <MarkdownEditorToolbar
+                client={client}
+                className="px-5 md:pr-6 md:pl-[3.5rem]"
+                trailing={showManualFileActions ? fileActions : null}
+              />
             </div>
           </div>}
-          {/* In the main pane the shell tab names the file; save and discard float in reach only while there is work to keep. */}
-          <div
-            className={`
-              fixed right-4 bottom-[calc(1rem+var(--workbench-safe-area-bottom,0px))] z-30 flex max-w-[calc(100vw-2rem)]
-              items-center gap-1 rounded-full border border-fg-alpha/10 py-1 pr-1 pl-3.5
-              bg-[color-mix(in srgb, var(--app-bg-solid) 90%, transparent)] backdrop-blur-sm
-              transition-[opacity,translate] duration-150 ease-out motion-reduce:transition-none md:right-6
-              ${hasLocalWork ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0"}
-            `}
-            inert={!hasLocalWork}
-          >
-            <p ref={filePathLabelRef} className="sr-only" />
-            <p ref={statusLineRef} className="m-0 min-w-0 truncate text-[0.84rem] text-fg/muted" />
-            {saveButton}
-            {discardButton}
-          </div>
+          {/* In the main pane the shell tab names the file and the toolbar holds save and reset; status is announced only. */}
+          <p ref={filePathLabelRef} className="sr-only" />
+          <p ref={statusLineRef} className="sr-only" aria-live="polite" />
         </>
       )}
 
@@ -572,26 +556,6 @@ export default function WorkbenchFilePanel ({
           <p ref={saveConflictExpectedRef} className="mt-3 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
           <p ref={saveConflictActualRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" />
         </>
-      </WorkbenchDialog>
-
-      <WorkbenchDialog
-        id={`reset-draft-dialog-${panelIdSuffix}`}
-        dialogRef={resetDraftDialogRef}
-        titleId={`reset-draft-title-${panelIdSuffix}`}
-        summaryId={`reset-draft-summary-${panelIdSuffix}`}
-        eyebrow="Discard draft"
-        title="Reset this draft?"
-        actions={
-          <>
-            <button ref={resetDraftCancelButtonRef} type="button" className={dialogButtonClassName}>Cancel</button>
-            <button ref={resetDraftHeadButtonRef} type="button" className={dialogButtonClassName}>Reset to HEAD</button>
-            <button ref={resetDraftSavedButtonRef} type="button" className={dialogButtonClassName}>Reset to saved</button>
-          </>
-        }
-      >
-        <p id={`reset-draft-summary-${panelIdSuffix}`} className="mt-3 text-sm leading-6 text-fg/muted">
-          Reset to saved discards the current draft and reloads the file from disk. Reset to HEAD overwrites the file on disk with the current git HEAD version, then reloads it here.
-        </p>
       </WorkbenchDialog>
 
       <div ref={revisionHoverToolbarRef} className={workbenchRevisionHoverToolbarClassName} hidden>

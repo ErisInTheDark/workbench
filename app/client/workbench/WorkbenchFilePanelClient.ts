@@ -53,6 +53,8 @@ export interface WorkbenchFilePanelSnapshot {
   fontSize: number;
   hasPendingWriteConflict: boolean;
   hasSaveIssue: boolean;
+  /** The file on disk is not its git HEAD version, so it can be restored from git. */
+  savedDiffersFromHead: boolean;
 }
 
 export type WorkbenchFilePanelListener = (snapshot: WorkbenchFilePanelSnapshot) => void;
@@ -69,10 +71,15 @@ export interface WorkbenchFilePanelClient {
   /** Keep the editor selection through a toolbar press; call on the press, before focus can move. */
   beginToolbarInteraction: (event: Event) => void;
   comments: WorkbenchCommentController;
+  /** Discard the unsaved draft and reload the file from disk. */
+  deleteDraft: () => Promise<void>;
   dispose: () => void;
   getSnapshot: () => WorkbenchFilePanelSnapshot;
   getToolbarState: () => EditorToolbarState;
+  /** Write the file's git HEAD version to disk and reload it. */
+  restoreFromGit: () => Promise<void>;
   runCommand: (command: EditorCommand) => void;
+  save: () => Promise<void>;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   setReviewMode: (mode: ReviewMode) => void;
   setShowGitMarkers: (show: boolean) => void;
@@ -96,12 +103,10 @@ function WorkbenchFilePanelClient(
   const listeners = new Set<WorkbenchFilePanelListener>();
   const editorSurface = surfaces.editor;
   const statusDisplay = surfaces.statusDisplay;
-  const controlButtons = surfaces.controls;
   const dialogSurface = surfaces.dialogs;
   const toolbarSurface = surfaces.toolbars;
   const editor = editorSurface.editor;
   const saveConflictDialog = dialogSurface.saveConflict.dialog;
-  const resetDraftDialog = dialogSurface.resetDraft.dialog;
   const {
     getClosestListItem,
     getListItemTextContainer,
@@ -150,12 +155,6 @@ function WorkbenchFilePanelClient(
   }
 
   function closeActiveDialog() {
-    if (isDialogOpen(resetDraftDialog)) {
-      hideDialog(resetDraftDialog);
-      editor.focus();
-      return true;
-    }
-
     if (isDialogOpen(saveConflictDialog)) {
       hideDialog(saveConflictDialog);
       editor.focus();
@@ -167,7 +166,6 @@ function WorkbenchFilePanelClient(
 
 
   const editorClient = WorkbenchEditorClient({
-    controls: controlButtons,
     dialogs: dialogSurface,
     editor: editorSurface,
     statusDisplay,
@@ -305,12 +303,6 @@ function WorkbenchFilePanelClient(
 
       await resetCurrentDraftToSaved();
     },
-    handleResetCurrentDraftToSaved: async () => {
-      await resetCurrentDraftToSaved();
-    },
-    handleResetCurrentFileToHead: async () => {
-      await resetCurrentFileToHead();
-    },
     handleSaveCurrentFile: async () => {
       await saveCurrentFile();
     },
@@ -326,7 +318,6 @@ function WorkbenchFilePanelClient(
       editorClient.scheduleEditorChromeRefresh();
       editorClient.scheduleReviewRefresh();
     },
-    isSaveButtonInvalid: () => Boolean(fileSessionState.saveIssue),
     listStructure: {
       getClosestListItem,
       getListItemTextContainer,
@@ -384,6 +375,8 @@ function WorkbenchFilePanelClient(
       fontSize: editorUiSnapshot.fontSize,
       hasPendingWriteConflict: Boolean(fileSessionState.pendingWriteConflict),
       hasSaveIssue: Boolean(fileSessionState.saveIssue),
+      savedDiffersFromHead: fileSessionState.headContent !== null
+        && fileSessionState.baselineContent !== fileSessionState.headContent,
     };
   }
 
@@ -416,6 +409,8 @@ function WorkbenchFilePanelClient(
 
     if (
       lastSnapshot.dirty !== snapshot.dirty
+      || lastSnapshot.baselineContent !== snapshot.baselineContent
+      || lastSnapshot.headContent !== snapshot.headContent
       || lastSnapshot.mode !== snapshot.mode
       || Boolean(lastSnapshot.saveIssue) !== Boolean(snapshot.saveIssue)
       || Boolean(lastSnapshot.pendingWriteConflict) !== Boolean(snapshot.pendingWriteConflict)
@@ -457,24 +452,19 @@ function WorkbenchFilePanelClient(
 
   function acceptObservation(snapshot: FileDocumentSnapshot) {
     fileClient.acceptObservation(snapshot);
-    editorClient.setSaveButtonState();
     editorClient.refreshStatusMessage(snapshot.failure ?? undefined);
     emit();
   }
 
   async function resetCurrentDraftToSaved() {
-    editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentDraftToSaved();
     if (lifecycle.isDisposed) return;
-    editor.focus();
     emit();
   }
 
   async function resetCurrentFileToHead() {
-    editorClient.hideResetDraftDialog();
     await fileClient.resetCurrentFileToHead();
     if (lifecycle.isDisposed) return;
-    editor.focus();
     emit();
   }
 
@@ -488,13 +478,15 @@ function WorkbenchFilePanelClient(
     editorClient.setFontSize(fontSize, setOptions);
   }
 
-  editorClient.setSaveButtonState();
   emit();
 
   return {
     acceptObservation,
     beginToolbarInteraction: editorClient.beginToolbarInteraction,
     comments: editorClient.comments,
+    deleteDraft: resetCurrentDraftToSaved,
+    restoreFromGit: resetCurrentFileToHead,
+    save: () => saveCurrentFile(),
     dispose: () => {
       fileClient.dispose();
       editorClient.dispose();
