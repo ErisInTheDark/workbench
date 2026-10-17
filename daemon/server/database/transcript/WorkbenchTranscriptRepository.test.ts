@@ -3070,6 +3070,36 @@ test("a turn settling with its compaction still open interrupts it, but re-recor
   }
 });
 
+test("abandoned holds on settled turns end undelivered and interrupted, sparing running turns and newer holds", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const held = (entryKey: string, turnId: string, attemptedAt: number): StoredSteerEntry => ({
+      attemptedAt, canonicalItemId: null, clientUserMessageId: null, entryKey, error: null,
+      input: [{ type: "text", text: entryKey, text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(turnId),
+    });
+    repository.settle([threadObservation(), turnObservation("first", 0), compaction("started", 100, { turnId: "first" })]);
+    repository.settle([
+      { kind: "steer", entry: held("stale", "first", 110), observedAt: 110 },
+      { kind: "steer", entry: held("fresh", "first", 300), observedAt: 300 },
+    ]);
+    repository.settle([liveTurn("live", 1), { kind: "steer", entry: held("running", "live", 120), observedAt: 120 }]);
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(100), []);
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200), [thread]);
+
+    const settled = repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 250 }]);
+    assert.deepEqual(settled.changedThreadIds, [thread]);
+    assert.deepEqual(heldSteerRows(database).map(({ entry_key, state }) => `${entry_key}:${state}`),
+      ["stale:interrupted", "fresh:pending", "running:pending"]);
+    assert.deepEqual(readCompactions(repository), [{ turnId: "first", status: "failed", startedAt: 100, completedAt: 250 }]);
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200), []);
+    assert.deepEqual(repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 260 }]).changedThreadIds, []);
+  } finally {
+    database.close();
+  }
+});
+
 test("capture gaps anchor stored turns, extend once into the next turn, and close only when every anchor is re-read", () => {
   const { database, repository } = createRepository();
   const turnIds = (...ids: string[]) => ids.map(id => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id));

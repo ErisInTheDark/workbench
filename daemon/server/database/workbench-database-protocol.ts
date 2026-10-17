@@ -202,6 +202,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "queryTranscript"; request: TranscriptQuery }
   | { type: "readThreadContextUsage"; threadId: string }
   | { type: "readTranscriptMaterializedTurnIds"; threadId: string; turnIds: readonly string[] }
+  | { type: "readTranscriptAbandonedHoldThreadIds"; before: number }
   | { type: "replaceSearchProjects"; projects: readonly { id: string; name: string; rootPath: string }[] }
   | { type: "replaceSearchProjectFiles"; projectId: string; paths: readonly string[] }
   | { type: "search"; request: WorkbenchSearchRequest }
@@ -247,7 +248,9 @@ const TRANSCRIPT_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["t
   "readTranscriptItemRange", "readTranscriptMaterializedTurnIds",
 ]);
 // Unbounded history scans never run ahead of the transcript reads live provider ingest awaits.
-const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>(["queryTranscript"]);
+const QUERY_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>([
+  "queryTranscript", "readTranscriptAbandonedHoldThreadIds",
+]);
 
 /** Most urgent first: live ingest awaits transcript reads, the UI awaits core reads, and the rest is background. */
 export const WORKBENCH_DATABASE_READ_CLASSES = ["transcript", "core", "query", "stats"] as const;
@@ -332,6 +335,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "transcriptQueryResult"; result: { ok: true; page: TranscriptQueryPage } | { ok: false; error: string } }
   | { id: number; type: "threadContextUsage"; snapshot: ThreadContextUsageSnapshot | null }
   | { id: number; type: "transcriptMaterializedTurnIds"; turnIds: string[] }
+  | { id: number; type: "transcriptAbandonedHoldThreadIds"; threadIds: string[] }
   | { id: number; type: "searchResult"; result: WorkbenchSearchResponse }
   | { id: number; type: "statsResult"; result: WorkbenchStatsResponse }
   | { id: number; type: "statsClaimedRoots"; roots: WorkbenchClaimedRoot[] }

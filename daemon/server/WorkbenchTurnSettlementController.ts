@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchTurnSettlementOwners: provider liveness, canonical transcript, lifecycle publication and thread-lifecycle listing ports.
- * - default WorkbenchTurnSettlementController: settle turns whose provider runtime is gone, on stop, when a newer turn starts, and once per cold daemon start, where it also repairs working lifecycles whose turn already ended.
+ * - WorkbenchTurnSettlementOwners: provider liveness, canonical transcript, lifecycle publication, thread-lifecycle and abandoned-hold listing ports.
+ * - default WorkbenchTurnSettlementController: settle turns whose provider runtime is gone, on stop, when a newer turn starts, and once per cold daemon start, where it also repairs working lifecycles whose turn already ended and retires held steers and compactions a previous daemon left on settled turns.
  */
 import { ThreadReferenceSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -21,6 +21,8 @@ export interface WorkbenchTurnSettlementOwners {
   observe(harness: WorkbenchHarness, facts: WorkbenchProviderObservation): Promise<unknown>;
   /** Every non-draft thread with its saved lifecycle. */
   listThreadLifecycles(): Promise<Array<{ threadId: string; lifecycle: WorkbenchThreadLifecycle }>>;
+  /** Threads with pending held steers or running compactions, created before `before`, on settled turns. */
+  readAbandonedHoldThreadIds(before: number): Promise<string[]>;
   warn(message: string): void;
 }
 
@@ -103,6 +105,36 @@ export default class WorkbenchTurnSettlementController {
   }
 
   private async sweep() {
+    await Promise.all([this.sweepOrphanedTurns(), this.sweepAbandonedHolds()]);
+  }
+
+  /** Holds created before the sweep began belong to a previous daemon; anything this daemon starts is newer. */
+  private async sweepAbandonedHolds() {
+    const before = Date.now();
+    let threadIds: string[];
+    try {
+      threadIds = await this.owners.readAbandonedHoldThreadIds(before);
+    } catch (error) {
+      this.owners.warn(`Abandoned hold sweep could not list threads: ${bounded(error)}`);
+      return;
+    }
+    if (!threadIds.length) return;
+    let failed = 0;
+    for (const threadId of threadIds) {
+      if (this.retired) return;
+      try {
+        await this.owners.transcript.record([{
+          kind: "abandonedHolds", threadId: WorkbenchThreadIdSchema.parse(threadId), before, endedAt: Date.now(),
+        }], { source: "workbench" });
+      } catch (error) {
+        failed += 1;
+        this.owners.warn(`Abandoned hold sweep failed for thread ${threadId.slice(0, 8)}: ${bounded(error)}`);
+      }
+    }
+    this.owners.warn(`Abandoned hold sweep finished: ${threadIds.length - failed} thread(s) retired, ${failed} failed.`);
+  }
+
+  private async sweepOrphanedTurns() {
     let threads: Array<{ threadId: string; lifecycle: WorkbenchThreadLifecycle }>;
     try {
       // A questionnaire wait is provider-owned too: its turn can die with the daemon while the question survives.

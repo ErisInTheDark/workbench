@@ -5,6 +5,7 @@
  * - WorkbenchTranscriptCaptureGapObservation: one turn-anchored failed capture opening, or re-read anchors reconciling it.
  * - WorkbenchTranscriptProviderTurnScopeObservation: one complete provider-owned turn replacement boundary.
  * - WorkbenchTranscriptContextCompactionObservation: one provider report that context compaction started or ended.
+ * - WorkbenchTranscriptAbandonedHoldsObservation: cold-start retirement of held steers and compactions a previous daemon left on settled turns.
  * - WorkbenchTranscriptObservation: ordered transcript input, metadata-only catalogs and restricted usage windows.
  * - NativeTranscriptAtomicObservation/NativeTranscriptObservation: provider-addressed facts before canonical mapping.
  * - WorkbenchTranscriptRecordingContext: fact ownership and provider-recovery boundary for one settlement.
@@ -235,6 +236,17 @@ export interface WorkbenchTranscriptContextCompactionObservation<ThreadId extend
   };
 }
 
+/**
+ * A cold start's retirement of what a previous daemon left waiting on settled turns: pending held steers become
+ * undelivered and running compactions interrupted. Only holds created before `before` count, so live work survives.
+ */
+export interface WorkbenchTranscriptAbandonedHoldsObservation<ThreadId extends string = WorkbenchThreadId> {
+  kind: "abandonedHolds";
+  threadId: ThreadId;
+  before: number;
+  endedAt: number;
+}
+
 export interface WorkbenchTranscriptProviderTurnScopeObservation<ThreadId extends string = WorkbenchThreadId, TurnId extends string = WorkbenchTurnId> {
   completeTurnIds: readonly TurnId[];
   kind: "providerTurnScope";
@@ -247,6 +259,7 @@ export type WorkbenchTranscriptObservation<ThreadId extends string = WorkbenchTh
   | WorkbenchTranscriptCaptureGapObservation<ThreadId, TurnId>
   | WorkbenchTranscriptProviderTurnScopeObservation<ThreadId, TurnId>
   | WorkbenchTranscriptContextCompactionObservation<ThreadId, TurnId>
+  | WorkbenchTranscriptAbandonedHoldsObservation<ThreadId>
   | {
     kind: "turnCatalog";
     threadId: ThreadId;
@@ -267,7 +280,8 @@ export type WorkbenchTranscriptObservation<ThreadId extends string = WorkbenchTh
   };
 
 export type NativeTranscriptAtomicObservation = WorkbenchTranscriptAtomicObservation<NativeThreadId, NativeTurnId>;
-export type NativeTranscriptObservation = WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>;
+/** Abandoned-hold retirement is Workbench-owned; providers never report it. */
+export type NativeTranscriptObservation = Exclude<WorkbenchTranscriptObservation<NativeThreadId, NativeTurnId>, { kind: "abandonedHolds" }>;
 
 export interface WorkbenchTranscriptRecordingContext {
   /** `explicit`: a caller demanded these turns by name, so turns expired by retention are recovered too. */

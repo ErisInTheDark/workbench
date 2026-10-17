@@ -867,6 +867,15 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.turnIds;
   }
 
+  async readTranscriptAbandonedHoldThreadIds(before: number) {
+    await this.start();
+    const response = await this.#request({ type: "readTranscriptAbandonedHoldThreadIds", before });
+    if (response.type !== "transcriptAbandonedHoldThreadIds") {
+      throw new WorkbenchDatabaseFailure(`Unexpected abandoned hold response: ${response.type}`);
+    }
+    return response.threadIds;
+  }
+
   async replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]) {
     await this.start();
     const response = await this.#request({ type: "replaceSearchProjects", projects });

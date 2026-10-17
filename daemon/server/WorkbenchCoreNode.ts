@@ -125,7 +125,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readContextUsage" | "readRecoveryGaps" | "isThreadObserved" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled" | "acceptApprovalOutcome">,
+  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readAbandonedHoldThreadIds" | "readContextUsage" | "readRecoveryGaps" | "isThreadObserved" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled" | "acceptApprovalOutcome">,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -754,6 +754,7 @@ function createWorkbenchCoreFeature(
       }
       return threads;
     },
+    readAbandonedHoldThreadIds: before => transcript.readAbandonedHoldThreadIds(before),
     warn: message => logThreadStateWarning(message),
   });
   const threadActions = new WorkbenchThreadActionController({

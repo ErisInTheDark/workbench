@@ -1,4 +1,4 @@
-/* No production exports. Tests protect orphaned-turn settlement on stop, on a new turn, and on a cold daemon start, including stale-lifecycle repair and stalled providers. */
+/* No production exports. Tests protect orphaned-turn settlement on stop, on a new turn, and on a cold daemon start, including stale-lifecycle repair, abandoned-hold retirement and stalled providers. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
@@ -15,6 +15,7 @@ function fixture({
   lifecycles: threadLifecycles = new Map<string, WorkbenchThreadLifecycle>(),
   turns = new Map<string, Array<{ id: string; status: string }>>(),
   isTurnLive = async (threadId: string) => live.has(threadId),
+  abandoned = [] as string[],
 } = {}) {
   const recorded: unknown[] = [];
   const lifecycles: unknown[] = [];
@@ -46,6 +47,7 @@ function fixture({
       ...working.map(threadId => ({ threadId, lifecycle: workingLifecycle })),
       ...[...threadLifecycles].map(([threadId, lifecycle]) => ({ threadId, lifecycle })),
     ],
+    readAbandonedHoldThreadIds: async () => abandoned,
     warn: message => { warnings.push(message); },
   };
   return { controller: new WorkbenchTurnSettlementController(owners), owners, recorded, lifecycles, warnings, settlements };
@@ -139,6 +141,27 @@ test("a provider whose liveness check never answers does not hold other threads'
   for (let turn = 0; turn < 20 && !f.lifecycles.length; turn++) await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.settlements, ["zombie:zombie-turn"]);
   assert.equal(f.lifecycles.length, 1);
+});
+
+test("the cold sweep retires abandoned holds on any thread, past one thread's failure and a stalled provider", async () => {
+  const f = fixture({
+    working: ["stalled"], abandoned: ["idle-a", "broken", "idle-b"],
+    isTurnLive: () => new Promise<boolean>(() => undefined),
+  });
+  const before = Date.now();
+  f.owners.transcript.record = async observations => {
+    if (observations.some(observation => "threadId" in observation && observation.threadId === "broken")) throw new Error("disk gone");
+    f.recorded.push(...observations);
+    return undefined as never;
+  };
+  void f.controller.startColdSweep();
+  for (let turn = 0; turn < 20 && !f.warnings.some(line => /Abandoned hold sweep finished/u.test(line)); turn++) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const retired = f.recorded as Array<{ kind: string; threadId: string; before: number }>;
+  assert.deepEqual(retired.map(({ kind, threadId }) => `${kind}:${threadId}`), ["abandonedHolds:idle-a", "abandonedHolds:idle-b"]);
+  assert.ok(retired.every(observation => observation.before >= before && observation.before === retired[0]!.before));
+  assert.equal(f.warnings.filter(line => /broken.*disk gone/u.test(line)).length, 1);
 });
 
 test("retirement stops the sweep from settling anything further", async () => {

@@ -29,7 +29,7 @@ export interface NativeTranscriptIdentityOwners {
 }
 type CatalogObservation = Extract<NativeTranscriptAtomicObservation, { kind: "thread" | "turn" }>;
 type ObservationMappers = {
-  [Kind in WorkbenchTranscriptObservation["kind"]]:
+  [Kind in NativeTranscriptObservation["kind"]]:
     (input: Extract<NativeTranscriptObservation, { kind: Kind }>) => Extract<WorkbenchTranscriptObservation, { kind: Kind }>;
 };
 

@@ -572,6 +572,15 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     });
     return;
   }
+  if (request.type === "readTranscriptAbandonedHoldThreadIds") {
+    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({
+      id: request.id,
+      type: "transcriptAbandonedHoldThreadIds",
+      threadIds: transcriptRepository.readAbandonedHoldThreadIds(request.before),
+    });
+    return;
+  }
   if (request.type === "replaceSearchProjects") {
     if (!searchRepository) throw new Error("Workbench search repository is not initialized");
     searchRepository.replaceProjects(request.projects);

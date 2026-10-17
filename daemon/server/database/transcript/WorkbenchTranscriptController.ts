@@ -50,7 +50,7 @@ interface WorkbenchTranscriptItemRange {
 type WorkbenchTranscriptControllerDatabase = Pick<
   WorkbenchDatabaseController,
   "failure" | "readThreadContextUsage" | "readTranscript" | "settleTranscript" | "start"
-> & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds">> & {
+> & Partial<Pick<WorkbenchDatabaseController, "readTranscriptMaterializedTurnIds" | "readTranscriptAbandonedHoldThreadIds">> & {
   readTranscriptItemRange?(request: {
     before?: WorkbenchTranscriptItemCursor;
     limit: number;
@@ -595,6 +595,14 @@ export default class WorkbenchTranscriptController {
       throw new Error("Workbench transcript materialization reads are not configured");
     }
     return this.#database.readTranscriptMaterializedTurnIds(threadId, turnIds);
+  }
+
+  async readAbandonedHoldThreadIds(before: number) {
+    this.#assertActive();
+    if (!this.#database.readTranscriptAbandonedHoldThreadIds) {
+      throw new Error("Workbench transcript abandoned hold reads are not configured");
+    }
+    return this.#database.readTranscriptAbandonedHoldThreadIds(before);
   }
 
   /** A thread-wide provider read failed; the gap anchors the thread's latest stored turn. */

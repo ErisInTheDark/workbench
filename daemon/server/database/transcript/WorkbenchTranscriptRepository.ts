@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers, context compaction, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers, context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -305,6 +305,8 @@ export default class WorkbenchTranscriptRepository {
               ? this.#settleProviderTurnScope(observation)
             : observation.kind === "contextCompaction"
               ? this.#settleContextCompaction(observation, settlementMode)
+            : observation.kind === "abandonedHolds"
+              ? this.#settleAbandonedHolds(observation)
             : this.#settleObservation(observation);
           if (threadId) changedThreadIds.add(threadId);
         }
@@ -477,6 +479,12 @@ export default class WorkbenchTranscriptRepository {
         ...(contextItemOrder ? { contextItemOrder } : {}),
       };
     })();
+  }
+
+  /** Threads holding steers or compactions created before `before` that wait on settled turns. */
+  readAbandonedHoldThreadIds(before: number) {
+    const { steers, compactions } = this.#abandonedHolds(before, null);
+    return [...new Set([...steers, ...compactions].map(row => row.thread_id))].sort();
   }
 
   readMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
@@ -1703,6 +1711,44 @@ export default class WorkbenchTranscriptRepository {
       state: "interrupted", resolved_at: endedAt,
     }, { turn_id: turnId, state: "pending" }));
     this.#settlementChanges?.heldSteerTurnIds.add(turnId);
+  }
+
+  /** Running turns own their holds until they settle; on a settled turn a hold can only be a previous daemon's leftover. */
+  #abandonedHolds(before: number, threadId: string | null) {
+    const parameters = { before, threadId };
+    const steers = this.#database.prepare(`
+      SELECT s.id, s.thread_id, s.turn_id
+      FROM thread_held_steers s
+      JOIN thread_turns t ON t.id = s.turn_id AND t.thread_id = s.thread_id
+      WHERE s.state = 'pending' AND s.attempted_at < @before
+        AND t.state NOT IN ('admitted', 'inProgress')
+        AND (@threadId IS NULL OR s.thread_id = @threadId)
+      ORDER BY s.id
+    `).all(parameters) as Array<{ id: number; thread_id: string; turn_id: string }>;
+    const compactions = this.#database.prepare(`
+      SELECT i.*
+      FROM thread_items i
+      JOIN thread_item_context_compactions c ON c.item_id = i.id
+      JOIN thread_turns t ON t.id = i.turn_id AND t.thread_id = i.thread_id
+      WHERE c.state = 'inProgress' AND i.created_at < @before
+        AND t.state NOT IN ('admitted', 'inProgress')
+        AND (@threadId IS NULL OR i.thread_id = @threadId)
+      ORDER BY i.id
+    `).all(parameters) as TranscriptItemRow[];
+    return { steers, compactions };
+  }
+
+  #settleAbandonedHolds(observation: Extract<WorkbenchTranscriptObservation, { kind: "abandonedHolds" }>) {
+    const { steers, compactions } = this.#abandonedHolds(observation.before, observation.threadId);
+    if (!steers.length && !compactions.length) return null;
+    this.#interruptContextCompactions(compactions, observation.endedAt);
+    for (const steer of steers) {
+      this.#run(updateRows(heldSteerTables.threadHeldSteers, {
+        state: "interrupted", resolved_at: observation.endedAt,
+      }, { id: steer.id }));
+      this.#settlementChanges?.heldSteerTurnIds.add(steer.turn_id);
+    }
+    return observation.threadId;
   }
 
   #withHeldSteers(
