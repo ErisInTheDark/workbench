@@ -308,7 +308,7 @@ function serializeListElement(node: Element, style: MarkdownStyle, indent = 0): 
 
   return items
     .map((item, index) => {
-      const prefix = listType === "ol" ? `${orderedOrdinals[index]}. ` : `${style.bullet} `;
+      const prefix = listType === "ol" ? `${orderedOrdinals[index]}${style.orderedDelimiter} ` : `${style.bullet} `;
       const [firstLine = "", ...continuationLines] = serializeListItemMainText(item, style).split("\n");
       const continuationIndent = " ".repeat(indent + prefix.length);
       const text = joinWithHardBreaks([
@@ -317,7 +317,7 @@ function serializeListElement(node: Element, style: MarkdownStyle, indent = 0): 
       ]);
       const line = `${" ".repeat(indent)}${prefix}${text}`.trimEnd();
       const nested: string = getNestedBlockElementsForItem(item)
-        .map((childBlock) => serializeNestedListChildBlock(childBlock, style, indent + 2))
+        .map((childBlock) => serializeNestedListChildBlock(childBlock, style, indent + style.listIndent))
         .filter(Boolean)
         .join("\n");
 
@@ -358,12 +358,19 @@ function serializeBlockElement(node: Element, style: MarkdownStyle): Omit<Serial
     case "h3":
     case "h4":
     case "h5":
-    case "h6":
+    case "h6": {
+      const level = Number.parseInt(tag.slice(1), 10);
+      const text = joinWithHardBreaks(serializeParagraph(node, style).trim().split("\n").map(trimLineEnd));
+      // An underline needs text above it, so an empty heading keeps its `#` form.
+      const underlined = style.setextHeadings && level <= 2 && text.trim();
       return {
         kind: "block",
         isComment: false,
-        text: `${"#".repeat(Number.parseInt(tag.slice(1), 10))} ${joinWithHardBreaks(serializeParagraph(node, style).trim().split("\n").map(trimLineEnd))}`.trimEnd(),
+        text: underlined
+          ? `${text}\n${(level === 1 ? "=" : "-").repeat(Math.max(3, ...text.split("\n").map((line) => line.trimEnd().length)))}`
+          : `${"#".repeat(level)} ${text}`.trimEnd(),
       };
+    }
     case "ul":
     case "ol":
       return {

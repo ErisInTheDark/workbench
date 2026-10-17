@@ -212,6 +212,16 @@ test("undo walks back through savable states to the document before typing", () 
   assert.equal(seen.at(-1), "start\n", `undo states: ${JSON.stringify(seen)}`);
 }));
 
+test("edited blocks keep the file's setext headings, ordered markers and nesting width", () => withPanel("Title\n=====\n\nPart\n----\n\n1) one\n    - nested\n2) two\n", async panel => {
+  await panel.caret("Title|");
+  await panel.type("!");
+  await panel.caret("Part|");
+  await panel.type("s");
+  await panel.caret("one|");
+  await panel.type("!");
+  assert.equal(await panel.save(), "Title!\n======\n\nParts\n-----\n\n1) one!\n    - nested\n2) two\n");
+}));
+
 test("ctrl+s saves and ctrl+y redoes", () => withPanel("start\n", async panel => {
   await panel.caret("start|");
   await panel.type("!");

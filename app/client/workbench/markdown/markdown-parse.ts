@@ -139,6 +139,7 @@ const THREAD_BLOCK_TAG_BOUNDARY_PATTERN = new RegExp(
 
 const HARD_BREAK_SUFFIX = / {2,}$/;
 const HARD_BREAK_BLANK_LINE = /^ {2,}$/;
+const SETEXT_UNDERLINE = /^ {0,3}(=+|-+)[ \t]*$/;
 
 function isEditorProfile(options: MarkdownParseOptions) {
   return (options.profile ?? "editor") === "editor";
@@ -1725,6 +1726,7 @@ function parseBlocksFromLines(
     blankLineCount = 0;
     while (
       index < lines.length
+      && !(isEditorProfile(options) && paragraphLines.length > 0 && SETEXT_UNDERLINE.test(lines[index]))
       && (lines[index].trim() || (isEditorProfile(options) && paragraphLines.length > 0 && HARD_BREAK_BLANK_LINE.test(lines[index])))
       && !isBlockCommentLine(lines[index])
       && !(isEditorProfile(options) && readSuggestionBlock(lines, index))
@@ -1746,6 +1748,13 @@ function parseBlocksFromLines(
     if (!paragraphLines.length) {
       blocks.push({ type: "paragraph", text: lines[index] });
       index += 1;
+      continue;
+    }
+    // Text underlined with `===` or `---` is a level 1 or 2 heading, not a paragraph followed by a rule.
+    const underline = isEditorProfile(options) ? lines[index]?.match(SETEXT_UNDERLINE) : null;
+    if (underline) {
+      index += 1;
+      blocks.push({ type: "heading", level: underline[1]!.startsWith("=") ? 1 : 2, text: joinHardBreakLines(paragraphLines) });
       continue;
     }
     blocks.push({ type: "paragraph", text: isEditorProfile(options) ? joinHardBreakLines(paragraphLines) : paragraphLines.join("\n") });

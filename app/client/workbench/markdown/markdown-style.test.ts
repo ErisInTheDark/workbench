@@ -8,9 +8,18 @@ import { applyDocumentLineStyle, detectMarkdownStyle } from "./markdown-style";
 
 test("delimiter and bullet habits follow the file", () => {
   assert.deepEqual(detectMarkdownStyle("__a__ and _b_\n\n* one\n* two\n"), {
-    bullet: "*", emphasis: "_", finalNewline: true, lineEnding: "\n", strong: "__",
+    bullet: "*", emphasis: "_", finalNewline: true, lineEnding: "\n", listIndent: 2, orderedDelimiter: ".",
+    setextHeadings: false, strong: "__",
   });
   assert.equal(detectMarkdownStyle("**a** *b* __c__ **d**").strong, "**");
+});
+
+test("heading, ordered marker and nesting habits follow the file", () => {
+  const style = detectMarkdownStyle("Title\n=====\n\nPart\n----\n\n1) one\n    - nested\n2) two\n\n# atx\n");
+  assert.equal(style.setextHeadings, true);
+  assert.equal(style.orderedDelimiter, ")");
+  assert.equal(style.listIndent, 4);
+  assert.equal(detectMarkdownStyle("# a\n\n## b\n\nText\n\n---\n").setextHeadings, false, "a rule after a blank line is no underline");
 });
 
 test("code spans and fences are not evidence", () => {
