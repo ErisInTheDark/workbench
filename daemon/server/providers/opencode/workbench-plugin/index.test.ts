@@ -201,7 +201,7 @@ test("patch targets appear while both response and arguments are unfinished and 
 });
 
 test("Go credentials use the sole key but never substitute OAuth access", async () => {
-  const connection = { type: "credential" as const, id: "connection", label: "Go" };
+  const connection = { type: "credential" as const, id: "connection", label: "Go", method: "key" as const };
   const integration = {
     connection: { active: async () => undefined, resolve: async () => ({ type: "key", key: "secret" }) },
     get: async () => ({ data: { connections: [connection] } }),
