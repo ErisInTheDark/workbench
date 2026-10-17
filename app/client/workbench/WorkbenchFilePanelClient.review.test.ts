@@ -91,13 +91,13 @@ test("a suggestion read from markdown resolves to its original", () => withPanel
 test("commenting on selected words highlights them and threads replies", () => withPanel("alpha beta gamma\n", async panel => {
   await panel.select("alpha [beta] gamma");
   await panel.toolbar("comment");
-  panel.panel.comments.submitDraft("why?");
+  panel.panel.comments.submitDraft("why?", null);
   assert.equal(await panel.save(), "alpha <mark>beta</mark><!-- why? --> gamma\n");
 
   const [thread] = panel.panel.comments.getSnapshot().threads;
   assert.ok(thread);
-  panel.panel.comments.reply(thread.id, "because");
-  assert.equal(await panel.save(), "alpha <mark>beta</mark><!-- why? --><!-- because --> gamma\n");
+  panel.panel.comments.reply(thread.id, "because", "Chiri V");
+  assert.equal(await panel.save(), "alpha <mark>beta</mark><!-- why? --><!-- [Chiri V]: because --> gamma\n");
 
   panel.panel.comments.resolve(thread.id);
   assert.equal(await panel.save(), "alpha beta gamma\n");
@@ -106,7 +106,7 @@ test("commenting on selected words highlights them and threads replies", () => w
 test("commenting with a collapsed caret adds a comment line after the block", () => withPanel("one\n\ntwo\n", async panel => {
   await panel.caret("one|");
   await panel.toolbar("comment");
-  panel.panel.comments.submitDraft("needs work");
+  panel.panel.comments.submitDraft("needs work", null);
   assert.equal(await panel.save(), "one\n<!-- needs work -->\n\ntwo\n");
 
   const [thread] = panel.panel.comments.getSnapshot().threads;
@@ -124,4 +124,13 @@ test("comment threads keep their authors and exact source", () => withPanel("tex
   await panel.caret("end|");
   await panel.type("!");
   assert.equal(await panel.save(), "text <mark>here</mark><!--@agent:  look --> end!\n<!-- @chiri: block note -->\n");
+}));
+
+test("editing a note's author or body rewrites only that note, and an emptied body keeps it", () => withPanel("one\n<!-- @chiri: first --><!-- second -->\n", async panel => {
+  panel.panel.comments.refresh();
+  const [thread] = panel.panel.comments.getSnapshot().threads;
+  panel.panel.comments.editComment(thread!.id, 1, { author: "Lily Pad", body: "second" });
+  assert.equal(await panel.save(), "one\n<!-- @chiri: first -->\n<!-- [Lily Pad]: second -->\n");
+  panel.panel.comments.editComment(thread!.id, 0, { author: "chiri", body: "  " });
+  assert.equal(await panel.save(), "one\n<!-- @chiri: first -->\n<!-- [Lily Pad]: second -->\n");
 }));

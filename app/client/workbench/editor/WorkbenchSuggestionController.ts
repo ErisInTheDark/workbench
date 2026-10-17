@@ -453,9 +453,10 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     editor.style.setProperty("--suggest-col-width", `${layout.width}px`);
   }
 
+  /** Rows move their members, so anything measured before this pass (gutter markers) is stale whenever rows exist. */
   function publishRows(next: SuggestionRowBounds[]) {
     const key = JSON.stringify(next);
-    if (key === rowsKey) return;
+    if (key === rowsKey && !next.length) return;
     rowsKey = key;
     rows = next;
     options.onLayoutChanged();

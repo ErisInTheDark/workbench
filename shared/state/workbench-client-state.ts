@@ -39,6 +39,7 @@ import appStateReleases from "./workbench-app-state-releases.ts";
 import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { GitPeerSyncModeSchema, type GitPeerSyncMode } from "../workbench/git/git-peer-contracts";
+import { USER_NAME_MAX_LENGTH } from "../workbench/settings/workbench-setting-definitions.ts";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
 import { DaemonIdSchema, LogicalProjectIdSchema, type LogicalProjectId } from "../workbench/identity.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
@@ -103,7 +104,8 @@ export type WorkbenchGlobalPreference =
   | { key: "gitPeerSyncMode"; value: GitPeerSyncMode }
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "theme"; value: WorkbenchThemeValue }
-  | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue };
+  | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue }
+  | { key: "userName"; value: string };
 
 export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails"; value: boolean }
@@ -113,7 +115,8 @@ export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "openMarkdownFilesWith" | "openSvgFilesWith"; value: WorkbenchViewableFileOpenValue }
   | { enabled: boolean; key: "openOtherFilesWith"; value: WorkbenchOtherFileOpenValue }
   | { enabled: boolean; key: "gitPeerSyncMode"; value: GitPeerSyncMode }
-  | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue };
+  | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue }
+  | { enabled: boolean; key: "userName"; value: string };
 
 export type WorkbenchSidebarPreference =
   | { key: "projectTimeGroupCount" | "settledThreadItemLimit"; value: number }
@@ -253,6 +256,7 @@ const preferenceBoolean = z.object({
 });
 const ViewableFileOpenSchema = z.enum(["vscode", "workbench"]);
 const OtherFileOpenSchema = z.enum(["none", "vscode"]);
+const UserNameSchema = z.string().max(USER_NAME_MAX_LENGTH);
 const GlobalPreferenceSchema = z.union([
   preferenceBoolean,
   z.object({ key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
@@ -264,6 +268,7 @@ const GlobalPreferenceSchema = z.union([
   z.object({ key: z.literal("harness"), value: ProviderKeySchema }),
   z.object({ key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
   z.object({ key: z.literal("transcriptProjectionMode"), value: z.enum(["compare", "json", "sqlite"]) }),
+  z.object({ key: z.literal("userName"), value: UserNameSchema }),
 ]);
 const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.enum([
@@ -276,6 +281,7 @@ const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.literal("openOtherFilesWith"), value: OtherFileOpenSchema }),
   z.object({ enabled: z.boolean(), key: z.literal("gitPeerSyncMode"), value: GitPeerSyncModeSchema }),
   z.object({ enabled: z.boolean(), key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
+  z.object({ enabled: z.boolean(), key: z.literal("userName"), value: UserNameSchema }),
 ]);
 const SidebarPreferenceSchema = z.union([
   z.object({ key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit"]), value: z.number() }),
@@ -289,7 +295,7 @@ const projectAddress = { daemonRegistrationId: address, projectId: address };
 const projectPreferenceKeys = [
   "composerSpellCheck", "editorSpellCheck", "showUnopenableFiles", "threadCodeBlockWrap",
   "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
-  "theme", "gitPeerSyncMode", "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+  "theme", "gitPeerSyncMode", "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName",
 ] as const satisfies readonly WorkbenchProjectPreference["key"][];
 const attachment = z.object({ id: address, url: z.string() });
 
@@ -350,7 +356,7 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode", "gitPeerSyncMode",
-    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
     key: z.enum(projectPreferenceKeys) }),

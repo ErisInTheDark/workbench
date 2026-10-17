@@ -1,8 +1,10 @@
 /*
  * Exports:
  * - MarkdownComment: one note of a comment thread; `raw` keeps the exact `<!-- -->` source it was read from.
- * - parseComment: read the inside of one `<!-- -->` into an author and body.
- * - formatComment: write one note as `<!-- @author: body -->`, reusing its raw source while it is unedited.
+ * - COMMENT_AUTHOR_MAX_LENGTH: longest author name a comment stores.
+ * - normalizeCommentAuthor: the author name a comment can store, or null when nothing is left.
+ * - parseComment: read the inside of one `<!-- -->` into an author and body; also reads the older `@author:` form.
+ * - formatComment: write one note as `<!-- [author]: body -->`, reusing its raw source while it is unedited.
  * - formatCommentThread: write a thread's notes back to back, which is what makes them one thread.
  * - readCommentRun: read the comments glued together at a source index, as one thread.
  * - parseCommentLine: read a line made only of comments, or null.
@@ -16,16 +18,25 @@ export interface MarkdownComment {
   raw?: string;
 }
 
-const AUTHOR_PATTERN = /^@([^\s:@][^\s:]{0,39}):[ \t]*/u;
+export const COMMENT_AUTHOR_MAX_LENGTH = 40;
+
+const AUTHOR_PATTERN = /^\[([^\]\r\n]{1,40})\]:[ \t]*/u;
+const LEGACY_AUTHOR_PATTERN = /^@([^\s:@][^\s:]{0,39}):[ \t]*/u;
 const COMMENT_OPEN = "<!--";
 const COMMENT_CLOSE = "-->";
 
+export function normalizeCommentAuthor(name: string | null | undefined) {
+  const author = (name ?? "").replace(/[\]\r\n]+/gu, " ").trim().slice(0, COMMENT_AUTHOR_MAX_LENGTH).trim();
+  return author || null;
+}
+
 export function parseComment(inner: string, raw?: string): MarkdownComment {
   const trimmed = inner.trim();
-  const author = trimmed.match(AUTHOR_PATTERN);
+  const author = trimmed.match(AUTHOR_PATTERN) ?? trimmed.match(LEGACY_AUTHOR_PATTERN);
+  const name = author ? normalizeCommentAuthor(author[1]) : null;
   return {
-    author: author ? author[1]! : null,
-    body: author ? trimmed.slice(author[0].length) : trimmed,
+    author: name,
+    body: name ? trimmed.slice(author![0].length) : trimmed,
     ...(raw === undefined ? {} : { raw }),
   };
 }
@@ -44,7 +55,8 @@ export function formatComment(comment: MarkdownComment) {
   }
 
   const body = sanitizeBody(comment.body);
-  const prefix = comment.author ? `@${comment.author}: ` : "";
+  const author = normalizeCommentAuthor(comment.author);
+  const prefix = author ? `[${author}]: ` : "";
   return `${COMMENT_OPEN} ${prefix}${body}${body || prefix ? " " : ""}${COMMENT_CLOSE}`;
 }
 

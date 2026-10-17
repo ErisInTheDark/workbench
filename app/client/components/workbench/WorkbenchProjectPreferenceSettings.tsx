@@ -17,7 +17,7 @@ import WorkbenchSettingsRadioTable from "./WorkbenchSettingsRadioTable";
 import { PlusIcon } from "./workbench-icons";
 
 const PROJECT_SETTING_KEYS = [
-  "editorFontFamily", "editorSpellCheck", "composerSpellCheck",
+  "userName", "editorFontFamily", "editorSpellCheck", "composerSpellCheck",
   "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "showUnopenableFiles",
 ] as const satisfies readonly WorkbenchSettingKey[];
 
@@ -25,6 +25,7 @@ type Project = { id: LogicalProjectId; label: string; iconProject: WorkbenchLogi
 
 function PreferenceSet({ projectId, onError }: { projectId: LogicalProjectId | null; onError: (message: string) => void }) {
   return <>
+    <WorkbenchSettingsPreferences keys={["userName"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsRadioTable keys={["editorFontFamily"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsPreferences keys={["editorSpellCheck", "composerSpellCheck"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsRadioTable title="Open files with" description="Where file links and explorer clicks open, by file type."

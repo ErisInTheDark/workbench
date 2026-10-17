@@ -1,21 +1,24 @@
 /*
  * Exports:
  * - default MarkdownCommentMargin: comment threads beside the markdown editor: cards aligned to what they discuss,
- *   pushed apart so they never overlap and flowing around suggestion rows, or inline badges that open a card where the pane is too narrow. Threads take
- *   replies, edits and resolution; a draft card writes a new thread.
+ *   pushed apart so they never overlap and flowing around suggestion rows, or inline badges that open a card where the pane is too narrow. Notes are
+ *   always editable in place; a focused thread offers a reply row signed with the configured name, and a draft card
+ *   writes a new thread.
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
-import type { MarkdownComment } from "../../../workbench/markdown/comment-markdown";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { COMMENT_AUTHOR_MAX_LENGTH, type MarkdownComment } from "../../../workbench/markdown/comment-markdown";
 import type {
   CommentDraftView,
   CommentMarginSnapshot,
   CommentThreadView,
 } from "../../../workbench/editor/WorkbenchCommentController";
 import type { WorkbenchFilePanelClient } from "../../../workbench/WorkbenchFilePanelClient";
+import FlushInput from "../../ui/FlushInput";
+import FlushTextArea from "../../ui/FlushTextArea";
 import IconButton from "../../ui/IconButton";
-import { CheckIcon, MessageSquareTextIcon, SquarePenIcon, Trash2Icon } from "../workbench-icons";
+import { CheckIcon, MessageSquareTextIcon, Trash2Icon } from "../workbench-icons";
 import type { CommentMarginLayout } from "./use-editor-margin-layout";
 
 const CARD_GAP_PX = 10;
@@ -109,84 +112,28 @@ function placeCards(
   return tops;
 }
 
-function submitOnEnter(event: KeyboardEvent<HTMLTextAreaElement>, submit: () => void, cancel: () => void) {
-  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-    event.preventDefault();
-    submit();
-  } else if (event.key === "Escape") {
-    event.preventDefault();
-    cancel();
-  }
+/** What an author field may hold while typing; trimming waits for the comment to be written. */
+function authorInput(value: string) {
+  return value.replace(/[\]\r\n]+/gu, "");
 }
 
-function CommentBox({
-  autoFocus = false,
-  initial = "",
-  onCancel,
-  onSubmit,
-  placeholder,
-  submitLabel,
-}: {
-  autoFocus?: boolean;
-  initial?: string;
-  onCancel: () => void;
-  onSubmit: (body: string) => void;
-  placeholder: string;
-  submitLabel: string;
-}) {
-  const [value, setValue] = useState(initial);
-  const textarea = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (autoFocus) textarea.current?.focus({ preventScroll: true });
-  }, [autoFocus]);
-
-  useLayoutEffect(() => {
-    const element = textarea.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
-  }, [value]);
-
-  const submit = () => {
-    if (!value.trim()) return;
-    onSubmit(value);
-    setValue("");
-  };
-
+function AuthorField({ onCommit, value }: { onCommit: (author: string) => void; value: string }) {
   return (
-    <div className="mt-2 flex flex-col gap-1.5">
-      <textarea
-        ref={textarea}
-        rows={1}
-        value={value}
-        placeholder={placeholder}
-        className="
-          w-full resize-none rounded-[0.6rem] bg-fg/5 px-2.5 py-1.5 text-[0.86rem] leading-snug text-text outline-none
-          placeholder:text-fg/45 focus:bg-fg/8
-        "
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={(event) => submitOnEnter(event, submit, onCancel)}
-      />
-      {value.trim() || initial ? (
-        <div className="flex justify-end gap-1">
-          <button type="button" className="rounded-full px-2.5 py-1 text-[0.78rem] text-fg/muted hover:bg-fg/5 hover:text-text" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!value.trim()}
-            className="rounded-full bg-accent-soft px-2.5 py-1 text-[0.78rem] font-medium text-accent hover:brightness-110 disabled:opacity-45"
-            onClick={submit}
-          >
-            {submitLabel}
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <FlushInput
+      ariaLabel="Comment author"
+      placeholder="User"
+      maxLength={COMMENT_AUTHOR_MAX_LENGTH}
+      normalize={authorInput}
+      value={value}
+      className="w-full pr-8 text-[0.76rem] font-semibold text-text"
+      onCommit={onCommit}
+    />
   );
 }
 
+const bodyClassName = "text-[0.86rem] leading-snug text-text";
+
+/** One note, always editable: its author and body commit on blur or Enter. */
 function CommentEntry({
   comment,
   onDelete,
@@ -194,37 +141,55 @@ function CommentEntry({
 }: {
   comment: MarkdownComment;
   onDelete: () => void;
-  onEdit: (body: string) => void;
+  onEdit: (edit: { author: string | null; body: string }) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  if (editing) {
-    return (
-      <CommentBox
-        autoFocus
-        initial={comment.body}
-        placeholder="Edit comment"
-        submitLabel="Save"
-        onCancel={() => setEditing(false)}
-        onSubmit={(body) => {
-          onEdit(body);
-          setEditing(false);
-        }}
-      />
-    );
-  }
-
   return (
     <div className="group/comment relative py-1">
-      {comment.author ? <p className="m-0 text-[0.76rem] font-semibold text-text">{comment.author}</p> : null}
-      <p className="m-0 whitespace-pre-wrap break-words pr-12 text-[0.86rem] leading-snug text-text">{comment.body}</p>
+      <AuthorField value={comment.author ?? ""} onCommit={(author) => onEdit({ author: author || null, body: comment.body })} />
+      <FlushTextArea
+        ariaLabel="Comment"
+        value={comment.body}
+        className={bodyClassName}
+        onCommit={(body) => onEdit({ author: comment.author, body })}
+      />
       <span className="absolute top-0.5 right-0 flex opacity-0 transition-opacity group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 coarse-touch:opacity-100">
-        <IconButton label="Edit comment" size="compact" display="hover-border" onClick={() => setEditing(true)}>
-          <SquarePenIcon size={14} />
-        </IconButton>
         <IconButton label="Delete comment" size="compact" display="hover-border" tone="danger" onClick={onDelete}>
           <Trash2Icon size={14} />
         </IconButton>
       </span>
+    </div>
+  );
+}
+
+/** A comment row still being written, signed with the configured name until changed. */
+function NewCommentEntry({
+  autoFocus = false,
+  defaultAuthor,
+  onCancel,
+  onSubmit,
+  placeholder,
+}: {
+  autoFocus?: boolean;
+  defaultAuthor: string;
+  onCancel: () => void;
+  onSubmit: (body: string, author: string | null) => void;
+  placeholder: string;
+}) {
+  const [author, setAuthor] = useState(defaultAuthor);
+  return (
+    <div className="py-1">
+      <AuthorField value={author} onCommit={setAuthor} />
+      <FlushTextArea
+        ariaLabel={placeholder}
+        autoFocus={autoFocus}
+        mode="submit"
+        placeholder={placeholder}
+        className={bodyClassName}
+        onCommit={(body) => {
+          if (body.trim()) onSubmit(body, author || null);
+        }}
+        onEscape={onCancel}
+      />
     </div>
   );
 }
@@ -239,7 +204,17 @@ function CardHeader({ children, quote }: { children?: ReactNode; quote: string }
   );
 }
 
-function ThreadCard({ active, comments, thread }: { active: boolean; comments: Comments; thread: CommentThreadView }) {
+function ThreadCard({
+  active,
+  comments,
+  defaultAuthor,
+  thread,
+}: {
+  active: boolean;
+  comments: Comments;
+  defaultAuthor: string;
+  thread: CommentThreadView;
+}) {
   const resolveButton = (
     <IconButton
       label="Resolve thread"
@@ -261,9 +236,17 @@ function ThreadCard({ active, comments, thread }: { active: boolean; comments: C
           key={`${index}:${comment.body}`}
           comment={comment}
           onDelete={() => comments.deleteComment(thread.id, index)}
-          onEdit={(body) => comments.editComment(thread.id, index, body)}
+          onEdit={(edit) => comments.editComment(thread.id, index, edit)}
         />
       ))}
+      {active ? (
+        <NewCommentEntry
+          defaultAuthor={defaultAuthor}
+          placeholder="Reply"
+          onCancel={() => comments.setActive(null)}
+          onSubmit={(body, author) => comments.reply(thread.id, body, author)}
+        />
+      ) : null}
     </div>
   );
 
@@ -281,28 +264,20 @@ function ThreadCard({ active, comments, thread }: { active: boolean; comments: C
           <span className="mt-0.5">{resolveButton}</span>
         </div>
       )}
-      {active ? (
-        <CommentBox
-          placeholder="Reply"
-          submitLabel="Reply"
-          onCancel={() => comments.setActive(null)}
-          onSubmit={(body) => comments.reply(thread.id, body)}
-        />
-      ) : null}
     </>
   );
 }
 
-function DraftCard({ comments, draft }: { comments: Comments; draft: CommentDraftView }) {
+function DraftCard({ comments, defaultAuthor, draft }: { comments: Comments; defaultAuthor: string; draft: CommentDraftView }) {
   return (
     <>
       {draft.quote ? <CardHeader quote={draft.quote} /> : null}
-      <CommentBox
+      <NewCommentEntry
         autoFocus
+        defaultAuthor={defaultAuthor}
         placeholder="Add a comment"
-        submitLabel="Comment"
         onCancel={() => comments.cancelDraft()}
-        onSubmit={(body) => comments.submitDraft(body)}
+        onSubmit={(body, author) => comments.submitDraft(body, author)}
       />
     </>
   );
@@ -317,9 +292,12 @@ const litCardClassName = "bg-[color-mix(in_srgb,var(--app-bg-solid)_89%,var(--te
 
 export default function MarkdownCommentMargin({
   client,
+  defaultAuthor,
   layout,
 }: {
   client: WorkbenchFilePanelClient | null;
+  /** The configured name that signs new comments; empty leaves them unsigned. */
+  defaultAuthor: string;
   layout: CommentMarginLayout;
 }) {
   const comments = client?.comments ?? null;
@@ -387,8 +365,13 @@ export default function MarkdownCommentMargin({
             className={`${cardClassName} ${litCardClassName} pointer-events-auto z-10`}
             style={{ top: open.top + 28 }}
           >
-            {snapshot.draft ? <DraftCard comments={comments} draft={snapshot.draft} /> : (
-              <ThreadCard active comments={comments} thread={snapshot.threads.find((thread) => thread.id === open.id)!} />
+            {snapshot.draft ? <DraftCard comments={comments} defaultAuthor={defaultAuthor} draft={snapshot.draft} /> : (
+              <ThreadCard
+                active
+                comments={comments}
+                defaultAuthor={defaultAuthor}
+                thread={snapshot.threads.find((thread) => thread.id === open.id)!}
+              />
             )}
           </section>
         ) : null}
@@ -427,7 +410,7 @@ export default function MarkdownCommentMargin({
             onPointerEnter={() => comments.setHovered(thread.id)}
             onPointerLeave={() => comments.setHovered(null)}
           >
-            <ThreadCard active={active} comments={comments} thread={thread} />
+            <ThreadCard active={active} comments={comments} defaultAuthor={defaultAuthor} thread={thread} />
           </section>
         );
       })}
@@ -437,7 +420,7 @@ export default function MarkdownCommentMargin({
           className={`${cardClassName} ${litCardClassName} z-10`}
           style={{ top: tops.get(DRAFT_ID) ?? snapshot.draft.top }}
         >
-          <DraftCard comments={comments} draft={snapshot.draft} />
+          <DraftCard comments={comments} defaultAuthor={defaultAuthor} draft={snapshot.draft} />
         </section>
       ) : null}
     </aside>

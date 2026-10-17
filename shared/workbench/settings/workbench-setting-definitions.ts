@@ -9,6 +9,7 @@
  * - WORKBENCH_FILE_OPEN_SETTING_KEYS: file kind to its open destination setting.
  * - WorkbenchSettingKey: configurable setting identities.
  * - WorkbenchGlobalSettings: global preference values.
+ * - USER_NAME_MAX_LENGTH: longest stored user name.
  * - WorkbenchSettingDefinition: setting control metadata.
  * - WORKBENCH_SETTING_DEFINITIONS: shared settings controls and search metadata.
  */
@@ -23,7 +24,7 @@ export type WorkbenchFileOpenSettingKey = "openMarkdownFilesWith" | "openSvgFile
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
-  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails";
+  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName";
 
 export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
   markdown: "openMarkdownFilesWith",
@@ -44,7 +45,11 @@ export interface WorkbenchGlobalSettings {
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
   threadCodeDetails: boolean;
+  /** Signs new markdown comments; empty leaves them unsigned. */
+  userName: string;
 }
+
+export const USER_NAME_MAX_LENGTH = 40;
 
 export type WorkbenchFileOpenPolicy = Pick<WorkbenchGlobalSettings, WorkbenchFileOpenSettingKey>;
 
@@ -53,8 +58,12 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
   description: string;
   key: K;
   label: string;
+  /** Longest value a text control accepts. */
+  maxLength?: number;
   options?: Array<{ description: string; label: string; value: WorkbenchGlobalSettings[K] }>;
-  type: "boolean" | "number" | "select";
+  /** Shown by an empty text control. */
+  placeholder?: string;
+  type: "boolean" | "number" | "select" | "text";
 };
 
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
@@ -101,6 +110,7 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
   threadCodeBlockWrap: { description: "Controls whether thread markdown code blocks wrap long lines instead of using horizontal scrolling.", key: "threadCodeBlockWrap", label: "Wrap thread code blocks", type: "boolean" },
   threadCodeDetails: { description: "Show code-mode source and raw output alongside captured tool calls. Failed executions and calls without captured tool results remain visible.", key: "threadCodeDetails", label: "Show code details", type: "boolean" },
   editorSpellCheck: { description: "Controls browser spellcheck in the rich markdown editor.", key: "editorSpellCheck", label: "Editor spellcheck", type: "boolean" },
+  userName: { description: "", key: "userName", label: "Name", maxLength: USER_NAME_MAX_LENGTH, placeholder: "User", type: "text" },
   theme: {
     columns: "two", description: "Controls Workbench colors and font personality.", key: "theme", label: "Theme", type: "select",
     options: [

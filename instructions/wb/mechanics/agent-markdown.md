@@ -46,8 +46,8 @@ other markdown rules, as one example plus three rules instead of a separate skil
 ## Review markup in markdown files
 
 ```md
-The <mark>fox</mark><!-- @user: too cliche? --><!-- @agent: reworded below -->
-<!-- @user: comment on whole paragraph -->
+The <mark>fox</mark><!-- [user]: too cliche? --><!-- [agent]: reworded below -->
+<!-- [user]: comment on whole paragraph -->
 
 <del>
 
@@ -61,6 +61,6 @@ Replacement blocks.
 </ins>
 ```
 
-- Comment: `<!-- @name: text -->` right after `<mark>`ed words, or on own line after its block. Reply: next comment glued on, or next line
+- Comment: `<!-- [name]: text -->` right after `<mark>`ed words, or on own line after its block. Reply: next comment glued on, or next line
 - Suggestion: `<del>` block directly followed by `<ins>` block; omit either for pure insertion or deletion
 - Resolve by removing thread, or keeping one suggestion side; leave other review markup intact

@@ -7,12 +7,23 @@ import test from "node:test";
 import { formatComment, parseCommentLine, readCommentRun } from "./comment-markdown";
 
 test("glued comments read as one thread; spaced ones end it", () => {
-  const run = readCommentRun("<!-- @chiri: why? --><!-- because --> <!-- other -->", 0);
+  const run = readCommentRun("<!-- [Chiri V]: why? --><!-- because --> <!-- other -->", 0);
   assert.deepEqual(run?.comments.map(({ author, body }) => ({ author, body })), [
-    { author: "chiri", body: "why?" },
+    { author: "Chiri V", body: "why?" },
     { author: null, body: "because" },
   ]);
-  assert.equal(run?.end, "<!-- @chiri: why? --><!-- because -->".length);
+  assert.equal(run?.end, "<!-- [Chiri V]: why? --><!-- because -->".length);
+});
+
+test("older @author comments keep their author", () => {
+  assert.deepEqual(readCommentRun("<!-- @lily: hi -->", 0)?.comments.map(({ author, body }) => ({ author, body })),
+    [{ author: "lily", body: "hi" }]);
+});
+
+test("an author can never break out of its brackets", () => {
+  const written = formatComment({ author: "a]: b\nc", body: "note" });
+  assert.deepEqual(readCommentRun(written, 0)?.comments.map(({ author, body }) => ({ author, body })),
+    [{ author: "a : b c", body: "note" }]);
 });
 
 test("a comment line holds only comments", () => {
@@ -24,7 +35,7 @@ test("a comment line holds only comments", () => {
 test("unedited comments keep their source and edited ones use the canonical form", () => {
   const [comment] = readCommentRun("<!--@lily:  odd   spacing-->", 0)!.comments;
   assert.equal(formatComment(comment!), "<!--@lily:  odd   spacing-->");
-  assert.equal(formatComment({ ...comment!, body: "fixed" }), "<!-- @lily: fixed -->");
+  assert.equal(formatComment({ ...comment!, body: "fixed" }), "<!-- [lily]: fixed -->");
 });
 
 test("a body cannot close its comment early", () => {

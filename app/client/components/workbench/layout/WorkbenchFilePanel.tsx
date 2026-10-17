@@ -531,7 +531,7 @@ export default function WorkbenchFilePanel ({
               [& [data-suggestion-row-empty]]:(font-sans italic text-[0.85em] text-fg/50)
             `}
           />
-          <MarkdownCommentMargin client={client} layout={marginLayout.comments} />
+          <MarkdownCommentMargin client={client} defaultAuthor={settings.get("userName")} layout={marginLayout.comments} />
           <div
             ref={customCaretRef}
             className="

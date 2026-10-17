@@ -7,7 +7,7 @@
  *   and create, reply to, edit and resolve threads as editor mutations.
  */
 
-import type { MarkdownComment } from "../markdown/comment-markdown";
+import { normalizeCommentAuthor, type MarkdownComment } from "../markdown/comment-markdown";
 import {
     createCommentThreadElement,
     getCommentThreadKind,
@@ -63,10 +63,10 @@ export interface WorkbenchCommentControllerOptions {
 export interface WorkbenchCommentController {
   cancelDraft: () => void;
   deleteComment: (id: string, index: number) => void;
-  editComment: (id: string, index: number, body: string) => void;
+  editComment: (id: string, index: number, edit: { author: string | null; body: string }) => void;
   getSnapshot: () => CommentMarginSnapshot;
   refresh: () => void;
-  reply: (id: string, body: string) => void;
+  reply: (id: string, body: string, author: string | null) => void;
   resolve: (id: string) => void;
   scheduleRefresh: () => void;
   setActive: (id: string | null) => void;
@@ -74,7 +74,7 @@ export interface WorkbenchCommentController {
   /** Light up the thread whose highlighted words are under the pointer. */
   syncHoverFromPointer: (target: EventTarget | null) => void;
   startDraft: () => boolean;
-  submitDraft: (body: string) => void;
+  submitDraft: (body: string, author: string | null) => void;
   subscribe: (listener: () => void) => () => void;
   syncActiveFromSelection: () => void;
 }
@@ -292,7 +292,7 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     }
   }
 
-  function submitDraft(body: string) {
+  function submitDraft(body: string, author: string | null) {
     const range = draftRange;
     const text = body.trim();
     draftRange = null;
@@ -303,7 +303,9 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
 
     const runContainer = options.getInlineRunContainer(range.startContainer);
     const anchored = !range.collapsed && runContainer && runContainer.contains(range.endContainer) && range.toString().trim();
-    const atom = createCommentThreadElement(document, anchored ? "inline" : "block", [{ author: null, body: text }]);
+    const atom = createCommentThreadElement(document, anchored ? "inline" : "block", [
+      { author: normalizeCommentAuthor(author), body: text },
+    ]);
     options.runStructuralMutation(() => {
       if (anchored) anchorInRun(runContainer, range, atom);
       else insertBlockThreadAfter(range.collapsed ? range.startContainer : range.endContainer, atom);
@@ -326,16 +328,18 @@ function WorkbenchCommentController(options: WorkbenchCommentControllerOptions):
     refresh();
   }
 
-  function reply(id: string, body: string) {
+  function reply(id: string, body: string, author: string | null) {
     const text = body.trim();
-    if (text) updateComments(id, (comments) => [...comments, { author: null, body: text }]);
+    if (text) updateComments(id, (comments) => [...comments, { author: normalizeCommentAuthor(author), body: text }]);
   }
 
-  function editComment(id: string, index: number, body: string) {
-    const text = body.trim();
-    updateComments(id, (comments) => text
-      ? comments.map((comment, position) => position === index ? { author: comment.author, body: text } : comment)
-      : comments.filter((_, position) => position !== index));
+  /** An emptied body keeps the note as it was; deleting is its own action. */
+  function editComment(id: string, index: number, edit: { author: string | null; body: string }) {
+    const text = edit.body.trim();
+    if (!text) return;
+    updateComments(id, (comments) => comments.map((comment, position) => position === index
+      ? { ...comment, author: normalizeCommentAuthor(edit.author), body: text }
+      : comment));
   }
 
   function deleteComment(id: string, index: number) {

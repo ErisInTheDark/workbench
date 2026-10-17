@@ -49,6 +49,7 @@ import {
   type WorkbenchSettingKey,
   type WorkbenchTheme,
   type WorkbenchViewableFileOpenDestination,
+  USER_NAME_MAX_LENGTH,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
@@ -144,6 +145,10 @@ function normalizeGitPeerSyncMode(value: unknown): WorkbenchGlobalSettings["gitP
   return value === "rebase" ? "rebase" : "merge";
 }
 
+function normalizeUserName(value: unknown) {
+  return typeof value === "string" ? value.replace(/\s+/gu, " ").trim().slice(0, USER_NAME_MAX_LENGTH) : "";
+}
+
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
   const legacy = legacyFileOpenPolicy(candidate.fileOpenBehavior);
@@ -160,6 +165,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     theme: normalizeTheme(candidate.theme),
     threadCodeBlockWrap: typeof candidate.threadCodeBlockWrap === "boolean" ? candidate.threadCodeBlockWrap : false,
     threadCodeDetails: typeof candidate.threadCodeDetails === "boolean" ? candidate.threadCodeDetails : false,
+    userName: normalizeUserName(candidate.userName),
   };
 }
 
@@ -185,6 +191,8 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: normalizeOtherFileOpen(candidate.value ?? defaultValue) } as WorkbenchProjectSettingOverride<K>;
     case "editorFontSize":
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
+    case "userName":
+      return { enabled, value: normalizeUserName(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
     case "composerSpellCheck":
     case "showUnopenableFiles":
@@ -211,6 +219,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     theme: "default",
     threadCodeBlockWrap: false,
     threadCodeDetails: false,
+    userName: "",
   };
 }
 
@@ -229,6 +238,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     theme: { enabled: false, value: globalDefaults.theme },
     threadCodeBlockWrap: { enabled: false, value: globalDefaults.threadCodeBlockWrap },
     threadCodeDetails: { enabled: false, value: globalDefaults.threadCodeDetails },
+    userName: { enabled: false, value: globalDefaults.userName },
   };
 }
 
@@ -366,6 +376,7 @@ function normalizePreferenceOverrides(candidate: Record<string, unknown>): Workb
     theme: normalizeProjectOverride("theme", candidate.theme),
     threadCodeBlockWrap: normalizeProjectOverride("threadCodeBlockWrap", candidate.threadCodeBlockWrap),
     threadCodeDetails: normalizeProjectOverride("threadCodeDetails", candidate.threadCodeDetails),
+    userName: normalizeProjectOverride("userName", candidate.userName),
   } satisfies WorkbenchProjectSettings;
 }
 
@@ -521,5 +532,6 @@ export function resolveWorkbenchSettings(
     theme: projectSettings.theme.enabled ? projectSettings.theme.value : globalSettings.theme,
     threadCodeBlockWrap: projectSettings.threadCodeBlockWrap.enabled ? projectSettings.threadCodeBlockWrap.value : globalSettings.threadCodeBlockWrap,
     threadCodeDetails: projectSettings.threadCodeDetails.enabled ? projectSettings.threadCodeDetails.value : globalSettings.threadCodeDetails,
+    userName: projectSettings.userName.enabled ? projectSettings.userName.value : globalSettings.userName,
   };
 }

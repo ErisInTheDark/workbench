@@ -31,6 +31,7 @@ const KEY_RELEASES: Partial<Record<WorkbenchSettingKey, number>> = {
   openOtherFilesWith: appStateReleases.fileOpenDestinations.version,
   openSvgFilesWith: appStateReleases.fileOpenDestinations.version,
   threadCodeDetails: appStateReleases.threadCodeDetails.version,
+  userName: appStateReleases.userName.version,
 };
 
 function useBoundSettings(logicalProjectId: LogicalProjectId | null, unresolved = false) {
