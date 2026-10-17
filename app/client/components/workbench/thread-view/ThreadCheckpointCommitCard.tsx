@@ -117,6 +117,25 @@ function CommitLine({ changes, committedSha, title }: {
   );
 }
 
+/**
+ * The changed-files disclosure. Its default is fixed when it mounts: Disclosure follows a changing default until
+ * touched, so a proposal accepted while open would otherwise pop its file list open on the way to collapsing.
+ */
+function CommitChanges({ children, openByDefault, summary }: { children: ReactNode; openByDefault: boolean; summary: ReactNode }) {
+  const [defaultOpen] = useState(openByDefault);
+  return (
+    <Disclosure
+      className="mt-1.5 py-0.5"
+      contentClassName="mt-1 rounded-[0.65rem] bg-fg/4 px-2"
+      defaultOpen={defaultOpen}
+      summary={summary}
+      summaryClassName="text-[0.82em] leading-[1.5] text-fg/muted"
+    >
+      {children}
+    </Disclosure>
+  );
+}
+
 export function getCheckpointProposalDisplayedChanges(
   proposal: GitCheckpointProposal | null,
   commitMode: "amend" | "commit",
@@ -591,11 +610,9 @@ export default function ThreadCheckpointCommitCard({
               </span>
             )}
           />
-        ) : <Disclosure
-          className="mt-1.5 py-0.5"
-          contentClassName="mt-1 rounded-[0.65rem] bg-fg/4 px-2"
+        ) : <CommitChanges
           // Opening a settled commit means reading it, so its files come with it; pending work keeps its list tucked.
-          defaultOpen={toggleable && (committed || !interactive)}
+          openByDefault={toggleable && (committed || !interactive)}
           summary={(
             <span className="flex min-w-0 w-full flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="inline-flex min-w-0 items-baseline gap-2">
@@ -605,7 +622,6 @@ export default function ThreadCheckpointCommitCard({
               {actions}
             </span>
           )}
-          summaryClassName="text-[0.82em] leading-[1.5] text-fg/muted"
         >
           {knownChanges ?? (
             <p className="m-0 py-2 text-[0.78em] leading-[1.6] text-fg/muted">
@@ -645,7 +661,7 @@ export default function ThreadCheckpointCommitCard({
               )}
             </Disclosure>
           ) : null}
-        </Disclosure>}
+        </CommitChanges>}
       </div>
       </div>
       </div>
