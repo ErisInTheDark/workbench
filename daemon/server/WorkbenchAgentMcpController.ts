@@ -411,7 +411,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    */
   private async callShell(
     scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, input: WorkbenchEscalatingShellInput,
-    tools: WorkbenchProviderTools, hosted: boolean,
+    tools: WorkbenchProviderTools, escalation: boolean,
   ): Promise<WorkbenchMcpToolStep> {
     const started = await this.startTranscript("shell", input, call.meta, scope.clientScope, call.signal, tools);
     if (started.kind === "failed") return { kind: "result", result: started.result };
@@ -437,7 +437,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       prepared = await this.prepareShell(input, call.meta, {
         clientScope: scope.clientScope,
         ...(started.reference ? { itemId: started.reference.itemId, turnId: started.reference.turnId } : {}),
-      }, signal, tools, hosted);
+      }, signal, tools, escalation);
     } catch (error) {
       registration.unregister();
       return await finishFailure(error, signal);
@@ -465,13 +465,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return { kind: "result", result: await this.finish(scope, detached, outcome) };
   }
 
-  /** Escalating providers get the Workbench-hosted shell, including its approval; others prepare their native shell. */
+  /** Escalating providers use Workbench admission for every shell call. */
   private async prepareShell(
     input: WorkbenchEscalatingShellInput, meta: Record<string, unknown> | undefined, context: ProviderToolRequestContext,
-    signal: AbortSignal, tools: WorkbenchProviderTools, hosted: boolean,
+    signal: AbortSignal, tools: WorkbenchProviderTools, escalation: boolean,
   ) {
     const metadata = ProviderToolMetadataSchema.parse(meta ?? {});
-    if (!hosted) {
+    if (!escalation) {
       if (!tools.prepareShell) throw new Error("This provider has no native shell.");
       return await tools.prepareShell(input, metadata, signal, context);
     }

@@ -13,8 +13,9 @@
  */
 import type http from "node:http";
 
+import { getRequestListener } from "@hono/node-server";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   CallToolRequestSchema, CancelledNotificationSchema, ListToolsRequestSchema,
   type CallToolResult, type Tool,
@@ -113,6 +114,7 @@ export function sendWorkbenchMcpJsonRpcError(response: http.ServerResponse, stat
   if (response.destroyed || response.writableEnded) return;
   response.statusCode = status;
   response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Connection", "close");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message }, id: null }));
 }
@@ -147,7 +149,7 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     if (!requestAbort.signal.aborted) requestAbort.abort(new Error("Workbench MCP caller disconnected."));
   };
   let server: Server | undefined;
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   let closed = false;
   const close = () => {
     if (closed) return;
@@ -190,7 +192,13 @@ async function completeRequest(request: http.IncomingMessage, response: http.Ser
     requestAbort.signal.throwIfAborted();
     const body = await readJsonBody(request);
     await server.connect(transport);
-    await transport.handleRequest(request, response, body);
+    const handleRequest = getRequestListener(async webRequest => {
+      const result = await transport.handleRequest(webRequest, { parsedBody: body });
+      // Retire completed sockets before clients can race Node's idle timeout by reusing them.
+      result.headers.set("Connection", "close");
+      return result;
+    }, { overrideGlobalObjects: false, autoCleanupIncoming: false });
+    await handleRequest(request, response);
   } catch (error) {
     const message = sanitizeWorkbenchMcpError(error) || "Workbench MCP request failed.";
     logError("workbench-mcp", message);

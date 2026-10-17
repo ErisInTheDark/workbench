@@ -1,7 +1,7 @@
-/* Exports: none. Tests cover typed MCP inventory, trusted identity, dispatch, waits, and cancellation. */
+/* Exports: none. Tests cover typed MCP inventory, trusted identity, dispatch, connection retirement, waits, and cancellation. */
 import assert from "node:assert/strict";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { test } from "node:test";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
@@ -16,7 +16,7 @@ import {
 } from "./lib/workbench/commands/workbench-agent-command-definition";
 import WorkbenchAgentMcpController, { type WorkbenchAgentMcpControllerOptions } from "./WorkbenchAgentMcpController";
 import CodexToolsController from "./CodexToolsController";
-import CodexShellController from "./CodexShellController";
+import type CodexShellController from "./CodexShellController";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type { NativeThreadId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
@@ -28,7 +28,9 @@ import {
   isWorkbenchCommandVisibleTo,
   WORKBENCH_PARENT_ONLY_TOOLS,
 } from "workbench-shared/workbench/commands/workbench-tool-audience";
-import type { WorkbenchPreparedShell, WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "./provider-execution";
+import type { WorkbenchAdmittedExecution, WorkbenchPreparedShell, WorkbenchProviderTools, ProviderToolResult, WorkbenchToolTranscriptReference } from "./provider-execution";
+import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
+import type WorkbenchProvider from "./WorkbenchProvider";
 
 const EXPECTED_PARENT_ONLY_TOOLS = [
   "git_arc_propose",
@@ -208,7 +210,7 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
   transcript?: WorkbenchProviderTools["transcript"];
   requestCodex: (request: JsonRpcRequest) => Promise<JsonRpcResponse>;
   resolveThreadId?: (nativeId: NativeThreadId, cwd: string) => Promise<WorkbenchThreadId>;
-  shell?: Pick<CodexShellController, "prepare">;
+  shell?: Pick<CodexShellController, "prepareAdmitted">;
 }) {
   const tools = new CodexToolsController({
     resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
@@ -225,19 +227,108 @@ function codexController(options: Omit<WorkbenchAgentMcpControllerOptions, "tool
         cwd: result.thread.cwd,
       };
     },
-    shell: options.shell ?? new CodexShellController({
-      readConfiguration: async () => ({ config: {} }),
-      executor: { execute: async () => { throw new Error("unexpected shell execution"); } },
-    }),
+    shell: {
+      prepare: async () => { throw new Error("unexpected native shell execution"); },
+      prepareAdmitted: options.shell?.prepareAdmitted ?? (async () => { throw new Error("unexpected shell execution"); }),
+    },
   });
   if (options.transcript) Object.assign(tools, { transcript: options.transcript });
   return new WorkbenchAgentMcpController({
+    approveHostedShell: async () => { throw new Error("unexpected approval"); },
     ...options,
     tools: provider => {
       assert.equal(provider, "codex");
       return tools;
     },
   });
+}
+
+for (const harness of ["codex", "claude", "opencode"] as const) {
+  for (const decision of ["allow", "decline", "cancel"] as const) {
+    test(`${harness} shell through its provider handle uses Workbench admission and honours ${decision}`, async () => {
+      const cwd = process.cwd();
+      const threadId = WorkbenchThreadIdSchema.parse("wb-thread");
+      const cancellation = new AbortController();
+      const permissions: WorkbenchAdmittedExecution["permissions"][] = [];
+      const approvals: Parameters<NonNullable<WorkbenchAgentMcpControllerOptions["approveHostedShell"]>>[0][] = [];
+      const prepared = preparedShell(cwd);
+      let nativeCalls = 0;
+      let executions = 0;
+      const prepareExecution: NonNullable<WorkbenchProviderTools["prepareExecution"]> = async request => {
+        permissions.push(request.permissions);
+        return prepared.run;
+      };
+      const tools: WorkbenchProviderTools = harness === "codex"
+        ? new CodexToolsController({
+          readCallerThread: async () => ({ id: threadId, cwd }),
+          resolvePatchCaller: async () => { throw new Error("unexpected patch"); },
+          shell: {
+            prepare: async () => { nativeCalls++; return prepared; },
+            prepareAdmitted: prepareExecution,
+          },
+        })
+        : {
+          caller: async () => ({ harness, threadId, cwd }),
+          describe: async () => ({ experimental: {}, shellDescription: "test", shellEscalation: true }),
+          patchClaims: async () => { throw new Error("unexpected patch"); },
+          prepareExecution,
+        };
+      const dispatcher = new WorkbenchProviderDispatcher(
+        async (_registration, operation) => operation({ tools } as WorkbenchProvider),
+      );
+      const controller = new WorkbenchAgentMcpController({
+        tools: () => dispatcher.get(harness).tools,
+        daemonOrigin: "http://127.0.0.1:4500",
+        requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+        lifecycleLogError: () => {},
+        approveHostedShell: async request => {
+          approvals.push(request);
+          if (decision === "cancel") cancellation.abort(new Error("caller cancelled"));
+          return decision === "decline" ? { kind: "decline" } : { kind: "allowOnce" };
+        },
+        executeShell: async () => {
+          executions++;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      });
+      const call = (requestId: number, outsideSandbox = false) => controller.call(
+        { clientScope: "client", projectLocal: false, provider: harness, subagent: false },
+        {
+          name: "shell", requestId, signal: cancellation.signal,
+          meta: { threadId: "native-thread" },
+          arguments: {
+            command: "echo test",
+            ...(outsideSandbox ? { outside_sandbox: true, justification: "needs outside access" } : {}),
+          },
+        },
+      );
+      const ordinary = await call(1);
+      assert.ok(ordinary.kind === "result");
+      assert.equal(ordinary.result.isError, false, responseText(ordinary.result));
+      assert.equal(nativeCalls, 0, "the provider handle must not divert ordinary commands to native preparation");
+      assert.deepEqual(permissions, [{ mode: "restricted", writableRoots: [cwd], network: false }]);
+      assert.equal(approvals.length, 0);
+      assert.equal(executions, 1);
+
+      const escalated = await call(2, true);
+      assert.ok(escalated.kind === "result");
+      assert.equal(escalated.result.isError, decision !== "allow");
+      assert.equal(approvals.length, 1);
+      assert.deepEqual(approvals[0]?.caller, { harness, threadId, cwd });
+      assert.equal(approvals[0]?.subject.cwd, cwd);
+      assert.equal(approvals[0]?.subject.justification, "needs outside access");
+      assert.equal(executions, decision === "allow" ? 2 : 1);
+      assert.deepEqual(permissions.map(value => value.mode),
+        decision === "allow" ? ["restricted", "approved-unrestricted"] : ["restricted"]);
+      if (decision === "allow") {
+        const next = await call(3);
+        assert.ok(next.kind === "result" && !next.result.isError);
+        assert.deepEqual(permissions.map(value => value.mode), ["restricted", "approved-unrestricted", "restricted"]);
+        assert.equal(approvals.length, 1);
+        assert.equal(executions, 3);
+      }
+    });
+  }
 }
 
 test("MCP preserves typed Git rejections before and after dispatch", async () => {
@@ -277,6 +368,7 @@ test("MCP preserves typed Git rejections before and after dispatch", async () =>
 });
 
 for (const failResolution of [false, true]) test(`shell resolves caller identity from thread cwd with resolution failure=${failResolution}`, async () => {
+  const cwd = process.cwd();
   const identities: object[] = [];
   const controller = codexController({
     executeCommand: async () => Response.json({}),
@@ -286,18 +378,18 @@ for (const failResolution of [false, true]) test(`shell resolves caller identity
     requestCodex: async (request) => {
       assert.equal(request.method, "thread/read");
       assert.deepEqual(request.params, { includeTurns: false, threadId: "native-session" });
-      return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
+      return { id: request.id ?? null, result: { thread: { cwd } } };
     },
     resolveThreadId: async (nativeThreadId, cwd) => {
       assert.equal(nativeThreadId, "native-session");
-      assert.equal(cwd, "C:/authoritative");
+      assert.equal(cwd, process.cwd());
       if (failResolution) throw new Error("identity unavailable");
       return WorkbenchThreadIdSchema.parse("workbench-thread");
     },
     shell: {
-      prepare: async (_input, _meta, _signal, identity) => {
-        identities.push(identity);
-        return preparedShell("C:/other");
+      prepareAdmitted: async request => {
+        identities.push(request.caller);
+        return preparedShell(request.cwd).run;
       },
     },
     executeShell: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
@@ -308,10 +400,10 @@ for (const failResolution of [false, true]) test(`shell resolves caller identity
     const call = () => client.callTool({
       name: "shell",
       _meta: { threadId: "native-session" },
-      arguments: { command: "Get-Location", workdir: "C:/other" },
+      arguments: { command: "Get-Location", workdir: "." },
     });
     assert.equal((await call()).isError, failResolution);
-    assert.deepEqual(identities, failResolution ? [] : [{ nativeThreadId: "native-session", workbenchThreadId: "workbench-thread" }]);
+    assert.deepEqual(identities, failResolution ? [] : [{ harness: "codex", threadId: "workbench-thread", cwd }]);
   } finally {
     await client.close();
     await server.close();
@@ -355,6 +447,61 @@ async function connectClient(url: URL) {
   const client = new Client({ name: "workbench-mcp-test", version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(url));
   return client;
+}
+
+for (const outcome of ["success", "tool error", "protocol error", "admission error", "notification"] as const) {
+  test(`retires completed MCP connections after ${outcome} without replaying calls`, async context => {
+    let executions = 0;
+    const controller = codexController({
+      daemonOrigin: "http://127.0.0.1:4500",
+      requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+      requestCodex: async request => ({
+        id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } },
+      }),
+      executeCommand: async () => {
+        executions++;
+        return outcome === "tool error"
+          ? new Response("operation rejected", { status: 409 })
+          : Response.json({ title: "completed" });
+      },
+    });
+    const server = await startController(controller);
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    context.after(async () => {
+      agent.destroy();
+      await server.close();
+    });
+    if (outcome === "admission error") server.url.searchParams.set("client", "invalid");
+    const sockets = new Set<Socket>();
+    for (let id = 1; id <= 2; id++) {
+      const message = outcome === "notification"
+        ? { jsonrpc: "2.0", method: "notifications/initialized" }
+        : outcome === "protocol error"
+          ? { invalid: true }
+          : {
+            jsonrpc: "2.0", id, method: "tools/call",
+            params: { name: "task_get", arguments: {}, _meta: { threadId: "thread-1" } },
+          };
+      const status = await new Promise<number | undefined>((resolve, reject) => {
+        const request = http.request(server.url, {
+          agent,
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        }, response => {
+          response.once("error", reject);
+          response.once("end", () => resolve(response.statusCode));
+          response.resume();
+        });
+        request.once("socket", socket => { sockets.add(socket); });
+        request.once("error", reject);
+        request.end(JSON.stringify(message));
+      });
+      assert.equal(status, outcome === "notification" ? 202
+        : outcome === "admission error" || outcome === "protocol error" ? 400 : 200);
+    }
+    assert.equal(executions, outcome === "success" || outcome === "tool error" ? 2 : 0);
+    assert.equal(sockets.size, 2, "completed responses must not leave a reusable idle socket");
+  });
 }
 
 function responseText(result: unknown) {
@@ -465,7 +612,6 @@ test("git_repo exists only while the virtual repository runtime is available", a
 test("lists one typed tool per eligible command and dispatches with trusted thread cwd", async () => {
   const executed: WorkbenchAgentCommandRequest[] = [];
   const codexRequests: Array<{ method?: string; params?: unknown }> = [];
-  const shellCalls: Array<{ input: object; meta: Record<string, unknown> | undefined }> = [];
   const controller = codexController({
     executeCommand: async (request) => {
       executed.push(request);
@@ -478,13 +624,6 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       codexRequests.push(request);
       return { id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } };
     },
-    shell: {
-      prepare: async (input, meta) => {
-        shellCalls.push({ input, meta });
-        return preparedShell("C:/authoritative/child");
-      },
-    },
-    executeShell: async () => ({ exitCode: 3, stderr: "sandbox denial\n", stdout: "partial\n" }),
   });
   const server = await startController(controller);
   const client = await connectClient(server.url);
@@ -576,29 +715,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.match(ripgrep.description ?? "", /without shell quoting.*no matches/u);
     const shell = inventory.tools.find(({ name }) => name === "shell");
     assert.ok(shell);
-    assert.deepEqual(Object.keys(shell.inputSchema.properties ?? {}).sort(), ["command", "expensive", "login", "timeout_ms", "workdir"]);
     assert.deepEqual(Object.keys(shell.outputSchema?.properties ?? {}).sort(), ["cwd", "exitCode", "shell", "stderr", "stdout"]);
-    assert.match(shell.description ?? "", /never escalates.*direct shell_command/u);
-
-    const shellMeta = {
-      [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: { effective: "sandbox" },
-      threadId: "thread-1",
-    };
-    const shellResult = await client.callTool({
-      _meta: shellMeta,
-      arguments: { command: "Get-ChildItem", workdir: "child" },
-      name: "shell",
-    });
-    assert.equal(shellResult.isError, false);
-    assert.match(responseText(shellResult), /Exit code: 3[\s\S]*partial[\s\S]*sandbox denial/u);
-    assert.deepEqual(shellResult.structuredContent, {
-      cwd: "C:/authoritative/child",
-      exitCode: 3,
-      shell: "pwsh",
-      stderr: "sandbox denial\n",
-      stdout: "partial\n",
-    });
-    assert.deepEqual(shellCalls, [{ input: { command: "Get-ChildItem", workdir: "child" }, meta: shellMeta }]);
 
     for (const [toolName, action, responseKind] of [
       ["git_arc_compare", "compare", "git-arc-compare"],
@@ -799,8 +916,6 @@ test("child catalogues omit every parent-only tool while retaining child coordin
     executeCommand: async () => Response.json({}),
     daemonOrigin: "http://127.0.0.1:4500",
     requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/authoritative" } } }),
-    shell: { prepare: async () => preparedShell("C:/authoritative") },
-    executeShell: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
   });
   const server = await startController(controller);
   const parent = await connectClient(server.url);
@@ -887,13 +1002,7 @@ test("fails closed without trusted identity and sanitizes boundary failures", as
     const missingShellIdentity = await client.callTool({ arguments: { command: "echo no" }, name: "shell" });
     assert.equal(missingShellIdentity.isError, true);
     assert.match(responseText(missingShellIdentity), /trusted MCP thread identity/u);
-    const missingSandboxState = await client.callTool({
-      _meta: { threadId: "thread-1" },
-      arguments: { command: "echo no" },
-      name: "shell",
-    });
-    assert.equal(missingSandboxState.isError, true);
-    assert.match(responseText(missingSandboxState), /valid MCP sandbox state/u);
+    assert.equal(codexReadCount, 0);
 
     failThreadRead = true;
     const sanitized = await client.callTool({
@@ -1121,6 +1230,7 @@ test("keeps declared Code Mode waits alive with request-owned progress only", as
 });
 
 test("shell calls that request progress keep their stream alive", { timeout: 5_000 }, async () => {
+  const cwd = process.cwd();
   const pulses: Array<() => Promise<void>> = [];
   const stopped: string[] = [];
   const progress: number[] = [];
@@ -1132,8 +1242,8 @@ test("shell calls that request progress keep their stream alive", { timeout: 5_0
     daemonOrigin: "http://127.0.0.1:4500",
     lifecycleLogError: () => {},
     requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
-    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
-    shell: { prepare: async () => preparedShell("C:/workspace") },
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd } } }),
+    shell: { prepareAdmitted: async () => preparedShell(cwd).run },
     executeShell: async () => {
       started.resolve();
       await release.promise;

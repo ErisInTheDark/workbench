@@ -73,7 +73,7 @@ const configurationSchema = z.object({
   }),
 });
 
-export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command inside the current Codex turn sandbox. This tool never escalates or opens an approval prompt. If a necessary command fails because the sandbox blocked it, diagnose that restriction before retrying with the direct shell_command tool and require_escalated.";
+export const WORKBENCH_SHELL_TOOL_DESCRIPTION = "Run a shell command in the sandbox, or request approval to run it outside the sandbox.";
 
 export interface CodexShellControllerOptions {
   /** Runs only the short sandbox ACL repair commands; agent commands run through the exec node's shell runner. */

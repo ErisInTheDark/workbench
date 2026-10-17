@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, prepare tools for its native sandbox, and expose the executor's command roots for reaping.
+ * - default CodexToolsController: interpret Codex MCP metadata, gate apply_patch on claims and sandbox ACL repair, prepare native and approved shell calls, and expose command roots for reaping.
  */
 import { NativeThreadIdSchema, type NativeThreadId, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { ProviderToolMetadata, WorkbenchProviderTools } from "./provider-execution";
@@ -65,8 +65,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
     return {
       experimental: { [WORKBENCH_SHELL_SANDBOX_CAPABILITY]: {} },
       shellDescription: WORKBENCH_SHELL_TOOL_DESCRIPTION,
-      // Codex escalates through its own native approval request, never through this tool.
-      shellEscalation: false,
+      shellEscalation: true,
     };
   }
 
