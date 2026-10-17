@@ -908,7 +908,7 @@ test("home renders one combined priority list with project-owned folders and for
   assert.doesNotMatch(html, /Pinned threads/u);
   assert.match(html, /data-role="thread-priority-icon" data-thread-priority="pinned"/u);
   assert.match(html, /Alpha[\s\S]*?web\/alpha[\s\S]*?Alpha folder/u);
-  assert.match(html, /href="\/@\/thread\/beta\/@\/beta-pinned"/u);
+  assert.match(html, /href="\/@\/\*~\/thread\/beta\/beta-pinned[?"]/u);
   assert.match(html, /data-thread-priority-drop-target="main"/u);
   assert.match(html, /data-thread-insertion-target="pinned"/u);
   assert.match(html, /data-thread-insertion-target="snoozed"/u);

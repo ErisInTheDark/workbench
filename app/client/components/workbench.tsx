@@ -71,7 +71,9 @@ import { useWorkbenchAppRpc } from "../workbench/app/WorkbenchAppRpcContext";
 import { WorkbenchNetworkClientContext } from "../workbench/app/WorkbenchNetworkClient";
 import WorkbenchBrowseSessionController from "../workbench/browse/WorkbenchBrowseSessionController";
 import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uuid-polyfill";
-import { FileActionContext, FileScopeContext, resolveFileOpenDestination, useFileActions } from "../workbench/file/use-file";
+import {
+  FileActionContext, FileScopeContext, resolveFileOpenDestination, resolveWorkbenchFileRoute, useFileActions,
+} from "../workbench/file/use-file";
 import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
 import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
@@ -118,20 +120,17 @@ import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComp
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
 import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
-import WorkbenchGitRefreshButton from "./workbench/git/WorkbenchGitRefreshButton";
-import WorkbenchGitRepositoryControl from "./workbench/git/WorkbenchGitRepositoryControl";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
 import WorkbenchSvgEditorView from "./workbench/svg/WorkbenchSvgEditorView";
-import WorkbenchSvgWorkspace from "./workbench/svg/WorkbenchSvgWorkspace";
-import { useSvgFileTabs } from "./workbench/svg/use-svg-file-tabs";
+import WorkbenchSvgFileView, { canCreateTextFiles, NEW_SVG_SOURCE } from "./workbench/svg/WorkbenchSvgFileView";
+import WorkbenchShellTabs from "./workbench/shell-tabs/WorkbenchShellTabs";
 import WorkbenchThreadPanel from "./workbench/layout/WorkbenchThreadPanel";
 import MobilePaneTrack from "./workbench/MobilePaneTrack";
 import type { MobileShellHeaderEvent } from "./workbench/mobile-shell-header-visibility";
 import MobileShellHeaderVisibilityController from "./workbench/MobileShellHeaderVisibilityController";
 import WorkbenchMobileShellHeader from "./workbench/WorkbenchMobileShellHeader";
-import WorkbenchStatsTabs from "./workbench/stats/WorkbenchStatsTabs";
 import WorkbenchStatsView from "./workbench/stats/WorkbenchStatsView";
 import { resolveStatsProjectScope } from "./workbench/stats/stats-project-scope";
 import type DraftSessionController from "./workbench/thread-view/DraftSessionController";
@@ -192,7 +191,6 @@ import WorkbenchSidebarPreferencesProvider from "./workbench/WorkbenchSidebarPre
 import WorkbenchSidebarSectionDisclosure from "./workbench/WorkbenchSidebarSectionDisclosure";
 import WorkbenchTabIcon from "./workbench/WorkbenchTabIcon";
 import WorkbenchSidebarPane from "./workbench/WorkbenchSidebarPane";
-import WorkbenchThreadShellTitle from "./workbench/WorkbenchThreadShellTitle";
 import { isThreadStatusActive } from "./workbench/thread-attention";
 import WorkbenchThreadTooltipDetails from "./workbench/WorkbenchThreadTooltipDetails";
 import WorkbenchWorkspace from "./workbench/WorkbenchWorkspace";
@@ -443,7 +441,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const mobileSidebarRequested = isMobileSidebarRequested(useSearchParams().toString());
   const mobilePane = getPreferredMobilePane(isMobile, route, mobileSidebarRequested);
   const mobilePaneSlideRef = useRef<((destination: MobilePaneDestination) => void) | null>(null);
-  const [settingsPageTitle, setSettingsPageTitle] = useState("General");
   // A composer shortcut asks settings to open on one section; ordinary settings visits start fresh.
   const [settingsTarget, setSettingsTarget] = useState<{ section: string; daemonId: DaemonId } | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -469,8 +466,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   }));
   const mainPaneRef = useRef<HTMLElement>(null);
   const directThreadScrollViewportRef = useRef<HTMLDivElement>(null);
-  const filePathLabelRef = useRef<HTMLParagraphElement>(null);
-  const statusLineRef = useRef<HTMLParagraphElement>(null);
   const retainedThreadRef = useRef<ThreadPayload | null>(null);
   const threadViewInstanceKeysByThreadIdRef = useRef(new Map<string, string>());
   const searchActivationRef = useRef<(result: WorkbenchSearchHit) => void>(() => undefined);
@@ -809,16 +804,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     openOtherFilesWith: resolvedSettings.openOtherFilesWith,
     openSvgFilesWith: resolvedSettings.openSvgFilesWith,
   }), [resolvedSettings.openMarkdownFilesWith, resolvedSettings.openOtherFilesWith, resolvedSettings.openSvgFilesWith]);
-  const svgFileTabs = useSvgFileTabs({
-    browseLocation,
-    currentProjectId: explorer.currentProjectId,
-    logicalProjects,
-    navigateToRoute,
-    navigator: workbenchClient.mounted?.projectNavigator ?? null,
-    route,
-  });
   const openFileByPolicy = useFileActions({
-    routeForWorkbenchFile: svgFileTabs.routeForWorkbenchFile,
     policy: fileOpenPolicy,
     browseLocation,
     currentProjectId: explorer.currentProjectId,
@@ -862,20 +848,23 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
         : createPinnedThreadRoute(viewedProjectId, targetProjectId, target));
     return true;
   }, [explorer.currentProjectId, navigateToRoute, route]);
+  /** The new-thread composer for the selection's preferred launch target: where Workbench starts when nothing is open. */
+  const newThreadRoute = useCallback((): WorkbenchRoute | null => {
+    if (workbenchClient.mounted?.presentationClient) {
+      const presentation = workbenchClient.mounted.presentationClient.snapshot().data;
+      const preferred = presentation
+        ? preferredSelectedLaunchTarget(logicalProjects, selectionProjectIds, presentation)
+        : null;
+      return preferred?.project && preferred.location
+        ? createLogicalThreadRoute(preferred.project.id, preferred.project.id, preferred.location, { kind: "new" })
+        : null;
+    }
+    return selectedPhysicalProjects[0] ? createThreadRoute(selectedPhysicalProjects[0].id, { kind: "new" }) : null;
+  }, [logicalProjects, selectedPhysicalProjects, selectionProjectIds, workbenchClient.mounted]);
   const searchActionContext = useMemo<WorkbenchActionContext>(() => ({
     createThread: () => {
-      if (workbenchClient.mounted?.presentationClient) {
-        const presentation = workbenchClient.mounted.presentationClient.snapshot().data;
-        const preferred = presentation
-          ? preferredSelectedLaunchTarget(logicalProjects, selectionProjectIds, presentation)
-          : null;
-        const project = preferred?.project;
-        const location = preferred?.location;
-        if (project && location) navigateToRoute(createLogicalThreadRoute(
-          project.id, project.id, location, { kind: "new" },
-        ));
-      }
-      else if (selectedPhysicalProjects[0]) navigateToRoute(createThreadRoute(selectedPhysicalProjects[0].id, { kind: "new" }));
+      const destination = newThreadRoute();
+      if (destination) navigateToRoute(destination);
     },
     getSidebarThreadLinks: () => Array.from(document.querySelector("aside")?.querySelectorAll<HTMLElement>("[data-workbench-sidebar-thread-link='true']") ?? [])
       .filter((link) => !link.closest("[hidden]")),
@@ -889,9 +878,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     },
     zoomIn: () => updateEditorFontSize(resolvedSettings.editorFontSize + 0.08),
     zoomOut: () => updateEditorFontSize(resolvedSettings.editorFontSize - 0.08),
-  }), [attachedProjectId, isMobile, logicalProjects, navigateToRoute, selectedPhysicalProjects, selectionProjectIds,
-    resolvedSettings.editorFontSize, searchController, updateEditorFontSize, viewedProjectId,
-    workbenchClient.mounted]);
+  }), [attachedProjectId, isMobile, navigateToRoute, newThreadRoute, resolvedSettings.editorFontSize, searchController,
+    updateEditorFontSize, viewedProjectId]);
   searchActivationRef.current = (result) => {
     switch (result.kind) {
       case "action":
@@ -1341,6 +1329,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const effectiveThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetRootId(effectiveThreadTarget) : route.threadId;
   const effectiveSelectedThreadId = effectiveThreadTarget ? getWorkbenchThreadTargetSelectedId(effectiveThreadTarget) : effectiveThreadId;
   const effectiveFilePath = mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.filePath : route.filePath;
+  const showSvgFileView = showFileView && isSvgFile(effectiveFilePath);
+  const svgFileLocation = showSvgFileView
+    ? (mobileMosaicFallbackTarget?.kind === "file" ? mobileMosaicFallbackTarget.source?.location : undefined)
+      ?? workbenchClient.mounted?.projectNavigator.fileLocationFor(route) ?? null
+    : null;
   const showEmptyState = !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
   const showRouteError = Boolean(selectionError) && !showThreadView && !showFileView && !showSettingsView && !showStatsView && !showMosaicView && !showGitView && !routeView;
   if (currentThread) {
@@ -1545,8 +1538,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   const ambientCanvasVariant: WorkbenchAmbientCanvasVariant | null = resolvedSettings.theme === "magical-girl" || resolvedSettings.theme === "winter"
     ? resolvedSettings.theme
     : null;
-  const shouldShowShellHeader = !showFullBleedMainView && !showFileView && !showEmptyState
-    && (!isMobile || mobilePane === "editor");
+  const shouldShowShellHeader = !showFullBleedMainView && (!isMobile || mobilePane === "editor");
   const mainPaneScrollKey = showThreadView
     ? `thread:${activeThreadId}`
     : showFileView
@@ -1945,14 +1937,19 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     setIsCreatingEntry(true);
     setCreateDialogError("");
     try {
-      const createdPath = await controls.createEntry(createDialogParentPath, createEntryName, type);
+      // Explorer entries follow markdown naming; an svg starts as an empty drawing written directly.
+      const svgPath = type === "file" && isSvgFile(createEntryName.trim())
+        ? [createDialogParentPath, createEntryName.trim()].filter(Boolean).join("/") : null;
+      const createdPath = svgPath && canCreateTextFiles(controls)
+        ? await controls.createTextFile(svgPath, NEW_SVG_SOURCE, browseLocation).then(() => svgPath)
+        : await controls.createEntry(createDialogParentPath, createEntryName, type);
       setIsCreatingEntry(false);
 
       closeCreateDialog();
       if (type === "file") {
         navigateToRoute(route.logical?.projectId && browseLocation
           ? createLogicalFileRoute(route.logical.projectId, browseLocation, createdPath)
-          : createFileRoute(explorer.currentProjectId || route.projectId, createdPath));
+          : createFileRoute(explorer.currentProjectId || route.projectId, createdPath), { tab: "durable" });
       }
     } catch (error) {
       setIsCreatingEntry(false);
@@ -2150,6 +2147,8 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               ref={mainPaneRef}
               className={`scrollbar-hover-reveal flex h-dvh w-screen min-w-0 shrink-0 flex-col overflow-x-hidden md:w-auto${showGitView
                 ? " min-h-0 overflow-hidden px-5 pb-0 md:h-screen md:px-6"
+                : showSvgFileView
+                ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-hidden md:px-6"
                 : showSettingsView || showStatsView || routeView
                 ? " overflow-y-auto px-5 md:h-screen md:min-h-0 md:overflow-y-auto md:px-6"
                 : isDirectThreadSurface
@@ -2176,70 +2175,41 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 hidden={!shouldShowShellHeader}
                 visibility={mobileShellHeaderVisibility}
               >
+                {/* The fade stops short of the left edge so the page's top-left glow shows through. */}
                 <div
                   aria-hidden="true"
                   className={`
                     pointer-events-none absolute inset-0 -z-10 md:backdrop-blur-none
                     bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)]
-                    ${showStatsView ? "" : "md:mx-auto md:max-w-[58rem]"}
+                    [mask-image:linear-gradient(to right, transparent, black calc(var(--spacing) * 20))]
                   `}
                 />
-                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                  <div className="order-2 min-w-0 w-full flex-1 md:order-1">
-                    <WorkbenchThreadShellTitle
-                      draft={activeRouteDraft}
-                      onSaveTitle={controls ? async (source, title) => await controls.setThreadTitle({
-                        harness: source.harness, threadId: source.id, title,
-                      }) : undefined}
-                      projectId={threadProjectId}
-                      showThreadView={showThreadView}
-                      statusRef={statusLineRef}
-                      target={effectiveThreadTarget}
-                      thread={threadForThreadView}
-                      threadId={effectiveThreadId}
-                      titleRef={filePathLabelRef}
-                      unavailable={Boolean(selectionError)}
-                    >
-                      <p id="file-path" ref={filePathLabelRef} hidden={showStatsView} className="truncate text-base font-semibold leading-tight">
-                        {routeView ? routeView.title : showGitView ? "Working tree" : showSettingsView ? `Settings / ${settingsPageTitle}` : "Select a file"}
-                      </p>
-                      {showStatsView ? (
-                        <WorkbenchStatsTabs tab={statsTab} />
-                      ) : null}
-                      <p id="status-line" ref={statusLineRef} hidden={showSettingsView || showStatsView || Boolean(routeView)} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted">
-                        {showGitView ? <WorkbenchGitRepositoryControl /> : "Markdown files open as rich text. Save with Ctrl/Cmd+S."}
-                      </p>
-                    </WorkbenchThreadShellTitle>
-                  </div>
-                  <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-                    <IconButton
-                      type="button"
-                      label="Back to file explorer"
-                      display="hover-border"
-                      title="Back to file explorer"
-                      hidden={!isMobile || mobilePane !== "editor"}
-                      className="md:hidden"
-                      onClick={() => {
-                        if (mobilePaneSlideRef.current) mobilePaneSlideRef.current("sidebar");
-                        else window.history.pushState({ workbench: true }, "", mobileSidebarHref(window.location));
-                      }}
-                    >
-                      <BackArrowIcon size={20} />
-                      <span className="sr-only">Back to file explorer</span>
-                    </IconButton>
-                    <div className="flex items-center gap-1.5">
-                      {showGitView ? <WorkbenchGitRefreshButton /> : null}
-                      <WorkbenchZoomButton
-                        label="Editor text size"
-                        disabled={!shouldShowShellHeader}
-                        min={MIN_EDITOR_FONT_SIZE}
-                        max={MAX_EDITOR_FONT_SIZE}
-                        value={resolvedSettings.editorFontSize}
-                        onPreview={setEditorFontSizePreview}
-                        onChange={updateEditorFontSize}
-                      />
-                    </div>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <IconButton
+                    type="button"
+                    label="Back to file explorer"
+                    display="hover-border"
+                    title="Back to file explorer"
+                    hidden={!isMobile || mobilePane !== "editor"}
+                    className="shrink-0 md:hidden"
+                    onClick={() => {
+                      if (mobilePaneSlideRef.current) mobilePaneSlideRef.current("sidebar");
+                      else window.history.pushState({ workbench: true }, "", mobileSidebarHref(window.location));
+                    }}
+                  >
+                    <BackArrowIcon size={20} />
+                    <span className="sr-only">Back to file explorer</span>
+                  </IconButton>
+                  <WorkbenchShellTabs className="flex-1" fallback={newThreadRoute} />
+                  <WorkbenchZoomButton
+                    label="Editor text size"
+                    disabled={!shouldShowShellHeader}
+                    min={MIN_EDITOR_FONT_SIZE}
+                    max={MAX_EDITOR_FONT_SIZE}
+                    value={resolvedSettings.editorFontSize}
+                    onPreview={setEditorFontSizePreview}
+                    onChange={updateEditorFontSize}
+                  />
                 </div>
               </WorkbenchMobileShellHeader>
 
@@ -2389,7 +2359,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onGitRootsSaved={async daemonId => {
                       await workbenchClient.mounted?.refreshInstallationProjects(daemonId);
                     }}
-                    onPageChange={setSettingsPageTitle}
                     initialSection={settingsTarget?.section}
                     initialDaemonId={settingsTarget?.daemonId}
                     selectionPending={dynamicSelectionPending
@@ -2653,9 +2622,17 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     }}
                   />
                 ) : null}
-                {showFileView && !shouldRenderMainLayout && svgFileTabs.tabs ? (
-                  <WorkbenchSvgWorkspace controls={controls} tabs={svgFileTabs.tabs} />
-                ) :showFileView && !shouldRenderMainLayout ? (
+                {showSvgFileView && !shouldRenderMainLayout ? (
+                  <WorkbenchSvgFileView
+                    controls={controls}
+                    location={svgFileLocation}
+                    onOpenCopy={path => navigateToRoute(resolveWorkbenchFileRoute({
+                      currentProjectId: explorer.currentProjectId, logicalProjects, location: svgFileLocation, path,
+                      projectId: svgFileLocation?.projectId ?? explorer.currentProjectId ?? route.projectId, route,
+                    }), { replace: true })}
+                    path={effectiveFilePath}
+                  />
+                ) : showFileView && !shouldRenderMainLayout ? (
                   <WorkbenchFileView
                     route={route}
                     editorFontClassName={editorFontClassName}

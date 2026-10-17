@@ -113,7 +113,6 @@ export default function WorkbenchSettingsView({
   projects,
   onError,
   onGitRootsSaved,
-  onPageChange,
   selectionError,
   selectionPending,
 }: {
@@ -132,7 +131,6 @@ export default function WorkbenchSettingsView({
   projects: readonly { id: LogicalProjectId; label: string; iconProject: WorkbenchLogicalProject }[];
   onError: (message: string) => void;
   onGitRootsSaved: (daemonId: DaemonId) => Promise<void>;
-  onPageChange: (title: string) => void;
   selectionError: string | null;
   selectionPending: boolean;
 }) {
@@ -157,10 +155,6 @@ export default function WorkbenchSettingsView({
   const machineFolders = machine ? folders.filter(item => item.project && item.target.daemonId === machine.id) : [];
   const folder = machineFolders.find(item => folderKey(item.target) === chosenFolderKey) ?? machineFolders[0] ?? null;
   const folderDaemon = folder ? getFolderDaemon(folder.target) : null;
-  const title = place.kind === "app" ? appPages.find(page => page.id === place.page)!.label
-    : `${machine?.hostname ?? "Machine"} / ${machinePages.find(page => page.id === place.page)!.label}`;
-
-  useEffect(() => { onPageChange(title); }, [onPageChange, title]);
   if (selectionPending) return <p role="status" className="mx-auto max-w-content px-5 py-6 text-sm text-fg/muted">Loading project selection...</p>;
   if (selectionError) return <p role="alert" className="mx-auto max-w-content px-5 py-6 text-sm text-danger">{selectionError}</p>;
 

@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - default WorkbenchProjectNavigation: maintain current project addresses, resolve routes, hrefs, and live thread owners, and notify subscribers when addresses change.
+ * - default WorkbenchProjectNavigation: maintain current project addresses, resolve routes, hrefs, tab destinations, and live thread owners, and notify subscribers when addresses change.
  */
 import type { WorkbenchLogicalProject, WorkbenchProjectAlias, WorkbenchProjectOption } from "workbench-shared/types";
 import {
   createHomeRoute, createInvalidWorkbenchRoute, createProjectRoute, createProjectSelectionRoute, createWorkbenchHref,
-  parseWorkbenchRouteFromLocation, withProjectSelection, withFileTabs, getWorkbenchFileTabs, type WorkbenchRoute,
+  formatWorkbenchTab, parseWorkbenchRouteFromLocation, withProjectSelection, withFileTabs, WORKBENCH_ROUTE_MARKER,
+  type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
@@ -216,21 +217,47 @@ export default class WorkbenchProjectNavigation {
   /** `inherit` keeps the current sidebar selection for every destination except home and project views, which are selections. */
   href(route: WorkbenchRoute, current?: WorkbenchRoute,
     selection: "inherit" | "exact" = "exact"): string | undefined {
+    const destination = this.publicRoute(route, current, selection);
+    return destination && createWorkbenchHref(destination);
+  }
+
+  /**
+   * The tab a destination's href writes, without the project selection and sidebar folder (they stay ambient), so the
+   * same tab opens under any selection. Home and project views are the selection itself, and mosaic and invalid routes
+   * have no address, so none of them are tabs.
+   */
+  tabFor(route: WorkbenchRoute, current?: WorkbenchRoute): string | undefined {
+    if (route.view === "mosaic" || route.view === "invalid" || route.view === "home" || route.view === "project") {
+      return undefined;
+    }
+    const destination = this.publicRoute(route, current, "inherit");
+    return destination && formatWorkbenchTab(destination);
+  }
+
+  /** The destination a tab names, before the current selection and folder are applied. */
+  routeForTab(tab: string): WorkbenchRoute {
+    return this.readRoute(`/${WORKBENCH_ROUTE_MARKER}/*/${tab}`);
+  }
+
+  /** The destination with public project addresses, exactly as its href and tab spell it. */
+  private publicRoute(route: WorkbenchRoute, current: WorkbenchRoute | undefined,
+    selection: "inherit" | "exact"): WorkbenchRoute | undefined {
     const fileLocation = route.view === "file" ? this.fileLocationFor(route) : null;
     const intent = selection === "inherit" && current && route.view !== "home" && route.view !== "project"
       ? withProjectSelection(route, current.selectedProjectIds) : route;
     let withFolder = intent.folderAddress === undefined && selection === "inherit" && current?.folderAddress?.length
       ? { ...intent, folderAddress: [...current.folderAddress] }
       : intent;
+    // A file tab names its own folder, so its tab reads the same under any sidebar folder or selection. A folder the
+    // picker does not list yet has no address, and only opens as the sidebar's own folder.
     if (fileLocation) {
-      const sidebarFolder = this.folderForRoute(this.resolveRoute(withFolder));
-      const sameFolder = sidebarFolder?.daemonId === fileLocation.daemonId
-        && sidebarFolder?.projectId === fileLocation.projectId;
-      const address = sameFolder ? null : ProjectFolderAddress.forFolder(this.folders, fileLocation);
-      if (address && !address.length) return undefined;
-      const { tabs, index } = getWorkbenchFileTabs(withFolder);
-      if (index >= 0) withFolder = withFileTabs(withFolder, tabs.map((tab, position) =>
-        position === index ? { ...tab, folderAddress: address } : tab), index);
+      const address = ProjectFolderAddress.forFolder(this.folders, fileLocation);
+      if (address.length) {
+        withFolder = withFileTabs(withFolder, [{ filePath: withFolder.filePath, folderAddress: address }], 0);
+      } else {
+        const sidebarFolder = this.folderForRoute(this.resolveRoute(withFolder));
+        if (sidebarFolder?.daemonId !== fileLocation.daemonId || sidebarFolder.projectId !== fileLocation.projectId) return undefined;
+      }
     }
     const resolved = this.resolveRoute(withFolder);
     if (resolved.view === "invalid" || resolved.view === "mosaic") return undefined;
@@ -257,24 +284,24 @@ export default class WorkbenchProjectNavigation {
         return project ? this.canonicalAddress(project) : undefined;
       }) ?? null;
       if (selectedAddresses?.includes(undefined)) return undefined;
-      return createWorkbenchHref({
+      return {
         ...resolved,
         logical: undefined,
         projectId: selectedAddresses?.length === 1 ? ProjectIdSchema.parse(selectedAddresses[0]!) : "",
         selectedProjectIds: selectedAddresses as string[] | null,
         threadOwnerProjectId: owner ? ProjectIdSchema.parse(this.canonicalAddress(owner)) : "",
-      });
+      };
     }
     const preferred = current ? [current.projectId, current.threadOwnerProjectId] : [];
     const projectId = this.address(withFolder.projectId, preferred);
     const ownerId = this.address(withFolder.threadOwnerProjectId, preferred);
     const selectedAddresses = withFolder.selectedProjectIds?.map(id => this.address(id, preferred)) ?? null;
     if (projectId === undefined || ownerId === undefined || selectedAddresses?.includes(undefined)) return undefined;
-    return createWorkbenchHref({
+    return {
       ...withFolder, projectId: projectId ? ProjectIdSchema.parse(projectId) : "",
       selectedProjectIds: selectedAddresses as string[] | null,
       threadOwnerProjectId: ownerId ? ProjectIdSchema.parse(ownerId) : "",
-    });
+    };
   }
 
   private resolveProjectId(address: string) {

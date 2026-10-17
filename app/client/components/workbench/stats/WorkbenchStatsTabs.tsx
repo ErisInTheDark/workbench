@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchStatsTabs: the stats view's tab row for the app shell header; each tab is a real link to its url.
+ * - default WorkbenchStatsTabs: the stats view's own tab row; each tab is a real link to its url.
  */
 import { createStatsRoute, WORKBENCH_STATS_TABS, type WorkbenchStatsTab } from "workbench-shared/workbench/navigation/workbench-route";
 import { useWorkbenchProjectNavigation } from "../../../workbench/navigation/use-workbench-project-navigation";

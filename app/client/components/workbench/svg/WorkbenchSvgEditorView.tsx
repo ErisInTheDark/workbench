@@ -111,26 +111,19 @@ function RealSizePreviews({ root }: { root: SvgSourceElement }) {
 }
 
 export default function WorkbenchSvgEditorView({
-  active = true,
   contained = false,
   controls,
-  embedded = false,
   location = null,
   onClose,
-  onDirtyChange,
   onHeaderPointerDragStart,
   onSaveAs,
   path,
   sidebarToggleInset,
 }: {
-  active?: boolean;
   contained?: boolean;
   controls: WorkbenchControls | null;
-  /** Inside the tabbed workspace: no own title, fills its slot. */
-  embedded?: boolean;
   location?: ProjectLocationReference | null;
   onClose?: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
   onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
   /** Ask for a new path for `content`; call `done` once it is written so this file's draft can be dropped. */
   onSaveAs?: (content: string, done: () => void) => void;
@@ -161,7 +154,6 @@ export default function WorkbenchSvgEditorView({
   const [action, setAction] = useState<SvgCanvasAction | null>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { onDirtyChange?.(state.dirty); }, [onDirtyChange, state.dirty]);
 
   const segmentRanges = useMemo(() => {
     if (!parsed.ok) return [];
@@ -226,7 +218,7 @@ export default function WorkbenchSvgEditorView({
     setAction(current => ({ id: (current?.id ?? 0) + 1, ...(typeof command === "string" ? { kind: command } : command) } as SvgCanvasAction));
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (!active || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === "s") {
       event.preventDefault();
@@ -257,12 +249,13 @@ export default function WorkbenchSvgEditorView({
     <div
       className={`
         flex min-w-0 flex-col
-        ${embedded ? "min-h-0 flex-1" : contained ? "h-full min-h-[24rem]" : "min-h-[calc(100dvh-1rem)] md:h-dvh"}
+        ${contained ? "h-full min-h-[24rem]" : "min-h-0 flex-1"}
       `}
       data-svg-editor-path={path}
       onKeyDown={handleKeyDown}
     >
-      {embedded ? null : (
+      {/* In the main pane the shell tab names the file; mosaic panels carry their own draggable title. */}
+      {!contained ? null : (
         <header
           className={`
             flex items-center gap-2 pt-3

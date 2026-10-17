@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces.
+ * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces; mosaic panels get a
+ *   titled header, the main pane a floating save and discard control shown while there is local work.
  */
 "use client";
 
@@ -9,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } 
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import createFilePanelClient, { type WorkbenchFilePanelClient, type WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import useFileDocument from "../../../workbench/file/use-file-document";
-import type { WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
+import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE } from "../../../workbench/state/workbench-settings";
 import IconButton from "../../ui/IconButton";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
@@ -79,7 +80,6 @@ export default function WorkbenchFilePanel ({
   const statusLineRef = useRef<HTMLParagraphElement>(null);
   const resetDraftButtonRef = useRef<HTMLButtonElement>(null);
   const saveFileButtonRef = useRef<HTMLButtonElement>(null);
-  const zoomButtonRef = useRef<HTMLButtonElement>(null);
   const saveConflictDialogRef = useRef<HTMLDivElement>(null);
   const saveConflictSummaryRef = useRef<HTMLParagraphElement>(null);
   const saveConflictExpectedRef = useRef<HTMLParagraphElement>(null);
@@ -111,7 +111,6 @@ export default function WorkbenchFilePanel ({
       || !statusLineRef.current
       || !resetDraftButtonRef.current
       || !saveFileButtonRef.current
-      || !zoomButtonRef.current
       || !saveConflictDialogRef.current
       || !saveConflictSummaryRef.current
       || !saveConflictExpectedRef.current
@@ -135,7 +134,6 @@ export default function WorkbenchFilePanel ({
       controls: {
         resetDraftButton: resetDraftButtonRef.current,
         saveFileButton: saveFileButtonRef.current,
-        zoomButton: zoomButtonRef.current,
       },
       dialogs: {
         saveConflict: {
@@ -201,6 +199,20 @@ export default function WorkbenchFilePanel ({
     clientRef.current?.previewFontSize(value === null ? null : usesPanelZoom ? panelBaseFontSize + value * 0.08 : value);
   }, [usesPanelZoom, panelBaseFontSize]);
 
+  const hasLocalWork = Boolean(snapshot?.dirty || snapshot?.hasSaveIssue || snapshot?.hasPendingWriteConflict);
+  const saveButton = (
+    <IconButton ref={saveFileButtonRef} type="button" title="Save current file" label="Save current file" display="hover-border" data-invalid="false">
+      <SaveIcon size={20} />
+      <span className="sr-only">Save current file</span>
+    </IconButton>
+  );
+  const discardButton = (
+    <IconButton ref={resetDraftButtonRef} type="button" title="Discard the current draft" label="Discard the current draft" display="hover-border">
+      <BinIcon size={20} />
+      <span className="sr-only">Discard the current draft</span>
+    </IconButton>
+  );
+
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
       !onHeaderPointerDragStart
@@ -227,91 +239,93 @@ export default function WorkbenchFilePanel ({
       {!file.snapshot.data && file.snapshot.phase === "pending" ? <p role="status">Loading file...</p> : null}
       {file.snapshot.data && file.snapshot.phase !== "current" && !file.snapshot.failure
         ? <p role="status">Waiting for current disk data...</p> : null}
-      <header
-        className={`sticky top-0 z-10 -mx-5 py-3 md:-mx-6 ${sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pl-32 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
-        onPointerDown={handleHeaderPointerDown}
-      >
+      {contained ? (
+        <header
+          className={`
+            sticky top-0 z-10 -mx-5 py-3 md:-mx-6
+            ${sidebarToggleInset === "collapsed" ? "pl-32 pr-5 md:pl-32 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}
+            ${onHeaderPointerDragStart ? "cursor-grab active:cursor-grabbing" : ""}
+            ${isMinimizedVertical ? "flex h-full items-center justify-center" : ""}
+          `}
+          {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}
+          onPointerDown={handleHeaderPointerDown}
+        >
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
+          />
+          <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between ${isMinimizedVertical ? "rotate-90 whitespace-nowrap" : ""}`}>
+            <div className="order-2 min-w-0 md:order-1">
+              <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
+                {titleLabel ?? snapshot?.currentPath ?? path}
+              </p>
+              <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" hidden={isMinimized} />
+            </div>
+            <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
+              {onMinimizeToggle ? (
+                <IconButton
+                  type="button"
+                  title={isMinimized ? "Expand panel" : "Minimize panel"}
+                  label={isMinimized ? "Expand panel" : "Minimize panel"}
+                  display="hover-border"
+                  onClick={onMinimizeToggle}
+                >
+                  {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
+                  <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
+                </IconButton>
+              ) : null}
+              {onPanelZoomDeltaChange ? (
+                <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
+                  <WorkbenchZoomButton
+                    label="Editor text size"
+                    disabled={isMinimized || !showManualFileActions || !snapshot}
+                    min={Math.floor(Number(((MIN_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6)))}
+                    max={Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6)))}
+                    step={1}
+                    value={panelZoomDelta}
+                    onPreview={previewZoom}
+                    format={value => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, panelBaseFontSize + value * 0.08)).toFixed(2)}rem`}
+                    onChange={onPanelZoomDeltaChange}
+                  />
+                </div>
+              ) : null}
+              <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
+                {saveButton}
+                {discardButton}
+              </div>
+              {onClose ? (
+                <IconButton
+                  type="button"
+                  title="Close panel"
+                  label="Close panel"
+                  display="hover-border"
+                  onClick={onClose}
+                >
+                  <PanelCloseIcon size={16} />
+                  <span className="sr-only">Close panel</span>
+                </IconButton>
+              ) : null}
+            </div>
+          </div>
+        </header>
+      ) : (
+        // In the main pane the shell tab names the file; save and discard float in reach only while there is work to keep.
         <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-10 md:mx-auto md:max-w-[58rem] bg-[linear-gradient(to bottom, var(--app-bg-solid) calc(100% - var(--spacing) * 6), transparent)] md:backdrop-blur-none"
-        />
-        <div className={`flex flex-col gap-2 md:flex-row md:items-start md:justify-between${isMinimizedVertical ? " rotate-90 whitespace-nowrap" : ""}`}>
-          <div className="order-2 min-w-0 md:order-1">
-            <p ref={filePathLabelRef} className="truncate text-base font-semibold leading-tight">
-              {titleLabel ?? snapshot?.currentPath ?? path}
-            </p>
-            <p ref={statusLineRef} className="mt-1 text-[0.84rem] tracking-[0.02em] text-fg/muted" hidden={isMinimized}>
-              Markdown files open as rich text. Save with Ctrl/Cmd+S.
-            </p>
-          </div>
-          <div className="order-1 flex items-center justify-between gap-3 md:order-2 md:ml-auto md:flex-none md:justify-end">
-            {onMinimizeToggle ? (
-              <IconButton
-                type="button"
-                title={isMinimized ? "Expand panel" : "Minimize panel"}
-                label={isMinimized ? "Expand panel" : "Minimize panel"}
-                display="hover-border"
-                onClick={onMinimizeToggle}
-              >
-                {isMinimized ? <PanelExpandIcon size={20} /> : <PanelMinimizeIcon size={20} />}
-                <span className="sr-only">{isMinimized ? "Expand panel" : "Minimize panel"}</span>
-              </IconButton>
-            ) : null}
-            <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-              <WorkbenchZoomButton
-                ref={zoomButtonRef}
-                label="Editor text size"
-                disabled={isMinimized || !showManualFileActions || !snapshot}
-                min={onPanelZoomDeltaChange ? Math.floor(Number(((MIN_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6))) : MIN_EDITOR_FONT_SIZE}
-                max={onPanelZoomDeltaChange ? Math.ceil(Number(((MAX_EDITOR_FONT_SIZE - panelBaseFontSize) / 0.08).toFixed(6))) : MAX_EDITOR_FONT_SIZE}
-                step={onPanelZoomDeltaChange ? 1 : 0.08}
-                value={onPanelZoomDeltaChange ? panelZoomDelta : snapshot?.fontSize ?? fontSizeRem}
-                onPreview={previewZoom}
-                format={value => `${Math.max(MIN_EDITOR_FONT_SIZE, Math.min(MAX_EDITOR_FONT_SIZE, onPanelZoomDeltaChange ? panelBaseFontSize + value * 0.08 : value)).toFixed(2)}rem`}
-                onChange={(value) => {
-                  if (onPanelZoomDeltaChange) onPanelZoomDeltaChange(value);
-                  else clientRef.current?.setFontSize(value);
-                }}
-              />
-            </div>
-            <div className="flex items-center gap-1.5" hidden={isMinimized || !showManualFileActions}>
-              <IconButton
-                ref={saveFileButtonRef}
-                type="button"
-                title="Save current file"
-                label="Save current file"
-                display="hover-border"
-                data-invalid="false"
-              >
-                <SaveIcon size={20} />
-                <span className="sr-only">Save current file</span>
-              </IconButton>
-              <IconButton
-                ref={resetDraftButtonRef}
-                type="button"
-                title="Discard the current draft"
-                label="Discard the current draft"
-                display="hover-border"
-              >
-                <BinIcon size={20} />
-                <span className="sr-only">Discard the current draft</span>
-              </IconButton>
-            </div>
-            {onClose ? (
-              <IconButton
-                type="button"
-                title="Close panel"
-                label="Close panel"
-                display="hover-border"
-                onClick={onClose}
-              >
-                <PanelCloseIcon size={16} />
-                <span className="sr-only">Close panel</span>
-              </IconButton>
-            ) : null}
-          </div>
+          className={`
+            fixed right-4 bottom-[calc(1rem+var(--workbench-safe-area-bottom,0px))] z-30 flex max-w-[calc(100vw-2rem)]
+            items-center gap-1 rounded-full border border-fg-alpha/10 py-1 pr-1 pl-3.5
+            bg-[color-mix(in srgb, var(--app-bg-solid) 90%, transparent)] backdrop-blur-sm
+            transition-[opacity,translate] duration-150 ease-out motion-reduce:transition-none md:right-6
+            ${hasLocalWork ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0"}
+          `}
+          inert={!hasLocalWork}
+        >
+          <p ref={filePathLabelRef} className="sr-only" />
+          <p ref={statusLineRef} className="m-0 min-w-0 truncate text-[0.84rem] text-fg/muted" />
+          {saveButton}
+          {discardButton}
         </div>
-      </header>
+      )}
 
       <div className="relative min-h-0 flex-1" hidden={isMinimized}>
         <div className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto">

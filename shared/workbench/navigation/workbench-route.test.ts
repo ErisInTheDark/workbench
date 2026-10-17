@@ -1,14 +1,14 @@
 /*
  * Exports: none.
- * Tests: file tabs survive href round trips with per-tab folders; stats tabs survive href round trips and selection changes; draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
+ * Tests: the flagged tab list and every tab shape round-trip, old shapes rewrite to it; stats tabs survive href round trips and selection changes; draft folder changes survive new-to-saved promotion without accepting another route intent; the new project view survives href round trips.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DraftIdSchema, LogicalProjectIdSchema, ProjectIdSchema, DaemonIdSchema } from "../identity";
 import {
-  createFileRoute, createHomeRoute, createLogicalThreadRoute, createNewProjectRoute, createStatsRoute, createToggledProjectSelectionRoute,
-  createWorkbenchHref, getWorkbenchFileTabs, isSameDraftRouteIntent, isSameWorkbenchRoute, parseWorkbenchRouteFromPath,
-  withFileTabs, withProjectSelection,
+  createFileRoute, createHomeRoute, createHomeThreadRoute, createLogicalThreadRoute, createNewProjectRoute, createProjectSelectionRoute, createSettingsRoute,
+  createStatsRoute, createThreadRoute, createToggledProjectSelectionRoute, createWorkbenchHref, isSameDraftRouteIntent,
+  isSameWorkbenchRoute, parseWorkbenchRouteFromPath, withFileTabs, withProjectSelection,
 } from "./workbench-route";
 
 test("stats tabs round-trip through their href, keep through selection changes, and default to usage", () => {
@@ -19,32 +19,67 @@ test("stats tabs round-trip through their href, keep through selection changes, 
     assert.equal(isSameWorkbenchRoute(parsed, route), true);
     assert.equal(createToggledProjectSelectionRoute(route, ["alpha"], "beta", ["alpha", "beta"]).statsTab ?? "usage", tab);
   }
-  assert.equal(createWorkbenchHref(createStatsRoute(null, "usage")), "/@/stats");
+  assert.equal(createWorkbenchHref(createStatsRoute(null, "usage")), "/@/*/stats");
   assert.equal(isSameWorkbenchRoute(createStatsRoute(null, "tools"), createStatsRoute(null)), false);
   assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
 });
 
-test("file tabs keep order, focus and per-tab folders through hrefs; a lone local tab stays a plain file url", () => {
-  const tabs = [
-    { filePath: "icons/smile.svg", folderAddress: null },
-    { filePath: "icons/star.svg", folderAddress: ["+convex-lab"] },
-    { filePath: "brand/logo.svg", folderAddress: ["velvet-daemon", "wb"] },
-  ];
-  const route = withFileTabs(withProjectSelection(createFileRoute("workbench", "icons/smile.svg"), ["workbench"]), tabs, 1);
+test("after the route marker the path is the flagged tab list, and it round-trips with selection and folder", () => {
+  const route = {
+    ...withProjectSelection(createHomeThreadRoute("workbench", "8995"), ["secret-santa", "babblebox"]),
+    folderAddress: ["babblebox"],
+    tabStrip: { tabs: ["thread/zoomie-lint/c6c7", "thread/workbench/8995", "settings"], preview: 1 },
+  };
   const href = createWorkbenchHref(route);
-  assert.equal(href, "/workbench/@/file/2/icons/smile.svg/+/%2Bconvex-lab/*/icons/star.svg/+/velvet-daemon/wb/*/brand/logo.svg");
+  assert.equal(href, "/secret-santa/+/babblebox/*/babblebox/@/thread/zoomie-lint/c6c7/+/*~/thread/workbench/8995/+/settings");
   const parsed = parseWorkbenchRouteFromPath(href);
-  assert.equal(parsed.filePath, "icons/star.svg");
-  assert.deepEqual(getWorkbenchFileTabs(parsed), { tabs, index: 1 });
-  assert.equal(isSameWorkbenchRoute(parsed, route), true);
-  assert.equal(isSameWorkbenchRoute(parsed, withFileTabs(route, tabs, 0)), false);
+  assert.equal(parsed.view, "thread");
+  assert.equal(parsed.threadOwnerProjectId, "workbench");
+  assert.equal(parsed.threadTarget?.kind === "provider" && parsed.threadTarget.threadId, "8995");
+  assert.deepEqual(parsed.selectedProjectIds, ["secret-santa", "babblebox"]);
+  assert.deepEqual(parsed.folderAddress, ["babblebox"]);
+  assert.deepEqual(parsed.tabStrip, route.tabStrip);
+  assert.equal(createWorkbenchHref(parsed), href);
 
-  const single = withFileTabs(createFileRoute("workbench", "x.svg"), [{ filePath: "icons/a.svg", folderAddress: null }], 0);
-  assert.equal(createWorkbenchHref(single), "/workbench/@/file/icons/a.svg");
-  assert.deepEqual(getWorkbenchFileTabs(parseWorkbenchRouteFromPath("/workbench/@/file/icons/a.svg")).tabs,
-    [{ filePath: "icons/a.svg", folderAddress: null }]);
-  assert.equal(parseWorkbenchRouteFromPath("/workbench/@/file/4/a.svg/+/b.svg").view, "invalid");
-  assert.equal(parseWorkbenchRouteFromPath("/workbench/@/file/1/*/a.svg").view, "invalid");
+  const settings = parseWorkbenchRouteFromPath("/@/thread/zoomie-lint/c6c7/+/~*/settings");
+  assert.equal(settings.view, "settings");
+  assert.deepEqual(settings.tabStrip, { tabs: ["thread/zoomie-lint/c6c7", "settings"], preview: 1 });
+  assert.equal(parseWorkbenchRouteFromPath("/@/*/settings/+/*/git").view, "invalid", "one tab is active");
+});
+
+test("every tab names its whole destination without a nested route marker, and a lone tab is still marked active", () => {
+  const cases: Array<[ReturnType<typeof createFileRoute>, string]> = [
+    [withProjectSelection(createThreadRoute("workbench", "x"), ["workbench"]), "/workbench/@/*/thread/workbench/x"],
+    [createHomeThreadRoute("github.com/team/repo", { kind: "new" }), "/@/*/thread/github.com%2Fteam%2Frepo/new"],
+    [createHomeThreadRoute("repo", { kind: "subagent", parentThreadId: "p", threadId: "c" } as never), "/@/*/thread/repo/p/sub/c"],
+    [createSettingsRoute(""), "/@/*/settings"],
+    [createStatsRoute(null, "tools"), "/@/*/stats/tools"],
+    [withFileTabs(createFileRoute("", "icons/star.svg"), [{ filePath: "icons/star.svg", folderAddress: ["+convex-lab"] }], 0),
+      "/@/*/file/%2Bconvex-lab/*/icons/star.svg"],
+  ];
+  for (const [route, href] of cases) {
+    assert.equal(createWorkbenchHref(route), href);
+    const parsed = parseWorkbenchRouteFromPath(href);
+    assert.equal(parsed.view, route.view, href);
+    assert.equal(createWorkbenchHref(parsed), href);
+  }
+  assert.equal(parseWorkbenchRouteFromPath("/@/*/file/%2Bconvex-lab/*/icons/star.svg").filePath, "icons/star.svg");
+  assert.equal(createWorkbenchHref(createProjectSelectionRoute(["a"])), "/a/@/");
+});
+
+test("old route shapes and the old tab query still open and rewrite to the tab list", () => {
+  const legacy: Array<[string, string]> = [
+    ["/workbench/@/thread/x", "/workbench/@/*/thread/workbench/x"],
+    ["/a/+/b/@/thread/zoomie/@/c6", "/a/+/b/@/*/thread/zoomie/c6"],
+    ["/a/@/pin/zoomie/@/thread/c6", "/a/@/*/thread/zoomie/c6"],
+    ["/workbench/@/file/2/a.svg/+/%2Bconvex-lab/*/b.svg", "/workbench/@/file/a.svg/+/*/file/%2Bconvex-lab/*/b.svg"],
+    ["/a/@/thread/workbench/@/8995?tab=thread%2Fzoomie%2F%40%2Fc6&tab=thread%2Fworkbench%2F%40%2F8995&preview=1",
+      "/a/@/thread/zoomie/c6/+/*~/thread/workbench/8995"],
+  ];
+  for (const [old, canonical] of legacy) {
+    const url = new URL(old, "http://workbench.local");
+    assert.equal(createWorkbenchHref(parseWorkbenchRouteFromPath(url.pathname, url.search)), canonical, old);
+  }
 });
 
 test("new project view round-trips through its href with and without a project selection", () => {

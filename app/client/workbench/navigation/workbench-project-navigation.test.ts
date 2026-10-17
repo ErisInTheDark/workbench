@@ -9,7 +9,7 @@ import {
   createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute, createHomeRoute, createNewProjectRoute,
   createPinnedThreadRoute, createSettingsRoute, createStatsRoute, createLogicalProjectRoute,
   createLogicalExistingThreadRoute, createLogicalFileRoute,
-  createLogicalThreadRoute, withProjectSelection, withFileTabs, getWorkbenchFileTabs,
+  createLogicalThreadRoute, withProjectSelection,
   createToggledProjectSelectionRoute,
   createWorkbenchHref, parseWorkbenchRouteFromLocation,
 } from "workbench-shared/workbench/navigation/workbench-route";
@@ -48,7 +48,7 @@ test("daemon names round-trip selection and thread ownership without exposing sc
   const thread = createLogicalThreadRoute(null, project.id, null, { kind: "new" });
   const threadHref = navigation.href(thread)!;
   assert.equal(navigation.readRoute(threadHref).logical?.threadOwnerProjectId, project.id);
-  assert.ok(threadHref.includes("/desktop/@/"));
+  assert.equal(threadHref, "/@/*/thread/desktop/new");
 
   const target = project.locations[0]!.target;
   assert.deepEqual(navigation.folderForRoute(route), target);
@@ -108,7 +108,7 @@ test("one navigator refreshes project collisions and aliases without freezing th
   assert.equal(navigator.readRoute("/repo").view, "invalid");
   assert.equal(navigator.href(projectRoute), "/github.com/team/repo/@/");
   owner = location;
-  assert.equal(navigator.href(threadRoute), "/github.com/team/repo/@/pin/gitlab.com/team/repo/@/thread/thread-uuid");
+  assert.equal(navigator.href(threadRoute), "/github.com/team/repo/@/*/thread/gitlab.com%2Fteam%2Frepo/thread-uuid");
 
   const physicalId = ProjectIdSchema.parse("physical-project");
   navigator.update([], [{ alias: "old-project", projectId: physicalId }], []);
@@ -130,7 +130,7 @@ test("multi-project addresses keep selection independent of a draft owner", () =
   assert.equal(navigation.href(selected), "/one/+/two/@/");
   const draft = withProjectSelection(createLogicalThreadRoute(null, first, null, { kind: "new" }), [first, second]);
   const href = navigation.href(draft);
-  assert.equal(href, "/one/+/two/@/thread/one/@/new");
+  assert.equal(href, "/one/+/two/@/*/thread/one/new");
   const restored = navigation.readRoute(href!);
   assert.deepEqual(restored.selectedProjectIds, [first, second]);
   assert.equal(restored.logical?.threadOwnerProjectId, first);
@@ -166,8 +166,8 @@ test("thread links inherit selection while an explicit project toggle changes it
   ]);
   const current = navigation.readRoute("/one/@/thread/t1");
   const toggled = createToggledProjectSelectionRoute(current, [first], second, [first, second]);
-  assert.equal(navigation.href(toggled, current, "inherit"), "/one/@/thread/t1");
-  assert.equal(navigation.href(toggled, current, "exact"), "/one/+/two/@/thread/one/@/t1");
+  assert.equal(navigation.href(toggled, current, "inherit"), "/one/@/*/thread/one/t1");
+  assert.equal(navigation.href(toggled, current, "exact"), "/one/+/two/@/*/thread/one/t1");
 });
 
 test("every destination keeps the sidebar selection unless it is itself a selection", () => {
@@ -214,10 +214,10 @@ test("statistics keep a logical multi-project selection and stay on statistics w
   const stats = navigation.readRoute("/one/+/two/@/stats");
   assert.equal(stats.view, "stats");
   assert.deepEqual(stats.selectedProjectIds, [first, second]);
-  assert.equal(navigation.href(stats), "/one/+/two/@/stats");
+  assert.equal(navigation.href(stats), "/one/+/two/@/*/stats");
   const narrowed = createToggledProjectSelectionRoute(stats, [first, second], second, [first, second]);
-  assert.equal(navigation.href(narrowed), "/one/@/stats");
-  assert.equal(navigation.href(withProjectSelection(createStatsRoute(null), null)), "/@/stats");
+  assert.equal(navigation.href(narrowed), "/one/@/*/stats");
+  assert.equal(navigation.href(withProjectSelection(createStatsRoute(null), null)), "/@/*/stats");
 });
 
 test("longer remote addresses resolve to one project and canonicalise to its shortest slug", () => {
@@ -378,7 +378,7 @@ test("a UUID link needs its verified owner and does not borrow the selected proj
   });
   assert.equal(new WorkbenchProjectNavigation([], [], projects).href(route), undefined);
   const navigation = new WorkbenchProjectNavigation([], [], projects, () => ownerLocation);
-  assert.equal(navigation.href(route), "/repo/@/pin/other/@/thread/thread-uuid");
+  assert.equal(navigation.href(route), "/repo/@/*/thread/other/thread-uuid");
 });
 
 test("a verified observed-only thread still has a Home link", () => {
@@ -399,7 +399,7 @@ test("a verified observed-only thread still has a Home link", () => {
     }],
   }], () => location);
   assert.equal(navigation.href(createLogicalExistingThreadRoute(null, { kind: "provider", threadId })),
-    `/@/thread/repo/@/${threadId}`);
+    `/@/*/thread/repo/${threadId}`);
 });
 
 function createFolderNavigation() {
@@ -449,29 +449,52 @@ test("opening a file keeps sidebar selection and preserves its folder through a 
   }
 });
 
-test("changing focused file tabs preserves both tab folders and explicit selection intent", () => {
+test("a file tab names its own folder whether or not it is the sidebar folder, keeping the selection", () => {
   const { first, second, navigation, workbenchOnOne, worktree } = createFolderNavigation();
   const folderAddress = [workbenchOnOne.daemonId, "workbench"];
   const current = { ...withProjectSelection(createProjectRoute(""), [first, second]), folderAddress };
-  const tabs = [
-    { filePath: "first.svg", folderAddress: null },
-    { filePath: "second.svg", folderAddress: ["+convex-lab"] },
-  ];
-  for (const index of [0, 1]) {
-    const location = index === 0 ? workbenchOnOne.target : worktree.target;
-    const target = withFileTabs({
-      ...createLogicalFileRoute(index === 0 ? first : second, location, tabs[index]!.filePath), folderAddress,
-    }, tabs, index);
+  for (const [project, location, filePath] of [
+    [first, workbenchOnOne.target, "first.svg"], [second, worktree.target, "second.svg"],
+  ] as const) {
+    const target = createLogicalFileRoute(project, location, filePath);
     const href = navigation.href(target, current, "inherit");
     assert.ok(href);
     const reopened = navigation.readRoute(href);
     assert.deepEqual(reopened.selectedProjectIds, [first, second]);
-    assert.deepEqual(getWorkbenchFileTabs(reopened), { tabs, index });
+    assert.deepEqual(reopened.folderAddress, folderAddress);
     assert.deepEqual(navigation.fileLocationFor(reopened), location);
+    assert.equal(href.endsWith(`/${navigation.tabFor(target)}`), true, "the url's tab is the same tab under any sidebar");
   }
   const exact = navigation.href(createLogicalFileRoute(second, worktree.target, "second.svg"), current, "exact");
   assert.ok(exact);
   assert.deepEqual(navigation.readRoute(exact).selectedProjectIds, [second]);
+});
+
+test("a file's tab is the tab its href writes, even when its folder comes from the sidebar", () => {
+  const { navigation } = createFolderNavigation();
+  const current = navigation.readRoute("/one/+/two/*/%2Bconvex-lab/@/file/notes.md");
+  const tab = navigation.tabFor(current, current);
+  assert.equal(tab, "file/%2Bconvex-lab/*/notes.md");
+  assert.equal(navigation.href(current, current, "inherit"), `/one/+/two/*/%2Bconvex-lab/@/*/${tab}`);
+});
+
+test("tab destinations drop the selection and folder so a tab reopens under any later selection", () => {
+  const { first, second, navigation, workbenchOnOne, worktree } = createFolderNavigation();
+  const thread = createLogicalThreadRoute(first, first, null, { kind: "new" });
+  assert.equal(navigation.tabFor(thread), "thread/one/new");
+  assert.equal(navigation.tabFor(createSettingsRoute("elsewhere")), "settings");
+  assert.equal(navigation.tabFor(createLogicalProjectRoute(second)), undefined, "the selection view is not a tab");
+  assert.equal(navigation.tabFor(createHomeRoute()), undefined);
+  const multi = { ...withProjectSelection(createProjectRoute(""), [first, second]), folderAddress: [workbenchOnOne.daemonId, "workbench"] };
+  for (const current of [multi, withProjectSelection(createProjectRoute(""), [second]), createHomeRoute()]) {
+    const reopenedThread = navigation.readRoute(navigation.href(navigation.routeForTab("thread/one/new"), current, "inherit")!);
+    assert.equal(reopenedThread.logical?.threadOwnerProjectId, first);
+    assert.deepEqual(reopenedThread.selectedProjectIds, current.selectedProjectIds);
+    const fileTab = navigation.tabFor(createLogicalFileRoute(second, worktree.target, "x.svg"))!;
+    const reopenedFile = navigation.readRoute(navigation.href(navigation.routeForTab(fileTab), current, "inherit")!);
+    assert.deepEqual(navigation.fileLocationFor(reopenedFile), worktree.target);
+    assert.equal(reopenedFile.filePath, "x.svg");
+  }
 });
 
 test("a folder equal to its project address is omitted from the path as redundant", () => {
@@ -580,7 +603,7 @@ test("catalogue addresses replace junction aliases without changing thread ident
   }], [{ alias, projectId }]);
   const incoming = createThreadRoute(alias, "thread");
   const resolved = navigation.resolveRoute(incoming);
-  assert.equal(navigation.href(resolved, incoming), "/web/repo/@/thread/thread");
+  assert.equal(navigation.href(resolved, incoming), "/web/repo/@/*/thread/web%2Frepo/thread");
   assert.deepEqual(navigation.readRoute(navigation.href(resolved, incoming)!), resolved);
 });
 
@@ -618,7 +641,7 @@ test("current retained addresses survive navigation, with deterministic historic
   const projectId = ProjectIdSchema.parse(identities[0]);
   const aliases = [{ alias: "old/repo", projectId }, { alias: "older/repo", projectId }];
   const navigation = new WorkbenchProjectNavigation([], aliases);
-  assert.equal(navigation.href(createThreadRoute(projectId, "thread"), createProjectRoute("older/repo")), "/older/repo/@/thread/thread");
+  assert.equal(navigation.href(createThreadRoute(projectId, "thread"), createProjectRoute("older/repo")), "/older/repo/@/*/thread/older%2Frepo/thread");
   assert.equal(navigation.href(createProjectRoute(projectId)), "/old/repo/@/");
   assert.equal(new WorkbenchProjectNavigation([], [...aliases].reverse()).href(createProjectRoute(projectId)), "/old/repo/@/");
   assert.equal(new WorkbenchProjectNavigation([], []).href(createProjectRoute(projectId)), undefined);

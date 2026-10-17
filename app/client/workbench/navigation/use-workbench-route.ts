@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { usePathname, useSearchParams } from "./browser-navigation";
 import {
-  type WorkbenchRoute,
+  LEGACY_TAB_SEARCH_PARAMS, type WorkbenchRoute,
 } from "workbench-shared/workbench/navigation/workbench-route";
 import type { WorkbenchClientController } from "../../components/workbench/workbench-client-context";
 import { useWorkbenchClientStateController, useWorkbenchClientStateSnapshot } from "../../components/workbench/workbench-client-state-context";
@@ -71,11 +71,17 @@ export function useWorkbenchRoute(client: WorkbenchClientController) {
       navigateToRoute(route, { replace: true });
       return;
     }
-    const canonical = href(route);
+    // A replacement swaps the url's active tab for its canonical spelling in place.
+    const canonical = href(route, { replace: true });
     if (!canonical) return;
     const canonicalPath = new URL(canonical, window.location.origin).pathname;
-    if (pathname !== "/" && pathname !== "/@/" && canonicalPath !== pathname) {
-      window.history.replaceState({ workbench: true }, "", `${canonicalPath}${window.location.search}${window.location.hash}`);
+    // The tab list in the path owns the tabs an old query carried.
+    const params = new URLSearchParams(window.location.search);
+    const legacyTabParams = Object.values(LEGACY_TAB_SEARCH_PARAMS);
+    const hadLegacyTabs = legacyTabParams.some(name => params.has(name));
+    for (const name of legacyTabParams) params.delete(name);
+    if (pathname !== "/" && pathname !== "/@/" && (canonicalPath !== pathname || hadLegacyTabs)) {
+      window.history.replaceState({ workbench: true }, "", `${canonicalPath}${params.size ? `?${params}` : ""}${window.location.hash}`);
     }
   }, [pathname, locationSnapshot, client.controls, href, navigateToRoute, route, stateSnapshot.schemaVersion]);
 

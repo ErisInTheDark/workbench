@@ -7,7 +7,8 @@
  * - ToolbarDomSurface: floating formatting toolbar elements.
  * - EditorDomSurface: React-owned editor elements.
  * - StatusDisplaySurface: file path and status labels.
- * - ControlButtonsDomSurface: save, reset and zoom-trigger elements.
+ * - ControlButtonsDomSurface: save and reset elements.
+ * - WORKBENCH_STICKY_CHROME_ATTRIBUTE: marks sticky chrome the floating editor toolbars must stay below.
  * - WorkbenchEditorDomSurfaces: DOM capabilities consumed by the editor client.
  * - hasRequiredEditorDomSurface: validate editor elements before boot.
  * - hasRequiredStatusDisplaySurface: validate status elements before boot.
@@ -15,6 +16,8 @@
  * - hasRequiredDialogDomSurface: validate dialog elements before boot.
  * - hasRequiredToolbarDomSurface: validate toolbar elements before boot.
  */
+
+export const WORKBENCH_STICKY_CHROME_ATTRIBUTE = "data-workbench-sticky-chrome";
 
 export interface WorkbenchDialogElements {
   dialog: HTMLDivElement;
@@ -72,7 +75,6 @@ export interface StatusDisplaySurface {
 export interface ControlButtonsDomSurface {
   resetDraftButton: HTMLButtonElement;
   saveFileButton: HTMLButtonElement;
-  zoomButton: HTMLButtonElement;
 }
 
 export interface WorkbenchEditorDomSurfaces {
@@ -92,11 +94,7 @@ export function hasRequiredStatusDisplaySurface(surface: Partial<StatusDisplaySu
 }
 
 export function hasRequiredControlButtonsDomSurface(surface: Partial<ControlButtonsDomSurface> | null | undefined): surface is ControlButtonsDomSurface {
-  return Boolean(
-    surface?.resetDraftButton
-      && surface?.saveFileButton
-      && surface?.zoomButton,
-  );
+  return Boolean(surface?.resetDraftButton && surface?.saveFileButton);
 }
 
 export function hasRequiredDialogDomSurface(surface: Partial<DialogDomSurface> | null | undefined): surface is DialogDomSurface {

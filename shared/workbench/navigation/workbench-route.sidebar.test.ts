@@ -42,8 +42,9 @@ const fixtureIdentityValues = {
 };
 
 test("stats routes round-trip globally and per project", () => {
-  assert.equal(createStatsHref(""), "/@/stats");
-  assert.equal(createStatsHref("project/path"), "/project/path/@/stats");
+  assert.equal(createStatsHref(""), "/@/*/stats");
+  assert.equal(createStatsHref("project/path"), "/project/path/@/*/stats");
+  assert.equal(parseWorkbenchRouteFromPath("/project/path/@/*/stats").view, "stats");
   assert.deepEqual(parseWorkbenchRouteFromPath("/@/stats"), createStatsRoute(""));
   assert.deepEqual(parseWorkbenchRouteFromPath("/project/path/@/stats"), createStatsRoute("project/path"));
   assert.equal(parseWorkbenchRouteFromPath("/@/stats/nope").view, "invalid");
@@ -76,7 +77,7 @@ test("project hrefs preserve slash and reserved-character identities", () => {
 });
 
 test("settings use one selection-preserving route without scope suffixes", () => {
-  for (const path of ["/@/settings", "/alpha/@/settings", "/alpha/+/beta/@/settings"]) {
+  for (const path of ["/@/*/settings", "/alpha/@/*/settings", "/alpha/+/beta/@/*/settings"]) {
     const route = parseWorkbenchRouteFromPath(path);
     assert.equal(route.view, "settings");
     assert.equal(createWorkbenchHref(route), path);
@@ -103,51 +104,51 @@ test("project toggles keep the active thread until its owning project is deselec
   const order = ["alpha", "beta", "gamma"];
   const thread = parseWorkbenchRouteFromPath("/alpha/+/beta/@/thread/alpha/@/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "gamma", order)),
-    "/alpha/+/beta/+/gamma/@/thread/alpha/@/t1");
+    "/alpha/+/beta/+/gamma/@/*/thread/alpha/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "beta", order)),
-    "/alpha/@/thread/t1");
+    "/alpha/@/*/thread/alpha/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(thread, selected, "alpha", order)),
     "/beta/@/");
-  const single = parseWorkbenchRouteFromPath("/alpha/@/thread/t1");
+  const single = parseWorkbenchRouteFromPath("/alpha/@/*/thread/alpha/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(single, ["alpha"], "beta", order)),
-    "/alpha/+/beta/@/thread/alpha/@/t1");
+    "/alpha/+/beta/@/*/thread/alpha/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(single, ["alpha"], "alpha", order)),
     "/+/@/");
-  const dynamic = parseWorkbenchRouteFromPath("/@/thread/alpha/@/t1");
+  const dynamic = parseWorkbenchRouteFromPath("/@/*/thread/alpha/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(dynamic, selected, "beta", order)),
-    "/alpha/@/thread/t1");
+    "/alpha/@/*/thread/alpha/t1");
 
-  const unselectedOwner = parseWorkbenchRouteFromPath("/alpha/@/pin/beta/@/thread/t1");
+  const unselectedOwner = parseWorkbenchRouteFromPath("/alpha/@/*/thread/beta/t1");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(unselectedOwner, ["alpha"], "gamma", order)),
-    "/alpha/+/gamma/@/thread/beta/@/t1");
+    "/alpha/+/gamma/@/*/thread/beta/t1");
   const draftId = "123e4567-e89b-42d3-a456-426614174000";
-  const draft = parseWorkbenchRouteFromPath(`/alpha/+/beta/@/thread/beta/@/new/${draftId}`);
+  const draft = parseWorkbenchRouteFromPath(`/alpha/+/beta/@/*/thread/beta/new/${draftId}`);
   assert.equal(draft.view, "thread");
   assert.equal(createWorkbenchHref(createToggledProjectSelectionRoute(draft, selected, "alpha", order)),
-    `/beta/@/thread/new/${draftId}`);
+    `/beta/@/*/thread/beta/new/${draftId}`);
 });
 
 test("sidebar folder selection rides the url between the selection and the view", () => {
-  const thread = parseWorkbenchRouteFromPath("/alpha/+/beta/*/%2Bconvex-lab/@/thread/alpha/@/t1");
+  const thread = parseWorkbenchRouteFromPath("/alpha/+/beta/*/%2Bconvex-lab/@/*/thread/alpha/t1");
   assert.equal(thread.view, "thread");
   assert.deepEqual(thread.selectedProjectIds, ["alpha", "beta"]);
   assert.deepEqual(thread.folderAddress, ["+convex-lab"]);
-  assert.equal(createWorkbenchHref(thread), "/alpha/+/beta/*/%2Bconvex-lab/@/thread/alpha/@/t1");
+  assert.equal(createWorkbenchHref(thread), "/alpha/+/beta/*/%2Bconvex-lab/@/*/thread/alpha/t1");
 
-  const bare = parseWorkbenchRouteFromPath("/alpha/*/web/workbench/@/git");
+  const bare = parseWorkbenchRouteFromPath("/alpha/*/web/workbench/@/*/git");
   assert.equal(bare.view, "git");
   assert.deepEqual(bare.folderAddress, ["web", "workbench"]);
-  assert.equal(createWorkbenchHref(bare), "/alpha/*/web/workbench/@/git");
+  assert.equal(createWorkbenchHref(bare), "/alpha/*/web/workbench/@/*/git");
 
   const qualified = parseWorkbenchRouteFromPath(`/alpha/*/${fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029")}/repo/@/`);
   assert.deepEqual(qualified.folderAddress, ["502902c0-9512-40be-bb06-c65d86ef2029", "repo"]);
   assert.equal(createWorkbenchHref(qualified), `/alpha/*/${fixtureIdentitySchemas.DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029")}/repo/@/`);
 
-  const home = parseWorkbenchRouteFromPath("/*/repo/@/thread/owner/project/@/new");
+  const home = parseWorkbenchRouteFromPath("/*/repo/@/*/thread/owner%2Fproject/new");
   assert.deepEqual(home.folderAddress, ["repo"]);
-  assert.equal(createWorkbenchHref(home), "/*/repo/@/thread/owner/project/@/new");
+  assert.equal(createWorkbenchHref(home), "/*/repo/@/*/thread/owner%2Fproject/new");
 
-  const none = parseWorkbenchRouteFromPath("/alpha/+/beta/@/thread/alpha/@/t1");
+  const none = parseWorkbenchRouteFromPath("/alpha/+/beta/@/*/thread/alpha/t1");
   assert.equal(none.folderAddress ?? null, null);
   assert.equal(parseWorkbenchRouteFromPath("/alpha/*/@/").view, "invalid");
   assert.equal(parseWorkbenchRouteFromPath("/@/location/502902c0-9512-40be-bb06-c65d86ef2029/repo").view, "invalid");
@@ -157,11 +158,11 @@ test("home thread routes preserve the owning project without selecting it", () =
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000");
   const folderId = fixtureIdentitySchemas.FolderIdSchema.parse("00000000-0000-4000-8000-000000000010");
   const cases = [
-    [{ kind: "new" as const }, "/@/thread/owner/project/@/new"],
-    [{ draftId, kind: "draft" as const }, `/@/thread/owner/project/@/new/${draftId}`],
-    [{ folderId, kind: "new" as const }, `/@/thread/owner/project/@/folder/${folderId}/thread/new`],
-    [{ kind: "provider" as const, threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("provider") }, "/@/thread/owner/project/@/provider"],
-    [{ kind: "subagent" as const, parentThreadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("child") }, "/@/thread/owner/project/@/parent/sub/child"],
+    [{ kind: "new" as const }, "/@/*/thread/owner%2Fproject/new"],
+    [{ draftId, kind: "draft" as const }, `/@/*/thread/owner%2Fproject/new/${draftId}`],
+    [{ folderId, kind: "new" as const }, `/@/*/thread/owner%2Fproject/folder/${folderId}/new`],
+    [{ kind: "provider" as const, threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("provider") }, "/@/*/thread/owner%2Fproject/provider"],
+    [{ kind: "subagent" as const, parentThreadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("parent"), threadId: fixtureIdentitySchemas.ThreadReferenceSchema.parse("child") }, "/@/*/thread/owner%2Fproject/parent/sub/child"],
   ] as const;
 
   for (const [target, expectedHref] of cases) {
@@ -191,26 +192,24 @@ test("thread routes discriminate blank drafts and provider ids", () => {
   assert.deepEqual(parseWorkbenchRouteFromPath(`/p/@/thread/new/${draftId}`).threadTarget, { draftId, kind: "draft" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/provider-id").threadTarget, { kind: "provider", threadId: "provider-id" });
   assert.deepEqual(parseWorkbenchRouteFromPath("/p/@/thread/parent/sub/child").threadTarget, { kind: "subagent", parentThreadId: "parent", threadId: "child" });
-  assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] }), "/p/@/thread/parent/sub/child");
-  assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/thread/new/${draftId}`);
-  assert.equal(createThreadHref("p", { folderId, kind: "new" }), `/p/@/folder/${folderId}/thread/new`);
+  assert.equal(createThreadHref("p", { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] }), "/p/@/*/thread/p/parent/sub/child");
+  assert.equal(createThreadHref("p", { draftId, kind: "draft" }), `/p/@/*/thread/p/new/${draftId}`);
+  assert.equal(createThreadHref("p", { folderId, kind: "new" }), `/p/@/*/thread/p/folder/${folderId}/new`);
 });
 
-test("pinned routes preserve viewed and owning projects through the existing thread grammar", () => {
+test("a thread viewed under another project keeps that selection and its owner in one tab", () => {
   const draftId = fixtureIdentitySchemas.DraftIdSchema.parse("123e4567-e89b-42d3-a456-426614174000");
   const providerHref = createPinnedThreadHref("viewed/project", "owner/project", { kind: "provider", threadId: fixtureIdentityValues.WorkbenchThreadId["provider"] });
-  assert.equal(providerHref, "/viewed/project/@/pin/owner/project/@/thread/provider");
-  assert.deepEqual(parseWorkbenchRouteFromPath(providerHref), {
-    ...parseWorkbenchRouteFromPath("/owner/project/@/thread/provider"),
-    projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("viewed/project"),
-    selectedProjectIds: ["viewed/project"],
-    threadOwnerProjectId: "owner/project",
-  });
+  assert.equal(providerHref, "/viewed/project/@/*/thread/owner%2Fproject/provider");
+  const provider = parseWorkbenchRouteFromPath(providerHref);
+  assert.deepEqual(provider.selectedProjectIds, ["viewed/project"]);
+  assert.equal(provider.threadOwnerProjectId, "owner/project");
+  assert.deepEqual(provider.threadTarget, { kind: "provider", threadId: "provider" });
   const draftHref = createPinnedThreadHref("viewed", "owner", { draftId, kind: "draft" });
-  assert.equal(draftHref, `/viewed/@/pin/owner/@/thread/new/${draftId}`);
+  assert.equal(draftHref, `/viewed/@/*/thread/owner/new/${draftId}`);
   assert.equal(parseWorkbenchRouteFromPath(draftHref).threadTarget?.kind, "draft");
   const subagentHref = createPinnedThreadHref("viewed", "owner", { kind: "subagent", parentThreadId: fixtureIdentityValues.WorkbenchThreadId["parent"], threadId: fixtureIdentityValues.WorkbenchThreadId["child"] });
-  assert.equal(subagentHref, "/viewed/@/pin/owner/@/thread/parent/sub/child");
+  assert.equal(subagentHref, "/viewed/@/*/thread/owner/parent/sub/child");
   assert.equal(parseWorkbenchRouteFromPath("/viewed/@/pin/owner").view, "invalid");
 });
 

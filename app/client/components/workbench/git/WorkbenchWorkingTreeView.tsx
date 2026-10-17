@@ -1,4 +1,4 @@
-/* Exports: default WorkbenchWorkingTreeView: compose file navigation and sticky diff review beneath the shell header. */
+/* Exports: default WorkbenchWorkingTreeView: compose the repository controls, file navigation and sticky diff review beneath the shell header. */
 "use client";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import PrimaryButton from "../../ui/PrimaryButton";
@@ -6,6 +6,8 @@ import { BackArrowIcon, OpenThreadIcon } from "../workbench-icons";
 import WorkbenchGitComposer from "./WorkbenchGitComposer";
 import WorkbenchGitDiffView from "./WorkbenchGitDiffView";
 import WorkbenchGitFileList from "./WorkbenchGitFileList";
+import WorkbenchGitRefreshButton from "./WorkbenchGitRefreshButton";
+import WorkbenchGitRepositoryControl from "./WorkbenchGitRepositoryControl";
 import { useWorkingTree, useWorkingTreeSnapshot } from "./WorkbenchWorkingTreeProvider";
 
 export default function WorkbenchWorkingTreeView () {
@@ -41,6 +43,10 @@ export default function WorkbenchWorkingTreeView () {
     </div>
   </div>;
   return <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+    <div className="flex min-w-0 items-center gap-2 pb-2 text-[0.84rem] text-fg/muted">
+      <div className="min-w-0 flex-1"><WorkbenchGitRepositoryControl /></div>
+      <WorkbenchGitRefreshButton />
+    </div>
     {snapshot.error ? <p role="alert" className="whitespace-pre-line px-3 text-sm text-danger">{snapshot.error}</p> : null}
     {snapshot.operationError ? <p role="alert" className="px-3 text-sm text-danger">{snapshot.operationError}</p> : null}
     {snapshot.result ? <div role="status" className="px-3 text-sm text-fg/muted">

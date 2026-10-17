@@ -2,7 +2,7 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsView: feed the app's stats store its view facts, nudge history import and limit refresh, and render the routed tab's lead, the shared controls, and the tab.
+ * - default WorkbenchStatsView: feed the app's stats store its view facts, nudge history import and limit refresh, and render the stats tab row, the routed tab's lead, the shared controls, and the tab.
  */
 import { useContext, useEffect, useLayoutEffect, useState, type ComponentType } from "react";
 
@@ -12,6 +12,7 @@ import WorkbenchWorkspaceContext, { WorkbenchOperationsContext as WorkbenchDaemo
 import type { StatsProjectScope } from "./stats-project-scope";
 import useStats from "./use-stats";
 import WorkbenchStatsControls from "./WorkbenchStatsControls";
+import WorkbenchStatsTabs from "./WorkbenchStatsTabs";
 import type { StatsInputs } from "./WorkbenchStatsStore";
 import WorkbenchStatsToolsTab from "./tools/WorkbenchStatsToolsTab";
 import WorkbenchStatsLimits from "./usage/WorkbenchStatsLimits";
@@ -69,6 +70,7 @@ export default function WorkbenchStatsView({ onAddressFeedback, projects, scope,
   const { Lead, Body } = TABS[tab];
   return (
     <div className="mx-auto flex w-full max-w-[76rem] flex-col gap-7 pb-10 pt-1">
+      <WorkbenchStatsTabs tab={tab} />
       {Lead ? <Lead key={`${tab}:lead`} /> : null}
       <WorkbenchStatsControls error={actionError} tab={tab} />
       <Body key={tab} />

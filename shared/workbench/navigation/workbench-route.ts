@@ -2,8 +2,10 @@
  * Exports:
  * - WORKBENCH_ROUTE_MARKER: route marker for workbench URLs.
  * - WORKBENCH_FOLDER_MARKER: marker segment for the sidebar folder selection slot.
+ * - LEGACY_TAB_SEARCH_PARAMS: query names of the old tab strip, read once and then dropped.
  * - WorkbenchRouteView/WorkbenchRoute/WorkbenchRouteParseResult: normalized route contracts.
- * - WorkbenchFileTab/withFileTabs/getWorkbenchFileTabs: ordered file tabs after the focused tab number, each optionally prefixed by its folder address and the folder marker.
+ * - WorkbenchFileTab/withFileTabs/getWorkbenchFileTabs: a file route's own folder address (old urls could list several file tabs).
+ * - formatWorkbenchTab: one destination as its tab after the route marker (thread, file with its folder, settings, ...).
  * - createSettledThreadExitRoute: leave a settled viewed thread while keeping the project selection.
  * - createDiscardedDraftExitRoute: leave only the draft still viewed when deletion completes.
  * - WORKBENCH_STATS_TABS/WorkbenchStatsTab: stats view tabs carried in the url.
@@ -20,6 +22,7 @@ import {
 } from "../../navigation/workbench-route-path.ts";
 
 import { type WorkbenchMosaicNode } from "./workbench-mosaic-route.ts";
+import { WorkbenchTabStrip } from "./workbench-tabs.ts";
 import { areDeeplyEqual } from "../deep-equality.ts";
 import { z } from "zod";
 import { WorkbenchThreadRouteTargetSchema, type WorkbenchThreadRouteTarget } from "../thread/thread-state.ts";
@@ -30,6 +33,8 @@ export const WORKBENCH_ROUTE_MARKER = "@";
 export const WORKBENCH_FOLDER_MARKER = "*";
 
 const LEGACY_FILE_SEARCH_PARAM = "file";
+/** Tabs briefly rode the query (`?tab=...&tab=...&preview=<index>`) before the tab list moved into the path. */
+export const LEGACY_TAB_SEARCH_PARAMS = { tab: "tab", preview: "preview" } as const;
 const LEGACY_THREAD_SEARCH_PARAM = "thread";
 const RouteThreadReferenceSchema = z.string().brand<"ThreadReference">();
 const RouteProjectIdSchema = z.string().brand<"ProjectId">();
@@ -59,6 +64,8 @@ export interface WorkbenchRoute {
   selectedProjectIds: readonly string[] | null;
   /** Stats view tab; absent means usage. */
   statsTab?: WorkbenchStatsTab;
+  /** Open tabs as written after the route marker; this route's own tab is the active one. Absent means just this tab. */
+  tabStrip?: WorkbenchTabStrip;
   threadId: string;
   threadOwnerProjectId: ProjectId | "";
   threadTarget: WorkbenchThreadRouteTarget | null;
@@ -294,15 +301,6 @@ function parseFileRoute(projectId: string, segments: readonly string[]): Workben
   return withFileTabs(createFileRoute(projectId, tabs[index - 1]!.filePath), tabs, index - 1);
 }
 
-function encodeFileTabs(route: WorkbenchRoute) {
-  if (!route.fileTabs?.length) return encodeWorkbenchRoutePath(route.filePath);
-  const groups = route.fileTabs.map(tab => [
-    ...(tab.folderAddress?.length ? [...tab.folderAddress.map(encodeRouteSegment), WORKBENCH_FOLDER_MARKER] : []),
-    encodeWorkbenchRoutePath(tab.filePath),
-  ].join("/"));
-  return `${(route.fileTabIndex ?? 0) + 1}/${groups.join("/+/")}`;
-}
-
 export function createThreadRoute(projectId: string, target: string | WorkbenchThreadRouteTarget): WorkbenchRoute {
   const threadTarget: WorkbenchThreadRouteTarget = typeof target === "string"
     ? target === "new" ? { kind: "new" } : { kind: "provider", threadId: RouteThreadReferenceSchema.parse(target) }
@@ -529,6 +527,93 @@ function parseThreadTargetSegments(
     : createInvalidWorkbenchRoute("Provider thread IDs must use one segment, or a subagent route must use parent/sub/child.", projectId);
 }
 
+/** A tab's flags segment: `*` active, `~` replaceable, or both in either order. */
+function isTabFlags(segment: string | undefined) {
+  return Boolean(segment) && /^[*~]{1,2}$/u.test(segment!) && new Set(segment).size === segment!.length;
+}
+
+/** One tab's destination with no project selection; the caller applies the url's selection prefix. */
+function parseTabSegments(rawSegments: string[]): WorkbenchRoute {
+  const decoded = decodeRouteSegments(rawSegments);
+  if (decoded.ok === false) return createInvalidWorkbenchRoute(decoded.error);
+  const [mode, ...rest] = decoded.value;
+  if (mode === "thread") {
+    const [owner, ...target] = rest;
+    if (!owner) return createInvalidWorkbenchRoute("Thread tabs name their owning project.");
+    const parsed = target[0] === "folder" && target.length === 3 && target[2] === "new"
+      ? WorkbenchThreadRouteTargetSchema.safeParse({ folderId: target[1], kind: "new" })
+      : target[0] === "new" && target.length <= 2
+        ? WorkbenchThreadRouteTargetSchema.safeParse(target.length === 1 ? { kind: "new" } : { draftId: target[1], kind: "draft" })
+        : target.length === 3 && target[1] === "sub"
+          ? WorkbenchThreadRouteTargetSchema.safeParse({ kind: "subagent", parentThreadId: target[0], threadId: target[2] })
+          : target.length === 1
+            ? WorkbenchThreadRouteTargetSchema.safeParse({ kind: "provider", threadId: target[0] })
+            : null;
+    return parsed?.success ? createHomeThreadRoute(owner, parsed.data) : createInvalidWorkbenchRoute("Invalid thread tab.");
+  }
+  if (mode === "file") {
+    const fileSegments = rawSegments.slice(1);
+    const marker = fileSegments.indexOf(WORKBENCH_FOLDER_MARKER);
+    const folder = marker < 0 ? { ok: true as const, value: null } : decodeRouteSegments(fileSegments.slice(0, marker));
+    const path = decodeRouteSegments(fileSegments.slice(marker + 1));
+    if (folder.ok === false) return createInvalidWorkbenchRoute(folder.error);
+    if (path.ok === false) return createInvalidWorkbenchRoute(path.error);
+    const filePath = path.value.join("/");
+    if (!filePath || folder.value?.length === 0) return createInvalidWorkbenchRoute("File tabs need a path and, when marked, a folder.");
+    const route = createFileRoute("", filePath);
+    return folder.value ? withFileTabs(route, [{ filePath, folderAddress: folder.value }], 0) : route;
+  }
+  if (mode === "settings" && !rest.length) return createSettingsRoute("");
+  if (mode === "new-project" && !rest.length) return createNewProjectRoute();
+  if (mode === "git" && !rest.length) return { ...createGitRoute(""), selectedProjectIds: null };
+  if (mode === "stats" && rest.length <= 1) {
+    const tab = rest.length ? WORKBENCH_STATS_TABS.find(candidate => candidate === rest[0]) : "usage";
+    if (tab) return createStatsRoute(null, tab);
+  }
+  return createInvalidWorkbenchRoute(`Unknown workbench tab: ${decoded.value.join("/")}`);
+}
+
+/** The flagged tab list after the route marker, or null for an older route shape. */
+function parseTabList(afterMarker: string[], projectId: string): WorkbenchRoute | null {
+  const groups: string[][] = [[]];
+  for (const segment of afterMarker) {
+    if (segment === "+") groups.push([]);
+    else groups.at(-1)!.push(segment);
+  }
+  if (!groups.some(group => isTabFlags(group[0]))) return null;
+  const tabs: string[] = [];
+  let active = -1;
+  let preview: number | null = null;
+  for (const [index, group] of groups.entries()) {
+    const flags = isTabFlags(group[0]) ? group[0]! : "";
+    const tail = flags ? group.slice(1) : group;
+    if (!tail.length) return createInvalidWorkbenchRoute("A tab is empty.", projectId);
+    if (flags.includes("*")) {
+      if (active >= 0) return createInvalidWorkbenchRoute("Only one tab can be active.", projectId);
+      active = index;
+    }
+    if (flags.includes("~")) preview = index;
+    tabs.push(tail.join("/"));
+  }
+  if (active < 0) return createInvalidWorkbenchRoute("One tab must be active.", projectId);
+  const route = parseTabSegments(groups[active]!.slice(isTabFlags(groups[active]![0]) ? 1 : 0));
+  if (route.view === "invalid") return route;
+  const selected = projectId ? withProjectSelection(route, [projectId]) : route;
+  // A lone durable tab is what every route already means, so it carries no strip.
+  return tabs.length === 1 && preview === null ? selected : { ...selected, tabStrip: { tabs, preview } };
+}
+
+/** Old urls listed several svg tabs inside one file route; they become ordinary tabs. */
+function withLegacyFileTabs(route: WorkbenchRoute): WorkbenchRoute {
+  if (route.view !== "file" || (route.fileTabs?.length ?? 0) < 2) return route;
+  const { tabs, index } = getWorkbenchFileTabs(route);
+  const tabStrip = {
+    tabs: tabs.map(tab => formatWorkbenchTab(withFileTabs(createFileRoute("", tab.filePath), [tab], 0))!),
+    preview: null,
+  };
+  return { ...withFileTabs(route, [tabs[index]!], 0), tabStrip };
+}
+
 function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearchParams): WorkbenchRoute {
   const markerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER);
   if (markerIndex >= 0) {
@@ -539,11 +624,17 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
     const mode = segments[markerIndex + 1] ?? "";
     const projectId = projectSegments.value.join("/");
+    const tabList = parseTabList(segments.slice(markerIndex + 1), projectId);
+    if (tabList) return tabList;
     if (!mode && segments.length === markerIndex + 1) {
       return projectId ? createProjectRoute(projectId) : createHomeRoute();
     }
+    const ownerMarkerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER, markerIndex + 2);
+    if (projectId && mode === "thread" && ownerMarkerIndex >= 0) {
+      const homeThread = parseLegacyRouteFromSegments(segments.slice(markerIndex), searchParams);
+      return homeThread.view === "invalid" ? homeThread : withProjectSelection(homeThread, [projectId]);
+    }
     if (!projectId && mode === "thread") {
-      const ownerMarkerIndex = segments.indexOf(WORKBENCH_ROUTE_MARKER, markerIndex + 2);
       if (ownerMarkerIndex < markerIndex + 3) {
         return createInvalidWorkbenchRoute("Home thread routes must identify one owning project.");
       }
@@ -584,7 +675,7 @@ function parseLegacyRouteFromSegments(segments: string[], searchParams: URLSearc
 
     const value = valueSegments.value.join("/");
     if (mode === "file") {
-      return parseFileRoute(projectId, valueSegments.value);
+      return withLegacyFileTabs(parseFileRoute(projectId, valueSegments.value));
     }
     if (mode === "thread") {
       return parseThreadTargetSegments(valueSegments.value, projectId);
@@ -697,7 +788,23 @@ function parseWorkbenchRouteSegments(pathname: string, search: string): Workbenc
     return createHomeRoute();
   }
 
-  return parseProjectSelectionRouteFromSegments(segments, searchParams);
+  return withLegacyTabQuery(parseProjectSelectionRouteFromSegments(segments, searchParams), searchParams);
+}
+
+function withLegacyTabQuery(route: WorkbenchRoute, searchParams: URLSearchParams): WorkbenchRoute {
+  const legacyTabs = searchParams.getAll(LEGACY_TAB_SEARCH_PARAMS.tab).filter(Boolean);
+  if (route.view === "invalid" || route.tabStrip || !legacyTabs.length) return route;
+  const tabs: string[] = [];
+  const hasPreview = searchParams.has(LEGACY_TAB_SEARCH_PARAMS.preview);
+  const legacyPreview = Number(searchParams.get(LEGACY_TAB_SEARCH_PARAMS.preview));
+  let preview: number | null = null;
+  for (const [index, legacyTab] of legacyTabs.entries()) {
+    const tab = formatWorkbenchTab(parseWorkbenchRouteSegments(`/${WORKBENCH_ROUTE_MARKER}/${legacyTab}`, ""));
+    if (!tab || tabs.includes(tab)) continue;
+    if (hasPreview && legacyPreview === index) preview = tabs.length;
+    tabs.push(tab);
+  }
+  return tabs.length ? { ...route, tabStrip: { tabs, preview } } : route;
 }
 
 export function parseWorkbenchRouteFromLocation(location: WorkbenchLocationLike | string): WorkbenchRouteParseResult {
@@ -721,43 +828,38 @@ export function createWorkbenchHref(route: WorkbenchRoute): string {
     : "";
   const markedPath = projectPath ? `/${projectPath}/${folderPath}${WORKBENCH_ROUTE_MARKER}` : `/${folderPath}${WORKBENCH_ROUTE_MARKER}`;
   if (route.logical) throw new Error("Logical routes need project-address resolution before serialisation.");
-  if (route.view === "home") {
-    return "/";
+  if (route.view === "home") return "/";
+  if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
+  const active = formatWorkbenchTab(route);
+  if (!active) return `${markedPath}/`;
+  const strip = route.tabStrip ? WorkbenchTabStrip.open(route.tabStrip, active) : { tabs: [active], preview: null };
+  const tabs = strip.tabs.map((tab, index) => {
+    const flags = `${tab === active ? "*" : ""}${index === strip.preview ? "~" : ""}`;
+    return flags ? `${flags}/${tab}` : tab;
+  });
+  return `${markedPath}/${tabs.join("/+/")}`;
+}
+
+export function formatWorkbenchTab(route: WorkbenchRoute): string | undefined {
+  if (route.view === "thread") {
+    const owner = route.threadOwnerProjectId || route.projectId;
+    const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: RouteThreadReferenceSchema.parse(route.threadId) });
+    if (!owner) return undefined;
+    const ownerTab = `thread/${encodeRouteSegment(owner)}`;
+    if (target.kind === "new") return target.folderId ? `${ownerTab}/folder/${encodeRouteSegment(target.folderId)}/new` : `${ownerTab}/new`;
+    if (target.kind === "draft") return `${ownerTab}/new/${encodeRouteSegment(target.draftId)}`;
+    if (target.kind === "subagent") return `${ownerTab}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
+    return `${ownerTab}/${encodeRouteSegment(target.threadId)}`;
   }
   if (route.view === "file") {
-    return `${markedPath}/file/${encodeFileTabs(route)}`;
+    if (!route.filePath) return undefined;
+    const { tabs, index } = getWorkbenchFileTabs(route);
+    const folder = tabs[index]?.folderAddress;
+    return `file/${folder?.length ? `${folder.map(encodeRouteSegment).join("/")}/${WORKBENCH_FOLDER_MARKER}/` : ""}${encodeWorkbenchRoutePath(route.filePath)}`;
   }
-  if (route.view === "thread") {
-    const target = route.threadTarget ?? (route.threadId === "new" ? { kind: "new" as const } : { kind: "provider" as const, threadId: RouteThreadReferenceSchema.parse(route.threadId) });
-    const threadOwnerProjectId = route.threadOwnerProjectId || route.projectId;
-    if (!route.projectId && threadOwnerProjectId) {
-      const ownerPath = encodeWorkbenchRoutePath(threadOwnerProjectId);
-      if (target.kind === "new") return target.folderId
-        ? `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/folder/${target.folderId}/thread/new`
-        : `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new`;
-      if (target.kind === "draft") return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/new/${target.draftId}`;
-      if (target.kind === "subagent") return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-      return `${markedPath}/thread/${ownerPath}/${WORKBENCH_ROUTE_MARKER}/${encodeRouteSegment(target.threadId)}`;
-    }
-    if (threadOwnerProjectId !== route.projectId) {
-      return `${markedPath}/pin${createWorkbenchHref(createThreadRoute(threadOwnerProjectId, target))}`;
-    }
-    if (target.kind === "new") return target.folderId
-      ? `${markedPath}/folder/${target.folderId}/thread/new`
-      : `${markedPath}/thread/new`;
-    if (target.kind === "draft") return `${markedPath}/thread/new/${target.draftId}`;
-    if (target.kind === "subagent") return `${markedPath}/thread/${encodeRouteSegment(target.parentThreadId)}/sub/${encodeRouteSegment(target.threadId)}`;
-    return `${markedPath}/thread/${encodeRouteSegment(target.threadId)}`;
-  }
-  if (route.view === "settings") return `${markedPath}/settings`;
-  if (route.view === "new-project") return `${markedPath}/new-project`;
-  if (route.view === "git") return `${markedPath}/git`;
-  if (route.view === "stats") {
-    return route.statsTab && route.statsTab !== "usage" ? `${markedPath}/stats/${route.statsTab}` : `${markedPath}/stats`;
-  }
-  if (route.view === "mosaic") throw new Error("Mosaic routes are unavailable.");
-
-  return `${markedPath}/`;
+  if (route.view === "settings" || route.view === "new-project" || route.view === "git") return route.view;
+  if (route.view === "stats") return route.statsTab && route.statsTab !== "usage" ? `stats/${route.statsTab}` : "stats";
+  return undefined;
 }
 
 export function createProjectHref(projectId: string) {

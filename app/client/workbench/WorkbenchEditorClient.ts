@@ -75,7 +75,7 @@ import {
     MAX_EDITOR_FONT_SIZE,
     MIN_EDITOR_FONT_SIZE,
 } from "./state/workbench-settings";
-import type { WorkbenchEditorDomSurfaces } from "./workbench-dom";
+import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "./workbench-dom";
 
 const DEFAULT_STATUS_MESSAGE = "Markdown files open as rich text. Save with Ctrl/Cmd+S.";
 const DIRTY_STATUS_MESSAGE = "Unsaved changes.";
@@ -750,13 +750,8 @@ function WorkbenchEditorClient(
 
   function getMinimumToolbarTop(viewport = getVisualViewportMetrics()) {
     let minimumTop = viewport.top + 12;
-    const headerChromeElements: HTMLElement[] = [
-      statusDisplay.filePathLabel,
-      statusDisplay.statusLine,
-      controls.zoomButton,
-      controls.saveFileButton,
-      controls.resetDraftButton,
-    ];
+    // Sticky chrome (the shell tab strip, a mosaic panel's header) sits above the editor wherever it scrolls.
+    const headerChromeElements = editor.ownerDocument.querySelectorAll<HTMLElement>(`[${WORKBENCH_STICKY_CHROME_ATTRIBUTE}]`);
 
     for (const element of headerChromeElements) {
       if (!element.isConnected) {

@@ -90,7 +90,6 @@ export function useFileActions({
   navigateToRoute,
   onInvalidLocation,
   route,
-  routeForWorkbenchFile = resolveWorkbenchFileRoute,
   selectedDaemon,
 }: {
   policy: WorkbenchFileOpenPolicy;
@@ -101,8 +100,6 @@ export function useFileActions({
   navigateToRoute: (route: WorkbenchRoute) => void;
   onInvalidLocation: () => void;
   route: WorkbenchRoute;
-  /** Builds the destination route for Workbench opens, e.g. to add a file to open tabs. */
-  routeForWorkbenchFile?: typeof resolveWorkbenchFileRoute;
   selectedDaemon: WorkbenchDaemonClient | null;
 }): FileOpenAction {
   return useCallback(async (target, scope) => {
@@ -123,7 +120,7 @@ export function useFileActions({
       if (route.view === "file" && target.path === route.filePath
         && (route.logical?.location?.daemonId ?? null) === (location?.daemonId ?? null)
         && (route.logical?.location?.projectId ?? route.projectId) === projectId) return true;
-      navigateToRoute(routeForWorkbenchFile({
+      navigateToRoute(resolveWorkbenchFileRoute({
         currentProjectId, logicalProjects, location, path: target.path, projectId, route,
       }));
       return true;
@@ -147,7 +144,7 @@ export function useFileActions({
       return false;
     }
   }, [policy, browseLocation, currentProjectId, defaultDaemon, logicalProjects, navigateToRoute,
-    onInvalidLocation, route, routeForWorkbenchFile, selectedDaemon]);
+    onInvalidLocation, route, selectedDaemon]);
 }
 
 export function useFile({
