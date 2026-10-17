@@ -44,6 +44,7 @@ import {
 import {
     isInlineRunContainer,
 } from "./editor/inline-run-containers";
+import { matchEditorCommand } from "./editor/editor-commands";
 import { createEditorHighlightScope } from "./editor/editor-highlights";
 import RevisionHoverToolbarController, {
     type RevisionToolbarContext
@@ -1228,6 +1229,12 @@ function WorkbenchEditorClient(
     onLayoutChanged: () => {
       commentController.scheduleRefresh();
       scheduleDiffGutterRefresh();
+    },
+    // Undo and redo cover both columns; other editor shortcuts stay off the original so it keeps editor markup.
+    onOriginalKeyDown: (event) => {
+      const command = matchEditorCommand(event);
+      if (command === "undo" || command === "redo") options.handleEditorKeyDown(event);
+      else if (command) event.preventDefault();
     },
     renderMarkdown: renderMarkdownFragment,
     runStructuralMutation: (mutate, hooks) => {

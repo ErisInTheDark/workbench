@@ -88,6 +88,19 @@ test("a suggestion read from markdown resolves to its original", () => withPanel
   assert.equal(await panel.save(), "old words\n");
 }));
 
+test("editing a suggestion's original column rewrites its original side", () => withPanel("<del>\n\nold words\n\n</del>\n<ins>\n\nnew words\n\n</ins>\n", async panel => {
+  await panel.caret("new| words");
+  const original = document.querySelector<HTMLElement>("[data-suggestion-row-old]");
+  assert.ok(original);
+  const text = document.createTreeWalker(original, NodeFilter.SHOW_TEXT).nextNode() as Text;
+  text.data = "older words";
+  original.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  assert.equal(await panel.save(), "<del>\n\nolder words\n\n</del>\n<ins>\n\nnew words\n\n</ins>\n");
+  await panel.caret("new| words");
+  await panel.resolveSuggestion("reject");
+  assert.equal(await panel.save(), "older words\n");
+}));
+
 test("commenting on selected words highlights them and threads replies", () => withPanel("alpha beta gamma\n", async panel => {
   await panel.select("alpha [beta] gamma");
   await panel.toolbar("comment");

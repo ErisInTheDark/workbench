@@ -499,7 +499,13 @@ export default function WorkbenchFilePanel ({
                 pointer-events-auto absolute h-[44px] overflow-x-auto overflow-y-hidden [scrollbar-width:thin]
               )
               [& [data-suggestion-row-scroll-width]]:h-px
-              [& [data-suggestion-row-old]]:(absolute select-text opacity-55)
+              [& [data-suggestion-row-old]]:(
+                pointer-events-auto absolute cursor-text select-text opacity-55 outline-none transition-opacity
+                hover:opacity-75 focus:opacity-90
+              )
+              [& [data-suggestion-row-old][data-suggestion-row-empty]]:before:(
+                content-['Nothing_here_before'] absolute left-0 top-0 pointer-events-none font-sans italic text-[0.85em] text-fg/50
+              )
               [& [data-suggestion-row-old] > :last-child]:mb-0
               [& [data-suggestion-row-head]]:(
                 absolute flex h-[44px] items-center justify-between gap-2
@@ -512,7 +518,6 @@ export default function WorkbenchFilePanel ({
                 transition hover:(bg-fg/6 text-text border-[color-mix(in srgb, var(--text) 18%, transparent)])
               )
               [& [data-suggestion-row-head][data-side=new] [data-suggestion-row-action]]:(text-accent hover:(bg-accent-soft text-accent))
-              [& [data-suggestion-row-empty]]:(font-sans italic text-[0.85em] text-fg/50)
             `}
           />
           <MarkdownCommentMargin client={client} defaultAuthor={settings.get("userName")} layout={marginLayout.comments} />

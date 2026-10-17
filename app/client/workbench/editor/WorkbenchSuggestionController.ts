@@ -5,7 +5,8 @@
  * - SuggestionRowBounds: vertical extent of a suggestion row, which comment cards keep clear of.
  * - WorkbenchSuggestionControllerOptions: editor surfaces and mutation hooks the controller drives.
  * - default WorkbenchSuggestionController: own suggestion groups: tag blocks as the user starts changing them, lay each
- *   group out as a row with its original and keep-side actions, highlight the word diff, and resolve groups to one side.
+ *   group out as a row with its editable original and keep-side actions, highlight the word diff, and resolve groups to
+ *   one side.
  */
 
 import { getSuggestionId, getSuggestionOld, nextSuggestionId, REVIEW_ATTRIBUTES } from "../markdown/review-markup";
@@ -40,6 +41,8 @@ export interface WorkbenchSuggestionControllerOptions {
   layer: HTMLElement;
   /** Rows moved, resized or scrolled; things placed around them need placing again. */
   onLayoutChanged: () => void;
+  /** Keys pressed while editing an original column, so editor shortcuts such as undo still reach the editor. */
+  onOriginalKeyDown: (event: KeyboardEvent) => void;
   renderMarkdown: (markdown: string) => HTMLElement;
   runStructuralMutation: (mutate: () => void, hooks?: { afterDomMutation?: () => void }) => void;
   scheduleFrame: (callback: () => void) => void;
@@ -288,7 +291,7 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
 
   /**
    * One row per suggestion in the layer: a band, a sideways scroller (used when the row is wider than its viewport),
-   * the read-only original, and a header over each column. Headers paint above the scroller so their buttons stay live.
+   * the editable original, and a header over each column. Headers paint above the scroller so their buttons stay live.
    */
   function getRow(id: string) {
     const existing = Array.from(layer.children).find((child) => child.getAttribute(ROW_ATTRIBUTE) === id);
@@ -309,7 +312,12 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     const newHead = createElement(`${ROW_ATTRIBUTE}-head`);
     newHead.dataset.side = "new";
     newHead.append(createElement(`${ROW_ATTRIBUTE}-label`, "span", "Suggested"), createAction(id, "accept", "Keep suggestion"));
-    row.append(createElement(`${ROW_ATTRIBUTE}-band`), scroller, createElement(`${ROW_ATTRIBUTE}-old`), oldHead, newHead);
+    const oldBody = createElement(`${ROW_ATTRIBUTE}-old`) as HTMLDivElement;
+    oldBody.contentEditable = "true";
+    oldBody.setAttribute("aria-label", "Original");
+    oldBody.addEventListener("input", () => commitOriginal(id, oldBody));
+    oldBody.addEventListener("keydown", (event) => options.onOriginalKeyDown(event));
+    row.append(createElement(`${ROW_ATTRIBUTE}-band`), scroller, oldBody, oldHead, newHead);
     layer.append(row);
     return row;
   }
@@ -341,16 +349,32 @@ function WorkbenchSuggestionController(options: WorkbenchSuggestionControllerOpt
     }
   }
 
+  /** The original column is editable document too: what is typed there becomes the suggestion's original markdown. */
   function renderOld(body: HTMLElement, old: string) {
+    body.toggleAttribute(`${ROW_ATTRIBUTE}-empty`, !old);
+    // The column already shows what it was edited into; rendering it again would lose the caret.
     if (renderedOld.get(body) === old) return;
     renderedOld.set(body, old);
     body.replaceChildren();
     if (!old) {
-      body.append(createElement(`${ROW_ATTRIBUTE}-empty`, "p", "Nothing here before"));
+      const paragraph = document.createElement("p");
+      paragraph.append(document.createElement("br"));
+      body.append(paragraph);
       return;
     }
     body.append(...Array.from(options.renderMarkdown(old).childNodes));
-    for (const element of Array.from(body.querySelectorAll("[contenteditable]"))) element.removeAttribute("contenteditable");
+  }
+
+  function commitOriginal(id: string, body: HTMLElement) {
+    const group = collectGroups().find((candidate) => candidate.id === id);
+    if (!group) return;
+    const old = (body.textContent ?? "").trim() || body.querySelector("[data-comment-thread]")
+      ? options.serializeBlocks(Array.from(body.children))
+      : "";
+    body.toggleAttribute(`${ROW_ATTRIBUTE}-empty`, !old);
+    if (old === group.old) return;
+    renderedOld.set(body, old);
+    options.runStructuralMutation(() => tag(group.nodes, id, old));
   }
 
   function place(element: HTMLElement, left: number, top: number, width: number) {
