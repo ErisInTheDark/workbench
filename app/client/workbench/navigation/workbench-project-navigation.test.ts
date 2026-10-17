@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { WorkbenchLogicalProject } from "workbench-shared/types";
 import { DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
 import {
   createProjectRoute, createFileRoute, createThreadRoute, createHomeThreadRoute,
@@ -15,6 +16,72 @@ import {
 import WorkbenchProjectNavigation from "./workbench-project-navigation";
 
 const identities = ["remote://github.com/team/repo", "local:///C:/git/repo", "workspace://members"];
+
+function daemonProjectFixture(): WorkbenchLogicalProject {
+  const daemonId = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const projectId = ProjectIdSchema.parse("daemon");
+  const rootPath = "C:/Users/example/AppData/Local/inthedark/wb/daemon/workspace";
+  return {
+    id: LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001"),
+    matchKey: `daemon://${daemonId}`, label: "desktop", storedLabel: "desktop",
+    locations: [{
+      target: { daemonId, projectId }, daemonId, hostname: "desktop", name: "desktop", rootPath,
+      project: {
+        id: projectId, kind: "daemon", name: "desktop", relativePath: "daemon",
+        rootPath, roots: [], lastCommitTimeMs: null,
+      },
+    }],
+  };
+}
+
+test("daemon names round-trip selection and thread ownership without exposing scratch folders", () => {
+  const project = daemonProjectFixture();
+  const navigation = new WorkbenchProjectNavigation([], [], [project]);
+  const route = createLogicalProjectRoute(project.id);
+  assert.equal(navigation.href(route), "/desktop/@/");
+  assert.equal(navigation.readRoute(navigation.href(route)!).logical?.projectId, project.id);
+
+  const oldPath = "/c/Users/example/AppData/Local/inthedark/wb/daemon/workspace/@/";
+  const restored = navigation.readRoute(oldPath);
+  assert.equal(restored.logical?.projectId, project.id);
+  assert.equal(navigation.href(restored), "/desktop/@/");
+  const thread = createLogicalThreadRoute(null, project.id, null, { kind: "new" });
+  const threadHref = navigation.href(thread)!;
+  assert.equal(navigation.readRoute(threadHref).logical?.threadOwnerProjectId, project.id);
+  assert.ok(threadHref.includes("/desktop/@/"));
+
+  const target = project.locations[0]!.target;
+  assert.deepEqual(navigation.folderForRoute(route), target);
+  assert.equal(navigation.folderAddressFor(target, route), null);
+});
+
+test("daemon addresses follow names without requiring an attached catalogue", () => {
+  const project = daemonProjectFixture();
+  project.locations[0]!.project = null;
+  const navigation = new WorkbenchProjectNavigation([], [], [project]);
+  const route = createLogicalProjectRoute(project.id);
+  assert.equal(navigation.href(route), "/desktop/@/");
+  assert.deepEqual(navigation.folderForRoute(route), project.locations[0]!.target);
+  navigation.update([], [], [{ ...project, label: "workstation", storedLabel: "workstation" }]);
+  assert.equal(navigation.href(route), "/workstation/@/");
+  assert.equal(navigation.readRoute("/workstation/@/").logical?.projectId, project.id);
+});
+
+test("colliding daemon names use project identity rather than paths or another project's address", () => {
+  const project = daemonProjectFixture();
+  const otherId = LogicalProjectIdSchema.parse("a12f7e1e-81b6-4c30-bdc0-f83475981002");
+  for (const other of [
+    { id: otherId, matchKey: "remote://github.com/team/desktop", label: "desktop", locations: [] },
+    { ...project, id: otherId, matchKey: "daemon://another", locations: [] },
+  ]) {
+    const navigation = new WorkbenchProjectNavigation([], [], [project, other]);
+    assert.equal(navigation.readRoute("/desktop/@/").view, "invalid");
+    const href = navigation.href(createLogicalProjectRoute(project.id))!;
+    assert.equal(href, `/${project.id}/@/`);
+    assert.equal(navigation.readRoute(href).logical?.projectId, project.id);
+    assert.deepEqual(navigation.folderForRoute(navigation.readRoute(href)), project.locations[0]!.target);
+  }
+});
 
 test("one navigator refreshes project collisions and aliases without freezing thread ownership", () => {
   const firstId = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");

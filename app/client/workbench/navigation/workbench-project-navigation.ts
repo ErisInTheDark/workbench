@@ -10,6 +10,7 @@ import {
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
+import { isDaemonProject } from "workbench-shared/workbench/project/workbench-project-projection";
 import {
   ProjectFolderAddress, projectFolderOptions, type ProjectFolderOption,
 } from "workbench-shared/workbench/project/project-folder-address";
@@ -175,10 +176,14 @@ export default class WorkbenchProjectNavigation {
     });
   }
 
-  /** A folder whose address equals its owning project's address is that project's own folder. */
+  /** Daemon workspaces belong to their daemon identity; repository folders match their owner's address. */
   private isProjectOwnFolder(folder: ProjectFolderOption | undefined): boolean {
     if (!folder) return false;
     const owner = this.logicalProjects.find(project => project.id === folder.ownerProjectId);
+    if (owner && isDaemonProject(owner.matchKey)) {
+      return owner.locations.some(location => location.target.daemonId === folder.target.daemonId
+        && location.target.projectId === folder.target.projectId);
+    }
     const ownerAddress = owner ? this.canonicalAddress(owner) : this.address(folder.ownerProjectId, []);
     return !!ownerAddress && ProjectFolderAddress.forFolder(this.folders, folder.target).join("/") === ownerAddress;
   }
@@ -314,7 +319,9 @@ export default class WorkbenchProjectNavigation {
   }
 
   private canonicalAddress(project: WorkbenchLogicalProject) {
-    const candidates = project.matchKey.startsWith("remote://")
+    const candidates = isDaemonProject(project.matchKey)
+      ? [project.storedLabel ?? project.label, project.id]
+      : project.matchKey.startsWith("remote://")
       ? this.remoteAddresses(project)
       : [...this.localAddresses(project), ...[project.label, project.storedLabel ?? ""]
         .filter(address => !address.includes("://") && !/^[a-z]:[/\\]/iu.test(address)), project.id];
