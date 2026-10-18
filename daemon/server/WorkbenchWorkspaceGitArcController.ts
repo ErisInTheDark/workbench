@@ -40,7 +40,9 @@ import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
 import type { GitArcPreparedOperation } from "./lib/workbench/git/GitArcRegistry";
-import type { GitArcAdoptionInput } from "./lib/workbench/git/GitArcOwnershipTransferController";
+import {
+  assertGitArcAdoptionStashChoice, gitArcAdoptionHandlesStash, type GitArcAdoptionInput,
+} from "./lib/workbench/git/GitArcOwnershipTransferController";
 import type { WorkbenchFileClaimCheckResult } from "./lib/workbench/file-claim-check";
 
 export class WorkspaceGitArcMemberError extends Error {
@@ -133,6 +135,14 @@ function comparable(filePath: string) {
 
 function transferStashForMember(requested: boolean | undefined, memberHasStash: boolean) {
   return requested === true ? memberHasStash : requested;
+}
+
+/** Each repository moves, leaves or discards only the stash it actually holds. */
+function stashChoiceForMember(input: Pick<GitArcAdoptionInput, "discardStash" | "transferStash">, memberHasStash: boolean) {
+  return {
+    discardStash: input.discardStash === true && memberHasStash ? true : undefined,
+    transferStash: transferStashForMember(input.transferStash, memberHasStash),
+  };
 }
 
 function isInside(candidate: string, root: string) {
@@ -1095,7 +1105,6 @@ export default class WorkbenchWorkspaceGitArcController {
     if (paths) {
       const groups = this.groupRootPaths(project, members, paths, []);
       const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));
-      let sourceHasStash = false;
       let stashMembers = new Set<string>();
       const values = await this.runPreparedMembers(
         members,
@@ -1103,28 +1112,21 @@ export default class WorkbenchWorkspaceGitArcController {
           await beforeTransfer?.();
           const source = await this.findLifecycleStateInMembers(project, members, input.source.harness, input.source.threadId);
           stashMembers = new Set(source?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
-          sourceHasStash = stashMembers.size > 0;
-          if (sourceHasStash && input.transferStash === undefined) {
-            throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
-          }
-          if (!sourceHasStash && input.transferStash === true) {
-            throw new Error("transferStash is true, but the source has no saved stash.");
-          }
+          assertGitArcAdoptionStashChoice(input, stashMembers.size > 0);
           return members.filter(member => selected.has(member.repoRoot)
-            || input.transferStash === true && stashMembers.has(member.repoRoot));
+            || gitArcAdoptionHandlesStash(input) && stashMembers.has(member.repoRoot));
         },
         member => this.local.prepareAdoption({
           ...input,
           harness,
           cwd: member.repoRoot,
           selectedPaths: selected.get(member.repoRoot) ?? [],
-          transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
+          ...stashChoiceForMember(input, stashMembers.has(member.repoRoot)),
         }),
         [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
       );
       return this.aggregateResults(project, values);
     }
-    let sourceHasStash = false;
     let stashMembers = new Set<string>();
     const values = await this.runPreparedMembers(
       members,
@@ -1135,18 +1137,12 @@ export default class WorkbenchWorkspaceGitArcController {
           this.findLifecycleStateInMembers(project, members, harness, input.threadId),
         ]);
         stashMembers = new Set(source?.members.filter(member => member.stashedPaths?.length).map(member => member.repoRoot));
-        sourceHasStash = stashMembers.size > 0;
-        if (sourceHasStash && input.transferStash === undefined) {
-          throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
-        }
-        if (!sourceHasStash && input.transferStash === true) {
-          throw new Error("transferStash is true, but the source has no saved stash.");
-        }
+        assertGitArcAdoptionStashChoice(input, stashMembers.size > 0);
         if (input.transferStash === true && caller?.stashedPaths?.length) {
           throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
         }
         const selected = new Set(source?.members
-          .filter(member => member.claimedPaths.length || input.transferStash === true && member.stashedPaths?.length)
+          .filter(member => member.claimedPaths.length || gitArcAdoptionHandlesStash(input) && member.stashedPaths?.length)
           .map(member => member.repoRoot));
         return members.filter(member => selected.has(member.repoRoot));
       },
@@ -1154,7 +1150,7 @@ export default class WorkbenchWorkspaceGitArcController {
         ...input,
         harness,
         cwd: member.repoRoot,
-        transferStash: transferStashForMember(input.transferStash, stashMembers.has(member.repoRoot)),
+        ...stashChoiceForMember(input, stashMembers.has(member.repoRoot)),
       }),
       [{ harness, project, threadId: input.threadId }, { ...input.source, project }],
     );

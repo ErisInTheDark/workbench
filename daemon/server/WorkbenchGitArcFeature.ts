@@ -428,6 +428,7 @@ export default class WorkbenchGitArcFeature {
                 cwd: project.cwd, harness: adoptionRecipient?.harness ?? owner.harness,
                 threadId: adoptionRecipient?.threadId ?? owner.threadId, source: adoptionSource,
                 transferStash: effectiveRequest.transferStash,
+                ...effectiveRequest.discardStash ? { discardStash: true } : {},
               }, async () => {
                 const owners = await Promise.all([owner, ...adoptionRecipient ? [adoptionRecipient] : []].map(async identity => (
                   await this.options.getThreadClaimContext(project.project.id, identity.harness, identity.threadId)

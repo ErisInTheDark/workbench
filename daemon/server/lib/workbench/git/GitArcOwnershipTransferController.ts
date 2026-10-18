@@ -2,7 +2,8 @@
  * Exports:
  * - GitArcAdoptionInput/GitArcAdoptionResult: complete or selected source transfer input and the recipient's receipt.
  * - GitArcSelectedTransferInput: selected live claims released to a child.
- * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers; children inherit stack baselines (fast-forwarding from the releaser's lower layers) and sealed proposals survive.
+ * - gitArcAdoptionHandlesStash/assertGitArcAdoptionStashChoice: classify and validate the source-stash move, leave or discard choice.
+ * - default GitArcOwnershipTransferController: prepare atomic claim/stash ownership transfers, optionally discarding the source stash; children inherit stack baselines (fast-forwarding from the releaser's lower layers) and sealed proposals survive.
  */
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
@@ -27,8 +28,10 @@ export interface GitArcAdoptionInput {
   source: { harness: GitArcHarness; threadId: string };
   /** Move only these live source claims; the source keeps its stash and remaining claims. */
   selectedPaths?: string[];
-  /** Required when the source has saved stash: true moves it; false leaves it. */
+  /** Required when the source has saved stash unless it is discarded: true moves it; false leaves it. */
   transferStash?: boolean;
+  /** Delete the source's saved stash in the same ref transition instead of moving or leaving it. */
+  discardStash?: boolean;
 }
 
 export interface GitArcSelectedTransferInput extends GitArcAdoptionInput {
@@ -40,7 +43,7 @@ export interface GitArcAdoptionResult {
   checkpointRef: string;
   intentName: string;
   kind: "arc" | "plan";
-  phase: "active" | "plan" | "stashed";
+  phase: "active" | "plan" | "stashed" | "resolved";
   repoRoot: string;
   scopePaths: string[];
   claimedPaths: string[];
@@ -48,6 +51,24 @@ export interface GitArcAdoptionResult {
   stashedPaths: string[];
   /** Source proposals that lost their owner's claims; reported so they never vanish silently. */
   invalidatedProposals: GitArcInvalidatedProposal[];
+}
+
+type GitArcAdoptionStashChoice = Pick<GitArcAdoptionInput, "discardStash" | "transferStash">;
+
+/** Whether the adoption moves or deletes the source's saved stash rather than leaving it. */
+export function gitArcAdoptionHandlesStash(input: GitArcAdoptionStashChoice) {
+  return input.transferStash === true || input.discardStash === true;
+}
+
+/** A source with saved stash needs an explicit move, leave or discard; a source without one accepts none of them. */
+export function assertGitArcAdoptionStashChoice(input: GitArcAdoptionStashChoice, sourceHasStash: boolean) {
+  if (input.discardStash && input.transferStash !== undefined) throw new Error("Choose either discardStash or transferStash.");
+  if (sourceHasStash && input.transferStash === undefined && !input.discardStash) {
+    throw new Error("The source has saved stash. Set transferStash explicitly to true or false, or discardStash to delete it.");
+  }
+  if (!sourceHasStash && gitArcAdoptionHandlesStash(input)) {
+    throw new Error(`${input.discardStash ? "discardStash" : "transferStash"} is set, but the source has no saved stash.`);
+  }
 }
 
 function liveArc(entry: GitArcRegistryEntry | null) {
@@ -96,13 +117,10 @@ export default class GitArcOwnershipTransferController {
     const [callerStash, sourceStash] = await Promise.all([
       stashes.readOwnedStash(caller, target), stashes.readOwnedStash(source, origin),
     ]);
-    if (sourceStash && input.transferStash === undefined) {
-      throw new Error("The source has saved stash. Set transferStash explicitly to true or false.");
-    }
-    if (!sourceStash && input.transferStash === true) {
-      throw new Error("transferStash is true, but the source has no saved stash.");
-    }
+    assertGitArcAdoptionStashChoice(input, Boolean(sourceStash));
     const moveStash = Boolean(sourceStash && input.transferStash);
+    const discardStash = Boolean(sourceStash && input.discardStash);
+    const stashLeaves = moveStash || discardStash;
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const [sourceChain, targetChain] = await Promise.all([stack.readChain(origin?.stackTip), stack.readChain(target?.stackTip)]);
     const targetOwn = stack.ownLayers(targetChain, caller);
@@ -142,12 +160,14 @@ export default class GitArcOwnershipTransferController {
     const remainingActive = (sourceOwnership?.activeClaims ?? []).filter(value => !incomingSet.has(value));
     const existing = targetOwned;
     const targetActive = [...new Set([...(targetOwnership?.activeClaims ?? []), ...incoming])].sort();
-    if (!incoming.length && !moveStash) throw new Error("The source thread owns no selected live claims or saved stash.");
+    if (!incoming.length && !moveStash && !discardStash) throw new Error("The source thread owns no selected live claims or saved stash.");
+    // A discard-only adoption changes nothing the caller owns, so the caller's registry entry stays untouched.
+    const callerChanges = incoming.length > 0 || moveStash;
     if (moveStash && callerStash) throw new Error("The calling thread already has a stash. Adoption cannot replace it.");
     const head = await repository.headOrNull();
     const sourceArc = liveArc(origin);
     const callerArc = liveArc(target);
-    for (const [identity, entry, arc, paths] of [[source, origin, sourceArc, sourceLive], [caller, target, callerArc, existing]] as const) {
+    for (const [identity, entry, arc, paths] of [[source, origin, sourceArc, sourceLive], [caller, target, callerArc, callerChanges ? existing : []]] as const) {
       if (!paths.length) continue;
       if (!arc) throw new Error("Live claims have no implementation baseline.");
       const checkpoint = await store.readCheckpoint(identity.harness, identity.threadId, arc.checkpointCommit);
@@ -171,6 +191,11 @@ export default class GitArcOwnershipTransferController {
     }
     const updates: GitRefUpdate[] = [];
     const deletes: Array<{ oldValue?: string; ref: string }> = [];
+    if (discardStash) {
+      deletes.push(...sourceStash!.legacy
+        ? (await stashes.prepareDeleteFrozen(source, sourceStash!.paths)).deletions
+        : await stashes.prepareDeleteAdopted(source, sourceStash!.paths));
+    }
     let stashCheckpoint: Awaited<ReturnType<GitCheckpointStore["prepareCheckpoint"]>> | null = null;
     if (moveStash) {
       const baseline = await store.readCheckpoint(source.harness, source.threadId, sourceStash.checkpointCommit);
@@ -188,7 +213,7 @@ export default class GitArcOwnershipTransferController {
         : await stashes.prepareRehomeAdopted(source, caller, sourceStash.paths);
       updates.push(stashCheckpoint.update, ...moved.updates);
       deletes.push(...moved.deletions);
-    } else if (callerStash?.legacy) {
+    } else if (callerStash?.legacy && callerChanges) {
       const moved = await stashes.prepareRehomeFrozen(caller, caller, callerStash.paths);
       updates.push(...moved.updates);
       deletes.push(...moved.deletions);
@@ -208,7 +233,8 @@ export default class GitArcOwnershipTransferController {
         kind: "arc", registryLifecycle: true, scopePaths: remaining, version: 3,
       }) : null;
     if (sourcePrepared) updates.push(sourcePrepared.update);
-    const checkpointCommit = prepared?.checkpointCommit ?? target?.checkpointCommit ?? stashCheckpoint!.checkpointCommit;
+    // Discard-only adoption by a thread without Git arc state reports the source's last checkpoint.
+    const checkpointCommit = prepared?.checkpointCommit ?? target?.checkpointCommit ?? stashCheckpoint?.checkpointCommit ?? origin!.checkpointCommit;
     const retained = {
       checkpointCommit: prepared?.checkpointCommit ?? callerArc?.checkpointCommit ?? checkpointCommit,
       activeClaimedPaths: targetActive,
@@ -243,40 +269,43 @@ export default class GitArcOwnershipTransferController {
           } : null,
         proposalId: remaining.length ? origin.proposalId : null,
         proposalIds: remaining.length ? origin.proposalIds : [],
-        savedStash: moveStash ? null : origin.savedStash,
+        savedStash: stashLeaves ? null : origin.savedStash,
       }
       : {
         ...origin, checkpointCommit: sourcePrepared?.checkpointCommit ?? origin.checkpointCommit,
         activeClaimedPaths: remainingActive,
         phase: remaining.length ? "active" as const : "resolved" as const,
-        claimedPaths: remaining, savedStash: moveStash ? null : origin.savedStash,
+        claimedPaths: remaining, savedStash: stashLeaves ? null : origin.savedStash,
       } : null;
     const mutation = await registry.prepareOwners([
-      { identity: caller, expectedCheckpointCommit: target?.checkpointCommit ?? null, next: nextTarget },
+      ...callerChanges ? [{ identity: caller, expectedCheckpointCommit: target?.checkpointCommit ?? null, next: nextTarget }] : [],
       { identity: source, expectedCheckpointCommit: origin?.checkpointCommit ?? null, next: nextSource },
     ]);
     updates.push(...mutation.updates);
     // Only the source loses files. Its pending proposals covering moved files can no longer be committed by their owner;
     // sealed proposals and every caller proposal are frozen snapshots that stay committable.
-    const sourceOpen = [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...(moveStash ? sourceStash?.proposalIds ?? [] : [])])]
+    const leavingStashProposals = stashLeaves ? sourceStash?.proposalIds ?? [] : [];
+    const sourceOpen = [...new Set([...(sourceArc?.proposalIds ?? origin?.proposalIds ?? []), ...leavingStashProposals])]
       .filter(id => !sourceSealed.has(id));
     const { updates: invalidationUpdates, invalidatedProposals } = await proposals.prepareUnavailableUpdates({
       cwd: repository.root, ...source, repository,
       proposalIds: selectedPaths
         ? [...new Set([
           ...await proposals.proposalsCoveringPaths(repository, source.harness, source.threadId, sourceOpen, incoming),
-          ...(moveStash ? sourceStash?.proposalIds ?? [] : []),
+          ...leavingStashProposals,
         ])]
         : sourceOpen,
       reason: selectedPaths ? selectedReason : "Claim ownership was transferred to a coordinating thread.",
     });
     updates.push(...invalidationUpdates);
-    const checkpoint = prepared ?? stashCheckpoint ?? await store.readCheckpoint(harness, caller.threadId, checkpointCommit);
+    const checkpoint = prepared ?? stashCheckpoint ?? (target
+      ? await store.readCheckpoint(harness, caller.threadId, checkpointCommit)
+      : await store.readCheckpoint(sourceHarness, source.threadId, checkpointCommit));
     const result: GitArcAdoptionResult = {
       checkpointCommit: plan?.checkpointCommit ?? checkpointCommit,
       checkpointRef: plan?.checkpointRef ?? checkpoint.checkpointRef,
       intentName, kind: plan ? "plan" : "arc",
-      phase: claimedPaths.length ? plan ? "plan" : "active" : "stashed",
+      phase: claimedPaths.length ? plan ? "plan" : "active" : savedStash ? "stashed" : plan ? "plan" : "resolved",
       repoRoot: repository.root, scopePaths: plan?.metadata?.scopePaths ?? claimedPaths,
       claimedPaths, additionalClaims: incoming,
       stashedPaths: moveStash ? sourceStash?.paths ?? [] : callerStash?.paths ?? [],
@@ -290,7 +319,7 @@ export default class GitArcOwnershipTransferController {
       checkpointCommit: origin?.phase === "plan" ? origin.checkpointCommit : sourceCheckpoint?.checkpointCommit ?? checkpointCommit,
       checkpointRef: sourceCheckpoint?.checkpointRef ?? checkpoint.checkpointRef,
       intentName: origin?.intentName ?? null, kind: "arc",
-      phase: origin?.phase === "plan" ? "plan" : remaining.length ? "active" : sourceStash && !moveStash ? "stashed" : "resolved",
+      phase: origin?.phase === "plan" ? "plan" : remaining.length ? "active" : sourceStash && !stashLeaves ? "stashed" : "resolved",
       repoRoot: repository.root, scopePaths: remaining, claimedPaths: remaining, releasedClaims: incoming,
       ...(sourcePlan ? { plannedPaths: sourcePlan.metadata?.scopePaths ?? [] } : {}),
       invalidatedProposals,

@@ -18,7 +18,7 @@
 - Publishing or activating successor work over an ordinary stashed arc atomically promotes its frozen snapshot into the saved-stash slot; the successor owns live claims while restore and discard still target the saved work.
 - Activating successor work keeps the lifecycle's pending and unavailable proposals; only committed, rescinded and superseded ids drop.
 - Live claims and saved stash are independent presentation state. When both exist, thread rows, tabs, tooltips, and lifecycle controls expose both; neither suppresses the other.
-- Adopted stashes reuse frozen Git commits under caller-owned refs; ordinary stashes retain claim-loss storage and `stashed` phase. The caller's saved-stash slot may coexist with live claims and blocks settlement and retention.
+- Adopted stashes reuse frozen Git commits under caller-owned refs; ordinary stashes retain claim-loss storage and `stashed` phase. The caller's saved-stash slot may coexist with live claims and blocks settlement and retention. Adoption may instead discard the source's saved stash in the same ref transition.
 - Selected release to an owned subagent atomically moves only named live file claims, refreshes both checkpoints, and leaves stashes and worktree/index content untouched.
 - Active claims are editable ownership; baseline claims are guards derived from the owner's pending sealed proposals. They may overlap. Default status shows active claims only; explicit baseline status supports handoff.
 - Stacking converts its proposal paths from explicit active ownership to baseline guards. Editing beyond an owned pending stack tip activates those paths without another claim mutation; unstacking restores reopened paths to active ownership.

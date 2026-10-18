@@ -372,31 +372,36 @@ const claims = defineWorkbenchAgentCommand({
 });
 
 const adopt = defineWorkbenchAgentCommand({
-  description: "Adopt complete or selected live claims. When the source has saved stash, transferStash must explicitly move or leave it. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child.",
+  description: "Adopt complete or selected live claims. When the source has saved stash, transferStash must explicitly move or leave it, or discardStash deletes it. Thread IDs require explicit user instruction; names select an owned unsettled unlocked child.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "adopt"],
-  usage: "wb git arc adopt (--thread <id> | --name <name>) [--transfer-stash|--leave-stash] [--release-to-subagent <name>] [-- <claim-path>...]",
+  usage: "wb git arc adopt (--thread <id> | --name <name>) [--transfer-stash|--leave-stash|--discard-stash] [--release-to-subagent <name>] [-- <claim-path>...]",
   inputSchema: z.object({
     threadId: requiredText.optional(),
     name: requiredText.optional(),
     paths: paths.default([]).describe("Move only these live source claims; the source keeps its stash and other claims."),
     releaseToSubagent: requiredText.optional().describe("Owned unsettled subagent receiving the selected claims instead of the caller."),
-    transferStash: z.boolean().optional().describe("Required when saved stash exists: true transfers it; false leaves it."),
+    transferStash: z.boolean().optional().describe("Required when saved stash exists, unless discarding: true transfers it; false leaves it."),
+    discardStash: z.literal(true).optional().describe("Delete the source's saved stash instead of moving or leaving it."),
   }).strict()
     .refine(input => Boolean(input.threadId) !== Boolean(input.name), "Supply exactly one threadId or name source.")
+    .refine(input => !input.discardStash || input.transferStash === undefined, "Choose either discardStash or transferStash.")
     .refine(input => !input.releaseToSubagent || input.paths.length > 0 && input.releaseToSubagent !== input.name,
       "releaseToSubagent requires paths and a different subagent than the source."),
   parseCliArgs(args) {
     const values = ["--thread", "--name", "--release-to-subagent"];
-    const booleans = ["--leave-stash", "--transfer-stash"];
+    const booleans = ["--leave-stash", "--transfer-stash", "--discard-stash"];
     const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { boolean: booleans, values }), {
       boolean: booleans, trailing: true, values,
     });
-    if (flags.has("--leave-stash") && flags.has("--transfer-stash")) throw new Error("Choose either --leave-stash or --transfer-stash.");
+    if (booleans.filter(flag => flags.has(flag)).length > 1) {
+      throw new Error("Choose one of --transfer-stash, --leave-stash or --discard-stash.");
+    }
     return {
       threadId: flags.optional("--thread") ?? undefined, name: flags.optional("--name") ?? undefined,
       paths: flags.trailing, releaseToSubagent: flags.optional("--release-to-subagent") ?? undefined,
       ...(flags.has("--leave-stash") ? { transferStash: false } : flags.has("--transfer-stash") ? { transferStash: true } : {}),
+      ...(flags.has("--discard-stash") ? { discardStash: true as const } : {}),
     };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
@@ -406,6 +411,7 @@ const adopt = defineWorkbenchAgentCommand({
       ...(input.paths.length ? { paths: input.paths } : {}),
       ...(input.releaseToSubagent ? { releaseToSubagent: { kind: "subagent" as const, name: input.releaseToSubagent } } : {}),
       ...(input.transferStash === undefined ? {} : { transferStash: input.transferStash }),
+      ...(input.discardStash ? { discardStash: true } : {}),
     }, "git-arc-adopt");
   },
 });

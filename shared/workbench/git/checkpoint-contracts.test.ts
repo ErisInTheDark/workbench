@@ -169,6 +169,12 @@ test("plan and arc requests encode claimed-path defaults and successor refs", ()
     transferStash: false,
   });
   assert.equal(adoptSource.action === "arcAdoptSource" ? adoptSource.transferStash : undefined, false);
+  const adoptDiscarding = (stash: object) => GitCheckpointRequestSchema.safeParse({
+    action: "arcAdoptSource", cwd: "C:/repo", source: { kind: "subagent", name: "mira" }, threadId: "thread-one", ...stash,
+  }).success;
+  assert.equal(adoptDiscarding({ discardStash: true }), true);
+  assert.equal(adoptDiscarding({ discardStash: true, transferStash: false }), false);
+  assert.equal(adoptDiscarding({ discardStash: true, transferStash: true }), false);
   const editStart = (operations: object[]) => GitCheckpointRequestSchema.safeParse({
     action: "arcEditStart", cwd: "C:/repo", operations, threadId: "thread-one",
   }).success;

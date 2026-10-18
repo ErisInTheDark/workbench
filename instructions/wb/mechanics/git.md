@@ -101,7 +101,7 @@ follow-up scope:
 
 <docs tools="git_arc_adopt">
 ### adopt claims from another thread
-- <tool id="git_arc_adopt" /> transfers complete live claims. If the source has saved stash, set `transferStash` explicitly to move or leave it. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
+- <tool id="git_arc_adopt" /> transfers complete live claims. If the source has saved stash, set `transferStash` explicitly to move or leave it, or `discardStash` to delete it; discard from sibling threads only on explicit user direction. Use `threadId` only on explicit user instruction, or `name` for an owned subagent.
 - Exact `paths` select active or baseline guards; the recipient gets active ownership on its inherited stack. `transferStash` independently selects saved stash. `releaseToSubagent` hands the selection from one owned child to another atomically.
 - Adopt preserves caller claims, proposals and worktree; plans stay with the source. Source proposals covering moved files become unavailable and are reported. Reject stash transfer if the caller has one.
 </docs>

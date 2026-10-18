@@ -258,7 +258,11 @@ test("adoption requires exactly one source and preserves explicit stash choices"
   const moved = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", "--name", "source", "--release-to-subagent", "fern", "--", "one.ts"], gitArcOptions);
   assert.equal(moved.kind, "request");
   assert.deepEqual([moved.request.body?.paths, moved.request.body?.releaseToSubagent], [["one.ts"], { kind: "subagent", name: "fern" }]);
-  for (const args of [[], ["--thread", "source", "--name", "mira"], ["--name", "source", "--release-to-subagent", "fern"], ["--name", "fern", "--release-to-subagent", "fern", "--", "one.ts"]]) {
+  const discarded = await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", "--name", "source", "--discard-stash"], gitArcOptions);
+  assert.equal(discarded.kind, "request");
+  assert.deepEqual([discarded.request.body?.discardStash, discarded.request.body?.transferStash], [true, undefined]);
+  for (const args of [[], ["--thread", "source", "--name", "mira"], ["--name", "source", "--release-to-subagent", "fern"], ["--name", "fern", "--release-to-subagent", "fern", "--", "one.ts"],
+    ["--name", "source", "--discard-stash", "--leave-stash"], ["--name", "source", "--discard-stash", "--transfer-stash"]]) {
     assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "adopt", ...args], gitArcOptions)).kind, "error");
   }
 });
