@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts.
+ * - default WorkbenchThreadStateQuestionnaireRepository: persist one thread's canonical questionnaire source facts, including MCP tool enable context.
  * - WorkbenchThreadQuestionnaires: pending request and ordered answered history.
  */
 import { randomUUID } from "node:crypto";
@@ -39,9 +39,11 @@ type QuestionRow = {
 type OptionRow = { questionnaire_id: string; question_index: number; option_index: number; label: string; description: string };
 type AnswerGroupRow = { questionnaire_id: string; question_id: string };
 type AnswerRow = { questionnaire_id: string; question_id: string; answer_index: number; answer: string };
+type McpToolRow = { questionnaire_id: string; server: string; tool: string; title: string | null; description: string };
 interface QuestionnaireBatch {
   questions: Map<string, QuestionRow[]>;
   options: Map<string, OptionRow[]>;
+  mcpTools: Map<string, McpToolRow>;
   groups: Map<string, AnswerGroupRow[]>;
   answers: Map<string, AnswerRow[]>;
 }
@@ -70,9 +72,12 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
         .all(...ids) as AnswerGroupRow[];
       const answers = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_answers WHERE questionnaire_id IN (${selection}) ORDER BY question_id, answer_index`)
         .all(...ids) as AnswerRow[];
+      const mcpTools = this.database.prepare(`SELECT * FROM workbench_thread_questionnaire_mcp_tools WHERE questionnaire_id IN (${selection})`)
+        .all(...ids) as McpToolRow[];
       const batch: QuestionnaireBatch = {
         questions: Map.groupBy(questions, row => row.questionnaire_id),
         options: Map.groupBy(options, row => row.questionnaire_id),
+        mcpTools: new Map(mcpTools.map(row => [row.questionnaire_id, row])),
         groups: Map.groupBy(groups, row => row.questionnaire_id),
         answers: Map.groupBy(answers, row => row.questionnaire_id),
       };
@@ -140,6 +145,12 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
       INSERT INTO workbench_thread_questionnaire_options(questionnaire_id, question_index, option_index, label, description)
       VALUES (?, ?, ?, ?, ?)
     `);
+    const mcpTool = entry.request.mcpTool;
+    if (mcpTool) {
+      this.database.prepare(`
+        INSERT INTO workbench_thread_questionnaire_mcp_tools(questionnaire_id, server, tool, title, description) VALUES (?, ?, ?, ?, ?)
+      `).run(id, mcpTool.server, mcpTool.tool, mcpTool.title, mcpTool.description);
+    }
     entry.request.questions.forEach((question, questionIndex) => {
       questionStatement.run(id, questionIndex, question.id, question.header, question.question, Number(question.allowOther), Number(question.isSecret));
       question.options.forEach((option, optionIndex) => {
@@ -164,8 +175,10 @@ export default class WorkbenchThreadStateQuestionnaireRepository {
   private readRequest(row: QuestionnaireRow, batch: QuestionnaireBatch): WorkbenchDurableQuestionnaire["request"] {
     const questions = batch.questions.get(row.id) ?? [];
     const options = batch.options.get(row.id) ?? [];
+    const mcpTool = batch.mcpTools.get(row.id);
     return {
       id: row.request_id, title: row.title, summary: row.summary, submitLabel: row.submit_label,
+      ...(mcpTool ? { mcpTool: { server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title, description: mcpTool.description } } : {}),
       questions: questions.map((question, questionIndex) => {
         if (question.question_index !== questionIndex) throw new Error("Questionnaire has incomplete question ordering.");
         return {

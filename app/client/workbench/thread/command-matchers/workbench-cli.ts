@@ -9,7 +9,7 @@
  * - parseWorkbenchVisCommand: parse `wb vis start|end|read|snapshot|screenshot <path>` for its vis item.
  * - parseWorkbenchTodoCommand: parse `wb todo` list, add and remove calls for their todo row.
  * - WorkbenchSubagentCommandAction: supported subagent command actions.
- * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, feedback, vis, todo, task, token, message, subagent, and reload commands.
+ * - WORKBENCH_CLI_COMMAND_MATCHERS: shell-neutral matchers for wb toc, rm, feedback, vis, todo, mcp, task, token, message, subagent, and reload commands.
  */
 import type { CommandAction } from "workbench-shared/workbench/thread/workbench-thread-items";
 import {
@@ -443,6 +443,28 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       return operation
         ? getWorkbenchCommandRendering(operation.action === "remove" ? "todo_remove" : "todo", todoRenderingArguments(operation))?.result ?? null
         : null;
+    },
+  }),
+  CommandMatcher({
+    id: "workbench-cli.mcp",
+    match: ({ stage, summaryParts }) => {
+      if (summaryParts.length) return null;
+      const normalized = stage.text.trim();
+      const action = /^wb(?:\.cmd)?\s+mcp\s+(tools|request|call)(?=\s|$)/iu.exec(normalized)?.[1]?.toLowerCase();
+      if (!action || hasBooleanFlag(normalized, "help")) return null;
+      const server = readFlagValue(normalized, "server");
+      if (action === "tools") {
+        const separator = normalized.indexOf(" -- ");
+        const query = separator >= 0 ? normalized.slice(separator + 4).trim() : "";
+        return getWorkbenchCommandRendering("mcp_tools", {
+          ...query ? { query } : {}, ...server ? { server } : {},
+          includeDisabled: hasBooleanFlag(normalized, "include-disabled"),
+        })?.result ?? null;
+      }
+      const tool = readFlagValue(normalized, "tool");
+      return getWorkbenchCommandRendering(action === "call" ? "mcp_call" : "mcp_request", {
+        ...server ? { server } : {}, ...tool ? { tool } : {},
+      })?.result ?? null;
     },
   }),
   CommandMatcher({

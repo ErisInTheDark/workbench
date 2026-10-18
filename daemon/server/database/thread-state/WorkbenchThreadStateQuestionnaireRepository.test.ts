@@ -78,6 +78,24 @@ test("questionnaires preserve empty versus missing answers and source anchors wi
   }
 });
 
+test("an MCP tool enable request keeps its tool context, pending and answered, and only on that questionnaire", () => {
+  const { database, threadId, value, repository } = fixture();
+  try {
+    const mcpTool = { server: "pd-connect", tool: "google_drive-trash-file", title: "Trash File", description: "Move a file to the **trash**." };
+    const enable = { ...value.history[0]!.request, mcpTool };
+    const stored = {
+      pending: { ...value.pending!, request: enable },
+      history: [value.history[0]!, { ...value.history[0]!, requestKey: "enabled", request: { ...enable, mcpTool: { ...mcpTool, title: null } } }],
+    };
+    repository.replace(threadId, stored);
+    assert.deepEqual(repository.read(threadId), stored);
+    repository.replace(threadId, { pending: null, history: [] });
+    assert.deepEqual(database.prepare("SELECT * FROM workbench_thread_questionnaire_mcp_tools").all(), []);
+  } finally {
+    database.close();
+  }
+});
+
 test("stale pending approvals are never served while answered approval history stays", () => {
   const { database, threadId, value, repository } = fixture();
   try {

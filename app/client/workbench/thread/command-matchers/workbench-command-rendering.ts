@@ -23,6 +23,7 @@ import {
   type WorkbenchFeedbackChannel,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import { VirtualRepoWarmRequestSchema } from "workbench-shared/workbench/repo/virtual-repo-contract";
+import { mcpToolLabel } from "../../mcp-tool-label";
 
 import { CommandMatcher } from "./core";
 import {
@@ -52,6 +53,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "todo",
   "todo_remove",
   "mcp_tools",
+  "mcp_request",
   "mcp_call",
   // Vis is CLI-only; its CLI matcher renders through these names, which also keep earlier MCP calls rendering.
   "vis_start",
@@ -796,15 +798,23 @@ export function getWorkbenchCommandRoute(
     }
     case "mcp_tools": {
       const query = readString(args.query);
+      const server = readString(args.server);
+      const scope = `${readBoolean(args.includeDisabled) ? "all " : ""}${server ? `${server} ` : ""}MCP tools`;
       return query
-        ? simple("workbench-cli.mcp", actionTarget("Searching MCP tools for ", query), actionTarget("Searched MCP tools for ", query))
-        : simple("workbench-cli.mcp", actionTarget("Listing ", "MCP tools"), actionTarget("Listed ", "MCP tools"));
+        ? simple("workbench-cli.mcp", [...actionTarget("Searching ", scope), ...actionTarget(" for ", query)],
+          [...actionTarget("Searched ", scope), ...actionTarget(" for ", query)])
+        : simple("workbench-cli.mcp", actionTarget("Listing ", scope), actionTarget("Listed ", scope));
     }
+    case "mcp_request":
+      // The composer request and its transcript decision card own this call's presentation.
+      return hidden("workbench-cli.mcp-request");
     case "mcp_call": {
       const server = readString(args.server);
       const tool = readString(args.tool);
-      const target = server && tool ? `${server}/${tool}` : "MCP tool";
-      return simple("workbench-cli.mcp", actionTarget("Running ", target), actionTarget("Ran ", target));
+      if (!server || !tool) return simple("workbench-cli.mcp", actionTarget("Running ", "an MCP tool"), actionTarget("Ran ", "an MCP tool"));
+      const label = mcpToolLabel({ name: tool });
+      return simple("workbench-cli.mcp", [...actionTarget("Running ", label), ...actionTarget(" on ", server)],
+        [...actionTarget("Ran ", label), ...actionTarget(" on ", server)]);
     }
     case "task_get":
       return simple("workbench-cli.task-title-get", actionTarget("Checking ", "task title"), actionTarget("Checked ", "task title"));

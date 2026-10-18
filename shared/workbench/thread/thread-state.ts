@@ -431,6 +431,10 @@ const WorkbenchUserInputQuestionSchema = z.object({
 }).strict();
 const WorkbenchUserInputRequestSchema = z.object({
   id: z.string().min(1),
+  /** The MCP server tool an enable request is about. */
+  mcpTool: z.object({
+    server: z.string().min(1), tool: z.string().min(1), title: z.string().nullable(), description: z.string(),
+  }).strict().optional(),
   questions: z.array(WorkbenchUserInputQuestionSchema).min(1),
   submitLabel: z.string(),
   summary: z.string(),

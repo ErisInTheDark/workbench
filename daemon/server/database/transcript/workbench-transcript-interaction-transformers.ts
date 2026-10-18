@@ -162,6 +162,12 @@ export function transformQuestionnaireEntry(
       }));
     }
   }
+  const mcpTool = entry.request.mcpTool;
+  if (mcpTool) {
+    mutations.push(upsertRow(interactionTables.threadInteractionMcpTools, {
+      item_id: itemId, server: mcpTool.server, tool: mcpTool.tool, title: mcpTool.title ?? null, description: mcpTool.description,
+    }, { conflictColumns: ["item_id"], updateColumns: ["server", "tool", "title", "description"] }));
+  }
   if (command) {
     mutations.push(upsertRow(interactionTables.threadApprovalCommandContexts, {
       item_id: itemId,
@@ -194,6 +200,7 @@ export function transformQuestionnaireEntry(
       deleteRows(interactionTables.threadInteractionOptions, { item_id: itemId }),
       deleteRows(interactionTables.threadInteractionQuestions, { item_id: itemId }),
       deleteRows(interactionTables.threadApprovalCommandActions, { item_id: itemId }),
+      deleteRows(interactionTables.threadInteractionMcpTools, { item_id: itemId }),
     ],
     mutations,
   };

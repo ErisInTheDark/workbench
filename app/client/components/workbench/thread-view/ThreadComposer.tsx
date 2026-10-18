@@ -78,6 +78,10 @@ import ThreadProfileEditorController, { type ProfileEditorSection } from "./Thre
 import { getComposerProfileDisplayLabel } from "./composer-profile-label";
 import { formatHarnessLabel } from "./harness-label";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import { ThreadMcpToolRequestPanel } from "./ThreadMcpToolRequest";
+import {
+  MCP_TOOL_REQUEST_APPROVE, MCP_TOOL_REQUEST_DENY, MCP_TOOL_REQUEST_QUESTION_ID,
+} from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
 import { getThreadUserInputRequestPreviewText } from "./thread-user-input-request-preview";
 import { buildPendingUserInputRequestSubmissionOptions } from "./thread-user-input-request-submission";
@@ -694,6 +698,8 @@ export default function ThreadComposer ({
     </button>
   ) : null;
 
+  // An MCP tool enable request is answered with its own Approve/Deny controls instead of the questionnaire form.
+  const pendingMcpTool = visiblePendingUserInputRequest?.request.mcpTool ?? null;
   const questionnairePreviewText = visiblePendingUserInputRequest
     ? getThreadUserInputRequestPreviewText(visiblePendingUserInputRequest.request)
     : "";
@@ -738,7 +744,25 @@ export default function ThreadComposer ({
                 data-active={isQuestionnairePanelActive ? "true" : "false"}
                 inert={!isQuestionnairePanelActive}
               >
-                <ThreadUserInputRequest
+                {pendingMcpTool ? <ThreadMcpToolRequestPanel
+                  key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
+                  tool={pendingMcpTool}
+                  reason={visiblePendingUserInputRequest.request.questions[0]?.question ?? ""}
+                  actionTarget={questionnaireSubmitTarget}
+                  stop={showStopButton && stopControlState.action === "stop" ? {
+                    run: () => { void stop(); }, pending: isStopping, disabled: isStopDisabled, label: stopPresentation.label,
+                  } : null}
+                  onDecide={async approved => {
+                    try {
+                      await questionnaire.submit({ answers: { [MCP_TOOL_REQUEST_QUESTION_ID]: {
+                        answers: [approved ? MCP_TOOL_REQUEST_APPROVE : MCP_TOOL_REQUEST_DENY],
+                      } } }, buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest));
+                    } catch (submitError) {
+                      onSubmitRejected?.(submitError);
+                      throw submitError;
+                    }
+                  }}
+                /> : <ThreadUserInputRequest
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   contentClassName={stickyMode ? stickyComposerContentClassName : undefined}
                   draft={threadQuestionnaireDraft}
@@ -764,7 +788,7 @@ export default function ThreadComposer ({
                       throw submitError;
                     }
                   }}
-                />
+                />}
               </div>
             ) : null}
             <div
@@ -954,7 +978,7 @@ export default function ThreadComposer ({
                   />
                 ) : null}
               </div>
-              {stopButton}
+              {pendingMcpTool && isQuestionnairePanelActive ? null : stopButton}
             </div>
           </div>
         </div>

@@ -401,6 +401,56 @@ test("projection preserves distinct questionnaire items with one reused provider
   }
 });
 
+test("answered MCP tool enable requests keep their tool through the transcript", () => {
+  const { database, repository } = createRepository();
+  const request = {
+    id: "request-mcp",
+    mcpTool: { server: "pd-connect", tool: "google_drive-search-files", title: "Search Files", description: "Search **Drive** files." },
+    questions: [{
+      allowOther: false,
+      header: "Enable",
+      id: "decision",
+      isSecret: false,
+      options: [{ description: "", label: "Approve" }, { description: "", label: "Deny" }],
+      question: "To find your Ongoing folder.",
+    }],
+    submitLabel: "Submit",
+    summary: "Enable MCP tool",
+    title: "Enable MCP tool",
+  };
+  try {
+    repository.settle([canonicalWindow([
+      thread(),
+      turn("turn-1", 0),
+      {
+        entry: {
+          insertAfterItemId: null,
+          insertAfterItemIndex: null,
+          itemId: "mcp-request",
+          request,
+          requestKey: "mcp-key",
+          resolvedAt: 2_000,
+          response: { answers: { decision: { answers: ["Approve"] } } },
+          threadId: fixtureIdentityValues.WorkbenchThreadId.thread,
+          turnId: fixtureIdentityValues.WorkbenchTurnId["turn-1"],
+        },
+        kind: "questionnaire",
+        observedAt: 2_000,
+      },
+    ], ["turn-1"])]);
+    const snapshot = repository.read({ threadId: "thread", turnLimit: 1 });
+    assert.ok(snapshot);
+    const result = projectWorkbenchTranscript(snapshot);
+    assert.equal(result.success, true);
+    if (!result.success) return;
+    const interaction = result.data.turns.flatMap(({ items }) => items).find(({ type }) => type === "questionnaire");
+    assert.ok(interaction?.type === "questionnaire");
+    assert.deepEqual(interaction.request, request);
+  } finally {
+    database.close();
+  }
+});
+
 test("projection reads an augmentation collection linearly as item count grows", () => {
   const { database, repository } = createRepository();
   try {

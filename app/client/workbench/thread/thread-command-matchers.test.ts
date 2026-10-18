@@ -363,6 +363,19 @@ test("todo CLI and MCP calls share one intent and own their row", () => {
   }
 });
 
+test("MCP server CLI and MCP calls read as their intent, and enable requests leave the row to their decision card", () => {
+  const display = (command: string) => getThreadCommandDisplay({ command, commandActions: [], cwd: PROJECT_ROOT, projectRootPath: PROJECT_ROOT });
+  assert.equal(display("wb mcp tools --include-disabled -- drive search").summaryText, "Searched all MCP tools for drive search");
+  assert.equal(display("wb mcp tools --server pd-connect").summaryText, "Listed pd-connect MCP tools");
+  assert.equal(display("wb mcp call --server pd-connect --tool google_drive-search-files --arguments-json '{}'").summaryText,
+    "Ran Google drive search files on pd-connect");
+  assert.equal(display("wb mcp request --server pd-connect --tool google_drive-search-files --reason 'Find docs'").omitFromDisplay, true);
+  const call = getWorkbenchMcpCommandRoute({ argumentsValue: { server: "pd-connect", tool: "list_issues", arguments: {} }, server: "wb", tool: "mcp_call" });
+  assert.ok(call?.kind === "simple");
+  assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: { server: "pd-connect", tool: "x", reason: "y" }, server: "wb", tool: "mcp_request" })
+    ?.rendering.result.omitFromDisplay, true);
+});
+
 test("a grouped command label counts every item, naming vis checks and never dropping unnamed ones", () => {
   const block = (...commands: string[]) => getThreadCommandBlockDisplay({
     items: commands.map(command => ({ command, commandActions: [], cwd: PROJECT_ROOT })),

@@ -123,6 +123,7 @@
  * - WorkbenchUserInputQuestion: questionnaire question contract.
  * - WorkbenchApprovalCommandContext: approval command context.
  * - WorkbenchUserInputApprovalContext: approval request context.
+ * - WorkbenchUserInputMcpToolContext: MCP tool an enable request is about.
  * - WorkbenchUserInputRequest: questionnaire request contract.
  * - WorkbenchUserInputAnswer: questionnaire answer contract.
  * - WorkbenchUserInputResponse: questionnaire response contract.
@@ -1098,12 +1099,21 @@ export interface WorkbenchUserInputApprovalContext {
   command?: WorkbenchApprovalCommandContext;
 }
 
+/** The MCP server tool an agent asks the user to enable. */
+export interface WorkbenchUserInputMcpToolContext {
+  server: string;
+  tool: string;
+  title?: string | null | undefined;
+  description: string;
+}
+
 export interface WorkbenchUserInputRequest {
   id: string;
   title: string;
   summary: string;
   submitLabel: string;
   approval?: WorkbenchUserInputApprovalContext;
+  mcpTool?: WorkbenchUserInputMcpToolContext | undefined;
   questions: WorkbenchUserInputQuestion[];
 }
 

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - defineThreadQuestionnaireSchema: preserve questionnaire source facts outside transcript materialisation.
+ * - defineThreadQuestionnaireSchema: preserve questionnaire source facts, including the MCP tool an enable request is about, outside transcript materialisation.
  */
 import {
   booleanInteger, check, defineTable, enumText, foreignKey, index, integer, literal,
@@ -9,6 +9,7 @@ import {
 import {
   createTable, defineSubsystemHistory, defineTableHistory, tableVersion,
 } from "workbench-shared/database/schema/schema-history";
+import releases from "workbench-shared/workbench/database/schema/releases";
 
 export function defineThreadQuestionnaireSchema(schemaVersion: number) {
   function install<Table extends TableDefinition>(table: Table) {
@@ -110,11 +111,24 @@ export function defineThreadQuestionnaireSchema(schemaVersion: number) {
     ],
   })));
 
+  /** The MCP server tool an enable request is about; absent for ordinary questionnaires. */
+  const mcpToolTable = defineTable("workbench_thread_questionnaire_mcp_tools", {
+    questionnaire_id: text().primaryKey().references("workbench_thread_questionnaires", "id", { onDelete: "CASCADE" }),
+    server: text().notNull(),
+    tool: text().notNull(),
+    title: text(),
+    description: text().notNull(),
+  });
+  const mcpTools = defineTableHistory({
+    current: mcpToolTable,
+    versions: [tableVersion({ schemaVersion: releases.questionnaireMcpTools.version, table: mcpToolTable, migration: createTable(mcpToolTable) })],
+  });
+
   return {
     tables: {
       questionnaires: questionnaires.current, questions: questions.current, options: options.current,
-      answerGroups: answerGroups.current, answers: answers.current,
+      answerGroups: answerGroups.current, answers: answers.current, mcpTools: mcpTools.current,
     },
-    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers]),
+    history: defineSubsystemHistory([questionnaires, questions, options, answerGroups, answers, mcpTools]),
   };
 }

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } fr
 import type WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import type { McpServerSnapshot } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import McpServerSettingsController, { openCenteredMcpSignInPopup } from "../../workbench/McpServerSettingsController";
+import { mcpToolLabel, mcpToolSharedPrefix } from "../../workbench/mcp-tool-label";
 import { readWorkbenchAppPort } from "../../workbench/app/workbench-app-port-client";
 import { useWorkbenchAppRpc } from "../../workbench/app/WorkbenchAppRpcContext";
 import IconButton, { iconButtonClassName } from "../ui/IconButton";
@@ -26,19 +27,6 @@ type ServerProps = { server: McpServerSnapshot; controller: McpServerSettingsCon
 type Tool = Extract<McpServerSnapshot["catalog"], { status: "ready" }>["tools"][number];
 
 const cardBorder = "border-[color-mix(in_srgb,var(--text)_10%,transparent)]";
-
-/** The server's own title, else the name without a prefix every tool shares, sentence-cased. */
-function toolLabel(tool: Tool, sharedPrefix: string) {
-  if (tool.title?.trim()) return tool.title.trim();
-  const words = tool.name.slice(sharedPrefix.length).replace(/[_-]+/gu, " ").trim();
-  const sentence = /[a-z]/u.test(words) ? words : words.toLowerCase();
-  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
-}
-
-function sharedPrefix(tools: readonly Tool[]) {
-  const prefix = tools[0]?.name.match(/^[A-Za-z0-9]+[_-]/u)?.[0] ?? "";
-  return tools.length > 1 && prefix && tools.every(tool => tool.name.startsWith(prefix)) ? prefix : "";
-}
 
 function MenuItem({ icon, danger = false, children }: { icon: ReactNode; danger?: boolean; children: ReactNode }) {
   return <span className={`inline-flex items-center gap-2 ${danger ? "text-danger" : ""}`}>{icon}{children}</span>;
@@ -76,7 +64,7 @@ function ToolList({ server, controller, busy }: ServerProps) {
   // Allowed tools the server stopped offering stay listed so they can be unticked.
   const listed: Tool[] = [...tools, ...server.allowedTools.filter(name => !tools.some(tool => tool.name === name))
     .map(name => ({ name, title: null, description: "No longer offered by the server." }))];
-  const prefix = sharedPrefix(tools);
+  const prefix = mcpToolSharedPrefix(tools);
   const setTool = (name: string, allowed: boolean) => {
     const others = server.allowedTools.filter(tool => tool !== name);
     void controller.update({ action: "setTools", id: server.id, tools: allowed ? [...others, name] : others });
@@ -91,7 +79,7 @@ function ToolList({ server, controller, busy }: ServerProps) {
       checked={server.allowAll || server.allowedTools.includes(tool.name)} onChange={allowed => setTool(tool.name, allowed)}
       label={<span className="flex min-w-0 flex-col">
         <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-          <span className="text-text">{toolLabel(tool, prefix)}</span>
+          <span className="text-text">{mcpToolLabel(tool, prefix)}</span>
           <code className="text-[0.85em] font-normal text-fg/muted">{tool.name}</code>
         </span>
         {tool.description ? <MarkdownRender markdown={tool.description}

@@ -9,6 +9,7 @@
  * threadInteractionAnswers: current ordered settled answer table. Keywords: database, schema, questionnaire.
  * threadApprovalCommandContexts: current approval command context table. Keywords: database, schema, approval.
  * threadApprovalCommandActions: current ordered approval command action table. Keywords: database, schema, approval.
+ * threadInteractionMcpTools: MCP server tool an answered enable request was about. Keywords: database, schema, mcp.
  * interactionTables: current interaction table inventory. Keywords: database, schema, interaction.
  * InteractionSchemaRows: selected row types for current interaction tables. Keywords: database, schema, types.
  * interactionSchemaHistory: private interaction table histories. Keywords: database, schema, history.
@@ -208,6 +209,24 @@ const threadApprovalCommandActionsV1 = defineTable("thread_approval_command_acti
 const threadApprovalCommandActionsHistory = initialHistory(threadApprovalCommandActionsV1);
 export const threadApprovalCommandActions = threadApprovalCommandActionsHistory.current;
 
+/** The MCP server tool an answered enable request was about. */
+const threadInteractionMcpToolsV1 = defineTable("thread_interaction_mcp_tools", {
+  item_id: integer().primaryKey().references("thread_item_interactions", "item_id", { onDelete: "CASCADE" }),
+  server: text().notNull(),
+  tool: text().notNull(),
+  title: text(),
+  description: text().notNull(),
+});
+const threadInteractionMcpToolsHistory = defineTableHistory({
+  versions: [tableVersion({
+    schemaVersion: databaseReleases.interactionMcpTools.version,
+    table: threadInteractionMcpToolsV1,
+    migration: createTable(threadInteractionMcpToolsV1),
+  })],
+  current: threadInteractionMcpToolsV1,
+});
+export const threadInteractionMcpTools = threadInteractionMcpToolsHistory.current;
+
 export const interactionTables = Object.freeze({
   threadItemWebSearches,
   threadWebSearchQueries,
@@ -218,6 +237,7 @@ export const interactionTables = Object.freeze({
   threadInteractionAnswers,
   threadApprovalCommandContexts,
   threadApprovalCommandActions,
+  threadInteractionMcpTools,
 });
 
 export type InteractionSchemaRows = {
@@ -234,4 +254,5 @@ export const interactionSchemaHistory = defineSubsystemHistory([
   threadInteractionAnswersHistory,
   threadApprovalCommandContextsHistory,
   threadApprovalCommandActionsHistory,
+  threadInteractionMcpToolsHistory,
 ]);

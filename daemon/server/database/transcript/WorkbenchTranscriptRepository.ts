@@ -2264,6 +2264,7 @@ export default class WorkbenchTranscriptRepository {
       threadInteractionAnswers: itemRows(interactionTables.threadInteractionAnswers),
       threadApprovalCommandContexts: itemRows(interactionTables.threadApprovalCommandContexts),
       threadApprovalCommandActions: itemRows(interactionTables.threadApprovalCommandActions),
+      threadInteractionMcpTools: itemRows(interactionTables.threadInteractionMcpTools),
       threadBrowseEntries,
       transcriptAssetRefs,
       transcriptAssets: this.#all(selectRows(evidenceTables.transcriptAssets, {

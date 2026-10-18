@@ -1,18 +1,22 @@
 /*
  * Exports:
- * - McpToolListing: one server's allowed tools, or why they are unavailable.
- * - formatMcpToolListing: agent-facing text for `mcp_tools`; a query returns ranked matches with input schemas.
+ * - McpToolListing: one server's offered tools with their allowed state, or why they are unavailable.
+ * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches and adds input schemas.
  * - formatMcpToolResult: agent-facing text for one `mcp_call` result.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerTool } from "./McpServerConnection";
 
 export type McpToolListing =
-  | { server: string; status: "ready"; tools: McpServerTool[] }
+  | { server: string; status: "ready"; tools: { tool: McpServerTool; allowed: boolean }[] }
+  | { server: string; status: "signInRequired" }
   | { server: string; status: "error"; detail: string };
+
+type Entry = { server: string; tool: McpServerTool; allowed: boolean };
 
 const MAX_MATCHES = 10;
 const NO_SERVERS = "No MCP servers are configured. The user can add them in Settings > Agents > MCP servers.";
+const DISABLED_HINT = "Disabled (ask the user to enable one with mcp_request):";
 
 function firstLine(text: string) {
   return text.split(/\r?\n/u).find(line => line.trim())?.trim() ?? "";
@@ -23,9 +27,9 @@ function terms(text: string) {
 }
 
 /** Name hits outweigh description hits; tools matching no term are dropped. */
-function score(tool: McpServerTool, server: string, query: readonly string[]) {
-  const name = new Set(terms(`${server} ${tool.name}`));
-  const description = tool.description.toLowerCase();
+function score(entry: Entry, query: readonly string[]) {
+  const name = new Set(terms(`${entry.server} ${entry.tool.name} ${entry.tool.title ?? ""}`));
+  const description = entry.tool.description.toLowerCase();
   let total = 0;
   for (const term of query) {
     if (name.has(term)) total += 3;
@@ -35,34 +39,53 @@ function score(tool: McpServerTool, server: string, query: readonly string[]) {
   return total;
 }
 
-function unavailable(listings: readonly McpToolListing[]) {
-  return listings.flatMap(listing => listing.status === "error" ? [`${listing.server}: unavailable (${listing.detail})`] : []);
+function brief(entry: Entry) {
+  return `${entry.server}/${entry.tool.name}: ${firstLine(entry.tool.description)}`;
 }
 
-export function formatMcpToolListing(listings: readonly McpToolListing[], query: string | undefined) {
+function detailed(entry: Entry) {
+  return [
+    `${entry.server}/${entry.tool.name}`,
+    entry.tool.description.trim(),
+    `Input schema: ${JSON.stringify(entry.tool.inputSchema)}`,
+  ].filter(Boolean).join("\n");
+}
+
+function section(lines: readonly string[], separator: string) {
+  return lines.join(separator);
+}
+
+export function formatMcpToolListing(listings: readonly McpToolListing[], query: string | undefined, includeDisabled = false) {
   if (!listings.length) return `${NO_SERVERS}\n`;
-  const ready = listings.flatMap(listing => listing.status === "ready"
-    ? listing.tools.map(tool => ({ server: listing.server, tool }))
+  const entries = listings.flatMap(listing => listing.status === "ready"
+    ? listing.tools.map(({ tool, allowed }): Entry => ({ server: listing.server, tool, allowed }))
     : []);
-  const failures = unavailable(listings);
+  const unavailable = listings.flatMap(listing => listing.status === "error"
+    ? [`${listing.server}: unavailable (${listing.detail})`]
+    : listing.status === "signInRequired"
+      ? [`${listing.server}: needs authentication; the user can authenticate it in Settings > Agents > MCP servers`]
+      : []);
   const queryTerms = terms(query ?? "");
-  if (!queryTerms.length) {
-    const lines = ready.map(({ server, tool }) => `${server}/${tool.name}: ${firstLine(tool.description)}`);
-    if (!lines.length && !failures.length) lines.push("No MCP server tools are allowed. The user can allow them in Settings > Agents > MCP servers.");
-    return `${[...lines, ...failures].join("\n")}\n`;
-  }
-  const matches = ready
-    .map(entry => ({ ...entry, score: score(entry.tool, entry.server, queryTerms) }))
-    .filter(entry => entry.score > 0)
-    .sort((left, right) => right.score - left.score || `${left.server}/${left.tool.name}`.localeCompare(`${right.server}/${right.tool.name}`))
-    .slice(0, MAX_MATCHES);
-  const blocks = matches.map(({ server, tool }) => [
-    `${server}/${tool.name}`,
-    tool.description.trim(),
-    `Input schema: ${JSON.stringify(tool.inputSchema)}`,
-  ].filter(Boolean).join("\n"));
-  if (!blocks.length) blocks.push(`No allowed MCP server tools match "${query}".`);
-  return `${[...blocks, ...failures].join("\n\n")}\n`;
+  const ranked = (candidates: Entry[]) => queryTerms.length
+    ? candidates.map(entry => ({ entry, score: score(entry, queryTerms) }))
+      .filter(({ score }) => score > 0)
+      .sort((left, right) => right.score - left.score
+        || `${left.entry.server}/${left.entry.tool.name}`.localeCompare(`${right.entry.server}/${right.entry.tool.name}`))
+      .slice(0, MAX_MATCHES).map(({ entry }) => entry)
+    : candidates;
+  const render = queryTerms.length ? detailed : brief;
+  const separator = queryTerms.length ? "\n\n" : "\n";
+  const enabled = ranked(entries.filter(entry => entry.allowed)).map(render);
+  const disabled = includeDisabled ? ranked(entries.filter(entry => !entry.allowed)).map(render) : [];
+
+  const blocks: string[] = [];
+  if (enabled.length) blocks.push(section(enabled, separator));
+  else if (queryTerms.length) blocks.push(`No enabled MCP server tools match "${query}".`);
+  else blocks.push("No MCP server tools are enabled.");
+  if (disabled.length) blocks.push(`${DISABLED_HINT}\n${section(disabled, separator)}`);
+  else if (!includeDisabled && !enabled.length) blocks.push("Search again with includeDisabled to see tools the user could enable.");
+  if (unavailable.length) blocks.push(unavailable.join("\n"));
+  return `${blocks.join("\n\n")}\n`;
 }
 
 export function formatMcpToolResult(result: CallToolResult) {

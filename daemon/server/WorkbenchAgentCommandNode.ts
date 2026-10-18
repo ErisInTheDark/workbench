@@ -8,6 +8,7 @@ import { WorkbenchRequestUserInputCommandSchema } from "./lib/workbench/commands
 import { WorkbenchStoreCommandRequestSchema } from "./lib/workbench/commands/store-command-definitions";
 import { WorkbenchTodoRequestSchema } from "./lib/workbench/commands/todo-command-definitions";
 import { WorkbenchMcpRequestSchema } from "./lib/workbench/commands/mcp-command-definitions";
+import { isMcpToolRequestApproved, mcpToolRequestQuestions } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { WorkbenchVisRequestSchema } from "./lib/workbench/commands/vis-command-definitions";
 import { formatVisAnswers, formatVisSessionResult, parseVisProject } from "workbench-shared/workbench/vis/vis-contract";
 import { isWorkbenchAgentMcpRuntimeReloadInterruption } from "./lib/workbench/commands/workbench-agent-command-definition";
@@ -257,6 +258,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         const mcpServers = build.get("mcpServers");
         try {
           if (request.action === "tools") return new Response(await mcpServers.listTools(request, signal), { headers });
+          if (request.action === "request") {
+            const { identity } = await nativeTarget(request.threadId, request.cwd, request.harness);
+            const text = await mcpServers.requestTool(request, async mcpTool => {
+              const response = await questionnaires.request({
+                callerThreadId: identity.threadId, cwd: request.cwd, requestKey: request.requestKey, mcpTool,
+                questions: mcpToolRequestQuestions(request.reason),
+              }, signal);
+              return isMcpToolRequestApproved(response);
+            }, signal);
+            return new Response(text, { headers });
+          }
           const outcome = await mcpServers.call(request, signal);
           return new Response(outcome.text, { headers, status: outcome.isError ? 422 : 200 });
         } catch (error) {

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkbenchDurableQuestionnaire } from "workbench-shared/workbench/thread/thread-state";
 import { WORKBENCH_MCP_QUESTIONNAIRE_REQUEST_KEY_PREFIX } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
 import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
-import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { WorkbenchPendingUserInputRequest, WorkbenchUserInputMcpToolContext, WorkbenchUserInputResponse } from "workbench-shared/types";
 import type { WorkbenchRequestUserInputCommandInput } from "./lib/workbench/commands/questionnaire-command-definition";
 import type { WorkbenchThreadId, WorkbenchTurnId, ProjectId } from "workbench-shared/workbench/identity";
 
@@ -101,7 +101,11 @@ export default class WorkbenchQuestionnaireController {
     };
   }
 
-  async request(input: Omit<WorkbenchRequestUserInputCommandInput, "callerThreadId"> & { callerThreadId: WorkbenchThreadId }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
+  async request(input: Omit<WorkbenchRequestUserInputCommandInput, "callerThreadId"> & {
+    callerThreadId: WorkbenchThreadId;
+    /** The MCP server tool this request asks the user to enable. */
+    mcpTool?: WorkbenchUserInputMcpToolContext;
+  }, signal: AbortSignal): Promise<WorkbenchUserInputResponse> {
     this.assertActive();
     signal.throwIfAborted();
     if (this.pendingByThreadId.has(input.callerThreadId)) {
@@ -120,7 +124,7 @@ export default class WorkbenchQuestionnaireController {
     const restored = pendingQuestionnaire?.requestKey === requestKey ? pendingQuestionnaire : null;
     const questionnaire: WorkbenchQuestionnaire = {
       itemId: restored?.itemId ?? randomUUID(),
-      request: buildWorkbenchQuestionnaireRequest({ id: requestKey, questions: input.questions }),
+      request: buildWorkbenchQuestionnaireRequest({ id: requestKey, questions: input.questions, mcpTool: input.mcpTool }),
       requestKey,
       turnId: restored?.turnId ?? turnId,
     };

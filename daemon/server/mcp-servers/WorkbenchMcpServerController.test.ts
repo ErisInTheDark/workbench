@@ -93,11 +93,11 @@ test("only allowed tools the server currently offers are forwarded; allow-all co
     const owner = create();
     const { servers: [server] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
     const id = server!.id;
-    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /not allowed/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /not enabled/u);
 
     await owner.update({ action: "setTools", id, tools: ["SEARCH", "GONE"] });
     assert.deepEqual(await owner.call({ server: "drive", tool: "SEARCH", arguments: { q: "x" } }, signal()), { text: "ran SEARCH\n", isError: false });
-    await assert.rejects(owner.call({ server: "drive", tool: "EXECUTE", arguments: {} }, signal()), /not allowed/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "EXECUTE", arguments: {} }, signal()), /not enabled/u);
     await assert.rejects(owner.call({ server: "drive", tool: "GONE", arguments: {} }, signal()), /does not offer/u);
 
     await owner.update({ action: "setAllowAll", id, allowAll: true });
@@ -107,7 +107,7 @@ test("only allowed tools the server currently offers are forwarded; allow-all co
 
     // Individual picks survive allow-all, so turning it off restores them.
     await owner.update({ action: "setAllowAll", id, allowAll: false });
-    await assert.rejects(owner.call({ server: "drive", tool: "LATER", arguments: {} }, signal()), /not allowed/u);
+    await assert.rejects(owner.call({ server: "drive", tool: "LATER", arguments: {} }, signal()), /not enabled/u);
     assert.deepEqual((await owner.read()).servers[0]?.allowedTools, ["GONE", "SEARCH"]);
   } finally { close(); }
 });
@@ -189,6 +189,56 @@ test("invalid settings store nothing; removal closes the connection and drops ev
     for (const table of ["mcp_servers", "mcp_server_tools", "mcp_server_auth"]) {
       assert.equal((database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count, 0);
     }
+  } finally { close(); }
+});
+
+test("disabled tools are hidden by default and listed in their own section only when asked", async () => {
+  const docs = new FakeServer("docs");
+  docs.tools = [tool("SEARCH_FILES", "Find files by name"), tool("DELETE_FILE", "Delete a file")];
+  const { create, close } = setup({ docs });
+  try {
+    const owner = create();
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES"] });
+    assert.equal(await owner.listTools({}, signal()), "docs/SEARCH_FILES: Find files by name\n");
+    const withDisabled = await owner.listTools({ includeDisabled: true }, signal());
+    assert.equal(withDisabled, [
+      "docs/SEARCH_FILES: Find files by name",
+      "",
+      "Disabled (ask the user to enable one with mcp_request):",
+      "docs/DELETE_FILE: Delete a file",
+      "",
+    ].join("\n"));
+    assert.equal(withDisabled.match(/mcp_request/gu)?.length, 1, "the enable hint appears once");
+    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal()), /not enabled/u);
+  } finally { close(); }
+});
+
+test("an enable request asks only for offered disabled tools, and enables on the user's yes", async () => {
+  const docs = new FakeServer("docs");
+  docs.tools = [tool("SEARCH_FILES", "Find files"), tool("DELETE_FILE", "Delete a file")];
+  const { create, close } = setup({ docs });
+  try {
+    const owner = create();
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES"] });
+    const asked: string[] = [];
+    const answer = (enable: boolean) => async (mcpTool: { server: string; tool: string; description: string }) => {
+      asked.push(`${mcpTool.server}/${mcpTool.tool}: ${mcpTool.description}`);
+      return enable;
+    };
+    const request = (tool: string, enable = true) => owner.requestTool({ server: "docs", tool, reason: "Needed" }, answer(enable), signal());
+
+    assert.match(await request("SEARCH_FILES"), /already enabled/u);
+    await assert.rejects(request("NOPE"), /does not offer/u);
+    assert.deepEqual(asked, [], "enabled and unoffered tools never reach the user");
+
+    assert.match(await request("DELETE_FILE", false), /did not enable/u);
+    await assert.rejects(owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal()), /not enabled/u);
+    assert.match(await request("DELETE_FILE"), /^Enabled docs\/DELETE_FILE/u);
+    assert.deepEqual(asked, ["docs/DELETE_FILE: Delete a file", "docs/DELETE_FILE: Delete a file"]);
+    assert.equal((await owner.call({ server: "docs", tool: "DELETE_FILE", arguments: {} }, signal())).isError, false);
+    assert.deepEqual((await owner.read()).servers[0]?.allowedTools, ["DELETE_FILE", "SEARCH_FILES"]);
   } finally { close(); }
 });
 

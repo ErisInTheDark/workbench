@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchMcpServerOptions: database, device identity and connection factory ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins and live connections; answers settings reads/updates, sign-in steps and agent tool listing/calls.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins and live connections; answers settings reads/updates, sign-in steps and agent tool listing, enable requests and calls.
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -237,29 +237,56 @@ export default class WorkbenchMcpServerController {
     return { outcome: "signedIn", server: server.name };
   }
 
-  /** Allowed tools across servers, or one server's; each unreachable server is reported alongside the rest. */
-  async listTools(input: { server?: string; query?: string }, signal: AbortSignal) {
+  /** Tools across servers, or one server's: enabled ones, plus disabled ones when asked; unreachable servers are reported alongside. */
+  async listTools(input: { server?: string; query?: string; includeDisabled?: boolean }, signal: AbortSignal) {
     const servers = (await this.#servers()).filter(server => !input.server || server.name === input.server);
     if (input.server && !servers.length) throw new Error(`No MCP server is named ${input.server}.`);
     const listings = await Promise.all(servers.map(async (server): Promise<McpToolListing> => {
       const catalog = await this.#catalog(server, signal);
       if (catalog.status === "ready") {
-        return { server: server.name, status: "ready", tools: catalog.tools.filter(tool => this.#allows(server, tool.name)) };
+        return { server: server.name, status: "ready", tools: catalog.tools.map(tool => ({ tool, allowed: this.#allows(server, tool.name) })) };
       }
-      return {
-        server: server.name, status: "error",
-        detail: catalog.status === "signInRequired" ? "needs sign-in; the user can sign in in Settings > Agents > MCP servers" : catalog.detail,
-      };
+      return catalog.status === "signInRequired"
+        ? { server: server.name, status: "signInRequired" }
+        : { server: server.name, status: "error", detail: catalog.detail };
     }));
     signal.throwIfAborted();
-    return formatMcpToolListing(listings, input.query);
+    return formatMcpToolListing(listings, input.query, input.includeDisabled === true);
+  }
+
+  /**
+   * Ask the user, through `ask`, to enable one offered tool; Enable adds it to the server's allowed tools.
+   * An already-enabled tool returns at once; an unoffered one is rejected without asking.
+   */
+  async requestTool(
+    input: { server: string; tool: string; reason: string },
+    ask: (mcpTool: { server: string; tool: string; title: string | null; description: string }) => Promise<boolean>,
+    signal: AbortSignal,
+  ) {
+    const server = (await this.#servers()).find(candidate => candidate.name === input.server);
+    if (!server) throw new Error(`No MCP server is named ${input.server}.`);
+    if (this.#allows(server, input.tool)) return `${input.server}/${input.tool} is already enabled. Call it with mcp_call.\n`;
+    const catalog = await this.#catalog(server, signal);
+    if (catalog.status === "signInRequired") throw new Error(`${input.server} needs authentication first; ask the user to authenticate it in Settings > Agents > MCP servers.`);
+    if (catalog.status === "error") throw new Error(`${input.server} is unavailable: ${catalog.detail}`);
+    const tool = catalog.tools.find(candidate => candidate.name === input.tool);
+    if (!tool) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
+    const enabled = await ask({ server: server.name, tool: tool.name, title: tool.title ?? null, description: tool.description });
+    if (!enabled) return `The user did not enable ${input.server}/${input.tool}.\n`;
+    // Re-read so picks made while the user decided are kept.
+    const current = (await this.#servers()).find(candidate => candidate.id === server.id);
+    if (!current) throw new Error(`${input.server} was removed while waiting for the user.`);
+    if (!this.#allows(current, tool.name)) {
+      await this.options.database.executeTransaction([insertRow(mcpServerTools, { server_id: current.id, tool_name: tool.name })]);
+    }
+    return `Enabled ${input.server}/${input.tool}. Call it with mcp_call.\n`;
   }
 
   /** Forward one call only when the tool is both allowed and currently offered. */
   async call(input: { server: string; tool: string; arguments: Record<string, unknown> }, signal: AbortSignal): Promise<McpServerCallOutcome> {
     const server = (await this.#servers()).find(candidate => candidate.name === input.server);
     if (!server) throw new Error(`No MCP server is named ${input.server}.`);
-    if (!this.#allows(server, input.tool)) throw new Error(`${input.server}/${input.tool} is not allowed. The user can allow it in Settings > Agents > MCP servers.`);
+    if (!this.#allows(server, input.tool)) throw new Error(`${input.server}/${input.tool} is not enabled. Ask the user to enable it with mcp_request.`);
     if (server.header && server.header.value === null) throw new Error(UNREADABLE_CREDENTIAL);
     const connection = this.#connection(server);
     const offered = await connection.listTools(signal);

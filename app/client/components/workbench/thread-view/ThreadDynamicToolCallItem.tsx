@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default ThreadDynamicToolCallItem: render generic tool calls and Workbench questionnaire history.
+ * - default ThreadDynamicToolCallItem: render generic tool calls, Workbench questionnaire history and MCP tool enable decisions.
  */
 "use client";
 
@@ -10,6 +10,7 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { repairQuestionnaireQuestion } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import type {
   WorkbenchSkillSummary,
+  WorkbenchUserInputMcpToolContext,
   WorkbenchUserInputOption,
   WorkbenchUserInputQuestion,
   WorkbenchUserInputRequest,
@@ -33,6 +34,8 @@ import ThreadFileChangeItem from "./ThreadFileChangeItem";
 import { getNativeToolDisplay, isNativeFileOperation, getThreadCommandOutcomeDisplay } from "../../../workbench/thread/thread-command-matchers";
 import { ThreadCommandSummary } from "./thread-view-primitives";
 import ThreadUserInputRequest from "./ThreadUserInputRequest";
+import { ThreadMcpToolDecisionCard } from "./ThreadMcpToolRequest";
+import { isMcpToolRequestApproved } from "workbench-shared/workbench/mcp/mcp-tool-request";
 import { formatDynamicToolInvocation, formatToolCallOutput } from "./format-thread-tool-call";
 import { humanizeThreadLabel } from "./thread-view-formatters";
 import { useWorkbenchClientStateSnapshot } from "../workbench-client-state-context";
@@ -115,6 +118,15 @@ function parseQuestionnaireRequest (value: unknown, requestId: string) {
     summary,
     title: title || "User input request",
   } satisfies WorkbenchUserInputRequest;
+}
+
+/** The MCP tool an enable request was about, when this questionnaire was one. */
+function parseMcpToolContext (value: unknown): WorkbenchUserInputMcpToolContext | null {
+  const tool = asRecord(asRecord(value)?.mcpTool);
+  const server = asString(tool?.server);
+  const name = asString(tool?.tool);
+  if (!tool || !server || !name) return null;
+  return { server, tool: name, title: asString(tool.title), description: asString(tool.description) ?? "" };
 }
 
 function parseQuestionnaireResponse (item: DynamicToolCallItem) {
@@ -498,6 +510,14 @@ export default function ThreadDynamicToolCallItem ({
   const presentedItem = visibleDurationMs === item.durationMs
     ? item
     : { ...item, durationMs: visibleDurationMs ?? null };
+  const mcpTool = item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME ? parseMcpToolContext(item.arguments) : null;
+  if (mcpTool) {
+    const request = parseQuestionnaireRequest(item.arguments, `history:${item.id}`);
+    return <div className="py-2">
+      <ThreadMcpToolDecisionCard tool={mcpTool} reason={request?.questions[0]?.question ?? ""}
+        approved={isMcpToolRequestApproved(parseQuestionnaireResponse(item).response)} />
+    </div>;
+  }
   if (item.tool === WORKBENCH_QUESTIONNAIRE_TOOL_NAME) {
     return <ThreadQuestionnaireToolCallItem answeredAt={answeredAt} inlineMentionSources={inlineMentionSources} item={presentedItem} threadCwdPath={threadCwdPath} projectFilePaths={projectFilePaths} projectId={projectId} projectRootPath={projectRootPath} workspaceRoots={workspaceRoots} />;
   }
