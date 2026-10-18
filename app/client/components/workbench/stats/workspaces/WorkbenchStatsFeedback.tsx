@@ -2,9 +2,9 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, defaulting to unowned reports and filterable by ownership and category, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
+ * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, defaulting to unowned reports, searchable with painted matches, filterable by ownership and category, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
  */
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useContext, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   WORKBENCH_FEEDBACK_CATEGORIES,
   type WorkbenchFeedbackCategory,
@@ -12,6 +12,9 @@ import {
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import RadioRow from "../../../ui/RadioRow";
+import SearchField from "../../../ui/SearchField";
+import { TextSearch } from "../../../../workbench/search/text-search";
+import useSearchHighlight from "../../../../workbench/search/use-search-highlight";
 import WorkbenchWorkspaceContext from "../../WorkbenchWorkspaceContext";
 import useStats from "../use-stats";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
@@ -24,6 +27,7 @@ import {
   FEEDBACK_CATEGORY_PRESENTATION,
   feedbackAddressProjectId,
   feedbackReference,
+  feedbackSearchText,
   countFeedbackCategories,
   selectFeedbackItems,
   type FeedbackOwnershipFilter,
@@ -36,6 +40,8 @@ export default function WorkbenchStatsFeedback() {
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
   const [ownership, setOwnership] = useState<FeedbackOwnershipFilter>("unowned");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<HTMLDivElement | null>(null);
   // Report ids are only unique per daemon, so selection keys carry the daemon.
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -77,16 +83,20 @@ export default function WorkbenchStatsFeedback() {
       setBusy(false);
     }
   };
-  const ownershipItems = useMemo(
-    () => ownership === "all" ? items : items.filter((item) => !item.owned),
-    [items, ownership],
-  );
-  const categoryCounts = useMemo(() => countFeedbackCategories(ownershipItems), [ownershipItems]);
-  const visible = useMemo(
-    () => selectFeedbackItems(items, categories, ownership, sort),
-    [categories, items, ownership, sort],
-  );
   const modelName = useStats.modelNames(items.flatMap(({ harness }) => harness ? [harness] : []));
+  const searchQuery = useDeferredValue(query);
+  const search = useMemo(() => TextSearch.parse(searchQuery), [searchQuery]);
+  const searching = TextSearch.isActive(search);
+  const searchTexts = useMemo(() => new Map(items.map((item) => [item, feedbackSearchText(item, {
+    modelName: modelName(item.harness, item.model),
+    projectName: projectName(item.projectId, item.daemonId),
+  })])), [items, modelName, projectName]);
+  const { searched, visible } = useMemo(
+    () => selectFeedbackItems(items, { categories, ownership, search, sort }, (item) => searchTexts.get(item) ?? ""),
+    [categories, items, ownership, search, searchTexts, sort],
+  );
+  const categoryCounts = useMemo(() => countFeedbackCategories(searched), [searched]);
+  useSearchHighlight(results, searchQuery);
   const newest = items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
   const toggle = (category: WorkbenchFeedbackCategory) => setCategories((current) => {
     const next = new Set(current);
@@ -127,6 +137,17 @@ export default function WorkbenchStatsFeedback() {
         <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No agent feedback in this period.</p>
       ) : (
         <>
+          <SearchField
+            ariaLabel="Search feedback"
+            onChange={setQuery}
+            placeholder={"Search feedback · \"exact phrase\" · -exclude"}
+            shortcut
+            status={searching ? `${visible.length} ${visible.length === 1 ? "match" : "matches"}` : null}
+            value={query}
+          />
+          <div aria-live="polite" className="sr-only">
+            {searching ? `${visible.length} matching ${visible.length === 1 ? "report" : "reports"}` : ""}
+          </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div aria-label="Feedback categories" className="flex flex-wrap gap-1" role="group">
               {WORKBENCH_FEEDBACK_CATEGORIES.map((category) => {
@@ -176,45 +197,65 @@ export default function WorkbenchStatsFeedback() {
               />
             </div>
           </div>
-          {visible.length ? (
-            <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
-              {visible.map((item) => {
-                const key = keyOf(item);
-                const daemonId = item.daemonId ?? attached;
-                const report = (
-                  <WorkbenchStatsFeedbackReport
-                    item={item}
-                    modelName={modelName(item.harness, item.model)}
-                    onToggle={() => toggleSelected(key)}
-                    selected={selectedKeys.has(key)}
-                  />
-                );
-                if (!daemonId) return <div className="contents" key={key}>{report}</div>;
-                return (
-                  <Draggable
-                    dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
-                    key={key}
-                    label={item.title}
-                    payload={{
-                      reference: feedbackReference(item, {
-                        daemonId,
-                        modelName: modelName(item.harness, item.model),
-                        projectName: projectName(item.projectId, item.daemonId),
-                      }),
-                      type: "feedback",
-                    }}
+          <div ref={setResults}>
+            {visible.length ? (
+              <ol aria-label="Agent feedback reports" aria-multiselectable className={`-mx-3 my-0 grid gap-y-1 p-0 ${statsRevealClassName}`} role="listbox">
+                {visible.map((item) => {
+                  const key = keyOf(item);
+                  const daemonId = item.daemonId ?? attached;
+                  const report = (
+                    <WorkbenchStatsFeedbackReport
+                      clamp={!searching}
+                      item={item}
+                      modelName={modelName(item.harness, item.model)}
+                      onToggle={() => toggleSelected(key)}
+                      selected={selectedKeys.has(key)}
+                    />
+                  );
+                  if (!daemonId) return <div className="contents" key={key}>{report}</div>;
+                  return (
+                    <Draggable
+                      dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
+                      key={key}
+                      label={item.title}
+                      payload={{
+                        reference: feedbackReference(item, {
+                          daemonId,
+                          modelName: modelName(item.harness, item.model),
+                          projectName: projectName(item.projectId, item.daemonId),
+                        }),
+                        type: "feedback",
+                      }}
+                    >
+                      {report}
+                    </Draggable>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className={`m-0 flex flex-wrap items-center gap-x-2 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>
+                {searching && !searched.length
+                  ? <span>No reports match <q className="font-semibold text-text">{searchQuery.trim()}</q>.</span>
+                  : <span>No feedback matches these filters.</span>}
+                {searching ? (
+                  <button
+                    className="
+                      rounded-md px-1 text-fg/muted hover:bg-fg/7 hover:text-text
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
+                    "
+                    onClick={() => setQuery("")}
+                    type="button"
                   >
-                    {report}
-                  </Draggable>
-                );
-              })}
-            </ol>
-          ) : (
-            <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No feedback matches these filters.</p>
-          )}
+                    Clear search
+                  </button>
+                ) : null}
+              </p>
+            )}
+          </div>
           {feedback.total > items.length ? (
             <p className="m-0 text-[0.72rem] text-fg/muted">
-              Showing the {items.length} most important of {feedback.total} reports. Narrow the period to see the rest.
+              {searching ? "Searching" : "Showing"} the {items.length} most important of {feedback.total} reports.
+              {" "}Narrow the period to {searching ? "search" : "see"} the rest.
             </p>
           ) : null}
         </>

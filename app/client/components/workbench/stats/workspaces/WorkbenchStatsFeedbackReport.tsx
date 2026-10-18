@@ -155,7 +155,9 @@ export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread
   );
 }
 
-export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle, selected }: {
+export default function WorkbenchStatsFeedbackReport({ clamp, item, modelName, onToggle, selected }: {
+  /** Off while searching, so no match hides under the fade. */
+  clamp?: boolean;
   item: WorkbenchFeedbackItem;
   modelName: string | null;
   onToggle: () => void;
@@ -183,7 +185,7 @@ export default function WorkbenchStatsFeedbackReport({ item, modelName, onToggle
       role="option"
       tabIndex={0}
     >
-      <WorkbenchFeedbackReportBody item={item} modelName={modelName} />
+      <WorkbenchFeedbackReportBody clamp={clamp} item={item} modelName={modelName} />
     </li>
   );
 }

@@ -2,7 +2,8 @@
  * Exports:
  * - FEEDBACK_CATEGORY_PRESENTATION: label and hue for each feedback category.
  * - feedbackImportanceTone: text colour class for an importance between 0 and 1.
- * - FeedbackOwnershipFilter/selectFeedbackItems: the reports a viewer sees for ownership, category, and sort filters.
+ * - FeedbackOwnershipFilter/selectFeedbackItems: the reports a viewer sees for ownership, search, category, and sort filters.
+ * - feedbackSearchText: folded text a search matches one report against.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
  * - feedbackReference: the composer reference a new thread receives when addressing one report.
@@ -13,6 +14,7 @@ import type {
   WorkbenchFeedbackSort,
 } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+import { TextSearch } from "../../../../workbench/search/text-search";
 
 export type FeedbackOwnershipFilter = "unowned" | "all";
 
@@ -64,13 +66,33 @@ export function feedbackReference(item: WorkbenchFeedbackItem, describe: {
   };
 }
 
+/** Folded text a search matches one report against: what it says, who wrote it, and where it came from. */
+export function feedbackSearchText(item: WorkbenchFeedbackItem, names: { modelName: string | null; projectName: string }) {
+  return TextSearch.fold([
+    item.title, item.report, FEEDBACK_CATEGORY_PRESENTATION[item.category].label, item.channel,
+    names.modelName ?? item.model ?? "", item.reasoningEffort ?? "", names.projectName, item.threadId ?? "",
+  ].join("\0"));
+}
+
+/**
+ * `searched` passes ownership and search, so category pills count where matches live;
+ * `visible` narrows that by category, in the chosen order.
+ */
 export function selectFeedbackItems(
   items: readonly WorkbenchFeedbackItem[],
-  categories: ReadonlySet<WorkbenchFeedbackCategory>,
-  ownership: FeedbackOwnershipFilter,
-  sort: WorkbenchFeedbackSort,
+  filters: {
+    categories: ReadonlySet<WorkbenchFeedbackCategory>;
+    ownership: FeedbackOwnershipFilter;
+    search: TextSearch;
+    sort: WorkbenchFeedbackSort;
+  },
+  searchText: (item: WorkbenchFeedbackItem) => string,
 ) {
-  const owned = ownership === "all" ? items : items.filter((item) => !item.owned);
-  const visible = categories.size ? owned.filter(({ category }) => categories.has(category)) : [...owned];
-  return sort === "newest" ? visible.sort((left, right) => right.createdAt - left.createdAt || right.id - left.id) : visible;
+  const owned = filters.ownership === "all" ? items : items.filter((item) => !item.owned);
+  const searched = TextSearch.isActive(filters.search)
+    ? owned.filter((item) => TextSearch.matches(filters.search, searchText(item)))
+    : owned;
+  const visible = filters.categories.size ? searched.filter(({ category }) => filters.categories.has(category)) : [...searched];
+  if (filters.sort === "newest") visible.sort((left, right) => right.createdAt - left.createdAt || right.id - left.id);
+  return { searched, visible };
 }
