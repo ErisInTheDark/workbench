@@ -15,7 +15,7 @@ import WorkbenchMainLayout, {
   type WorkbenchPanelTarget,
 } from "workbench-shared/workbench/layout/workbench-layout";
 import DropTarget from "../drag/DropTarget";
-import { useWorkbenchDragController } from "../drag/workbench-drag-context";
+import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 
 type WorkbenchMosaicPanelMetadata = Extract<WorkbenchMainLayoutNode, { readonly type: "leaf" }>["mosaicPanel"];
 type WorkbenchPanelDropPayload = Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" | "thread-row" }>;
@@ -148,7 +148,7 @@ function getDropFromPoint(
 }
 
 function WorkbenchDropPreviewOverlay() {
-  const controller = useWorkbenchDragController();
+  const controller = useWorkbenchDrag();
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   const preview = snapshot.active
     && snapshot.payload

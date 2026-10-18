@@ -7,7 +7,7 @@
 import type { DragEvent, DragEventHandler, PointerEvent, PointerEventHandler, ReactNode } from "react";
 
 import type { WorkbenchDragPayload } from "../../../workbench/layout/workbench-drag";
-import { useOptionalWorkbenchDragController } from "./workbench-drag-context";
+import { useWorkbenchDrag } from "./workbench-drag-context";
 
 export default function Draggable({ children, disabled = false, dropTargetIds, label, payload }: {
   children: ReactNode | ((props: {
@@ -20,7 +20,7 @@ export default function Draggable({ children, disabled = false, dropTargetIds, l
   label: string;
   payload: WorkbenchDragPayload;
 }) {
-  const controller = useOptionalWorkbenchDragController();
+  const controller = useWorkbenchDrag.optional();
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
     if (disabled || event.button !== 0) return;
     if (event.target instanceof HTMLElement && event.target.closest("button,input,textarea,select,[contenteditable='true']")) return;

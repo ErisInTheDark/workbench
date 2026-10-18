@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement, type ComponentProps } from "react";
+import { createElement, type ComponentProps, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type {
@@ -31,6 +31,8 @@ import ThreadTooltipContent from "./WorkbenchThreadTooltipContent";
 import WorkbenchContextMenuContext, { type WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import WorkbenchThreadStatusCounts from "./WorkbenchThreadStatusCounts";
 import WorkbenchDragProvider from "./drag/WorkbenchDragProvider";
+import WorkbenchDragController from "../../workbench/layout/WorkbenchDragController";
+import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 
 const fixtureIdentityValues = {
@@ -126,9 +128,16 @@ function createActions(): ComponentProps<typeof WorkbenchThreadList>["actions"] 
   };
 }
 
+/** A drag provider whose controller reports `payload` as the drag in progress. */
+function withActiveDrag(payload: WorkbenchDragPayload | null, list: ReactElement) {
+  const controller = new WorkbenchDragController();
+  if (payload) Object.assign(controller, { getActivitySnapshot: () => ({ active: true, label: "", payload }) });
+  return createElement(WorkbenchDragProvider, { children: list, controller });
+}
+
 function renderThreads(
   entries: ThreadEntry[],
-  activeDragPayload: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"] = null,
+  activeDragPayload: WorkbenchDragPayload | null = null,
   displayOrder: FolderSidebars["homeDisplayOrder"] = {},
   options: {
     attachedDaemonId?: string;
@@ -151,9 +160,8 @@ function renderThreads(
           children: createElement(
             WorkbenchContextMenuContext.Provider,
             { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
-            createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+            withActiveDrag(activeDragPayload, createElement(WorkbenchThreadList, {
               actions: createActions(),
-              activeDragPayload,
               attachedDaemonId: options.attachedDaemonId,
               canCreateThread: true,
               currentTarget: null,
@@ -214,7 +222,7 @@ function renderHomeThreads({
   projects,
   selectedProjectIds = projects.map(project => project.id),
 }: {
-  activeDragPayload?: ComponentProps<typeof WorkbenchThreadList>["activeDragPayload"];
+  activeDragPayload?: WorkbenchDragPayload | null;
   displayOrder?: FolderSidebars["homeDisplayOrder"];
   projectThreadSidebars: WorkbenchProjectThreadSidebars;
   projects: WorkbenchProjectOption[];
@@ -229,9 +237,8 @@ function renderHomeThreads({
         children: createElement(
         WorkbenchContextMenuContext.Provider,
         { value: { closeContextMenu: () => undefined, openContextMenu: () => undefined, refreshContextMenu: () => undefined } },
-        createElement(WorkbenchDragProvider, null, createElement(WorkbenchThreadList, {
+        withActiveDrag(activeDragPayload, createElement(WorkbenchThreadList, {
           actions,
-          activeDragPayload,
           createTarget: { location: null, project: projects[0]! },
           folderSidebars: folderSidebars(projectThreadSidebars, displayOrder),
           currentTarget: null,

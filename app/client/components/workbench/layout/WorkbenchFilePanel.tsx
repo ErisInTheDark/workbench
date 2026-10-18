@@ -16,6 +16,8 @@ import useFileDocument from "../../../workbench/file/use-file-document";
 import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFamily } from "../../../workbench/state/workbench-settings";
 import { MARK_TAG_SCOPE_ATTRIBUTE, markTagStyleSheet } from "../../../workbench/editor/mark-tag-styles";
+import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/workbench-drag";
+import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
@@ -112,7 +114,7 @@ interface WorkbenchFilePanelProps {
   location: ProjectLocationReference | null;
   onFocus: () => void;
   onClose?: () => void;
-  onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
+  headerDrag?: WorkbenchMainPanelDragPayload;
   onMinimizeToggle?: () => void;
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
@@ -170,7 +172,7 @@ export default function WorkbenchFilePanel ({
   location,
   onClose,
   onFocus,
-  onHeaderPointerDragStart,
+  headerDrag,
   onMinimizeToggle,
   onPanelZoomDeltaChange,
   panelZoomDelta = 0,
@@ -368,9 +370,10 @@ export default function WorkbenchFilePanel ({
     : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pr-6"
       : "px-5 md:px-6";
 
+  const beginDrag = useWorkbenchDrag.mainPanel();
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
-      !onHeaderPointerDragStart
+      !headerDrag
       || (
         event.target instanceof HTMLElement
         && event.target.closest("button,a,input,textarea,select,[role='toolbar'],[contenteditable='true']")
@@ -380,7 +383,7 @@ export default function WorkbenchFilePanel ({
     }
 
     event.preventDefault();
-    onHeaderPointerDragStart(event);
+    beginDrag(event, headerDrag);
   }
 
   return (
@@ -397,7 +400,7 @@ export default function WorkbenchFilePanel ({
         <header
           className={`
             sticky top-0 z-10 -mx-5 py-3 md:-mx-6
-            ${onHeaderPointerDragStart ? "cursor-grab active:cursor-grabbing" : ""}
+            ${headerDrag ? "cursor-grab active:cursor-grabbing" : ""}
             ${isMinimizedVertical ? "flex h-full items-center justify-center" : ""}
           `}
           {...{ [WORKBENCH_STICKY_CHROME_ATTRIBUTE]: "" }}

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchDragProvider: provide one drag controller and render its lifecycle-owned ghost.
+ * - default WorkbenchDragProvider: own the app's drag controller (tests may supply one) and render its ghost.
  */
 "use client";
 

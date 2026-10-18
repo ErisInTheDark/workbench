@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { defaultProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
 
 import type {
@@ -74,9 +74,9 @@ import { installBrowserRandomUuidPolyfill } from "../workbench/browser-random-uu
 import {
   FileActionContext, FileScopeContext, resolveFileOpenDestination, resolveWorkbenchFileRoute, useFileActions,
 } from "../workbench/file/use-file";
-import { WORKBENCH_MAIN_PANEL_DROP_TARGET_ID, type WorkbenchDragPayload } from "../workbench/layout/workbench-drag";
+import type { WorkbenchDragPayload, WorkbenchMainPanelDragPayload } from "../workbench/layout/workbench-drag";
 import { replaceWorkbenchMosaicTarget } from "../workbench/layout/workbench-mosaic-layout";
-import WorkbenchDragController from "../workbench/layout/WorkbenchDragController";
+import useMediaQuery from "../workbench/dom/layout/use-media-query";
 import WorkbenchWorkspaceController from "../workbench/layout/WorkbenchWorkspaceController";
 import type { WorkspaceFileLinkRoot } from "../workbench/markdown/markdown-links";
 import { useWorkbenchProjectNavigation } from "../workbench/navigation/use-workbench-project-navigation";
@@ -111,7 +111,7 @@ import { useSettings } from "./workbench/use-settings";
 import WorkbenchComposerProfileController from "../workbench/state/WorkbenchComposerProfileController";
 import { getThreadDocumentFromSnapshot } from "../workbench/thread/thread-document-keys";
 import { ThreadMessageNotSentError } from "../workbench/thread/thread-message-submission";
-import WorkbenchDragProvider from "./workbench/drag/WorkbenchDragProvider";
+import { useWorkbenchDrag } from "./workbench/drag/workbench-drag-context";
 import WorkbenchWorkingTreeProvider from "./workbench/git/WorkbenchWorkingTreeProvider";
 import WorkbenchWorkingTreeView from "./workbench/git/WorkbenchWorkingTreeView";
 import WorkbenchFileView from "./workbench/layout/WorkbenchFileView";
@@ -416,7 +416,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       record.preference.key === "harness"
     ))?.preference.value as WorkbenchHarness | undefined
   ) ?? defaultProviderKey);
-  const [isMobile, setIsMobile] = useState(false);
+  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const [mobileShellHeaderVisibility] = useState(() => new MobileShellHeaderVisibilityController());
   const mobileSidebarRequested = isMobileSidebarRequested(useSearchParams().toString());
   const mobilePane = getPreferredMobilePane(isMobile, route, mobileSidebarRequested);
@@ -459,12 +459,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
       return () => { stop(); query.release(); };
     },
   }), [controls, workbenchClient.mounted]);
-  const workbenchDragController = useMemo(() => new WorkbenchDragController(), []);
-  const workbenchDragActivity = useSyncExternalStore(workbenchDragController.subscribe, workbenchDragController.getActivitySnapshot, workbenchDragController.getActivitySnapshot);
-  const activeWorkbenchDrag = workbenchDragActivity.active && workbenchDragActivity.payload
-    ? { payload: workbenchDragActivity.payload }
-    : null;
-  useEffect(() => () => { workbenchDragController.dispose(); }, [workbenchDragController]);
+  const drag = useWorkbenchDrag();
+  const activeDragPayload = useWorkbenchDrag.activePayload();
+  const beginMainPanelDrag = useWorkbenchDrag.mainPanel();
   useEffect(() => () => { searchController.dispose(); }, [searchController]);
   useEffect(() => () => { workspaceController.dispose(); }, [workspaceController]);
 
@@ -485,32 +482,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     readResolvedComposerDrafts, readResolvedComposerDrafts);
   const threadComposerDraftsByThreadId = useMemo(() => projectComposerDrafts(clientState.records, composerDraftIdentityFor),
     [clientState.records, composerDraftIdentityFor, resolvedComposerDrafts]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia(MOBILE_MEDIA_QUERY);
-    const applyMatch = () => {
-      setIsMobile(mediaQuery.matches);
-    };
-
-    applyMatch();
-    if (typeof mediaQuery.addEventListener === "function") {
-      mediaQuery.addEventListener("change", applyMatch);
-    } else {
-      mediaQuery.addListener(applyMatch);
-    }
-
-    return () => {
-      if (typeof mediaQuery.removeEventListener === "function") {
-        mediaQuery.removeEventListener("change", applyMatch);
-      } else {
-        mediaQuery.removeListener(applyMatch);
-      }
-    };
-  }, [route]);
 
   const isMobileMosaicRoute = isMobile && route.view === "mosaic";
   const routeMosaicNodeForControls = isMobileMosaicRoute ? route.mosaicNode : null;
@@ -1573,13 +1544,13 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
   useEffect(() => {
     workspaceController.select({
       isMobile,
-      isPanelTargetDragActive: activeWorkbenchDrag?.payload.type === "panel-target",
+      isPanelTargetDragActive: activeDragPayload?.type === "panel-target",
       mosaicNode: route.view === "mosaic" ? route.mosaicNode : null,
       routeTarget: routePanelTarget,
       showMosaic: showMosaicView,
     });
   }, [
-    activeWorkbenchDrag?.payload.type,
+    activeDragPayload?.type,
     isMobile,
     route.mosaicNode,
     route.view,
@@ -1710,28 +1681,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
     ],
     label: `${node.type === "file" ? "File" : "Folder"} actions for ${node.name}`,
   }), [deleteProjectFile, revealProjectEntry]);
-
-  const endWorkbenchPointerDrag = useCallback(() => {
-    workbenchDragController.cancel();
-  }, [workbenchDragController]);
-
-  const beginWorkbenchPointerDrag = useCallback((event: ReactPointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => {
-    if (isMobile || event.button !== 0 || payload.type === "thread-folder" || payload.type === "home-thread-folder") return;
-    const label = payload.type === "new-thread"
-      ? "New thread"
-      : payload.type === "feedback"
-        ? payload.reference.title
-      : payload.target.kind === "file"
-        ? payload.target.filePath
-        : payload.target.kind === "thread" && (payload.target.target.kind === "provider" || payload.target.target.kind === "subagent")
-          ? payload.target.target.threadId
-          : payload.target.kind;
-    workbenchDragController.begin(event, {
-      dropTargetIds: [WORKBENCH_MAIN_PANEL_DROP_TARGET_ID],
-      label,
-      payload,
-    });
-  }, [isMobile, workbenchDragController]);
 
   useEffect(() => {
     if (!isMobile || mobilePane !== "editor" || !mainPaneScrollKey || isDirectThreadSurface) {
@@ -1922,7 +1871,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             ? WorkbenchMainLayout.panels(mainLayoutForRender)[0]?.id
             : null;
           return (
-      <WorkbenchDragProvider controller={workbenchDragController}>
         <WorkbenchContextMenuProvider>
         <div
           className={`relative isolate h-dvh overflow-hidden md:grid md:min-h-screen md:h-auto md:overflow-visible md:items-start${isEffectiveDesktopSidebarCollapsed
@@ -1961,7 +1909,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                 event.preventDefault();
               }}
               onPointerDown={(event) => {
-                beginWorkbenchPointerDrag(event, {
+                beginMainPanelDrag(event, {
                   harness,
                   type: "new-thread",
                 });
@@ -1972,13 +1920,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
             </IconButton>
           ) : null}
           <MobilePaneTrack
-            isMobile={isMobile}
             pane={mobilePane}
             route={route}
             slideRef={mobilePaneSlideRef}
           >
             <WorkbenchSidebarPane
-              activeDragPayload={activeWorkbenchDrag?.payload ?? null}
               activeProjectId={activeProjectId}
               appRuntime={appRuntime}
               askAgentWithReferences={askAgentWithReferences}
@@ -1991,7 +1937,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
               onAttachFeedback={clientState.schemaVersion >= appStateReleases.composerDraftReferences.version
                 ? handleAttachFeedbackToThread
                 : undefined}
-              onBeginPointerDrag={beginWorkbenchPointerDrag}
               onOpenQualifiedThread={openQualifiedThread}
               onOpenThread={openThreadFromExplorer}
               onPresentationDraftDeleted={handlePresentationDraftDeleted}
@@ -2063,21 +2008,11 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             controls={workbenchControls}
                             currentPath={activeFilePath}
                             expandedDirectories={expandedDirectories}
-                            getFileDragPayload={(path) => ({
-                              target: { filePath: path, kind: "file" },
-                              type: "panel-target",
-                            })}
                             getNodeContextMenu={getProjectNodeContextMenu}
                             isFileOpenable={canOpenFileFromExplorer}
                             modifiedPaths={modifiedPaths}
                             nodes={visibleTree}
                             onCreateInDirectory={openCreateDialog}
-                            onFilePointerDragStart={(event, path) => {
-                              beginWorkbenchPointerDrag(event, {
-                                target: { filePath: path, kind: "file" },
-                                type: "panel-target",
-                              });
-                            }}
                             onOpenFile={(path) => {
                               void openFileFromExplorer(path);
                             }}
@@ -2374,7 +2309,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                     onFocusPanel={() => { }}
                     onLayoutChange={updateMainLayout}
                     onPanelDrop={handleMainLayoutPanelDrop}
-                    onPointerDrop={endWorkbenchPointerDrag}
+                    onPointerDrop={() => drag.cancel()}
                     onSplitResize={resizeMosaicSplit}
                     renderPanel={({ isFocused, mosaicPanel, panelId, target }) => {
                       const mosaicTarget = workspaceController.mosaicTargetForPanel(panelId);
@@ -2390,6 +2325,9 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                       const togglePanelMinimized = () => {
                         updateMosaicPanelOptions(panelId, { minimized: !isMinimized || undefined });
                       };
+                      const headerDrag: WorkbenchMainPanelDragPayload | undefined = showMosaicView
+                        ? { sourcePanelId: panelId, target: mosaicTarget ?? target, type: "panel-target" }
+                        : undefined;
                       if (target.kind === "file" && isSvgFile(target.filePath)) {
                         return (
                           <WorkbenchSvgEditorView
@@ -2398,9 +2336,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             controls={controls}
                             location={mosaicTarget?.source?.location ?? null}
                             onClose={showMosaicView ? () => { closeMosaicPanel(mosaicTarget ?? target); } : undefined}
-                            onHeaderPointerDragStart={showMosaicView ? (event) => {
-                              beginWorkbenchPointerDrag(event, { sourcePanelId: panelId, target: mosaicTarget ?? target, type: "panel-target" });
-                            } : undefined}
+                            headerDrag={headerDrag}
                             path={target.filePath}
                             sidebarToggleInset={sidebarToggleInset}
                           />
@@ -2422,13 +2358,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                               closeMosaicPanel(mosaicTarget ?? target);
                             } : undefined}
                             onFocus={() => { }}
-                            onHeaderPointerDragStart={showMosaicView ? (event) => {
-                              beginWorkbenchPointerDrag(event, {
-                                sourcePanelId: panelId,
-                                target: mosaicTarget ?? target,
-                                type: "panel-target",
-                              });
-                            } : undefined}
+                            headerDrag={headerDrag}
                             onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
                             onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
                             panelZoomDelta={panelZoomDelta}
@@ -2512,13 +2442,7 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
                             onClose={showMosaicView ? () => {
                               closeMosaicPanel(mosaicTarget ?? target);
                             } : undefined}
-                            onHeaderPointerDragStart={showMosaicView ? (event) => {
-                              beginWorkbenchPointerDrag(event, {
-                                sourcePanelId: panelId,
-                                target: mosaicTarget ?? target,
-                                type: "panel-target",
-                              });
-                            } : undefined}
+                            headerDrag={headerDrag}
                             onMinimizeToggle={showMosaicView ? togglePanelMinimized : undefined}
                             onPanelZoomDeltaChange={showMosaicView ? updatePanelZoomDelta : undefined}
                             panelZoomDelta={panelZoomDelta}
@@ -2685,7 +2609,6 @@ export default function Workbench ({ appRuntime = null }: { appRuntime?: Workben
 
         </div>
         </WorkbenchContextMenuProvider>
-      </WorkbenchDragProvider>
           );
         }}
       </WorkbenchSidebarPreferencesProvider>

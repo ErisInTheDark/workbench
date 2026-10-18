@@ -8,7 +8,7 @@ import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalSt
 
 import type { WorkbenchDropTargetHandle, WorkbenchDropTargetSnapshot } from "../../../workbench/layout/WorkbenchDragController";
 import type { WorkbenchDragPayload, WorkbenchThreadDragPreview } from "../../../workbench/layout/workbench-drag";
-import { DropTargetBoundaryContext, useWorkbenchDragController } from "./workbench-drag-context";
+import { DropTargetBoundaryContext, useWorkbenchDrag } from "./workbench-drag-context";
 
 const IDLE_TARGET_SNAPSHOT: WorkbenchDropTargetSnapshot = { selected: false, x: 0, y: 0 };
 const EMPTY_UNSUBSCRIBE = () => undefined;
@@ -25,7 +25,7 @@ export default function DropTarget({ as = "div", children, className, dropTarget
   selectionPriority?: number;
   style?: CSSProperties;
 }) {
-  const controller = useWorkbenchDragController();
+  const controller = useWorkbenchDrag();
   const boundary = useContext(DropTargetBoundaryContext);
   const [element, setElement] = useState<HTMLElement | null>(null);
   const [registration, setRegistration] = useState<WorkbenchDropTargetHandle | null>(null);

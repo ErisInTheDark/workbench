@@ -3,6 +3,7 @@
  * - WORKBENCH_*_DROP_TARGET_ID: shared accepted-target identifiers for thread ordering, priority, row actions, composer attachment, and main panels.
  * - WorkbenchThreadDragAction/WorkbenchThreadDragPreview: icon-led action context for the cursor ghost.
  * - WorkbenchThreadDragSection/WorkbenchThreadRowDragPayload/WorkbenchFeedbackDragPayload/WorkbenchDragPayload: pointer-drag payloads for threads, feedback, and panels.
+ * - WorkbenchMainPanelDragPayload/mainPanelDragLabel: payloads that drag only onto the main panel, and their ghost label.
  * - isWorkbenchThreadRowDragPayload/isWorkbenchFeedbackDragPayload/canMoveWorkbenchThreadRowToSection: classify drags and preserve placement boundaries.
  */
 
@@ -73,6 +74,17 @@ export type WorkbenchDragPayload =
 
 export type WorkbenchThreadRowDragPayload = Extract<WorkbenchDragPayload, { readonly type: "home-thread-row" | "thread-row" }>;
 export type WorkbenchFeedbackDragPayload = Extract<WorkbenchDragPayload, { readonly type: "feedback" }>;
+export type WorkbenchMainPanelDragPayload = Extract<WorkbenchDragPayload, { readonly type: "new-thread" | "panel-target" }>;
+
+export function mainPanelDragLabel(payload: WorkbenchMainPanelDragPayload) {
+  if (payload.type === "new-thread") return "New thread";
+  const { target } = payload;
+  if (target.kind === "file") return target.filePath;
+  if (target.kind === "thread" && (target.target.kind === "provider" || target.target.kind === "subagent")) {
+    return target.target.threadId;
+  }
+  return target.kind;
+}
 
 export function isWorkbenchThreadRowDragPayload(payload: WorkbenchDragPayload | null): payload is WorkbenchThreadRowDragPayload {
   return payload?.type === "thread-row" || payload?.type === "home-thread-row";

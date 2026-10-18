@@ -11,9 +11,9 @@ import type { WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-
 import {
   isWorkbenchThreadRowDragPayload,
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
-  type WorkbenchDragPayload,
   type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
+import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import {
   getWorkbenchThreadFolderKey,
   type WorkbenchThreadFolder,
@@ -87,7 +87,6 @@ function FolderHoverOpenTarget({ onOpen, open, selected }: { onOpen: () => void;
 }
 
 export default function WorkbenchThreadFolder({
-  activeDragPayload = null,
   autoFocusName = false,
   attentionLabelsByThreadId = {},
   canPrependThread,
@@ -95,7 +94,6 @@ export default function WorkbenchThreadFolder({
   entries,
   folder,
   homeFolderKey,
-  isDragActive,
   onAutoFocusComplete,
   onOpenChange,
   onPrependThread,
@@ -104,7 +102,6 @@ export default function WorkbenchThreadFolder({
   project,
   tooltip,
 }: {
-  activeDragPayload?: WorkbenchDragPayload | null;
   autoFocusName?: boolean;
   attentionLabelsByThreadId?: Record<string, string | undefined>;
   canPrependThread?: (payload: WorkbenchThreadRowDragPayload) => boolean;
@@ -112,7 +109,6 @@ export default function WorkbenchThreadFolder({
   entries: FolderEntry[];
   folder: WorkbenchThreadFolder;
   homeFolderKey?: string;
-  isDragActive: boolean;
   onAutoFocusComplete?: () => void;
   onOpenChange: (open: boolean) => void;
   onPrependThread?: (payload: WorkbenchThreadRowDragPayload) => void;
@@ -121,6 +117,8 @@ export default function WorkbenchThreadFolder({
   project?: WorkbenchProjectOption | WorkbenchLogicalProject;
   tooltip: ReactNode;
 }) {
+  const activeDragPayload = useWorkbenchDrag.activePayload();
+  const isDragActive = Boolean(activeDragPayload);
   const inputRef = useRef<HTMLInputElement>(null);
   const onOpenChangeRef = useRef(onOpenChange);
   const acceptedTitleRef = useRef(folder.title);

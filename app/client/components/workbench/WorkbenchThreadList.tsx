@@ -41,7 +41,6 @@ import {
   canMoveWorkbenchThreadRowToSection,
   isWorkbenchThreadRowDragPayload,
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
-  type WorkbenchDragPayload,
   type WorkbenchThreadDragSection,
   type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
@@ -52,6 +51,7 @@ import {
 } from "./context-menu-placement";
 import DropTarget from "./drag/DropTarget";
 import DropTargetBoundary from "./drag/DropTargetBoundary";
+import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import Disclosure from "../ui/Disclosure";
 import { useNonTextInputShiftKey } from "./use-non-text-input-shift-key";
 import { workbenchOptionHoverClassName, workbenchOptionRowClassName, workbenchOptionSelectedClassName, workbenchThreadListButtonClassName, workbenchThreadListLabelClassName } from "./workbench-class-names";
@@ -177,7 +177,6 @@ function mergeDisplayItems (
 
 export default function WorkbenchThreadList ({
   actions,
-  activeDragPayload = null,
   allowMainPanelDrop = false,
   attachedDaemonId = null,
   canCreateThread,
@@ -199,7 +198,6 @@ export default function WorkbenchThreadList ({
   selectedProjectIds,
 }: {
   actions: ThreadActions;
-  activeDragPayload?: WorkbenchDragPayload | null;
   allowMainPanelDrop?: boolean;
   attachedDaemonId?: string | null;
   canCreateThread?: boolean;
@@ -241,6 +239,7 @@ export default function WorkbenchThreadList ({
   const [layoutError, setLayoutError] = useState("");
   const [workingThreadsOpen, setWorkingThreadsOpen] = useState(false);
   const isShiftPressed = useNonTextInputShiftKey();
+  const activeDragPayload = useWorkbenchDrag.activePayload();
   const client = useWorkbenchClientController();
   const projectHref = useWorkbenchProjectNavigation();
   const {
@@ -367,7 +366,6 @@ export default function WorkbenchThreadList ({
     return () => controls.setArchivedThreadLimit(null);
   }, [archivedDemand, controls]);
   const nextSettledThreadCount = Math.min(SETTLED_THREAD_PAGE_SIZE, remainingSettledThreadCount);
-  const isDragActive = Boolean(activeDragPayload);
   const visibleRows = (items: ListDisplayItem[]) => items.flatMap(item => item.itemKind === "folder"
     ? preferences.threadFolderIds.includes(itemKey(item)) ? item.entries : []
     : [item.entry]);
@@ -393,7 +391,7 @@ export default function WorkbenchThreadList ({
     if (nextEntry) rowRefs.current.get(nextEntry.threadKey)?.focus();
   };
   const rowContext: ThreadListRowContext = {
-    actions, activeDragPayload, allowMainPanelDrop, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
+    actions, allowMainPanelDrop, attachedDaemonId, controls, currentTarget, focusRow, getThreadHref, hasSelectedEntry,
     firstThreadKey: navigableEntries[0]?.threadKey ?? null, homeDisplayOrderSupported, isShiftPressed, logicalProjects,
     onAttachFeedback, projectHref, projectsById, readRowForPayload: rowForPayload,
     registerRow: (threadKey, node) => { if (node) rowRefs.current.set(threadKey, node); else rowRefs.current.delete(threadKey); },
@@ -528,14 +526,12 @@ export default function WorkbenchThreadList ({
           renderDropMarker(key, beforeKey, section, null, null),
           <li className="m-0 list-none" key={key}>
             <ListedThreadFolder
-              activeDragPayload={activeDragPayload}
               autoFocusName={actions.autoFocusFolderId === item.folder.folderId}
               canPrependThread={(payload) => canMoveWorkbenchThreadRowToSection(payload, section, item.projectId)
                 && !item.folder.threadKeys.includes(payload.projectSourceKey)}
               listEntries={item.entries}
               folder={item.folder}
               homeFolderKey={key}
-              isDragActive={isDragActive}
               onAutoFocusComplete={actions.onAutoFocusFolderComplete}
               onOpenChange={(open) => setFolderOpen("threads", key, open)}
               onPrependThread={(payload) => {

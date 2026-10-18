@@ -4,11 +4,11 @@
  */
 "use client";
 
-import { memo, useMemo, type ComponentProps, type PointerEvent, type ReactNode } from "react";
+import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
 
 import type { WorkbenchControls, WorkbenchHarness, WorkbenchLogicalThreadRow, WorkbenchLogicalProject, WorkbenchProjectOption } from "workbench-shared/types";
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
-import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
+import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import { createLogicalExistingThreadRoute, createLogicalThreadRoute, createThreadRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import { useWorkbenchProjectNavigation } from "../../workbench/navigation/use-workbench-project-navigation";
@@ -52,7 +52,6 @@ function FolderSidebarThreadList({ sidebarProjectId, ...props }: ComponentProps<
 }
 
 interface WorkbenchThreadSidebarProps {
-  activeDragPayload: WorkbenchDragPayload | null;
   attachedDaemonId?: string | null;
   createProjectId?: string;
   currentTarget: WorkbenchThreadTarget | null;
@@ -64,7 +63,6 @@ interface WorkbenchThreadSidebarProps {
     target: WorkbenchThreadTarget,
     reference: WorkbenchThreadAddressedFeedback,
   ) => Promise<void>;
-  onBeginPointerDrag: (event: PointerEvent<HTMLElement>, payload: WorkbenchDragPayload) => void;
   onCreateThread: (ownerProjectId: string, options?: {
     folderId?: FolderId;
     location?: ProjectLocationReference;
@@ -82,7 +80,6 @@ interface WorkbenchThreadSidebarProps {
 }
 
 export default memo(function WorkbenchThreadSidebar({
-  activeDragPayload,
   attachedDaemonId,
   createProjectId,
   currentTarget,
@@ -90,7 +87,6 @@ export default memo(function WorkbenchThreadSidebar({
   harness,
   logicalProjects,
   onAttachFeedback,
-  onBeginPointerDrag,
   onCreateThread,
   projectId,
   renderThreadTooltipDetails,
@@ -106,6 +102,7 @@ export default memo(function WorkbenchThreadSidebar({
   const projectHref = useWorkbenchProjectNavigation();
   const client = useWorkbenchClientController();
   const actions = WorkbenchThreadSidebarActionsProvider.useActions();
+  const beginDrag = useWorkbenchDrag.mainPanel();
   const ownerProjectId = logicalProject?.id ?? projectId;
   const selection = selectedProjectIds ?? (ownerProjectId ? [ownerProjectId] : []);
   const createTarget = resolveSidebarCreateTarget({
@@ -133,7 +130,6 @@ export default memo(function WorkbenchThreadSidebar({
 
   const listProps: ComponentProps<typeof WorkbenchThreadList> = {
           actions,
-          activeDragPayload,
           allowMainPanelDrop: showMosaicView,
           attachedDaemonId,
           canCreateThread: logicalProject
@@ -155,7 +151,7 @@ export default memo(function WorkbenchThreadSidebar({
           onAttachFeedback,
           onCreateThread,
           onCreateThreadPointerDragStart: showMosaicView ? (event) => {
-            onBeginPointerDrag(event, { harness, type: "new-thread" });
+            beginDrag(event, { harness, type: "new-thread" });
           } : undefined,
           presentation,
           projectId: ownerProjectId,

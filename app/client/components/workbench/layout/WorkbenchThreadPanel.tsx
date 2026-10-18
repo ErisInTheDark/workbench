@@ -10,6 +10,8 @@ import type { ThreadPayload } from "workbench-shared/types";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import ThreadScrollViewport from "../thread-view/ThreadScrollViewport";
 import ThreadView from "../thread-view/ThreadView";
+import { useWorkbenchDrag } from "../drag/workbench-drag-context";
+import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/workbench-drag";
 import { useThread } from "../use-thread";
 import { useThreads } from "../use-threads";
 import { normalizeWorkbenchTimestampMs } from "workbench-shared/workbench/thread/thread-state";
@@ -46,7 +48,7 @@ interface WorkbenchThreadPanelProps extends Omit<ThreadViewProps, "scrollViewpor
   location?: ProjectLocationReference | null;
   onClose?: () => void;
   onCreateDraftThread?: () => ThreadPayload | null;
-  onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
+  headerDrag?: WorkbenchMainPanelDragPayload;
   onMinimizeToggle?: () => void;
   onPanelZoomDeltaChange?: (zoomDelta: number) => void;
   panelZoomDelta?: number;
@@ -64,7 +66,7 @@ export default function WorkbenchThreadPanel ({
   location = null,
   onClose,
   onCreateDraftThread,
-  onHeaderPointerDragStart,
+  headerDrag,
   onMinimizeToggle,
   onPanelZoomDeltaChange,
   panelZoomDelta = 0,
@@ -95,6 +97,7 @@ export default function WorkbenchThreadPanel ({
   const runtimeThreads = useThreads().threads;
   const [zoomPreview, setZoomPreview] = useState<number | null>(null);
   const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const beginDrag = useWorkbenchDrag.mainPanel();
   const initializedNewRef = useRef(false);
 
   useEffect(() => {
@@ -125,7 +128,7 @@ export default function WorkbenchThreadPanel ({
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
     if (
-      !onHeaderPointerDragStart
+      !headerDrag
       || (
         event.target instanceof HTMLElement
         && event.target.closest("button,a,input,textarea,select,[contenteditable='true']")
@@ -135,7 +138,7 @@ export default function WorkbenchThreadPanel ({
     }
 
     event.preventDefault();
-    onHeaderPointerDragStart(event);
+    beginDrag(event, headerDrag);
   }
 
   return (
@@ -143,7 +146,7 @@ export default function WorkbenchThreadPanel ({
       data-thread-daemon-id={ownerMetadata?.daemonId ?? launchContext?.daemonId}
       data-thread-project-id={ownerMetadata?.projectId ?? launchContext?.project.id}>
       <header
-        className={`sticky top-0 z-10 py-3 ${sidebarToggleInset === "collapsed" ? "pl-28 pr-5 md:pl-28 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}${onHeaderPointerDragStart ? " cursor-grab active:cursor-grabbing" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
+        className={`sticky top-0 z-10 py-3 ${sidebarToggleInset === "collapsed" ? "pl-28 pr-5 md:pl-28 md:pr-6" : sidebarToggleInset === "expanded" ? "pl-19 pr-5 md:pl-19 md:pr-6" : "px-5 md:px-6"}${headerDrag ? " cursor-grab active:cursor-grabbing" : ""}${isMinimizedVertical ? " flex h-full items-center justify-center" : ""}`}
         onPointerDown={handleHeaderPointerDown}
       >
         <div

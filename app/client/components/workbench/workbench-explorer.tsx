@@ -4,11 +4,11 @@
  * - FileVisibilityIcon: select the shared eye glyph for the current file-visibility state.
  * - SidebarLoadingSkeleton: animated placeholder rows for loading sidebar sections.
  * - BrowseSessionsList: active Browse sessions in the sidebar.
- * - ExplorerTree: recursive project tree with current, modified and create-entry state.
+ * - ExplorerTree: recursive project tree with current, modified and create-entry state; files drag onto the main panel.
  */
 "use client";
 
-import { useMemo, type PointerEvent, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import type {
   ChangeSummary,
@@ -16,7 +16,7 @@ import type {
   WorkbenchBrowseSessionSummary,
   WorkbenchControls
 } from "workbench-shared/types";
-import type { WorkbenchDragPayload } from "../../workbench/layout/workbench-drag";
+import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import ChevronIcon from "./ChevronIcon";
 import FileKindIcon from "./file-kind-icon";
 import ContextMenuCapability from "./ContextMenuCapability";
@@ -255,14 +255,12 @@ interface ExplorerTreeProps {
   currentPath: string;
   expandedDirectories: Set<string>;
   isFileOpenable?: (path: string) => boolean;
-  getFileDragPayload?: (path: string) => WorkbenchDragPayload | null;
   getNodeContextMenu?: (node: TreeNode) => WorkbenchContextMenuDefinition | null;
   derivedState?: ExplorerTreeDerivedState;
   modifiedPaths: Set<string>;
   nested?: boolean;
   nodes: TreeNode[];
   onCreateInDirectory?: (path: string) => void;
-  onFilePointerDragStart?: (event: PointerEvent<HTMLElement>, path: string) => void;
   onOpenFile?: (path: string) => void;
 }
 
@@ -273,15 +271,14 @@ export function ExplorerTree ({
   derivedState,
   expandedDirectories,
   isFileOpenable,
-  getFileDragPayload,
   getNodeContextMenu,
   modifiedPaths,
   nested = false,
   nodes,
   onCreateInDirectory,
-  onFilePointerDragStart,
   onOpenFile,
 }: ExplorerTreeProps) {
+  const beginDrag = useWorkbenchDrag.mainPanel();
   const treeDerivedState = useMemo(() => (
     derivedState ?? buildExplorerTreeDerivedState(nodes, changes, modifiedPaths)
   ), [changes, derivedState, modifiedPaths, nodes]);
@@ -351,14 +348,12 @@ export function ExplorerTree ({
                   currentPath={currentPath}
                   derivedState={treeDerivedState}
                   expandedDirectories={expandedDirectories}
-                  getFileDragPayload={getFileDragPayload}
                   getNodeContextMenu={getNodeContextMenu}
                   isFileOpenable={isFileOpenable}
                   modifiedPaths={modifiedPaths}
                   nested
                   nodes={node.children}
                   onCreateInDirectory={onCreateInDirectory}
-                  onFilePointerDragStart={onFilePointerDragStart}
                   onOpenFile={onOpenFile}
                 />
               ) : null}
@@ -399,7 +394,7 @@ export function ExplorerTree ({
                     }
 
                     event.stopPropagation();
-                    onFilePointerDragStart?.(event, node.path);
+                    beginDrag(event, { target: { filePath: node.path, kind: "file" }, type: "panel-target" });
                   }}
                   onClick={() => {
                     if (!isOpenable) {

@@ -8,7 +8,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, ty
 import type { WorkbenchRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import MobilePaneSwipeController, { type MobilePaneDestination } from "../../workbench/navigation/MobilePaneSwipeController";
 import { useWorkbenchNavigate } from "../../workbench/navigation/use-workbench-project-navigation";
-import { mobileSidebarHref, type MobilePane } from "../../workbench/state/mobile-pane-url-state";
+import { MOBILE_MEDIA_QUERY, mobileSidebarHref, type MobilePane } from "../../workbench/state/mobile-pane-url-state";
+import useMediaQuery from "../../workbench/dom/layout/use-media-query";
 
 const BLOCKED_TARGETS = "input,textarea,select,button,a,label,summary,[contenteditable],[role='button'],[role='link'],[role='textbox'],[role='combobox'],[role='slider'],[role='spinbutton'],[role='switch']";
 
@@ -47,15 +48,15 @@ function clampPosition(positionPx: number, width: number) {
   return Math.min(0, Math.max(-width, positionPx));
 }
 
-export default function MobilePaneTrack({ children, isMobile, pane, route, slideRef }: {
+export default function MobilePaneTrack({ children, pane, route, slideRef }: {
   children: ReactNode;
-  isMobile: boolean;
   pane: MobilePane;
   route: WorkbenchRoute;
   /** Filled with the slide-then-navigate action while mobile, for controls outside the swipe gesture. */
   slideRef?: MutableRefObject<((destination: MobilePaneDestination) => void) | null>;
 }) {
   const navigateToRoute = useWorkbenchNavigate();
+  const isMobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const [controller] = useState(() => new MobilePaneSwipeController());
   const [motion, setMotion] = useState<Motion | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);

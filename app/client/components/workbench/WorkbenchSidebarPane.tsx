@@ -32,14 +32,13 @@ import WorkbenchThreadSidebarActionsProvider from "./WorkbenchThreadSidebarActio
 type ThreadSidebarProps = ComponentProps<typeof WorkbenchThreadSidebar>;
 type ActionsProps = ComponentProps<typeof WorkbenchThreadSidebarActionsProvider>;
 export default function WorkbenchSidebarPane({
-  activeDragPayload, activeProjectId, appRuntime, askAgentWithReferences, browseLocation, browseProjectId,
+  activeProjectId, appRuntime, askAgentWithReferences, browseLocation, browseProjectId,
   browseSessionController, collapsed, createThread, explorerSection, harness,
-  onAttachFeedback, onBeginPointerDrag, onOpenQualifiedThread, onOpenThread,
+  onAttachFeedback, onOpenQualifiedThread, onOpenThread,
   onPresentationDraftDeleted, onThreadSettled, physicalProjects, projectSourceError,
   renderThreadTooltipDetails, route, searchController, showGitView, showMosaicView,
   viewedProjectId,
 }: {
-  activeDragPayload: ThreadSidebarProps["activeDragPayload"];
   activeProjectId: ActionsProps["projectId"];
   appRuntime: ComponentProps<typeof ReloadNecessary>["appRuntime"];
   askAgentWithReferences: ComponentProps<typeof ReloadNecessary>["onAskAgent"];
@@ -52,7 +51,6 @@ export default function WorkbenchSidebarPane({
   explorerSection: ReactNode;
   harness: ThreadSidebarProps["harness"];
   onAttachFeedback: ThreadSidebarProps["onAttachFeedback"];
-  onBeginPointerDrag: ThreadSidebarProps["onBeginPointerDrag"];
   /** Context-menu "Open" for a listed thread row; row clicks follow their hrefs. */
   onOpenQualifiedThread: (row: WorkbenchLogicalThreadRow, selectedLogicalProjectId: string | null) => void;
   onOpenThread: ActionsProps["onOpenThread"];
@@ -158,7 +156,6 @@ export default function WorkbenchSidebarPane({
                 title="Threads"
               >
                 <WorkbenchThreadSidebar
-                  activeDragPayload={activeDragPayload}
                   attachedDaemonId={client.mounted?.networkClient?.snapshot().snapshot?.daemon?.daemonId ?? null}
                   createProjectId={selection.createProjectId}
                   emptySelectionMessage={route.selectedProjectIds === null
@@ -172,7 +169,6 @@ export default function WorkbenchSidebarPane({
                   selectedLocation={browseLocation}
                   currentTarget={route.view === "thread" ? route.threadTarget : null}
                   harness={harness}
-                  onBeginPointerDrag={onBeginPointerDrag}
                   onCreateThread={createThread}
                   projectId={browseProjectId}
                   projects={physicalProjects}

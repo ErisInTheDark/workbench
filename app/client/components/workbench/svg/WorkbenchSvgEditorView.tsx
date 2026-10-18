@@ -22,7 +22,9 @@ import { buildSvgPreview, readSvgViewBox } from "../../../workbench/svg/svg-prev
 import { getSvgSegments, groupSvgSelection, svgElementSelectionKeys, SVG_SEGMENT_TAGS } from "../../../workbench/svg/svg-segments";
 import { formatSvgSource } from "../../../workbench/svg/svg-source-edits";
 import { findSvgElementAt, getSvgAttribute, parseSvgSource, type SvgSourceElement } from "../../../workbench/svg/svg-source";
+import type { WorkbenchMainPanelDragPayload } from "../../../workbench/layout/workbench-drag";
 import IconButton from "../../ui/IconButton";
+import { useWorkbenchDrag } from "../drag/workbench-drag-context";
 import PlaintextEditable from "../thread-view/PlaintextEditable";
 import { PanelCloseIcon, Redo2Icon, ResetIcon, SaveAsIcon, SaveIcon, Undo2Icon, WandSparklesIcon } from "../workbench-icons";
 import WorkbenchSvgCanvas, { type SvgCanvasAction, type SvgCanvasTool } from "./WorkbenchSvgCanvas";
@@ -115,7 +117,7 @@ export default function WorkbenchSvgEditorView({
   controls,
   location = null,
   onClose,
-  onHeaderPointerDragStart,
+  headerDrag,
   onSaveAs,
   path,
   sidebarToggleInset,
@@ -124,7 +126,7 @@ export default function WorkbenchSvgEditorView({
   controls: WorkbenchControls | null;
   location?: ProjectLocationReference | null;
   onClose?: () => void;
-  onHeaderPointerDragStart?: (event: PointerEvent<HTMLElement>) => void;
+  headerDrag?: WorkbenchMainPanelDragPayload;
   /** Ask for a new path for `content`; call `done` once it is written so this file's draft can be dropped. */
   onSaveAs?: (content: string, done: () => void) => void;
   path: string;
@@ -153,7 +155,7 @@ export default function WorkbenchSvgEditorView({
   const [view, setView] = useState<SvgViewOptions>(DEFAULT_VIEW);
   const [action, setAction] = useState<SvgCanvasAction | null>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
-
+  const beginDrag = useWorkbenchDrag.mainPanel();
 
   const segmentRanges = useMemo(() => {
     if (!parsed.ok) return [];
@@ -232,9 +234,9 @@ export default function WorkbenchSvgEditorView({
   }
 
   function handleHeaderPointerDown(event: PointerEvent<HTMLElement>) {
-    if (!onHeaderPointerDragStart || (event.target instanceof HTMLElement && event.target.closest("button,a,input,[contenteditable]"))) return;
+    if (!headerDrag || (event.target instanceof HTMLElement && event.target.closest("button,a,input,[contenteditable]"))) return;
     event.preventDefault();
-    onHeaderPointerDragStart(event);
+    beginDrag(event, headerDrag);
   }
 
   const status = portError || state.error
@@ -260,7 +262,7 @@ export default function WorkbenchSvgEditorView({
           className={`
             flex items-center gap-2 pt-3
             ${sidebarToggleInset === "collapsed" ? "md:pl-28" : sidebarToggleInset === "expanded" ? "md:pl-14" : ""}
-            ${onHeaderPointerDragStart ? "cursor-grab active:cursor-grabbing" : ""}
+            ${headerDrag ? "cursor-grab active:cursor-grabbing" : ""}
           `}
           onPointerDown={handleHeaderPointerDown}
         >

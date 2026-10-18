@@ -29,11 +29,11 @@ import {
   WORKBENCH_THREAD_ORDER_DROP_TARGET_ID,
   WORKBENCH_THREAD_PRIORITY_DROP_TARGET_ID,
   WORKBENCH_THREAD_ROW_ACTION_DROP_TARGET_ID,
-  type WorkbenchDragPayload,
   type WorkbenchThreadDragSection,
   type WorkbenchThreadRowDragPayload,
 } from "../../workbench/layout/workbench-drag";
 import Draggable from "./drag/Draggable";
+import { useWorkbenchDrag } from "./drag/workbench-drag-context";
 import { useThread } from "./use-thread";
 import { useThreads } from "./use-threads";
 import WorkbenchThreadComposerDropTarget from "./WorkbenchThreadComposerDropTarget";
@@ -52,7 +52,6 @@ export type ThreadListRowEntry =
 
 export interface ThreadListRowContext {
   actions: ThreadActions;
-  activeDragPayload: WorkbenchDragPayload | null;
   allowMainPanelDrop: boolean;
   /** Folder-sidebar rows on this daemon resolve their listed row through it. */
   attachedDaemonId: string | null;
@@ -121,6 +120,7 @@ export default function WorkbenchThreadListRow({
 }) {
   const { entry, qualified, member } = useRowFacts(listEntry, Boolean(context.logicalProjects), context.attachedDaemonId);
   const attentionLabel = useThread.attention(entry && entry.entryKind !== "draft" ? entry.identity.threadId : null);
+  const activeDragPayload = useWorkbenchDrag.activePayload();
   const { threadKey, projectId: entryProjectId } = listEntry;
   const ctx = context;
   const project = ctx.projectsById.get(entryProjectId) ?? null;
@@ -179,7 +179,6 @@ export default function WorkbenchThreadListRow({
   const targetReady = entry.entryKind === "thread"
     && entry.lifecycle.kind === "completed"
     && !(entry.gitArc?.claimedPaths.length);
-  const activeDragPayload = ctx.activeDragPayload;
   const folderDropEnabled = Boolean(
     isWorkbenchThreadRowDragPayload(activeDragPayload)
     && targetIdentity

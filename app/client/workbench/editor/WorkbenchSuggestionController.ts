@@ -10,6 +10,7 @@
  */
 
 import { getSuggestionId, getSuggestionOld, nextSuggestionId, REVIEW_ATTRIBUTES } from "../markdown/review-markup";
+import { MOBILE_MEDIA_QUERY } from "../state/mobile-pane-url-state";
 import type { EditorHighlightScope } from "./editor-highlights";
 import { diffWords, type TextSpan } from "./text-diff";
 
@@ -75,8 +76,6 @@ const ROW_ATTRIBUTE = "data-suggestion-row";
 const ROW_HEAD_PX = 44;
 const ROW_PAD_PX = 12;
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-/** Matches Tailwind's `md` breakpoint, below which the row band is styled solid. */
-const MOBILE_MEDIA_QUERY = "(max-width: 767px)";
 
 function createCheckIcon() {
   const svg = document.createElementNS(SVG_NAMESPACE, "svg");
