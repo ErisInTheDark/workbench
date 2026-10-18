@@ -529,8 +529,23 @@ function WorkbenchInlineFormatController(
     return options.getInlineRunContainer(selection.getRangeAt(0).startContainer);
   }
 
+  /** A selection extended out of a block (as a drag upward does) still covers it; rebuilding it would drop the anchor. */
+  function selectionStillCovers(container: HTMLElement) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return false;
+    try {
+      return selection.getRangeAt(0).intersectsNode(container);
+    } catch {
+      return false;
+    }
+  }
+
   function maybeCanonicalizePreviousSelectionContainer(selectionContainer: HTMLElement | null) {
     const previousContainer = lastSelectionInlineRunContainer;
+    if (previousContainer && previousContainer !== selectionContainer && options.editor.contains(previousContainer)
+      && selectionStillCovers(previousContainer)) {
+      return;
+    }
     lastSelectionInlineRunContainer = selectionContainer;
 
     if (

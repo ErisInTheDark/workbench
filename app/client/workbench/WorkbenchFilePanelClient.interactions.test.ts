@@ -20,6 +20,17 @@ async function caretAtEnd(panel: MountedFilePanel) {
   await panel.caretIn(last, last.childNodes.length);
 }
 
+test("a selection dragged up from a block's end keeps that end as it reaches the block above", () => withPanel("first line\n\nsecond line\n", async panel => {
+  const [first, second] = Array.from(panel.editor.children);
+  const end = second!.lastChild!.lastChild as Text;
+  await panel.caretIn(end, end.length);
+  window.getSelection()!.setBaseAndExtent(end, end.length, first!.firstChild!.firstChild!, 3);
+  await new Promise<void>(resolve => { setImmediate(resolve); });
+  const selection = window.getSelection()!;
+  assert.equal(selection.anchorNode?.textContent, "second line");
+  assert.equal(selection.anchorOffset, "second line".length);
+}));
+
 test("typing into an empty document saves the typed paragraph", () => withPanel("", async panel => {
   await caretAtEnd(panel);
   await panel.type("hello world");
