@@ -15,6 +15,12 @@ import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../dae
 import { logError } from "../../process-helpers";
 import { OpenCodePatchObservationSchema } from "./opencode-workbench-rpc";
 import { setTimeout as delay } from "node:timers/promises";
+import type { ClientError } from "@opencode/client";
+
+/** The OpenCode client loads lazily with the service, so its error class is matched by shape. */
+function isTransportFailure(error: unknown): error is ClientError {
+  return error instanceof Error && error.name === "ClientError" && "reason" in error && error.reason === "Transport";
+}
 
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "agent",
@@ -90,7 +96,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       subscribe: signal => ({
         async *[Symbol.asyncIterator]() {
           const client = await service.acquire(signal);
-          yield* client.event.subscribe({ signal });
+          try {
+            yield* client.event.subscribe({ signal });
+          } catch (error) {
+            // A connection-level failure means the service process is gone; the reconnect then starts a fresh one.
+            if (isTransportFailure(error)) service.markUnreachable(client);
+            throw error;
+          }
         },
       }),
       onConnected: ({ signal, wasTouched }) => events.reconcileConnection(signal, wasTouched),

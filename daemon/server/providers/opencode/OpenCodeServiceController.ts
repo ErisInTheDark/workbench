@@ -2,7 +2,8 @@
  * Exports:
  * - WorkbenchOpenCodeClient: typed client for the user's companion-capable shared OpenCode service.
  * - OpenCodeServiceControllerOptions: injectable service discovery and client construction.
- * - default OpenCodeServiceController: own reload-safe companion service startup, suspension, and model warming.
+ * - default OpenCodeServiceController: own reload-safe companion service startup, suspension until rollback, replacement of
+ *   an unreachable service, and model warming.
  */
 import type { OpenCodeClient } from "@opencode/client";
 import type { Endpoint, EnsureOptions, StopOptions } from "@opencode/client/service";
@@ -136,6 +137,8 @@ export default class OpenCodeServiceController {
   private stopping: Promise<void> | null = null;
   private lifetime = new AbortController();
   private disposed = false;
+  /** Between a reload's detach and its rollback; the shared service then belongs to the replacement. */
+  private suspended = false;
   private readonly dataRoot: string;
   private readonly serviceStateHome: string;
   private readonly serviceFile: string;
@@ -149,6 +152,8 @@ export default class OpenCodeServiceController {
 
   async acquire(signal?: AbortSignal): Promise<WorkbenchOpenCodeClient> {
     if (this.disposed) throw new Error("OpenCode service client has been disposed.");
+    // Acquiring would adopt the replacement's service, which this generation's disposal then stops.
+    if (this.suspended) throw new Error("OpenCode service is suspended for replacement.");
     if (this.client) return this.client;
     const acquiring = this.acquiring ??= this.create().finally(() => {
       this.acquiring = null;
@@ -198,10 +203,23 @@ export default class OpenCodeServiceController {
 
   async suspend() {
     if (this.disposed) return false;
+    this.suspended = true;
     return await this.retireGeneration(
       new Error("OpenCode service controller suspended for replacement."),
       { drain: true, renew: true },
     );
+  }
+
+  /** A rolled-back reload hands the shared service back to this generation. */
+  resume() {
+    this.suspended = false;
+  }
+
+  /** The client's service stopped answering; the next acquisition ensures a live one. Reports about older clients are ignored. */
+  markUnreachable(client: WorkbenchOpenCodeClient) {
+    if (this.client !== client) return;
+    this.client = null;
+    this.modelCatalogs.clear();
   }
 
   async dispose() {

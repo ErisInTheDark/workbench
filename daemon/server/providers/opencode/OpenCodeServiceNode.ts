@@ -54,6 +54,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         detach,
         retryDetach: detach,
         resume: () => {
+          service.resume();
           if (restart) restartInBackground();
         },
         commit: () => service.dispose(),

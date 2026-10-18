@@ -177,7 +177,7 @@ test("allows failed dedicated-service acquisition to be retried", async () => {
   await controller.dispose();
 });
 
-test("suspends active service ownership for replacement and remains resumable until disposal", async () => {
+test("suspends active service ownership and refuses acquisition until resumed", async () => {
   let ensures = 0;
   let stops = 0;
   const clients = [1, 2].map(id => ({
@@ -200,16 +200,46 @@ test("suspends active service ownership for replacement and remains resumable un
   assert.equal(await controller.suspend(), false);
   assert.equal(ensures, 0);
   assert.equal(stops, 0);
+  controller.resume();
 
   assert.equal(await controller.acquire(), clients[0]);
   assert.equal(await controller.suspend(), true);
   assert.equal(stops, 1);
+  // A replaced generation must not re-own the shared service, or its disposal would stop its successor's.
+  await assert.rejects(controller.acquire(), /suspended for replacement/u);
+  assert.equal(ensures, 1);
+  controller.resume();
   assert.equal(await controller.acquire(), clients[1]);
   assert.equal(ensures, 2);
 
   await controller.dispose();
   assert.equal(stops, 2);
   await assert.rejects(controller.acquire(), /has been disposed/u);
+});
+
+test("an unreachable service is replaced on the next acquisition, ignoring stale reports", async () => {
+  let ensures = 0;
+  const clients = [1, 2].map(id => ({
+    id,
+    model: modelApi,
+    plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+  }));
+  const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
+    prepareServiceDirectory: async () => undefined,
+    ensureService: async () => ({ url: `http://127.0.0.1:${4_095 + ++ensures}` }),
+    createClient: () => clients[ensures - 1] as never,
+    stopService: async () => undefined,
+  });
+  try {
+    const first = await controller.acquire();
+    assert.equal(await controller.acquire(), first);
+    controller.markUnreachable(first);
+    const second = await controller.acquire();
+    assert.equal(second, clients[1]);
+    controller.markUnreachable(first);
+    assert.equal(await controller.acquire(), second);
+    assert.equal(ensures, 2);
+  } finally { await controller.dispose(); }
 });
 
 test("coalesces model catalogues by directory and invalidates provider changes", async () => {

@@ -43,17 +43,18 @@ function graphHost(options: { failUnrelated: () => boolean }) {
   });
 }
 
-test("failed detach still restarts the retained service on rollback", async t => {
-  let resumed = false;
+test("rollback un-suspends the retained service before restarting it, even after a failed detach", async t => {
+  const calls: string[] = [];
   t.mock.method(OpenCodeServiceController.prototype, "suspend", async () => { throw new Error("stop failed"); });
-  t.mock.method(OpenCodeServiceController.prototype, "acquire", async () => { resumed = true; return {} as never; });
+  t.mock.method(OpenCodeServiceController.prototype, "resume", () => { calls.push("resume"); });
+  t.mock.method(OpenCodeServiceController.prototype, "acquire", async () => { calls.push("acquire"); return {} as never; });
   t.mock.method(OpenCodeServiceController.prototype, "dispose", async () => {});
   const instance = OpenCodeServiceNode.create({} as never, { handoffState: undefined } as never);
   const handoff = instance.beginHandoff!({ isReplacing: () => true });
   try {
     await assert.rejects(Promise.resolve().then(() => handoff.detach()), /stop failed/u);
     await handoff.resume();
-    assert.equal(resumed, true);
+    assert.deepEqual(calls, ["resume", "acquire"]);
   } finally { await instance.dispose(); }
 });
 
