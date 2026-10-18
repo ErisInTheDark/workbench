@@ -250,6 +250,12 @@ function renderThreadInlineNodes (
             {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
           </mark>
         );
+      case "markTag":
+        return (
+          <u data-mark={node.name} key={key} title={node.name}>
+            {renderThreadInlineNodes(node.children, key, options, appendTarget, nodePath)}
+          </u>
+        );
       case "commentThread":
         return null;
       case "threadIcon":

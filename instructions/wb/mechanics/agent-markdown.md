@@ -39,14 +39,14 @@ How:
 - avoid tangent docs: no detail on rejections or failures
 
 <!--
-The Workbench markdown editor renders these as margin comment threads and side-by-side suggestions, and writes them
-back in exactly this form. Agents meet them in any markdown file a user reviewed, so the syntax lives here, next to the
+The Workbench markdown editor renders these as margin comment threads, side-by-side suggestions and coloured dotted
+underlines (mark tags, applied with Alt+digit in suggest mode), and writes them back in exactly this form. Agents meet them in any markdown file a user reviewed, so the syntax lives here, next to the
 other markdown rules, as one example plus three rules instead of a separate skill.
 -->
 ## Review markup in markdown files
 
 ```md
-The <mark>fox</mark><!-- [user]: too cliche? --><!-- [agent]: reworded below -->
+The <mark>fox</mark><!-- [user]: too cliche? --><!-- [agent]: reworded below --> jumps <u data-mark="rethink">over</u>
 <!-- [user]: comment on whole paragraph -->
 
 <del>
@@ -63,4 +63,5 @@ Replacement blocks.
 
 - Comment: `<!-- [name]: text -->` right after `<mark>`ed words, or on own line after its block. Reply: next comment glued on, or next line
 - Suggestion: `<del>` block directly followed by `<ins>` block; omit either for pure insertion or deletion
-- Resolve by removing thread, or keeping one suggestion side; leave other review markup intact
+- Mark tag: `<u data-mark="tag">` words carry one user-chosen review label, such as bad, rethink or good
+- Resolve by removing thread or tag, or keeping one suggestion side; leave other review markup intact

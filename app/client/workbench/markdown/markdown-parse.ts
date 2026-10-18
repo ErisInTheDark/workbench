@@ -92,6 +92,7 @@ export type ParsedInlineNode =
   | { type: "inlineComment"; children: ParsedInlineNode[] }
   | { type: "commentThread"; comments: MarkdownComment[] }
   | { type: "mark"; children: ParsedInlineNode[] }
+  | { type: "markTag"; children: ParsedInlineNode[]; name: string }
   | { type: "threadIcon"; children: ParsedInlineNode[] | null; color: string | null; iconType: string; source: string }
   | { type: "knownSkillMention"; text: string; title: string }
   | { type: "attachmentMention"; text: string; number: number | null }
@@ -610,6 +611,21 @@ function parseThreadIconMarker(markdown: string, index: number, options: Markdow
   };
 }
 
+const MARK_TAG_OPENER = "<u data-mark=\"";
+const ATTRIBUTE_ENTITIES: Record<string, string> = { amp: "&", gt: ">", lt: "<", quot: "\"" };
+
+/** `<u data-mark="name">words</u>`: words carrying one mark tag. */
+function readMarkTag(markdown: string, index: number) {
+  if (!markdown.startsWith(MARK_TAG_OPENER, index)) return null;
+  const nameStart = index + MARK_TAG_OPENER.length;
+  const nameEnd = markdown.indexOf("\">", nameStart);
+  const closeIndex = nameEnd === -1 ? -1 : markdown.indexOf("</u>", nameEnd + 2);
+  if (closeIndex === -1) return null;
+  const name = markdown.slice(nameStart, nameEnd).replace(/&(amp|gt|lt|quot);/g, (_, entity: string) => ATTRIBUTE_ENTITIES[entity]!);
+  if (!name.trim() || name.includes("\n")) return null;
+  return { content: markdown.slice(nameEnd + 2, closeIndex), end: closeIndex + "</u>".length, name };
+}
+
 export function parseInlineMarkdown(markdown: string, options: MarkdownParseOptions = {}) {
   const nodes: ParsedInlineNode[] = [];
   let index = 0;
@@ -682,6 +698,13 @@ export function parseInlineMarkdown(markdown: string, options: MarkdownParseOpti
         index = closeIndex + 7;
         continue;
       }
+    }
+
+    const markTag = readMarkTag(markdown, index);
+    if (markTag) {
+      nodes.push({ children: parseInlineMarkdown(markTag.content, options), name: markTag.name, type: "markTag" });
+      index = markTag.end;
+      continue;
     }
 
     if (isEditorProfile(options) && markdown.startsWith("<!--", index)) {

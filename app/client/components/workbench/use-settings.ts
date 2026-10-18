@@ -27,6 +27,7 @@ import { useProjects } from "./use-projects";
 /** Settings whose app-state rows arrived after logical-project preferences; older databases cannot store them. */
 const KEY_RELEASES: Partial<Record<WorkbenchSettingKey, number>> = {
   gitPeerSyncMode: appStateReleases.gitPeerSyncMode.version,
+  markTags: appStateReleases.markTags.version,
   openMarkdownFilesWith: appStateReleases.fileOpenDestinations.version,
   openOtherFilesWith: appStateReleases.fileOpenDestinations.version,
   openSvgFilesWith: appStateReleases.fileOpenDestinations.version,

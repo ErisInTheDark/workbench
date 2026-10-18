@@ -141,6 +141,7 @@ function edgeText(node: Node | undefined, edge: "first" | "last"): Text | null {
 function keyCode(key: string) {
   if (key === "`") return "Backquote";
   if (key === "\\") return "Backslash";
+  if (/^\d$/u.test(key)) return `Digit${key}`;
   return key.length === 1 ? `Key${key.toUpperCase()}` : key;
 }
 

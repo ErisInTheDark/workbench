@@ -559,6 +559,37 @@ const globalPreferencesV14 = defineTable("global_preferences", {
   `)],
 }));
 
+/** `markTags` rows hold no scalar: they own their list, kept in `global_mark_tags`. */
+const globalPreferencesV15 = defineTable("global_preferences", {
+  ...globalPreferencesV14.columns,
+  key: enumText(
+    "appPort", "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "harness", "projectStatusCountsExpanded", "projectsOpen", "projectTimeGroupCount",
+    "reactDevelopmentMode", "reloadNecessaryOpen", "showUnopenableFiles", "sidebarCollapsed",
+    "theme", "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen",
+    "transcriptProjectionMode", "voiceInputEnabled", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags",
+  ).primaryKey(),
+}, table => ({
+  constraints: [unique([table.key, table.deleted]), check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("projectStatusCountsExpanded")}, ${literal("projectsOpen")}, ${literal("reactDevelopmentMode")}, ${literal("reloadNecessaryOpen")}, ${literal("showUnopenableFiles")}, ${literal("sidebarCollapsed")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}, ${literal("threadGitArcProposalsOpen")}, ${literal("threadVisOpen")}, ${literal("voiceInputEnabled")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("appPort")}, ${literal("editorFontSize")}, ${literal("projectTimeGroupCount")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("harness")}, ${literal("theme")}, ${literal("transcriptProjectionMode")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+      OR (${table.key} = ${literal("userName")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND length(${table.text_value}) <= ${literal(40)})
+      OR (${table.key} = ${literal("markTags")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    ))
+  `)],
+}));
+
 const globalPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({ migration: createTable(globalPreferencesV1), schemaVersion: appStateReleases.initialAppState.version, table: globalPreferencesV1 }),
@@ -633,8 +664,43 @@ const globalPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.userName.version,
       table: globalPreferencesV14,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: globalPreferencesV14, to: globalPreferencesV15 }),
+      schemaVersion: appStateReleases.markTags.version,
+      table: globalPreferencesV15,
+    }),
   ],
-  current: globalPreferencesV14,
+  current: globalPreferencesV15,
+});
+
+/** One row per tag of the live global `markTags` preference, in keybind order. */
+const globalMarkTags = defineTable("global_mark_tags", {
+  owner_key: enumText("markTags").notNull().default("markTags"),
+  owner_deleted: booleanInteger().notNull().default(0),
+  position: integer().notNull().nonNegative(),
+  name: text().notNull(),
+  color: enumText("red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "white").notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.owner_key, table.position]),
+    unique([table.owner_key, table.name]),
+    foreignKey([table.owner_key, table.owner_deleted], {
+      columns: ["key", "deleted"],
+      onDelete: "CASCADE",
+      table: "global_preferences",
+    }),
+    check(sql`${table.owner_deleted} = ${literal(0)}`),
+    check(sql`${table.position} < ${literal(10)}`),
+    check(sql`length(${table.name}) BETWEEN ${literal(1)} AND ${literal(32)}`),
+  ],
+}));
+const globalMarkTagsHistory = defineTableHistory({
+  current: globalMarkTags,
+  versions: [tableVersion({
+    migration: createTable(globalMarkTags),
+    schemaVersion: appStateReleases.markTags.version,
+    table: globalMarkTags,
+  })],
 });
 
 const projectPreferencesV1 = defineTable("project_preferences", {
@@ -981,6 +1047,34 @@ const logicalProjectPreferencesV5 = defineTable("logical_project_preferences", {
   `)],
 }));
 
+/** `markTags` overrides hold no scalar: they own their list, kept in `logical_project_mark_tags`. */
+const logicalProjectPreferencesV6 = defineTable("logical_project_preferences", {
+  ...logicalProjectPreferencesV5.columns,
+  key: enumText(
+    "composerSpellCheck", "editorFontFamily", "editorFontSize", "editorSpellCheck",
+    "fileOpenBehavior", "showUnopenableFiles", "theme", "threadCodeBlockWrap", "threadCodeDetails", "gitPeerSyncMode",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags",
+  ).notNull(),
+}, table => ({
+  constraints: [primaryKey([table.logical_project_id, table.key]), unique([table.logical_project_id, table.key, table.deleted]), check(sql`
+    (${table.deleted} = ${literal(1)} AND ${table.enabled} IS NULL AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    OR (${table.deleted} = ${literal(0)} AND ${table.enabled} IS NOT NULL AND (
+      (${table.key} IN (${literal("composerSpellCheck")}, ${literal("editorSpellCheck")}, ${literal("showUnopenableFiles")}, ${literal("threadCodeBlockWrap")}, ${literal("threadCodeDetails")}) AND ${table.boolean_value} IS NOT NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} = ${literal("editorFontSize")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NOT NULL AND ${table.text_value} IS NULL)
+      OR (${table.key} IN (${literal("editorFontFamily")}, ${literal("fileOpenBehavior")}, ${literal("theme")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NOT NULL)
+      OR (${table.key} = ${literal("gitPeerSyncMode")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("merge")}, ${literal("rebase")}))
+      OR (${table.key} IN (${literal("openMarkdownFilesWith")}, ${literal("openSvgFilesWith")}) AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("workbench")}, ${literal("vscode")}))
+      OR (${table.key} = ${literal("openOtherFilesWith")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND ${table.text_value} IN (${literal("vscode")}, ${literal("none")}))
+      OR (${table.key} = ${literal("userName")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL
+        AND ${table.text_value} IS NOT NULL AND length(${table.text_value}) <= ${literal(40)})
+      OR (${table.key} = ${literal("markTags")} AND ${table.boolean_value} IS NULL AND ${table.integer_value} IS NULL AND ${table.text_value} IS NULL)
+    ))
+  `)],
+}));
+
 const logicalProjectPreferencesHistory = defineTableHistory({
   versions: [
     tableVersion({
@@ -1011,8 +1105,44 @@ const logicalProjectPreferencesHistory = defineTableHistory({
       schemaVersion: appStateReleases.userName.version,
       table: logicalProjectPreferencesV5,
     }),
+    tableVersion({
+      migration: rebuildTable({ from: logicalProjectPreferencesV5, to: logicalProjectPreferencesV6 }),
+      schemaVersion: appStateReleases.markTags.version,
+      table: logicalProjectPreferencesV6,
+    }),
   ],
-  current: logicalProjectPreferencesV5,
+  current: logicalProjectPreferencesV6,
+});
+
+/** One row per tag of a live logical-project `markTags` override, in keybind order. */
+const logicalProjectMarkTags = defineTable("logical_project_mark_tags", {
+  logical_project_id: text().notNull(),
+  owner_key: enumText("markTags").notNull().default("markTags"),
+  owner_deleted: booleanInteger().notNull().default(0),
+  position: integer().notNull().nonNegative(),
+  name: text().notNull(),
+  color: enumText("red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "white").notNull(),
+}, table => ({
+  constraints: [
+    primaryKey([table.logical_project_id, table.owner_key, table.position]),
+    unique([table.logical_project_id, table.owner_key, table.name]),
+    foreignKey([table.logical_project_id, table.owner_key, table.owner_deleted], {
+      columns: ["logical_project_id", "key", "deleted"],
+      onDelete: "CASCADE",
+      table: "logical_project_preferences",
+    }),
+    check(sql`${table.owner_deleted} = ${literal(0)}`),
+    check(sql`${table.position} < ${literal(10)}`),
+    check(sql`length(${table.name}) BETWEEN ${literal(1)} AND ${literal(32)}`),
+  ],
+}));
+const logicalProjectMarkTagsHistory = defineTableHistory({
+  current: logicalProjectMarkTags,
+  versions: [tableVersion({
+    migration: createTable(logicalProjectMarkTags),
+    schemaVersion: appStateReleases.markTags.version,
+    table: logicalProjectMarkTags,
+  })],
 });
 
 const projectSidebarPreferencesHistory = initialHistory(defineTable("project_sidebar_preferences", {
@@ -1486,8 +1616,10 @@ const histories = [
   lastProjectSelectionsHistory,
   lastProjectSelectionProjectsHistory,
   globalPreferencesHistory,
+  globalMarkTagsHistory,
   projectPreferencesHistory,
   logicalProjectPreferencesHistory,
+  logicalProjectMarkTagsHistory,
   projectSidebarPreferencesHistory,
   projectSidebarFoldersHistory,
   projectExpandedDirectoriesHistory,
@@ -1514,12 +1646,14 @@ export const appStateClientTables = Object.freeze({
   fileDraftHistories: fileDraftHistoriesHistory.current,
   fileDraftHistoryFrames: fileDraftHistoryFramesHistory.current,
   fileDrafts: fileDraftsHistory.current,
+  globalMarkTags: globalMarkTagsHistory.current,
   globalPreferences: globalPreferencesHistory.current,
   lastLaunchTarget: lastLaunchTargetHistory.current,
   lastProjectSelectionProjects: lastProjectSelectionProjectsHistory.current,
   lastProjectSelections: lastProjectSelectionsHistory.current,
   projectExpandedDirectories: projectExpandedDirectoriesHistory.current,
   projectPreferences: projectPreferencesHistory.current,
+  logicalProjectMarkTags: logicalProjectMarkTagsHistory.current,
   logicalProjectPreferences: logicalProjectPreferencesHistory.current,
   projectSidebarFolders: projectSidebarFoldersHistory.current,
   projectSidebarPreferences: projectSidebarPreferencesHistory.current,

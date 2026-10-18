@@ -16,6 +16,7 @@ const MARKS: Record<string, (content: string) => string> = {
   ins: content => `<ins>${content}</ins>`,
   link: content => `<a href="https://example.test/">${content}</a>`,
   mark: content => `<mark>${content}</mark>`,
+  "mark tag": content => `<u data-mark="bad">${content}</u>`,
 };
 
 const BLOCKS: Record<string, (content: string) => string> = {

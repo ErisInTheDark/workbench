@@ -65,6 +65,8 @@
  * - MagnetIcon/MagnetOffIcon: point snapping on and off.
  * - BoldIcon/ItalicIcon/CodeIcon/Heading1Icon/Heading2Icon/Heading3Icon/TextQuoteIcon/ListOrderedIcon: markdown toolbar glyphs.
  * - MessageSquareTextIcon/SparklesIcon: markdown comment and suggest-mode glyphs (FeatherIcon is edit mode).
+ * - TagIcon: markdown mark tag glyph.
+ * - GripVerticalIcon: drag handle for reorderable rows.
  * - FileIcon/FileTextIcon/FileCodeIcon/FileImageIcon: file kind glyphs for tabs and explorer rows.
  * - DiffIcon: git change markers toggle.
  * - FoldVerticalIcon/UnfoldVerticalIcon/Undo2Icon/FlagIcon, with FoldWorkedRunIcon/UnfoldWorkedRunIcon/ReapplyTitleIcon/TitleCommandIcon aliases: thread workflow glyphs.
@@ -921,6 +923,20 @@ export function ListOrderedIcon(props: IconProps) {
   return <OutlinedIcon {...props}>
     <path d="M11 5h10" /><path d="M11 12h10" /><path d="M11 19h10" /><path d="M4 4h1v5" /><path d="M4 9h2" />
     <path d="M6.5 20H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02" />
+  </OutlinedIcon>;
+}
+
+export function TagIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
+    <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+  </OutlinedIcon>;
+}
+
+export function GripVerticalIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <circle cx="9" cy="12" r="1" /><circle cx="9" cy="5" r="1" /><circle cx="9" cy="19" r="1" />
+    <circle cx="15" cy="12" r="1" /><circle cx="15" cy="5" r="1" /><circle cx="15" cy="19" r="1" />
   </OutlinedIcon>;
 }
 

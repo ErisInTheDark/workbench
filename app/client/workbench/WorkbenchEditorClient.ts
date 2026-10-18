@@ -12,10 +12,11 @@
  * - WorkbenchEditorClientOptions: editor callbacks, dependencies and state readers.
  * - BlockFormat / EditorToolbarState: what the persistent toolbar shows as active, and the review mode.
  * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, code block and table structure, review
- *   (suggestions and comments), the markdown source surface, mutations and event cleanup.
+ *   (suggestions, comments and mark tags), the markdown source surface, mutations and event cleanup.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "workbench-shared/types";
+import type { MarkTag } from "workbench-shared/workbench/settings/mark-tags";
 import {
     getEditorLineHeight,
     getExpandedRangeRect,
@@ -46,7 +47,7 @@ import {
 import {
     isInlineRunContainer,
 } from "./editor/inline-run-containers";
-import { matchEditorCommand } from "./editor/editor-commands";
+import { matchEditorCommand, matchMarkTagPosition } from "./editor/editor-commands";
 import { createEditorHighlightScope } from "./editor/editor-highlights";
 import RevisionHoverToolbarController, {
     type RevisionToolbarContext
@@ -60,6 +61,7 @@ import { captureRichCaretAnchor, findRichAnchorPoint, type CaretAnchor } from ".
 import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import WorkbenchCommentController, { type WorkbenchCommentController as CommentController } from "./editor/WorkbenchCommentController";
 import WorkbenchFormatCommandController, { type FormatCommand } from "./editor/WorkbenchFormatCommandController";
+import WorkbenchMarkTagController from "./editor/WorkbenchMarkTagController";
 import WorkbenchInlineFormatController, {
     type CaretRenderContext,
     type InlineFormatState,
@@ -168,6 +170,8 @@ export interface EditorToolbarState {
   canEditSource: boolean;
   editable: boolean;
   inline: InlineFormatState;
+  /** The mark tag of the text the selection starts in. */
+  markTag: string | null;
   reviewMode: ReviewMode;
   showGitMarkers: boolean;
   /** The markdown source is being edited as text. */
@@ -238,6 +242,8 @@ export interface WorkbenchEditorClientOptions {
 
 interface WorkbenchEditorClient {
   applyFormatCommand: (command: FormatCommand) => void;
+  /** Tag the selection, or the caret's tagged run or word; an annotation, so suggest mode records no suggestion. */
+  applyMarkTag: (name: string) => boolean;
   /** Run a format or comment command as a markdown text edit in source mode. */
   applySourceCommand: (command: FormatCommand | "comment") => void;
   codeBlocks: CodeBlockController;
@@ -264,6 +270,7 @@ interface WorkbenchEditorClient {
   prepareForEdit: () => void;
   refreshToolbarState: () => void;
   scheduleReviewRefresh: () => void;
+  setMarkTags: (tags: readonly MarkTag[]) => void;
   setReviewMode: (mode: ReviewMode) => void;
   setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
@@ -738,6 +745,8 @@ function WorkbenchEditorClient(
   const source = surfaces.editor.source;
   const customCaret = surfaces.editor.customCaret;
   const diffGutter = surfaces.editor.diffGutter;
+  // Git change markers are opt-in per panel from the toolbar.
+  diffGutter.hidden = true;
   const reviewLayer = surfaces.editor.reviewLayer;
   const editorShell = diffGutter.parentElement;
   const statusDisplay = surfaces.statusDisplay;
@@ -750,6 +759,8 @@ function WorkbenchEditorClient(
   let toolbarInteractionActive = false;
   let markdownStyle: MarkdownStyle = DEFAULT_MARKDOWN_STYLE;
   let reviewMode: ReviewMode = "edit";
+  /** Tags Alt+digit applies while suggesting, in keybind order. */
+  let markTags: readonly MarkTag[] = [];
   const toolbarListeners = new Set<() => void>();
   let toolbarState: EditorToolbarState | null = null;
   let toolbarStateKey = "";
@@ -1084,6 +1095,7 @@ function WorkbenchEditorClient(
       canEditSource,
       editable: Boolean(path) && (options.fileSessionState.mode === "rich" || canEditSource),
       inline: sourceFormats?.inline ?? (isSourceMode() ? NO_INLINE_FORMATS : inlineFormatController.getActiveInlineFormats()),
+      markTag: options.fileSessionState.mode === "rich" ? markTagController.getActive() : null,
       reviewMode,
       showGitMarkers: !diffGutter.hidden,
       source: isSourceMode(),
@@ -1346,6 +1358,13 @@ function WorkbenchEditorClient(
     },
   });
 
+  const markTagController = WorkbenchMarkTagController({
+    editor,
+    runStructuralMutation: (mutate, hooks) => {
+      runStructuralMutation(mutate, hooks);
+    },
+  });
+
   const codeBlockController = WorkbenchCodeBlockController({
     container: editorShell ?? editor,
     editor,
@@ -1508,6 +1527,33 @@ function WorkbenchEditorClient(
     prepareEditorForToolbarAction();
     clearToolbarInteraction();
     return commentController.startDraft();
+  }
+
+  /** Mark tags annotate review, so they apply only while suggesting in rich mode. */
+  function tagSelection(name: string) {
+    return isRichMode() && reviewMode === "suggest" && editor.getAttribute("contenteditable") === "true"
+      && markTagController.apply(name);
+  }
+
+  /** The toolbar menu acts on the selection its press preserved. */
+  function applyMarkTag(name: string) {
+    prepareEditorForToolbarAction();
+    clearToolbarInteraction();
+    return tagSelection(name);
+  }
+
+  /**
+   * The keyboard acts on the live selection; a toolbar press left preserved by a menu closed without choosing must not
+   * pull the caret back. An unassigned digit keeps its default, which types a symbol with Option on Apple layouts.
+   */
+  function handleMarkTagKeyDown(event: KeyboardEvent) {
+    const position = matchMarkTagPosition(event);
+    const tag = position === null ? undefined : markTags[position];
+    if (!tag || event.isComposing || reviewMode !== "suggest" || !isRichMode()) return false;
+    event.preventDefault();
+    preservedToolbarSelection = null;
+    tagSelection(tag.name);
+    return true;
   }
 
   function clearPendingInlineFormats() {
@@ -1828,6 +1874,7 @@ function WorkbenchEditorClient(
       return;
     }
     suggestionController.prepareForEdit();
+    suggestionController.scheduleRefresh();
   }
 
   function edgeLeaf(node: Node, direction: -1 | 1): Node {
@@ -1948,6 +1995,8 @@ function WorkbenchEditorClient(
   }, { signal });
 
   editor.addEventListener("keydown", (event) => {
+    // Tagging annotates, so its chord must not make the caret's block a suggestion first.
+    if (handleMarkTagKeyDown(event)) return;
     prepareForEditKey(event);
     if (isRichMode() && (tableController.handleKeyDown(event) || blockStructureController.handleKeyDown(event))) {
       return;
@@ -2154,6 +2203,7 @@ function WorkbenchEditorClient(
 
   return {
     applyFormatCommand,
+    applyMarkTag,
     applyHoveredRevisionAction,
     applySourceCommand,
     beginToolbarInteraction,
@@ -2185,6 +2235,9 @@ function WorkbenchEditorClient(
     prepareForEdit: suggestionController.prepareForEdit,
     refreshToolbarState,
     scheduleReviewRefresh,
+    setMarkTags: (tags) => {
+      markTags = tags;
+    },
     setReviewMode,
     setShowGitMarkers,
     setSuggestionLayout: suggestionController.setLayout,

@@ -3,8 +3,8 @@
  * - WorkbenchFilePanelSnapshot: readonly mounted file panel state.
  * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
  * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
- * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode, comment margin,
- *   code block headers and the markdown source toggle.
+ * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode, mark tags, comment
+ *   margin, code block headers and the markdown source toggle.
  * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts, editor commands and cleanup.
  */
 
@@ -23,6 +23,7 @@ import {
     restoreListItemSelection,
     restoreParagraphSelection,
 } from "./dom/selection/selection-dom";
+import type { MarkTag } from "workbench-shared/workbench/settings/mark-tags";
 import { matchEditorCommand, type EditorCommand } from "./editor/editor-commands";
 import {
     getInlineRunContainer,
@@ -70,6 +71,8 @@ export interface WorkbenchFilePanelClientOptions {
 
 export interface WorkbenchFilePanelClient {
   acceptObservation: (snapshot: FileDocumentSnapshot) => void;
+  /** Tag the selection, or the caret's tagged run or word, while suggesting in rich mode. */
+  applyMarkTag: (name: string) => void;
   /** Keep the editor selection through a toolbar press; call on the press, before focus can move. */
   beginToolbarInteraction: (event: Event) => void;
   codeBlocks: WorkbenchCodeBlockController;
@@ -87,6 +90,8 @@ export interface WorkbenchFilePanelClient {
   /** The name comments written in source mode are signed with. */
   setCommentAuthor: (author: string | null) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
+  /** The tags Alt+digit applies in suggest mode, in keybind order. */
+  setMarkTags: (tags: readonly MarkTag[]) => void;
   setReviewMode: (mode: ReviewMode) => void;
   setShowGitMarkers: (show: boolean) => void;
   setSuggestionLayout: (layout: SuggestionLayout) => void;
@@ -513,6 +518,9 @@ function WorkbenchFilePanelClient(
 
   return {
     acceptObservation,
+    applyMarkTag: (name) => {
+      editorClient.applyMarkTag(name);
+    },
     beginToolbarInteraction: editorClient.beginToolbarInteraction,
     comments: editorClient.comments,
     deleteDraft: resetCurrentDraftToSaved,
@@ -533,6 +541,7 @@ function WorkbenchFilePanelClient(
       commentAuthor = author;
     },
     setFontSize,
+    setMarkTags: editorClient.setMarkTags,
     setReviewMode: editorClient.setReviewMode,
     setShowGitMarkers: editorClient.setShowGitMarkers,
     setSuggestionLayout: editorClient.setSuggestionLayout,

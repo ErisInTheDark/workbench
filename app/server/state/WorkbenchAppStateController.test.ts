@@ -129,6 +129,45 @@ test("logical project preferences persist independently of physical project addr
   } finally { await restarted.close(); }
 });
 
+test("mark tag lists keep their order and colours, replace whole, ride deltas and clear with their owner", async context => {
+  const fixture = await controllerFixture(context);
+  const logicalProjectId = LogicalProjectIdSchema.parse("84c24145-0460-489c-ac05-b382b38d4b12");
+  const global = (value: Array<{ color: "red" | "green" | "blue"; name: string }>) => ({
+    kind: "globalPreference" as const, preference: { key: "markTags" as const, value },
+  });
+  const project = (value: Array<{ color: "red" | "green" | "blue"; name: string }>) => ({
+    kind: "logicalProjectPreference" as const, logicalProjectId, preference: { enabled: true, key: "markTags" as const, value },
+  });
+  const tags = (response: WorkbenchClientStateResponse) => projectedRecords(response).flatMap(record =>
+    (record.kind === "globalPreference" || record.kind === "logicalProjectPreference") && record.preference.key === "markTags"
+      ? [record] : []).sort((left, right) => left.kind.localeCompare(right.kind));
+  try {
+    const saved = await fixture.controller.mutate({ action: "put", record: global([{ color: "green", name: "good" }, { color: "red", name: "bad" }]) });
+    assert.equal(conformWorkbenchClientStateResponse(saved).success, true);
+    assert.deepEqual(tags(saved), [global([{ color: "green", name: "good" }, { color: "red", name: "bad" }])], "the acknowledgement delta carries the list");
+    await fixture.controller.mutate({ action: "put", record: global([{ color: "red", name: "bad" }]) });
+    await fixture.controller.mutate({ action: "put", record: project([{ color: "blue", name: "later" }, { color: "red", name: "bad" }]) });
+    const untouched = fixture.controller.revision;
+    await fixture.controller.mutate({ action: "put", record: { kind: "globalPreference", preference: { key: "theme", value: "winter" } } });
+    assert.deepEqual(tags(fixture.controller.read(untouched)), [], "unchanged lists stay out of later deltas");
+    await fixture.controller.mutate({ action: "put", record: global([]) });
+    assert.deepEqual(tags(fixture.controller.read()), [global([]), project([{ color: "blue", name: "later" }, { color: "red", name: "bad" }])],
+      "an emptied list is still the user's list");
+  } finally { await fixture.controller.close(); }
+  const restarted = fixture.create();
+  try {
+    await restarted.start();
+    assert.deepEqual(tags(restarted.read()), [global([]), project([{ color: "blue", name: "later" }, { color: "red", name: "bad" }])]);
+    await restarted.mutate({ action: "delete", identity: { kind: "logicalProjectPreference", logicalProjectId, key: "markTags" } });
+    assert.deepEqual(tags(restarted.read()), [global([])]);
+    await restarted.mutate({ action: "put", record: project([{ color: "green", name: "good" }]) });
+    await restarted.forgetLogicalProjects(new Set());
+    assert.deepEqual(tags(restarted.read()), [global([])], "a gone project's override leaves with its tags");
+    await restarted.mutate({ action: "put", record: project([{ color: "green", name: "good" }]) });
+    assert.deepEqual(tags(restarted.read()), [global([]), project([{ color: "green", name: "good" }])], "no stale tags return with a new override");
+  } finally { await restarted.close(); }
+});
+
 test("last project selection preserves order and replaces explicit, empty and unfiltered states", async context => {
   const fixture = await controllerFixture(context);
   const first = LogicalProjectIdSchema.parse("112f7e1e-81b6-4c30-bdc0-f83475981001");

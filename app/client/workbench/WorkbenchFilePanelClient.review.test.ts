@@ -1,7 +1,7 @@
 /*
  * No exports. Review wards for the mounted rich editor: unedited markdown survives edits elsewhere byte for byte, suggest
- * mode turns changes into resolvable suggestions without moving the caret, and comment threads round-trip as html
- * comments.
+ * mode turns changes into resolvable suggestions without moving the caret, mark tags annotate words one tag at a time and
+ * round-trip as `u` elements, and comment threads round-trip as html comments.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -99,6 +99,70 @@ test("editing a suggestion's original column rewrites its original side", () => 
   await panel.caret("new| words");
   await panel.resolveSuggestion("reject");
   assert.equal(await panel.save(), "older words\n");
+}));
+
+const MARK_TAGS = [{ color: "red", name: "bad" }, { color: "purple", name: "rethink" }] as const;
+
+function suggesting(panel: MountedFilePanel) {
+  panel.panel.setReviewMode("suggest");
+  panel.panel.setMarkTags(MARK_TAGS);
+}
+
+test("a mark tag keybind tags the selection without suggesting a change, swaps tags, and takes its own tag off", () => withPanel("alpha beta gamma\n", async panel => {
+  suggesting(panel);
+  await panel.select("alpha [beta] gamma");
+  await panel.press("1", { alt: true });
+  assert.equal(await panel.save(), "alpha <u data-mark=\"bad\">beta</u> gamma\n");
+  assert.equal(panel.editor.querySelector("[data-suggestion]"), null, "a tag annotates; it is not a suggested change");
+  assert.equal(window.getSelection()?.toString(), "beta", "the tagged words stay selected for the next tag");
+
+  await panel.press("2", { alt: true });
+  assert.equal(await panel.save(), "alpha <u data-mark=\"rethink\">beta</u> gamma\n", "words carry one tag at a time");
+  await panel.press("2", { alt: true });
+  assert.equal(await panel.save(), "alpha beta gamma\n");
+}));
+
+test("a caret tags its word, and untags the whole run it sits in", () => withPanel("alpha beta gamma\n", async panel => {
+  suggesting(panel);
+  await panel.caret("gam|ma");
+  await panel.press("1", { alt: true });
+  assert.equal(await panel.save(), "alpha beta <u data-mark=\"bad\">gamma</u>\n");
+  await panel.select("alpha [beta gamma]");
+  await panel.press("1", { alt: true });
+  assert.equal(await panel.save(), "alpha <u data-mark=\"bad\">beta gamma</u>\n");
+  await panel.caret("be|ta");
+  await panel.press("1", { alt: true });
+  assert.equal(await panel.save(), "alpha beta gamma\n");
+}));
+
+test("a mark tag keybind tags the live selection, not one a closed toolbar menu preserved", () => withPanel("alpha beta gamma\n", async panel => {
+  suggesting(panel);
+  await panel.caret("al|pha");
+  panel.panel.beginToolbarInteraction(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await panel.select("alpha beta [gamma]");
+  await panel.press("1", { alt: true });
+  assert.equal(await panel.save(), "alpha beta <u data-mark=\"bad\">gamma</u>\n");
+}));
+
+test("mark tag keybinds do nothing while editing or for unassigned digits", () => withPanel("alpha beta\n", async panel => {
+  panel.panel.setMarkTags(MARK_TAGS);
+  await panel.select("alpha [beta]");
+  await panel.press("1", { alt: true });
+  panel.panel.setReviewMode("suggest");
+  await panel.press("3", { alt: true });
+  assert.equal(await panel.save(), "alpha beta\n");
+}));
+
+test("tagged words read from markdown save exactly when their block is rewritten", () => withPanel("say <u data-mark=\"needs &quot;work&quot;\">**this** one</u> now\n", async panel => {
+  await panel.caret("now|");
+  await panel.type("!");
+  assert.equal(await panel.save(), "say <u data-mark=\"needs &quot;work&quot;\">**this** one</u> now!\n");
+}));
+
+test("text that looks like a mark tag stays literal", () => withPanel("plain\n", async panel => {
+  await panel.caret("plain|");
+  await panel.type(" <u data-mark=\"x\">y</u>");
+  assert.equal(await panel.save(), "plain \\<u data-mark=\"x\">y\\</u>\n");
 }));
 
 test("commenting on selected words highlights them and threads replies", () => withPanel("alpha beta gamma\n", async panel => {

@@ -8,13 +8,14 @@
  */
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
 
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import createFilePanelClient, { type WorkbenchFilePanelClient, type WorkbenchFilePanelSnapshot } from "../../../workbench/WorkbenchFilePanelClient";
 import useFileDocument from "../../../workbench/file/use-file-document";
 import { WORKBENCH_STICKY_CHROME_ATTRIBUTE, type WorkbenchEditorDomSurfaces } from "../../../workbench/workbench-dom";
 import { MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, type WorkbenchEditorFontFamily } from "../../../workbench/state/workbench-settings";
+import { MARK_TAG_SCOPE_ATTRIBUTE, markTagStyleSheet } from "../../../workbench/editor/mark-tag-styles";
 import { useSettings } from "../use-settings";
 import type MobileShellHeaderVisibilityController from "../MobileShellHeaderVisibilityController";
 import IconButton from "../../ui/IconButton";
@@ -299,6 +300,13 @@ export default function WorkbenchFilePanel ({
     client?.setCommentAuthor(userName || null);
   }, [client, userName]);
 
+  const markTags = settings.get("markTags");
+  useEffect(() => {
+    client?.setMarkTags(markTags);
+  }, [client, markTags]);
+  const markTagScope = useId();
+  const markTagStyles = useMemo(() => markTagStyleSheet(markTagScope, markTags), [markTagScope, markTags]);
+
   const threadCount = useSyncExternalStore(
     client?.comments.subscribe ?? noSubscription,
     () => (client?.comments.getSnapshot().threads.length ?? 0) + (client?.comments.getSnapshot().draft ? 1 : 0),
@@ -452,6 +460,7 @@ export default function WorkbenchFilePanel ({
             <MarkdownEditorToolbar
               client={client}
               className={`mt-1.5 ${headerInsetClassName}`}
+              markTags={markTags}
               trailing={showManualFileActions ? fileActions : null}
             />
           )}
@@ -482,6 +491,7 @@ export default function WorkbenchFilePanel ({
               <MarkdownEditorToolbar
                 client={client}
                 className="px-5 md:pr-6 md:pl-[3.5rem]"
+                markTags={markTags}
                 trailing={showManualFileActions ? fileActions : null}
               />
             </div>
@@ -495,8 +505,10 @@ export default function WorkbenchFilePanel ({
       {loading && !isMinimized ? <WorkbenchLoadingSpinner label="Loading file" /> : null}
       {/* The editor mounts while loading, hidden, so its client is ready the moment content arrives. */}
       <div className="relative min-h-0 flex-1 pt-3" hidden={isMinimized || loading}>
+        {markTagStyles ? <style>{markTagStyles}</style> : null}
         <div
           ref={editorShellRef}
+          {...{ [MARK_TAG_SCOPE_ATTRIBUTE]: markTagScope }}
           className="editor-shell relative mx-auto grid [--code-block-head:2.05rem] w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto"
           style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
         >

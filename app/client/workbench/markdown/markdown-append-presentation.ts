@@ -53,6 +53,7 @@ function inlineNodeChildren(node: ParsedInlineNode) {
     case "link":
     case "inlineComment":
     case "mark":
+    case "markTag":
       return node.children;
     default:
       return null;
@@ -64,6 +65,7 @@ function inlineNodeSemanticsEqual(previous: ParsedInlineNode, next: ParsedInline
   if (previous.type === "link" && next.type === "link") {
     return previous.external === next.external && previous.href === next.href;
   }
+  if (previous.type === "markTag" && next.type === "markTag") return previous.name === next.name;
   return previous.type === "strong"
     || previous.type === "em"
     || previous.type === "delete"
@@ -111,6 +113,7 @@ function inlineVisibleText(node: ParsedInlineNode): string {
     case "link":
     case "inlineComment":
     case "mark":
+    case "markTag":
       return node.children.map(inlineVisibleText).join("");
     case "commentThread":
       return "";

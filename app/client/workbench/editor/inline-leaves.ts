@@ -1,8 +1,7 @@
 /*
  * Exports:
  * - InlineMark / InlineLeaf: the flat inline model of one run: text, breaks, selection markers and comment thread atoms,
- *   each carrying its full mark set.
- * - getInlineMarkForElement / createInlineMarkElement: map mark elements to marks and back.
+ *   each carrying its full mark set. * - getInlineMarkForElement / createInlineMarkElement: map mark elements to marks and back.
  * - areInlineMarksEqual / areInlineMarkListsEqual / normalizeInlineMarks: compare and canonically order mark sets.
  * - flattenInlineContent: read DOM inline content into leaves.
  * - normalizeInlineLeaves / normalizeInlineLeavesForCanonicalRuns / normalizeInlineLeavesForSerialization: merge leaves,
@@ -12,12 +11,15 @@
  * - serializeInlineRunContainerForMarkupSignature: canonical structure of a run for save-guard comparison.
  */
 
-import { isCommentThreadElement, readThreadComments } from "../markdown/review-markup";
+import { isCommentThreadElement, readThreadComments, REVIEW_ATTRIBUTES } from "../markdown/review-markup";
 
-export interface InlineMark {
-  href?: string;
-  tag: "a" | "code" | "del" | "em" | "ins" | "mark" | "strong";
-}
+/** `u` is a mark tag: suggest-mode annotation naming one configured tag. */
+export type InlineMark =
+  | { tag: "a"; href: string }
+  | { tag: "u"; name: string }
+  | { tag: "code" | "del" | "em" | "ins" | "mark" | "strong" };
+
+const MARK_TAG_ATTRIBUTE = REVIEW_ATTRIBUTES.markTag;
 
 export type InlineLeaf =
   | { type: "text"; marks: InlineMark[]; text: string }
@@ -27,12 +29,13 @@ export type InlineLeaf =
 
 const INLINE_MARK_RANK: Record<InlineMark["tag"], number> = {
   a: 0,
-  mark: 1,
-  del: 2,
-  ins: 3,
-  em: 4,
-  strong: 5,
-  code: 6,
+  u: 1,
+  mark: 2,
+  del: 3,
+  ins: 4,
+  em: 5,
+  strong: 6,
+  code: 7,
 };
 
 export function getInlineMarkForElement(element: Element): InlineMark | null {
@@ -55,6 +58,11 @@ export function getInlineMarkForElement(element: Element): InlineMark | null {
       return { tag: "mark" };
     case "a":
       return { tag: "a", href: element.getAttribute("href") ?? "" };
+    case "u": {
+      // Plain underlines (pasted from word processors) have no markdown form and drop to text.
+      const name = element.getAttribute(MARK_TAG_ATTRIBUTE);
+      return name ? { tag: "u", name } : null;
+    }
     default:
       return null;
   }
@@ -63,13 +71,20 @@ export function getInlineMarkForElement(element: Element): InlineMark | null {
 export function createInlineMarkElement(mark: InlineMark) {
   const element = document.createElement(mark.tag);
   if (mark.tag === "a") {
-    element.setAttribute("href", mark.href ?? "");
+    element.setAttribute("href", mark.href);
+  } else if (mark.tag === "u") {
+    element.setAttribute(MARK_TAG_ATTRIBUTE, mark.name);
+    element.title = mark.name;
   }
   return element;
 }
 
+function markDetail(mark: InlineMark) {
+  return mark.tag === "a" ? mark.href : mark.tag === "u" ? mark.name : "";
+}
+
 export function areInlineMarksEqual(left: InlineMark, right: InlineMark) {
-  return left.tag === right.tag && left.href === right.href;
+  return left.tag === right.tag && markDetail(left) === markDetail(right);
 }
 
 export function areInlineMarkListsEqual(left: readonly InlineMark[], right: readonly InlineMark[]) {
@@ -84,7 +99,7 @@ export function normalizeInlineMarks(marks: readonly InlineMark[]) {
       return rankDifference;
     }
 
-    return left.tag === "a" && right.tag === "a" ? (left.href ?? "").localeCompare(right.href ?? "") : 0;
+    return markDetail(left).localeCompare(markDetail(right));
   });
 
   const deduped: InlineMark[] = [];
@@ -416,6 +431,10 @@ function wrapMarkupSignatureContent(content: string, mark: InlineMark) {
   if (mark.tag === "a") {
     const href = mark.href ? ` href=${JSON.stringify(mark.href)}` : "";
     return `<a${href}>${content}</a>`;
+  }
+
+  if (mark.tag === "u") {
+    return `<u ${MARK_TAG_ATTRIBUTE}=${JSON.stringify(mark.name)}>${content}</u>`;
   }
 
   return `<${mark.tag}>${content}</${mark.tag}>`;

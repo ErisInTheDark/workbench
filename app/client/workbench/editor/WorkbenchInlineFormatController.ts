@@ -27,6 +27,7 @@ import {
     type InlineLeaf,
     type InlineMark,
 } from "./inline-leaves";
+import { INLINE_RUN_CONTAINER_SELECTOR, getInlineRunContainersInRange } from "./inline-run-containers";
 
 export interface CaretRenderContext {
   bold: boolean;
@@ -85,7 +86,6 @@ const INLINE_FORMAT_ORDER: Array<{ key: PendingInlineFormatKey; tagName: keyof H
 ];
 
 const FORMAT_MARK_TAGS = new Set<string>(INLINE_FORMAT_ORDER.map((format) => format.tagName));
-const INLINE_RUN_CONTAINER_SELECTOR = "p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th, span[data-summary-text='true']";
 
 const NAVIGATION_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 
@@ -97,7 +97,7 @@ function WorkbenchInlineFormatController(
   }
 
   function removeEmptyInlineFormattingArtifacts(root: ParentNode = options.editor) {
-    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins", "mark"], options.editor, root);
+    removeEmptyInlineFormatElements(["strong", "em", "code", "del", "ins", "mark", "u"], options.editor, root);
   }
 
   let pendingInlineFormats: InlineFormatState | null = null;
@@ -827,8 +827,7 @@ function WorkbenchInlineFormatController(
     }
 
     const range = selection.getRangeAt(0);
-    const containers = Array.from(options.editor.querySelectorAll<HTMLElement>(INLINE_RUN_CONTAINER_SELECTOR))
-      .filter((element) => options.isInlineRunContainer(element) && range.intersectsNode(element));
+    const containers = getInlineRunContainersInRange(options.editor, range);
     if (!containers.length) {
       return;
     }

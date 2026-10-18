@@ -12,7 +12,7 @@ import { checkReopenedFixpoint, checkSavedWords, reportSweep, type SweepFailure 
 const MARKDOWN_TOKENS = [
   "word", "**bold**", "*em*", "***both***", "`code`", "`a``b`", "<del>gone</del>", "<ins>new</ins>", "~~struck~~",
   "[link](https://example.test/)", "[rel](docs/a.md)", "<!-- note -->", "\\*", "snake_case", "2*3", "#hash", "a_b_",
-  "a&nbsp;b",
+  "a&nbsp;b", "<u data-mark=\"bad\">tagged</u>",
 ];
 const MARKDOWN_PREFIXES = ["", "# ", "> ", "- ", "1. ", "- top\n  - "];
 

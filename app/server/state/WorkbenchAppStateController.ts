@@ -12,10 +12,9 @@ import {
   type WorkbenchClientStateRows,
   type WorkbenchClientStateAttachmentIdentity,
   type WorkbenchGlobalPreference,
-  type WorkbenchProjectPreference,
+  type WorkbenchLogicalProjectPreference,
   type WorkbenchSidebarPreference,
-} from "workbench-shared/state/workbench-client-state";
-import { workbenchClientStateAttachmentUrl } from "workbench-shared/state/workbench-client-state";
+} from "workbench-shared/state/workbench-client-state";import { workbenchClientStateAttachmentUrl } from "workbench-shared/state/workbench-client-state";
 import { isDeepStrictEqual } from "node:util";
 import { projectWorkbenchClientStateRows, workbenchClientStateRecordIdentity as recordIdentity } from "workbench-shared/state/workbench-client-state-projection";
 import {
@@ -30,7 +29,8 @@ import {
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { appStateClientTables, appStateSchema, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
 
-type ScalarPreference = WorkbenchGlobalPreference | WorkbenchProjectPreference | WorkbenchSidebarPreference;
+/** List-valued preferences (`markTags`) store no scalar; their rows own child tables instead. */
+type ScalarPreference = WorkbenchGlobalPreference | WorkbenchLogicalProjectPreference | WorkbenchSidebarPreference;
 const STORED_IMAGE = "workbench:stored-image";
 type ImageMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 type BrowserProjection = { browserStateId: string; attachmentsAsUrls: boolean };
@@ -103,6 +103,7 @@ export default class WorkbenchAppStateController {
     rows.globalPreferences = this.#repository.query(selectRows(appStateClientTables.globalPreferences, {
       where: { key }, limit: 1,
     }));
+    if (key === "markTags") rows.globalMarkTags = this.#repository.query(selectRows(appStateClientTables.globalMarkTags));
     for (const change of projectWorkbenchClientStateRows(rows)) {
       if (
         change.change === "upsert"
@@ -341,8 +342,7 @@ export default class WorkbenchAppStateController {
     const operation = this.#mutationQueue.then(() => {
       // Read only the logically keyed families; a full read would expand stored draft images.
       const rows = this.#readRows(this.#repository.currentVersion().revision);
-      rows.logicalProjectPreferences = this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences, {}));
-      rows.lastProjectSelections = this.#repository.query(selectRows(appStateClientTables.lastProjectSelections, {}));
+      rows.logicalProjectPreferences = this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences, {}));      rows.lastProjectSelections = this.#repository.query(selectRows(appStateClientTables.lastProjectSelections, {}));
       rows.lastProjectSelectionProjects = this.#repository.query(selectRows(appStateClientTables.lastProjectSelectionProjects, {}));
       type ProjectKeyed = Extract<WorkbenchClientStateRecord, { kind: "logicalProjectPreference" | "lastProjectSelection" }>;
       const stale = projectWorkbenchClientStateRows(rows).flatMap((change): ProjectKeyed[] => {
@@ -379,6 +379,9 @@ export default class WorkbenchAppStateController {
       this.#repository.query(selectRows(appStateClientTables.lastProjectSelections)),
     );
     const questionnaireDrafts = changed(this.#repository.query(selectRows(appStateClientTables.questionnaireDrafts)));
+    // Mark tags carry no revision either; a put rewrites them and bumps their preference, so they ride along with it.
+    const globalPreferences = changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences)));
+    const logicalProjectPreferences = changed(this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences)));
     // Children carry no revision; a put rewrites them and bumps their draft, so only changed drafts' children ride along.
     type QuestionnaireOwner = { daemon_registration_id: string; project_id: string; thread_id: string; request_key: string };
     const ownerKey = (row: QuestionnaireOwner) => `${row.daemon_registration_id}\0${row.project_id}\0${row.thread_id}\0${row.request_key}`;
@@ -422,7 +425,10 @@ export default class WorkbenchAppStateController {
       fileDraftHistoryFrames: fileDraftOwners.flatMap(owner => this.#repository.query(selectRows(
         appStateClientTables.fileDraftHistoryFrames, owner))),
       fileDrafts,
-      globalPreferences: changed(this.#repository.query(selectRows(appStateClientTables.globalPreferences))),
+      globalMarkTags: globalPreferences.some(row => row.key === "markTags" && !row.deleted)
+        ? this.#repository.query(selectRows(appStateClientTables.globalMarkTags))
+        : [],
+      globalPreferences,
       modelPreferences: changed(this.#repository.query(selectRows(appStateClientTables.modelPreferences))),
       modelGroupDisclosures: changed(this.#repository.query(selectRows(appStateClientTables.modelGroupDisclosures))),
       lastLaunchTarget: changed(this.#repository.query(selectRows(appStateClientTables.lastLaunchTarget))),
@@ -430,7 +436,11 @@ export default class WorkbenchAppStateController {
         ? this.#repository.query(selectRows(appStateClientTables.lastProjectSelectionProjects))
         : [],
       lastProjectSelections,
-      logicalProjectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.logicalProjectPreferences))),
+      logicalProjectMarkTags: logicalProjectPreferences.filter(row => row.key === "markTags" && !row.deleted)
+        .flatMap(row => this.#repository.query(selectRows(appStateClientTables.logicalProjectMarkTags, {
+          where: { logical_project_id: row.logical_project_id },
+        }))),
+      logicalProjectPreferences,
       projectExpandedDirectories: changed(this.#repository.query(selectRows(appStateClientTables.projectExpandedDirectories))),
       projectPreferences: changed(this.#repository.query(selectRows(appStateClientTables.projectPreferences))),
       projectSidebarFolders: changed(this.#repository.query(selectRows(appStateClientTables.projectSidebarFolders))),
@@ -474,23 +484,40 @@ export default class WorkbenchAppStateController {
         return [upsertRow(appStateTables.modelGroupDisclosures, {
           group_id: record.groupId, open: Number(record.open) as 0 | 1, deleted: 0, revision,
         }, { conflictColumns: ["group_id"], updateColumns: ["open", "deleted", "revision"] })];
-      case "globalPreference":
-        return [upsertRow(appStateTables.globalPreferences, {
-          ...scalarColumns(record.preference),
-          deleted: 0,
-          key: record.preference.key,
-          revision,
-        }, { conflictColumns: ["key"], updateColumns: ["boolean_value", "integer_value", "text_value", "deleted", "revision"] })];
-      case "logicalProjectPreference":
-        return [upsertRow(appStateTables.logicalProjectPreferences, {
-          ...scalarColumns(record.preference),
-          deleted: 0,
-          enabled: Number(record.preference.enabled) as 0 | 1,
-          key: record.preference.key,
-          logical_project_id: record.logicalProjectId,
-          revision,
-        }, { conflictColumns: ["logical_project_id", "key"],
-          updateColumns: ["enabled", "boolean_value", "integer_value", "text_value", "deleted", "revision"] })];
+      case "globalPreference": {
+        const tags = record.preference.key === "markTags" ? record.preference.value : null;
+        return [
+          ...(tags ? [deleteRows(appStateTables.globalMarkTags, { owner_key: "markTags" })] : []),
+          upsertRow(appStateTables.globalPreferences, {
+            ...scalarColumns(record.preference),
+            deleted: 0,
+            key: record.preference.key,
+            revision,
+          }, { conflictColumns: ["key"], updateColumns: ["boolean_value", "integer_value", "text_value", "deleted", "revision"] }),
+          ...(tags ?? []).map((tag, position) => insertRow(appStateTables.globalMarkTags, {
+            color: tag.color, name: tag.name, owner_deleted: 0, owner_key: "markTags", position,
+          })),
+        ];
+      }
+      case "logicalProjectPreference": {
+        const tags = record.preference.key === "markTags" ? record.preference.value : null;
+        return [
+          ...(tags ? this.#deleteLogicalProjectMarkTags(record.logicalProjectId) : []),
+          upsertRow(appStateTables.logicalProjectPreferences, {
+            ...scalarColumns(record.preference),
+            deleted: 0,
+            enabled: Number(record.preference.enabled) as 0 | 1,
+            key: record.preference.key,
+            logical_project_id: record.logicalProjectId,
+            revision,
+          }, { conflictColumns: ["logical_project_id", "key"],
+            updateColumns: ["enabled", "boolean_value", "integer_value", "text_value", "deleted", "revision"] }),
+          ...(tags ?? []).map((tag, position) => insertRow(appStateTables.logicalProjectMarkTags, {
+            color: tag.color, logical_project_id: record.logicalProjectId, name: tag.name,
+            owner_deleted: 0, owner_key: "markTags", position,
+          })),
+        ];
+      }
       case "projectPreference":
         return [upsertRow(appStateTables.projectPreferences, {
           ...scalarColumns(record.preference),
@@ -609,13 +636,19 @@ export default class WorkbenchAppStateController {
           group_id: identity.groupId,
         })];
       case "globalPreference":
-        return [updateRows(appStateTables.globalPreferences, {
-          boolean_value: null, deleted: 1, integer_value: null, revision, text_value: null,
-        }, { key: identity.key })];
+        return [
+          ...(identity.key === "markTags" ? [deleteRows(appStateTables.globalMarkTags, { owner_key: "markTags" })] : []),
+          updateRows(appStateTables.globalPreferences, {
+            boolean_value: null, deleted: 1, integer_value: null, revision, text_value: null,
+          }, { key: identity.key }),
+        ];
       case "logicalProjectPreference":
-        return [updateRows(appStateTables.logicalProjectPreferences, {
-          boolean_value: null, deleted: 1, enabled: null, integer_value: null, revision, text_value: null,
-        }, { key: identity.key, logical_project_id: identity.logicalProjectId })];
+        return [
+          ...(identity.key === "markTags" ? this.#deleteLogicalProjectMarkTags(identity.logicalProjectId) : []),
+          updateRows(appStateTables.logicalProjectPreferences, {
+            boolean_value: null, deleted: 1, enabled: null, integer_value: null, revision, text_value: null,
+          }, { key: identity.key, logical_project_id: identity.logicalProjectId }),
+        ];
       case "lastLaunchTarget":
         return [updateRows(appStateTables.lastLaunchTarget, { deleted: 1, project_id: "", revision }, { id: "singleton" })];
       case "lastProjectSelection":
@@ -668,6 +701,10 @@ export default class WorkbenchAppStateController {
           }),
         ];
     }
+  }
+
+  #deleteLogicalProjectMarkTags(logicalProjectId: string): WorkbenchDatabaseMutation[] {
+    return [deleteRows(appStateTables.logicalProjectMarkTags, { logical_project_id: logicalProjectId, owner_key: "markTags" })];
   }
 
   #deleteQuestionnaireChildren(identity: Extract<

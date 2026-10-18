@@ -1,18 +1,22 @@
 /*
  * Exports:
  * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, code blocks,
- *   tables, comments, the markdown source toggle and history, acting on the editor selection without taking it.
+ *   tables, comments, suggest-mode mark tags, the markdown source toggle and history, acting on the editor selection
+ *   without taking it.
  * - CommandTooltip: an editor command's label and this platform's keybind chip, for buttons outside the toolbar too.
  */
 "use client";
 
 import { useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import { describeKeybind, EDITOR_COMMANDS, shownKeybind, type EditorCommand } from "../../../workbench/editor/editor-commands";
+import type { MarkTag } from "workbench-shared/workbench/settings/mark-tags";
+import { describeKeybind, EDITOR_COMMANDS, markTagKeybind, shownKeybind, type EditorCommand } from "../../../workbench/editor/editor-commands";
+import { markTagColorValue } from "../../../workbench/editor/mark-tag-styles";
 import type { ReviewMode } from "../../../workbench/editor/WorkbenchSuggestionController";
 import type { EditorToolbarState } from "../../../workbench/WorkbenchEditorClient";
 import type { WorkbenchFilePanelClient } from "../../../workbench/WorkbenchFilePanelClient";
 import IconButton from "../../ui/IconButton";
 import Keybind, { isApplePlatform } from "../../ui/Keybind";
+import PressDragMenu from "../../ui/PressDragMenu";
 import RotatorButton, { type RotatorOption } from "../../ui/RotatorButton";
 import Tooltip from "../../ui/Tooltip";
 import {
@@ -30,6 +34,7 @@ import {
   MessageSquareTextIcon,
   SparklesIcon,
   SquareCodeIcon,
+  TagIcon,
   Redo2Icon,
   RemoveFormattingIcon,
   TableIcon,
@@ -42,8 +47,9 @@ const DISABLED_STATE: EditorToolbarState = {
   canEditSource: false,
   editable: false,
   inline: { bold: false, code: false, del: false, ins: false, italic: false },
+  markTag: null,
   reviewMode: "edit",
-  showGitMarkers: true,
+  showGitMarkers: false,
   source: false,
 };
 
@@ -107,14 +113,65 @@ function ToolbarDivider() {
   return <span aria-hidden="true" className="mx-1 h-5 w-px shrink-0 bg-fg/10" />;
 }
 
+/** Suggest mode's tag picker, for pointers and touch; each item shows the Alt shortcut that applies it. */
+function MarkTagMenu({ active, client, disabled, tags }: {
+  active: string | null;
+  client: WorkbenchFilePanelClient | null;
+  disabled: boolean;
+  tags: readonly MarkTag[];
+}) {
+  const apple = isApplePlatform();
+  const activeTag = tags.find(tag => tag.name === active);
+  return (
+    <span data-editor-command="mark-tag" className="flex shrink-0">
+      <PressDragMenu
+        label={active ? `Mark tag: ${active}` : "Mark tag"}
+        heading="Mark as"
+        disabled={disabled || !tags.length}
+        triggerAppearance="plain"
+        triggerClassName={`
+          size-8 justify-center rounded-lg text-fg/muted enabled:hover:(bg-fg/6 text-text)
+          ${active ? "bg-fg/8 text-text" : ""}
+        `}
+        items={tags.map((tag, position) => ({
+          id: tag.name,
+          checked: tag.name === active,
+          content: (
+            <span className="flex min-w-48 items-center gap-2.5">
+              <span aria-hidden="true" className="size-2.5 shrink-0 rounded-full" style={{ background: markTagColorValue(tag.color) }} />
+              <span className="min-w-0 flex-1 truncate">{tag.name}</span>
+              <span className="flex coarse-touch:hidden"><Keybind keys={describeKeybind(markTagKeybind(position), apple)} /></span>
+            </span>
+          ),
+        }))}
+        onSelect={name => client?.applyMarkTag(name)}
+      >
+        <span className="relative inline-flex">
+          <TagIcon size={16} />
+          {activeTag ? (
+            <span
+              aria-hidden="true"
+              className="absolute -right-0.5 -bottom-0.5 size-[0.42rem] rounded-full ring-2 ring-[var(--app-bg-solid)]"
+              style={{ background: markTagColorValue(activeTag.color) }}
+            />
+          ) : null}
+        </span>
+      </PressDragMenu>
+    </span>
+  );
+}
+
 export default function MarkdownEditorToolbar({
   className = "",
   client,
+  markTags = [],
   trailing,
 }: {
   /** Start and end padding live inside the scroller, so a toolbar spanning the screen never cuts controls off at its edges. */
   className?: string;
   client: WorkbenchFilePanelClient | null;
+  /** Tags suggest mode offers, in keybind order. */
+  markTags?: readonly MarkTag[];
   /** File actions shown at the toolbar's end. */
   trailing?: ReactNode;
 }) {
@@ -167,6 +224,9 @@ export default function MarkdownEditorToolbar({
         <span className="flex shrink-0 items-center gap-0.5" key={index}>
           <ToolbarDivider />
           {group.map(commandButton)}
+          {index === GROUPS.length - 1 && state.reviewMode === "suggest" && !state.source ? (
+            <MarkTagMenu active={state.markTag} client={client} disabled={!state.editable} tags={markTags} />
+          ) : null}
         </span>
       ))}
       <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">

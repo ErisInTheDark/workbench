@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - escapeMarkdownText: escape markdown control characters, review tag openers, strike runs and literal &nbsp; in plain text.
+ * - escapeMarkdownText: escape markdown control characters, review and mark tag openers, strike runs and literal &nbsp; in
+ *   plain text.
  * - isIntrawordUnderscore: detect underscore runs between word characters, which are literal rather than emphasis.
  */
 
@@ -12,7 +13,7 @@ export function escapeMarkdownText(value: string) {
     .replaceAll("`", "\\`")
     .replaceAll("[", "\\[")
     .replaceAll("]", "\\]")
-    .replace(/<(?=\/?(?:del|ins|mark)>|!--)/g, "\\<")
+    .replace(/<(?=\/?(?:del|ins|mark)>|!--|u data-mark="|\/u>)/g, "\\<")
     .replace(/~(?=~)|(?<=~)~/g, "\\~")
     .replace(/&(?=nbsp;)/g, "\\&");
 }

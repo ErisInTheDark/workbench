@@ -7,7 +7,7 @@
 import { formatCommentThread } from "../markdown/comment-markdown";
 import { escapeMarkdownText } from "../markdown/markdown-escape";
 import { DEFAULT_MARKDOWN_STYLE, type MarkdownStyle } from "../markdown/markdown-style";
-import { readThreadComments } from "../markdown/review-markup";
+import { escapeAttribute, readThreadComments, REVIEW_ATTRIBUTES } from "../markdown/review-markup";
 import {
     areInlineMarkListsEqual,
     areInlineMarksEqual,
@@ -29,7 +29,7 @@ interface OpenMark {
 }
 
 /** Marks whose markdown may run across the whitespace and threads between two equally marked words. */
-const GAP_SPANNING_MARKS = new Set<InlineMark["tag"]>(["strong", "em", "mark"]);
+const GAP_SPANNING_MARKS = new Set<InlineMark["tag"]>(["strong", "em", "mark", "u"]);
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
 
 function hasMark(marks: readonly InlineMark[], mark: InlineMark) {
@@ -153,7 +153,9 @@ function chooseDelimiter(
     case "ins":
       return { close: `</${mark.tag}>`, delimiter: `<${mark.tag}>` };
     case "a":
-      return { close: `](${mark.href ?? ""})`, delimiter: "[" };
+      return { close: `](${mark.href})`, delimiter: "[" };
+    case "u":
+      return { close: "</u>", delimiter: `<u ${REVIEW_ATTRIBUTES.markTag}="${escapeAttribute(mark.name)}">` };
     case "code":
       return { close: "", delimiter: "" };
     case "strong":

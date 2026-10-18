@@ -8,6 +8,7 @@
  * - WorkbenchTranscriptModeValue: transcript storage selection.
  * - WorkbenchGlobalPreference: typed global preference.
  * - WorkbenchProjectPreference: typed project override.
+ * - WorkbenchLogicalProjectPreference: typed logical-project override, including list-valued settings.
  * - WorkbenchSidebarPreference: typed sidebar preference.
  * - WorkbenchFileDraftValue: recoverable file edits.
  * - WorkbenchFileDraftHistory/WorkbenchFileDraftHistoryFrame: persisted undo history of one file draft.
@@ -40,6 +41,12 @@ import type { SelectRow } from "../database/schema/schema-definition.ts";
 import { z } from "zod";
 import { GitPeerSyncModeSchema, type GitPeerSyncMode } from "../workbench/git/git-peer-contracts";
 import { USER_NAME_MAX_LENGTH } from "../workbench/settings/workbench-setting-definitions.ts";
+import {
+  MARK_TAG_COLORS,
+  MARK_TAG_LIMIT,
+  MARK_TAG_NAME_MAX_LENGTH,
+  type MarkTag,
+} from "../workbench/settings/mark-tags.ts";
 import { WorkbenchProjectAliasSchema } from "../workbench/project/project-state.ts";
 import { DaemonIdSchema, LogicalProjectIdSchema, type LogicalProjectId } from "../workbench/identity.ts";
 import { ProviderKeySchema } from "../workbench/provider/provider-key.ts";
@@ -105,7 +112,8 @@ export type WorkbenchGlobalPreference =
   | { key: "harness"; value: WorkbenchHarnessValue }
   | { key: "theme"; value: WorkbenchThemeValue }
   | { key: "transcriptProjectionMode"; value: WorkbenchTranscriptModeValue }
-  | { key: "userName"; value: string };
+  | { key: "userName"; value: string }
+  | { key: "markTags"; value: readonly MarkTag[] };
 
 export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "composerSpellCheck" | "editorSpellCheck" | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails"; value: boolean }
@@ -117,6 +125,11 @@ export type WorkbenchProjectPreference =
   | { enabled: boolean; key: "gitPeerSyncMode"; value: GitPeerSyncMode }
   | { enabled: boolean; key: "theme"; value: WorkbenchThemeValue }
   | { enabled: boolean; key: "userName"; value: string };
+
+/** Logical projects also override list-valued settings, which the older daemon-scoped project rows never stored. */
+export type WorkbenchLogicalProjectPreference =
+  | WorkbenchProjectPreference
+  | { enabled: boolean; key: "markTags"; value: readonly MarkTag[] };
 
 export type WorkbenchSidebarPreference =
   | { key: "projectTimeGroupCount" | "settledThreadItemLimit"; value: number }
@@ -182,7 +195,7 @@ export type WorkbenchClientStateRecord =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string; favourite: boolean }
   | { kind: "modelGroupDisclosure"; groupId: string; open: boolean }
   | { kind: "globalPreference"; preference: WorkbenchGlobalPreference }
-  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; preference: WorkbenchProjectPreference }
+  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; preference: WorkbenchLogicalProjectPreference }
   | (ProjectScoped & { kind: "projectPreference"; preference: WorkbenchProjectPreference })
   | (ProjectScoped & { kind: "sidebarPreference"; preference: WorkbenchSidebarPreference })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
@@ -197,7 +210,7 @@ export type WorkbenchClientStateIdentity =
   | { kind: "modelPreference"; harness: WorkbenchHarnessValue; modelId: string }
   | { kind: "modelGroupDisclosure"; groupId: string }
   | { kind: "globalPreference"; key: WorkbenchGlobalPreference["key"] }
-  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; key: WorkbenchProjectPreference["key"] }
+  | { kind: "logicalProjectPreference"; logicalProjectId: LogicalProjectId; key: WorkbenchLogicalProjectPreference["key"] }
   | (ProjectScoped & { key: WorkbenchProjectPreference["key"]; kind: "projectPreference" })
   | (ProjectScoped & { key: WorkbenchSidebarPreference["key"]; kind: "sidebarPreference" })
   | (ProjectScoped & { folderId: string; kind: "sidebarFolder"; scope: "pinned" | "thread" })
@@ -257,6 +270,11 @@ const preferenceBoolean = z.object({
 const ViewableFileOpenSchema = z.enum(["vscode", "workbench"]);
 const OtherFileOpenSchema = z.enum(["none", "vscode"]);
 const UserNameSchema = z.string().max(USER_NAME_MAX_LENGTH);
+const MarkTagsSchema = z.array(z.object({
+  color: z.enum(MARK_TAG_COLORS),
+  name: z.string().trim().min(1).max(MARK_TAG_NAME_MAX_LENGTH),
+}).strict()).max(MARK_TAG_LIMIT)
+  .refine(tags => new Set(tags.map(tag => tag.name)).size === tags.length, "Mark tag names must be unique.");
 const GlobalPreferenceSchema = z.union([
   preferenceBoolean,
   z.object({ key: z.literal("editorFontFamily"), value: z.enum(["mono", "sans", "serif"]) }),
@@ -269,6 +287,7 @@ const GlobalPreferenceSchema = z.union([
   z.object({ key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
   z.object({ key: z.literal("transcriptProjectionMode"), value: z.enum(["compare", "json", "sqlite"]) }),
   z.object({ key: z.literal("userName"), value: UserNameSchema }),
+  z.object({ key: z.literal("markTags"), value: MarkTagsSchema }),
 ]);
 const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.enum([
@@ -282,6 +301,10 @@ const ProjectPreferenceSchema = z.union([
   z.object({ enabled: z.boolean(), key: z.literal("gitPeerSyncMode"), value: GitPeerSyncModeSchema }),
   z.object({ enabled: z.boolean(), key: z.literal("theme"), value: z.enum(["default", "magical-girl", "winter"]) }),
   z.object({ enabled: z.boolean(), key: z.literal("userName"), value: UserNameSchema }),
+]);
+const LogicalProjectPreferenceSchema = z.union([
+  ProjectPreferenceSchema,
+  z.object({ enabled: z.boolean(), key: z.literal("markTags"), value: MarkTagsSchema }),
 ]);
 const SidebarPreferenceSchema = z.union([
   z.object({ key: z.enum(["projectTimeGroupCount", "settledThreadItemLimit"]), value: z.number() }),
@@ -297,6 +320,9 @@ const projectPreferenceKeys = [
   "threadCodeDetails", "editorFontFamily", "editorFontSize", "fileOpenBehavior",
   "theme", "gitPeerSyncMode", "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName",
 ] as const satisfies readonly WorkbenchProjectPreference["key"][];
+const logicalProjectPreferenceKeys = [
+  ...projectPreferenceKeys, "markTags",
+] as const satisfies readonly WorkbenchLogicalProjectPreference["key"][];
 const attachment = z.object({ id: address, url: z.string() });
 
 export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
@@ -305,7 +331,7 @@ export const WorkbenchClientStateRecordSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("modelGroupDisclosure"), groupId: z.string().min(1).max(600), open: z.boolean() }),
   z.object({ kind: z.literal("globalPreference"), preference: GlobalPreferenceSchema }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
-    preference: ProjectPreferenceSchema }),
+    preference: LogicalProjectPreferenceSchema }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     preference: ProjectPreferenceSchema }),
   z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,
@@ -356,10 +382,10 @@ export const WorkbenchClientStateIdentitySchema = z.discriminatedUnion("kind", [
     "threadCodeBlockWrap", "threadCodeDetails", "threadGitArcProposalsOpen", "threadVisOpen", "voiceInputEnabled",
     "editorFontFamily", "appPort", "editorFontSize", "projectTimeGroupCount", "fileOpenBehavior",
     "harness", "theme", "transcriptProjectionMode", "gitPeerSyncMode",
-    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName",
+    "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "userName", "markTags",
   ]) }),
   z.object({ kind: z.literal("logicalProjectPreference"), logicalProjectId: LogicalProjectIdSchema,
-    key: z.enum(projectPreferenceKeys) }),
+    key: z.enum(logicalProjectPreferenceKeys) }),
   z.object({ kind: z.literal("projectPreference"), ...projectAddress,
     key: z.enum(projectPreferenceKeys) }),
   z.object({ kind: z.literal("sidebarPreference"), ...projectAddress,

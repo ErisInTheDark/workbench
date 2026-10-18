@@ -69,6 +69,33 @@
     background-color: color-mix(in srgb, var(--attention) 12%, transparent);
   }
 
+  /* Mark tag palette; each tag's colour is chosen in settings and applied per editor by `mark-tag-styles`. */
+  :root {
+    --mark-tag-red: light-dark(#dc2626, #f87171);
+    --mark-tag-orange: light-dark(#ea580c, #fb923c);
+    --mark-tag-yellow: light-dark(#ca8a04, #facc15);
+    --mark-tag-green: light-dark(#16a34a, #4ade80);
+    --mark-tag-teal: light-dark(#0d9488, #2dd4bf);
+    --mark-tag-blue: light-dark(#2563eb, #60a5fa);
+    --mark-tag-purple: light-dark(#9333ea, #c084fc);
+    --mark-tag-pink: light-dark(#db2777, #f472b6);
+    /* A white line vanishes on light pages, so there it is drawn in soft ink instead. */
+    --mark-tag-white: light-dark(color-mix(in srgb, var(--text) 62%, transparent), #f8fafc);
+  }
+
+  /* Tags this view has no colour for, such as ones another project defines, stay a quiet dotted line. */
+  u[data-mark] {
+    --mark-tag-line: var(--mark-tag-color, color-mix(in srgb, var(--text) 45%, transparent));
+    text-decoration: underline dotted var(--mark-tag-line) 1.5px;
+    text-underline-offset: 0.24em;
+    border-radius: 0.15em;
+    transition: background-color 120ms ease-out;
+  }
+
+  u[data-mark]:hover {
+    background-color: color-mix(in srgb, var(--mark-tag-line) 12%, transparent);
+  }
+
   /* In-page search matches, painted the same way so rendered markdown keeps its DOM. */
   ::highlight(search-match) {
     background-color: color-mix(in srgb, var(--attention) 30%, transparent);

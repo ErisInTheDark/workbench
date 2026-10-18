@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - REVIEW_ATTRIBUTES: editor DOM attributes carrying comments, suggestions and preserved markdown source.
+ * - REVIEW_ATTRIBUTES: editor DOM attributes carrying comments, suggestions, mark tags and preserved markdown source.
  * - CommentThreadKind: inline threads sit in text; block threads sit between blocks as their own lines.
  * - escapeAttribute: escape text for a double-quoted HTML attribute.
  * - isCommentThreadElement / getCommentThreadKind: whether a node is a comment thread atom, and which kind.
@@ -17,6 +17,8 @@ import type { MarkdownComment } from "./comment-markdown";
 export const REVIEW_ATTRIBUTES = {
   comments: "data-comments",
   commentThread: "data-comment-thread",
+  /** Names the mark tag a `u` element carries. */
+  markTag: "data-mark",
   source: "data-md-source",
   sourceTight: "data-md-tight",
   suggestion: "data-suggestion",

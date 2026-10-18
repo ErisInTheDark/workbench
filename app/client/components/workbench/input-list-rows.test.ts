@@ -36,6 +36,24 @@ test("pairs count as filled when either side has text, keeping multiline values 
   assert.deepEqual(InputListRows.populated(rows).map(row => [row.key, row.value]), [["KEY", "line one\nline two\n"], ["", "orphan value"]]);
 });
 
+test("moving reorders filled rows with their extra fields, keeping the blank last", () => {
+  const rows = InputListRows.create<{ color: string }>([
+    { id: "a", value: "first", color: "red" }, { id: "b", value: "second" }, { id: "c", value: "third", color: "blue" },
+  ]);
+  const moved = InputListRows.move(rows, "c", 0);
+  assert.deepEqual(values(moved), ["third", "first", "second", ""]);
+  assert.equal(moved[0]!.color, "blue");
+  assert.deepEqual(values(InputListRows.move(moved, "c", 99)), ["first", "second", "third", ""], "targets clamp before the blank");
+});
+
+test("a full limited list offers no blank row until a row is removed or emptied", () => {
+  let rows = InputListRows.create([{ id: "a", value: "one" }], 2);
+  rows = InputListRows.edit(rows, rows[1]!.id, { value: "two" }, 2);
+  assert.deepEqual(values(rows), ["one", "two"]);
+  assert.deepEqual(values(InputListRows.remove(rows, "a", 2)), ["two", ""]);
+  assert.deepEqual(values(InputListRows.settle(InputListRows.edit(rows, "a", { value: "" }, 2), 2)), ["two", ""]);
+});
+
 test("typing in one field is one undo step, structural changes are their own steps, and redo restores", () => {
   const { history } = InputListRows;
   const start = InputListRows.create([{ id: "a", value: "x" }]);

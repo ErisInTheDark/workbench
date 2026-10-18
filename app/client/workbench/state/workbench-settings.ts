@@ -52,6 +52,8 @@ import {
   USER_NAME_MAX_LENGTH,
 } from "workbench-shared/workbench/settings/workbench-setting-definitions";
 
+import { DEFAULT_MARK_TAGS, MarkTag } from "workbench-shared/workbench/settings/mark-tags";
+
 import WorkbenchClientStateController from "./WorkbenchClientStateController";
 
 export {
@@ -149,6 +151,11 @@ function normalizeUserName(value: unknown) {
   return typeof value === "string" ? value.replace(/\s+/gu, " ").trim().slice(0, USER_NAME_MAX_LENGTH) : "";
 }
 
+/** An unwritten list keeps the defaults; a written one, even empty, is the user's. */
+function normalizeMarkTags(value: unknown): readonly MarkTag[] {
+  return value === undefined ? DEFAULT_MARK_TAGS : MarkTag.normalizeList(value);
+}
+
 function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettings {
   const candidate = isRecord(value) ? value : {};
   const legacy = legacyFileOpenPolicy(candidate.fileOpenBehavior);
@@ -157,6 +164,7 @@ function normalizeGlobalWorkbenchSettings(value: unknown): WorkbenchGlobalSettin
     editorFontFamily: normalizeEditorFontFamily(candidate.editorFontFamily),
     editorFontSize: clampEditorFontSize(candidate.editorFontSize),
     editorSpellCheck: typeof candidate.editorSpellCheck === "boolean" ? candidate.editorSpellCheck : false,
+    markTags: normalizeMarkTags(candidate.markTags),
     openMarkdownFilesWith: normalizeViewableFileOpen(candidate.openMarkdownFilesWith ?? legacy?.openMarkdownFilesWith),
     openOtherFilesWith: normalizeOtherFileOpen(candidate.openOtherFilesWith ?? legacy?.openOtherFilesWith),
     openSvgFilesWith: normalizeViewableFileOpen(candidate.openSvgFilesWith ?? legacy?.openSvgFilesWith),
@@ -193,6 +201,8 @@ function normalizeProjectOverride<K extends WorkbenchSettingKey>(
       return { enabled, value: clampEditorFontSize(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "userName":
       return { enabled, value: normalizeUserName(candidate.value) } as WorkbenchProjectSettingOverride<K>;
+    case "markTags":
+      return { enabled, value: normalizeMarkTags(candidate.value) } as WorkbenchProjectSettingOverride<K>;
     case "editorSpellCheck":
     case "composerSpellCheck":
     case "showUnopenableFiles":
@@ -211,6 +221,7 @@ export function createDefaultGlobalWorkbenchSettings(): WorkbenchGlobalSettings 
     editorFontFamily: "sans",
     editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
     editorSpellCheck: false,
+    markTags: DEFAULT_MARK_TAGS,
     openMarkdownFilesWith: "workbench",
     openOtherFilesWith: "vscode",
     openSvgFilesWith: "workbench",
@@ -230,6 +241,7 @@ export function createDefaultProjectWorkbenchSettings(): WorkbenchProjectSetting
     editorFontFamily: { enabled: false, value: globalDefaults.editorFontFamily },
     editorFontSize: { enabled: false, value: globalDefaults.editorFontSize },
     editorSpellCheck: { enabled: false, value: globalDefaults.editorSpellCheck },
+    markTags: { enabled: false, value: globalDefaults.markTags },
     openMarkdownFilesWith: { enabled: false, value: globalDefaults.openMarkdownFilesWith },
     openOtherFilesWith: { enabled: false, value: globalDefaults.openOtherFilesWith },
     openSvgFilesWith: { enabled: false, value: globalDefaults.openSvgFilesWith },
@@ -368,6 +380,7 @@ function normalizePreferenceOverrides(candidate: Record<string, unknown>): Workb
     editorFontFamily: normalizeProjectOverride("editorFontFamily", candidate.editorFontFamily),
     editorFontSize: normalizeProjectOverride("editorFontSize", candidate.editorFontSize),
     editorSpellCheck: normalizeProjectOverride("editorSpellCheck", candidate.editorSpellCheck),
+    markTags: normalizeProjectOverride("markTags", candidate.markTags),
     openMarkdownFilesWith: fileOpenOverride("openMarkdownFilesWith"),
     openOtherFilesWith: fileOpenOverride("openOtherFilesWith"),
     openSvgFilesWith: fileOpenOverride("openSvgFilesWith"),
@@ -395,7 +408,8 @@ export function readProjectWorkbenchSettings(
   return normalizePreferenceOverrides(candidate);
 }
 
-export async function writeProjectWorkbenchSetting<K extends WorkbenchSettingKey>(
+/** Daemon-scoped project rows predate list-valued settings, which only logical projects override. */
+export async function writeProjectWorkbenchSetting<K extends Exclude<WorkbenchSettingKey, "markTags">>(
   controller: WorkbenchClientStateController,
   projectId: string,
   key: K,
@@ -524,6 +538,7 @@ export function resolveWorkbenchSettings(
     editorFontFamily: projectSettings.editorFontFamily.enabled ? projectSettings.editorFontFamily.value : globalSettings.editorFontFamily,
     editorFontSize: projectSettings.editorFontSize.enabled ? projectSettings.editorFontSize.value : globalSettings.editorFontSize,
     editorSpellCheck: projectSettings.editorSpellCheck.enabled ? projectSettings.editorSpellCheck.value : globalSettings.editorSpellCheck,
+    markTags: projectSettings.markTags.enabled ? projectSettings.markTags.value : globalSettings.markTags,
     openMarkdownFilesWith: projectSettings.openMarkdownFilesWith.enabled ? projectSettings.openMarkdownFilesWith.value : globalSettings.openMarkdownFilesWith,
     openOtherFilesWith: projectSettings.openOtherFilesWith.enabled ? projectSettings.openOtherFilesWith.value : globalSettings.openOtherFilesWith,
     openSvgFilesWith: projectSettings.openSvgFilesWith.enabled ? projectSettings.openSvgFilesWith.value : globalSettings.openSvgFilesWith,

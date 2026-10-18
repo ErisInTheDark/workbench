@@ -15,9 +15,12 @@ import FlushInput from "../ui/FlushInput";
 import IconButton from "../ui/IconButton";
 import OptionCards, { OptionCard } from "../ui/OptionCards";
 import StepSlider from "../ui/StepSlider";
+import MarkTagSettings from "./MarkTagSettings";
 import { useSettings } from "./use-settings";
 
 const sizeSteps = [0.9, 1, 1.08, 1.18, 1.32, 1.48].map((value, index) => ({ label: String(index + 1), value }));
+
+type ScalarSettingValue = Exclude<WorkbenchGlobalSettings[WorkbenchSettingKey], readonly unknown[]>;
 
 export default function WorkbenchSettingsPreferences({
   keys,
@@ -38,7 +41,9 @@ export default function WorkbenchSettingsPreferences({
     const resetButton = settings.overridden(key) ? <IconButton
       type="button" display="hover-border" label={`Reset ${definition.label} to global`}
       title={`Reset ${definition.label} to global`}
-      className="absolute right-2 top-1/2 -translate-y-1/2 lg:-right-12"
+      className={definition.type === "markTags"
+        ? "absolute right-2 top-3 lg:-right-12"
+        : "absolute right-2 top-1/2 -translate-y-1/2 lg:-right-12"}
       disabled={unavailable}
       onClick={() => { void settings.reset(key).catch(report); }}
     ><ResetIcon size={18} /></IconButton> : null;
@@ -60,13 +65,18 @@ export default function WorkbenchSettingsPreferences({
           maxLength={definition.maxLength} disabled={unavailable}
           className="w-full max-w-sm rounded-[0.6rem] bg-fg/5 px-3 py-1.5 text-sm text-text focus:bg-fg/8 disabled:opacity-50"
           onCommit={next => { void settings.set(key, next as never).catch(report); }} />
+        : definition.type === "markTags" && Array.isArray(value)
+        ? <div className="max-w-lg">
+          <MarkTagSettings label="Mark tag" value={value} disabled={unavailable}
+            onChange={next => { void settings.set(key, next as never).catch(report); }} />
+        </div>
         : key === "editorFontSize"
         ? <StepSlider ariaLabel={definition.label} disabled={unavailable}
           value={typeof value === "number" ? value : 1.08} steps={sizeSteps}
           onChange={next => { void settings.set(key, next as never).catch(report); }} />
-        : definition.options ? <OptionCards<WorkbenchGlobalSettings[WorkbenchSettingKey]>
+        : definition.options && typeof value !== "object" ? <OptionCards<ScalarSettingValue>
           ariaLabel={definition.label} columns={definition.columns ?? "one"} disabled={unavailable}
-          mode="radio" options={definition.options} value={value}
+          mode="radio" options={definition.options as Array<{ description: string; label: string; value: ScalarSettingValue }>} value={value}
           onChange={next => { void settings.set(key, next as never).catch(report); }} /> : null}
       {resetButton}
       {unavailable ? <p className="text-xs text-fg/muted">Available after the app database is reloaded.</p> : null}

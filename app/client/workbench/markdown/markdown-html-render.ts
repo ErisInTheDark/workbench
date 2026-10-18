@@ -37,8 +37,7 @@ import {
     escapeAttribute,
     nextSuggestionId,
 } from "./review-markup";
-import { CODE_LINE_SENTINEL } from "../dom/mutation/code-block-dom";
-import { TABLE_ALIGN_ATTRIBUTE } from "../dom/mutation/table-dom";
+import { CODE_LINE_SENTINEL } from "../dom/mutation/code-block-dom";import { TABLE_ALIGN_ATTRIBUTE } from "../dom/mutation/table-dom";
 
 const escapeHtml = escapeAttribute;
 
@@ -109,6 +108,9 @@ function renderInlineHtml(nodes: ParsedInlineNode[]) {
         break;
       case "mark":
         html += `<mark>${renderInlineHtml(node.children)}</mark>`;
+        break;
+      case "markTag":
+        html += `<u ${REVIEW_ATTRIBUTES.markTag}="${escapeHtml(node.name)}" title="${escapeHtml(node.name)}">${renderInlineHtml(node.children)}</u>`;
         break;
       case "code":
         html += `<code>${escapeHtml(node.text)}</code>`;

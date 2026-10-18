@@ -5,8 +5,11 @@
  * - EDITOR_COMMANDS: label and keybinds of each command.
  * - shownKeybind: the keybind a command's chip shows on this platform (Ctrl+Y redo elsewhere, ⌘⇧Z on Apple).
  * - matchEditorCommand: the command a keydown triggers, if any.
+ * - markTagKeybind / matchMarkTagPosition: the Alt+digit chord of a mark tag list position, and the position a keydown selects.
  * - describeKeybind: the key labels of a chord, for keybind chips.
  */
+
+import { MARK_TAG_LIMIT, MarkTag } from "workbench-shared/workbench/settings/mark-tags";
 
 export type EditorCommand =
   | "bold"
@@ -43,7 +46,7 @@ export interface EditorKeybind {
   code?: string;
   /** Matched against the lowercased `KeyboardEvent.key`. */
   key?: string;
-  mod: true;
+  mod?: boolean;
   shift?: boolean;
 }
 
@@ -90,9 +93,25 @@ export function shownKeybind(command: EditorCommand, apple: boolean) {
 }
 
 function matchesKeybind(event: KeyboardEvent, keybind: EditorKeybind) {
-  if (!(event.ctrlKey || event.metaKey)) return false;
+  if (Boolean(keybind.mod) !== (event.ctrlKey || event.metaKey)) return false;
   if (Boolean(keybind.shift) !== event.shiftKey || Boolean(keybind.alt) !== event.altKey) return false;
   return keybind.code ? event.code === keybind.code : event.key.toLowerCase() === keybind.key;
+}
+
+/**
+ * The chord applying the mark tag at a list position: Alt with its digit, matched by `code` because Option+digit types
+ * a symbol on Apple layouts. Ctrl+digit belongs to the browser's tab switching.
+ */
+export function markTagKeybind(position: number): EditorKeybind {
+  return { alt: true, code: `Digit${MarkTag.keyDigit(position)}` };
+}
+
+/** The mark tag list position a keydown selects, if any. */
+export function matchMarkTagPosition(event: KeyboardEvent): number | null {
+  for (let position = 0; position < MARK_TAG_LIMIT; position += 1) {
+    if (matchesKeybind(event, markTagKeybind(position))) return position;
+  }
+  return null;
 }
 
 export function matchEditorCommand(event: KeyboardEvent): EditorCommand | null {
@@ -109,7 +128,7 @@ const CODE_LABELS: Record<string, string> = {
 };
 
 export function describeKeybind(keybind: EditorKeybind, apple: boolean) {
-  const keys: string[] = [apple ? "⌘" : "Ctrl"];
+  const keys: string[] = keybind.mod ? [apple ? "⌘" : "Ctrl"] : [];
   if (keybind.alt) keys.push(apple ? "⌥" : "Alt");
   if (keybind.shift) keys.push(apple ? "⇧" : "Shift");
   const key = keybind.code

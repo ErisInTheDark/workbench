@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchProjectPreferenceSettings: "Editing & files" defaults plus one disclosure per project that overrides them.
+ * - default WorkbenchProjectPreferenceSettings: "Editing & files" defaults (including mark tags) plus one disclosure per
+ *   project that overrides them.
  */
 "use client";
 
@@ -18,7 +19,7 @@ import { PlusIcon } from "./workbench-icons";
 
 const PROJECT_SETTING_KEYS = [
   "userName", "editorFontFamily", "editorSpellCheck", "composerSpellCheck",
-  "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "showUnopenableFiles",
+  "openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith", "showUnopenableFiles", "markTags",
 ] as const satisfies readonly WorkbenchSettingKey[];
 
 type Project = { id: LogicalProjectId; label: string; iconProject: WorkbenchLogicalProject };
@@ -28,6 +29,7 @@ function PreferenceSet({ projectId, onError }: { projectId: LogicalProjectId | n
     <WorkbenchSettingsPreferences keys={["userName"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsRadioTable keys={["editorFontFamily"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsPreferences keys={["editorSpellCheck", "composerSpellCheck"]} logicalProjectId={projectId} onError={onError} />
+    <WorkbenchSettingsPreferences keys={["markTags"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsRadioTable title="Open files with" description="Where file links and explorer clicks open, by file type."
       keys={["openMarkdownFilesWith", "openSvgFilesWith", "openOtherFilesWith"]} logicalProjectId={projectId} onError={onError} />
     <WorkbenchSettingsPreferences keys={["showUnopenableFiles"]} logicalProjectId={projectId} onError={onError} />

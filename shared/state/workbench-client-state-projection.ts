@@ -11,6 +11,7 @@ import type {
   WorkbenchFileDraftHistory,
   WorkbenchFileDraftHistoryFrame,
   WorkbenchGlobalPreference,
+  WorkbenchLogicalProjectPreference,
   WorkbenchProjectPreference,
   WorkbenchSidebarPreference,
 } from "./workbench-client-state.ts";
@@ -88,12 +89,16 @@ export function projectWorkbenchClientStateRows(
       kind: "modelGroupDisclosure", groupId: row.group_id, open: row.open === 1,
     });
   }
+  const byPosition = <Row extends { position: number }>(left: Row, right: Row) => left.position - right.position;
+  const globalMarkTags = [...rows.globalMarkTags].sort(byPosition).map(({ color, name }) => ({ color, name }));
   for (const row of rows.globalPreferences) {
     const identity = { key: row.key, kind: "globalPreference" as const };
     if (row.deleted) remove(row.revision, identity);
     else add(row.revision, 0, {
       kind: "globalPreference",
-      preference: { key: row.key, value: scalarValue(row) } as WorkbenchGlobalPreference,
+      preference: row.key === "markTags"
+        ? { key: row.key, value: globalMarkTags }
+        : { key: row.key, value: scalarValue(row) } as WorkbenchGlobalPreference,
     });
   }
   for (const row of rows.projectPreferences) {
@@ -127,7 +132,13 @@ export function projectWorkbenchClientStateRows(
     else add(row.revision, 0, {
       kind: "logicalProjectPreference",
       logicalProjectId,
-      preference: { enabled: row.enabled === 1, key: row.key, value: scalarValue(row) } as WorkbenchProjectPreference,
+      preference: row.key === "markTags"
+        ? {
+          enabled: row.enabled === 1, key: row.key,
+          value: rows.logicalProjectMarkTags.filter(tag => tag.logical_project_id === row.logical_project_id)
+            .sort(byPosition).map(({ color, name }) => ({ color, name })),
+        }
+        : { enabled: row.enabled === 1, key: row.key, value: scalarValue(row) } as WorkbenchLogicalProjectPreference,
     });
   }
   for (const row of rows.projectSidebarPreferences) {

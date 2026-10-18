@@ -15,6 +15,7 @@
  */
 import type { GitPeerSyncMode } from "../git/git-peer-contracts";
 import type { WorkbenchFileKind } from "../project/tree-utils";
+import type { MarkTag } from "./mark-tags";
 
 export type WorkbenchTheme = "default" | "magical-girl" | "winter";
 export type WorkbenchEditorFontFamily = "sans" | "serif" | "mono";
@@ -24,7 +25,7 @@ export type WorkbenchFileOpenSettingKey = "openMarkdownFilesWith" | "openSvgFile
 export type WorkbenchSettingKey =
   | "theme" | "editorFontFamily" | "editorSpellCheck" | "composerSpellCheck"
   | "editorFontSize" | WorkbenchFileOpenSettingKey | "gitPeerSyncMode"
-  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName";
+  | "showUnopenableFiles" | "threadCodeBlockWrap" | "threadCodeDetails" | "userName" | "markTags";
 
 export const WORKBENCH_FILE_OPEN_SETTING_KEYS = {
   markdown: "openMarkdownFilesWith",
@@ -41,6 +42,8 @@ export interface WorkbenchGlobalSettings {
   openOtherFilesWith: WorkbenchOtherFileOpenDestination;
   openSvgFilesWith: WorkbenchViewableFileOpenDestination;
   gitPeerSyncMode: GitPeerSyncMode;
+  /** Suggest-mode tags in keybind order: position 0 is Alt+1, position 9 is Alt+0. */
+  markTags: readonly MarkTag[];
   showUnopenableFiles: boolean;
   theme: WorkbenchTheme;
   threadCodeBlockWrap: boolean;
@@ -63,7 +66,7 @@ export type WorkbenchSettingDefinition<K extends WorkbenchSettingKey = Workbench
   options?: Array<{ description: string; label: string; value: WorkbenchGlobalSettings[K] }>;
   /** Shown by an empty text control. */
   placeholder?: string;
-  type: "boolean" | "number" | "select" | "text";
+  type: "boolean" | "markTags" | "number" | "select" | "text";
 };
 
 export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: WorkbenchSettingDefinition<K> } = {
@@ -85,6 +88,10 @@ export const WORKBENCH_SETTING_DEFINITIONS: { [K in WorkbenchSettingKey]: Workbe
     ],
   },
   editorFontSize: { description: "Controls editor and thread text scale.", key: "editorFontSize", label: "Text size", type: "number" },
+  markTags: {
+    description: "Tags that underline words in suggest mode. Each one's number is its Alt shortcut; drag to reorder.",
+    key: "markTags", label: "Mark tags", type: "markTags",
+  },
   openMarkdownFilesWith: {
     description: "Rich text editor.", key: "openMarkdownFilesWith", label: "Markdown", type: "select",
     options: [
