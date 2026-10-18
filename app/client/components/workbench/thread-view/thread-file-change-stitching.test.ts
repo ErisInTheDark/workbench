@@ -8,14 +8,16 @@ import { stitchFileOperationRows } from "./thread-file-change-stitching";
 
 type Status = "completed" | "failed" | "inProgress";
 
-function edit(id: string, path: string, status: Status = "completed"): NativeFileOperationItem {
+function edit(id: string, path: string, status: Status = "completed", { tool = "Edit", unclaimed = false } = {}): NativeFileOperationItem {
   return {
-    id, type: "dynamicToolCall", namespace: "claude", tool: "Edit",
+    id, type: "dynamicToolCall", namespace: "claude", tool,
     arguments: { file_path: path }, status, success: status === "failed" ? false : status === "completed" ? true : null,
     contentItems: null, durationMs: null,
-    metadata: { fileChange: { kind: "update", diff: "@@ -1,1 +1,1 @@\n-a\n+b" } },
+    metadata: { fileChange: { kind: "update", diff: "@@ -1,1 +1,1 @@\n-a\n+b" }, ...(unclaimed ? { workbenchFailureKind: "unclaimed" } : {}) },
   };
 }
+
+const unclaimed = (id: string, status: Status = "failed") => edit(id, "a.ts", status, { unclaimed: true });
 
 function rows(items: Parameters<typeof stitchFileOperationRows>[0]) {
   return stitchFileOperationRows(items).map(group => group.kind === "native"
@@ -33,8 +35,23 @@ test("any different row between edits breaks the run", () => {
   assert.deepEqual(rows([edit("1", "a.ts"), codex, edit("2", "a.ts")]), [["1"], ["codex"], ["2"]]);
 });
 
-test("failed edits stay standalone and never absorb or join a run", () => {
+test("failed edits never absorb or join an applied run", () => {
   assert.deepEqual(rows([edit("1", "a.ts"), edit("2", "a.ts", "failed"), edit("3", "a.ts")]), [["1"], ["2"], ["3"]]);
+});
+
+test("back-to-back identical failures on one file merge into one row", () => {
+  assert.deepEqual(rows([unclaimed("1"), unclaimed("2"), unclaimed("3")]), [["1+2+3"]]);
+});
+
+test("different failures, targets, or operations keep separate rows", () => {
+  assert.deepEqual(rows([unclaimed("1"), edit("2", "a.ts", "failed")]), [["1"], ["2"]]);
+  assert.deepEqual(rows([unclaimed("1"), edit("2", "b.ts", "failed", { unclaimed: true })]), [["1"], ["2"]]);
+  assert.deepEqual(rows([unclaimed("1"), edit("2", "a.ts", "failed", { tool: "Write", unclaimed: true })]), [["1"], ["2"]]);
+});
+
+test("a live retry joins the failure run, and stays only if it fails the same way", () => {
+  assert.deepEqual(rows([unclaimed("1"), unclaimed("2"), unclaimed("3", "inProgress")]), [["1+2+3"]]);
+  assert.deepEqual(rows([unclaimed("1"), unclaimed("2"), edit("3", "a.ts")]), [["1+2"], ["3"]]);
 });
 
 test("deletes and moves stay standalone", () => {

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect live file-change count rows, terminal diff disclosure, unsuccessful outcomes, adjacent item order, and stitched native rows. */
+/* No production exports. Tests protect live file-change count rows, terminal diff disclosure, unsuccessful outcomes, adjacent item order, and stitched native applied and failure rows. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement, Fragment, type ComponentProps } from "react";
@@ -110,6 +110,21 @@ test("native edit details never expose the raw call, and failures keep their out
   const html = detailsHtml(failed);
   assert.match(html, /String to replace not found/);
   assert.doesNotMatch(html, /secret-old|old_string|Edit\(/);
+});
+
+test("merged failure rows count attempts, show each distinct failure output once, and calm while a retry runs", () => {
+  const first = claudeEdit("first", "", "failed");
+  const stale = { ...claudeEdit("stale", "", "failed"), contentItems: [{ type: "inputText" as const, text: "File modified since read" }] };
+  const row = stitchedRow(first, claudeEdit("again", "", "failed"), stale);
+  assert.equal(row.failedAttempts, 3);
+  assert.equal(row.danger, true);
+  const html = detailsHtml(row);
+  assert.equal((html.match(/String to replace not found/g) ?? []).length, 1);
+  assert.match(html, /File modified since read/);
+  const retrying = stitchedRow(first, claudeEdit("live", "", "inProgress"));
+  assert.equal(retrying.presentationLabel, "Editing");
+  assert.equal(retrying.danger, false);
+  assert.equal(retrying.detailsAvailable, true);
 });
 
 test("in-progress file changes stream count summaries without exposing partial diffs", () => {

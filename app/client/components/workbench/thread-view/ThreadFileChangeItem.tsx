@@ -1,12 +1,12 @@
 /*
  * Exports:
- * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back native edits of one file into one row.
+ * - default ThreadFileChangeItem: render adjacent native and canonical file operations with shared lifecycle rows, growing back-to-back native edits or identical failed attempts on one file into one row.
  * - ThreadFileChangeList: render reusable file-change rows from already-shaped file update changes, marking binary diffs without previews.
  * - ThreadFileChangePreviewList: render non-disclosure file-change previews with established row presentation.
  * - ThreadFileChangeTotals: render shared cumulative addition and deletion counts.
  * - ThreadFileChangeListChange: reusable file-change row input.
  * - getThreadFileChangeTotals: cumulative counts using the same precedence as file rows.
- * - getStitchedNativeRowChange: one row input from stitched native pieces, with accumulated counts and hunks and failure-only evidence.
+ * - getStitchedNativeRowChange: one row input from stitched native pieces: accumulated counts and hunks for applied runs, attempt count and latest attempt for failure runs, failure-only evidence.
  */
 "use client";
 
@@ -76,6 +76,7 @@ interface ParsedFileChange {
   detailsAvailable: boolean;
   diff: ParsedUnifiedDiff;
   displayPath: string;
+  failedAttempts: number;
   movePathDisplay: string | null;
   presentationLabel?: string;
   sourceChangeIndex: number;
@@ -91,6 +92,8 @@ export interface ThreadFileChangeListChange {
   /** Pre-parsed diff, used when one row presents several changes; otherwise parsed from `change`. */
   diff?: ParsedUnifiedDiff;
   detailsAvailable?: boolean;
+  /** Failed attempts merged into this row; more than one shows a repeat count. */
+  failedAttempts?: number;
   showDiff?: boolean;
   presentationLabel?: string;
   sourceChangeIndex?: number;
@@ -322,6 +325,12 @@ function ThreadFileChangeSummary ({
         <ThreadSummaryText text={parsedChange.presentationLabel ?? presentation.completedLabel} />
       </span>
       <ProjectFilePath className="max-w-full shrink min-w-0 align-baseline text-[0.82em]" disambiguationPaths={projectFilePaths} path={parsedChange.displayPath} projectId={projectId} />
+      {parsedChange.failedAttempts > 1 ? (
+        <span className={`font-mono text-[0.78em] leading-[1.6] ${parsedChange.danger ? "text-danger" : "text-fg/muted"}`}>
+          <span aria-hidden="true" className="inline-block animate-tick motion-reduce:animate-none" key={parsedChange.failedAttempts}>×{parsedChange.failedAttempts}</span>
+          <span className="sr-only">{parsedChange.failedAttempts} failed attempts</span>
+        </span>
+      ) : null}
       {parsedChange.diff.binary ? (
         <span className="font-mono text-[0.78em] leading-[1.6] text-fg/muted">Binary</span>
       ) : (
@@ -390,6 +399,7 @@ function ThreadFileChangeRows ({
       detailsAvailable: entry.detailsAvailable ?? true,
       diff,
       displayPath: toWorkspaceDisplayPath(entry.change.path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.path,
+      failedAttempts: entry.failedAttempts ?? 0,
       movePathDisplay: entry.change.kind.type === "update" && entry.change.kind.move_path
         ? toWorkspaceDisplayPath(entry.change.kind.move_path, { projectRootPath: projectRootPath ?? "", workspaceRoots }) ?? entry.change.kind.move_path
         : null,
@@ -502,20 +512,24 @@ function ThreadFileChangeOutcome ({ item }: { item: FileChangeItem }) {
 interface NativeFileEvidenceFacts {
   durationMs: number | null;
   failed: boolean;
-  /** Tool output explaining a failure; successful calls never expose their raw invocation or output. */
-  failureOutput: string | null;
+  /** Distinct tool outputs explaining failures, in order; successful calls never expose their raw invocation or output. */
+  failureOutputs: string[];
+}
+
+function getNativeFailureOutput(item: NativeFileItem) {
+  const output = item.type === "dynamicToolCall"
+    ? formatToolCallOutput({ content: item.contentItems })
+    : formatToolCallOutput({ content: item.result?.content, fallback: item.error?.message ?? null });
+  return output?.trim() || null;
 }
 
 function getNativeFileEvidence(items: readonly NativeFileItem[]): NativeFileEvidenceFacts | null {
   const durations = items.flatMap(item => item.durationMs === null ? [] : [item.durationMs]);
-  const failedItem = items.find(item => getNativeFileOperationOutcome(item) === "failed");
-  const failureOutput = !failedItem ? null : failedItem.type === "dynamicToolCall"
-    ? formatToolCallOutput({ content: failedItem.contentItems })
-    : formatToolCallOutput({ content: failedItem.result?.content, fallback: failedItem.error?.message ?? null });
-  return durations.length || failedItem ? {
+  const failedItems = items.filter(item => getNativeFileOperationOutcome(item) === "failed");
+  return durations.length || failedItems.length ? {
     durationMs: durations.length ? durations.reduce((total, duration) => total + duration, 0) : null,
-    failed: Boolean(failedItem),
-    failureOutput: failureOutput?.trim() || null,
+    failed: failedItems.length > 0,
+    failureOutputs: [...new Set(failedItems.flatMap(item => getNativeFailureOutput(item) ?? []))],
   } : null;
 }
 
@@ -523,7 +537,7 @@ function NativeFileEvidence({ evidence }: { evidence: NativeFileEvidenceFacts })
   return <>
     {evidence.durationMs !== null ? <ThreadDurationText durationMs={evidence.durationMs} /> : null}
     {evidence.failed ? <p className="m-0 text-fg/muted">Attempted change. Applied counts are unavailable.</p> : null}
-    {evidence.failureOutput ? <ThreadCodeDisplay output={evidence.failureOutput} preview variant="plain" /> : null}
+    {evidence.failureOutputs.map(output => <ThreadCodeDisplay key={output} output={output} preview variant="plain" />)}
   </>;
 }
 
@@ -534,11 +548,17 @@ function getNativePieceLabel({ entry, item }: StitchedNativeFilePiece) {
   });
 }
 
-/** One row for back-to-back pieces: counts and hunks accumulate in order, keyed by the first piece so it grows in place. */
+/**
+ * One row for back-to-back pieces, keyed by the first piece so it grows in place.
+ * Applied runs accumulate counts and hunks in order; failure runs count attempts and show only the latest attempted diff.
+ */
 export function getStitchedNativeRowChange({ pieces }: StitchedNativeFileRow): ThreadFileChangeListChange {
   const [anchor] = pieces;
   const live = [...pieces].reverse().find(piece => getNativeFileOperationOutcome(piece.item) === "inProgress");
-  const diffs = pieces.map(piece => parseFileChangeDiff(piece.entry.change));
+  const failedAttempts = pieces.filter(piece => getNativeFileOperationOutcome(piece.item) === "failed").length;
+  const latestAttempt = [...pieces].reverse().find(piece => piece.entry.change.diff) ?? pieces.at(-1)!;
+  const shown: StitchedNativeFileRow["pieces"] = getNativeFileOperationOutcome(anchor.item) === "failed" ? [latestAttempt] : pieces;
+  const diffs = shown.map(piece => parseFileChangeDiff(piece.entry.change));
   const diff: ParsedUnifiedDiff = diffs.length === 1 ? diffs[0]! : {
     additions: diffs.reduce((total, part) => total + part.additions, 0),
     binary: diffs.some(part => part.binary),
@@ -546,20 +566,21 @@ export function getStitchedNativeRowChange({ pieces }: StitchedNativeFileRow): T
     headers: diffs[0]!.headers,
     hunks: diffs.flatMap(part => part.hunks),
   };
-  const summaryTotals = pieces.reduce((total, piece, index) => {
+  const summaryTotals = shown.reduce((total, piece, index) => {
     const counts = piece.entry.summaryTotals ?? diffs[index]!;
     return { additions: total.additions + counts.additions, deletions: total.deletions + counts.deletions };
   }, { additions: 0, deletions: 0 });
   const evidence = getNativeFileEvidence(pieces.filter(piece => piece.primary).map(piece => piece.item));
-  const hasDiff = pieces.some(piece => Boolean(piece.entry.change.diff));
+  const hasDiff = shown.some(piece => Boolean(piece.entry.change.diff));
   const settled = pieces.some(piece => getNativeFileOperationOutcome(piece.item) !== "inProgress");
   return {
-    change: anchor.entry.change,
-    danger: anchor.entry.danger,
+    change: shown[0].entry.change,
+    danger: (live ?? anchor).entry.danger,
     details: evidence ? <NativeFileEvidence evidence={evidence} /> : undefined,
     // Stays a disclosure while a later piece streams, so an open diff never collapses mid-growth.
     detailsAvailable: settled && (hasDiff || Boolean(evidence)),
     diff,
+    failedAttempts,
     presentationLabel: getNativePieceLabel(live ?? anchor),
     showDiff: hasDiff,
     sourceChangeIndex: anchor.entry.sourceChangeIndex,
