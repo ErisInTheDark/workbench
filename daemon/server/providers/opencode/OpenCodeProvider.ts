@@ -66,8 +66,7 @@ export function openCodeAccountLimits(quota: OpenCodeGoQuota) {
       rateLimitReachedType: reached,
     },
     rateLimitsByLimitId: null,
-    // Go credentials carry no account name, so accounts differ only by their credential fingerprint.
-    identity: quota.accountFingerprint ? { fingerprint: quota.accountFingerprint, label: null } : null,
+    identity: quota.accountFingerprint ? { fingerprint: quota.accountFingerprint, label: quota.accountLabel ?? null } : null,
   };
 }
 

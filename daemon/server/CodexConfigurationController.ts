@@ -73,12 +73,22 @@ export default class CodexConfigurationController {
     return response.account;
   }
 
-  /** Limits with the account that read them; an API key or a login without an email has no identity. */
+  /**
+   * Limits with the account that read them; an API key or a login without an email has no identity. Codex refreshes its
+   * ChatGPT token only for model requests, so an idle login's limits read fails until one explicit refresh.
+   */
   async accountLimits(): Promise<WorkbenchAccountLimits> {
-    const [limits, account] = await Promise.all([
-      this.operations.request("account/rateLimits/read", {}, { background: true }),
-      this.account(),
-    ]);
+    const readLimits = () => this.operations.request("account/rateLimits/read", {}, { background: true });
+    let limits: unknown;
+    try {
+      limits = await readLimits();
+    } catch (error) {
+      // Codex reports the backend's 401 only as text.
+      if (!(error instanceof Error && error.message.includes("token_expired"))) throw error;
+      await this.operations.request("account/read", { refreshToken: true }, { background: true });
+      limits = await readLimits();
+    }
+    const account = await this.account();
     const email = account?.email?.trim();
     return {
       ...WorkbenchAccountLimitsSchema.parse(limits),

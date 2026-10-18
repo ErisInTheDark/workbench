@@ -200,23 +200,70 @@ test("patch targets appear while both response and arguments are unfinished and 
   } finally { if (typeof cleanup === "function") await cleanup(); }
 });
 
-test("Go credentials use the sole key but never substitute OAuth access", async () => {
-  const connection = { type: "credential" as const, id: "connection", label: "Go", method: "key" as const };
-  const integration = {
-    connection: { active: async () => undefined, resolve: async () => ({ type: "key", key: "secret" }) },
-    get: async () => ({ data: { connections: [connection] } }),
+function goContext(integrationID: string | undefined, credentials: Record<string, { type: string; key?: string; access?: string; metadata?: Record<string, unknown> }>) {
+  const connection = (id: string) => ({ type: "credential" as const, id, label: id, method: "key" as const });
+  return {
+    provider: { get: async () => ({ data: { integrationID } }) },
+    integration: {
+      connection: {
+        active: async (id: string) => id === "opencode" && credentials[id] ? connection(id) : undefined,
+        resolve: async (info: { type: string; id?: string }) => info.type === "credential" && info.id ? credentials[info.id] : undefined,
+      },
+      get: async ({ integrationID: id }: { integrationID: string }) => ({ data: { connections: credentials[id] ? [connection(id)] : [] } }),
+    },
   };
-  assert.equal((await resolveOpenCodeGoCredential(integration))?.type, "key");
-  assert.equal(await resolveOpenCodeGoCredential({
-    ...integration, connection: { active: async () => connection, resolve: async () => ({ type: "oauth", access: "private" }) },
-  }), undefined);
+}
+
+test("Go credentials follow the integration OpenCode binds Go models to", async () => {
+  const console = (access: string) => ({
+    type: "oauth", access, metadata: { accountID: "acc", orgID: "org", email: "me@example.com" },
+  });
+  const credentials = { "opencode-go": { type: "key", key: "expired" }, opencode: console("fresh") };
+  const bound = await resolveOpenCodeGoCredential(goContext("opencode", credentials));
+  assert.equal(bound?.token, "fresh");
+  assert.equal(bound?.orgID, "org");
+  assert.equal(bound?.label, "me@example.com");
+  // Refreshing the console token keeps the same account.
+  const refreshed = await resolveOpenCodeGoCredential(goContext("opencode", { ...credentials, opencode: console("rotated") }));
+  assert.equal(refreshed?.identity, bound?.identity);
+  const unbound = await resolveOpenCodeGoCredential(goContext(undefined, credentials));
+  assert.equal(unbound?.token, "expired");
+  assert.equal(unbound?.orgID, null);
+});
+
+test("Go quota sends the bound credential and names its account without exposing it", async () => {
+  const result = await readOpenCodeGoQuota({
+    resolveCredential: async () => ({ token: "secret", orgID: "org", identity: "private-account\0org", label: "me@example.com" }),
+    fetch: async (_url, init) => {
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer secret");
+      assert.equal(headers.get("x-org-id"), "org");
+      return Response.json({ usage: Object.fromEntries(["rolling", "weekly", "monthly"].map(key =>
+        [key, { status: "ok", percent: 1, resetsAt: "2026-09-27T01:00:00.000Z" }])) });
+    },
+  });
+  assert.ok(result.ok);
+  assert.equal(result.quota.accountLabel, "me@example.com");
+  assert.doesNotMatch(JSON.stringify(result), /secret|private-account/u);
+});
+
+test("an expired Go key says so without leaking it", async () => {
+  const failure = await readOpenCodeGoQuota({
+    resolveCredential: async () => ({ token: "secret", orgID: null, identity: "secret", label: null }),
+    fetch: async () => Response.json({ error: { code: "api_key_expired", message: "secret expired" } }, { status: 401 }),
+  });
+  assert.equal(failure.ok, false);
+  assert.match(JSON.stringify(failure), /expired/u);
+  assert.doesNotMatch(JSON.stringify(failure), /secret/u);
 });
 
 test("Go quota normalises windows and returns sanitised failures", async () => {
+  const key = { token: "secret", orgID: null, identity: "secret", label: null };
   const result = await readOpenCodeGoQuota({
-    now: () => 100, resolveCredential: async () => ({ type: "key", key: "secret" }),
+    now: () => 100, resolveCredential: async () => key,
     fetch: async (_url, init) => {
       assert.equal(new Headers(init?.headers).get("authorization"), "Bearer secret");
+      assert.equal(new Headers(init?.headers).has("x-org-id"), false);
       return Response.json({ usage: Object.fromEntries(["rolling", "weekly", "monthly"].map((key, index) =>
         [key, { status: "ok", percent: index + 1, resetsAt: "2026-09-27T01:00:00.000Z" }])) });
     },
@@ -229,7 +276,7 @@ test("Go quota normalises windows and returns sanitised failures", async () => {
     async () => { throw new Error("PRIVATE"); },
     async () => new Response(null, { status: 403 }),
   ]) {
-    const failure = await readOpenCodeGoQuota({ resolveCredential: async () => ({ type: "key", key: "secret" }), fetch: request });
+    const failure = await readOpenCodeGoQuota({ resolveCredential: async () => key, fetch: request });
     assert.equal(failure.ok, false);
     assert.doesNotMatch(JSON.stringify(failure), /PRIVATE|secret/);
   }

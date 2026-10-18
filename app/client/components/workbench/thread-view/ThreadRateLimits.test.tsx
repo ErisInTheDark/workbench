@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect three-window account quota rendering.
+ * No exports. Tests protect three-window account quota rendering and untouched-window resets.
  */
 import assert from "node:assert/strict";
 import { createElement } from "react";
@@ -27,4 +27,19 @@ test("renders rolling, weekly, and monthly quota windows together", () => {
   assert.match(html, /5h/u);
   assert.match(html, /Weekly/u);
   assert.match(html, /Monthly/u);
+});
+
+test("an untouched window shows its full allowance without a reset", () => {
+  const window = (usedPercent: number) => ({ resetsAt: Date.UTC(2026, 9, 25) / 1_000, usedPercent, windowDurationMins: 10_080 });
+  const render = (usedPercent: number) => renderToStaticMarkup(createElement(ThreadRateLimits, {
+    harness: "codex",
+    rateLimits: {
+      credits: null, individualLimit: null, limitId: "codex", limitName: null, planType: "pro",
+      primary: window(usedPercent), rateLimitReachedType: null, secondary: null, spendControlReached: null, tertiary: null,
+    },
+  }));
+  const untouched = render(0);
+  assert.match(untouched, /100%/u);
+  assert.doesNotMatch(untouched, /Oct/u);
+  assert.match(render(20), /Oct/u);
 });

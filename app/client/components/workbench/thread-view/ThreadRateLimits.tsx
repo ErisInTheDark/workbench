@@ -27,7 +27,10 @@ function RateLimitWindowText ({
     <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
       <span className="font-semibold text-text">{formatRateLimitWindowLabel(window.windowDurationMins, fallback)}</span>
       <span>{formatUsedPercent(100 - window.usedPercent)}</span>
-      <span>{formatRateLimitResetTime(window.resetsAt === null ? null : window.resetsAt * 1_000)}</span>
+      {/* An untouched window has not started, so its reset is meaningless. */}
+      {window.usedPercent > 0 ? (
+        <span>{formatRateLimitResetTime(window.resetsAt === null ? null : window.resetsAt * 1_000)}</span>
+      ) : null}
     </span>
   );
 }

@@ -81,6 +81,46 @@ test("account translation preserves quota units and accepts newly named plan typ
   assert.doesNotMatch(result.identity?.fingerprint ?? "", /example/iu);
 });
 
+const expiredToken = new Error(
+  "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; body={\"error\":{\"code\":\"token_expired\"}}",
+);
+const limitsResponse = {
+  rateLimits: { limitId: "codex", limitName: null, primary: { usedPercent: 0, windowDurationMins: 10_080, resetsAt: 1 }, secondary: null, credits: null, planType: "pro" },
+  rateLimitsByLimitId: null,
+};
+
+function limitsController(failures: Error[]) {
+  const calls: string[] = [];
+  const controller = new CodexConfigurationController({
+    request: async (method, params) => {
+      calls.push(`${method}${"refreshToken" in params ? ":refresh" : ""}`);
+      if (method === "account/read") return { account: { type: "chatgpt", email: "me@example.com" } };
+      const failure = failures.shift();
+      if (failure) throw failure;
+      return limitsResponse;
+    },
+    warn: message => assert.fail(message),
+  });
+  return { calls, controller };
+}
+
+test("an expired Codex token is refreshed once before limits are reread", async () => {
+  const { calls, controller } = limitsController([expiredToken]);
+  assert.equal((await controller.accountLimits()).rateLimits.primary?.usedPercent, 0);
+  assert.deepEqual(calls.filter(call => call !== "account/read"),
+    ["account/rateLimits/read", "account/read:refresh", "account/rateLimits/read"]);
+});
+
+test("limit failures other than one expired token propagate without further refreshes", async () => {
+  const other = new Error("provider unavailable");
+  const failing = limitsController([other]);
+  await assert.rejects(failing.controller.accountLimits(), error => error === other);
+  assert.ok(!failing.calls.includes("account/read:refresh"));
+  const stillExpired = limitsController([expiredToken, expiredToken]);
+  await assert.rejects(stillExpired.controller.accountLimits(), error => error === expiredToken);
+  assert.equal(stillExpired.calls.filter(call => call === "account/read:refresh").length, 1);
+});
+
 test("an API-key Codex account reports limits without an identity", async () => {
   const controller = new CodexConfigurationController({
     request: async (method) => method === "account/read"

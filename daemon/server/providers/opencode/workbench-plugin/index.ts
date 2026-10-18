@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - readOpenCodeGoQuota: resolve and normalise Go quota without exposing its credential.
- * - resolveOpenCodeGoCredential: select the active or sole unambiguous Go credential inside OpenCode.
+ * - OpenCodeGoCredential: the token, org header and private account identity a Go quota read uses.
+ * - resolveOpenCodeGoCredential: select the credential of the integration OpenCode binds Go models to (Go key or Console login).
  * - OpenCodeWorkbenchPluginOptions: injectable companion boundaries for focused tests.
  * - createOpenCodeWorkbenchPlugin: create the process-local OpenCode companion.
  * - MANAGED_DISABLED_NATIVE_TOOLS: native tools hidden and denied in managed Workbench sessions.
@@ -44,32 +45,64 @@ const goQuotaResponseSchema = z.object({
   }),
 });
 
-export async function resolveOpenCodeGoCredential(integration: {
-  connection: {
-    active(integrationID: string): Promise<ConnectionInfo | undefined>;
-    resolve(connection: ConnectionInfo): Promise<{ type: string; key?: string; access?: string } | undefined>;
+const goErrorSchema = z.object({ error: z.object({ code: z.string() }) });
+
+/** What a Go quota read sends, plus a private account identity that survives token refreshes. */
+export interface OpenCodeGoCredential {
+  token: string;
+  orgID: string | null;
+  identity: string;
+  label: string | null;
+}
+
+type ResolvedCredential = { type: string; key?: string; access?: string; metadata?: Record<string, unknown> };
+
+/**
+ * Go models authenticate through whichever integration OpenCode binds the `opencode-go` provider to: its own key, or the
+ * OpenCode Console login once one is connected. Quota reads use the same credential and org header.
+ */
+export async function resolveOpenCodeGoCredential(context: {
+  provider: { get(input: { providerID: string }): Promise<{ data: { integrationID?: string } }> };
+  integration: {
+    connection: {
+      active(integrationID: string): Promise<ConnectionInfo | undefined>;
+      resolve(connection: ConnectionInfo): Promise<ResolvedCredential | undefined>;
+    };
+    get(input: { integrationID: string }): Promise<{ data: { connections: ConnectionInfo[] } }>;
   };
-  get(input: { integrationID: string }): Promise<{ data: { connections: ConnectionInfo[] } }>;
-}) {
-  const active = await integration.connection.active("opencode-go");
-  if (active) {
-    const credential = await integration.connection.resolve(active);
-    return credential?.type === "key" ? credential : undefined;
+}): Promise<OpenCodeGoCredential | undefined> {
+  const integrationID = (await context.provider.get({ providerID: "opencode-go" })).data.integrationID ?? "opencode-go";
+  const { integration } = context;
+  let connection = await integration.connection.active(integrationID);
+  if (!connection) {
+    const credentials = (await integration.get({ integrationID })).data.connections
+      .filter(candidate => candidate.type === "credential");
+    connection = credentials.length === 1 ? credentials[0] : undefined;
   }
-  const current = await integration.get({ integrationID: "opencode-go" });
-  const credentials = current.data.connections.filter(connection => connection.type === "credential");
-  const credential = credentials.length === 1 ? await integration.connection.resolve(credentials[0]!) : undefined;
-  return credential?.type === "key" ? credential : undefined;
+  const credential = connection ? await integration.connection.resolve(connection) : undefined;
+  const token = credential?.type === "key" ? credential.key : credential?.type === "oauth" ? credential.access : undefined;
+  if (!credential || !token) return undefined;
+  const text = (key: string) => {
+    const value = credential.metadata?.[key];
+    return typeof value === "string" ? value : null;
+  };
+  const orgID = text("orgID");
+  const accountID = credential.type === "oauth" ? text("accountID") : null;
+  return {
+    token, orgID,
+    identity: accountID ? `${accountID}\0${orgID ?? ""}` : token,
+    label: credential.type === "oauth" ? text("email") : null,
+  };
 }
 
 export async function readOpenCodeGoQuota(options: {
   fetch?: typeof fetch;
   now?: () => number;
-  resolveCredential(): Promise<{ type: string; key?: string; access?: string } | undefined>;
+  resolveCredential(): Promise<OpenCodeGoCredential | undefined>;
   signal?: AbortSignal;
 }): Promise<OpenCodeGoQuotaResult> {
   const observedAt = (options.now ?? Date.now)();
-  let credential: Awaited<ReturnType<typeof options.resolveCredential>>;
+  let credential: OpenCodeGoCredential | undefined;
   try {
     credential = await options.resolveCredential();
   } catch {
@@ -78,8 +111,7 @@ export async function readOpenCodeGoQuota(options: {
       error: { kind: "credential", message: "OpenCode Go credential resolution failed." },
     };
   }
-  const token = credential?.type === "key" ? credential.key : undefined;
-  if (!token) {
+  if (!credential) {
     return {
       ok: false,
       error: { kind: "credential", message: "OpenCode Go has no available credential." },
@@ -88,7 +120,10 @@ export async function readOpenCodeGoQuota(options: {
   let response: Response;
   try {
     response = await (options.fetch ?? fetch)("https://opencode.ai/zen/go/v1/usage", {
-      headers: { authorization: `Bearer ${token}` },
+      headers: {
+        authorization: `Bearer ${credential.token}`,
+        ...credential.orgID ? { "x-org-id": credential.orgID } : {},
+      },
       signal: options.signal,
     });
   } catch {
@@ -98,9 +133,15 @@ export async function readOpenCodeGoQuota(options: {
     };
   }
   if (response.status === 401) {
+    const expired = goErrorSchema.safeParse(await response.json().catch(() => null)).data?.error.code === "api_key_expired";
     return {
       ok: false,
-      error: { kind: "response", message: "OpenCode Go rejected its active credential." },
+      error: {
+        kind: "response",
+        message: expired
+          ? "OpenCode Go's API key has expired; sign in to OpenCode Console or replace the key."
+          : "OpenCode Go rejected its active credential.",
+      },
     };
   }
   if (response.status === 403) {
@@ -130,7 +171,8 @@ export async function readOpenCodeGoQuota(options: {
     status: value.status,
   });
   const quota = OpenCodeGoQuotaSchema.safeParse({
-    accountFingerprint: providerAccountFingerprint("opencode", token),
+    accountFingerprint: providerAccountFingerprint("opencode", credential.identity),
+    accountLabel: credential.label,
     observedAt,
     windows: {
       rolling: window(parsed.usage.rolling),
@@ -169,7 +211,7 @@ export function createOpenCodeWorkbenchPlugin(
       const rpc = await context.rpc.register(openCodeWorkbenchRpc, {
         goQuota: async (_input, { signal }) => readOpenCodeGoQuota({
           signal,
-          resolveCredential: () => resolveOpenCodeGoCredential(context.integration),
+          resolveCredential: () => resolveOpenCodeGoCredential(context),
         }),
       }).catch(async error => {
         const closed = await Promise.allSettled([tools.dispose()]);
