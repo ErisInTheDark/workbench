@@ -2,56 +2,26 @@
  * Exports:
  * - WorkbenchDaemonTransport: existing socket request port.
  * - WorkbenchDaemonRequestError: typed JSON-RPC failure with bounded domain data.
- * - default WorkbenchDaemonClient: create the browser daemon client.
+ * - default WorkbenchDaemonClient: create the browser daemon client: a typed `request` for any daemon method, validated against its registered
+ *   response schema, plus grouped convenience methods.
  */
-import { InstallationPullResultSchema } from "../installation-update";
-import { FilePayloadSchema } from "../project/project-file";
 import type {
   WorkbenchDaemonGitArcMethod,
   WorkbenchDaemonMethod,
   WorkbenchDaemonParams,
   WorkbenchDaemonResult,
 } from "./workbench-daemon-requests.ts";
-import { WORKBENCH_GIT_ARC_ACTION_BY_METHOD } from "./workbench-daemon-requests.ts";
-import { z } from "zod";
-import { ThreadAutoCompactSettingsSchema } from "../settings/thread-auto-compact";
-import { VoiceConfigurationSchema, VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
-import { VirtualRepoAvailabilitySchema } from "../repo/virtual-repo-contract";
-import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema, WorkingTreeResultSchema } from "../git/working-tree-contracts";
-import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
-import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
-import { ApprovalReviewSettingsSnapshotSchema } from "../approval-review/approval-review-settings";
 import {
-  McpServerSettingsSnapshotSchema, McpServerSignInFinishResultSchema, McpServerSignInStartResultSchema,
-} from "../mcp/mcp-server-settings";
-import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
-import { ProjectCreateResultSchema, ProjectFolderListSchema } from "../project/project-creation";
-import { ProjectStoreSnapshotSchema, ProjectStoreUpdateResultSchema } from "../project/project-store";
-import { WorkbenchProjectLocationsPayloadSchema } from "../project/project-location";
-import { WorkbenchThreadLaunchStateSchema } from "../thread/thread-launch";
-import {
-  WorkbenchPresentationAttachmentChunkSchema,
-  WorkbenchPresentationExportPageSchema,
-  WorkbenchPresentationLayoutChunkSchema,
-  WorkbenchPresentationManifestPageSchema,
-} from "../thread/thread-presentation-export";
-import { WORKBENCH_GIT_ARC_RESULT_SCHEMAS } from "./git-arc-result-schemas.ts";
+  getWorkbenchDaemonResultSchema, isWorkbenchDaemonResultParsed, WORKBENCH_GIT_ARC_ACTION_BY_METHOD,
+} from "./workbench-daemon-requests.ts";
+import { VoiceSessionEventSchema, type VoiceSessionEvent } from "../voice/voice-session-contract";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
   GitArcFailureSchema,
 } from "../git/git-arc-failures.ts";
 import reportClientSchemaError from "../report-client-schema-error.ts";
-import { WorkbenchProjectsPayloadSchema, WorkbenchCreateEntryResultSchema, WorkbenchDeleteFileResultSchema } from "../project/project-state.ts";
-import { WorkbenchProjectFileIndexResponseSchema } from "../project/project-file-index.ts";
-import { WorkbenchComposerProfileSelectionSchema } from "../thread/thread-state.ts";
-import { WorkbenchModelContextCapabilitySchema } from "../thread/thread-profile.ts";
-import { WorkbenchThreadIdentityResolutionSchema } from "../thread/workbench-thread-identity.ts";
-import { workbenchThreadActions } from "../thread/thread-actions.ts";
-import { WorkbenchModelOptionSchema } from "../provider/provider-model.ts";
-import { WorkbenchAccountLimitsSchema } from "../provider/provider-account.ts";
-import { ProviderRuntimesSnapshotSchema, type ProviderRuntimeKey } from "../provider/provider-runtime.ts";
-import { WorkbenchSearchResponseSchema } from "../search/workbench-search.ts";
+import type { ProviderRuntimeKey } from "../provider/provider-runtime.ts";
 import {
   WORKBENCH_STATS_IMPORT_UPDATED_METHOD,
   WorkbenchStatsImportProgressSchema,
@@ -69,117 +39,6 @@ export class WorkbenchDaemonRequestError extends Error {
   constructor(message: string, readonly code: number, readonly data: object | null = null) {
     super(message);
     this.name = "WorkbenchDaemonRequestError";
-  }
-}
-
-const recordSchema = z.object({}).passthrough();
-const fileWriteSchema = z.union([
-  z.object({ actualMtimeMs: z.number(), error: z.string(), expectedMtimeMs: z.number(), path: z.string() }).passthrough(),
-  z.object({ changes: z.record(z.string(), recordSchema), mtimeMs: z.number(), path: z.string(), projectId: z.string(), updatedAt: z.string() }).passthrough(),
-]);
-
-function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
-  if (method in workbenchThreadActions) {
-    return workbenchThreadActions[method as keyof typeof workbenchThreadActions].result;
-  }
-  if (method in WORKBENCH_GIT_ARC_RESULT_SCHEMAS) {
-    return WORKBENCH_GIT_ARC_RESULT_SCHEMAS[method as WorkbenchDaemonGitArcMethod];
-  }
-  const switched = method as Exclude<WorkbenchDaemonMethod, keyof typeof workbenchThreadActions | WorkbenchDaemonGitArcMethod>;
-  switch (switched) {
-    case "installation/update/pull": return InstallationPullResultSchema;
-    case "installation/update/failure/dismiss": return z.object({ ok: z.literal(true) }).strict();
-    case "provider/runtime/read":
-    case "provider/runtime/install": return ProviderRuntimesSnapshotSchema;
-    case "voice/configuration/read": return VoiceConfigurationSchema;
-    case "voice/agents": return z.object({ data: z.array(z.object({
-      name: z.string(), path: z.string(), description: z.string(), source: z.literal("library"), sourceLabel: z.string(),
-    }).passthrough()) });
-    case "voice/configuration/write":
-    case "voice/prepare":
-    case "voice/start":
-    case "voice/audio":
-    case "voice/finish":
-    case "voice/cancel": return z.object({ ok: z.literal(true) }).strict();
-    case "repo/runtime/read": return VirtualRepoAvailabilitySchema;
-    case "git/working-tree/read": return WorkingTreeReadSchema;
-    case "git/working-tree/diff": return WorkingTreeDiffSchema;
-    case "git/working-tree/preview": return WorkingTreePreviewSchema;
-    case "git/working-tree/mutate": return WorkingTreeResultSchema;
-    case "models/list": return z.object({ data: z.array(WorkbenchModelOptionSchema) });
-    case "account/limits/read": return WorkbenchAccountLimitsSchema;
-    case "models/context/read": return z.object({ data: z.array(WorkbenchModelContextCapabilitySchema) }).strict();
-    case "sandbox-network/read":
-    case "sandbox-network/update": return WorkbenchSandboxNetworkSettingsResponseSchema;
-    case "command-approvals/read":
-    case "command-approvals/remove": return CommandApprovalSnapshotSchema;
-    case "command-approvals/patch": return CommandApprovalSnapshotSchema;
-    case "approval-review/read":
-    case "approval-review/update": return ApprovalReviewSettingsSnapshotSchema;
-    case "mcp-servers/read":
-    case "mcp-servers/update": return McpServerSettingsSnapshotSchema;
-    case "mcp-servers/sign-in/start": return McpServerSignInStartResultSchema;
-    case "mcp-servers/sign-in/finish": return McpServerSignInFinishResultSchema;
-    case "project/store/read": return ProjectStoreSnapshotSchema;
-    case "project/store/update": return ProjectStoreUpdateResultSchema;
-    case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
-    case "project/discovery-settings/update": return ProjectDiscoverySettingsResultSchema;
-    case "project/folders/list": return ProjectFolderListSchema;
-    case "project/create": return ProjectCreateResultSchema;
-    case "project/catalog/read": return WorkbenchProjectsPayloadSchema;
-    case "project/file-index/read": return WorkbenchProjectFileIndexResponseSchema;
-    case "project/tree/refresh": return z.object({ accepted: z.literal(true) });
-    case "project/entry/create": return WorkbenchCreateEntryResultSchema;
-    case "project/file/delete": return WorkbenchDeleteFileResultSchema;
-    case "project/locations/read": return WorkbenchProjectLocationsPayloadSchema;
-    case "thread/launch": return WorkbenchThreadLaunchStateSchema;
-    case "thread/launch/read": return z.object({ state: WorkbenchThreadLaunchStateSchema.nullable() }).strict();
-    case "thread/presentation/export": return WorkbenchPresentationExportPageSchema;
-    case "thread/presentation/manifest/read": return WorkbenchPresentationManifestPageSchema;
-    case "thread/presentation/attachment/read": return WorkbenchPresentationAttachmentChunkSchema;
-    case "thread/presentation/layout/read": return WorkbenchPresentationLayoutChunkSchema;
-    case "thread/identity/resolve": return z.object({ data: WorkbenchThreadIdentityResolutionSchema.nullable() }).strict();
-    case "project/file/read": return FilePayloadSchema;
-    case "project/file/reset":
-    case "project/file/save": return fileWriteSchema;
-    case "search/query": return WorkbenchSearchResponseSchema;
-    case "stats/import/start": return WorkbenchStatsImportProgressSchema;
-    case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
-    case "stats/feedback/delete": return z.object({ deleted: z.number().int().nonnegative() }).strict();
-    case "stats/feedback/resolve": return z.object({ changed: z.number().int().nonnegative() }).strict();
-    case "local-capabilities/read":
-    case "local-capabilities/update": return z.object({
-      localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),
-    }).strict();
-    case "thread-auto-compact/read":
-    case "thread-auto-compact/update": return z.object({ settings: ThreadAutoCompactSettingsSchema }).strict();
-    case "agents/list": return z.object({ data: z.array(recordSchema) }).strict();
-    case "agents/read": return z.object({ providerGlobalDuplicate: z.boolean(), data: recordSchema }).strict();
-    case "skills/read": return z.object({
-      data: z.array(recordSchema), instructionPacks: z.array(recordSchema), instructions: z.string(),
-    }).strict();
-    case "native/file/open":
-    case "native/file/reveal": return z.object({ ok: z.literal(true), path: z.string(), projectId: z.string().nullable() }).passthrough();
-    case "native/file/link-roots": return z.object({ roots: z.array(recordSchema) }).strict();
-    case "questionnaire/respond": return z.object({
-      ok: z.literal(true),
-      route: z.enum(["admitted", "live", "provider"]),
-      warning: z.string().optional(),
-    }).strict();
-    case "browse/sessions/read": return z.object({ sessions: z.array(recordSchema) }).passthrough();
-    case "browse/sessions/forget":
-    case "browse/sessions/stop": return recordSchema;
-    case "profiles/delete":
-    case "profiles/read":
-    case "profiles/upsert": return z.object({ profiles: z.array(z.object({
-      lastUsedAt: z.number().int().nonnegative().nullable().default(null),
-    }).passthrough()) }).passthrough();
-    case "profiles/target/read": return z.object({ selection: WorkbenchComposerProfileSelectionSchema.nullable() }).strict();
-    case "profiles/target/set": return z.object({ ok: z.literal(true) }).strict();
-    default:
-      // Compile-time exhaustiveness: every WorkbenchDaemonRequestMap method needs a response schema.
-      switched satisfies never;
-      throw new Error(`No response schema is registered for ${method}.`);
   }
 }
 
@@ -456,20 +315,18 @@ class WorkbenchDaemonClient {
     }) ?? (() => undefined);
   }
 
-  private async request<TMethod extends WorkbenchDaemonMethod>(
+  /** Any daemon method, validated against its registered response schema; the grouped methods above are shorthands. */
+  async request<TMethod extends WorkbenchDaemonMethod>(
     method: TMethod,
     params: WorkbenchDaemonParams<TMethod>,
   ): Promise<WorkbenchDaemonResult<TMethod>> {
     const result = await this.transport.request<WorkbenchDaemonResult<TMethod>>(method, params);
-    const parsed = schemaFor(method).safeParse(result);
+    const parsed = getWorkbenchDaemonResultSchema(method).safeParse(result);
     if (!parsed.success) {
       reportClientSchemaError(`Rejected ${method} response`, parsed.error);
       throw new Error(`The ${method} response was invalid.`);
     }
-    if (method === "models/list" || method === "profiles/read" || method === "profiles/upsert" || method === "profiles/delete") {
-      return parsed.data as WorkbenchDaemonResult<TMethod>;
-    }
-    return result;
+    return isWorkbenchDaemonResultParsed(method) ? parsed.data as WorkbenchDaemonResult<TMethod> : result;
   }
 
   private async requestGitArc<TMethod extends WorkbenchDaemonGitArcMethod>(

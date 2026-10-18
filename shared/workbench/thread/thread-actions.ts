@@ -17,7 +17,7 @@
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
  * - WorkbenchThreadPageResult/WorkbenchThreadPageResultSchema: WB page and domain-history facts.
- * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry.
+ * - workbenchThreadActions/WorkbenchThreadActionMap: shared request and result contract registry; actions route by thread unless they name another route.
  */
 import { z } from "zod";
 import type {
@@ -206,12 +206,13 @@ const historyResult = <Entry extends z.ZodTypeAny>(entry: Entry) => z.object({
 });
 
 export const workbenchThreadActions = {
-  "questionnaires/pending/read": { params: z.object({}), result: z.object({ data: z.array(pendingQuestionnaire) }) },
+  "questionnaires/pending/read": { params: z.object({}), result: z.object({ data: z.array(pendingQuestionnaire) }), route: "installation" },
   "thread/questionnaires/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(questionnaireHistory) },
   "thread/steers/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(steerHistory) },
   "thread/browse/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(browseHistory) },
   "thread/approvals/read": { params: WorkbenchThreadHistoryReadSchema, result: historyResult(approvalOutcome) },
-  "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema },
+  // Browser creation uses saved-draft launch, not daemon thread creation.
+  "thread/create": { params: WorkbenchThreadCreateSchema, result: WorkbenchThreadPayloadSchema, route: "app" },
   "thread/metadata/read": { params: WorkbenchThreadTargetSchema, result: WorkbenchThreadPayloadSchema },
   "thread/page/read": { params: WorkbenchThreadPageSchema, result: WorkbenchThreadPageResultSchema },
   "thread/reconcile": { params: WorkbenchThreadReconcileSchema, result: WorkbenchThreadReconcileResultSchema },

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - workspaceCommandRoutes: exhaustive command ownership, shared by app routing and client facades.
+ * - workspaceCommandRoutes: command ownership derived from the daemon request and thread action registries, shared by app routing and client facades.
  * - WorkspaceCommandMethod/WorkspaceCommand/WorkspaceCommandResult: domain-typed workspace commands.
  * - WorkspaceCommandSchema: closed method registry and bounded JSON edge validation before owner validation.
  * - WORKSPACE_COMMAND_NOT_SENT/WORKSPACE_COMMAND_UNCERTAIN: distinguish dispatch outcomes.
@@ -14,14 +14,15 @@
  * - WorkspaceSearchResponseSchema: source-qualified search results and partial failure.
  */
 import { z } from "zod";
-import type {
-  WorkbenchDaemonGitArcMethod, WorkbenchDaemonRequestMap, WorkbenchDaemonMethod,
+import type { DaemonRequestRoute } from "../daemon/define-daemon-request";
+import {
+  workbenchDaemonRequests, type WorkbenchDaemonRequestMap, type WorkbenchDaemonMethod,
 } from "../daemon/workbench-daemon-requests";
+import { workbenchThreadActions } from "../thread/thread-actions";
 import { ProjectLocationReferenceSchema } from "../project/project-location";
 import { DaemonIdSchema, ThreadReferenceSchema, LogicalProjectIdSchema, ThreadDisplayKeySchema } from "../identity";
 import { WorkbenchThreadStateRequestSchema, WorkbenchHomeThreadDisplayOrderSchema, type WorkbenchThreadStateRequest } from "../thread/thread-state";
 import { WorkbenchThreadDisplayOrderSchema } from "../thread/thread-display-order";
-import type { WorkbenchThreadActionMap } from "../thread/thread-actions";
 import { WorkbenchMessageContextSchema } from "../provider/provider-input";
 import { WorkbenchSearchResultSchema } from "../search/workbench-search";
 import {
@@ -34,135 +35,27 @@ import {
 export const WORKSPACE_COMMAND_NOT_SENT = -32012;
 export const WORKSPACE_COMMAND_UNCERTAIN = -32013;
 
-const nonCommandMethods = [
-  // Browser creation uses saved-draft launch, not daemon thread creation.
-  "thread/create", "thread/launch", "thread/launch/read",
-  // App-owned projection reads and exports.
-  "project/locations/read",
-  "thread/presentation/export", "thread/presentation/manifest/read",
-  "thread/presentation/attachment/read", "thread/presentation/layout/read",
-  // Browser identity lookup uses the workspace owner observation.
-  "thread/identity/resolve",
-  // The app server's sign-in callback route relays the provider's answer itself.
-  "mcp-servers/sign-in/finish",
-] as const satisfies readonly WorkbenchDaemonMethod[];
-type OrdinaryWorkspaceCommandMethod = Exclude<
-  WorkbenchDaemonMethod,
-  typeof nonCommandMethods[number] | WorkbenchDaemonGitArcMethod
->;
+type DaemonRequests = typeof workbenchDaemonRequests;
+type ThreadActions = typeof workbenchThreadActions;
+type RouteOf<Method extends WorkbenchDaemonMethod> = Method extends keyof DaemonRequests ? DaemonRequests[Method]["route"]
+  : Method extends keyof ThreadActions ? ThreadActions[Method] extends { route: infer Route } ? Route : "thread"
+    : never;
+type WorkspaceCommandRoutes = {
+  [Method in WorkbenchDaemonMethod as RouteOf<Method> extends "app" ? never : Method]: Exclude<RouteOf<Method>, "app">;
+};
 
-export const workspaceCommandRoutes = {
-  "project/catalog/read": "installation",
-  "project/tree/refresh": "folder",
-  "project/entry/create": "folder",
-  "project/file/delete": "folder",
-  "questionnaires/pending/read": "installation",
-  "thread/questionnaires/read": "thread",
-  "thread/steers/read": "thread",
-  "thread/browse/read": "thread",
-  "thread/approvals/read": "thread",
-  "thread/metadata/read": "thread",
-  "thread/page/read": "thread",
-  "thread/reconcile": "thread",
-  "thread/message/submit": "thread",
-  "thread/title/set": "thread",
-  "thread/compact": "thread",
-  "thread/provider/delete": "thread",
-  "thread/stop": "thread",
-  "thread/interrupt": "thread",
-  "thread/steer/resend": "thread",
-  "thread/steer/dismiss": "thread",
-  "thread/shell/stop": "thread",
-  "thread/goal/set": "thread",
-  "thread/goal/clear": "thread",
-  "thread/todo/add": "thread",
-  "thread/todo/remove": "thread",
-  "thread/todo/required/set": "thread",
-  "thread/todo/text/set": "thread",
-  "thread/feedback/addressed/detach": "thread",
-  "thread/vis/end": "thread",
-  "thread/vis/answer": "thread",
-  "thread/skills/read": "thread",
-  "thread/skills/deactivate": "thread",
-  "voice/configuration/read": "installation",
-  "voice/configuration/write": "installation",
-  "voice/agents": "installation",
-  "voice/prepare": "installation",
-  "voice/start": "installation",
-  "voice/audio": "session",
-  "voice/finish": "session",
-  "voice/cancel": "session",
-  "repo/runtime/read": "installation",
-  "git/working-tree/read": "folder",
-  "git/working-tree/diff": "folder",
-  "git/working-tree/preview": "folder",
-  "git/working-tree/mutate": "folder",
-  "models/context/read": "installation",
-  "models/list": "installation",
-  "account/limits/read": "installation",
-  "agents/list": "folder",
-  "agents/read": "folder",
-  "browse/sessions/forget": "thread",
-  "browse/sessions/read": "thread",
-  "browse/sessions/stop": "thread",
-  "sandbox-network/read": "installation",
-  "sandbox-network/update": "installation",
-  "command-approvals/read": "installation",
-  "command-approvals/remove": "installation",
-  "command-approvals/patch": "installation",
-  "approval-review/read": "installation",
-  "approval-review/update": "installation",
-  "mcp-servers/read": "installation",
-  "mcp-servers/update": "installation",
-  "mcp-servers/sign-in/start": "installation",
-  "project/discovery-settings/read": "installation",
-  "project/discovery-settings/update": "installation",
-  "project/folders/list": "installation",
-  "project/create": "installation",
-  "local-capabilities/read": "installation",
-  "local-capabilities/update": "installation",
-  "installation/update/pull": "installation",
-  "installation/update/failure/dismiss": "installation",
-  "provider/runtime/read": "installation",
-  "provider/runtime/install": "installation",
-  "thread-auto-compact/read": "installation",
-  "thread-auto-compact/update": "installation",
-  "native/file/link-roots": "folder",
-  "native/file/open": "folder",
-  "native/file/reveal": "folder",
-  "profiles/delete": "installation",
-  "profiles/read": "installation",
-  "profiles/target/read": "installation",
-  "profiles/target/set": "installation",
-  "profiles/upsert": "installation",
-  "project/file-index/read": "folder",
-  "project/file/read": "folder",
-  "project/file/reset": "folder",
-  "project/file/save": "folder",
-  "project/store/read": "folder",
-  "project/store/update": "folder",
-  "search/query": "folder",
-  "questionnaire/respond": "thread",
-  "stats/import/start": "installation",
-  "stats/rate-limits/refresh": "installation",
-  "stats/feedback/delete": "installation",
-  "stats/feedback/resolve": "installation",
-  "skills/read": "folder",
-  "git/arc/compare": "threadCwd",
-  "git/arc/diff-artifact/read": "threadCwd",
-  "git/arc/proposal/commit": "threadCwd",
-  "git/arc/proposals/commit": "threadCwd",
-  "git/arc/proposal/read": "threadCwd",
-  "git/arc/release": "threadCwd",
-  "git/arc/remove": "threadCwd",
-  "git/arc/restore": "threadCwd",
-  "git/arc/stash": "threadCwd",
-  "git/arc/unstash": "threadCwd",
-  "git/arc/stash/discard": "threadCwd",
-} as const satisfies (
-  Record<OrdinaryWorkspaceCommandMethod, "thread" | "folder" | "installation" | "session">
-  & Record<WorkbenchDaemonGitArcMethod, "threadCwd">
-);
+function routeOf(method: WorkbenchDaemonMethod): DaemonRequestRoute {
+  if (method in workbenchDaemonRequests) return workbenchDaemonRequests[method as keyof DaemonRequests].route;
+  const action = workbenchThreadActions[method as keyof ThreadActions] as { route?: DaemonRequestRoute };
+  return action.route ?? "thread";
+}
+
+/** Every daemon method the app relays as a workspace command, by route; app-owned methods are absent. */
+export const workspaceCommandRoutes = Object.fromEntries(
+  ([...Object.keys(workbenchDaemonRequests), ...Object.keys(workbenchThreadActions)] as WorkbenchDaemonMethod[])
+    .map(method => [method, routeOf(method)] as const)
+    .filter(([, route]) => route !== "app"),
+) as WorkspaceCommandRoutes;
 
 export type WorkspaceCommandMethod = keyof typeof workspaceCommandRoutes;
 const scope = z.discriminatedUnion("kind", [
