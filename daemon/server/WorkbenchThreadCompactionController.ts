@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - QueuedThreadMessage: one user message waiting behind a compaction.
+ * - heldSteerInput: convert message input to held-steer history input with explicit placeholders.
  * - default WorkbenchThreadCompactionController: own canonical compaction admission, execution, failure settlement and the compaction queue.
  */
 import { randomUUID } from "node:crypto";
@@ -44,21 +45,21 @@ type CompactionOutcome = "completed" | "failed" | "aborted";
 const COMPACTION_FAILED_ERROR = "Context compaction failed, so this message was not sent.";
 
 /** Held steer history stores text elements with explicit placeholders. */
-function heldInput(input: QueuedThreadMessage["input"]): UserInput[] {
+export function heldSteerInput(input: QueuedThreadMessage["input"]): UserInput[] {
   return input.map(part => part.type === "text" ? {
     ...part,
     text_elements: part.text_elements.map(element => ({ byteRange: element.byteRange, placeholder: element.placeholder ?? null })),
   } : part);
 }
 
+/** Admission activates the skills the merged input names, so only instruction choices merge here. */
 function mergeContexts(messages: readonly QueuedThreadMessage[]): WorkbenchMessageContext | undefined {
   const first = messages[0]?.context;
-  const activatedSkillPaths = [...new Set(messages.flatMap(message => message.context?.activatedSkillPaths ?? []))];
   const instructionInjections = Object.assign({}, ...messages.map(message => message.context?.instructionInjections ?? {}));
-  if (!first && !activatedSkillPaths.length && !Object.keys(instructionInjections).length) return undefined;
+  if (!first && !Object.keys(instructionInjections).length) return undefined;
+  const { activatedSkillPaths: _named, ...selection } = first ?? {};
   return {
-    ...first,
-    ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+    ...selection,
     ...(Object.keys(instructionInjections).length ? { instructionInjections } : {}),
   };
 }
@@ -118,7 +119,7 @@ export default class WorkbenchThreadCompactionController {
         threadId: WorkbenchThreadIdSchema.parse(threadId),
         turnId: await queue.turnId,
         entryKey: `compaction:${message.clientMessageId}`,
-        input: heldInput(message.input),
+        input: heldSteerInput(message.input),
         status: "pending",
         attemptedAt: this.ports.now(),
         resolvedAt: null,

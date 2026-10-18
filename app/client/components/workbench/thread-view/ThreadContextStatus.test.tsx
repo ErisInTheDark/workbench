@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import { DraftIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import type { ThreadHead } from "../../../workbench/thread/ThreadStore";
 import WorkbenchClientContext from "../workbench-client-context";
 import ThreadContextStatus from "./ThreadContextStatus";
 
@@ -35,7 +36,7 @@ const thread: ThreadPayload = {
   updatedAt: 1,
 };
 
-function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentThread = thread) {
+function render(lifecycle?: WorkbenchThreadLifecycle, snoozed = false, currentThread: ThreadHead = thread) {
   return renderToStaticMarkup(createElement(ThreadContextStatus, {
     lifecycle,
     onCompactThread: async () => {},
@@ -136,8 +137,23 @@ test("interrupted Workbench state overrides stale active provider status for con
   assert.doesNotMatch(snoozed, /disabled=""/u);
   assert.match(snoozed, /aria-label="Compact thread context"/u);
 
-  const live = render(pendingInput);
+  const waiting = { ...thread, status: "active:waitingOnUserInput" };
+  const live = render(pendingInput, false, { ...waiting, turnLive: true });
   assert.match(live, /disabled=""/u);
 
+  const held = render(pendingInput, false, { ...waiting, turnLive: false });
+  assert.doesNotMatch(held, /disabled=""/u, "a held questionnaire on an ended turn can compact");
+  assert.match(held, /aria-label="Compact thread context"/u);
+
   assert.match(render(), /disabled=""/u);
+});
+
+test("an ended turn never unblocks a working thread", () => {
+  const markup = render({
+    agent: { agentStatus: "working" },
+    kind: "working",
+    reason: "acceptedIntent",
+    settled: false,
+  }, false, { ...thread, turnLive: false });
+  assert.match(markup, /disabled=""/u);
 });

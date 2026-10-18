@@ -18,6 +18,7 @@
 
 import type { CooperativeWorkBudget } from "../state/cooperative-work";
 import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import { resolveWorkbenchSkillMention, workbenchSkillMentionAliases } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import {
   type WorkspaceFileLinkRoot,
   normalizeWorkbenchPath,
@@ -190,11 +191,6 @@ function normalizeMentionPath(value: string) {
 
 function normalizeComparableValue(value: string) {
   return normalizeMentionPath(value).toLocaleLowerCase();
-}
-
-function getSkillDirectoryAlias(skill: WorkbenchSkillSummary) {
-  const match = /^(?:\.agents\/)?skills\/(?:builtin\/)?([^/]+)\/SKILL\.md$/i.exec(normalizeMentionPath(skill.relativePath));
-  return match?.[1] ?? "";
 }
 
 function createInlineMentionRecordKeyBuilder(): InlineMentionRecordKeyBuilder {
@@ -751,16 +747,13 @@ function prepareInlineMentionSkills(skills: readonly WorkbenchSkillSummary[]): P
   }
 
   const preparedSkills: PreparedInlineMentionSkills = {
-    candidates: records.map((skill): InlineMentionCandidate => {
-      const directoryAlias = getSkillDirectoryAlias(skill);
-      return {
-        aliases: Array.from(new Set([skill.name, directoryAlias].filter(Boolean))),
-        description: skill.description,
-        kind: "skill",
-        label: skill.name,
-        path: skill.path,
-      };
-    }),
+    candidates: records.map((skill): InlineMentionCandidate => ({
+      aliases: workbenchSkillMentionAliases(skill),
+      description: skill.description,
+      kind: "skill",
+      label: skill.name,
+      path: skill.path,
+    })),
     key,
     records,
   };
@@ -1169,16 +1162,6 @@ function getTokenResolutionEnd(token: ParsedInlineMentionToken, consumedLength: 
     : token.start + token.marker.length + consumedLength;
 }
 
-function resolveSkillMention(value: string, candidates: readonly InlineMentionCandidate[]) {
-  const normalizedValue = value.toLocaleLowerCase();
-  const matches = candidates.filter((candidate) => (
-    candidate.kind === "skill"
-    && candidate.aliases.some((alias) => alias.toLocaleLowerCase() === normalizedValue)
-  ));
-  const uniquePaths = new Set(matches.map((match) => match.path));
-  return uniquePaths.size === 1 && matches.length === 1 ? matches[0] : null;
-}
-
 function resolveIndexedPathFromMap(map: ReadonlyMap<string, string | null>, comparablePath: string) {
   if (!map.has(comparablePath)) {
     return undefined;
@@ -1322,7 +1305,7 @@ function resolveToken(token: ParsedInlineMentionToken, sources: InlineMentionHig
 
   for (const { consumedLength, value } of values) {
     if (token.kind === "skill") {
-      const match = resolveSkillMention(value, sources.skillCandidates);
+      const match = resolveWorkbenchSkillMention(value, sources.skillCandidates);
       if (!match) {
         continue;
       }

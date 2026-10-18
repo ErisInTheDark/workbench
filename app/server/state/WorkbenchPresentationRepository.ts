@@ -236,6 +236,7 @@ export default class WorkbenchPresentationRepository {
       case "deleteAttachment": this.deleteAttachment(mutation); break;
       case "reserveLaunch": this.reserveLaunch(mutation); break;
       case "completeLaunch": this.completeLaunch(mutation); break;
+      case "releaseLaunch": this.releaseLaunch(mutation); break;
       case "saveLayout": this.saveLayout(mutation); break;
       case "saveLayouts": this.saveLayouts(mutation); break;
       case "importDraft": this.importDraft(mutation); break;
@@ -644,6 +645,14 @@ export default class WorkbenchPresentationRepository {
     this.requireDatabase().prepare(`
       UPDATE presentation_drafts SET phase = 'submitting', launch_id = ?, selection_json = ?, revision = ? WHERE id = ?
     `).run(input.launchId, JSON.stringify(input.selection), this.nextRevision(), input.draftId);
+  }
+
+  /** Only the owning, still-submitting reservation reopens; uncertain or accepted launches keep their fence. */
+  private releaseLaunch(input: Extract<PresentationMutation, { kind: "releaseLaunch" }>) {
+    this.requireDatabase().prepare(`
+      UPDATE presentation_drafts SET phase = 'unsent', launch_id = NULL, revision = ?
+      WHERE id = ? AND phase = 'submitting' AND launch_id = ?
+    `).run(this.nextRevision(), input.draftId, input.launchId);
   }
 
   private completeLaunch(input: Extract<PresentationMutation, { kind: "completeLaunch" }>) {

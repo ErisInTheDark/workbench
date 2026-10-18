@@ -215,6 +215,39 @@ test("only the exact revision from deleting an unlaunched draft can reopen it", 
   }
 });
 
+test("releasing a definitely unlaunched reservation makes the draft editable again; other launches stay untouched", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-release-");
+  const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });
+  try {
+    await repository.start();
+    repository.mutate({ kind: "registerLocations", daemonId: first, hostname: "desktop", catalog: catalog("/desktop/repo") });
+    const logicalProjectId = repository.read().projects[0]!.id;
+    const draft = { id: draftId, logicalProjectId, target: { daemonId: first, projectId }, prompt: "use /stale", selection, updatedAt: 1 };
+    const saved = repository.mutate({ kind: "putDraft", draft, expectedRevision: null }).drafts[0]!;
+    const launchId = crypto.randomUUID();
+    repository.mutate({ kind: "reserveLaunch", draftId, expectedRevision: saved.revision, launchId, selection });
+
+    repository.mutate({ kind: "releaseLaunch", draftId, launchId: crypto.randomUUID() });
+    assert.equal(repository.read().drafts[0]?.phase, "submitting", "another launch cannot release this one");
+
+    const released = repository.mutate({ kind: "releaseLaunch", draftId, launchId }).drafts[0]!;
+    assert.equal(released.phase, "unsent");
+    assert.equal(released.launchId, null);
+    assert.equal(released.prompt, "use /stale");
+    const edited = repository.mutate({ kind: "putDraft", draft: { ...draft, prompt: "fixed" }, expectedRevision: released.revision }).drafts[0]!;
+    assert.equal(edited.prompt, "fixed");
+
+    const relaunch = crypto.randomUUID();
+    repository.mutate({ kind: "reserveLaunch", draftId, expectedRevision: edited.revision, launchId: relaunch, selection });
+    repository.mutate({ kind: "completeLaunch", draftId, launchId: relaunch, threadId: "thread-1" });
+    repository.mutate({ kind: "releaseLaunch", draftId, launchId: relaunch });
+    assert.deepEqual(repository.read().drafts, [], "an accepted launch is never reopened");
+  } finally {
+    await repository.close();
+    await temporary.dispose();
+  }
+});
+
 test("draft references persist, survive reference-blind saves, and leave with the draft at launch", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-presentation-references-");
   const repository = new WorkbenchPresentationRepository({ databasePath: path.join(temporary.path, "presentation.sqlite3") });

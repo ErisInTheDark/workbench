@@ -1,11 +1,11 @@
 /*
  * Exports:
- * - WorkbenchThreadActionOwners: shared identity, profile/state, project and transcript owners.
+ * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
  * - WorkbenchThreadCreationNotDispatchedError: definite validation failure before provider creation.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire snooze, virtual-steer routing and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
-import type { ThreadPayload, WorkbenchHarness } from "workbench-shared/types";
+import type { ThreadPayload, WorkbenchHarness, WorkbenchSkillSummary } from "workbench-shared/types";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { WorkbenchUserInputSchema } from "workbench-shared/workbench/provider/provider-input";
 import {
@@ -35,10 +35,13 @@ import type WorkbenchThreadTodoController from "./WorkbenchThreadTodoController"
 import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
 import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
 import type WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
-import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
+import type WorkbenchQuestionnaireSteerController from "./WorkbenchQuestionnaireSteerController";
+import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { readWorkbenchAgentMessageInput } from "workbench-shared/workbench/thread/thread-agent-message";
 
 export interface WorkbenchThreadActionOwners {
+  /** Messages a held questionnaire keeps for its answer, released undelivered when stop dismisses it. */
+  questionnaireSteers: Pick<WorkbenchQuestionnaireSteerController, "hold" | "release">;
   autoCompact: Pick<WorkbenchThreadAutoCompactController, "observe" | "submit">;
   compaction: Pick<WorkbenchThreadCompactionController, "compact">;
   approvals: Pick<WorkbenchApprovalController, "list">;
@@ -65,8 +68,8 @@ export interface WorkbenchThreadActionOwners {
   todos: Pick<WorkbenchThreadTodoController, "add" | "remove" | "setRequired" | "setText">;
   addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "clear">;
   vis: Pick<import("./vis/WorkbenchVisController").default, "answer" | "endById">;
-  /** Record skills an accepted submission activated. */
-  recordSkillActivations(threadId: string, paths: readonly string[]): Promise<void>;
+  /** Skills the thread's messages can activate; claimed activations are checked against them. */
+  readSkills(threadId: string): Promise<readonly WorkbenchSkillSummary[]>;
   warn(message: string): void;
 }
 
@@ -274,26 +277,26 @@ export default class WorkbenchThreadActionController {
   private async message(input: WorkbenchThreadMessage): Promise<WorkbenchThreadMessageSubmitResult> {
     const { identity, provider } = await this.target(input.threadId);
     const threadId = identity.threadId;
-    // Browser steer classification is advisory; the provider decides whether a continuation steers.
-    const result = await this.owners.autoCompact.submit(threadId, provider, {
+    // Senders that track skills claim them; the claim must match what this daemon would activate.
+    const claimed = input.context?.activatedSkillPaths;
+    if (claimed) {
+      assertWorkbenchSkillActivations(claimed, input.input.flatMap(part => part.type === "text" ? [part.text] : []),
+        await this.owners.readSkills(threadId));
+    }
+    const message = {
       clientMessageId: input.clientMessageId,
       input: input.input,
-      intent: input.intent === "newTurn" ? "newTurn" : "continue",
+      intent: input.intent === "newTurn" ? "newTurn" as const : "continue" as const,
       ...(input.context ? { context: input.context } : {}),
-    }, (message, options) => provider.threads.submit({
-      ...message, threadId, ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
-    }), input.skipAutoCompact ? { skipAutoCompact: true } : {});
-    const warnings: string[] = [];
-    try {
-      await this.owners.recordSkillActivations(identity.threadId, collectActivatedSkillPaths(input.input, input.context));
-    } catch (error) {
-      const warning = "Your message was accepted, but Workbench could not record its activated skills.";
-      this.owners.warn(`${warning} ${error instanceof Error ? error.message.slice(0, 300) : ""}`);
-      warnings.push(warning);
-    }
-    return warnings.length
-      ? { ...result, warning: [result.warning?.slice(0, 500), ...warnings].filter(Boolean).join(" ") }
-      : result;
+    };
+    // A held questionnaire whose turn ended keeps the message as a virtual steer for the answer's continuation.
+    // Otherwise browser steer classification is advisory; the provider decides whether a continuation steers.
+    // Admission activates and records the skills the admitted input names.
+    return await this.owners.questionnaireSteers.hold(threadId, message)
+      ? { kind: "queued" }
+      : await this.owners.autoCompact.submit(threadId, provider, message, (queued, options) => provider.threads.submit({
+        ...queued, threadId, ...(options.skipAutoCompact ? { skipAutoCompact: true } : {}),
+      }), input.skipAutoCompact ? { skipAutoCompact: true } : {});
   }
 
   private async withAutoCompactStatus<Thread extends ThreadPayload>(thread: Thread): Promise<Thread> {
@@ -314,6 +317,7 @@ export default class WorkbenchThreadActionController {
     const entry = await this.owners.state.getCanonicalThreadEntry(target.identity.projectId, target.identity.threadId);
     const requestKey = entry && entry.entryKind !== "draft" ? entry.pendingQuestionnaire?.requestKey : undefined;
     await this.markStopped(target, requestKey, "");
+    await this.owners.questionnaireSteers.release(target.identity.threadId);
   }
 
   private async stop(input: WorkbenchThreadStop, connectionId?: string): Promise<{ ok: true }> {
@@ -321,6 +325,8 @@ export default class WorkbenchThreadActionController {
     await this.owners.continuations.cancel(target.identity.threadId);
     await this.interruptThread(target);
     await this.markStopped(target, input.requestKey, connectionId ?? "");
+    // Stop dismissed the questionnaire, so steers waiting on its answer become undelivered.
+    await this.owners.questionnaireSteers.release(target.identity.threadId);
     return { ok: true };
   }
 

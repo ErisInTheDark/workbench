@@ -340,6 +340,8 @@ function selectionStore() {
         return stored.get(command.threadId) ?? null;
       },
       readThreadKind: async () => "thread",
+      readSkills: async () => [],
+      recordSkillActivations: async () => {},
       now: () => 1,
       warn: message => assert.fail(message),
     }),

@@ -8,6 +8,7 @@ import type { WorkbenchHarness, WorkbenchSendThreadMessageOptions } from "workbe
 import type { UserInput } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { areWorkbenchAgentPathsEqual } from "workbench-shared/workbench/agent-paths";
 import { createComposerReferenceMessage } from "workbench-shared/workbench/thread/composer-reference";
+import { readWorkbenchSkillActivationMismatch } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
 import { matchesWorkbenchModelOption } from "workbench-shared/workbench/provider/provider-model";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
@@ -137,6 +138,11 @@ export default class WorkbenchWorkspaceDrafts {
         if (wasSubmitting) state = (await daemon.launches.read({ launchId })).state;
         if (!state || state.phase === "prepared" || state.phase === "created") state = await daemon.launches.create(request);
       } catch (error) {
+        // A definite pre-reservation rejection the composer reconciles; nothing was launched, so the draft reopens for edits.
+        if (readWorkbenchSkillActivationMismatch(error)) {
+          presentation.mutate({ kind: "releaseLaunch", draftId, launchId });
+          throw error;
+        }
         try { state = (await daemon.launches.read({ launchId })).state; }
         catch (reconcileError) {
           const uncertain = new WorkbenchRpcRequestInterruptedError(
@@ -151,7 +157,11 @@ export default class WorkbenchWorkspaceDrafts {
       }
       if (state.phase !== "accepted") {
         state = (await daemon.launches.read({ launchId })).state ?? state;
-        if (state.phase === "failed") throw new Error(state.reason);
+        // A failed launch created nothing; only uncertain outcomes keep the submitting fence.
+        if (state.phase === "failed") {
+          presentation.mutate({ kind: "releaseLaunch", draftId, launchId });
+          throw new Error(state.reason);
+        }
         if (state.phase !== "accepted") throw new WorkbenchRpcRequestInterruptedError(
           "The launch is not confirmed. Reconcile this saved draft; do not create another thread.", true,
         );

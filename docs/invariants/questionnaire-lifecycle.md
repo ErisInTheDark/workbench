@@ -5,4 +5,5 @@
 - Ordinary questionnaire responses append at their daemon-owned acceptance point. Approval responses remain bound to their active approval turn.
 - Approval presentation is live-only; provider events reach clients only for observed threads. Clients re-read pending requests whenever thread state's `pendingInput` request key disagrees with the live request they hold.
 - Workbench owns hosted-shell approval waits; pending approvals hand off across core reloads. Providers own only native approval requests.
+- Messages sent while a questionnaire waits are steers. Live turns admit them; while a held questionnaire's turn is not live they are virtual steers: held, never sent to the provider, delivered after the answer in the continuation's first user message. Turn end keeps pending steers virtual while a questionnaire is pending.
 - Questionnaire delivery must not hold the thread mutation queue. Admission needs that queue; accepted history merges into current state without clearing a replacement question.

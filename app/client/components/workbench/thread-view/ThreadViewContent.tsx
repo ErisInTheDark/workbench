@@ -13,6 +13,7 @@ import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench
 import type { ThreadPayload, WorkbenchComposerInputDraft, WorkbenchComposerSettings, WorkbenchHarness, WorkbenchProjectRoot, WorkbenchSendThreadMessageOptions, WorkbenchSkillSummary } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
+import { readWorkbenchSkillActivationMismatch } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { useWorkbenchDaemonClient } from "../WorkbenchWorkspaceContext";
 import { writeTextToClipboard } from "../../../workbench/dom/clipboard";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
@@ -827,6 +828,12 @@ export default memo(function ThreadViewContent ({
     await active.actions.send(input, options);
   }, [active.actions, active.draftDocument, activeProfileSlot, composerProfileController, onSendMessage, resolvedActiveThread, thread.id]);
 
+  // The daemon rejects skill activations its catalog disagrees with and sends the activatable skills; adopt them.
+  const reconcileRejectedSkills = useCallback((error: unknown) => {
+    const mismatch = readWorkbenchSkillActivationMismatch(error);
+    if (mismatch) setWorkbenchSkills(mismatch.activatableSkills);
+  }, []);
+
   const handleStopThread = useCallback(async () => {
     await active.actions.stop();
   }, [active.actions]);
@@ -987,6 +994,7 @@ export default memo(function ThreadViewContent ({
       onListModels={threads.listModels}
       subscribeModelUpdates={threads.subscribeModelUpdates}
       highlightSources={inlineMentionSources}
+      onSubmitRejected={reconcileRejectedSkills}
       onSendMessage={handleSendMessage}
       onStopThread={handleStopThread}
       onThreadSettled={onThreadSettled}

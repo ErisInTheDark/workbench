@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, recording addressed feedback once accepted.
+ * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, rejecting mismatched skill activations before reserving and recording addressed feedback once accepted.
  */
 import {
   WorkbenchThreadLaunchRequestSchema,
@@ -9,6 +9,8 @@ import {
   type WorkbenchThreadLaunchState,
 } from "workbench-shared/workbench/thread/thread-launch";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
+import type { WorkbenchSkillSummary } from "workbench-shared/types";
+import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
 import type WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
 import type WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
@@ -21,6 +23,8 @@ export default class WorkbenchThreadLaunchController {
   private accepting = true;
 
   constructor(private readonly owners: {
+    /** Skills a message in the project can activate; claimed first-input activations are checked against them. */
+    readProjectSkills(projectId: string): Promise<readonly WorkbenchSkillSummary[]>;
     database: Pick<WorkbenchDatabaseController, "reserveThreadLaunch" | "readThreadLaunch" | "advanceThreadLaunch">;
     projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
     actions: Pick<WorkbenchThreadActionController, "handle" | "createForLaunch">;
@@ -34,6 +38,12 @@ export default class WorkbenchThreadLaunchController {
     const retained = await this.owners.database.readThreadLaunch(parsed.launchId);
     if (retained && !areDeeplyEqual(retained.request, parsed)) {
       throw new Error("Launch ID belongs to a different saved intent.");
+    }
+    // A claimed skill mismatch rejects before anything is reserved, so no thread exists for a launch that cannot send.
+    const claimed = parsed.messageContext?.activatedSkillPaths;
+    if (!retained && claimed) {
+      assertWorkbenchSkillActivations(claimed, parsed.firstInput.flatMap(part => part.type === "text" ? [part.text] : []),
+        await this.owners.readProjectSkills(parsed.projectId));
     }
     const location = retained?.location ?? await this.captureLocation(parsed.projectId);
     const state = await this.owners.database.reserveThreadLaunch(parsed, location);

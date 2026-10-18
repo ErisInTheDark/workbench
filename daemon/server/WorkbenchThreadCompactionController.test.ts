@@ -74,7 +74,7 @@ test("messages sent during compaction are held, then delivered once as one merge
   assert.equal(delivered.length, 1);
   const [merged] = delivered;
   assert.deepEqual(merged!.input.map(part => part.type === "text" ? part.text : part.type), ["one", "two"]);
-  assert.deepEqual(merged!.context, { activatedSkillPaths: ["a", "b"], workflowIds: ["default"] });
+  assert.deepEqual(merged!.context, { workflowIds: ["default"] }, "admission activates skills from the merged input");
   // Every held copy names the merged message, so clients hide them once it lands.
   assert.ok(f.steers.every(steer => steer.clientUserMessageId === merged!.clientMessageId));
   assert.deepEqual(f.steers.slice(2).map(steer => [steer.entryKey, steer.status]), [["compaction:first", "dismissed"], ["compaction:second", "dismissed"]]);

@@ -52,6 +52,8 @@ interface ThreadHeadFields {
   tokenUsage: ThreadTokenUsage | null;
   contextWindowTokens?: number | null;
   willAutoCompact?: boolean;
+  /** Whether the provider runs the latest turn; a held questionnaire's thread waits on input without one. Absent from older daemons. */
+  turnLive?: boolean;
   /** The user-set Workbench goal; drafts have none. */
   goal?: WorkbenchThreadGoal | null;
   skills?: readonly WorkbenchThreadSkill[];

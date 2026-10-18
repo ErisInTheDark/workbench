@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchQuestionnaireResponseStatePort: atomic durable questionnaire settlement boundary.
- * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, and durable-state ports.
- * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation, recording skills it activates.
+ * - WorkbenchQuestionnaireResponseControllerOptions: approval owner, questionnaire waiter, harness, virtual-steer, and durable-state ports.
+ * - default WorkbenchQuestionnaireResponseController: route one answer to its live approval, live delivery, or managed continuation (carrying virtual steers), recording skills it activates.
  */
 import type {
   WorkbenchQuestionnaireRespondRequest,
@@ -26,8 +26,11 @@ import {
 import {
   isWorkbenchMcpQuestionnaireRequestKey,
 } from "workbench-shared/workbench/thread/thread-questionnaire-identity";
-import type { WorkbenchHarness, WorkbenchUserInputResponse } from "workbench-shared/types";
+import type { WorkbenchHarness, WorkbenchSkillSummary, WorkbenchUserInputRequest, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { collectActivatedSkillPaths } from "workbench-shared/workbench/thread/thread-skill-state";
+import { assertWorkbenchSkillActivations } from "workbench-shared/workbench/thread/thread-skill-mentions";
+import { joinUserInputs } from "./WorkbenchQuestionnaireSteerController";
+import type WorkbenchQuestionnaireSteerController from "./WorkbenchQuestionnaireSteerController";
 import type WorkbenchApprovalController from "./WorkbenchApprovalController";
 import type WorkbenchHarnessController from "./WorkbenchHarnessController";
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
@@ -58,7 +61,7 @@ export interface WorkbenchQuestionnaireResponseStatePort {
 }
 
 export interface WorkbenchQuestionnaireResponseControllerOptions {
-  approvals: Pick<WorkbenchApprovalController, "owns" | "respond">;
+  approvals: Pick<WorkbenchApprovalController, "owns" | "list" | "respond">;
   harnesses: Pick<WorkbenchHarnessController, "resolveThreadIdentity">;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   resolveLatestTurn(input: {
@@ -66,8 +69,20 @@ export interface WorkbenchQuestionnaireResponseControllerOptions {
     threadId: ReturnType<typeof WorkbenchThreadIdSchema.parse>;
   }): Promise<WorkbenchTurnId | null>;
   state: WorkbenchQuestionnaireResponseStatePort;
+  /** Virtual steers ride along with a continuation and retire once it is accepted. */
+  questionnaireSteers: Pick<WorkbenchQuestionnaireSteerController, "deliverWith">;
+  /** Skills the thread can activate; claimed answer activations are checked against them. */
+  readSkills(threadId: WorkbenchThreadId): Promise<readonly WorkbenchSkillSummary[]>;
   /** Record skills an accepted answer activated; failure never undoes the answer. */
   recordSkillActivations?(threadId: string, paths: readonly string[]): Promise<void>;
+}
+
+/** Answers the user typed: those that are not one of their question's option labels. */
+function freeTextAnswers(request: WorkbenchUserInputRequest, response: WorkbenchUserInputResponse) {
+  return Object.entries(response.answers).flatMap(([questionId, { answers }]) => {
+    const labels = new Set(request.questions.find(question => question.id === questionId)?.options?.map(option => option.label));
+    return answers.filter(answer => !labels.has(answer));
+  });
 }
 
 type QuestionnaireDelivery =
@@ -103,6 +118,8 @@ export default class WorkbenchQuestionnaireResponseController {
     const projectId = ProjectIdSchema.parse(input.projectId);
     const threadId = WorkbenchThreadIdSchema.parse(input.threadId);
     if (this.options.approvals.owns(threadId, input.requestKey)) {
+      await this.checkSkillActivations(input, this.options.approvals.list()
+        .find(candidate => candidate.threadId === threadId && candidate.requestKey === input.requestKey)?.request);
       await this.sendSupplementalInput(input, input.turnId ?? null);
       await this.options.approvals.respond({ threadId, requestKey: input.requestKey, response: input.response });
       return { ok: true, route: "live" };
@@ -115,7 +132,8 @@ export default class WorkbenchQuestionnaireResponseController {
       resolvedAt: Date.now(),
       response: input.response,
       threadId,
-    }, async ({ lifecycle }) => {
+    }, async ({ lifecycle, questionnaire }) => {
+      await this.checkSkillActivations(input, questionnaire.request);
       const pendingInput = lifecycle.kind === "needsAttention"
         && lifecycle.reason === "pendingInput"
         && lifecycle.requestKey === input.requestKey;
@@ -173,10 +191,23 @@ export default class WorkbenchQuestionnaireResponseController {
   }
 
   private async respondToProvider(input: ResolvedQuestionnaireRequest): Promise<WorkbenchQuestionnaireRespondResult> {
+    const pending = await this.interactions(input.harness).pending();
+    await this.checkSkillActivations(input, pending
+      .find(candidate => candidate.threadId === input.threadId && candidate.requestKey === input.requestKey)?.request);
     await this.sendSupplementalInput(input, input.turnId ?? null);
     const response = await this.sendProviderResponse(input, input.turnId ?? null);
     const warning = response.warning;
     return { ok: true, route: "provider", ...(warning ? { warning } : {}) };
+  }
+
+  /** Claimed activations must match the skills the typed answers name; an unknown request leaves every answer typed. */
+  private async checkSkillActivations(input: ResolvedQuestionnaireRequest, request: WorkbenchUserInputRequest | undefined) {
+    if (!input.activatedSkillPaths) return;
+    const texts = request
+      ? freeTextAnswers(request, input.response)
+      : Object.values(input.response.answers).flatMap(({ answers }) => answers);
+    assertWorkbenchSkillActivations(input.activatedSkillPaths, texts,
+      await this.options.readSkills(WorkbenchThreadIdSchema.parse(input.threadId)));
   }
 
   private async sendProviderResponse(input: ResolvedQuestionnaireRequest, turnId: string | null) {
@@ -222,23 +253,24 @@ export default class WorkbenchQuestionnaireResponseController {
     return turnId;
   }
 
+  /**
+   * The answer opens the new turn as one message: `<answer>\n\n<extra input>\n\n<steer 1>\n\n<steer 2>`.
+   * Admission activates and records the skills it names; the answer's checked activations ride along as context.
+   */
   private async admitContinuation(input: ResolvedQuestionnaireRequest) {
     const activatedSkillPaths = Array.from(new Set(
       input.activatedSkillPaths?.map(path => path.trim()).filter(Boolean) ?? [],
     ));
-    const turnInput = [
-      ...createWorkbenchQuestionnaireResponseInput(input.response),
-      ...(input.supplementalInput ?? []),
-    ];
-    const result = await this.provider(input.harness).threads.submit({
-      intent: "continue",
-      clientMessageId: input.requestKey,
-      threadId: input.threadId,
-      input: turnInput,
-      ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
-      ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
-    });
-    await this.recordSkillActivations(input.threadId, collectActivatedSkillPaths(turnInput, { activatedSkillPaths }));
+    const result = await this.options.questionnaireSteers.deliverWith(input.threadId, steers => (
+      this.provider(input.harness).threads.submit({
+        intent: "continue",
+        clientMessageId: input.requestKey,
+        threadId: input.threadId,
+        input: joinUserInputs([createWorkbenchQuestionnaireResponseInput(input.response), input.supplementalInput ?? [], ...steers]),
+        ...(activatedSkillPaths.length ? { context: { activatedSkillPaths } } : {}),
+        ...(input.skipAutoCompact ? { skipAutoCompact: true } : {}),
+      })
+    ));
     return {
       turnId: WorkbenchTurnIdSchema.parse(result.kind === "started" ? result.turn.id : result.turnId),
       ...(result.warning ? { warning: result.warning } : {}),

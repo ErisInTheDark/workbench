@@ -150,6 +150,7 @@ export default function ThreadComposer ({
   onThreadComposerDraftChange,
   onThreadComposerDraftClear,
   onQuestionnaireError,
+  onSubmitRejected,
   onThreadAgentChange,
   onThreadReasoningEffortChange,
   onThreadServiceTierChange,
@@ -197,6 +198,8 @@ export default function ThreadComposer ({
   onThreadComposerDraftChange: (projectId: string, threadId: string, update: DraftUpdate<WorkbenchComposerInputDraft>, reason?: "autosave" | "submission" | "retarget", target?: WorkbenchThreadTarget, detached?: boolean) => Promise<WorkbenchComposerInputDraft | null>;
   onThreadComposerDraftClear: (projectId: string, threadId: string, target?: WorkbenchThreadTarget) => Promise<void> | void;
   onQuestionnaireError?: (message: string) => void;
+  /** A message or answer the daemon rejected; the owner of stale facts (such as known skills) refreshes them. */
+  onSubmitRejected?: (error: unknown) => void;
   onThreadAgentChange: (threadId: string, agentPath: string | null) => void;
   onThreadReasoningEffortChange: (threadId: string, effort: string | null) => void;
   onThreadServiceTierChange: (threadId: string, serviceTier: string | null) => void;
@@ -500,11 +503,15 @@ export default function ThreadComposer ({
 
     const activatedSkillPaths = getActivatedWorkbenchSkillPaths(composerHighlights);
     setError("");
+    // Always claimed, even when empty, so the daemon can check them against its own skill catalog.
     const send = (onThreadLaunched?: WorkbenchSendThreadMessageOptions["onThreadLaunched"]) => onSendMessage(thread.id, input, {
-      ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+      activatedSkillPaths,
       ...(!thread.isDraft && shiftKey ? { skipAutoCompact: true } : {}),
       ...(thread.isDraft && shiftKey ? { stayInCreate: true } : {}),
       onThreadLaunched,
+    }).catch((sendError: unknown) => {
+      onSubmitRejected?.(sendError);
+      throw sendError;
     });
     if (!thread.isDraft) {
       await editing.session.submitAccepted(async () => {
@@ -747,10 +754,15 @@ export default function ThreadComposer ({
                   mode="live"
                   willAutoCompact={Boolean(thread.willAutoCompact)}
                   onSubmit={async (response, options) => {
-                    await questionnaire.submit(response, {
-                      ...buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest),
-                      ...options,
-                    });
+                    try {
+                      await questionnaire.submit(response, {
+                        ...buildPendingUserInputRequestSubmissionOptions(turns, visiblePendingUserInputRequest),
+                        ...options,
+                      });
+                    } catch (submitError) {
+                      onSubmitRejected?.(submitError);
+                      throw submitError;
+                    }
                   }}
                 />
               </div>

@@ -23,6 +23,7 @@
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | held steer | An admitted steer awaiting delivery (pending) or never delivered (undelivered). Stored outside the transcript and shown as an overlay at the thread bottom until delivered, dismissed, or resent |
 | compaction queue | User messages sent while a thread compacts. Held as pending steers on the latest turn, delivered as one merged message when compaction ends |
+| virtual steer | Pending held steer on an ended turn while its thread holds a pending questionnaire. Never sent to the provider; delivered after the answer in the continuation's first user message |
 | transcripts | Actual thread data instead of just the visible narrative. `wb transcript --help` for looking through them |
 | workbench item | A transcript item Workbench records itself (compaction, steers, user vis ends) via a `kind: "item"` observation with `source: "workbench"`. Non-core types store as generic payloads and render through `thread-generic-item-matchers.ts` |
 | logs | Persisted daemon and app server logs under `.workbench/logs/`. |

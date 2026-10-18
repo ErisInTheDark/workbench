@@ -323,7 +323,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
     await editing.session.submitAccepted(async () => {
       await interactiveProps.onSubmit(response, {
         ...(supplementalInput.length ? { supplementalInput } : {}),
-        ...(activatedSkillPaths.length ? { activatedSkillPaths } : {}),
+        // Always claimed, even when empty, so the daemon can check them against its own skill catalog.
+        activatedSkillPaths,
         ...(isShiftPressed ? { skipAutoCompact: true } : {}),
       });
     }, interactiveProps.onDraftClear);

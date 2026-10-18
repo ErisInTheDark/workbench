@@ -71,6 +71,7 @@ import type WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoComp
 import type WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
 import type WorkbenchThreadActionController from "./WorkbenchThreadActionController";
 import { workbenchThreadActions, WorkbenchTranscriptRecoveryRequiredError, WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED } from "workbench-shared/workbench/thread/thread-actions";
+import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import { ProviderRuntimeInstallRequestSchema } from "workbench-shared/workbench/provider/provider-runtime";
 import { z } from "zod";
@@ -691,6 +692,7 @@ export default class WorkbenchDaemonRequestController {
             : error instanceof WorkbenchTranscriptRecoveryRequiredError ? WORKBENCH_TRANSCRIPT_RECOVERY_REQUIRED
             : error instanceof WorkbenchThreadHistoryPendingError ? WORKBENCH_THREAD_HISTORY_PENDING : -32000,
           ...(error instanceof GitArcFailureException ? { data: { gitArcFailure: error.failure } } : {}),
+          ...(error instanceof WorkbenchSkillActivationMismatchError ? { data: { skillActivationMismatch: error.mismatch } } : {}),
           message: error instanceof Error ? error.message : "Daemon request failed.",
         },
       };

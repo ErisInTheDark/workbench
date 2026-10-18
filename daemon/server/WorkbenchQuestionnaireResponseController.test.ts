@@ -23,6 +23,8 @@ import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import type {
   WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchUserInput } from "workbench-shared/workbench/provider/provider-input";
+import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
 
 const projectId = testProjectIds.project;
 const threadId = WorkbenchThreadIdSchema.parse("thread");
@@ -31,7 +33,8 @@ const turnId = WorkbenchTurnIdSchema.parse("turn");
 const latestTurnId = WorkbenchTurnIdSchema.parse("latest-turn");
 const admittedTurnId = WorkbenchTurnIdSchema.parse("admitted-turn");
 const nativeAdmittedTurnId = NativeTurnIdSchema.parse("native-admitted-turn");
-const response = { answers: { route: { answers: ["approve"] } } };
+const response = { answers: { route: { answers: ["approve", "use /review"] } } };
+const reviewSkill = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
 const questionnaire = {
   itemId: "item",
   request: {
@@ -63,6 +66,9 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   latestTurnId?: typeof latestTurnId | null;
   pendingTurnId?: typeof turnId | null;
   requestKey?: string;
+  virtualSteers?: WorkbenchUserInput[][];
+  optionLabel?: string;
+  providerPendingKey?: string;
 } = {}) {
   const events: string[] = [];
   const requests: JsonRpcRequest[] = [];
@@ -80,6 +86,9 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
         if (pendingRequestKey !== input.requestKey) return null;
         const pendingQuestionnaire = {
           ...questionnaire,
+          ...(options.optionLabel ? { request: { ...questionnaire.request, questions: questionnaire.request.questions.map(question => ({
+            ...question, options: [{ description: "", label: options.optionLabel! }],
+          })) } } : {}),
           requestKey: pendingRequestKey!,
           turnId: options.pendingTurnId === undefined ? questionnaire.turnId : options.pendingTurnId,
         };
@@ -130,7 +139,9 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
     },
     interactions: {
       interruptRetaining: unused,
-      pending: unused,
+      pending: async () => options.providerPendingKey ? [{
+        harness: "codex", threadId, requestKey: options.providerPendingKey, turnId, itemId: null, request: questionnaire.request,
+      }] : [],
       canDeliver: async () => options.deliverable ?? true,
       deliver: async () => { events.push("waiter"); return true; },
       respond: async input => { observe("respond", input); return {}; },
@@ -141,6 +152,9 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
   const controller = new WorkbenchQuestionnaireResponseController({
     approvals: {
       owns: (_thread, key) => key === options.liveApprovalKey,
+      list: () => options.liveApprovalKey ? [{
+        harness: "codex", threadId, requestKey: options.liveApprovalKey, turnId, itemId: null, request: questionnaire.request,
+      }] : [],
       respond: async input => { observe("approval", input); return { ok: true }; },
     },
     providers: { get: () => provider },
@@ -159,6 +173,14 @@ function createHarness(lifecycle: WorkbenchThreadLifecycle, options: {
       }),
     },
     resolveLatestTurn: async () => options.latestTurnId === undefined ? latestTurnId : options.latestTurnId,
+    readSkills: async () => [reviewSkill],
+    questionnaireSteers: {
+      deliverWith: async (_thread, admit) => {
+        const result = await admit(options.virtualSteers ?? []);
+        if (options.virtualSteers?.length) events.push("steers retired");
+        return result;
+      },
+    },
     state,
   });
   return { controller, events, historyTurnId: () => historyTurnId, requests, settled: () => settled };
@@ -203,7 +225,7 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
     repository.replace(thread.threadId, { pending, history: [] });
     const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
     const controller = new WorkbenchQuestionnaireResponseController({
-      approvals: { owns: () => false, respond: unused },
+      approvals: { owns: () => false, list: () => [], respond: unused },
       providers: { get: () => ({
         configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
         threads: {
@@ -225,6 +247,8 @@ test("admitted native turns settle questionnaire history under SQLite canonical 
         resolveThreadIdentity: async () => thread,
       },
       resolveLatestTurn: async () => null,
+      readSkills: async () => [reviewSkill],
+      questionnaireSteers: { deliverWith: (_thread, admit) => admit([]) },
       state: {
         resolvePendingQuestionnaire: async (input, deliver) => {
           const accepted = await deliver({ questionnaire: pending, lifecycle: { kind: "stopped", reason: "userMarkedStopped", settled: false } });
@@ -263,7 +287,9 @@ test("interrupted lifecycle admits even when the daemon still exposes an orphan 
   assert.equal(harness.events.includes("waiter"), false);
   assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
   const admission = harness.requests.find(({ method }) => method === "submit");
-  assert.deepEqual((admission?.params as { input?: unknown[] } | undefined)?.input?.slice(1), request().supplementalInput);
+  const [answer, image] = (admission?.params as { input: WorkbenchUserInput[] }).input;
+  assert.ok(answer?.type === "text" && answer.text.endsWith("</wb:questionnaire-response>\n\nextra context"), "extra text joins the answer");
+  assert.deepEqual(image, request().supplementalInput[1]);
   assert.deepEqual(
     (admission?.params as { context?: { activatedSkillPaths?: string[] } } | undefined)?.context?.activatedSkillPaths,
     request().activatedSkillPaths,
@@ -372,6 +398,59 @@ test("provider questionnaire with pending lifecycle but no live waiter admits a 
   assert.equal(result.route, "admitted");
   assert.deepEqual(harness.events.slice(0, 2), ["submit", "settled"]);
   assert.equal(harness.requests.some(({ method }) => method === "respond"), false);
+});
+
+test("a held questionnaire's continuation is one message: the answer, then each virtual steer, retiring them once accepted", async () => {
+  const requestKey = "provider-question";
+  const text = (value: string) => ({ text: value, text_elements: [], type: "text" as const });
+  const harness = createHarness({
+    kind: "needsAttention", reason: "pendingInput", requestKey, settled: false, turnId,
+  }, { deliverable: false, requestKey, virtualSteers: [[text("first")], [text("second")]] });
+
+  await harness.controller.respond({ ...request(), requestKey, supplementalInput: [] });
+
+  const submitted = harness.requests.find(({ method }) => method === "submit")?.params as { input: WorkbenchUserInput[] };
+  assert.equal(submitted.input.length, 1);
+  const [joined] = submitted.input;
+  assert.ok(joined?.type === "text");
+  assert.match(joined.text, /<\/wb:questionnaire-response>\n\nfirst\n\nsecond$/u);
+  assert.deepEqual(harness.events.slice(0, 3), ["submit", "steers retired", "settled"]);
+});
+
+test("claimed skill activations in free-text answers are checked before any delivery; option labels are not skills", async () => {
+  const harness = createHarness({
+    kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId,
+  });
+  const answer = (...answers: string[]) => ({ answers: { route: { answers } } });
+  const rejected = await harness.controller.respond({
+    ...request(), activatedSkillPaths: ["C:/gone/stale/SKILL.md"], response: answer("approve", "use /review"),
+  }).catch(error => error);
+  assert.ok(rejected instanceof WorkbenchSkillActivationMismatchError);
+  assert.deepEqual(harness.events, []);
+
+  const optionLabel = createHarness({
+    kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId,
+  }, { optionLabel: "/review" });
+  await optionLabel.controller.respond({ ...request(), activatedSkillPaths: [], response: answer("/review") });
+  assert.equal(optionLabel.settled(), true);
+});
+
+test("live approval and provider-native answers check claimed skill activations before delivery", async () => {
+  const lifecycle = {
+    kind: "needsAttention", reason: "pendingInput", requestKey: questionnaire.requestKey, settled: false, turnId,
+  } as const;
+  const stale = { ...request(), activatedSkillPaths: ["C:/gone/stale/SKILL.md"] };
+  const approval = createHarness(lifecycle, { liveApprovalKey: questionnaire.requestKey });
+  assert.ok(await approval.controller.respond(stale).catch(error => error) instanceof WorkbenchSkillActivationMismatchError);
+  assert.deepEqual(approval.events, []);
+
+  const native = createHarness(lifecycle, { providerPendingKey: "native-question" });
+  assert.ok(await native.controller.respond({ ...stale, requestKey: "native-question" }).catch(error => error)
+    instanceof WorkbenchSkillActivationMismatchError);
+  assert.deepEqual(native.events, []);
+
+  const accepted = createHarness(lifecycle, { providerPendingKey: "native-question" });
+  assert.equal((await accepted.controller.respond({ ...request(), requestKey: "native-question" })).route, "provider");
 });
 
 test("live approvals answer through their owner and never touch durable questionnaire state", async () => {

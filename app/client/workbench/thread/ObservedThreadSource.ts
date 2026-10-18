@@ -96,6 +96,7 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     contextWindowTokens: settings?.contextWindowTokens ?? null,
     tokenUsage: runtime?.tokenUsage ?? null,
     ...(runtime?.willAutoCompact != null ? { willAutoCompact: runtime.willAutoCompact } : {}),
+    ...(runtime?.turnLive != null ? { turnLive: runtime.turnLive } : {}),
     goal: runtime?.goal ?? null,
     skills: runtime?.skills ?? [],
     todos: runtime?.todos ?? [],
@@ -355,7 +356,7 @@ export default function createObservedThreadSource(
         const steerText = getWorkbenchApprovalSupplementalSteerText(durable.request, response);
         const supplementalInput = [...(steerText ? [createWorkbenchTextInput(steerText)] : []), ...(options.supplementalInput ?? [])];
         const result = await ports.daemon.threads.questionnaire.respond({
-          ...(options.activatedSkillPaths?.length ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
+          ...(options.activatedSkillPaths ? { activatedSkillPaths: options.activatedSkillPaths } : {}),
           insertAfterItemId: options.insertAfterItemId ?? (isWorkbenchMcpQuestionnaireRequestKey(durable.requestKey) ? null : durable.itemId),
           insertAfterItemIndex: options.insertAfterItemIndex ?? null,
           projectId: ProjectIdSchema.parse(ports.projectId),

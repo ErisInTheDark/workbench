@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, questionnaire, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations (including provider runtime installs).
+ * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, turn liveness, questionnaire and virtual steers, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
  */
 import path from "node:path";
@@ -80,9 +80,11 @@ import WorkbenchApprovalReviewController from "./approval-review/WorkbenchApprov
 import { readOpenCodeApiKey } from "./approval-review/opencode-auth-credential";
 import { DEFAULT_APPROVAL_MODE, resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
 import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
+import WorkbenchQuestionnaireSteerController from "./WorkbenchQuestionnaireSteerController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
 import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
 import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
+import WorkbenchThreadTurnLiveness from "./WorkbenchThreadTurnLiveness";
 import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
 import WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
 import WorkbenchThreadContextRolloverController from "./WorkbenchThreadContextRolloverController";
@@ -169,6 +171,18 @@ function createWorkbenchCoreFeature(
     const request = approvals.list().find(candidate => candidate.threadId === threadId);
     return request ? { itemId: request.itemId, request: request.request, requestKey: request.requestKey, turnId: request.turnId } : null;
   };
+  const turnLiveness = new WorkbenchThreadTurnLiveness({
+    threads: harness => {
+      const key = installedProviderKeys.find(candidate => candidate === harness);
+      if (!key) throw new Error(`Provider ${harness} is not installed.`);
+      return providers.get(key).threads;
+    },
+    resolveHarness: async threadId => (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness ?? null,
+    publish: (threadId, turnLive) => {
+      for (const listener of runtimeListeners) listener(threadId, { turnLive });
+    },
+    warn: message => logThreadStateWarning(message),
+  });
   const compaction = new WorkbenchThreadCompactionController(admission, {
     record: transcript.record.bind(transcript),
     setCompacting: (threadId, compacting) => threadSummaries?.setCompacting(threadId, compacting),
@@ -188,12 +202,11 @@ function createWorkbenchCoreFeature(
     readRuntime: async target => {
       const key = installedProviderKeys.find(candidate => candidate === target.harness);
       if (!key) throw new Error(`Provider ${target.harness} is not installed.`);
-      return run(providerRegistrations[key], async provider => {
-        const thread = await provider.threads.read(target.threadId, { background: true });
-        const latestTurn = await provider.threads.latestTurn(target.threadId);
-        const turnLive = latestTurn ? await provider.threads.isTurnLive(target.threadId, latestTurn.id) : false;
-        return { latestTurn, status: thread.status, turnLive };
-      }, `${key}: auto-compact status`);
+      const { latestTurn, status } = await run(providerRegistrations[key], async provider => ({
+        status: (await provider.threads.read(target.threadId, { background: true })).status,
+        latestTurn: await provider.threads.latestTurn(target.threadId),
+      }), `${key}: auto-compact status`);
+      return { latestTurn, status, turnLive: await turnLiveness.read(target.threadId, target.harness) };
     },
     publish: (target, willAutoCompact) => {
       for (const listener of runtimeListeners) listener(target.threadId, { willAutoCompact });
@@ -201,6 +214,15 @@ function createWorkbenchCoreFeature(
     now: Date.now,
     warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
   });
+  const skillCatalog = new WorkbenchAgentSkillCatalogController(
+    (projectId) => projectCatalog.resolveProjectById(projectId),
+    (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
+  );
+  /** The skills a thread's messages can activate: its project's catalog, as the composer reads it. */
+  const readThreadSkills = async (threadId: string) => {
+    const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+    return identity ? await skillCatalog.readActivatableSkills(identity.projectId) : [];
+  };
   const instructionSelection = new WorkbenchThreadInstructionSelectionController({
     store: command => database.executeThreadInstructionSelection(command),
     readThreadKind: async threadId => {
@@ -209,6 +231,8 @@ function createWorkbenchCoreFeature(
         ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
       return entry && entry.entryKind !== "draft" ? entry.entryKind : null;
     },
+    readSkills: readThreadSkills,
+    recordSkillActivations: (threadId, paths) => threadSkills.recordActivations(threadId, paths, "user"),
     now: Date.now,
     warn: message => console.warn(`[instruction-selection] ${message.slice(0, 500)}`),
   });
@@ -690,10 +714,29 @@ function createWorkbenchCoreFeature(
     await threadSkills.observeCompaction(completion.threadId);
     if (lease.isCurrent()) await threadGoals.observeCompaction(completion.threadId);
   });
+  const questionnaireSteers = new WorkbenchQuestionnaireSteerController({
+    hasPendingQuestionnaire: async threadId => {
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+      const entry = identity ? await requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
+      return Boolean(entry && entry.entryKind !== "draft" && "pendingQuestionnaire" in entry && entry.pendingQuestionnaire);
+    },
+    latestTurn: async threadId => {
+      const harness = (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness;
+      if (!harness) return null;
+      const turn = await provider(harness).threads.latestTurn(threadId);
+      return turn ? { id: turn.id, live: await turnLiveness.read(threadId, harness) } : null;
+    },
+    readSteers: async threadId => (await transcriptReader.history(threadId)).steerEntries,
+    record: transcript.record.bind(transcript),
+    now: Date.now,
+    warn: message => logThreadStateWarning(message),
+  });
   const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
     approvals,
     harnesses,
     providers,
+    questionnaireSteers,
+    readSkills: readThreadSkills,
     recordSkillActivations,
     resolveLatestTurn: async ({ projectId, threadId }) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
@@ -779,6 +822,7 @@ function createWorkbenchCoreFeature(
     warn: message => logThreadStateWarning(message),
   });
   const threadActions = new WorkbenchThreadActionController({
+    questionnaireSteers,
     autoCompact,
     compaction,
     approvals,
@@ -790,12 +834,18 @@ function createWorkbenchCoreFeature(
     continuations,
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadState, state: threadState.controller,
-    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, vis, recordSkillActivations,
+    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, vis,
+    readSkills: readThreadSkills,
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
   const unsubscribeTurnStarted = transcript.subscribeTurnStarted(async ({ threadId, turnId }) => {
     if (!lease.isCurrent()) return;
+    // A newly live turn means any questionnaire its steers waited on was answered or dropped.
+    if (await turnLiveness.turnStarted(threadId)) {
+      void questionnaireSteers.release(threadId).catch(error => logThreadStateWarning(
+        `Virtual steer release failed for ${threadId.slice(0, 120)}: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`));
+    }
     await turnSettlement.settleSuperseded(threadId, turnId);
     if (lease.isCurrent()) await threadActions.resendUndeliveredAgentMessages(threadId, turnId);
   });
@@ -804,7 +854,9 @@ function createWorkbenchCoreFeature(
     if (lease.isCurrent()) messages.delivered(threadId, message);
   }) ?? (() => undefined);
   const unsubscribeAutoCompactSettled = transcript.subscribeSettled(threadIds => {
-    if (lease.isCurrent()) void autoCompact.refreshObserved(threadIds);
+    if (!lease.isCurrent()) return;
+    void autoCompact.refreshObserved(threadIds);
+    void turnLiveness.settled(threadIds);
   });
   // Held steers live outside the transcript stream, so open views learn about them from this push.
   const unsubscribeHeldSteers = transcript.subscribeHeldSteers(async ({ threadId, turnId }) => {
@@ -817,6 +869,7 @@ function createWorkbenchCoreFeature(
     }
   });
   const launches = new WorkbenchThreadLaunchController({
+    readProjectSkills: projectId => skillCatalog.readActivatableSkills(projectId),
     database, projects: projectCatalog, actions: threadActions,
     addressedFeedback: threadAddressedFeedback,
     warn: message => logThreadStateWarning(message),
@@ -853,9 +906,11 @@ function createWorkbenchCoreFeature(
       const skills = await optional("skills", () => threadSkills.read(threadId));
       const todos = await optional("todos", () => threadTodos.read(threadId));
       const addressedFeedback = await optional("addressed feedback", () => threadAddressedFeedback.read(threadId));
+      const turnLive = await optional("turn liveness", () => turnLiveness.read(threadId, harness));
       return {
         tokenUsage: await readTokenUsage(threadId),
         willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
+        ...(turnLive !== undefined ? { turnLive } : {}),
         pendingApproval: readPendingApproval(threadId),
         ...(goal !== undefined ? { goal } : {}),
         ...(skills !== undefined ? { skills } : {}),
@@ -896,10 +951,7 @@ function createWorkbenchCoreFeature(
     threadActions,
     launches,
     presentationExport: threadState.controller,
-    agents: new WorkbenchAgentSkillCatalogController(
-      (projectId) => projectCatalog.resolveProjectById(projectId),
-      (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
-    ),
+    agents: skillCatalog,
     files: projectFiles,
     gitArc,
     nativeFiles: new WorkbenchNativeFileController(projectCatalog),

@@ -6,7 +6,7 @@
  * - WorkbenchGitArcProposalState/WorkbenchGitArcProposalSummary: one observed lifecycle proposal and its Git-derived message and totals.
  * - WorkbenchDurableQuestionnaire/WorkbenchQuestionnaireHistoryEntryState: saved pending and answered questions.
  * - WorkbenchPendingApprovalSchema: a live, non-durable approval prompt.
- * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, pending approval, goal, skills, todos, addressed feedback) on thread observations.
+ * - ThreadRuntimeSchema/ThreadRuntime/ThreadRuntimeRecordSchema: per-thread live facts (token usage, auto-compaction, turn liveness, pending approval, goal, skills, todos, addressed feedback) on thread observations.
  * - WorkbenchThreadSidebarEntry/WorkbenchTopLevelThreadSidebarEntry/WorkbenchThreadSidebarGroup: row variants and display groups.
  * - WorkbenchThreadSidebarEntryVariants: unrefined entry variant schemas for derived row contracts.
  * - WorkbenchThreadWaitTargetSchema/WorkbenchThreadWaitTarget: project-qualified dependent-wait references.
@@ -471,6 +471,8 @@ export const WorkbenchPendingApprovalSchema = z.object({
 export const ThreadRuntimeSchema = z.object({
   tokenUsage: ThreadTokenUsageSchema.nullable(),
   willAutoCompact: z.boolean().nullable(),
+  /** Whether the provider runs the thread's latest turn; absent from daemons that predate it. */
+  turnLive: z.boolean().optional(),
   pendingApproval: WorkbenchPendingApprovalSchema.nullable().optional(),
   /** The user-set Workbench goal; absent from daemons that predate goals. */
   goal: WorkbenchThreadGoalSchema.nullable().optional(),

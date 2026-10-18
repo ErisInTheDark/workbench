@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers, context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits), context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -1705,15 +1705,26 @@ export default class WorkbenchTranscriptRepository {
     this.#settlementChanges?.heldSteerTurnIds.add(entry.turnId);
   }
 
-  /** A turn that ends can no longer deliver the steers it still holds; they become undelivered, not lost. */
+  /**
+   * A turn that ends can no longer deliver the steers it still holds; they become undelivered, not lost.
+   * While its thread holds a pending questionnaire they stay pending as virtual steers, delivered with the answer.
+   */
   #interruptHeldSteers(turnId: string, endedAt: number) {
-    this.#run(updateRows(heldSteerTables.threadHeldSteers, {
-      state: "interrupted", resolved_at: endedAt,
-    }, { turn_id: turnId, state: "pending" }));
+    this.#database.prepare(`
+      UPDATE thread_held_steers SET state = 'interrupted', resolved_at = @endedAt
+      WHERE turn_id = @turnId AND state = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM workbench_thread_questionnaires q
+          WHERE q.thread_id = thread_held_steers.thread_id AND q.state = 'pending'
+        )
+    `).run({ turnId, endedAt });
     this.#settlementChanges?.heldSteerTurnIds.add(turnId);
   }
 
-  /** Running turns own their holds until they settle; on a settled turn a hold can only be a previous daemon's leftover. */
+  /**
+   * Running turns own their holds until they settle; on a settled turn a hold is a virtual steer while its thread
+   * holds a pending questionnaire, and otherwise a leftover nobody will deliver.
+   */
   #abandonedHolds(before: number, threadId: string | null) {
     const parameters = { before, threadId };
     const steers = this.#database.prepare(`
@@ -1723,6 +1734,9 @@ export default class WorkbenchTranscriptRepository {
       WHERE s.state = 'pending' AND s.attempted_at < @before
         AND t.state NOT IN ('admitted', 'inProgress')
         AND (@threadId IS NULL OR s.thread_id = @threadId)
+        AND NOT EXISTS (
+          SELECT 1 FROM workbench_thread_questionnaires q WHERE q.thread_id = s.thread_id AND q.state = 'pending'
+        )
       ORDER BY s.id
     `).all(parameters) as Array<{ id: number; thread_id: string; turn_id: string }>;
     const compactions = this.#database.prepare(`

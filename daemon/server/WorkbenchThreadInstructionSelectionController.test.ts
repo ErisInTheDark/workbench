@@ -7,8 +7,11 @@ import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInst
 
 const threadId = WorkbenchThreadIdSchema.parse("thread");
 
+const review = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
+
 function fixture(kind: "thread" | "subagent", options: { stored?: WorkbenchInstructionSelection; failWrites?: boolean } = {}) {
   const warnings: string[] = [];
+  const activations: string[][] = [];
   let stored = options.stored ?? null;
   const owner = new WorkbenchThreadInstructionSelectionController({
     store: async command => {
@@ -19,11 +22,27 @@ function fixture(kind: "thread" | "subagent", options: { stored?: WorkbenchInstr
       return stored;
     },
     readThreadKind: async () => kind,
+    readSkills: async () => [review],
+    recordSkillActivations: async (_thread, paths) => { activations.push([...paths]); },
     now: () => 1,
     warn: message => { warnings.push(message); },
   });
-  return { owner, warnings, stored: () => stored };
+  return { owner, warnings, activations, stored: () => stored };
 }
+
+test("admitted input activates the skills it names, with or without its own selection", async () => {
+  const text = (value: string) => [{ type: "text" as const, text: value, text_elements: [] }];
+  const { owner, activations } = fixture("thread", { stored: { workflowIds: ["review"] } });
+  assert.deepEqual(await owner.resolve(threadId, undefined, text("answer\n\n/review this")), {
+    workflowIds: ["review"], activatedSkillPaths: [review.path],
+  });
+  assert.deepEqual(await owner.resolve(threadId, { workflowIds: [] }, text("/review")), {
+    workflowIds: [], activatedSkillPaths: [review.path],
+  });
+  assert.deepEqual(await owner.resolve(threadId, undefined), { workflowIds: ["review"] }, "agent messages are not parsed");
+  await owner.record(threadId, undefined, [review.path]);
+  assert.deepEqual(activations, [[review.path]]);
+});
 
 test("a thread with no recorded selection launches with its kind's default workflow", async () => {
   assert.deepEqual(await fixture("thread").owner.resolve(threadId, undefined), { workflowIds: ["default"] });

@@ -60,15 +60,18 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   }
 
   /** Inside the admission lane, so a selection recorded by an earlier message is the one this message sees. */
+  /** User input passed here activates the skills it names; agent messages pass none. */
   private async withSelection<T>(
     threadId: string, context: WorkbenchMessageContext | undefined,
     admit: (context: WorkbenchMessageContext | undefined) => Promise<T>,
+    input?: readonly WorkbenchUserInput[],
   ) {
     const selection = this.options.instructionSelection;
     if (!selection) return await admit(context);
     const id = WorkbenchThreadIdSchema.parse(threadId);
-    const result = await admit(await selection.resolve(id, context));
-    await selection.record(id, context);
+    const resolved = await selection.resolve(id, context, input);
+    const result = await admit(resolved);
+    await selection.record(id, context, resolved.activatedSkillPaths ?? []);
     return result;
   }
 
@@ -170,7 +173,7 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       const result = this.admitted(input.threadId, await this.run(providerRegistrations[this.key], provider => (
         this.admitMessage(input.threadId, provider, () => this.withSelection(input.threadId, input.context, context => (
           provider.threads.submit({ ...providerInput, ...(context ? { context } : {}) })
-        )), { skipAutoCompact })
+        ), providerInput.input), { skipAutoCompact })
       ), `${this.key}: threads.submit`));
       return await this.publishAcceptedUserMessage(input, result);
     },

@@ -6,7 +6,8 @@ import WorkbenchTemporaryDirectory from "../../../shared/WorkbenchTemporaryDirec
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import WorkbenchDaemonClient from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import WorkbenchDaemonClient, { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
+import { readWorkbenchSkillActivationMismatch } from "workbench-shared/workbench/thread/thread-skill-mentions";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { DaemonIdSchema, ProjectIdSchema, ProjectIdentityKeySchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
@@ -188,6 +189,58 @@ test("uncertain dispatch reconciles the original launch and coalesces callers", 
   assert.equal(f.requests.filter(request => request.method === "thread/launch").length, 1);
   assert.equal(f.retained(), 0);
 });
+
+test("a skill activation rejection reaches the caller unchanged instead of launch reconciliation", async context => {
+  const f = await fixture(context);
+  const mismatch = { unknownPaths: ["C:/gone/stale/SKILL.md"], missedPaths: [], activatableSkills: [] };
+  f.handle(async method => {
+    if (method === "models/list") return { data: [model] };
+    assert.equal(method, "thread/launch");
+    throw new WorkbenchDaemonRequestError("Skill activation /stale doesn't exist for this thread.", -32000, { skillActivationMismatch: mismatch });
+  });
+  const rejected = await f.owner.launch(f.draftId, f.draft().revision).catch(error => error);
+  assert.deepEqual(readWorkbenchSkillActivationMismatch(rejected), mismatch);
+  assert.equal(f.requests.some(request => request.method === "thread/launch/read"), false);
+  await assertEditableAndRelaunchable(f);
+});
+
+test("a launch the daemon definitely failed leaves the draft editable instead of locked submitting", async context => {
+  const f = await fixture(context);
+  let failed: WorkbenchThreadLaunchState | null = null;
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [model] };
+    if (method === "thread/launch/read") return { state: failed };
+    assert.equal(method, "thread/launch");
+    failed = { phase: "failed", launchId: WorkbenchThreadLaunchRequestSchema.parse(params).launchId, reason: "Profile is unavailable." };
+    return failed;
+  });
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /Profile is unavailable/u);
+  await assertEditableAndRelaunchable(f);
+});
+
+async function assertEditableAndRelaunchable(f: Awaited<ReturnType<typeof fixture>>) {
+  const draft = f.draft();
+  assert.equal(draft.phase, "unsent");
+  assert.equal(draft.launchId, null);
+  const rejectedLaunchId = WorkbenchThreadLaunchRequestSchema.parse(
+    f.requests.findLast(request => request.method === "thread/launch")!.params).launchId;
+  f.presentation.mutate({ kind: "putDraft", expectedRevision: draft.revision, draft: {
+    id: draft.id, logicalProjectId: draft.logicalProjectId, target: draft.target,
+    prompt: "edited message", selection: draft.selection, updatedAt: 2,
+  } });
+  let sent: z.infer<typeof WorkbenchThreadLaunchRequestSchema> | null = null;
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [model] };
+    assert.equal(method, "thread/launch");
+    sent = WorkbenchThreadLaunchRequestSchema.parse(params);
+    return { phase: "accepted", launchId: sent.launchId, threadId: randomUUID(), turnId: randomUUID() };
+  });
+  await f.owner.launch(f.draftId, f.draft().revision);
+  const relaunch = sent as z.infer<typeof WorkbenchThreadLaunchRequestSchema> | null;
+  const text = relaunch?.firstInput[0];
+  assert.equal(text?.type === "text" ? text.text : null, "edited message");
+  assert.notEqual(relaunch?.launchId, rejectedLaunchId);
+}
 
 test("a replacement owner reads an uncertain launch without resending the first message", async context => {
   const f = await fixture(context);

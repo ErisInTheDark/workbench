@@ -4,7 +4,7 @@
  * - isVisibleWorkbenchAgentMessageText: recognize agent text that is neither blank nor the reserved turn-end marker.
  * - stripWorkbenchTurnEndMarker: remove the reserved trailing marker from displayed agent text.
  * - createWorkbenchThreadRecoveryId/createWorkbenchThreadRecoveryInput/createWorkbenchUnfinishedTurnInput/createWorkbenchQuestionnaireResponseInput: construct provider-safe hidden Workbench steers.
- * - stripWorkbenchQuestionnaireResponseInput: remove valid hidden questionnaire parts while preserving visible sibling input.
+ * - stripWorkbenchQuestionnaireResponseInput: remove valid hidden questionnaire answers, including one opening a joined message, while preserving visible input.
  * - isWorkbenchThreadRecoveryInput/isWorkbenchUnfinishedTurnInput/isWorkbenchUnfinishedContinuationTurn/isWorkbenchQuestionnaireResponsePart/isWorkbenchQuestionnaireResponseInput/isWorkbenchHiddenSystemSteerInput/isWorkbenchThreadRecoveryUserMessage: recognize reserved hidden Workbench content and continuation turns.
  * - isWorkbenchThreadRecoveryEligible: derive the manual resume boundary from authoritative lifecycle and pending-input state.
  */
@@ -90,9 +90,8 @@ export function createWorkbenchQuestionnaireResponseInput(response: WorkbenchUse
   }];
 }
 
-export function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
-  if (input.type !== "text") return false;
-  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(input.text);
+function isWorkbenchQuestionnaireResponseText(text: string) {
+  const parsed = WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.read(text);
   if (!parsed) return false;
   try {
     const response = JSON.parse(parsed.body) as { answers?: unknown };
@@ -102,8 +101,37 @@ export function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
   }
 }
 
+/** A text part opening with a valid wrapped answer: the visible text after it, and that text's UTF-8 byte offset. */
+function splitWorkbenchQuestionnaireResponse(text: string) {
+  const closing = `\n</${WORKBENCH_QUESTIONNAIRE_RESPONSE_TAG_WRAPPER.tagName}>`;
+  const end = text.indexOf(closing);
+  if (end < 0) return null;
+  const answerEnd = end + closing.length;
+  const after = text.slice(answerEnd);
+  if (after && !/^\r?\n/u.test(after)) return null;
+  if (!isWorkbenchQuestionnaireResponseText(text.slice(0, answerEnd))) return null;
+  const rest = after.replace(/^\s+/u, "");
+  return { rest, offset: new TextEncoder().encode(text.slice(0, text.length - rest.length)).length };
+}
+
+/** True when the part opens with a wrapped answer; joined messages carry visible text after it. */
+export function isWorkbenchQuestionnaireResponsePart(input: UserInput) {
+  return input.type === "text" && splitWorkbenchQuestionnaireResponse(input.text) !== null;
+}
+
 export function stripWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]): UserInput[] {
-  return input.filter((item) => !isWorkbenchQuestionnaireResponsePart(item));
+  return input.flatMap((item) => {
+    const split = item.type === "text" ? splitWorkbenchQuestionnaireResponse(item.text) : null;
+    if (!split || item.type !== "text") return [item];
+    if (!split.rest) return [];
+    return [{
+      ...item,
+      text: split.rest,
+      text_elements: item.text_elements
+        .filter(element => element.byteRange.start >= split.offset)
+        .map(element => ({ ...element, byteRange: { start: element.byteRange.start - split.offset, end: element.byteRange.end - split.offset } })),
+    }];
+  });
 }
 
 export function isWorkbenchThreadRecoveryInput(input: readonly UserInput[]) {
@@ -126,11 +154,11 @@ export function isWorkbenchUnfinishedContinuationTurn(turn: Pick<Turn, "items">)
   return turn.items.some(item => item.type === "userMessage" && isWorkbenchUnfinishedTurnInput(item.content));
 }
 
+/** An answer-only message: nothing stays visible once the answer and skill transport are removed. */
 export function isWorkbenchQuestionnaireResponseInput(input: readonly UserInput[]) {
   const visibleInput = stripWorkbenchActivatedSkillsInput(input);
-  return visibleInput.length === 1
-    && visibleInput[0] !== undefined
-    && isWorkbenchQuestionnaireResponsePart(visibleInput[0]);
+  return visibleInput.some(isWorkbenchQuestionnaireResponsePart)
+    && stripWorkbenchQuestionnaireResponseInput(visibleInput).length === 0;
 }
 
 export function isWorkbenchHiddenSystemSteerInput(input: readonly UserInput[]) {

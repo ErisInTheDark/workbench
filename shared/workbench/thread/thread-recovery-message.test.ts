@@ -144,6 +144,19 @@ test("skill transport does not hide other input alongside questionnaire response
   assert.equal([malformed, ordinary].some(isWorkbenchQuestionnaireResponsePart), false);
 });
 
+test("an answer opening a joined message hides only itself; the text after it stays visible with its ranges", () => {
+  const [answer] = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
+  assert.ok(answer?.type === "text");
+  const prefix = `${answer.text}\n\n`;
+  const offset = new TextEncoder().encode(prefix).length;
+  const joined = [{ text: `${prefix}first @x`, text_elements: [{ byteRange: { start: offset + 6, end: offset + 8 }, placeholder: null }], type: "text" as const }];
+  assert.equal(joined.some(isWorkbenchQuestionnaireResponsePart), true);
+  assert.equal(isWorkbenchQuestionnaireResponseInput(joined), false, "the steers keep the message visible");
+  assert.deepEqual(unwrapWorkbenchSteerDisplayInput(joined), [
+    { text: "first @x", text_elements: [{ byteRange: { start: 6, end: 8 }, placeholder: null }], type: "text" },
+  ]);
+});
+
 test("mixed questionnaire response transport preserves only visible siblings for display", () => {
   const response = createWorkbenchQuestionnaireResponseInput({ answers: { route: { answers: ["approved"] } } });
   const ordinary = { text: "visible note", text_elements: [], type: "text" as const };

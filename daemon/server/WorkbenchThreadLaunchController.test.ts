@@ -7,6 +7,9 @@ import { ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadLaunchRequestSchema, type WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
 import { WorkbenchThreadCreationNotDispatchedError } from "./WorkbenchThreadActionController";
+import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
+
+const review = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
 
 const launchId = "dc085242-b595-4a51-9bd0-099013ead304";
 const projectId = ProjectIdSchema.parse("3ffed8c7-5098-4ced-9f6a-32f13eb747c6");
@@ -37,6 +40,7 @@ function fixture({ failMessage = false, failBeforeCreation = false, unavailableP
   let messages = 0;
   const warnings: string[] = [];
   const controller = new WorkbenchThreadLaunchController({
+    readProjectSkills: async () => [review],
     database: {
       reserveThreadLaunch: async (_input, captured) => {
         assert.deepEqual(captured, location);
@@ -80,8 +84,24 @@ function fixture({ failMessage = false, failBeforeCreation = false, unavailableP
     },
     warn: message => warnings.push(message),
   });
-  return { controller, addressed, get state() { return state; }, get creations() { return creations; }, get messages() { return messages; }, warnings };
+  return {
+    controller, addressed, warnings, get state() { return state; }, get creations() { return creations; },
+    get messages() { return messages; }, get recorded() { return recorded; },
+  };
 }
+
+test("claimed skill activations that disagree with the project's catalog reject a launch before anything is reserved or created", async () => {
+  const stale = WorkbenchThreadLaunchRequestSchema.parse({
+    ...request, firstInput: [{ type: "text", text: "/review it", text_elements: [] }],
+    messageContext: { activatedSkillPaths: ["C:/gone/stale/SKILL.md"] },
+  });
+  const owner = fixture({ launch: stale });
+  const rejected = await owner.controller.launch(stale).catch(error => error);
+  assert.ok(rejected instanceof WorkbenchSkillActivationMismatchError);
+  assert.deepEqual(rejected.mismatch.activatableSkills, [review]);
+  assert.equal(owner.recorded, false);
+  assert.equal(owner.creations, 0);
+});
 
 test("replaying an accepted launch returns the same thread and never repeats native work", async () => {
   const owner = fixture();

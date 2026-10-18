@@ -3100,6 +3100,39 @@ test("abandoned holds on settled turns end undelivered and interrupted, sparing 
   }
 });
 
+test("steers on a turn that ends while a questionnaire waits stay virtual until the questionnaire leaves", () => {
+  const { database, repository } = createRepository();
+  try {
+    const thread = fixtureIdentityValues.WorkbenchThreadId.thread;
+    const live = fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse("live");
+    repository.settle([threadObservation(), liveTurn("live", 0), { kind: "steer", entry: {
+      attemptedAt: 110, canonicalItemId: null, clientUserMessageId: null, entryKey: "steer", error: null,
+      input: [{ type: "text", text: "steer", text_elements: [] }], requestId: null, resolvedAt: null,
+      status: "pending", threadId: thread, turnId: live,
+    }, observedAt: 110 }]);
+    database.prepare(`
+      INSERT INTO workbench_thread_states (thread_id, thread_kind, harness_id, title, activity_at, provider_observed)
+      SELECT thread_id, 'topLevel', harness_id, '', 0, 1 FROM thread_turns WHERE id = ?
+    `).run(live);
+    database.prepare(`
+      INSERT INTO workbench_thread_questionnaires (id, thread_id, state, turn_id, request_key, request_id, title, summary, submit_label)
+      VALUES ('question', ?, 'pending', ?, 'request', 'request', 'Question', '', 'Submit')
+    `).run(thread, live);
+    const steerState = () => heldSteerRows(database).map(({ state }) => state);
+
+    repository.settle([{ ...turnObservation("live", 0), state: "interrupted", endedAt: 150 }]);
+    assert.deepEqual(steerState(), ["pending"], "the interrupted turn's steer waits for the answer");
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200), [], "a restart keeps it too");
+
+    database.prepare("DELETE FROM workbench_thread_questionnaires WHERE id = 'question'").run();
+    assert.deepEqual(repository.readAbandonedHoldThreadIds(200), [thread]);
+    repository.settle([{ kind: "abandonedHolds", threadId: thread, before: 200, endedAt: 250 }]);
+    assert.deepEqual(steerState(), ["interrupted"], "once nothing will answer it, it ends undelivered");
+  } finally {
+    database.close();
+  }
+});
+
 test("capture gaps anchor stored turns, extend once into the next turn, and close only when every anchor is re-read", () => {
   const { database, repository } = createRepository();
   const turnIds = (...ids: string[]) => ids.map(id => fixtureIdentitySchemas.WorkbenchTurnIdSchema.parse(id));

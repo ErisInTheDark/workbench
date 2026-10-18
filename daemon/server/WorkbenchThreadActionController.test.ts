@@ -7,6 +7,9 @@ import WorkbenchThreadActionController, {
 import type WorkbenchProvider from "./WorkbenchProvider";
 import { NativeThreadIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { createWorkbenchAgentMessageText } from "workbench-shared/workbench/thread/thread-agent-message";
+import { WorkbenchSkillActivationMismatchError } from "workbench-shared/workbench/thread/thread-skill-mentions";
+
+const review = { name: "review", description: "", path: "C:/skills/review/SKILL.md", relativePath: "skills/review/SKILL.md" };
 
 function fixture(providerWarning?: string) {
   const unused = async (): Promise<never> => { throw new Error("Unexpected operation."); };
@@ -39,7 +42,13 @@ function fixture(providerWarning?: string) {
     configuration: { modelContext: { read: unused }, models: { read: unused }, guidance: { contains: unused } },
   };
   const recorded: object[] = [];
+  /** What the stop had done by the time each virtual-steer release ran. */
+  const releases: string[] = [];
   const owners: WorkbenchThreadActionOwners = {
+    questionnaireSteers: {
+      hold: async () => false,
+      release: async threadId => { releases.push(`${threadId}:${stopOrder.join(",")}`); },
+    },
     autoCompact: {
       observe: async () => true,
       submit: async (_threadId, _provider, message, deliver, options) => deliver(message, options ?? {}),
@@ -67,7 +76,7 @@ function fixture(providerWarning?: string) {
     todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
     addressedFeedback: { clear: unused },
     vis: { answer: unused, endById: unused },
-    recordSkillActivations: async () => undefined,
+    readSkills: async () => [review],
     state: {
       getCanonicalThreadEntry: async () => null,
       listPendingQuestionnaires: () => [],
@@ -84,7 +93,7 @@ function fixture(providerWarning?: string) {
   };
   return {
     provider, owners,
-    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded,
+    controller: new WorkbenchThreadActionController(owners), messages, connections, warnings, stops, mutations, stopOrder, recorded, releases,
     failInterrupt: () => { interruptFailure = true; },
     failTitle: () => { titleFailure = true; },
   };
@@ -234,16 +243,44 @@ test("message admission ignores browser steer classification", async () => {
   }]);
 });
 
-test("accepted provider warnings survive an additional skill-recording failure", async () => {
-  const f = fixture("Recorder needs repair.");
-  f.owners.recordSkillActivations = async () => { throw new Error("skills unavailable"); };
-  const result = await f.controller.handle("thread/message/submit", {
-    threadId: "wb-thread", clientMessageId: "message", input: [], intent: "continue",
+test("claimed skill activations that disagree with the daemon's catalog reject the message before it is held or sent", async () => {
+  const f = fixture();
+  let held = 0;
+  f.owners.questionnaireSteers.hold = async () => { held += 1; return false; };
+  const submit = (activatedSkillPaths?: string[]) => f.controller.handle("thread/message/submit", {
+    threadId: "wb-thread", clientMessageId: "message", intent: "continue",
+    input: [{ type: "text", text: "/review please", text_elements: [] }],
+    ...(activatedSkillPaths ? { context: { activatedSkillPaths } } : {}),
   });
-  assert.ok(result.warning?.includes("Recorder needs repair."));
-  assert.match(result.warning ?? "", /could not record its activated skills/u);
-  assert.match(f.warnings[0] ?? "", /skills unavailable/u);
-  assert.equal(f.messages.length, 1);
+  const rejected = await submit(["C:/gone/stale/SKILL.md"]).catch(error => error);
+  assert.ok(rejected instanceof WorkbenchSkillActivationMismatchError);
+  assert.deepEqual(rejected.mismatch.activatableSkills, [review]);
+  assert.equal(held, 0);
+  assert.deepEqual(f.messages, []);
+
+  await submit([review.path]);
+  await submit();
+  assert.equal(f.messages.length, 2, "matching claims and senders that claim nothing go through");
+});
+
+test("a message to a held questionnaire's ended turn is held as a virtual steer, never sent to the provider", async () => {
+  const f = fixture();
+  const held: object[] = [];
+  f.owners.questionnaireSteers.hold = async (threadId, message) => { held.push({ threadId, message }); return true; };
+  const result = await f.controller.handle("thread/message/submit", {
+    threadId: "native-thread", clientMessageId: "message", input: [{ type: "text", text: "later", text_elements: [] }], intent: "continue",
+  });
+  assert.equal(result.kind, "queued");
+  assert.deepEqual(f.messages, []);
+  assert.deepEqual(held, [{ threadId: "wb-thread", message: {
+    clientMessageId: "message", input: [{ type: "text", text: "later", text_elements: [] }], intent: "continue",
+  } }]);
+});
+
+test("stopping releases virtual steers only after the questionnaire is dismissed", async () => {
+  const f = fixture();
+  await f.controller.handle("thread/stop", { threadId: "wb-thread", intent: "stop", requestKey: "held-question" });
+  assert.deepEqual(f.releases, ["wb-thread:interrupt,settle,mutation"]);
 });
 
 test("questionnaire-only stop interrupts provider work before dismissing the question", async () => {
