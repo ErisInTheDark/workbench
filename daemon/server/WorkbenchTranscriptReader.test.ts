@@ -84,6 +84,46 @@ test("canonical pages traverse mixed-provider turns without provider reads", asy
   }
 });
 
+test("the latest turn comes from the turn catalog without reading any turn's items", async () => {
+  const database = new Database(":memory:");
+  installWorkbenchDatabaseSchema(database);
+  const repository = new WorkbenchTranscriptRepository(database);
+  const threadId = WorkbenchThreadIdSchema.parse("latest-thread");
+  const turns = ["settled", "running"].map(id => WorkbenchTurnIdSchema.parse(id));
+  repository.settle([{
+    kind: "thread", threadId, projectId: testProjectIds.project, projectRoot: "/repo",
+    title: "latest", createdAt: 1, updatedAt: 3, activityAt: 3,
+  }, ...turns.flatMap((turnId, index) => [{
+    kind: "turn" as const, threadId, turnId, turnIndex: index, harnessId: "claude",
+    nativeLocation: "/repo", nativeThreadId: NativeThreadIdSchema.parse("native"),
+    nativeTurnId: NativeTurnIdSchema.parse(`native-${index}`), state: index ? "inProgress" as const : "completed" as const,
+    createdAt: index + 1, startedAt: (index + 1) * 1000, endedAt: index ? null : 2000, durationMs: index ? null : 1000,
+  }, {
+    kind: "item" as const, threadId, turnId, observedAt: index + 2, lifecycle: "completed" as const,
+    item: { id: `item-${index}`, type: "agentMessage" as const, text: `reply ${index}`,
+      phase: "commentary" as const, memoryCitation: null, delivery: null, questions: null },
+  }])]);
+  const requests: unknown[] = [];
+  const reader = new WorkbenchTranscriptReader({
+    readSnapshot: async request => { requests.push(request.turnIds); return repository.read(request); },
+    readContext: async id => repository.readContext(id),
+    readMaterializedTurns: async (id, ids) => repository.readMaterializedTurnIds(id, ids),
+    readContextUsage: async id => repository.readContextUsage(id),
+    readMetadata: async () => ({ entry: null, harness: "claude" }),
+  });
+  try {
+    const latest = await reader.latestTurn(threadId);
+    assert.equal(latest?.id, turns[1]);
+    assert.equal(latest?.status, "inProgress");
+    assert.equal(latest?.startedAt, 2);
+    assert.deepEqual(latest?.items, []);
+    assert.deepEqual(requests, [[]], "only the turn catalog is read");
+    database.prepare("DELETE FROM thread_turn_materializations WHERE turn_id = ?").run(turns[1]);
+    assert.equal((await reader.latestTurn(threadId))?.id, turns[1], "an unmaterialised newest turn is still the latest");
+    assert.equal(await reader.latestTurn(WorkbenchThreadIdSchema.parse("unknown-thread")), null);
+  } finally { database.close(); }
+});
+
 test("empty canonical history and retained interaction facts need no provider interpretation", async () => {
   const database = new Database(":memory:");
   installWorkbenchDatabaseSchema(database);

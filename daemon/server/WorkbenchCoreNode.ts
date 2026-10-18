@@ -58,7 +58,7 @@ import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
 import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
 import WorkbenchTurnContinuationController from "./WorkbenchTurnContinuationController";
 import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
-import WorkbenchTranscriptReader from "./WorkbenchTranscriptReader";
+import WorkbenchTranscriptReader, { threadPayloadStatus } from "./WorkbenchTranscriptReader";
 import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
@@ -200,14 +200,16 @@ function createWorkbenchCoreFeature(
       const usage = await database.readThreadContextUsage(identity.threadId);
       return { activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null };
     },
+    // Status comes from the saved Workbench lifecycle; only the latest turn and its liveness are provider facts.
     readRuntime: async target => {
       const key = installedProviderKeys.find(candidate => candidate === target.harness);
       if (!key) throw new Error(`Provider ${target.harness} is not installed.`);
-      const { latestTurn, status } = await run(providerRegistrations[key], async provider => ({
-        status: (await provider.threads.read(target.threadId, { background: true })).status,
-        latestTurn: await provider.threads.latestTurn(target.threadId),
-      }), `${key}: auto-compact status`);
-      return { latestTurn, status, turnLive: await turnLiveness.read(target.threadId, target.harness) };
+      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(target.threadId) });
+      const entry = identity && threadState
+        ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
+      const latestTurn = await run(providerRegistrations[key], provider => provider.threads.latestTurn(target.threadId),
+        `${key}: auto-compact latest turn`);
+      return { latestTurn, status: threadPayloadStatus(entry), turnLive: await turnLiveness.read(target.threadId, target.harness) };
     },
     publish: (target, willAutoCompact) => {
       for (const listener of runtimeListeners) listener(target.threadId, { willAutoCompact });

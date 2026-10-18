@@ -81,7 +81,7 @@ export interface OpenCodeThreadOperationsOptions {
   state: Pick<WorkbenchThreadStateFeature, "controller" | "installCreatedProfile">;
   managed: Pick<OpenCodeManagedSessionController, "creation" | "refresh">;
   transcript: OpenCodeTranscriptAdapter;
-  reader: Pick<WorkbenchTranscriptReader, "readPage">;
+  reader: Pick<WorkbenchTranscriptReader, "latestTurn" | "readPage">;
   signal: AbortSignal;
   reconciliation: Pick<WorkbenchTranscriptReconciliationController, "reconcile">;
   readWorkingRecords(): Promise<Array<Pick<WorkbenchThreadStateRecord, "identity" | "lifecycle">>>;
@@ -452,7 +452,8 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
   }
 
   async latestTurn(threadId: string) {
-    return (await this.readLatest(threadId)).turns.at(-1) ?? null;
+    await this.sync(threadId);
+    return await this.options.reader.latestTurn((await this.identity(threadId)).threadId);
   }
 
   async admitTurn(threadId: string) {

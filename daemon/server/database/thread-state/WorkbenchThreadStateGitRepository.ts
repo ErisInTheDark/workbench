@@ -84,8 +84,11 @@ interface GitReadBatch {
   paths: Map<string, GitPathRow[]>;
   roots: Map<string, GitRootRow[]>;
   proposals: Map<string, GitProposalRow[]>;
+  /** Keyed by entry and proposal index. */
   proposalChanges: Map<string, GitProposalChangeRow[]>;
 }
+
+const proposalChangesKey = (entryId: string, proposalIndex: number) => `${entryId}\0${proposalIndex}`;
 
 export default class WorkbenchThreadStateGitRepository {
   private readonly hasProposalChanges = Boolean(this.database.prepare(`
@@ -127,7 +130,7 @@ export default class WorkbenchThreadStateGitRepository {
         paths: Map.groupBy(paths, entry => entry.entry_id),
         roots: Map.groupBy(roots, entry => entry.entry_id),
         proposals: Map.groupBy(proposals, entry => entry.entry_id),
-        proposalChanges: Map.groupBy(proposalChanges, entry => entry.entry_id),
+        proposalChanges: Map.groupBy(proposalChanges, change => proposalChangesKey(change.entry_id, change.proposal_index)),
       };
       const byThread = Map.groupBy(observations, observation => observation.thread_id);
       for (const id of ids) result.set(id, this.decode(byThread.get(id) ?? [], batch));
@@ -474,8 +477,7 @@ export default class WorkbenchThreadStateGitRepository {
   }
 
   private readProposalChanges(entryId: string, proposalIndex: number, batch: GitReadBatch) {
-    const changes = (batch.proposalChanges.get(entryId) ?? [])
-      .filter((change) => change.proposal_index === proposalIndex);
+    const changes = batch.proposalChanges.get(proposalChangesKey(entryId, proposalIndex)) ?? [];
     this.requireOrdered(changes.map((change) => change.change_index));
     return changes.map(({ additions, deletions, kind, path }) => ({ additions, deletions, kind, path }));
   }

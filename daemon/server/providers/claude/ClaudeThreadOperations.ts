@@ -342,7 +342,9 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
   }
 
   async readLatest(threadId: string) { return this.read(threadId); }
-  async latestTurn(threadId: string) { return (await this.read(threadId)).turns.at(-1) ?? null; }
+  async latestTurn(threadId: string) {
+    return await this.options.reader.latestTurn((await this.identity(threadId)).threadId);
+  }
   async admitTurn(threadId: string) { await this.read(threadId); }
 
   async submit(input: Parameters<WorkbenchProviderThreads["submit"]>[0]) {
@@ -540,7 +542,7 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
     const identity = await this.identity(threadId);
     if (this.live.has(identity.threadId)) throw new Error("Claude cannot compact during an active turn.");
     const binding = identity.bindings.find(value => value.harness === "claude");
-    const turn = (await this.read(threadId)).turns.at(-1);
+    const turn = await this.latestTurn(identity.threadId);
     if (!binding || !turn) throw new Error("Claude compaction requires an existing native turn.");
     const entry = await this.options.state.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
     const settings = entry && entry.entryKind !== "draft" ? entry.profile?.settings : null;
@@ -623,11 +625,14 @@ export default class ClaudeThreadOperations implements WorkbenchProviderThreads 
       const turnId = await this.recoverFromSessionLog(input.threadId, input.target, input.gapIds, signal);
       return { turnIds: [turnId], exhausted: true };
     }
-    const thread = await this.read(input.threadId);
     const target = input.target;
-    const turn = target.mode === "latest" ? thread.turns.at(-1)
-      : target.mode === "exact" ? thread.turns.find(value => value.id === target.turnId)
-        : thread.turns.findLast(value => value.id !== target.beforeTurnId);
+    if (target.mode === "latest") {
+      const latest = await this.latestTurn(input.threadId);
+      return { turnIds: latest ? [latest.id] : [], exhausted: true };
+    }
+    const { turns } = await this.read(input.threadId);
+    const turn = target.mode === "exact" ? turns.find(value => value.id === target.turnId)
+      : turns.findLast(value => value.id !== target.beforeTurnId);
     return { turnIds: turn ? [turn.id] : [], exhausted: true };
   }
 

@@ -752,11 +752,12 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
-  /** Runtime for each family thread: kept for threads already read, read once for newly listed ones. */
+  /** Runtime for each family thread: kept for threads already read, read once for newly listed ones; a retired observation stops reading. */
   private async familyRuntime(observation: Observation<Client>, entries: readonly { entryKind: string; identity?: { harness: string; threadId: string } }[]) {
     const previous = observation.value.kind === "thread" ? observation.value.runtime : {};
     const runtime: Record<string, ThreadRuntime> = {};
     for (const entry of entries) {
+      if (!this.active(observation)) break;
       if (entry.entryKind === "draft" || !entry.identity) continue;
       const { threadId, harness } = entry.identity;
       runtime[threadId] = previous[threadId] ?? await this.readRuntime(threadId, harness);
@@ -808,6 +809,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
             projectId: query.projectId, subscriptionId: observation.request.subscriptionId,
             target: { kind: "provider", threadId: identity.threadId },
           });
+          if (!this.active(observation)) return;
           const runtime = await this.familyRuntime(observation, data.entries);
           if (!this.active(observation)) return;
           this.update(observation, { kind: "thread", phase: "current", failure: null, runtime,

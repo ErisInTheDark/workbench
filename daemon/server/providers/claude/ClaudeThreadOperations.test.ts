@@ -200,7 +200,7 @@ test("manual Claude compaction targets the shared marker when the provider bound
       close: () => undefined,
     }) as never,
   });
-  Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "completed" }] }) });
+  Object.assign(owner, { latestTurn: async () => ({ id: turnId, status: "completed" }) });
   const work = owner.compact(threadId, { scope: compactionScope });
   try {
     await entered.promise;
@@ -222,7 +222,7 @@ test("failed manual Claude compaction propagates for the shared owner to settle"
       close: () => undefined,
     }) as never,
   });
-  Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "completed" }] }) });
+  Object.assign(owner, { latestTurn: async () => ({ id: turnId, status: "completed" }) });
   try {
     await assert.rejects(owner.compact(threadId, { scope: compactionScope }), /compaction query failed/);
     assert.deepEqual(reports, []);
@@ -249,7 +249,7 @@ test("Claude compaction closes its query and rejects caller or owner cancellatio
         close: () => { closes++; closed.resolve(); },
       }) as never,
     });
-    Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, status: "interrupted" }] }) });
+    Object.assign(owner, { latestTurn: async () => ({ id: turnId, status: "interrupted" }) });
     const work = owner.compact(threadId, {
       scope: compactionScope,
       ...(cause === "caller" ? { signal: cancellation.signal } : {}),

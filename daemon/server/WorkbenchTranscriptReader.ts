@@ -1,13 +1,15 @@
 /*
  * Exports:
  * - WorkbenchTranscriptReaderOptions: canonical storage and metadata ports, without provider access.
- * - default WorkbenchTranscriptReader: own canonical pages, history projection and stored recovery facts.
+ * - threadPayloadStatus: thread payload status derived from a saved Workbench lifecycle.
+ * - default WorkbenchTranscriptReader: own canonical pages, latest-turn facts, history projection and stored recovery facts.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchTranscriptReadRequest, WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
-import { projectWorkbenchTranscript } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import { projectWorkbenchTranscript, projectWorkbenchTranscriptTurnRow } from "workbench-shared/workbench/transcript/workbench-transcript-projection";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import { isTranscriptSideEntryItem, projectTranscriptSideEntries } from "workbench-shared/workbench/transcript/transcript-side-entries";
 import type { WorkbenchThreadPage, WorkbenchThreadPageResult } from "workbench-shared/workbench/thread/thread-actions";
 import { WorkbenchTranscriptRecoveryRequiredError } from "workbench-shared/workbench/thread/thread-actions";
@@ -32,11 +34,25 @@ export interface WorkbenchTranscriptReaderOptions {
   }>;
 }
 
+/** A thread payload's status from its saved Workbench lifecycle; providers overlay their own live runtime. */
+export function threadPayloadStatus(entry: WorkbenchThreadSidebarEntry | null): WorkbenchThreadPageResult["thread"]["status"] {
+  if (!entry || entry.entryKind === "draft") return "notLoaded";
+  if (entry.lifecycle.kind === "working") return "active";
+  return entry.lifecycle.kind === "needsAttention" && entry.lifecycle.reason === "pendingInput"
+    ? "active:waitingOnUserInput" : "idle";
+}
+
 export default class WorkbenchTranscriptReader {
   constructor(private readonly options: WorkbenchTranscriptReaderOptions) {}
 
   catalog(threadId: string) {
     return this.options.readSnapshot({ threadId, turnIds: [], turnLimit: 1 });
+  }
+
+  /** The newest turn's facts from the turn catalog alone; its items are never read. */
+  async latestTurn(threadId: string): Promise<Turn | null> {
+    const turn = (await this.catalog(threadId))?.turns.at(-1);
+    return turn ? projectWorkbenchTranscriptTurnRow(turn) : null;
   }
 
   readSnapshot(request: WorkbenchTranscriptReadRequest) {
@@ -83,9 +99,7 @@ export default class WorkbenchTranscriptReader {
         cwd: catalog.turns.at(-1)?.native_location ?? snapshot.thread.project_root,
         createdAt: snapshot.thread.created_at / 1000, updatedAt: snapshot.thread.updated_at / 1000,
         recencyAt: snapshot.thread.activity_at / 1000,
-        status: saved?.lifecycle.kind === "working" ? "active"
-          : saved?.lifecycle.kind === "needsAttention" && saved.lifecycle.reason === "pendingInput"
-            ? "active:waitingOnUserInput" : saved ? "idle" : "notLoaded",
+        status: threadPayloadStatus(saved),
         source: saved?.entryKind === "subagent" ? "subAgent" : "unknown",
         agentNickname: saved?.entryKind === "subagent" ? saved.name : null,
         agentRole: null, path: null, model: settings?.model ?? null,

@@ -495,6 +495,35 @@ test("identity admission during a pending lookup is visible even if that lookup 
   assert.equal(value.kind === "threadIdentity" ? value.identity?.threadId : null, threadId);
 });
 
+test("releasing a thread observation stops reading runtime for the rest of its family", async context => {
+  const entries = [thread(0), thread(1), thread(2)];
+  const firstRead = Promise.withResolvers<void>();
+  const heldRuntime = Promise.withResolvers<{ tokenUsage: null; willAutoCompact: null }>();
+  const runtimeReads: string[] = [];
+  const f = fixture(context, { runtime: {
+    read: async threadId => {
+      runtimeReads.push(threadId);
+      firstRead.resolve();
+      return heldRuntime.promise;
+    },
+    readTokenUsage: async () => null,
+    subscribe: () => () => {},
+  } });
+  f.owners.identities.findThread = () => ({ threadId, projectId: a, projectRoot: "C:/a", bindings: [] });
+  f.owners.threads.readWorkspaceThread = async request => ({
+    entries, error: null, freshness: "fresh", projectId: a, revision: 1, subscriptionId: request.subscriptionId,
+    target: { kind: "provider", threadId, harness: "codex" }, updateKind: "threadObservation", version: 2,
+  });
+  const observation = f.observe({ kind: "thread", projectId: a, threadId: ThreadReferenceSchema.parse(threadId) });
+  await firstRead.promise;
+  f.owner.release("connection", { subscriptionId: observation.subscriptionId, generation: observation.generation });
+  heldRuntime.resolve({ tokenUsage: null, willAutoCompact: null });
+  await heldRuntime.promise;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runtimeReads.length, 1, "A released observation reads no further family runtime");
+  assert.equal(f.updates.some(update => update.value.kind === "thread" && update.value.phase === "current"), false);
+});
+
 test("a failed refresh retains previous rows and waits for a new fact instead of retrying itself", async context => {
   const f = fixture(context);
   let reads = 0;

@@ -2,6 +2,7 @@
  * WorkbenchProjectedTranscriptTurn/WorkbenchTranscriptProjection: canonical transcript values reconstructed from relational rows.
  * WorkbenchTranscriptProjectionResult: hydration-bounded projection or relational-integrity failure.
  * projectWorkbenchTranscript: reconstruct turns, Browse facts, questionnaire and steer history, timing and display segments.
+ * projectWorkbenchTranscriptTurnRow: one turn row as an item-less Turn, for callers that need only turn facts.
  * projectWorkbenchTranscriptItems: project canonical item rows.
  * WorkbenchProjectedInteractionItem/WorkbenchProjectedGenericItem/WorkbenchProjectedTranscriptItem: projected item variants.
  * WorkbenchTranscriptItemProjectionResult/WorkbenchTranscriptItemProjectionRow: item projection output and rows.
@@ -93,6 +94,19 @@ function turnStatus(state: WorkbenchTranscriptSnapshot["turns"][number]["state"]
 
 function seconds(value: number | null) {
   return value === null ? null : value / 1_000;
+}
+
+export function projectWorkbenchTranscriptTurnRow(turn: WorkbenchTranscriptSnapshot["turns"][number]): Turn {
+  return {
+    completedAt: seconds(turn.ended_at),
+    durationMs: turn.duration_ms,
+    error: null,
+    id: turn.id,
+    items: [],
+    itemsView: "notLoaded",
+    startedAt: seconds(turn.started_at),
+    status: turnStatus(turn.state),
+  };
 }
 
 function browseEntries(
@@ -204,15 +218,10 @@ export function projectWorkbenchTranscript(
           }];
         });
         return {
-          completedAt: seconds(turn.ended_at),
-          durationMs: turn.duration_ms,
-          error: null,
-          id: turn.id,
+          ...projectWorkbenchTranscriptTurnRow(turn),
           items,
           itemsView: "full",
           itemTimeline,
-          startedAt: seconds(turn.started_at),
-          status: turnStatus(turn.state),
           turnIndex: turn.turn_index,
           payloadExpiredAt: expiredTurnPayloads.get(turn.id) ?? null,
         };
