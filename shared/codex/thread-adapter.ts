@@ -12,7 +12,7 @@
  * - toThreadTurn: admit native item identity evidence before a turn reaches Workbench consumers.
  * - CodexThreadSource/CodexTurnSource: accepted native or canonical content before conversion.
  * - UnsupportedCodexImageReferenceError: sanitized failure for unsupported provider-file media.
- * - toWorkbenchCodexInput/toWorkbenchCodexItem: normalise native media and remove image transport frames.
+ * - toWorkbenchCodexInput/toWorkbenchCodexItem: normalise native media, remove image transport frames and fold newer message phases into Workbench's.
  * - readWorkbenchTurnHistory: normalise the existing provider-thread history extension at its boundary.
  */
 import type { ThreadPayloadData, ThreadSummary, WorkbenchHarness, WorkbenchThreadTurnHistoryEntry } from "../types.ts";
@@ -24,7 +24,7 @@ import type { Turn } from "../workbench/thread/workbench-thread-turn.ts";
 import type { Turn as NativeTurn } from "./generated/app-server/v2/Turn.ts";
 import type { ThreadItem as NativeThreadItem } from "./generated/app-server/v2/ThreadItem.ts";
 import type { UserInput as NativeUserInput } from "./generated/app-server/v2/UserInput.ts";
-import type { ThreadItem, UserInput, FunctionCallOutputContentItem } from "../workbench/thread/workbench-thread-items.ts";
+import type { ThreadItem, UserInput, FunctionCallOutputContentItem, JsonValue } from "../workbench/thread/workbench-thread-items.ts";
 import { normalizeWorkbenchThreadItemTimeline } from "../workbench/thread/thread-item-timeline.ts";
 import { withCodexItemMetadata } from "./thread-item-source.ts";
 import { formatThreadStatus } from "../workbench/thread/thread-runtime-state.ts";
@@ -71,7 +71,14 @@ export function toWorkbenchCodexItem(item: ThreadItem | NativeThreadItem): Threa
   if (item.type === "functionCallOutput") {
     return { ...item, output: typeof item.output === "string" ? item.output : item.output.map(toWorkbenchCodexOutputPart) };
   }
+  // A partial answer is non-terminal answer text; Workbench keeps Codex's unknown-phase handling for it.
+  if (item.type === "agentMessage") return { ...item, phase: item.phase === "partial_answer" ? null : item.phase };
   return item;
+}
+
+function toWorkbenchTurnError(error: NativeTurn["error"] | Turn["error"]): Turn["error"] {
+  // Codex's forward-compatible error variants are typed loosely, but the value always arrives as parsed JSON.
+  return error ? { ...error, codexErrorInfo: error.codexErrorInfo as JsonValue } : null;
 }
 type ThreadResumePayloadSource = Pick<ThreadResumeResponse, "thread">
   & Partial<Pick<ThreadResumeResponse, "initialTurnsPage" | "model" | "reasoningEffort" | "serviceTier">>;
@@ -153,8 +160,9 @@ export function toThreadSummary<Id extends string>(thread: Omit<CompatibleThread
 export function toThreadTurn(turn: CodexTurnSource, harness: WorkbenchHarness = "codex"): Turn {
   return harness === "codex" ? {
     ...turn,
+    error: toWorkbenchTurnError(turn.error),
     items: turn.items.map(item => item.type === "generic" ? item : withCodexItemMetadata(toWorkbenchCodexItem(item))),
-  } : { ...turn, items: turn.items.map(toWorkbenchCodexItem) };
+  } : { ...turn, error: toWorkbenchTurnError(turn.error), items: turn.items.map(toWorkbenchCodexItem) };
 }
 
 export function toThreadPayload<Id extends string>(

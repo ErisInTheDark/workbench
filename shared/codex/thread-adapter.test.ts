@@ -13,7 +13,7 @@ test("native attachment frames are removed before canonical user-message admissi
   const text = (text: string) => ({ type: "text" as const, text, text_elements: [] });
   const image = { type: "image" as const, url: "data:image/png;base64,AAAA", detail: "original" as const };
   const turn: Turn = {
-    id: "turn", itemsView: "full", status: "completed", error: null,
+    id: "turn", rootTurnId: null, itemsView: "full", status: "completed", error: null,
     startedAt: null, completedAt: null, durationMs: null,
     items: [{ type: "userMessage", id: "message", clientId: "client", content: [
       text("compare #[attach:1]"), text('<wb:attachment id="attach:1">'), image, text("</wb:attachment>"),
@@ -44,7 +44,7 @@ test("native turn adaptation converts old steer state while preserving explicit 
     const legacy = {
       clientId: null, content: [], id: `workbench:steer-history:${status}:thread:request`, type: "userMessage" as const,
     };
-    const turn: Turn = { id: "turn", items: [legacy], itemsView: "full", status: "completed", error: null, startedAt: null, completedAt: null, durationMs: null };
+    const turn: Turn = { id: "turn", rootTurnId: null, items: [legacy], itemsView: "full", status: "completed", error: null, startedAt: null, completedAt: null, durationMs: null };
     assert.deepEqual(getWorkbenchInputState(toThreadTurn(turn).items[0]!), { kind: "steer", status });
     turn.items = [withWorkbenchInputState(legacy, { kind: "steer", status: "sent" })];
     assert.deepEqual(getWorkbenchInputState(toThreadTurn(turn).items[0]!), { kind: "steer", status: "sent" });
@@ -65,7 +65,7 @@ test("native adaptation rejects file-backed user and tool images without exposin
   ];
   for (const item of items) {
     const turn: Turn = {
-      id: "turn", items: [item], itemsView: "full", status: "completed",
+      id: "turn", rootTurnId: null, items: [item], itemsView: "full", status: "completed",
       error: null, startedAt: null, completedAt: null, durationMs: null,
     };
     assert.throws(() => toThreadTurn(turn), error => (
@@ -75,9 +75,22 @@ test("native adaptation rejects file-backed user and tool images without exposin
   }
 });
 
+test("native partial answers adapt to Workbench's unknown message phase", () => {
+  const message = (phase: "commentary" | "partial_answer" | "final_answer") => ({
+    type: "agentMessage" as const, id: phase, text: phase, phase, memoryCitation: null, delivery: null, questions: null,
+  });
+  const turn: Turn = {
+    id: "turn", rootTurnId: null, itemsView: "full", status: "completed",
+    error: null, startedAt: null, completedAt: null, durationMs: null,
+    items: [message("commentary"), message("partial_answer"), message("final_answer")],
+  };
+  assert.deepEqual(toThreadTurn(turn).items.map(item => item.type === "agentMessage" ? item.phase : "other"),
+    ["commentary", null, "final_answer"]);
+});
+
 test("native adaptation preserves supported images, surrounding content and detail", () => {
   const turn: Turn = {
-    id: "turn", itemsView: "full", status: "completed",
+    id: "turn", rootTurnId: null, itemsView: "full", status: "completed",
     error: null, startedAt: 1, completedAt: 2, durationMs: 1000,
     items: [
       { type: "userMessage", id: "input", clientId: "client", content: [

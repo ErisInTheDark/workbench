@@ -22,7 +22,7 @@ test("native image framing does not stop a pending steer from matching its deliv
   };
   assert.equal(updateMatchingPendingSteerEntriesForUserMessage([entry], item, 10)[0]?.status, "sent");
   assert.equal(updatePendingSteerEntriesForInterruptedTurn([entry], {
-    id: "turn", items: [item], itemsView: "full", status: "interrupted",
+    id: "turn", rootTurnId: null, items: [item], itemsView: "full", status: "interrupted",
     error: null, startedAt: null, completedAt: null, durationMs: null,
   }, 10)[0]?.status, "sent");
 });
@@ -47,7 +47,7 @@ test("steer parsing and reconciliation cannot silently discard a file-backed ima
     }),
     () => updateMatchingPendingSteerEntriesForUserMessage([entry], item, 10),
     () => updatePendingSteerEntriesForInterruptedTurn([entry], {
-      id: "turn", items: [item], itemsView: "full", status: "interrupted",
+      id: "turn", rootTurnId: null, items: [item], itemsView: "full", status: "interrupted",
       error: null, startedAt: null, completedAt: null, durationMs: null,
     }, 10),
   ]) {

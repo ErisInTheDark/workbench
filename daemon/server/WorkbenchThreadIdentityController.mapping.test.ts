@@ -375,7 +375,7 @@ test("repeated provider catalogues admit only new identity evidence without hidi
       threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
       source: "cli", parentThreadId: null,
       turns: [{
-        id: native.nativeTurnId, items: [message], itemsView: "full", status: "completed",
+        id: native.nativeTurnId, rootTurnId: null, items: [message], itemsView: "full", status: "completed",
         error: null, startedAt: 1, completedAt: 2, durationMs: 1,
       }],
       workbenchTurnHistory: [{
@@ -471,7 +471,7 @@ for (const route of ["catalogue", "event", "recorder"] as const) {
         environments: null, originator: null, daybreakEnabled: null,
         threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
         source: "cli", parentThreadId: null,
-        turns: [{ id: native.nativeTurnId, items: [message], itemsView: "full", status: "completed",
+        turns: [{ id: native.nativeTurnId, rootTurnId: null, items: [message], itemsView: "full", status: "completed",
           error: null, startedAt: 1, completedAt: 2, durationMs: 1 }],
       };
       const admit = () => route === "catalogue"
@@ -520,7 +520,7 @@ test("provider event batches admit starts before deltas without storing pending 
   const { database, owners, native, parent } = await setup();
   try {
     const pending = withWorkbenchTurnAdmission({
-      id: "3201f023-7830-4daf-a77b-23535c40b84b",
+      id: "3201f023-7830-4daf-a77b-23535c40b84b", rootTurnId: null,
       items: [], status: "inProgress" as const, itemsView: "full" as const,
       error: null, startedAt: 1, completedAt: null, durationMs: null,
     }, "providerPending");
@@ -822,7 +822,7 @@ test("turn snapshots and consecutive deltas share committed item identity withou
     const item: ThreadItem = { type: "reasoning", id: "item-1", summary: [], content: [] };
     const [mapped] = await admitProviderThreadItems(owners, native, [item]);
     const nativeTurn = {
-      id: native.nativeTurnId, items: [item], itemsView: "full" as const,
+      id: native.nativeTurnId, rootTurnId: null, items: [item], itemsView: "full" as const,
       status: "inProgress" as const, error: null, startedAt: 1, completedAt: null, durationMs: null,
     };
     const projectedTurn = mapProviderTurn(owners, native, nativeTurn);
@@ -1010,7 +1010,7 @@ for (const evidence of ["provisional", "retained-collision", "client-only"] as c
         threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null,
         source: "cli", parentThreadId: null,
         turns: [{
-          id: native.nativeTurnId, items: [source], itemsView: "full", status: "completed",
+          id: native.nativeTurnId, rootTurnId: null, items: [source], itemsView: "full", status: "completed",
           error: null, startedAt: 1, completedAt: 2, durationMs: 1,
         }],
         workbenchTurnHistory: [{

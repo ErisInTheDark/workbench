@@ -79,6 +79,7 @@ function providerThread(): Thread {
         type: "plan",
       }],
       itemsView: "full",
+      rootTurnId: null,
       startedAt: 1,
       status: "completed",
     }],
@@ -257,6 +258,7 @@ test("complete provider snapshots keep carried items with their first turn", () 
       { id: "later-answer", memoryCitation: null, delivery: null, questions: null, phase: "final_answer", text: "later", type: "agentMessage" },
     ],
     itemsView: "full",
+    rootTurnId: null,
     startedAt: 7,
     status: "completed",
   });

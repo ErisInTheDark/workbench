@@ -15,6 +15,7 @@ import Database from "better-sqlite3";
 import type CodexAppServer from "./CodexAppServer";
 import type { Thread } from "workbench-shared/codex/generated/app-server/v2/Thread";
 import type { ThreadItem } from "workbench-shared/codex/generated/app-server/v2/ThreadItem";
+import type { ThreadItem as WorkbenchThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import type { WorkbenchQuestionnaireHistoryEntry } from "workbench-shared/types";
 import {
   createWorkbenchFileChangeFailureSystemMessage,
@@ -341,6 +342,7 @@ function bridgeThread(items: ThreadItem[] = []) {
       id: "turn",
       items,
       itemsView: "full" as const,
+      rootTurnId: null,
       startedAt: 1,
       status: "inProgress" as const,
     }],
@@ -2474,7 +2476,7 @@ for (const cold of [false, true]) {
       threadId, sources: [{ turnId, kind: "stable" as const, reference }],
     })));
     assert.ok(first && question && last);
-    const message = (id: string): Extract<ThreadItem, { type: "agentMessage" }> => ({
+    const message = (id: string): Extract<WorkbenchThreadItem, { type: "agentMessage" }> => ({
       id, type: "agentMessage", text: id, phase: "commentary", memoryCitation: null, delivery: null, questions: null,
     });
     sql.repository.settle([

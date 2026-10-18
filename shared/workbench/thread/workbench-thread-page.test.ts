@@ -49,6 +49,7 @@ function thread(turnIds: string[], historyIds: string[]): Thread & {
       id,
       items: [],
       itemsView: "full",
+      rootTurnId: null,
       startedAt: 1,
       status: "completed",
     })),
