@@ -158,8 +158,8 @@ export interface ThreadStoreActions {
   removeTodo(id: number): Promise<void>;
   setTodoRequired(id: number, required: boolean): Promise<void>;
   setTodoText(id: number, text: string): Promise<void>;
-  /** The thread stops addressing one report; the report stays with its machine. */
-  detachAddressedFeedback(report: { daemonId: string; id: number }): Promise<void>;
+  /** The thread stops addressing these reports in one write; the reports stay with their machines. */
+  detachAddressedFeedback(reports: readonly { daemonId: string; id: number }[]): Promise<void>;
 }
 
 export type ThreadFeed = "draft" | "observed";

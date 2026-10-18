@@ -238,7 +238,10 @@ export const workbenchThreadActions = {
     params: WorkbenchThreadTargetSchema.extend({ id: z.number().int().nonnegative(), text: WorkbenchThreadTodoTextSchema }), result: ok,
   },
   "thread/feedback/addressed/detach": {
-    params: WorkbenchThreadTargetSchema.extend({ daemonId: z.string().min(1), id: z.number().int().nonnegative() }), result: ok,
+    params: WorkbenchThreadTargetSchema.extend({
+      reports: z.array(z.object({ daemonId: z.string().min(1), id: z.number().int().nonnegative() }).strict()).min(1).max(200),
+    }),
+    result: ok,
   },
   "thread/vis/end": { params: WorkbenchThreadTargetSchema.extend({ sessionId: z.uuid() }), result: ok },
   "thread/vis/answer": {

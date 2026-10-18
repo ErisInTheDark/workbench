@@ -218,7 +218,7 @@ export default class WorkbenchThreadActionController {
       return { ok: true };
     },
     "thread/feedback/addressed/detach": async input => {
-      await this.owners.addressedFeedback.detach(input.threadId, { daemonId: input.daemonId, id: input.id });
+      await this.owners.addressedFeedback.detach(input.threadId, input.reports);
       return { ok: true };
     },
     "thread/vis/end": input => this.endVis(input.threadId, input.sessionId),

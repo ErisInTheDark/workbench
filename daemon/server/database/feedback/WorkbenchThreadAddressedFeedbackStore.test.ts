@@ -31,7 +31,7 @@ const report = (id: number, daemonId = "daemon-a"): WorkbenchThreadAddressedFeed
   thread: "thread", createdAt: id, report: "text",
 });
 
-test("addressed feedback keeps first-recorded order, ignores repeats, counts per thread, and detaches one report by daemon and id", async context => {
+test("addressed feedback keeps first-recorded order, ignores repeats, counts per thread, and detaches reports by daemon and id", async context => {
   const { store, threadId, otherThreadId } = await fixture(context);
   store.execute({ kind: "record", threadId, feedback: [report(2), report(1)] });
   store.execute({ kind: "record", threadId, feedback: [report(1), report(1, "daemon-b")] });
@@ -40,7 +40,9 @@ test("addressed feedback keeps first-recorded order, ignores repeats, counts per
   assert.deepEqual(store.execute({ kind: "read", threadId }).map(item => `${item.daemonId}:${item.id}`),
     ["daemon-a:2", "daemon-a:1", "daemon-b:1"]);
   assert.deepEqual(store.counts(), { [threadId]: 3, [otherThreadId]: 1 });
-  assert.deepEqual(store.execute({ kind: "detach", threadId, daemonId: "daemon-a", feedbackId: 1 }).map(item => `${item.daemonId}:${item.id}`),
+  assert.deepEqual(store.execute({ kind: "detach", threadId, reports: [{ daemonId: "daemon-a", id: 1 }] }).map(item => `${item.daemonId}:${item.id}`),
     ["daemon-a:2", "daemon-b:1"]);
   assert.deepEqual(store.counts(), { [threadId]: 2, [otherThreadId]: 1 });
+  assert.deepEqual(store.execute({ kind: "detach", threadId, reports: [{ daemonId: "daemon-a", id: 2 }, { daemonId: "daemon-b", id: 1 }] }), []);
+  assert.deepEqual(store.counts(), { [otherThreadId]: 1 }, "detaching every report from one thread leaves other threads' copies");
 });

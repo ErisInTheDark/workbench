@@ -18,9 +18,10 @@ export default class WorkbenchThreadAddressedFeedbackController {
     await this.#change(threadId, resolved => ({ kind: "record", threadId: resolved, feedback }));
   }
 
-  /** The thread stops addressing one report; the report itself is untouched. */
-  async detach(threadId: string, report: { daemonId: string; id: number }) {
-    await this.#change(threadId, resolved => ({ kind: "detach", threadId: resolved, daemonId: report.daemonId, feedbackId: report.id }));
+  /** The thread stops addressing these reports, all at once; the reports themselves are untouched. */
+  async detach(threadId: string, reports: readonly { daemonId: string; id: number }[]) {
+    if (!reports.length) return;
+    await this.#change(threadId, resolved => ({ kind: "detach", threadId: resolved, reports }));
   }
 
   async holdsSettlement(threadId: WorkbenchThreadId) {
