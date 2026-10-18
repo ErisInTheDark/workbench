@@ -455,12 +455,6 @@ export default class WorkbenchThreadStateFeature {
     await this.controller.ensureProviderEntry(projectId, entry);
   }
 
-  async prepareProviderProfile(thread: ThreadPayload) {
-    const target = await this.providerProfileTarget(thread.harness, thread);
-    const profile = await this.controller.prepareComposerProfileTarget(target.slot);
-    return { ...profile, cwd: target.cwd, projectId: target.projectId };
-  }
-
   async readProviderProfile(harness: WorkbenchHarness, thread: ThreadPayload) {
     const target = await this.providerProfileTarget(harness, thread);
     const selection = await this.controller.readComposerProfileSnapshot(target.slot);

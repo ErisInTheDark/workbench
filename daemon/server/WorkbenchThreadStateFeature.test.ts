@@ -853,11 +853,11 @@ test("MCP admission consumes translated metadata without additional provider rea
     reasoningEffort: null, recencyAt: null, section: null, sectionEnteredAt: null,
     sessionId: "thread", source: "cli", threadSource: null,
   };
-  assert.deepEqual(await feature.prepareProviderProfile(await feature.observeThread(provider)), {
+  assert.deepEqual(await feature.readProviderProfile("codex", await feature.observeThread(provider)), {
     cwd: storageRoot, projectId: fixtureIdentityValues.ProjectId.project, selection, subagentName: null,
   });
   assert.equal(resolvedCwds.at(-1), storageRoot);
-  await assert.rejects(async () => feature.prepareProviderProfile(await feature.observeThread({ ...provider, cwd: "/unowned" })), /Unowned cwd/u);
+  await assert.rejects(async () => feature.readProviderProfile("codex", await feature.observeThread({ ...provider, cwd: "/unowned" })), /Unowned cwd/u);
 
   await feature.dispose();
   await temporary.dispose();
@@ -928,7 +928,7 @@ for (const foreignPage of ["first", "last"] as const) {
         assert.ok(changes.records?.every(record => record.identity.threadId !== neighbourIdentity.threadId) ?? true);
         await commit(changes);
       };
-      assert.deepEqual(await feature.prepareProviderProfile(observed), {
+      assert.deepEqual(await feature.readProviderProfile("codex", observed), {
         cwd: local.cwd, projectId, selection, subagentName: null,
       });
       assert.deepEqual(await feature.getProviderMcpState(observed), { generation: null, projectId });
