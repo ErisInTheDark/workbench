@@ -27,7 +27,7 @@ test("reads the app-owned port state through the maintained connection", async c
   };
   const reading = readWorkbenchAppPort(fixture.rpc);
   socket.reply(await socket.request("app/port/read"), snapshot);
-  assert.deepEqual(await reading, { ...snapshot, stableOrigin: null });
+  assert.deepEqual(await reading, { ...snapshot, stableOrigin: null, loopbackReachable: false });
 });
 
 test("rejects malformed browser-boundary responses", async () => {

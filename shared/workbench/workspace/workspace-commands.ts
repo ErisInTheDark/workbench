@@ -43,6 +43,8 @@ const nonCommandMethods = [
   "thread/presentation/attachment/read", "thread/presentation/layout/read",
   // Browser identity lookup uses the workspace owner observation.
   "thread/identity/resolve",
+  // The app server's sign-in callback route relays the provider's answer itself.
+  "mcp-servers/sign-in/finish",
 ] as const satisfies readonly WorkbenchDaemonMethod[];
 type OrdinaryWorkspaceCommandMethod = Exclude<
   WorkbenchDaemonMethod,
@@ -112,6 +114,7 @@ export const workspaceCommandRoutes = {
   "approval-review/update": "installation",
   "mcp-servers/read": "installation",
   "mcp-servers/update": "installation",
+  "mcp-servers/sign-in/start": "installation",
   "project/discovery-settings/read": "installation",
   "project/discovery-settings/update": "installation",
   "project/folders/list": "installation",

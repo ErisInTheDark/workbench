@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WORKBENCH_APP_PORT_PATH: same-origin HTTP route for reading and changing the foreground app listener port.
- * - WorkbenchAppPortSource/WorkbenchAppPortSnapshot: active listener state shared by the app server and browser settings UI.
+ * - WorkbenchAppPortSource/WorkbenchAppPortSnapshot: active listener state, and whether the browser can reach its loopback origin, shared by the app server and browser settings UI.
  * - WorkbenchAppPortUpdateRequest: bounded port-change request contract.
  * - WorkbenchAppPortSnapshotSchema/WorkbenchAppPortUpdateRequestSchema: validated JSON boundary.
  */
@@ -17,6 +17,8 @@ export interface WorkbenchAppPortSnapshot {
   editable: boolean;
   source: WorkbenchAppPortSource;
   stableOrigin?: string | null;
+  /** Whether this browser runs on the app's machine, so `appOrigin` reaches the app. */
+  loopbackReachable?: boolean;
 }
 
 export interface WorkbenchAppPortUpdateRequest {
@@ -34,6 +36,7 @@ export const WorkbenchAppPortSnapshotSchema = z.object({
   source: z.enum(["environment", "random", "setting"]),
   stableOrigin: z.url().refine(value => new URL(value).origin === value
     && ["http:", "https:"].includes(new URL(value).protocol)).nullable().default(null),
+  loopbackReachable: z.boolean().default(false),
 }).strict().superRefine((value, context) => {
   if (Number(new URL(value.appOrigin).port) !== value.currentPort) {
     context.addIssue({

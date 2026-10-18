@@ -2,20 +2,27 @@
  * Exports:
  * - WorkbenchMcpServerOptions: database, device identity and connection factory ports.
  * - McpServerCallOutcome: agent-facing text of one forwarded call and whether it failed.
- * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed credentials and live connections; answers settings reads/updates and agent tool listing/calls.
+ * - default WorkbenchMcpServerController: single owner of user-added MCP servers, their allow rules, sealed header credentials, OAuth sign-ins and live connections; answers settings reads/updates, sign-in steps and agent tool listing/calls.
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
-  McpServerSettingsUpdateSchema, type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSnapshot,
+  McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
+  type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams,
+  type McpServerSignInFinishResult, type McpServerSignInStartParams, type McpServerSignInStartResult, type McpServerSnapshot,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import {
   deleteRows, insertRow, selectRows, updateRows, upsertRow,
   type WorkbenchDatabaseMutation, type WorkbenchDatabaseQuery, type WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
-import { mcpServerAuth, mcpServers, mcpServerTools } from "../lib/workbench/database/schema/mcp-server-schema";
+import {
+  mcpServerAuth, mcpServerOAuthClients, mcpServerOAuthPending, mcpServerOAuthTokens, mcpServers, mcpServerTools,
+} from "../lib/workbench/database/schema/mcp-server-schema";
 import { deriveProjectStoreKey, openProjectStoreValue, sealProjectStoreValue } from "../store/project-store-crypto";
 import McpServerConnection, { type McpServerConnectionPort, type McpServerEndpoint, type McpServerTool } from "./McpServerConnection";
+import McpServerOAuthProvider, { McpServerSignInRequiredError, type McpServerOAuthStore } from "./McpServerOAuthProvider";
 import { formatMcpToolListing, formatMcpToolResult, type McpToolListing } from "./mcp-tool-search";
 
 export interface WorkbenchMcpServerOptions {
@@ -26,6 +33,7 @@ export interface WorkbenchMcpServerOptions {
   readDeviceIdentity(): Promise<string>;
   connect?: (endpoint: McpServerEndpoint) => McpServerConnectionPort;
   user?: () => string;
+  now?: () => number;
 }
 
 export interface McpServerCallOutcome {
@@ -40,12 +48,18 @@ interface StoredServer {
   allowAll: boolean;
   allowedTools: string[];
   /** `value` is null when the credential was sealed on another device or OS user. */
-  auth: { header: string; value: string | null } | null;
+  header: { name: string; value: string | null } | null;
+  /** Redirect URI of the registered OAuth client, and whether tokens are stored. */
+  oauth: { redirectUri: string | null; signedIn: boolean };
 }
 
-// Credentials are sealed with the project-store cipher, bound to this device, OS user, this scope and the header name.
+type Catalog = { status: "ready"; tools: McpServerTool[] } | { status: "signInRequired" } | { status: "error"; detail: string };
+
+// Secrets are sealed with the project-store cipher, bound to this device, OS user, this scope and each secret's own key.
 const SECRET_SCOPE = "mcp-servers";
 const UNREADABLE_CREDENTIAL = "The saved credential can't be read on this device or OS user. Set it again.";
+const SIGN_IN_TTL_MS = 10 * 60_000;
+const SIGN_IN_EXPIRED = "This sign-in has expired or was already used. Start sign-in again from Workbench settings.";
 
 function sanitize(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 300);
@@ -67,7 +81,7 @@ export default class WorkbenchMcpServerController {
       const catalog = await this.#catalog(server);
       return {
         id: server.id, name: server.name, url: server.url, allowAll: server.allowAll, allowedTools: server.allowedTools,
-        auth: server.auth ? { header: server.auth.header } : null,
+        auth: server.header ? { kind: "header", header: server.header.name } : server.oauth.signedIn ? { kind: "oauth" } : null,
         catalog: catalog.status === "ready"
           ? { status: "ready", tools: catalog.tools.map(tool => ({ name: tool.name, description: tool.description })) }
           : catalog,
@@ -82,8 +96,8 @@ export default class WorkbenchMcpServerController {
       if (servers.some(server => server.name === update.name)) throw new Error(`An MCP server named ${update.name} already exists.`);
       const id = randomUUID();
       await this.options.database.executeTransaction([
-        insertRow(mcpServers, { id, name: update.name, url: update.url, allow_all: 0, created_at: Date.now() }),
-        ...update.auth ? [await this.#sealAuth(id, update.auth)] : [],
+        insertRow(mcpServers, { id, name: update.name, url: update.url, allow_all: 0, created_at: this.#now() }),
+        ...update.auth ? [await this.#sealHeader(id, update.auth)] : [],
       ]);
       return await this.read();
     }
@@ -95,9 +109,14 @@ export default class WorkbenchMcpServerController {
         await this.#disconnect(server.id);
         break;
       case "setAuth":
-        await this.options.database.executeTransaction([update.auth
-          ? await this.#sealAuth(server.id, update.auth)
-          : deleteRows(mcpServerAuth, { server_id: server.id })]);
+        // A header credential and an OAuth sign-in are alternatives; setting one drops the other.
+        await this.options.database.executeTransaction(update.auth
+          ? [await this.#sealHeader(server.id, update.auth), ...this.#clearOAuth(server.id)]
+          : [deleteRows(mcpServerAuth, { server_id: server.id })]);
+        await this.#disconnect(server.id);
+        break;
+      case "signOut":
+        await this.options.database.executeTransaction(this.#clearOAuth(server.id));
         await this.#disconnect(server.id);
         break;
       case "setAllowAll":
@@ -116,15 +135,71 @@ export default class WorkbenchMcpServerController {
     return await this.read();
   }
 
+  /** Register (if needed) and prepare a PKCE authorization; the provider's callback finishes it. */
+  async startSignIn(input: McpServerSignInStartParams): Promise<McpServerSignInStartResult> {
+    const { id, redirectUri } = McpServerSignInStartParamsSchema.parse(input);
+    const server = (await this.#servers()).find(candidate => candidate.id === id);
+    if (!server) throw new Error("That MCP server no longer exists.");
+    const state = randomBytes(32).toString("base64url");
+    const provider = new McpServerOAuthProvider(this.#oauthStore(server.id), { kind: "start", redirectUri, state });
+    try {
+      await auth(provider, { serverUrl: server.url });
+    } catch (error) {
+      throw new Error(`Sign-in to ${server.name} couldn't start: ${sanitize(error)}`, { cause: error });
+    }
+    const authorization = provider.authorization();
+    if (!authorization) throw new Error(`${server.name} did not offer an OAuth sign-in.`);
+    const sealed = sealProjectStoreValue(await this.#key(), SECRET_SCOPE, `${state}\0verifier`, authorization.verifier);
+    // One sign-in per server at a time; a new start replaces an abandoned one.
+    await this.options.database.executeTransaction([
+      deleteRows(mcpServerOAuthPending, { server_id: server.id }),
+      insertRow(mcpServerOAuthPending, {
+        state, server_id: server.id, redirect_uri: redirectUri,
+        verifier_nonce: sealed.nonce, verifier_ciphertext: sealed.ciphertext, created_at: this.#now(),
+      }),
+    ]);
+    return { authorizationUrl: authorization.url.href };
+  }
+
+  /** Consume one started sign-in by its state, exactly once, and exchange the provider's code for tokens. */
+  async finishSignIn(input: McpServerSignInFinishParams): Promise<McpServerSignInFinishResult> {
+    const params = McpServerSignInFinishParamsSchema.parse(input);
+    const [pending] = await this.options.database.query(selectRows(mcpServerOAuthPending, { where: { state: params.state } }));
+    if (!pending) throw new Error(SIGN_IN_EXPIRED);
+    await this.options.database.executeTransaction([deleteRows(mcpServerOAuthPending, { state: params.state })]);
+    const server = (await this.#servers()).find(candidate => candidate.id === pending.server_id);
+    if (!server || this.#now() - pending.created_at > SIGN_IN_TTL_MS) throw new Error(SIGN_IN_EXPIRED);
+    if ("error" in params) return { outcome: "failed", server: server.name, detail: params.error };
+    const verifier = openProjectStoreValue(await this.#key(), SECRET_SCOPE, `${params.state}\0verifier`, {
+      nonce: pending.verifier_nonce, ciphertext: pending.verifier_ciphertext,
+    });
+    if (verifier === null) return { outcome: "failed", server: server.name, detail: "The sign-in started on another device or OS user." };
+    const provider = new McpServerOAuthProvider(this.#oauthStore(server.id), {
+      kind: "finish", redirectUri: pending.redirect_uri, verifier,
+    });
+    try {
+      await auth(provider, { serverUrl: server.url, authorizationCode: params.code });
+    } catch (error) {
+      return { outcome: "failed", server: server.name, detail: sanitize(error) || "The provider refused the sign-in." };
+    }
+    await this.options.database.executeTransaction([deleteRows(mcpServerAuth, { server_id: server.id })]);
+    await this.#disconnect(server.id);
+    return { outcome: "signedIn", server: server.name };
+  }
+
   /** Allowed tools across servers, or one server's; each unreachable server is reported alongside the rest. */
   async listTools(input: { server?: string; query?: string }, signal: AbortSignal) {
     const servers = (await this.#servers()).filter(server => !input.server || server.name === input.server);
     if (input.server && !servers.length) throw new Error(`No MCP server is named ${input.server}.`);
     const listings = await Promise.all(servers.map(async (server): Promise<McpToolListing> => {
       const catalog = await this.#catalog(server, signal);
-      return catalog.status === "ready"
-        ? { server: server.name, status: "ready", tools: catalog.tools.filter(tool => this.#allows(server, tool.name)) }
-        : { server: server.name, status: "error", detail: catalog.detail };
+      if (catalog.status === "ready") {
+        return { server: server.name, status: "ready", tools: catalog.tools.filter(tool => this.#allows(server, tool.name)) };
+      }
+      return {
+        server: server.name, status: "error",
+        detail: catalog.status === "signInRequired" ? "needs sign-in; the user can sign in in Settings > Agents > MCP servers" : catalog.detail,
+      };
     }));
     signal.throwIfAborted();
     return formatMcpToolListing(listings, input.query);
@@ -135,7 +210,7 @@ export default class WorkbenchMcpServerController {
     const server = (await this.#servers()).find(candidate => candidate.name === input.server);
     if (!server) throw new Error(`No MCP server is named ${input.server}.`);
     if (!this.#allows(server, input.tool)) throw new Error(`${input.server}/${input.tool} is not allowed. The user can allow it in Settings > Agents > MCP servers.`);
-    if (server.auth && server.auth.value === null) throw new Error(UNREADABLE_CREDENTIAL);
+    if (server.header && server.header.value === null) throw new Error(UNREADABLE_CREDENTIAL);
     const connection = this.#connection(server);
     const offered = await connection.listTools(signal);
     if (!offered.some(tool => tool.name === input.tool)) throw new Error(`${input.server} does not offer a tool named ${input.tool}.`);
@@ -151,16 +226,19 @@ export default class WorkbenchMcpServerController {
     if (failures.length) throw new AggregateError(failures, "MCP server connections failed to close.");
   }
 
+  #now() { return (this.options.now ?? Date.now)(); }
+
   #allows(server: StoredServer, tool: string) {
     return server.allowAll || server.allowedTools.includes(tool);
   }
 
-  async #catalog(server: StoredServer, signal?: AbortSignal): Promise<{ status: "ready"; tools: McpServerTool[] } | { status: "error"; detail: string }> {
-    if (server.auth && server.auth.value === null) return { status: "error", detail: UNREADABLE_CREDENTIAL };
+  async #catalog(server: StoredServer, signal?: AbortSignal): Promise<Catalog> {
+    if (server.header && server.header.value === null) return { status: "error", detail: UNREADABLE_CREDENTIAL };
     try {
       return { status: "ready", tools: await this.#connection(server).listTools(signal) };
     } catch (error) {
       signal?.throwIfAborted();
+      if (error instanceof McpServerSignInRequiredError) return { status: "signInRequired" };
       return { status: "error", detail: sanitize(error) || "The server could not be reached." };
     }
   }
@@ -168,7 +246,14 @@ export default class WorkbenchMcpServerController {
   #connection(server: StoredServer) {
     let connection = this.#connections.get(server.id);
     if (!connection) {
-      const endpoint = { url: server.url, headers: server.auth?.value ? { [server.auth.header]: server.auth.value } : {} };
+      const endpoint: McpServerEndpoint = server.header
+        ? { url: server.url, headers: server.header.value ? { [server.header.name]: server.header.value } : {} }
+        : {
+          url: server.url, headers: {},
+          authProvider: new McpServerOAuthProvider(this.#oauthStore(server.id), {
+            kind: "background", redirectUri: server.oauth.redirectUri ?? undefined,
+          }),
+        };
       connection = (this.options.connect ?? (value => new McpServerConnection(value)))(endpoint);
       this.#connections.set(server.id, connection);
     }
@@ -181,29 +266,94 @@ export default class WorkbenchMcpServerController {
     await connection?.close();
   }
 
-  async #sealAuth(serverId: string, auth: { header: string; value: string }) {
-    const sealed = sealProjectStoreValue(await this.#key(), SECRET_SCOPE, credentialKey(serverId, auth.header), auth.value);
+  #clearOAuth(serverId: string) {
+    return [mcpServerOAuthTokens, mcpServerOAuthClients, mcpServerOAuthPending].map(table => deleteRows(table, { server_id: serverId }));
+  }
+
+  async #sealHeader(serverId: string, header: { header: string; value: string }) {
+    const sealed = sealProjectStoreValue(await this.#key(), SECRET_SCOPE, credentialKey(serverId, header.header), header.value);
     return upsertRow(mcpServerAuth, {
-      server_id: serverId, header_name: auth.header, nonce: sealed.nonce, ciphertext: sealed.ciphertext, updated_at: Date.now(),
+      server_id: serverId, header_name: header.header, nonce: sealed.nonce, ciphertext: sealed.ciphertext, updated_at: this.#now(),
     }, { conflictColumns: ["server_id"], updateColumns: ["header_name", "nonce", "ciphertext", "updated_at"] });
   }
 
+  /** Sealed persistence of one server's OAuth client registration and tokens; unreadable secrets read as absent. */
+  #oauthStore(serverId: string): McpServerOAuthStore {
+    const database = this.options.database;
+    const seal = async (name: string, value: string) => sealProjectStoreValue(await this.#key(), SECRET_SCOPE, `${serverId}\0${name}`, value);
+    const open = async (name: string, nonce: Uint8Array | null, ciphertext: Uint8Array | null) => nonce && ciphertext
+      ? openProjectStoreValue(await this.#key(), SECRET_SCOPE, `${serverId}\0${name}`, { nonce, ciphertext })
+      : null;
+    return {
+      readClient: async () => {
+        const [row] = await database.query(selectRows(mcpServerOAuthClients, { where: { server_id: serverId } }));
+        if (!row) return null;
+        const secret = await open("oauth-client-secret", row.secret_nonce, row.secret_ciphertext);
+        const client: OAuthClientInformationMixed = { client_id: row.client_id, ...secret ? { client_secret: secret } : {} };
+        return { redirectUri: row.redirect_uri, client };
+      },
+      saveClient: async (redirectUri, client) => {
+        const secret = client.client_secret ? await seal("oauth-client-secret", client.client_secret) : null;
+        await database.executeTransaction([upsertRow(mcpServerOAuthClients, {
+          server_id: serverId, redirect_uri: redirectUri, client_id: client.client_id,
+          secret_nonce: secret?.nonce ?? null, secret_ciphertext: secret?.ciphertext ?? null,
+        }, { conflictColumns: ["server_id"], updateColumns: ["redirect_uri", "client_id", "secret_nonce", "secret_ciphertext"] })]);
+      },
+      readTokens: async () => {
+        const [row] = await database.query(selectRows(mcpServerOAuthTokens, { where: { server_id: serverId } }));
+        if (!row) return null;
+        const access = await open("oauth-access", row.access_nonce, row.access_ciphertext);
+        if (access === null) return null;
+        const refresh = await open("oauth-refresh", row.refresh_nonce, row.refresh_ciphertext);
+        const tokens: OAuthTokens = {
+          access_token: access, token_type: row.token_type,
+          ...refresh ? { refresh_token: refresh } : {},
+          ...row.scope ? { scope: row.scope } : {},
+          ...row.expires_at !== null ? { expires_in: Math.max(0, Math.floor((row.expires_at - this.#now()) / 1000)) } : {},
+        };
+        return tokens;
+      },
+      saveTokens: async tokens => {
+        const access = await seal("oauth-access", tokens.access_token);
+        const refresh = tokens.refresh_token ? await seal("oauth-refresh", tokens.refresh_token) : null;
+        await database.executeTransaction([upsertRow(mcpServerOAuthTokens, {
+          server_id: serverId, token_type: tokens.token_type,
+          access_nonce: access.nonce, access_ciphertext: access.ciphertext,
+          refresh_nonce: refresh?.nonce ?? null, refresh_ciphertext: refresh?.ciphertext ?? null,
+          expires_at: tokens.expires_in === undefined ? null : this.#now() + tokens.expires_in * 1000,
+          scope: tokens.scope ?? null, updated_at: this.#now(),
+        }, {
+          conflictColumns: ["server_id"],
+          updateColumns: ["token_type", "access_nonce", "access_ciphertext", "refresh_nonce", "refresh_ciphertext", "expires_at", "scope", "updated_at"],
+        })]);
+      },
+      clearTokens: async () => { await database.executeTransaction([deleteRows(mcpServerOAuthTokens, { server_id: serverId })]); },
+      clearClient: async () => { await database.executeTransaction([deleteRows(mcpServerOAuthClients, { server_id: serverId })]); },
+    };
+  }
+
   async #servers(): Promise<StoredServer[]> {
-    const [servers, tools, auth] = await Promise.all([
+    const [servers, tools, headers, clients, tokens] = await Promise.all([
       this.options.database.query(selectRows(mcpServers, { orderBy: [{ column: "created_at" }] })),
       this.options.database.query(selectRows(mcpServerTools, { orderBy: [{ column: "tool_name" }] })),
       this.options.database.query(selectRows(mcpServerAuth)),
+      this.options.database.query(selectRows(mcpServerOAuthClients)),
+      this.options.database.query(selectRows(mcpServerOAuthTokens)),
     ]);
-    const key = auth.length ? await this.#key() : null;
+    const key = headers.length ? await this.#key() : null;
     return servers.map(server => {
-      const credential = auth.find(row => row.server_id === server.id);
+      const header = headers.find(row => row.server_id === server.id);
       return {
         id: server.id, name: server.name, url: server.url, allowAll: server.allow_all === 1,
         allowedTools: tools.filter(row => row.server_id === server.id).map(row => row.tool_name),
-        auth: credential && key ? {
-          header: credential.header_name,
-          value: openProjectStoreValue(key, SECRET_SCOPE, credentialKey(server.id, credential.header_name), credential),
+        header: header && key ? {
+          name: header.header_name,
+          value: openProjectStoreValue(key, SECRET_SCOPE, credentialKey(server.id, header.header_name), header),
         } : null,
+        oauth: {
+          redirectUri: clients.find(row => row.server_id === server.id)?.redirect_uri ?? null,
+          signedIn: tokens.some(row => row.server_id === server.id),
+        },
       };
     });
   }

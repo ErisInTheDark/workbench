@@ -21,7 +21,9 @@ import { WorkingTreeReadSchema, WorkingTreeDiffSchema, WorkingTreePreviewSchema,
 import { WorkbenchSandboxNetworkSettingsResponseSchema } from "../provider/provider-settings";
 import { CommandApprovalSnapshotSchema } from "../settings/command-approvals";
 import { ApprovalReviewSettingsSnapshotSchema } from "../approval-review/approval-review-settings";
-import { McpServerSettingsSnapshotSchema } from "../mcp/mcp-server-settings";
+import {
+  McpServerSettingsSnapshotSchema, McpServerSignInFinishResultSchema, McpServerSignInStartResultSchema,
+} from "../mcp/mcp-server-settings";
 import { ProjectDiscoverySettingsReadSchema, ProjectDiscoverySettingsResultSchema } from "../project/project-discovery-settings";
 import { ProjectCreateResultSchema, ProjectFolderListSchema } from "../project/project-creation";
 import { ProjectStoreSnapshotSchema, ProjectStoreUpdateResultSchema } from "../project/project-store";
@@ -116,6 +118,8 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "approval-review/update": return ApprovalReviewSettingsSnapshotSchema;
     case "mcp-servers/read":
     case "mcp-servers/update": return McpServerSettingsSnapshotSchema;
+    case "mcp-servers/sign-in/start": return McpServerSignInStartResultSchema;
+    case "mcp-servers/sign-in/finish": return McpServerSignInFinishResultSchema;
     case "project/store/read": return ProjectStoreSnapshotSchema;
     case "project/store/update": return ProjectStoreUpdateResultSchema;
     case "project/discovery-settings/read": return ProjectDiscoverySettingsReadSchema;
@@ -371,6 +375,8 @@ class WorkbenchDaemonClient {
   readonly mcpServers = {
     read: () => this.request("mcp-servers/read", {}),
     update: (params: WorkbenchDaemonParams<"mcp-servers/update">) => this.request("mcp-servers/update", params),
+    startSignIn: (params: WorkbenchDaemonParams<"mcp-servers/sign-in/start">) => this.request("mcp-servers/sign-in/start", params),
+    finishSignIn: (params: WorkbenchDaemonParams<"mcp-servers/sign-in/finish">) => this.request("mcp-servers/sign-in/finish", params),
   };
 
   readonly projectStore = {

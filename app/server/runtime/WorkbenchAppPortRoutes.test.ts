@@ -69,7 +69,7 @@ test("delegates a valid connection-changing port update", async (context) => {
     method: "PUT",
   });
   assert.equal(updateResponse.status, 200);
-  assert.deepEqual(await updateResponse.json(), { ...moved, stableOrigin: null });
+  assert.deepEqual(await updateResponse.json(), { ...moved, stableOrigin: null, loopbackReachable: false });
   assert.deepEqual(updates, [43_211]);
 });
 
@@ -124,5 +124,5 @@ test("port moves preserve the stable network origin", async context => {
   const response = await fetch(`${address.url}${WORKBENCH_APP_PORT_PATH}`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: 43211 }),
   });
-  assert.deepEqual(await response.json(), { ...moved, stableOrigin });
+  assert.deepEqual(await response.json(), { ...moved, stableOrigin, loopbackReachable: false });
 });

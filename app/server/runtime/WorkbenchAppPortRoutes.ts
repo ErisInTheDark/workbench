@@ -50,6 +50,8 @@ export default class WorkbenchAppPortRoutes {
     appPort: WorkbenchAppPortControl;
     onDiagnostic?: (message: string) => void;
     stableOrigin?: (request: IncomingMessage) => string | null;
+    /** Whether the requesting browser is on the app's machine, so the loopback origin reaches it. */
+    loopbackReachable?: (request: IncomingMessage) => boolean;
     canUpdate?: () => boolean;
   }) {}
 
@@ -85,7 +87,11 @@ export default class WorkbenchAppPortRoutes {
   }
 
   private project(snapshot: ReturnType<WorkbenchAppPortControl["read"]>, request: IncomingMessage) {
-    return { ...snapshot, stableOrigin: this.options.stableOrigin?.(request) ?? null };
+    return {
+      ...snapshot,
+      stableOrigin: this.options.stableOrigin?.(request) ?? null,
+      loopbackReachable: this.options.loopbackReachable?.(request) ?? false,
+    };
   }
 
   read(request: IncomingMessage) {

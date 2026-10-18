@@ -33,5 +33,7 @@ export const WorkbenchAppNetworkEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("voice"), event: VoiceSessionEventSchema }).strict(),
   z.object({ kind: z.literal("workspaceDelta"), delta: WorkspaceObservationDeltaSchema }).strict(),
   z.object({ kind: z.literal("presentation-import"), status: WorkbenchPresentationImportStatusSchema }).strict(),
+  /** An MCP server OAuth callback reached the app and its daemon answered. */
+  z.object({ kind: z.literal("mcp-sign-in"), daemonId: DaemonIdSchema, outcome: z.enum(["signedIn", "failed"]) }).strict(),
 ]);
 export type WorkbenchAppNetworkEvent = z.infer<typeof WorkbenchAppNetworkEventSchema>;

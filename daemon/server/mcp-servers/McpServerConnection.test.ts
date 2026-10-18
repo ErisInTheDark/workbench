@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests protect the real streamable-HTTP edge: the credential header reaches the server,
- * calls are forwarded, and a refused credential reports the OAuth limitation instead of a raw transport error.
+ * calls are forwarded, and a refused credential is reported plainly instead of as a raw transport error.
  */
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -55,11 +55,11 @@ test("the credential header authenticates catalogue reads and forwarded calls", 
   }
 });
 
-test("a refused credential reports the OAuth limitation, and a failed connection is not reused", async () => {
+test("a refused credential is reported as such, and a failed connection is not reused", async () => {
   const server = await startServer();
   const connection = new McpServerConnection({ url: server.url, headers: { "x-consumer-api-key": "rotated" } });
   try {
-    await assert.rejects(connection.listTools(), /refused the request \(401\).*OAuth/u);
+    await assert.rejects(connection.listTools(), /rejected the credential \(401\)/u);
     server.accepted.key = "rotated";
     assert.deepEqual((await connection.listTools()).map(tool => tool.name), ["echo"]);
   } finally {

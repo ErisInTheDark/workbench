@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchAppHttpRouter: own network admission, app routes/upgrades, client diagnostics and static SPA resolution.
+ * - default WorkbenchAppHttpRouter: own network admission, app routes/upgrades (including the MCP sign-in callback), client diagnostics and static SPA resolution.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -22,6 +22,7 @@ import type WorkbenchWorkspaceThreads from "../workspace/WorkbenchWorkspaceThrea
 import type WorkbenchWorkspaceDrafts from "../workspace/WorkbenchWorkspaceDrafts";
 import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import WorkbenchWorkspaceAssetRoutes from "../workspace/WorkbenchWorkspaceAssetRoutes";
+import WorkbenchMcpSignInRoutes from "../workspace/WorkbenchMcpSignInRoutes";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
 import WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import WorkbenchAppSettingsController from "./WorkbenchAppSettingsController.ts";
@@ -45,6 +46,11 @@ function requestKind(pathname: string) {
   if (pathname === CLIENT_LOG_PATH) return "client log";
   if (pathname.startsWith("/api/")) return "api";
   return /\.[a-z0-9]{1,8}$/iu.test(pathname) ? "asset" : "page";
+}
+
+/** Whether the network relay forwarded this request from a device rather than the browser connecting directly. */
+function isForwarded(request: IncomingMessage) {
+  return Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-") && key !== "x-workbench-network-request");
 }
 
 function sendJson(response: ServerResponse, status: number, value: object) {
@@ -99,6 +105,7 @@ export default class WorkbenchAppHttpRouter {
   private readonly eventSockets: WorkbenchAppEventSocketController | null;
   private readonly importController: WorkbenchPresentationImportController | null;
   private readonly assets: WorkbenchWorkspaceAssetRoutes | null;
+  private readonly mcpSignIn: WorkbenchMcpSignInRoutes | null;
 
   constructor(private readonly options: {
     appPort: WorkbenchAppPortControl;
@@ -122,6 +129,9 @@ export default class WorkbenchAppHttpRouter {
     this.assets = options.sources ? new WorkbenchWorkspaceAssetRoutes({
       sources: options.sources, warn: message => options.logger.error("app", message),
     }) : null;
+    this.mcpSignIn = options.sources ? new WorkbenchMcpSignInRoutes({
+      sources: options.sources, warn: message => options.logger.error("app", message),
+    }) : null;
     this.importController = options.presentationImport ?? null;
     this.networkRoutes = options.network
       ? new WorkbenchNetworkRoutes(options.network) : null;
@@ -136,6 +146,8 @@ export default class WorkbenchAppHttpRouter {
         const origin = typeof forwarded === "string" ? forwarded : `http://${request.headers.host ?? ""}`;
         return options.network?.stableOrigin(origin) ?? null;
       },
+      // Every admitted connection is a loopback socket; forwarded ones are local only when they come from the host node.
+      loopbackReachable: request => !isForwarded(request) || options.network?.ingress(request.headers)?.trustHost === true,
       onDiagnostic: (message) => options.logger.error("app", `http ${message}`),
     });
     this.settingsRoutes = options.readAppliedReactDevelopmentMode
@@ -162,6 +174,7 @@ export default class WorkbenchAppHttpRouter {
       ? new WorkbenchAppEventSocketController({
           logger: options.logger, network: options.network, routes: this.networkRoutes,
           presentation: options.presentation, presentationImport: this.importController ?? undefined,
+          mcpSignIn: this.mcpSignIn ?? undefined,
           state: options.state, runtime: options.runtime,
           settings: this.settingsRoutes, port: this.portRoutes,
           sources: options.sources, workspace: options.workspace,
@@ -224,10 +237,8 @@ export default class WorkbenchAppHttpRouter {
   }
 
   admitConnection(request: IncomingMessage) {
-    const nativeHeaders = Object.keys(request.headers).some(key => key.startsWith("x-workbench-network-")
-      && key !== "x-workbench-network-request");
     return Boolean(isLoopbackConnection(request.socket)
-      && (!nativeHeaders || this.options.network?.ingress(request.headers)));
+      && (!isForwarded(request) || this.options.network?.ingress(request.headers)));
   }
 
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer) {
@@ -254,6 +265,7 @@ export default class WorkbenchAppHttpRouter {
     }
     if (await this.portRoutes.handle(request, response, url)) return;
     if (this.assets && await this.assets.handle(request, response, url)) return;
+    if (this.mcpSignIn && await this.mcpSignIn.handle(request, response, url)) return;
     if (await this.stateRoutes.handle(request, response, url)) return;
     if (this.presentationRoutes && await this.presentationRoutes.handle(request, response, url)) return;
     if (url.pathname.startsWith("/api/")) {

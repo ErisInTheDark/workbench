@@ -3,15 +3,20 @@
  * - McpServerEndpoint: url and request headers of one user-added MCP server.
  * - McpServerTool: one offered tool with its input schema.
  * - McpServerConnectionPort: the catalogue/call/close surface the server controller depends on.
- * - default McpServerConnection: SDK streamable-HTTP client for one server; caches the catalogue until the server reports a change and reconnects after transport failure.
+ * - default McpServerConnection: SDK streamable-HTTP client for one server, authenticated by a header or OAuth; caches the catalogue until the server reports a change, reconnects after transport failure and reports a needed sign-in as McpServerSignInRequiredError.
  */
+import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { McpServerSignInRequiredError } from "./McpServerOAuthProvider";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export interface McpServerEndpoint {
   url: string;
   headers: Record<string, string>;
+  /** OAuth sign-in for servers without a credential header; the SDK refreshes its tokens on 401. */
+  authProvider?: OAuthClientProvider;
 }
 
 export interface McpServerTool {
@@ -31,9 +36,11 @@ const CATALOGUE_TIMEOUT_MS = 20_000;
 const CALL_TIMEOUT_MS = 30 * 60_000;
 const MAX_CATALOGUE_PAGES = 50;
 
-function describeFailure(error: unknown) {
+function describeFailure(error: unknown, signedIn: boolean) {
+  // A failed refresh or a missing sign-in both mean the user must sign in again.
+  if (signedIn && (error instanceof UnauthorizedError || error instanceof OAuthError)) return new McpServerSignInRequiredError();
   if (error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403)) {
-    return new Error(`The server refused the request (${error.code}). It may need OAuth sign-in, which Workbench doesn't support yet; use an API-key header if the server offers one.`, { cause: error });
+    return new Error(`The server rejected the credential (${error.code}). Check the credential header and value.`, { cause: error });
   }
   return error;
 }
@@ -85,7 +92,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
       return await operation(await session);
     } catch (error) {
       if (!(error instanceof McpError) && this.#client === session) await this.close();
-      throw describeFailure(error);
+      throw describeFailure(error, this.endpoint.authProvider !== undefined);
     }
   }
 
@@ -106,6 +113,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
     client.setNotificationHandler(ToolListChangedNotificationSchema, () => { this.#tools = null; });
     const transport = new StreamableHTTPClientTransport(new URL(this.endpoint.url), {
       requestInit: { headers: this.endpoint.headers },
+      ...this.endpoint.authProvider ? { authProvider: this.endpoint.authProvider } : {},
     });
     try {
       await client.connect(transport, { timeout: CATALOGUE_TIMEOUT_MS });

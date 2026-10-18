@@ -37,6 +37,7 @@ import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRe
 import type WorkbenchAppSettingsController from "./WorkbenchAppSettingsController.ts";
 import type WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import type WorkbenchAppReloadOrchestrator from "./WorkbenchAppReloadOrchestrator";
+import type WorkbenchMcpSignInRoutes from "../workspace/WorkbenchMcpSignInRoutes";
 
 type Frame =
   | Extract<WorkbenchAppNetworkEvent, { kind: "transcriptSnapshot" | "transcriptStream" | "transcriptState" }>
@@ -46,6 +47,7 @@ type Frame =
   | { kind: "network"; snapshot: ReturnType<WorkbenchNetworkRoutes["snapshotFor"]> }
   | { kind: "presentation"; event: { revision: number } }
   | { kind: "presentation-import"; status: ReturnType<WorkbenchPresentationImportController["snapshot"]> }
+  | Extract<WorkbenchAppNetworkEvent, { kind: "mcp-sign-in" }>
   | { kind: "state"; revision: number }
   | { kind: "runtime" };
 
@@ -124,6 +126,7 @@ export default class WorkbenchAppEventSocketController {
     routes: WorkbenchNetworkRoutes;
     presentation?: Pick<WorkbenchPresentationController, "subscribe" | "revision" | "read" | "mutate">;
     presentationImport?: Pick<WorkbenchPresentationImportController, "subscribe" | "snapshot">;
+    mcpSignIn?: Pick<WorkbenchMcpSignInRoutes, "subscribe">;
     state?: Pick<WorkbenchBrowserStateRegistry,
       "readWorkspaceBrowser" | "mutateBrowser" | "subscribeBrowser">;
     settings?: Pick<WorkbenchAppSettingsController, "read" | "update"> | null;
@@ -240,6 +243,7 @@ export default class WorkbenchAppEventSocketController {
     const sendImport = (status: ReturnType<WorkbenchPresentationImportController["snapshot"]>) =>
       send({ kind: "presentation-import", status });
     const unsubscribeImport = this.options.presentationImport?.subscribe(sendImport);
+    const unsubscribeMcpSignIn = this.options.mcpSignIn?.subscribe(event => send({ kind: "mcp-sign-in", ...event }));
     const unsubscribeAdmission = this.options.network.subscribe(() => {
       if (!this.options.routes.admitSocket(request)) {
         this.options.logger.error("app", "WS network grant revoked; closing connection.");
@@ -250,6 +254,7 @@ export default class WorkbenchAppEventSocketController {
       if (released) return;
       released = true;
       unsubscribeImport?.();
+      unsubscribeMcpSignIn?.();
       unsubscribeAdmission();
       workspace?.dispose();
       this.connections.delete(connection);

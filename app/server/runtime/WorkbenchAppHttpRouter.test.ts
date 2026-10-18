@@ -126,6 +126,20 @@ test("rejects unauthenticated native ingress headers instead of granting localho
   await localResponse.text();
 });
 
+test("a browser connecting directly over loopback can reach the app's loopback origin for sign-in callbacks", async context => {
+  const router = await fixtureRouter([]);
+  await router.start();
+  context.after(() => router.close());
+  const server = new HttpServer({ hostname: "127.0.0.1", handleRequest: (request, response) => router.handle(request, response) });
+  context.after(() => server.close());
+  const { url } = await server.start();
+  const response = await fetch(`${url}/api/workbench-app-port`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ port: 43_211 }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as { loopbackReachable: boolean }).loopbackReachable, true);
+});
+
 test("rejects LAN clients before pages or APIs despite forged local headers", async (context) => {
   const errors: string[] = [];
   const router = await fixtureRouter(errors);

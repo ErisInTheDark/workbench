@@ -256,7 +256,7 @@ export default function WorkbenchSettingsView({
           </WorkbenchOperationsContext.Provider>)}
         </FormSection>
         <FormSection id="settings-mcp-servers" title="MCP servers">
-          {withDaemon((client, id) => <McpServerSettings key={id} daemon={client} />)}
+          {withDaemon((client, id) => <McpServerSettings key={id} daemon={client} daemonId={id} />)}
         </FormSection>
         <FormSection id="settings-agent-network" title="Network access">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>

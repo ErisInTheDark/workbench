@@ -156,6 +156,8 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "approval-review/update": { params: import("../approval-review/approval-review-settings").ApprovalReviewSettingsUpdate; result: import("../approval-review/approval-review-settings").ApprovalReviewSettingsSnapshot };
   "mcp-servers/read": { params: object; result: import("../mcp/mcp-server-settings").McpServerSettingsSnapshot };
   "mcp-servers/update": { params: import("../mcp/mcp-server-settings").McpServerSettingsUpdate; result: import("../mcp/mcp-server-settings").McpServerSettingsSnapshot };
+  "mcp-servers/sign-in/start": { params: import("../mcp/mcp-server-settings").McpServerSignInStartParams; result: import("../mcp/mcp-server-settings").McpServerSignInStartResult };
+  "mcp-servers/sign-in/finish": { params: import("../mcp/mcp-server-settings").McpServerSignInFinishParams; result: import("../mcp/mcp-server-settings").McpServerSignInFinishResult };
   "project/store/read": { params: import("../project/project-store").ProjectStoreReadRequest; result: import("../project/project-store").ProjectStoreSnapshot };
   "project/store/update": { params: import("../project/project-store").ProjectStoreUpdateRequest; result: import("../project/project-store").ProjectStoreUpdateResult };
   "project/discovery-settings/read": { params: object; result: import("../project/project-discovery-settings").ProjectDiscoverySettingsUpdate };

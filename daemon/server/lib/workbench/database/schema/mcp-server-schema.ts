@@ -3,6 +3,7 @@
  * - mcpServers: daemon-configured external MCP servers and their standing allow-all flag.
  * - mcpServerTools: individually allowed tools per server.
  * - mcpServerAuth: optional per-server credential header, sealed per device and user.
+ * - mcpServerOAuthClients/mcpServerOAuthTokens/mcpServerOAuthPending: OAuth sign-in registration, sealed tokens and started sign-ins awaiting their callback.
  * - mcpServerSchemaHistory: MCP server settings schema.
  */
 import { blob, booleanInteger, defineTable, integer, primaryKey, text } from "workbench-shared/database/schema/schema-definition";
@@ -43,7 +44,56 @@ const authHistory = defineTableHistory({
   versions: [tableVersion({ schemaVersion: releases.mcpServers.version, table: auth, migration: createTable(auth) })],
 });
 
+/** The dynamically registered client for the redirect URI of its latest sign-in. */
+const oauthClients = defineTable("mcp_server_oauth_clients", {
+  server_id: text().primaryKey().references(servers.name, "id", { onDelete: "CASCADE" }),
+  redirect_uri: text().notNull(),
+  client_id: text().notNull(),
+  secret_nonce: blob(),
+  secret_ciphertext: blob(),
+});
+
+const oauthTokens = defineTable("mcp_server_oauth_tokens", {
+  server_id: text().primaryKey().references(servers.name, "id", { onDelete: "CASCADE" }),
+  token_type: text().notNull(),
+  access_nonce: blob().notNull(),
+  access_ciphertext: blob().notNull(),
+  refresh_nonce: blob(),
+  refresh_ciphertext: blob(),
+  expires_at: integer().nonNegative(),
+  scope: text(),
+  updated_at: integer().notNull().nonNegative(),
+});
+
+/** One started sign-in awaiting its provider callback, keyed by its OAuth state. */
+const oauthPending = defineTable("mcp_server_oauth_pending", {
+  state: text().primaryKey(),
+  server_id: text().notNull().references(servers.name, "id", { onDelete: "CASCADE" }),
+  redirect_uri: text().notNull(),
+  verifier_nonce: blob().notNull(),
+  verifier_ciphertext: blob().notNull(),
+  created_at: integer().notNull().nonNegative(),
+});
+
+const oauthClientHistory = defineTableHistory({
+  current: oauthClients,
+  versions: [tableVersion({ schemaVersion: releases.mcpServerOAuth.version, table: oauthClients, migration: createTable(oauthClients) })],
+});
+const oauthTokenHistory = defineTableHistory({
+  current: oauthTokens,
+  versions: [tableVersion({ schemaVersion: releases.mcpServerOAuth.version, table: oauthTokens, migration: createTable(oauthTokens) })],
+});
+const oauthPendingHistory = defineTableHistory({
+  current: oauthPending,
+  versions: [tableVersion({ schemaVersion: releases.mcpServerOAuth.version, table: oauthPending, migration: createTable(oauthPending) })],
+});
+
 export const mcpServers = serverHistory.current;
 export const mcpServerTools = toolHistory.current;
 export const mcpServerAuth = authHistory.current;
-export const mcpServerSchemaHistory = defineSubsystemHistory([serverHistory, toolHistory, authHistory]);
+export const mcpServerOAuthClients = oauthClientHistory.current;
+export const mcpServerOAuthTokens = oauthTokenHistory.current;
+export const mcpServerOAuthPending = oauthPendingHistory.current;
+export const mcpServerSchemaHistory = defineSubsystemHistory([
+  serverHistory, toolHistory, authHistory, oauthClientHistory, oauthTokenHistory, oauthPendingHistory,
+]);

@@ -5,7 +5,9 @@
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
  * - McpServerSettingsSnapshotSchema/McpServerSettingsSnapshot/McpServerSnapshot: configured servers, allow rules and live catalogues; credential values are never included.
- * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, credential, allow-rule or refresh change.
+ * - McpServerSettingsUpdateSchema/McpServerSettingsUpdate: one server add, removal, credential, allow-rule, refresh or sign-out change.
+ * - McpServerSignInStart{Params,Result}Schema: begin an OAuth sign-in and receive the provider's authorization URL.
+ * - McpServerSignInFinish{Params,Result}Schema: hand the provider's callback (code or error) to the daemon and report the outcome.
  */
 import { z } from "zod";
 
@@ -40,6 +42,7 @@ const catalog = z.discriminatedUnion("status", [
     status: z.literal("ready"),
     tools: z.array(z.object({ name: McpServerToolNameSchema, description: z.string() }).strict()),
   }).strict(),
+  z.object({ status: z.literal("signInRequired") }).strict(),
   z.object({ status: z.literal("error"), detail: z.string().max(300) }).strict(),
 ]);
 
@@ -51,8 +54,11 @@ const server = z.object({
   allowAll: z.boolean(),
   /** Individually allowed tools; kept while `allowAll` is on so turning it off restores them. */
   allowedTools: z.array(McpServerToolNameSchema),
-  /** Header the sealed credential is sent in; null when the server has none. */
-  auth: z.object({ header: McpServerAuthHeaderSchema }).strict().nullable(),
+  /** A sealed credential header, an OAuth sign-in, or neither. */
+  auth: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("header"), header: McpServerAuthHeaderSchema }).strict(),
+    z.object({ kind: z.literal("oauth") }).strict(),
+  ]).nullable(),
   catalog,
 }).strict();
 export type McpServerSnapshot = z.infer<typeof server>;
@@ -68,5 +74,27 @@ export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("setAllowAll"), id, allowAll: z.boolean() }).strict(),
   z.object({ action: z.literal("setTools"), id, tools: z.array(McpServerToolNameSchema).max(1000) }).strict(),
   z.object({ action: z.literal("refresh"), id }).strict(),
+  z.object({ action: z.literal("signOut"), id }).strict(),
 ]);
 export type McpServerSettingsUpdate = z.input<typeof McpServerSettingsUpdateSchema>;
+
+export const McpServerSignInStartParamsSchema = z.object({
+  id,
+  /** Where the provider returns the browser: the app's loopback sign-in callback for this daemon. */
+  redirectUri: z.url({ protocol: /^https?$/u }).max(2048),
+}).strict();
+export type McpServerSignInStartParams = z.infer<typeof McpServerSignInStartParamsSchema>;
+export const McpServerSignInStartResultSchema = z.object({ authorizationUrl: z.url({ protocol: /^https?$/u }) }).strict();
+export type McpServerSignInStartResult = z.infer<typeof McpServerSignInStartResultSchema>;
+
+const signInState = z.string().min(16).max(256);
+export const McpServerSignInFinishParamsSchema = z.union([
+  z.object({ state: signInState, code: z.string().min(1).max(4096) }).strict(),
+  z.object({ state: signInState, error: z.string().min(1).max(500) }).strict(),
+]);
+export type McpServerSignInFinishParams = z.infer<typeof McpServerSignInFinishParamsSchema>;
+export const McpServerSignInFinishResultSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("signedIn"), server: McpServerNameSchema }).strict(),
+  z.object({ outcome: z.literal("failed"), server: McpServerNameSchema, detail: z.string().max(500) }).strict(),
+]);
+export type McpServerSignInFinishResult = z.infer<typeof McpServerSignInFinishResultSchema>;
