@@ -3,6 +3,7 @@
  * - default WorkbenchGitCheckpointController: route plan, lifecycle, stack, proposal, claim-view and edit-session owners; orchestrate inspection, edit-session claiming and restoration.
  * - GitArcNoopResult: ignored-path no-op result.
  * - GitArcLifecycleState: registered lifecycle projection.
+ * - GitArcDurableProposalReader: permanent-history proposal ids that lifecycle projections leave out.
  * - GitArcPlanClaimCollisionResult: inactive-plan collision facts.
  * - GitArcReleaseResult: released ownership result.
  * - GitArcStashResult: whole-arc stash or unstash result.
@@ -48,6 +49,7 @@ import GitArcPlanController, {
   type GitArcStartResult,
 } from "./GitArcPlanController";
 import GitArcProposalController, {
+  type GitArcDurableProposalReader,
   type GitArcLifecycleState,
   type GitCheckpointProposalReceipt,
 } from "./GitArcProposalController";
@@ -88,7 +90,7 @@ export type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-ar
 export { GitCheckpointDirtyPathsError, GitCheckpointIgnoredPathsError } from "./GitArcPlanController";
 export type { GitArcPlanState } from "./GitArcPlanController";
 export type { GitArcNoopResult } from "./GitArcPlanController";
-export type { GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
+export type { GitArcDurableProposalReader, GitArcLifecycleState, GitCheckpointProposalReceipt } from "./GitArcProposalController";
 export type { GitArcRetentionResult } from "./GitArcRetentionController";
 
 export interface GitArcActiveClaim extends GitArcRegistryEntry {
@@ -243,9 +245,10 @@ export default class WorkbenchGitCheckpointController {
     proposalDiffs = new GitArcProposalDiffController(),
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
     private readonly legacyDiffs?: Pick<import("../../../database/WorkbenchDatabaseController").default, "readLegacyDiffArtifact">,
+    readDurableProposalIds?: GitArcDurableProposalReader,
   ) {
     this.plans = new GitArcPlanController(resolveThreadIdentity);
-    this.proposals = new GitArcProposalController(proposalDiffs, resolveThreadIdentity);
+    this.proposals = new GitArcProposalController(proposalDiffs, resolveThreadIdentity, readDurableProposalIds);
     this.lifecycle = new GitArcLifecycleController(resolveThreadIdentity);
     this.stashes = new GitArcStashController(resolveThreadIdentity);
     this.transfers = new GitArcOwnershipTransferController(resolveThreadIdentity);

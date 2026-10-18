@@ -254,9 +254,11 @@ export default class GitCheckpointStore {
     return (await this.readProposalSummaryGroups([{ harness, proposalIds, threadId }]))[0] ?? [];
   }
 
-  async readCommittedProposalHistory(harness: GitArcHarness, threadId: string) {
+  /** Every committed proposal the thread holds, oldest first; `exclude` ids are skipped before any object read. */
+  async readCommittedProposalHistory(harness: GitArcHarness, threadId: string, exclude: ReadonlySet<string> = new Set()) {
     const namespaces = await this.proposalNamespaces(harness, threadId);
-    const refs = await this.repository.listRefsWithValues(...namespaces);
+    const refs = (await this.repository.listRefsWithValues(...namespaces))
+      .filter(({ ref }) => !exclude.has(ref.slice(ref.lastIndexOf("/") + 1)));
     const commits = await this.repository.readCommits(refs.map(({ value }) => value));
     const byId = new Map<string, { acceptedAt: number; summary: GitArcProposalSummary }>();
     for (const { ref, value } of refs) {

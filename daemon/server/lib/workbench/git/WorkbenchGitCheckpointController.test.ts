@@ -1023,6 +1023,19 @@ controllerTest("partial", "partial acceptance preserves claims and unrelated sta
   const thirdProposal = await controller.createProposal({ ...identity, description: "", paths: ["planned.txt"], title: "commit three" });
   await controller.commitProposal({ ...identity, description: "", includeNewer: false, proposalId: thirdProposal.proposalId, title: "commit three" });
   assert.deepEqual((await controller.readStatus(identity)).accepted.map(({ proposalId }) => proposalId), [secondProposal.proposalId, thirdProposal.proposalId]);
+  const published = (state: { proposals: Array<{ proposalId: string }> } | null | undefined) => state?.proposals.map(({ proposalId }) => proposalId).sort();
+  const everyAccepted = [firstProposal.proposalId, secondProposal.proposalId, thirdProposal.proposalId].sort();
+  assert.deepEqual(published(await controller.findLifecycleState(identity)), everyAccepted);
+  // Accepted commits already in permanent history leave the published lifecycle; the rest stay until promoted.
+  const durableLookups: string[][] = [];
+  const bounded = new WorkbenchGitCheckpointController(undefined, undefined, undefined, async threadIds => {
+    durableLookups.push([...threadIds]);
+    return new Map(threadIds.map(threadId => [threadId, new Set([firstProposal.proposalId])]));
+  });
+  const remaining = [secondProposal.proposalId, thirdProposal.proposalId].sort();
+  assert.deepEqual(published(await bounded.findLifecycleState(identity)), remaining);
+  assert.deepEqual(published((await bounded.listLifecycleStates({ cwd: source })).find(state => state.threadId === identity.threadId)), remaining);
+  assert.ok(durableLookups.length >= 2 && durableLookups.every(ids => ids.includes(identity.threadId)));
 });
 
 async function checkProposalReadPurity({ repository, source, state }: ControllerBranch<"status">) {

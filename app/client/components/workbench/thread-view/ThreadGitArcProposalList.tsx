@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - getThreadAcceptedGitHistory: dedupe permanent commits against actionable live committed proposals.
- * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows; pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under one group per commit age unless a single age is the whole panel.
+ * - default ThreadGitArcProposalList: the thread's interactive proposal cards and durable accepted-commit rows (which load their source proposal for amend once opened); pending work sits under a persisted commit-all header (a lone proposal is its own persisted disclosure), accepted history under one group per commit age unless a single age is the whole panel.
  */
 "use client";
 
@@ -24,7 +24,7 @@ import { ThreadCheckpointCommitActionsContext, type ThreadCheckpointStoredPropos
 import type ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import ThreadCheckpointCommitController from "./ThreadCheckpointCommitController";
 import Disclosure from "../../ui/Disclosure";
-import ThreadCheckpointCommitCard, { type ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
+import type { ThreadCommitDisclosure } from "./ThreadCheckpointCommitCard";
 import ThreadGitArcCommitGroup, { plural, threadGitArcCommitRowClassName } from "./ThreadGitArcCommitGroup";
 import { groupCommitsByAge } from "./thread-git-commit-age";
 
@@ -235,26 +235,32 @@ export default function ThreadGitArcProposalList({
       />
     </div>
   );
+  // A permanent commit opens onto its source proposal, which loads (and offers amend) only once opened.
   const historyRow = (commit: WorkbenchThreadGitCommit) => (
     <div
       className={threadGitArcCommitRowClassName}
+      data-thread-git-arc-proposal={commit.sourceProposalId}
       data-thread-git-commit={commit.commitSha}
       key={`${commit.rootId}:${commit.sourceProposalId}`}
     >
-      <ThreadCheckpointCommitCard
+      <ThreadCheckpointCommitController
+        cwd={cwd}
+        harness={harness}
+        intent={null}
         projectFilePaths={projectFilePaths}
         projectId={projectId}
         projectRootPath={projectRootPath}
+        proposalId={commit.sourceProposalId}
         sourceItemId={`durable-commit:${commit.rootId}:${commit.sourceProposalId}`}
-        state={{
-          status: "summary",
-          summary: {
-            changes: null,
-            committedSha: commit.commitSha,
-            description: commit.description,
-            title: commit.title,
-          },
+        summary={{
+          changes: null,
+          ...(commit.committedAt ? { committedAt: commit.committedAt } : {}),
+          committedSha: commit.commitSha,
+          description: commit.description,
+          mode: "commit",
+          title: commit.title,
         }}
+        threadId={threadId}
         workspaceRoots={workspaceRoots}
       />
     </div>

@@ -112,6 +112,13 @@ test("accepted history alone opens straight onto closed commit rows", () => {
   assert.equal(commitAllTag(html), null);
 });
 
+test("a durable commit row addresses its source proposal, so opening it can load amend state", () => {
+  const html = renderList(false, [], "committed", [durableCommit], { standalone: true });
+  assert.match(html, /data-thread-git-arc-proposal="accepted"/u);
+  assert.match(html, /aria-expanded="false"/u);
+  assert.match(html, /durable commit/u);
+});
+
 test("accepted history keeps its group when it shares the panel", () => {
   const withClaims = renderList(true, [], "committed", [durableCommit]);
   assert.match(withClaims, /data-thread-git-arc-accepted-group="older"/u);

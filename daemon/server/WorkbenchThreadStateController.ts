@@ -21,7 +21,7 @@ function threadStateLockKey(key: string) {
 import type { WorkbenchComposerProfileSlot, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchProjectsPayload, WorkbenchUserInputResponse } from "workbench-shared/types";
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import { resolveLinkedProfileSelection } from "workbench-shared/workbench/thread/thread-profile";
-import { DraftIdSchema, ProjectIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
+import { DraftIdSchema, ProjectIdSchema, WorkbenchThreadIdSchema, type DraftId, type ProjectId, type WorkbenchThreadId, type WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import {
   WorkbenchPresentationAttachmentChunkRequestSchema,
   WorkbenchPresentationAttachmentChunkSchema,
@@ -1566,6 +1566,17 @@ export default class WorkbenchThreadStateController {
     const loaded = this.projects.get(projectId);
     if (!loaded) throw new Error(`Project state failed to load: ${projectId}`);
     return loaded;
+  }
+
+  /** Accepted proposal ids each thread already holds in permanent commit history; unknown ids have none. */
+  async readDurableProposalIds(threadIds: readonly string[]): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+    const known = threadIds.flatMap(threadId => {
+      const parsed = WorkbenchThreadIdSchema.safeParse(threadId);
+      return parsed.success ? [parsed.data] : [];
+    });
+    if (!known.length) return new Map();
+    return new Map((await this.options.threadStateStore.readGitCommits(known))
+      .map(({ commits, threadId }) => [threadId, new Set(commits.map(({ sourceProposalId }) => sourceProposalId))]));
   }
 
   /**

@@ -2,6 +2,7 @@
  * Exports:
  * - default GitArcProposalController: own proposal validity (including stacked proposals), bounded diff hydration, publication, acceptance, and lifecycle projection.
  * - GitArcLifecycleState: active or resolved arc with ordered proposals, their paths and Git-derived summaries.
+ * - GitArcDurableProposalReader: accepted proposal ids each thread already holds in permanent commit history.
  * - GitArcAcceptedProposalsError: accepted receipts and remaining claims when continuation stops.
  * - GitCheckpointProposalReceipt: published proposal identity.
  */
@@ -62,6 +63,9 @@ export interface GitCheckpointProposalReceipt {
   sourceCheckpoint: string;
   title: string;
 }
+
+/** Accepted proposal ids each thread already holds in permanent commit history; lifecycle reads leave them out. */
+export type GitArcDurableProposalReader = (threadIds: readonly string[]) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 
 export interface GitArcLifecycleState {
   checkpointCommit: string;
@@ -154,11 +158,14 @@ function projectLifecycleState(
   return { ...common, claimedPaths: lifecycle.claimedPaths, phase: "active" };
 }
 
+/** Proposals a lifecycle publishes: its sealed and own ids, less accepted ones already in permanent history. */
 function projectedProposalIds(
   lifecycle: NonNullable<ReturnType<typeof lifecycleEntry>>,
   stackLayers: NonNullable<GitArcLifecycleState["stackLayers"]>,
+  durable: ReadonlySet<string> = new Set(),
 ) {
-  return [...new Set([...stackLayers.flatMap(({ proposalIds }) => proposalIds), ...lifecycle.proposalIds])];
+  return [...new Set([...stackLayers.flatMap(({ proposalIds }) => proposalIds), ...lifecycle.proposalIds])]
+    .filter(proposalId => !durable.has(proposalId));
 }
 
 function lifecycleSummaries(
@@ -655,6 +662,7 @@ export default class GitArcProposalController {
   constructor(
     private readonly proposalDiffs = new GitArcProposalDiffController(),
     private readonly resolveThreadIdentity: GitArcThreadIdentityResolver = passthroughGitArcThreadIdentityResolver,
+    private readonly readDurableProposalIds: GitArcDurableProposalReader = async () => new Map(),
   ) {}
 
   private registry(repository: WorkbenchGitRepository) {
@@ -688,13 +696,15 @@ export default class GitArcProposalController {
     const unavailable: Array<{ proposalId: string; title: string; reason: string }> = [];
     const visibility = entry ? acceptedVisibility(entry) : { dismissed: [], viewed: [] };
     const hiddenAccepted = new Set([...visibility.dismissed, ...visibility.viewed]);
+    // Viewed and dismissed ids are accepted proposals status never shows again, so they need no read at all.
+    const shownIds = proposalIds.filter(proposalId => !hiddenAccepted.has(proposalId));
     // Committed metadata is final, so one batched read settles those rows without per-proposal resolution.
-    const summaries = new Map((await this.store(repository).readProposalSummaries(harness, input.threadId, proposalIds))
+    const summaries = new Map((await this.store(repository).readProposalSummaries(harness, input.threadId, shownIds))
       .map(summary => [summary.proposalId, summary]));
-    for (const proposalId of proposalIds) {
+    for (const proposalId of shownIds) {
       const summary = summaries.get(proposalId);
       if (summary?.status === "committed") {
-        if (summary.committedSha && !hiddenAccepted.has(proposalId)) {
+        if (summary.committedSha) {
           accepted.push({ proposalId, title: summary.title, commitSha: summary.committedSha });
         }
         continue;
@@ -708,7 +718,7 @@ export default class GitArcProposalController {
         if (layer) stackedPending.set(layer.tipCommit, [...stackedPending.get(layer.tipCommit) ?? [], { proposalId, title: metadata.title }]);
         else pending.push({ proposalId, title: metadata.title });
       }
-      if (metadata.status === "committed" && metadata.committedSha && !hiddenAccepted.has(proposalId)) {
+      if (metadata.status === "committed" && metadata.committedSha) {
         accepted.push({ proposalId, title: metadata.title, commitSha: metadata.committedSha });
       }
       if (metadata.status === "unavailable") {
@@ -762,15 +772,16 @@ export default class GitArcProposalController {
     const stack = this.stack(repository);
     const stackLayers = await Promise.all(projected.map(async ({ entry }) => await stack.projectLayers(entry)));
     const store = this.store(repository);
+    const durable = await this.readDurableProposalIds([...new Set(projected.map(({ entry }) => entry.threadId))]);
     const summaries = await store.readProposalSummaryGroups(
       projected.map(({ entry, lifecycle }, index) => ({
         harness: normalizeHarness(entry.harness),
-        proposalIds: projectedProposalIds(lifecycle!, stackLayers[index] ?? []),
+        proposalIds: projectedProposalIds(lifecycle!, stackLayers[index] ?? [], durable.get(entry.threadId)),
         threadId: entry.threadId,
       })),
     );
     const committed = await Promise.all(projected.map(async ({ entry }) => (
-      await store.readCommittedProposalHistory(normalizeHarness(entry.harness), entry.threadId)
+      await store.readCommittedProposalHistory(normalizeHarness(entry.harness), entry.threadId, durable.get(entry.threadId))
     )));
     return projected.map(({ entry, lifecycle, saved }, index) => (
       projectLifecycleState(
@@ -794,12 +805,13 @@ export default class GitArcProposalController {
     if (!lifecycle) return null;
     const stackLayers = await this.stack(repository).projectLayers(entry);
     const store = this.store(repository);
+    const durable = (await this.readDurableProposalIds([entry.threadId])).get(entry.threadId);
     const summaries = await store.readProposalSummaries(
       harness,
       input.threadId,
-      projectedProposalIds(lifecycle, stackLayers),
+      projectedProposalIds(lifecycle, stackLayers, durable),
     );
-    const committed = await store.readCommittedProposalHistory(harness, input.threadId);
+    const committed = await store.readCommittedProposalHistory(harness, input.threadId, durable);
     return projectLifecycleState(entry, lifecycle, lifecycleSummaries(committed, summaries), saved, stackLayers);
   }
 

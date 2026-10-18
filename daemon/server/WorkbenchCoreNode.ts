@@ -428,6 +428,15 @@ function createWorkbenchCoreFeature(
       read: async identity => await database.readGitArcProposalDiff(identity),
       write: async (value, maxBytes) => await database.writeGitArcProposalDiff(value, maxBytes),
     },
+    // Without permanent history facts a lifecycle read publishes every accepted proposal: slower, never missing one.
+    readDurableProposalIds: async threadIds => {
+      if (!threadState) return new Map();
+      try { return await threadState.controller.readDurableProposalIds(threadIds); }
+      catch (error) {
+        logThreadStateWarning(`Durable proposal read failed: ${error instanceof Error ? error.message : "unknown failure"}`);
+        return new Map();
+      }
+    },
     getThreadCreatedAt: async (projectId, _harness, threadId) => {
       const snapshot = await transcript.read({ threadId, turnLimit: 1 });
       if (!snapshot) return null;

@@ -9,7 +9,7 @@
  */
 import type http from "node:http";
 
-import WorkbenchGitCheckpointController, { type GitArcActiveClaim } from "./lib/workbench/git/WorkbenchGitCheckpointController";
+import WorkbenchGitCheckpointController, { type GitArcActiveClaim, type GitArcDurableProposalReader } from "./lib/workbench/git/WorkbenchGitCheckpointController";
 import GitObjectReadSession from "./lib/workbench/git/GitObjectReadSession";
 import GitClaimHistoryReader from "./lib/workbench/git/GitClaimHistoryReader";
 import { GitArcAcceptedProposalsError } from "./lib/workbench/git/GitArcProposalController";
@@ -57,6 +57,8 @@ export interface WorkbenchGitArcFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   proposalDiffStore?: GitArcProposalDiffStore;
   legacyDiffStore?: Pick<import("./database/WorkbenchDatabaseController").default, "readLegacyDiffArtifact">;
+  /** Accepted proposals already in permanent thread history; lifecycle reads stop publishing them. */
+  readDurableProposalIds?: GitArcDurableProposalReader;
   getReloadScopesForPaths?(paths: readonly string[]): string[];
   getThreadCreatedAt(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<number | null>;
   getThreadClaimContext(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadClaimContext | null>;
@@ -196,7 +198,7 @@ export default class WorkbenchGitArcFeature {
         repositoryRoot: project.cwd,
         threadId: input.threadId,
       });
-    }, options.legacyDiffStore);
+    }, options.legacyDiffStore, options.readDurableProposalIds);
     const readMany = options.transitions.readMany ?? options.transitions.runMany;
     this.workspaceController = new WorkbenchWorkspaceGitArcController(this.controller, {
       readMany: async (paths, operation) => readMany

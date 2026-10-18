@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its link inputs.
- * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed summary until it loads; unobserved surfaces read for themselves), own edit and commit actions, and register commit-all readiness.
+ * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed or permanent-commit summary until it loads; unobserved surfaces read for themselves), own edit and commit actions, and register commit-all readiness.
  */
 "use client";
 
@@ -15,6 +15,7 @@ import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import {
   createGitArcOperationRejected,
   GitArcFailureException,
+  type GitArcFailure,
 } from "workbench-shared/workbench/git/git-arc-failures";
 import type { WorkbenchGitArcProposalSummary } from "workbench-shared/workbench/thread/thread-state";
 import type { GitCheckpointCommitCommandIntent } from "../../../workbench/thread/thread-command-matchers";
@@ -40,8 +41,21 @@ export interface ThreadCheckpointCommitControllerProps {
   projectRootPath?: string;
   proposalId: string | null;
   sourceItemId: string;
+  /** A permanent commit's stored message, for proposals the observed lifecycle no longer carries. */
+  summary?: WorkbenchGitArcProposalSummary;
   threadId: string;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
+}
+
+/** A permanent commit whose proposal retention already retired stays its summary: nothing is left to amend. */
+function failedCardState(
+  error: string,
+  failure: GitArcFailure | undefined,
+  permanent: WorkbenchGitArcProposalSummary | undefined,
+): CheckpointCommitCardState {
+  return permanent && failure?.code === "rejection" && failure.rejection.reason === "proposalNotFound"
+    ? { status: "summary", summary: permanent }
+    : { error, ...(failure ? { failure } : {}), retryable: true, status: "error" };
 }
 
 function ThreadCheckpointCommitController({
@@ -54,6 +68,7 @@ function ThreadCheckpointCommitController({
   projectRootPath,
   proposalId,
   sourceItemId,
+  summary,
   threadId,
   workspaceRoots,
   isProposalObserved,
@@ -103,6 +118,9 @@ function ThreadCheckpointCommitController({
   const commitActions = useContext(ThreadCheckpointCommitActionsContext);
   const [observationTarget, setObservationTarget] = useState<HTMLElement | null>(null);
   const latestSummary = useRef(proposalSummary);
+  // Read at failure time, so a fresh summary object from each parent render never restarts a load.
+  const permanentSummary = useRef(summary);
+  useEffect(() => { permanentSummary.current = summary; });
   /** Not loaded yet: the observed summary when Git has been read, otherwise a skeleton. */
   const hydratingState = useCallback((): CheckpointCommitCardState => latestSummary.current
     ? { status: "summary", summary: latestSummary.current }
@@ -111,7 +129,7 @@ function ThreadCheckpointCommitController({
     ? proposalObservation.status === "loaded"
       ? { proposal: proposalObservation.proposal, status: "loaded" }
       : proposalObservation.status === "failed"
-        ? { error: proposalObservation.error, failure: proposalObservation.failure, retryable: true, status: "error" }
+        ? failedCardState(proposalObservation.error, proposalObservation.failure, summary)
         : hydratingState()
     : proposalId ? hydratingState() : { status: "idle" });
   useEffect(() => {
@@ -261,12 +279,7 @@ function ThreadCheckpointCommitController({
       const failure = error instanceof GitArcFailureException
         ? error.failure
         : createGitArcOperationRejected("proposalState", error instanceof Error ? error.message : "Unable to load checkpoint proposal.");
-      setState({
-        error: error instanceof Error ? error.message : "Unable to load checkpoint proposal.",
-        failure,
-        retryable: true,
-        status: "error",
-      });
+      setState(failedCardState(error instanceof Error ? error.message : "Unable to load checkpoint proposal.", failure, permanentSummary.current));
     }
   }, [acceptProposal, cwd, daemon, harness, hydratingState, includeNewer, includeUnclaimed, proposalId, threadId]);
 
@@ -291,12 +304,7 @@ function ThreadCheckpointCommitController({
       return;
     }
     if (observation.status === "failed") {
-      setState({
-        error: observation.error,
-        failure: observation.failure,
-        retryable: true,
-        status: "error",
-      });
+      setState(failedCardState(observation.error, observation.failure, permanentSummary.current));
       return;
     }
     acceptProposal(observation.proposal);
@@ -503,7 +511,7 @@ export default function ThreadCheckpointCommitControllerRoot(props: ThreadCheckp
       isProposalObserved={proposalObservation.isObserved}
       observeProposal={proposalObservation.observe}
       proposalObservation={proposalObservation.state}
-      proposalSummary={proposalObservation.summary}
+      proposalSummary={proposalObservation.summary ?? props.summary ?? null}
     />
   );
 }

@@ -4838,3 +4838,25 @@ test("only an observed thread's untimed commits learn their times from Git, afte
     await temporary.dispose();
   }
 });
+
+test("durable proposal ids are the source proposals of each thread's permanent commits", async () => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-durable-proposals-");
+  const root = temporary.path;
+  const persistence = testPersistence(root);
+  const commit = (proposalId: string, historyIndex: number) => ({
+    commitSha: "a".repeat(40), description: "", historyIndex, rootId: "root", sourceProposalId: proposalId, title: proposalId,
+  });
+  persistence.gitCommits.set("a", [commit("first", 0), commit("second", 1)]);
+  const controller = new WorkbenchThreadStateController({
+    getProjectCatalog: projectCatalog, reconcileProject: async () => [], storageRoot: root,
+  });
+  try {
+    const durable = await controller.readDurableProposalIds(["a", "without-history"]);
+    assert.deepEqual([...durable.get("a") ?? []].sort(), ["first", "second"]);
+    assert.equal(durable.has("without-history"), false);
+    assert.deepEqual((await controller.readDurableProposalIds([])).size, 0);
+  } finally {
+    await controller.dispose();
+    await temporary.dispose();
+  }
+});
