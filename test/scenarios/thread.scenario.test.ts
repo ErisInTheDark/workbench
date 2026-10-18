@@ -676,7 +676,7 @@ test("selected providers complete the shared thread boundary journey in one clon
     }
 
     const cli = await IsolatedWorkbench.command("bash", [
-      path.join(runtime.project, "daemon/node_modules/.bin/wb"), "task", "get",
+      path.join(runtime.project, "wb"), "task", "get",
     ], runtime.project, {
       ...process.env,
       WORKBENCH_DATA_ROOT: runtime.dataRootPath,

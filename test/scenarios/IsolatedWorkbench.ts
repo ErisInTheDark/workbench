@@ -328,6 +328,7 @@ export default class IsolatedWorkbench {
       });
     }
     await fs.copyFile(path.join(source, "package.json"), path.join(project, "package.json"));
+    await fs.copyFile(path.join(source, "wb"), path.join(project, "wb"));
     await fs.copyFile(path.join(source, ".gitignore"), path.join(project, ".gitignore"));
     await fs.mkdir(path.join(project, ".workbench"), { recursive: true });
     await fs.copyFile(path.join(source, "test/scenarios/isolated-shutdown.mjs"), path.join(project, ".workbench/isolated-shutdown.mjs"));

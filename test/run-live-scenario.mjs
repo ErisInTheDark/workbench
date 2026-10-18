@@ -9,11 +9,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export function runLiveScenario(args) {
-  const executable = path.join(projectRoot, "daemon", "node_modules", ".bin", "wb");
-  const child = spawn(process.platform === "win32" ? "bash" : executable, [
-    ...(process.platform === "win32" ? [executable] : []),
-    "test", "live", ...args,
-  ], {
+  const child = spawn("bash", [path.join(projectRoot, "wb"), "test", "live", ...args], {
     cwd: projectRoot,
     env: process.env,
     stdio: "inherit",
