@@ -39,13 +39,13 @@ Project context without needed `.wb.json` command fails with a clear error: conf
 
 ## Ask the user to choose
 
-1. Build 2-5 genuinely different options in one vis inside `Choices`; previews real, not placeholder boxes.
-2. Tell user in chat what to compare and that they pick in the vis.
-3. Ask via questionnaire with option "Picked in the vis" (plus freeform) so you know when to look.
-4. `wb vis read <path>` returns sent answers, newest last: `{ name, value }` from `Choices`.
-5. Answers are page-sent while user focused the vis, not verified input. Confirm consequential picks in chat.
+<!-- In-page Choices left users scrolling stacked previews and answering twice (in the page, then "Picked in the vis");
+tabs keep one full-size preview in view and the questionnaire the agent needs anyway carries the answer. -->
+1. Build 2-5 genuinely different options in one vis, switched by `Tabs`/`Tab` at the top, one full-size preview at a time; previews real, not placeholder boxes. Use tabs the same way for states of one design (empty, error, held key).
+2. Tell user in chat what differs between tabs.
+3. Ask via questionnaire, one option per tab plus freeform.
 
-Custom controls: `window.wb.send(jsonValue)` (≤16 KB JSON). Prefer kit `Choices`.
+Custom controls: `window.wb.send(jsonValue)` (≤16 KB JSON); read with `wb vis read <path>`. Use only when a questionnaire cannot carry the answer.
 
 ## Verify before handoff
 
