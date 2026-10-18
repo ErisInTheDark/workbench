@@ -25,6 +25,8 @@ function command(overrides: Partial<Extract<WorkbenchApprovalSubject, { kind: "c
 function harness(options: {
   saved?: boolean; failSave?: boolean; deliverable?: boolean; handoff?: WorkbenchApprovalHandoff;
   mode?: WorkbenchApprovalMode; review?: () => Promise<ApprovalReviewVerdict>;
+  /** Holds every `inputResolved` thread-state update open until it settles. */
+  resolvingLifecycle?: Promise<void>;
 } = {}) {
   const events: string[] = [];
   const delivered: WorkbenchApprovalDecision[] = [];
@@ -57,7 +59,8 @@ function harness(options: {
     },
     logError: message => { errors.push(message); },
     observeLifecycle: async (_harness, _thread, event) => {
-      events.push(`${event.kind}${"answered" in event && event.answered ? ":answered" : ""}`);
+      if (event.kind === "inputResolved") await options.resolvingLifecycle;
+      events.push(event.kind);
     },
     recordOutcome: async entry => { outcomes.push(entry); },
     resolveProject: async () => projectId,
@@ -143,9 +146,26 @@ test("a shown approval carries command context, offers one-shot and remember cho
   await h.choose("first", ["Allow once"]);
   assert.deepEqual(h.delivered, [{ kind: "allowOnce" }]);
   assert.deepEqual(h.outcomes.map(({ itemId, outcome }) => [itemId, outcome]), [["item-first", "approved"]]);
-  assert.deepEqual(h.events.slice(2), ["context", "deliver", "questionnaire/resolved", "inputResolved:answered"]);
+  assert.deepEqual(h.events.slice(2), ["context", "questionnaire/resolved", "inputResolved", "deliver"]);
   assert.deepEqual(h.controller.list(), []);
   await assert.rejects(h.choose("first", ["Allow once"]), /no longer pending/u);
+});
+
+test("the agent receives a decision only after its thread has left pending input", async () => {
+  let leavePendingInput!: () => void;
+  const h = harness({ resolvingLifecycle: new Promise(resolve => { leavePendingInput = resolve; }) });
+  const hosted = await shownHostedRequest(h);
+  await h.open("provider");
+  let hostedDecided = false;
+  void hosted.decision.then(() => { hostedDecided = true; });
+  const responses = [h.choose("provider", ["Allow once"]), h.choose(hosted.requestKey, ["Allow once"])];
+  for (let attempt = 0; attempt < 20; attempt++) await Promise.resolve();
+  assert.deepEqual(h.delivered, [], "the provider resumed while its thread still showed pending input");
+  assert.equal(hostedDecided, false, "the hosted wait resumed while its thread still showed pending input");
+  leavePendingInput();
+  await Promise.all(responses);
+  assert.deepEqual(h.delivered, [{ kind: "allowOnce" }]);
+  assert.deepEqual(await hosted.decision, { kind: "allowOnce" });
 });
 
 test("remembering a prefix saves before delivering, and a failed save keeps the question answerable", async () => {

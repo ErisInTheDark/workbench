@@ -945,6 +945,68 @@ test("accepted questionnaire response returns its thread to working", async () =
   }
 });
 
+test("agent status reported while a live answer settles applies after that answer", async () => {
+  const question = {
+    itemId: "b5bf699f-ea4b-45cf-9583-7449b536ea44",
+    requestKey: "request",
+    turnId: fixtureTurnIds["turn"],
+    request: {
+      id: "request", title: "Choose", summary: "", submitLabel: "Submit",
+      questions: [{ id: "choice", header: "choice", question: "Proceed?", options: [], allowOther: true, isSecret: false }],
+    },
+  };
+  const provider: Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }> = {
+    activityAt: 1, entryKind: "thread", title: "Task",
+    identity: { harness: "codex", threadId: fixtureThreadIds["thread"] },
+    metadata: { archived: false, pinned: false, snoozed: false },
+    lifecycle: { kind: "needsAttention", reason: "pendingInput", requestKey: question.requestKey, turnId: question.turnId, settled: false },
+    pendingQuestionnaire: question,
+  };
+  const controller = new WorkbenchThreadStateController({
+    storageRoot: "agent-status-after-live-answer",
+    threadStateStore: new MemoryThreadStatePersistence(),
+    getProjectCatalog: projectCatalog,
+    reconcileProject: async (_project, _signal, accept) => {
+      await accept("codex", [provider], { complete: true });
+      return [];
+    },
+  });
+  try {
+    await controller.readProject(fixtureProjectIds["project"]);
+    await controller.refresh(fixtureProjectIds["project"]);
+    let delivering!: () => void;
+    const delivered = new Promise<void>(resolve => { delivering = resolve; });
+    let finishDelivery!: () => void;
+    const deliveryFinished = new Promise<void>(resolve => { finishDelivery = resolve; });
+    const resolution = controller.resolvePendingQuestionnaire({
+      harness: "codex", projectId: fixtureProjectIds["project"], requestKey: question.requestKey,
+      resolvedAt: 2, response: { answers: { choice: { answers: ["yes"] } } }, threadId: fixtureThreadIds["thread"],
+    }, async () => {
+      delivering();
+      await deliveryFinished;
+      return { delivery: "live", insertAfterItemId: null, insertAfterItemIndex: null, turnId: question.turnId };
+    });
+    await delivered;
+    // The resumed agent reports from its own request, outside the answer's delivery.
+    const status = controller.setAgentStatus(fixtureProjectIds["project"], fixtureThreadIds["thread"], "completed");
+    for (let attempt = 0; attempt < 20; attempt++) await Promise.resolve();
+    finishDelivery();
+    await Promise.all([resolution, status]);
+    const current = (await controller.getSnapshot(fixtureProjectIds["project"])).entries.find(
+      entry => entry.entryKind === "thread" && entry.identity.threadId === fixtureThreadIds["thread"],
+    );
+    assert.deepEqual(current?.entryKind === "thread" ? current.lifecycle : null, {
+      agent: { agentStatus: "completed", turnId: question.turnId },
+      kind: "working",
+      reason: "acceptedIntent",
+      settled: false,
+    });
+    assert.equal(current?.entryKind === "thread" ? current.pendingQuestionnaire : null, null);
+  } finally {
+    await controller.dispose();
+  }
+});
+
 test("task status requires every direct child to be settled without changing rejected parent intent", async () => {
   for (const status of ["completed", "blocked"] as const) {
     const controller = new WorkbenchThreadStateController({

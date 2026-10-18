@@ -1081,17 +1081,21 @@ export default class WorkbenchThreadStateController {
     projectId = this.canonicalProjectId(projectId);
     const entry = await this.getCanonicalThreadEntry(projectId, threadId);
     if (!entry || entry.entryKind === "draft") throw new Error("The managed thread has no stored thread state.");
-    const state = await this.getProject(projectId);
-    const unsettled = [...state.entries.values()].flatMap(child =>
-      child.entryKind === "subagent" && child.parentThreadId === threadId && !child.lifecycle.settled ? [child.name] : []);
-    if (unsettled.length) {
-      throw new Error(`Cannot mark task ${status}: unsettled subagents: ${unsettled.join(", ")}. Use \`wb subagent list\`, then \`wb subagent settle\` once each child is completed or stopped.`);
-    }
-    const next = await this.applyLifecycle(projectId, entry.identity.harness, threadId, { kind: "agentStatus", status });
-    if (!next || !("agent" in next.lifecycle) || next.lifecycle.agent?.agentStatus !== status) {
-      throw new Error("The thread status was not applied.");
-    }
-    return next;
+    const harness = entry.identity.harness;
+    // An answer resumes the agent before its settlement; a status the agent reports meanwhile belongs after it.
+    return await this.enqueue(`${projectId}:questionnaire:${harness}:${threadId}`, async () => {
+      const state = await this.getProject(projectId);
+      const unsettled = [...state.entries.values()].flatMap(child =>
+        child.entryKind === "subagent" && child.parentThreadId === threadId && !child.lifecycle.settled ? [child.name] : []);
+      if (unsettled.length) {
+        throw new Error(`Cannot mark task ${status}: unsettled subagents: ${unsettled.join(", ")}. Use \`wb subagent list\`, then \`wb subagent settle\` once each child is completed or stopped.`);
+      }
+      const next = await this.applyLifecycle(projectId, harness, threadId, { kind: "agentStatus", status });
+      if (!next || !("agent" in next.lifecycle) || next.lifecycle.agent?.agentStatus !== status) {
+        throw new Error("The thread status was not applied.");
+      }
+      return next;
+    });
   }
 
   async setPendingQuestionnaire(projectId: ProjectId, threadId: WorkbenchThreadId, questionnaire: WorkbenchDurableQuestionnaire) {

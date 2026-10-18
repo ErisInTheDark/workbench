@@ -30,7 +30,7 @@ import { buildWorkbenchApprovalPresentation } from "./lib/workbench/approval-pre
 
 type LifecycleEvent =
   | { kind: "pendingInput"; questionnaire: null; requestKey: string; turnId: WorkbenchTurnId | null }
-  | { kind: "inputResolved"; requestKey: string; answered?: true };
+  | { kind: "inputResolved"; requestKey: string };
 
 export interface WorkbenchApprovalControllerOptions {
   broadcast(harness: WorkbenchHarness, notification: WorkbenchTranscriptNotification): void;
@@ -218,7 +218,7 @@ export default class WorkbenchApprovalController {
     this.pending.delete(key(harness, requestKey));
     entry.waiter?.reject(new Error("The approval request ended before a decision."));
     if (entry.status === "opening") return;
-    this.resolveVisibly(entry, false);
+    void this.resolveVisibly(entry);
   }
 
   owns(threadId: string, requestKey: string) {
@@ -268,20 +268,11 @@ export default class WorkbenchApprovalController {
     if (!isCurrent()) throw gone();
     // Settle ownership before delivery so the transport's own cleanup cannot race a second resolution.
     this.pending.delete(key(entry.harness, entry.requestKey));
-    let delivered = false;
-    try {
-      if (entry.waiter) {
-        entry.waiter.resolve(decision);
-        delivered = true;
-      } else {
-        delivered = await this.options.deliver(entry.harness, { threadId: entry.threadId, requestKey: entry.requestKey, decision });
-      }
-    } finally {
-      if (!delivered) this.resolveVisibly(entry, false);
-    }
-    if (!delivered) throw gone();
+    // The agent resumes on delivery; a status it reports next must land after its thread leaves pending input.
+    await this.resolveVisibly(entry);
+    if (entry.waiter) entry.waiter.resolve(decision);
+    else if (!await this.options.deliver(entry.harness, { threadId: entry.threadId, requestKey: entry.requestKey, decision })) throw gone();
     await this.recordOutcome(entry, decision.kind === "decline" ? "denied" : "approved");
-    this.resolveVisibly(entry, true);
     return { ok: true as const };
   }
 
@@ -359,12 +350,12 @@ export default class WorkbenchApprovalController {
     }
   }
 
-  private resolveVisibly(entry: PendingApproval, answered: boolean) {
+  private async resolveVisibly(entry: PendingApproval) {
     this.options.broadcast(entry.harness, {
       method: "questionnaire/resolved", params: { threadId: entry.threadId, requestKey: entry.requestKey },
     });
     this.options.pendingChanged(entry.threadId);
-    void this.observe(entry, { kind: "inputResolved", requestKey: entry.requestKey, ...(answered ? { answered: true as const } : {}) });
+    await this.observe(entry, { kind: "inputResolved", requestKey: entry.requestKey });
   }
 
   private async observe(entry: PendingApproval, event: LifecycleEvent) {
