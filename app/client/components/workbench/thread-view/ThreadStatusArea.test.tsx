@@ -1,4 +1,4 @@
-/* No production exports. Protect addressed feedback lifecycle visibility and planned-claim intersection status states. */
+/* No production exports. Protect addressed feedback lifecycle visibility, planned-claim intersection status states and idle auto-open priority. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
@@ -12,7 +12,7 @@ import type {
 import WorkbenchClientContext from "../workbench-client-context";
 import type { WorkbenchClientController } from "../workbench-client-context";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
-import ThreadStatusArea from "./ThreadStatusArea";
+import ThreadStatusArea, { getThreadStatusAttention } from "./ThreadStatusArea";
 
 function render(lifecycle: WorkbenchThreadLifecycle) {
   return renderToStaticMarkup(createElement(WorkbenchClientContext.Provider, {
@@ -39,6 +39,24 @@ test("working and completed threads both expose their addressed feedback count",
   const completed = render({ kind: "completed", reason: "providerInactive", settled: false });
   assert.match(working, />1<\/span>/u);
   assert.match(completed, />1<\/span>/u);
+});
+
+test("idle auto-open prefers proposals, then required todos or feedback, then dirty claims", () => {
+  const idle: Parameters<typeof getThreadStatusAttention>[0] = {
+    dirtyClaimedPaths: null, feedbackCount: 0, pendingProposalIds: [], requiredTodoCount: 0,
+  };
+  const panel = (work: Partial<typeof idle>) => getThreadStatusAttention({ ...idle, ...work })?.panel ?? null;
+
+  assert.equal(panel({}), null);
+  assert.equal(panel({ dirtyClaimedPaths: ["a.ts"] }), "arc");
+  assert.equal(panel({ dirtyClaimedPaths: ["a.ts"], feedbackCount: 1 }), "todos");
+  assert.equal(panel({ dirtyClaimedPaths: ["a.ts"], requiredTodoCount: 1 }), "todos");
+  assert.equal(panel({ pendingProposalIds: ["p"], requiredTodoCount: 1, feedbackCount: 1, dirtyClaimedPaths: ["a.ts"] }), "arc");
+  // Falling from proposals to dirty claims keeps the arc panel but is new work, so it gets a new key.
+  assert.notEqual(
+    getThreadStatusAttention({ ...idle, pendingProposalIds: ["p"], dirtyClaimedPaths: ["a.ts"] })?.key,
+    getThreadStatusAttention({ ...idle, dirtyClaimedPaths: ["a.ts"] })?.key,
+  );
 });
 
 type ThreadEntry = Extract<WorkbenchThreadSidebarEntry, { entryKind: "thread" }>;

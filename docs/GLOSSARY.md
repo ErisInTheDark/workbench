@@ -9,6 +9,7 @@
 | Skill Load | The act of reading a skill's instruction file so the agent can apply that skill's workflow to the current task |
 | Active Skill | A skill recorded for one thread after user activation or agent Skill Load, until the user deactivates it |
 | Keyed delta | Upserted/removed items plus changed field names against an observation's previous revision; see `shared/workbench/workspace/observation-patch.ts` |
+| thread status row | Row under a thread's transcript: live title plus skills, vis, Git arc and todo pills, each opening one shared animated panel area; `ThreadStatusRow`, composed by `ThreadStatusArea` |
 | thread state | Durable sidebar state owned by `WorkbenchThreadStateController`. It includes project thread and draft records, project display order, new-thread profile selection, home display order, and pinned layout |
 | thread priority | Sidebar placement state: pinned, main, or snoozed. Settled is lifecycle, not priority. |
 | arc edit session | Per-thread previewable, revertible batch of ordered moves/regex replacements run via `wb git arc edit`; claims Git-visible touched files in the active arc; stored at the thread's `edit-session` ref |

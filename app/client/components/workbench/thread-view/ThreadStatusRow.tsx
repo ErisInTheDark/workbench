@@ -1,14 +1,16 @@
 /*
  * Exports:
  * - ThreadStatusPanel: one status-row control: its segmented pill and the panel it opens.
+ * - ThreadStatusAttention: the panel an idle thread wants open, keyed so each change opens it once.
  * - threadStatusSegmentClassName: the default pill segment look, for segments that extend it.
- * - default ThreadStatusRow: a thread's persistent status row; its live title (or a leading notice) and each segmented pill open one shared, sliding panel area. Narrow rows hide inline content in favour of narrow-only pills.
+ * - default ThreadStatusRow: a thread's persistent status row; its live title (or a leading notice) and each segmented pill open one shared, animated panel area. Narrow rows hide inline content in favour of narrow-only pills.
  */
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 
 import IconButton from "../../ui/IconButton";
+import SurfacePanels from "./SurfacePanels";
 import ThreadMeasuredContent from "./ThreadMeasuredContent";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 
@@ -24,23 +26,16 @@ export interface ThreadStatusPanel {
   render(): ReactNode;
 }
 
+export interface ThreadStatusAttention {
+  key: string;
+  panel: string;
+}
+
+/** Who opened the panel: an auto-opened panel yields as soon as its thread gets busy, a user-opened one stays. */
+type OpenPanel = { id: string; openedBy: "attention" | "user" };
+
 const LIVE = "live";
 
-/** One grid cell holds every panel; inactive ones leave flow and slide out toward their own side. */
-const panelClassName = `
-  hidden absolute inset-0 col-start-1 row-start-1 min-h-0 min-w-0 overflow-clip opacity-0
-  [transition-behavior:allow-discrete]
-  [transition:
-    opacity 180ms cubic-bezier(0.2, 0, 0, 1),
-    transform 240ms cubic-bezier(0.2, 0, 0, 1),
-    display 240ms allow-discrete
-  ]
-  data-[active=true]:(block relative inset-auto opacity-100 transform-[translateX(0)])
-  starting:data-[active=true]:opacity-0
-  motion-reduce:(transition-none)
-`;
-const liveSlideClassName = "transform-[translateX(-1.5rem)] starting:data-[active=true]:transform-[translateX(-1.5rem)]";
-const controlSlideClassName = "transform-[translateX(1.5rem)] starting:data-[active=true]:transform-[translateX(1.5rem)]";
 // Segments sit close together; only the pill's outer edges keep the full inset.
 export const threadStatusSegmentClassName = `
   gap-1 px-1 first:pl-2 last:pr-2 text-[0.74rem] font-semibold tabular-nums
@@ -49,9 +44,11 @@ export const threadStatusSegmentClassName = `
 /** An open panel's control keeps its hover chrome, so it reads as the thing that closes it. */
 const pressedControlClassName = "!border-[color-mix(in_srgb,var(--text)_18%,transparent)] !bg-[color-mix(in_srgb,var(--text)_5%,transparent)]";
 
-export default function ThreadStatusRow({ attention = null, inline, leading = null, live, panels = [] }: {
-  /** Opens its panel whenever its key changes, such as when a stopped turn leaves proposals to review. */
-  attention?: { key: string; panel: string } | null;
+export default function ThreadStatusRow({ attention = null, busy = false, inline, leading = null, live, panels = [] }: {
+  /** While idle, opens its panel on mount, whenever its key changes, and again once the thread goes idle. */
+  attention?: ThreadStatusAttention | null;
+  /** A busy thread opens panels only by user action, and closes the ones attention opened. */
+  busy?: boolean;
   /** Wide rows only, just left of the pills, such as the thread's active skill pills. */
   inline?: ReactNode;
   /** Fills the title slot while nothing is live, opening its panel. */
@@ -60,7 +57,7 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
   panels?: readonly ThreadStatusPanel[];
 }) {
   const panelsId = useId();
-  const [panel, setPanel] = useState<string | null>(null);
+  const [panel, setPanel] = useState<OpenPanel | null>(null);
   // Panels mount on first opening and stay while the row is open, so switching keeps edits in progress.
   const [mounted, setMounted] = useState<readonly string[]>([]);
   // The live panel belongs to one turn; mounting waits for its first opening.
@@ -68,28 +65,29 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
   const liveKey = live?.key ?? null;
   const attentionKey = attention?.key ?? null;
   const attentionPanel = attention?.panel ?? null;
+  const panelId = panel?.id ?? null;
   useEffect(() => {
-    setPanel(current => current === LIVE ? null : current);
+    setPanel(current => current?.id === LIVE ? null : current);
   }, [liveKey]);
   useEffect(() => {
-    if (attentionKey && attentionPanel) setPanel(attentionPanel);
-  }, [attentionKey, attentionPanel]);
+    if (busy) setPanel(current => current?.openedBy === "attention" ? null : current);
+    else if (attentionKey && attentionPanel) setPanel({ id: attentionPanel, openedBy: "attention" });
+  }, [attentionKey, attentionPanel, busy]);
   useEffect(() => {
-    if (panel === LIVE && liveKey) setMountedLiveKey(liveKey);
-    if (panel === null) setMounted([]);
-    else if (panel !== LIVE) setMounted(current => current.includes(panel) ? current : [...current, panel]);
-  }, [liveKey, panel]);
+    if (panelId === LIVE && liveKey) setMountedLiveKey(liveKey);
+    else if (panelId !== null) setMounted(current => current.includes(panelId) ? current : [...current, panelId]);
+  }, [liveKey, panelId]);
 
   const visiblePanels = panels.filter(({ segments }) => segments.length);
   if (!live && !leading && !visiblePanels.length && !inline) return null;
-  const activePanel = panel === LIVE ? (live ? LIVE : null) : visiblePanels.some(({ id }) => id === panel) ? panel : null;
-  const open = activePanel !== null;
-  const toggle = (next: string) => setPanel(current => current === next ? null : next);
+  const activePanel = panelId === LIVE ? (live ? LIVE : null) : visiblePanels.some(({ id }) => id === panelId) ? panelId : null;
+  const toggle = (next: string) => setPanel(current => current?.id === next ? null : { id: next, openedBy: "user" });
+  const closeLive = () => setPanel(current => current?.id === LIVE ? null : current);
 
   return (
     <div className="@container/status py-4">
       {/* The live panel deliberately closes once scrolled out of view; other panels keep any edit in progress. */}
-      <ThreadMeasuredContent onHidden={() => setPanel(current => current === LIVE ? null : current)}>
+      <ThreadMeasuredContent onHidden={closeLive}>
         <>
           <div className="flex min-w-0 items-center gap-2 py-1.5 @max-[32rem]/status:gap-0.5">
             {live || leading ? (
@@ -142,32 +140,25 @@ export default function ThreadStatusRow({ attention = null, inline, leading = nu
               </span>
             ) : null}
           </div>
-          {open ? (
+          {live || visiblePanels.length ? (
             // Panels grow to their content; only the streaming live terminal keeps a fixed height to scroll within.
-            <div className="relative grid min-w-0 overflow-hidden rounded-[0.8rem] border border-fg-alpha/16 bg-fg/3" id={panelsId}>
+            <SurfacePanels
+              activeKey={activePanel}
+              className="min-w-0 overflow-hidden rounded-[0.8rem] border border-fg-alpha/16 bg-fg/3"
+              id={panelsId}
+              onClosed={() => setMounted([])}
+            >
               {live ? (
-                <div
-                  aria-hidden={activePanel !== LIVE}
-                  className={`${panelClassName} ${liveSlideClassName} h-[min(100vh,24rem)]`}
-                  data-active={activePanel === LIVE ? "true" : "false"}
-                  inert={activePanel !== LIVE}
-                >
+                <SurfacePanels.Panel active={activePanel === LIVE} className="min-h-0 h-[min(100vh,24rem)]">
                   {mountedLiveKey === live.key || activePanel === LIVE ? live.renderBody(activePanel === LIVE) : null}
-                </div>
+                </SurfacePanels.Panel>
               ) : null}
               {visiblePanels.map(({ id, render }) => mounted.includes(id) || activePanel === id ? (
-                <div
-                  aria-hidden={activePanel !== id}
-                  className={`${panelClassName} ${controlSlideClassName}`}
-                  data-active={activePanel === id ? "true" : "false"}
-                  data-thread-status-panel={id}
-                  inert={activePanel !== id}
-                  key={id}
-                >
+                <SurfacePanels.Panel active={activePanel === id} className="min-h-0" data-thread-status-panel={id} key={id}>
                   {render()}
-                </div>
+                </SurfacePanels.Panel>
               ) : null)}
-            </div>
+            </SurfacePanels>
           ) : null}
         </>
       </ThreadMeasuredContent>

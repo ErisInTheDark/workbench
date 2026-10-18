@@ -63,7 +63,7 @@ import WorkbenchModelQuickPicker from "../WorkbenchModelQuickPicker";
 import type DraftSessionController from "./DraftSessionController";
 import { draftSessionOwner, type DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
-import useHeightTransition from "./use-height-transition";
+import SurfacePanels from "./SurfacePanels";
 import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-reference-seeds";
 import {
   composerReferenceKey, type ComposerReference,
@@ -91,44 +91,20 @@ function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-// Leaving content fades on the short exit timing so a resizing container never clips still-bright text.
-const modePanelClassName = `
-  hidden absolute inset-0 col-start-1 row-start-1 min-w-0 overflow-clip opacity-0
-  transform-[translateY(0.45rem) scale(0.985)]
-  [transition:
-    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
-    display var(--sticky-composer-exit-duration) allow-discrete
-  ]
-  [transition-behavior: allow-discrete]
-  data-[active=true]:(block relative inset-auto opacity-100 transform-[translateY(0) scale(1)])
-  data-[active=true]:[transition:
-    opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    transform var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease),
-    display var(--sticky-composer-motion-duration) allow-discrete
-  ]
-  starting:data-[active=true]:(opacity-0 transform-[translateY(0.45rem) scale(0.985)])
-  motion-reduce:(animate-none transition-none)
-`;
-
-const modePanelsClassName = `
-  relative grid
-  [transition: height var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
-`;
-
+// Leaving clusters fade on the short exit timing, then stop taking clicks.
 const actionClusterClassName = `
   col-start-1 row-start-1 min-w-0 invisible opacity-0
   [transition:
-    opacity var(--sticky-composer-exit-duration) var(--sticky-composer-motion-ease),
-    visibility 0s linear var(--sticky-composer-exit-duration)
+    opacity var(--transition-duration-surface-exit) var(--ease-surface),
+    visibility 0s linear var(--transition-duration-surface-exit)
   ]
-  data-[active=true]:(visible opacity-100 [transition: opacity var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)])
+  data-[active=true]:(visible opacity-100 transition-[opacity] duration-surface ease-surface)
   motion-reduce:transition-none
 `;
 
 const stickyComposerContentClassName = `
   [scrollbar-color: rgb(from var(--fg) r g b / 0) transparent]
-  [transition: scrollbar-color var(--sticky-composer-motion-duration) var(--sticky-composer-motion-ease)]
+  transition-[scrollbar-color] duration-surface ease-surface
   stuck:(
     [max-height: min(52dvh, calc(100dvh - env(safe-area-inset-bottom, 0px) - 11rem))]
     overflow-y-auto overscroll-contain
@@ -302,7 +278,6 @@ export default function ThreadComposer ({
     });
   };
   const focusAfterSendRef = useRef(false);
-  const modePanelsRef = useRef<HTMLDivElement>(null);
   const isProviderUnavailable = !isCommentMode && !installedProviderKeys.some(key => key === thread.harness);
   const isThreadStateBroken = hasStaleApprovalState(threadState);
   const isApprovalBlocked = isCurrentTurnWaitingOnApproval(threadState);
@@ -721,7 +696,6 @@ export default function ThreadComposer ({
   const activeComposerMode = showQuestionnairePanel ? "questionnaire" : "composer";
   const isComposerPanelActive = activeComposerMode === "composer";
   const isQuestionnairePanelActive = activeComposerMode === "questionnaire";
-  useHeightTransition(modePanelsRef, activeComposerMode);
   const composerForm = (
       <form
         className={joinClasses(
@@ -739,14 +713,9 @@ export default function ThreadComposer ({
               {header}
             </div>
           ) : null}
-          <div ref={modePanelsRef} className={modePanelsClassName} data-active-mode={activeComposerMode}>
+          <SurfacePanels activeKey={activeComposerMode}>
             {visiblePendingUserInputRequest ? (
-              <div
-                aria-hidden={!isQuestionnairePanelActive}
-                className={modePanelClassName}
-                data-active={isQuestionnairePanelActive ? "true" : "false"}
-                inert={!isQuestionnairePanelActive}
-              >
+              <SurfacePanels.Panel active={isQuestionnairePanelActive}>
                 {pendingMcpTool ? <ThreadMcpToolRequestPanel
                   key={`${projectId}:${thread.id}:${questionnaireRequestKey}`}
                   tool={pendingMcpTool}
@@ -792,14 +761,9 @@ export default function ThreadComposer ({
                     }
                   }}
                 />}
-              </div>
+              </SurfacePanels.Panel>
             ) : null}
-            <div
-              aria-hidden={!isComposerPanelActive}
-              className={modePanelClassName}
-              data-active={isComposerPanelActive ? "true" : "false"}
-              inert={!isComposerPanelActive}
-            >
+            <SurfacePanels.Panel active={isComposerPanelActive}>
               <div className={stickyMode ? stickyComposerContentClassName : undefined}>
                 <span className="sr-only">{isCommentMode ? "Write comment" : "Message thread"}</span>
                 <ComposerReferencePills
@@ -859,8 +823,8 @@ export default function ThreadComposer ({
                   </div>
                 ) : null}
               </div>
-            </div>
-          </div>
+            </SurfacePanels.Panel>
+          </SurfacePanels>
           <div className="mt-3 flex min-w-0 items-center justify-between gap-3">
             <div className="flex min-w-0 shrink items-center gap-2">
               {questionnaireToggleButton}

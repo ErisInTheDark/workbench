@@ -1,17 +1,20 @@
 /*
  * Exports:
+ * - getThreadStatusAttention: the panel an idle thread opens by itself: pending proposals, then required todos or addressed feedback, then dirty claims.
  * - default ThreadStatusArea: compose a thread's status row from its live activity, skills, live vis, Git arc work
  *   (claim intersections, proposals, claims, stash, accepted commits) and goal/todos with addressed feedback.
  */
 "use client";
 
 import type { ReactNode } from "react";
+import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
-import type {
-  WorkbenchHarnessId,
-  WorkbenchThreadGitCommit,
-  WorkbenchThreadLifecycle,
+import {
+  isWorkbenchThreadStatusProviderOwned,
+  type WorkbenchHarnessId,
+  type WorkbenchThreadGitCommit,
+  type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkspaceFileLinkRoot } from "../../../workbench/markdown/markdown-links";
 import LoaderIcon from "../LoaderIcon";
@@ -25,10 +28,12 @@ import {
 import { GitArcClaimIcon, GitArcUnclaimIcon } from "./GitArcIcon";
 import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadSkillPills, { skillPillToneClassName } from "./ThreadSkillPills";
-import ThreadStatusRow, { threadStatusSegmentClassName, type ThreadStatusPanel } from "./ThreadStatusRow";
+import ThreadStatusRow, { threadStatusSegmentClassName, type ThreadStatusAttention, type ThreadStatusPanel } from "./ThreadStatusRow";
 import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessionCard";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
 import { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
+import { useThreadGitArcClaimChanges } from "./ThreadGitArcObservationContext";
+import { getGitArcClaimReleaseAction } from "./ThreadGitArcPresentationContext";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 import { FEEDBACK_TEXT_TONE_CLASS_NAME } from "../feedback-presentation";
 
@@ -36,6 +41,20 @@ const amberClassName = "text-amber-600 dark:text-amber-300";
 
 function count(value: number) {
   return <span>{value}</span>;
+}
+
+/** First match wins; each target's key changes when its work does, so new work reopens a panel the user closed. */
+export function getThreadStatusAttention({ dirtyClaimedPaths, feedbackCount, pendingProposalIds, requiredTodoCount }: {
+  /** Null while dirtiness is unknown or the claims are clean. */
+  dirtyClaimedPaths: readonly string[] | null;
+  feedbackCount: number;
+  pendingProposalIds: readonly string[];
+  requiredTodoCount: number;
+}): ThreadStatusAttention | null {
+  if (pendingProposalIds.length) return { key: `proposals:${pendingProposalIds.join("\0")}`, panel: "arc" };
+  if (requiredTodoCount || feedbackCount) return { key: `todos:${requiredTodoCount}:${feedbackCount}`, panel: "todos" };
+  if (dirtyClaimedPaths?.length) return { key: `claims:${dirtyClaimedPaths.join("\0")}`, panel: "arc" };
+  return null;
 }
 
 export default function ThreadStatusArea({
@@ -78,6 +97,23 @@ export default function ThreadStatusArea({
   const feedbackCount = todos?.feedbackCount ?? 0;
   // Once the work is done, unhandled feedback is what holds settlement.
   const highlightFeedback = threadLifecycle?.kind === "completed" || threadLifecycle?.kind === "stopped";
+
+  // A turn still running or waiting on the user's answer is busy; an unknown lifecycle is too, so loading never flashes a panel open.
+  const busy = !threadLifecycle || isWorkbenchThreadStatusProviderOwned(threadLifecycle);
+  const facts = useThread.summary(WorkbenchThreadIdSchema.safeParse(threadId).data ?? null)?.summary.facts;
+  const requiredTodoCount = facts?.requiredTodoCount ?? 0;
+  // Dirtiness costs a Git comparison, so it is only asked for when it could decide the target.
+  const comparesClaims = !busy && !proposals.length && !requiredTodoCount && !feedbackCount
+    && (claim?.phase ?? "active") === "active" && claimed > 0;
+  const claimChanges = useThreadGitArcClaimChanges(comparesClaims)?.state;
+  const claimsDirty = claimChanges?.status === "loaded"
+    && getGitArcClaimReleaseAction(claimChanges.changeCount, claimChanges.hasUncommittedChanges) === "restore";
+  const attention = getThreadStatusAttention({
+    dirtyClaimedPaths: claimsDirty ? claim?.claimedPaths ?? null : null,
+    feedbackCount,
+    pendingProposalIds: proposals.map(({ proposalId }) => proposalId),
+    requiredTodoCount,
+  });
 
   const arcSegments: ThreadStatusPanel["segments"][number][] = [
     ...(overlapCount || plannedOverlapCount ? [{
@@ -169,8 +205,8 @@ export default function ThreadStatusArea({
 
   return (
     <ThreadStatusRow
-      // A stopped turn that leaves proposals to review opens them, once per pending set.
-      attention={!gitArc?.running && proposals.length ? { key: proposals.map(({ proposalId }) => proposalId).join("\0"), panel: "arc" } : null}
+      attention={attention}
+      busy={busy}
       inline={skills?.skills.length ? <ThreadSkillPills onDeactivate={skills.onDeactivate} skills={skills.skills} /> : null}
       leading={showPlanIntersectionStatus ? {
         content: (
