@@ -2,82 +2,38 @@
  * WorkbenchDatabaseControllerOptions: construction inputs for the database lifecycle owner.
  * WorkbenchDatabaseRequestFailure: one rolled-back request that leaves the database lifecycle ready.
  * WorkbenchDatabaseFailure: stable controller failure carrying one bounded cause.
- * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle, and step-sliced retention.
+ * WorkbenchDatabaseController: owns the writer worker, the priority reader pool, their heap readings, the complete database lifecycle,
+ *   step-sliced retention, and one method per registered request (./workbench-database-requests).
  */
 import { Worker } from "node:worker_threads";
-import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import type { LegacyDiffArtifactReference } from "./git/WorkbenchLegacyDiffArtifactStore";
-import type { ThreadGitSelectionCommand } from "./git/WorkbenchThreadGitSelectionStore";
-import type { ThreadSkillCommand } from "./skills/WorkbenchThreadSkillStore";
-import type { ThreadInstructionSelectionCommand } from "./thread-state/WorkbenchThreadInstructionSelectionStore";
-import type { ThreadGoalCommand } from "./goals/WorkbenchThreadGoalStore";
-import type { ThreadVisCommand } from "./vis/WorkbenchThreadVisStore";
-import type { ThreadTodoCommand } from "./todos/WorkbenchThreadTodoStore";
-import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore";
-import type { ProjectStoreCommand } from "./store/WorkbenchProjectStoreRepository";
-import type { TranscriptAssetRead, TranscriptAssetWrite } from "./transcript/WorkbenchTranscriptAssetStore";
-import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
-
 import type {
-    WorkbenchDatabaseMutation,
     WorkbenchDatabaseQuery,
     WorkbenchDatabaseRow,
 } from "workbench-shared/database/workbench-database-statements";
-import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
-import type { WorkbenchSearchRequest } from "workbench-shared/workbench/search/workbench-search";
-import type { WorkbenchThreadLaunchLocation, WorkbenchThreadLaunchRequest, WorkbenchThreadLaunchState } from "workbench-shared/workbench/thread/thread-launch";
-import type { WorkbenchClaimStatsRequest } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
-import type { WorkbenchFeedbackReadRequest, WorkbenchFeedbackRecord } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import type {
-  WorkbenchStatsImportProgress, WorkbenchStatsRange, WorkbenchStatsReadRequest, WorkbenchStatsSectionData,
+  WorkbenchStatsReadRequest, WorkbenchStatsSectionData,
 } from "workbench-shared/workbench/stats/workbench-stats-contract";
 import type { WorkbenchStoredStatsSection } from "./stats/WorkbenchStatsRepository.ts";
-import type { WorkbenchGitClaimRename, WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
-import type { WorkbenchSubagentReservation } from "../workbench-subagent-record";
-import type { WorkbenchStoredThreadTitleHistory } from "../WorkbenchThreadStateStore";
-import type { WorkbenchThreadGitCommitTime } from "./thread-state/WorkbenchThreadStateGitRepository";
-import type { WorkbenchProjectDiscovery, WorkbenchProjectIconSettlement, WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
-import type {
-    WorkbenchGitClaimImportCandidate,
-    WorkbenchGitClaimImportDiscovery,
-    WorkbenchGitClaimImportSettlement,
-    WorkbenchStatsUsageImportCandidate,
-    WorkbenchStatsUsageImportSettlement,
-} from "./stats/WorkbenchStatsImportRepository";
-import type { WorkbenchRateLimitObservation } from "./stats/WorkbenchStatsRepository";
-import type {
-    WorkbenchNativeThreadIdentity,
-    WorkbenchThreadIdentityLookup,
-    WorkbenchThreadIdentityMetadata,
-    WorkbenchThreadReplacementBinding,
-    WorkbenchTurnIdentityLookup,
-    WorkbenchTurnIdentityMetadata,
-} from "./thread-identity/workbench-thread-identity-types";
-import type {
-    WorkbenchSubagentRelationshipRead,
-    WorkbenchThreadRecordQuery, WorkbenchThreadStateCommit,
-    WorkbenchThreadStateGlobalDocument,
-    WorkbenchThreadStateProjectDocument,
-} from "./thread-state/workbench-thread-state-persistence";
-import type { WorkbenchThreadLayoutOwner } from "./thread-state/WorkbenchThreadStateLayoutRepository";
+import type { WorkbenchGitClaimRename } from "../stats/git-claim-observation";
+import type { WorkbenchProjectPersistence, WorkbenchProjectPreparation, WorkbenchProjectStartup } from "./project/workbench-project-persistence";
 import { TranscriptQueryError, type TranscriptQuery } from "./transcript/transcript-query-contract";
-import type {
-    WorkbenchTranscriptItemIdentityAdmission,
-    WorkbenchTranscriptItemIdentityLookup,
-    WorkbenchTranscriptObservation,
-    WorkbenchTranscriptReadRequest,
-} from "./transcript/workbench-transcript-types";
+import type { WorkbenchTranscriptRetentionCutoffs } from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 import type {
     WorkbenchDatabaseControllerState,
     WorkbenchDatabaseInventory,
-    WorkbenchDatabaseMutationResult,
     WorkbenchDatabaseRequest,
     WorkbenchDatabaseRequestPayload,
     WorkbenchDatabaseResponse,
     WorkbenchDatabaseWorkerMessage,
-    WorkbenchTranscriptItemRange,
 } from "./workbench-database-protocol";
-import { getWorkbenchDatabaseReadClass } from "./workbench-database-protocol";
+import { getWorkbenchDatabaseReadClass, getWorkbenchDatabaseRequestOrdering } from "./workbench-database-protocol";
+import {
+  workbenchDatabaseRequests,
+  type WorkbenchDatabaseRequestArgs,
+  type WorkbenchDatabaseRequestMethods,
+  type WorkbenchDatabaseRequestName,
+  type WorkbenchDatabaseRequestResult,
+} from "./workbench-database-requests";
 import WorkbenchDatabaseReadPool, { type WorkbenchDatabaseReader } from "./WorkbenchDatabaseReadPool";
 import {
   formatWorkbenchDatabaseDiagnostic,
@@ -117,7 +73,10 @@ interface DatabaseSuspension {
   retire(): void;
 }
 
-export default class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
+// Registered requests become methods of the same name; the constructor installs them.
+interface WorkbenchDatabaseController extends WorkbenchDatabaseRequestMethods {}
+
+class WorkbenchDatabaseController implements WorkbenchProjectPersistence {
   readonly #beforeMigration: WorkbenchDatabaseControllerOptions["beforeMigration"];
   readonly #onDiagnostic: WorkbenchDatabaseControllerOptions["onDiagnostic"];
   readonly #prepareProjects: WorkbenchDatabaseControllerOptions["prepareProjects"];
@@ -148,6 +107,9 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#onDiagnostic = onDiagnostic;
     this.#prepareProjects = prepareProjects;
     this.#databasePath = databasePath;
+    for (const name of Object.keys(workbenchDatabaseRequests) as WorkbenchDatabaseRequestName[]) {
+      Object.defineProperty(this, name, { configurable: true, writable: true, value: (...args: readonly unknown[]) => this.#call(name, args) });
+    }
     this.#worker = new Worker(workerUrl);
     this.#readers = new WorkbenchDatabaseReadPool({
       create: () => new Worker(workerUrl),
@@ -283,353 +245,27 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     catch (failure) { if (failure !== error && failure !== this.#failure) throw failure; }
   }
 
-  async getInventory() {
-    await this.start();
-    const response = await this.#request({ type: "getInventory" });
-    if (response.type !== "inventory") throw new WorkbenchDatabaseFailure(`Unexpected database inventory response: ${response.type}`);
-    return response.inventory;
-  }
-
-  async writeTranscriptAsset(input: TranscriptAssetWrite) {
-    await this.start();
-    const response = await this.#request({ type: "writeTranscriptAsset", input });
-    if (response.type !== "transcriptAssetWritten") throw new WorkbenchDatabaseFailure(`Unexpected asset write response: ${response.type}`);
-    return response.asset;
-  }
-
-  async readLegacyDiffArtifact(input: LegacyDiffArtifactReference) {
-    await this.start();
-    const response = await this.#request({ type: "readLegacyDiffArtifact", input });
-    if (response.type !== "legacyDiffArtifact") throw new WorkbenchDatabaseFailure(`Unexpected legacy diff response: ${response.type}`);
-    return response.diff;
-  }
-
-  async recordApprovalOutcome(entry: WorkbenchApprovalOutcomeEntry) {
-    await this.start();
-    const response = await this.#request({ type: "recordApprovalOutcome", entry });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected approval outcome write response: ${response.type}`);
-  }
-
-  async readApprovalOutcomes(threadId: string, turnIds?: readonly string[]) {
-    await this.start();
-    const response = await this.#request({ type: "readApprovalOutcomes", threadId, ...(turnIds ? { turnIds } : {}) });
-    if (response.type !== "approvalOutcomes") throw new WorkbenchDatabaseFailure(`Unexpected approval outcome response: ${response.type}`);
-    return response.entries;
-  }
-
-  async executeThreadGitSelection(command: ThreadGitSelectionCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadGitSelection", command });
-    if (response.type !== "threadGitSelection") throw new WorkbenchDatabaseFailure(`Unexpected thread Git selection response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeThreadSkills(command: ThreadSkillCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadSkills", command });
-    if (response.type !== "threadSkills") throw new WorkbenchDatabaseFailure(`Unexpected thread skill response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeThreadInstructionSelection(command: ThreadInstructionSelectionCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadInstructionSelection", command });
-    if (response.type !== "threadInstructionSelection") throw new WorkbenchDatabaseFailure(`Unexpected thread instruction selection response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeThreadGoals(command: ThreadGoalCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadGoals", command });
-    if (response.type !== "threadGoals") throw new WorkbenchDatabaseFailure(`Unexpected thread goal response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeThreadVis(command: ThreadVisCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadVis", command });
-    if (response.type !== "threadVis") throw new WorkbenchDatabaseFailure(`Unexpected thread vis response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeThreadTodos(command: ThreadTodoCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadTodos", command });
-    if (response.type !== "threadTodos") throw new WorkbenchDatabaseFailure(`Unexpected thread todo response: ${response.type}`);
-    return response.result;
-  }
-
-  /** Every thread's stored summary facts (required todo and addressed feedback counts) in one read. */
-  async readThreadSummaryFactSeeds() {
-    await this.start();
-    const response = await this.#request({ type: "threadSummaryFactSeeds" });
-    if (response.type !== "threadSummaryFactSeeds") throw new WorkbenchDatabaseFailure(`Unexpected thread summary facts response: ${response.type}`);
-    return new Map(Object.entries(response.facts));
-  }
-
-  async executeThreadAddressedFeedback(command: ThreadAddressedFeedbackCommand) {
-    await this.start();
-    const response = await this.#request({ type: "threadAddressedFeedback", command });
-    if (response.type !== "threadAddressedFeedback") throw new WorkbenchDatabaseFailure(`Unexpected addressed feedback response: ${response.type}`);
-    return response.result;
-  }
-
-  async executeProjectStore(command: ProjectStoreCommand) {
-    await this.start();
-    const response = await this.#request({ type: "projectStore", command });
-    if (response.type !== "projectStore") throw new WorkbenchDatabaseFailure(`Unexpected project store response: ${response.type}`);
-    return response.result;
-  }
-
-  async readTranscriptAsset(input: TranscriptAssetRead) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptAsset", input });
-    if (response.type !== "transcriptAssetContent") throw new WorkbenchDatabaseFailure(`Unexpected asset read response: ${response.type}`);
-    return response.asset;
-  }
-
-  async executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult> {
-    await this.start();
-    if (statements.length === 0) return { changes: 0 };
-    const response = await this.#request({ type: "executeTransaction", statements });
-    if (response.type !== "mutationResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected database mutation response: ${response.type}`);
-    }
-    return response.result;
-  }
-
   async query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]> {
-    await this.start();
-    const response = await this.#request({ type: "query", statement });
-    if (response.type !== "queryResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected database query response: ${response.type}`);
-    }
-    return response.rows as Row[];
+    return await this.readRows(statement) as Row[];
   }
 
-  async observeThreadIdentities(inputs: readonly WorkbenchThreadIdentityMetadata[]) {
-    await this.start();
-    if (!inputs.length) return [];
-    const response = await this.#request({ type: "observeThreadIdentities", inputs });
-    if (response.type !== "threadIdentities") {
-      throw new WorkbenchDatabaseFailure(`Unexpected thread identity admission response: ${response.type}`);
-    }
-    return response.identities;
+  async queryTranscript(request: TranscriptQuery) {
+    const result = await this.queryTranscriptPage(request);
+    if (result.ok === false) throw new TranscriptQueryError(result.error);
+    return result.page;
   }
 
-  async resolveThreadIdentity(input: WorkbenchThreadIdentityLookup) {
-    await this.start();
-    const response = await this.#request({ type: "resolveThreadIdentity", input });
-    if (response.type !== "threadIdentity") {
-      throw new WorkbenchDatabaseFailure(`Unexpected thread identity lookup response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async resolveNativeThreadIdentity(input: WorkbenchNativeThreadIdentity) {
-    await this.start();
-    const response = await this.#request({ type: "resolveNativeThreadIdentity", input });
-    if (response.type !== "threadIdentity") {
-      throw new WorkbenchDatabaseFailure(`Unexpected native thread identity lookup response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async reserveReplacementBinding(input: WorkbenchThreadReplacementBinding) {
-    await this.start();
-    const response = await this.#request({ type: "reserveReplacementBinding", input });
-    if (response.type !== "threadIdentity" || !response.identity) {
-      throw new WorkbenchDatabaseFailure(`Unexpected replacement binding reservation response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async releaseReplacementBinding(input: Omit<WorkbenchThreadReplacementBinding, "reservedAt">) {
-    await this.start();
-    const response = await this.#request({ type: "releaseReplacementBinding", input });
-    if (response.type !== "threadIdentity" || !response.identity) {
-      throw new WorkbenchDatabaseFailure(`Unexpected replacement binding release response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async listThreadIdentities() {
-    await this.start();
-    const response = await this.#request({ type: "listThreadIdentities" });
-    if (response.type !== "threadIdentities") {
-      throw new WorkbenchDatabaseFailure(`Unexpected thread identity catalog response: ${response.type}`);
-    }
-    return response.identities;
-  }
-
-  async observeTurnIdentities(inputs: readonly WorkbenchTurnIdentityMetadata[]) {
-    await this.start();
-    if (!inputs.length) return [];
-    const response = await this.#request({ type: "observeTurnIdentities", inputs });
-    if (response.type !== "turnIdentities") {
-      throw new WorkbenchDatabaseFailure(`Unexpected turn identity admission response: ${response.type}`);
-    }
-    return response.identities;
-  }
-
-  async resolveTurnIdentity(input: WorkbenchTurnIdentityLookup) {
-    await this.start();
-    const response = await this.#request({ type: "resolveTurnIdentity", input });
-    if (response.type !== "turnIdentity") {
-      throw new WorkbenchDatabaseFailure(`Unexpected turn identity lookup response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async admitTranscriptItemIdentities(inputs: readonly WorkbenchTranscriptItemIdentityAdmission[]) {
-    await this.start();
-    if (!inputs.length) return [];
-    const response = await this.#request({ type: "admitTranscriptItemIdentities", inputs });
-    if (response.type !== "transcriptItemIdentities") {
-      throw new WorkbenchDatabaseFailure(`Unexpected item identity admission response: ${response.type}`);
-    }
-    return response.identities;
-  }
-
-  async resolveTranscriptItemIdentity(input: WorkbenchTranscriptItemIdentityLookup) {
-    await this.start();
-    const response = await this.#request({ type: "resolveTranscriptItemIdentity", input });
-    if (response.type !== "transcriptItemIdentity") {
-      throw new WorkbenchDatabaseFailure(`Unexpected item identity lookup response: ${response.type}`);
-    }
-    return response.identity;
-  }
-
-  async settleTranscript(
-    observations: readonly WorkbenchTranscriptObservation[],
-    mode: import("./transcript/workbench-transcript-types").WorkbenchTranscriptSettlementMode = "live",
-  ) {
-    await this.start();
-    if (observations.length === 0) return { changedThreadIds: [], compactionCompletions: [] };
-    const response = await this.#request({ type: "settleTranscript", observations, mode });
-    if (response.type !== "transcriptSettlement") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript settlement response: ${response.type}`);
-    }
-    return response.settlement;
-  }
-
-  async readTranscript(request: WorkbenchTranscriptReadRequest) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscript", request });
-    if (response.type !== "transcriptSnapshot") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript read response: ${response.type}`);
-    }
-    return response.snapshot;
-  }
-
-  async readTranscriptItemRange(
-    request: Extract<WorkbenchDatabaseRequestPayload, { type: "readTranscriptItemRange" }>["request"],
-  ): Promise<WorkbenchTranscriptItemRange | null> {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptItemRange", request });
-    if (response.type !== "transcriptItemRange") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript item range response: ${response.type}`);
-    }
-    return response.range;
-  }
-
-  /** Many threads' stored runtime facts in one reader round trip. */
-  async readThreadRuntimeFacts(threadIds: readonly string[]) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadRuntimeFacts", threadIds });
-    if (response.type !== "threadRuntimeFacts") {
-      throw new WorkbenchDatabaseFailure(`Unexpected thread runtime facts response: ${response.type}`);
-    }
-    return response.facts;
-  }
-
-  async readThreadContextUsage(threadId: string) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadContextUsage", threadId });
-    if (response.type !== "threadContextUsage") {
-      throw new WorkbenchDatabaseFailure(`Unexpected context usage response: ${response.type}`);
-    }
-    return response.snapshot;
-  }
-
-  async readRetainedProjectCatalog(discoveryRoots: readonly string[]) {
-    await this.start();
-    const response = await this.#request({ type: "readRetainedProjectCatalog", discoveryRoots });
-    if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected retained catalogue response: ${response.type}`);
-    return response.projects;
-  }
-
-  async reconcileProjectCatalog(discovery: WorkbenchProjectDiscovery) {
-    await this.start();
-    const response = await this.#request({ type: "reconcileProjectCatalog", discovery });
-    if (response.type !== "projectCatalog") throw new WorkbenchDatabaseFailure(`Unexpected project catalogue response: ${response.type}`);
-    return response.projects;
-  }
-
-  async reserveThreadLaunch(request: WorkbenchThreadLaunchRequest, location: WorkbenchThreadLaunchLocation) {
-    await this.start();
-    const response = await this.#request({ type: "reserveThreadLaunch", request, location });
-    if (response.type !== "threadLaunch" || !response.launch) {
-      throw new WorkbenchDatabaseFailure("Unexpected launch admission response.");
-    }
-    return response.launch;
-  }
-
-  async readThreadLaunch(launchId: string) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadLaunch", launchId });
-    if (response.type !== "threadLaunch") throw new WorkbenchDatabaseFailure("Unexpected launch lookup response.");
-    return response.launch ? { request: response.request!, location: response.location!, state: response.launch } : null;
-  }
-
-  async advanceThreadLaunch(launchId: string, from: WorkbenchThreadLaunchState["phase"], next: WorkbenchThreadLaunchState) {
-    await this.start();
-    const response = await this.#request({ type: "advanceThreadLaunch", launchId, from, next });
-    if (response.type !== "threadLaunch" || !response.launch) {
-      throw new WorkbenchDatabaseFailure("Unexpected launch settlement response.");
-    }
-    return response.launch;
-  }
-
-  async readProjectAliases() {
-    await this.start();
-    const response = await this.#request({ type: "readProjectAliases" });
-    if (response.type !== "projectAliases") throw new WorkbenchDatabaseFailure(`Unexpected project aliases response: ${response.type}`);
-    return response.aliases;
-  }
-
-  async resolveProjectIdentity(projectId: string) {
-    await this.start();
-    const response = await this.#request({ type: "resolveProjectIdentity", projectId });
-    if (response.type !== "projectIdentity") throw new WorkbenchDatabaseFailure(`Unexpected project identity response: ${response.type}`);
-    return response.projectId;
-  }
-
-  async settleProjectIcon(settlement: WorkbenchProjectIconSettlement) {
-    await this.start();
-    const response = await this.#request({ type: "settleProjectIcon", settlement });
-    if (response.type !== "projectIconSettlement") throw new WorkbenchDatabaseFailure(`Unexpected project icon response: ${response.type}`);
-    return response.accepted;
-  }
-
-  async readGitArcProposalDiff(identity: Extract<WorkbenchDatabaseRequestPayload, { type: "readGitArcProposalDiff" }>["identity"]) {
-    await this.start();
-    const response = await this.#request({ type: "readGitArcProposalDiff", identity });
-    if (response.type !== "gitArcProposalDiff") {
-      throw new WorkbenchDatabaseFailure(`Unexpected Git arc proposal diff response: ${response.type}`);
-    }
-    return response.changes;
-  }
-
-  async writeGitArcProposalDiff(
-    value: Extract<WorkbenchDatabaseRequestPayload, { type: "writeGitArcProposalDiff" }>["value"],
-    maxBytes: number,
-  ) {
-    await this.start();
-    const response = await this.#request({ type: "writeGitArcProposalDiff", value, maxBytes });
-    if (response.type !== "mutationResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected Git arc proposal diff mutation response: ${response.type}`);
-    }
+  async readStats<Section extends WorkbenchStoredStatsSection>(
+    request: WorkbenchStatsReadRequest & { section: Section },
+    now?: number,
+    renames: readonly WorkbenchGitClaimRename[] = [],
+    workbenchProjectId: string | null = null,
+    /** Abandons the read while it still waits for a reader. */
+    signal?: AbortSignal,
+  ): Promise<WorkbenchStatsSectionData<Section>> {
+    const result = await this.#call("readStatsSection", [request, now, renames, workbenchProjectId], signal);
+    if (result.section !== request.section) throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${result.section}`);
+    return result as WorkbenchStatsSectionData<Section>;
   }
 
   /**
@@ -637,7 +273,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
    * behind them) interleave instead of waiting out the whole pass. `signal` stops between steps.
    */
   async runRetention(
-    cutoffs: Extract<WorkbenchDatabaseRequestPayload, { type: "expireRetainedPayloads" }>["cutoffs"],
+    cutoffs: WorkbenchTranscriptRetentionCutoffs,
     proposalCacheCutoff: number,
     signal?: AbortSignal,
     readObservedThreadIds?: () => string[],
@@ -649,40 +285,29 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       detail: `results before ${cutoffs.resultCutoff}, transcripts before ${cutoffs.transcriptCutoff}`,
       elapsedMs: null, progress: null,
     });
-    const step = async (request: WorkbenchDatabaseRequestPayload) => {
+    const step = <Name extends WorkbenchDatabaseRequestName>(name: Name, ...args: WorkbenchDatabaseRequestArgs<Name>) => {
       signal?.throwIfAborted();
-      return await this.#request(request);
+      return this.#call(name, args);
     };
-    const expiry = await step({
-      type: "expireRetainedPayloads",
-      cutoffs: { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) },
-    });
-    if (expiry.type !== "retentionExpiry") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${expiry.type}`);
+    const expiry = await step("expireRetainedPayloads",
+      { ...cutoffs, ...(readObservedThreadIds ? { observedThreadIds: readObservedThreadIds() } : {}) });
     const createdBefore = cutoffs.expiredAt - ASSET_ADMISSION_GRACE_MS;
-    const candidates = await step({ type: "listOrphanAssetCandidates", createdBefore });
-    if (candidates.type !== "orphanAssetCandidates") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${candidates.type}`);
     let expiredAssets = 0;
-    for (const digest of candidates.digests) {
-      const collected = await step({ type: "collectOrphanAsset", digest, createdBefore });
-      if (collected.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${collected.type}`);
-      expiredAssets += collected.result.changes;
+    for (const digest of await step("listOrphanAssetCandidates", createdBefore)) {
+      if (await step("collectOrphanAsset", digest, createdBefore)) expiredAssets += 1;
     }
-    const eviction = await step({ type: "evictProposalCaches", cutoff: proposalCacheCutoff });
-    if (eviction.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${eviction.type}`);
-    const resolvedFeedback = await step({ type: "expireResolvedFeedback", now: cutoffs.expiredAt });
-    if (resolvedFeedback.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${resolvedFeedback.type}`);
+    const expiredProposalCaches = await step("evictProposalCaches", proposalCacheCutoff);
+    const expiredResolvedFeedback = await step("expireResolvedFeedback", cutoffs.expiredAt);
     let fullCompaction = false;
     let reclaimedPages = 0;
     for (;;) {
-      const reclamation = await step({ type: "reclaimDatabasePages", maxPages: RECLAIMED_PAGES_PER_STEP });
-      if (reclamation.type !== "pageReclamation") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${reclamation.type}`);
+      const reclamation = await step("reclaimDatabasePages", RECLAIMED_PAGES_PER_STEP);
       fullCompaction ||= reclamation.fullCompaction;
       reclaimedPages += reclamation.reclaimedPages;
       if (!reclamation.remainingFreePages || !reclamation.reclaimedPages) break;
     }
     const result = {
-      ...expiry.result, expiredAssets, expiredProposalCaches: eviction.result.changes,
-      expiredResolvedFeedback: resolvedFeedback.result.changes, fullCompaction, reclaimedPages,
+      ...expiry, expiredAssets, expiredProposalCaches, expiredResolvedFeedback, fullCompaction, reclaimedPages,
     };
     this.#report({
       source: "database", operation: "retention", phase: "completed", level: "info",
@@ -690,384 +315,6 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       elapsedMs: performance.now() - startedAt, progress: null,
     });
     return result;
-  }
-
-  async readTranscriptProviderCursor(threadId: string, turnId: string) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptProviderCursor", threadId, turnId });
-    if (response.type !== "transcriptProviderCursor") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript cursor response: ${response.type}`);
-    }
-    return response.cursor;
-  }
-
-  async readTranscriptCompactionExecution(input: {
-    harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
-  }) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptCompactionExecution", input });
-    if (response.type !== "transcriptCompactionExecution") {
-      throw new WorkbenchDatabaseFailure(`Unexpected compaction execution response: ${response.type}`);
-    }
-    return response.execution;
-  }
-
-  async readTranscriptContext(threadId: string) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptContext", threadId });
-    if (response.type !== "transcriptContext") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript context response: ${response.type}`);
-    }
-    return response.snapshot;
-  }
-
-  async readThreadStateProject(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateProject", projectId });
-    if (response.type !== "threadStateProject") throw new WorkbenchDatabaseFailure(`Unexpected project response: ${response.type}`);
-    return response.document;
-  }
-
-  async readThreadStateNavigationSummary(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateNavigationSummary", projectId });
-    if (response.type !== "threadStateNavigationSummary") throw new WorkbenchDatabaseFailure(`Unexpected navigation response: ${response.type}`);
-    return response.summary;
-  }
-
-  async readThreadStateTitleHistories(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateTitleHistories", projectId });
-    if (response.type !== "threadStateTitleHistories") throw new WorkbenchDatabaseFailure(`Unexpected title history response: ${response.type}`);
-    return response.histories;
-  }
-
-  async readThreadGitCommits(threadIds: readonly WorkbenchThreadId[]) {
-    if (!threadIds.length) return [];
-    await this.start();
-    const response = await this.#request({ type: "readThreadGitCommits", threadIds });
-    if (response.type !== "threadGitCommits") throw new WorkbenchDatabaseFailure(`Unexpected thread commit response: ${response.type}`);
-    return response.threads;
-  }
-
-  async recordThreadGitCommitTimes(threadId: WorkbenchThreadId, times: readonly WorkbenchThreadGitCommitTime[]) {
-    if (!times.length) return;
-    await this.start();
-    const response = await this.#request({ type: "recordThreadGitCommitTimes", threadId, times });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected commit time response: ${response.type}`);
-  }
-
-  async findThreadGitCommitOwners(projectId: ProjectId, commitSha: string) {
-    await this.start();
-    const response = await this.#request({ type: "findThreadGitCommitOwners", projectId, commitSha });
-    if (response.type !== "threadGitCommitOwners") throw new WorkbenchDatabaseFailure(`Unexpected commit owner response: ${response.type}`);
-    return response.threadIds;
-  }
-
-  async writeThreadStateProject(projectId: ProjectId, document: WorkbenchThreadStateProjectDocument, titleHistories?: readonly WorkbenchStoredThreadTitleHistory[]) {
-    await this.start();
-    const response = await this.#request({ type: "writeThreadStateProject", projectId, document, titleHistories });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected project write response: ${response.type}`);
-  }
-
-  async readThreadStateGlobal(documentId: WorkbenchThreadStateGlobalDocument["id"]) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateGlobal", documentId });
-    if (response.type !== "threadStateGlobal") throw new WorkbenchDatabaseFailure(`Unexpected global response: ${response.type}`);
-    return response.document;
-  }
-
-  async writeThreadStateGlobal(document: WorkbenchThreadStateGlobalDocument) {
-    await this.start();
-    const response = await this.#request({ type: "writeThreadStateGlobal", document });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected global write response: ${response.type}`);
-  }
-
-  async readThreadStateRecords(query: WorkbenchThreadRecordQuery) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateRecords", query });
-    if (response.type !== "threadStateRecords") throw new WorkbenchDatabaseFailure(`Unexpected thread state response: ${response.type}`);
-    return response.records;
-  }
-
-  async readThreadStateDrafts(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateDrafts", projectId });
-    if (response.type !== "threadStateDrafts") throw new WorkbenchDatabaseFailure(`Unexpected draft response: ${response.type}`);
-    return response.drafts;
-  }
-
-  async readThreadStateProfile(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateProfile", projectId });
-    if (response.type !== "threadStateProfile") throw new WorkbenchDatabaseFailure(`Unexpected thread profile response: ${response.type}`);
-    return response.profile;
-  }
-
-  async readThreadStateLayout(owner: WorkbenchThreadLayoutOwner) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateLayout", owner });
-    if (response.type !== "threadStateLayout") throw new WorkbenchDatabaseFailure(`Unexpected thread layout response: ${response.type}`);
-    return response.layout;
-  }
-
-  async readThreadStatePinnedImports() {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStatePinnedImports" });
-    if (response.type !== "threadStatePinnedImports") throw new WorkbenchDatabaseFailure(`Unexpected pinned import response: ${response.type}`);
-    return response.projectIds;
-  }
-
-  async readThreadStateArchiveDeadline() {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateArchiveDeadline" });
-    if (response.type !== "threadStateArchiveDeadline") throw new WorkbenchDatabaseFailure(`Unexpected archive deadline response: ${response.type}`);
-    return response.activeAt;
-  }
-
-  async readThreadStateActivity(projectId: ProjectId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateActivity", projectId });
-    if (response.type !== "threadStateActivity") throw new WorkbenchDatabaseFailure(`Unexpected thread activity response: ${response.type}`);
-    return response.activityAt;
-  }
-
-  async readThreadStateSnoozeSources(targetThreadId: WorkbenchThreadId) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateSnoozeSources", targetThreadId });
-    if (response.type !== "threadStateSnoozeSources") throw new WorkbenchDatabaseFailure(`Unexpected snooze source response: ${response.type}`);
-    return response.sources;
-  }
-
-  async readThreadStateArchiveEligible(activeBefore: number) {
-    await this.start();
-    const response = await this.#request({ type: "readThreadStateArchiveEligible", activeBefore });
-    if (response.type !== "threadStateArchiveEligible") throw new WorkbenchDatabaseFailure(`Unexpected archive eligibility response: ${response.type}`);
-    return response.records;
-  }
-
-  async commitThreadState(changes: WorkbenchThreadStateCommit) {
-    await this.start();
-    const response = await this.#request({ type: "commitThreadState", changes });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected thread commit response: ${response.type}`);
-  }
-
-  async readSubagents(query: WorkbenchSubagentRelationshipRead) {
-    await this.start();
-    const response = await this.#request({ type: "readSubagents", query });
-    if (response.type !== "subagents" || response.records === null) throw new WorkbenchDatabaseFailure(`Unexpected subagent list response: ${response.type}`);
-    return response.records;
-  }
-
-  async readOwnedSubagents(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadIds: readonly WorkbenchThreadId[]) {
-    await this.start();
-    const response = await this.#request({ type: "readOwnedSubagents", parentThreadId, projectId, threadIds });
-    if (response.type !== "subagents") throw new WorkbenchDatabaseFailure(`Unexpected owned subagent response: ${response.type}`);
-    return response.records;
-  }
-
-  async reserveSubagent(record: Omit<WorkbenchSubagentReservation, "directSubagentIndex">) {
-    await this.start();
-    const response = await this.#request({ type: "reserveSubagent", record });
-    if (response.type !== "subagentReservation") throw new WorkbenchDatabaseFailure(`Unexpected subagent reservation response: ${response.type}`);
-    return response.record;
-  }
-
-  async activateSubagent(parentThreadId: WorkbenchThreadId, reservationId: string, record: WorkbenchSubagentRelationship) {
-    await this.start();
-    const response = await this.#request({ type: "activateSubagent", parentThreadId, reservationId, record });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected subagent activation response: ${response.type}`);
-  }
-
-  async removeSubagent(parentThreadId: WorkbenchThreadId, identifier: string) {
-    await this.start();
-    const response = await this.#request({ type: "removeSubagent", parentThreadId, identifier });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected subagent removal response: ${response.type}`);
-  }
-
-  async queryTranscript(request: TranscriptQuery) {
-    await this.start();
-    const response = await this.#request({ type: "queryTranscript", request });
-    if (response.type !== "transcriptQueryResult") throw new WorkbenchDatabaseFailure(`Unexpected transcript query response: ${response.type}`);
-    if (response.result.ok === false) throw new TranscriptQueryError(response.result.error);
-    return response.result.page;
-  }
-
-  async readTranscriptMaterializedTurnIds(threadId: string, turnIds: readonly string[]) {
-    await this.start();
-    if (turnIds.length === 0) return [];
-    const response = await this.#request({ type: "readTranscriptMaterializedTurnIds", threadId, turnIds });
-    if (response.type !== "transcriptMaterializedTurnIds") {
-      throw new WorkbenchDatabaseFailure(`Unexpected transcript materialization response: ${response.type}`);
-    }
-    return response.turnIds;
-  }
-
-  async readTranscriptAbandonedHoldThreadIds(before: number) {
-    await this.start();
-    const response = await this.#request({ type: "readTranscriptAbandonedHoldThreadIds", before });
-    if (response.type !== "transcriptAbandonedHoldThreadIds") {
-      throw new WorkbenchDatabaseFailure(`Unexpected abandoned hold response: ${response.type}`);
-    }
-    return response.threadIds;
-  }
-
-  async replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]) {
-    await this.start();
-    const response = await this.#request({ type: "replaceSearchProjects", projects });
-    if (response.type !== "mutationResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected search project replacement response: ${response.type}`);
-    }
-  }
-
-  async replaceSearchProjectFiles(projectId: string, paths: readonly string[]) {
-    await this.start();
-    const response = await this.#request({ type: "replaceSearchProjectFiles", projectId, paths });
-    if (response.type !== "mutationResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected search file replacement response: ${response.type}`);
-    }
-  }
-
-  async search(request: WorkbenchSearchRequest) {
-    await this.start();
-    const response = await this.#request({ type: "search", request });
-    if (response.type !== "searchResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected search response: ${response.type}`);
-    }
-    return response.result;
-  }
-
-  async recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot) {
-    await this.#statsMutation({ type: "recordStatsClaimSnapshot", snapshot });
-  }
-
-  async recordStatsRateLimits(observation: WorkbenchRateLimitObservation) {
-    await this.#statsMutation({ type: "recordStatsRateLimits", observation });
-  }
-
-  async readStats<Section extends WorkbenchStoredStatsSection>(
-    request: WorkbenchStatsReadRequest & { section: Section },
-    now?: number,
-    renames: readonly WorkbenchGitClaimRename[] = [],
-    workbenchProjectId: string | null = null,
-    /** Abandons the read while it still waits for a reader. */
-    signal?: AbortSignal,
-  ): Promise<WorkbenchStatsSectionData<Section>> {
-    await this.start();
-    const response = await this.#request({ type: "readStats", request, renames, workbenchProjectId, ...(now === undefined ? {} : { now }) }, undefined, signal);
-    if (response.type !== "statsResult" || response.result.section !== request.section) {
-      throw new WorkbenchDatabaseFailure(`Unexpected stats response: ${response.type}`);
-    }
-    return response.result as WorkbenchStatsSectionData<Section>;
-  }
-
-  async beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number) {
-    await this.start();
-    const response = await this.#request({ type: "beginStatsImport", runId, harnesses, now });
-    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import response: ${response.type}`);
-    return response.progress;
-  }
-
-  async readStatsClaimedRoots(projectIds: readonly string[] | null, range: WorkbenchStatsRange | "all", now?: number) {
-    await this.start();
-    const response = await this.#request({ type: "readStatsClaimedRoots", projectIds, range, ...(now === undefined ? {} : { now }) });
-    if (response.type !== "statsClaimedRoots") throw new WorkbenchDatabaseFailure(`Unexpected claimed roots response: ${response.type}`);
-    return response.roots;
-  }
-
-  async readClaimStats(request: WorkbenchClaimStatsRequest, now?: number, renames: readonly WorkbenchGitClaimRename[] = []) {
-    await this.start();
-    const response = await this.#request({ type: "readClaimStats", request, renames, ...(now === undefined ? {} : { now }) });
-    if (response.type !== "claimStatsResult") throw new WorkbenchDatabaseFailure(`Unexpected claim stats response: ${response.type}`);
-    return response.result;
-  }
-
-  async recordFeedback(entry: WorkbenchFeedbackRecord, now = Date.now()) {
-    await this.start();
-    const response = await this.#request({ type: "recordFeedback", entry, now });
-    if (response.type !== "feedbackRecorded") throw new WorkbenchDatabaseFailure(`Unexpected feedback record response: ${response.type}`);
-    return response.feedbackId;
-  }
-
-  async deleteFeedback(ids: readonly number[]) {
-    await this.start();
-    const response = await this.#request({ type: "deleteFeedback", ids });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback delete response: ${response.type}`);
-    return response.result.changes;
-  }
-
-  async resolveFeedback(ids: readonly number[], resolved: boolean, now = Date.now()) {
-    await this.start();
-    const response = await this.#request({ type: "resolveFeedback", ids, resolved, now });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback resolve response: ${response.type}`);
-    return response.result.changes;
-  }
-
-  async readFeedback(request: WorkbenchFeedbackReadRequest, now?: number) {
-    await this.start();
-    const response = await this.#request({ type: "readFeedback", request, ...(now === undefined ? {} : { now }) });
-    if (response.type !== "feedbackResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback read response: ${response.type}`);
-    return response.result;
-  }
-
-  async addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number) {
-    await this.start();
-    const response = await this.#request({ type: "addStatsClaimDiscoveries", runId, discoveries, now });
-    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats discovery response: ${response.type}`);
-    return response.progress;
-  }
-
-  async claimStatsUsageImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsUsageImportCandidate | null> {
-    await this.start();
-    const response = await this.#request({ type: "claimStatsUsageImport", runId, harnesses, now });
-    if (response.type !== "statsUsageImportCandidate") throw new WorkbenchDatabaseFailure(`Unexpected stats usage claim response: ${response.type}`);
-    return response.candidate;
-  }
-
-  async claimStatsClaimImport(runId: string, now: number): Promise<WorkbenchGitClaimImportCandidate | null> {
-    await this.start();
-    const response = await this.#request({ type: "claimStatsClaimImport", runId, now });
-    if (response.type !== "statsClaimImportCandidate") throw new WorkbenchDatabaseFailure(`Unexpected stats claim claim response: ${response.type}`);
-    return response.candidate;
-  }
-
-  async settleStatsUsageImport(runId: string, candidate: WorkbenchStatsUsageImportCandidate, settlement: WorkbenchStatsUsageImportSettlement, now: number) {
-    await this.start();
-    const response = await this.#request({ type: "settleStatsUsageImport", runId, candidate, settlement, now });
-    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import settlement response: ${response.type}`);
-    return response.progress;
-  }
-
-  async settleStatsClaimImport(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number) {
-    await this.start();
-    const response = await this.#request({ type: "settleStatsClaimImport", runId, candidate, settlement, now });
-    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats claim settlement response: ${response.type}`);
-    return response.progress;
-  }
-
-  async repairStatsAttributions(now: number, threadId: string | null = null) {
-    await this.start();
-    const response = await this.#request({ type: "repairStatsAttributions", now, threadId });
-    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected stats attribution response: ${response.type}`);
-    return response.result;
-  }
-
-  async readStatsImportProgress(state: WorkbenchStatsImportProgress["state"], revision: number, unsupportedClaimCheckpoints = 0) {
-    await this.start();
-    const response = await this.#request({ type: "readStatsImportProgress", state, revision, unsupportedClaimCheckpoints });
-    if (response.type !== "statsImportProgress") throw new WorkbenchDatabaseFailure(`Unexpected stats import progress response: ${response.type}`);
-    return response.progress;
-  }
-
-  async #statsMutation(request:
-    | Extract<WorkbenchDatabaseRequestPayload, { type: "recordStatsClaimSnapshot" }>
-    | Extract<WorkbenchDatabaseRequestPayload, { type: "recordStatsRateLimits" }>
-  ) {
-    await this.start();
-    const response = await this.#request(request);
-    if (response.type !== "mutationResult") {
-      throw new WorkbenchDatabaseFailure(`Unexpected stats mutation response: ${response.type}`);
-    }
   }
 
   async close() {
@@ -1135,6 +382,19 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     });
   }
 
+  /** One registered request: its local answer when it has one, otherwise a worker round trip once the database is started. */
+  async #call<Name extends WorkbenchDatabaseRequestName>(
+    name: Name, args: WorkbenchDatabaseRequestArgs<Name> | readonly unknown[], signal?: AbortSignal,
+  ): Promise<WorkbenchDatabaseRequestResult<Name>> {
+    const definition = workbenchDatabaseRequests[name] as { local?: (...args: readonly unknown[]) => { value: unknown } | undefined };
+    const local = definition.local?.(...args);
+    if (local) return local.value as WorkbenchDatabaseRequestResult<Name>;
+    await this.start();
+    const response = await this.#request({ type: "call", name, args }, undefined, signal);
+    if (response.type !== "result") throw new WorkbenchDatabaseFailure(`Unexpected ${name} response: ${response.type}`);
+    return response.result as WorkbenchDatabaseRequestResult<Name>;
+  }
+
   /** `signal` abandons a read that is still queued for a reader; anything already running finishes. */
   async #request(request: WorkbenchDatabaseRequestPayload, target?: WorkbenchDatabaseReader, signal?: AbortSignal): Promise<WorkbenchDatabaseResponse> {
     const precedingThreadStateWrite = this.#threadStateWrite;
@@ -1142,7 +402,8 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       && request.type !== "close" && request.type !== "initializeReader") {
       await this.#suspension.admission;
     }
-    if (request.type.startsWith("readThreadState")) await precedingThreadStateWrite;
+    const ordering = getWorkbenchDatabaseRequestOrdering(request);
+    if (ordering === "threadStateRead") await precedingThreadStateWrite;
     if (this.#state === "failed") return Promise.reject(this.#failure);
     if (this.#state === "closed") return Promise.reject(new WorkbenchDatabaseFailure("Workbench database is closed"));
     const readClass = getWorkbenchDatabaseReadClass(request);
@@ -1161,10 +422,7 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
         });
       } else this.#worker.postMessage(message);
     });
-    if (request.type === "commitThreadState" || request.type === "writeThreadStateProject"
-      || request.type === "writeThreadStateGlobal") {
-      this.#threadStateWrite = response.then(() => undefined, () => undefined);
-    }
+    if (ordering === "threadStateWrite") this.#threadStateWrite = response.then(() => undefined, () => undefined);
     return await response;
   }
 
@@ -1223,3 +481,5 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     this.#pending.clear();
   }
 }
+
+export default WorkbenchDatabaseController;

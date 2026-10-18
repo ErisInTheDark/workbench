@@ -17,7 +17,7 @@ class FakeReader extends EventEmitter {
   async getHeapStatistics() { return { used_heap_size: 1, total_heap_size: 2 }; }
   /** Finishes the read this reader is running. */
   answer(id = this.posted.at(-1)!.id) {
-    this.emit("message", { id, type: "queryResult", rows: [] } satisfies WorkbenchDatabaseResponse);
+    this.emit("message", { id, type: "result", result: [] } satisfies WorkbenchDatabaseResponse);
   }
 }
 
@@ -37,7 +37,7 @@ async function fixture(size = 3) {
   const read = (readClass: WorkbenchDatabaseReadClass, signal?: AbortSignal) => {
     const id = next++;
     const abandoned: unknown[] = [];
-    pool.run({ id, type: "getInventory" }, readClass, { signal, abandon: (reason) => abandoned.push(reason) });
+    pool.run({ id, type: "call", name: "getInventory", args: [] }, readClass, { signal, abandon: (reason) => abandoned.push(reason) });
     return { id, abandoned };
   };
   /** Every read sent to a reader, in send order. */

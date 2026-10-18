@@ -1,5 +1,6 @@
 /*
- * No production exports. This worker owns the SQLite connection, schema installation, pre-cache project recovery, domain repositories, readiness proof, and close boundary.
+ * No production exports. This worker owns the SQLite connection, schema installation, pre-cache project recovery, domain repositories,
+ * readiness proof, registered request dispatch, and close boundary.
  */
 import { parentPort } from "node:worker_threads";
 import path from "node:path";
@@ -13,26 +14,19 @@ import {
   type WorkbenchDatabaseResponse,
   type WorkbenchDatabaseWorkerMessage,
 } from "./workbench-database-protocol.ts";
-import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema, workbenchDatabaseTables } from "./workbench-database-schema.ts";
+import { getWorkbenchDatabaseRequest } from "./workbench-database-requests.ts";
+import type { WorkbenchDatabaseWorkerContext } from "./requests/define-database-request.ts";
+import { validateWorkbenchDatabaseReleases, workbenchDatabaseSchema } from "./workbench-database-schema.ts";
 import migrateWorkbenchDatabase, { restoreWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
 import recoverWorkbenchDatabase from "workbench-shared/database/recover-workbench-database";
-import {
-  compileWorkbenchDatabaseStatement,
-  type WorkbenchDatabaseRow,
-} from "workbench-shared/database/workbench-database-statements";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository.ts";
 import WorkbenchTranscriptTimestampRepair from "./transcript/WorkbenchTranscriptTimestampRepair.ts";
 import WorkbenchThreadIdentityRepository from "./thread-identity/WorkbenchThreadIdentityRepository.ts";
 import WorkbenchTranscriptIdentityRepository from "./transcript/WorkbenchTranscriptIdentityRepository.ts";
 import WorkbenchThreadStateRelationalRepository from "./thread-state/WorkbenchThreadStateRelationalRepository.ts";
 import WorkbenchThreadStateIntegrity from "./thread-state/WorkbenchThreadStateIntegrity.ts";
-import WorkbenchSubagentRelationshipRepository from "./thread-state/WorkbenchSubagentRelationshipRepository.ts";
 import WorkbenchSearchRepository from "./search/WorkbenchSearchRepository.ts";
-import WorkbenchTranscriptQueryRepository from "./transcript/WorkbenchTranscriptQueryRepository.ts";
-import { TranscriptQueryError } from "./transcript/transcript-query-contract.ts";
 import WorkbenchStatsRepository from "./stats/WorkbenchStatsRepository.ts";
-import WorkbenchClaimStatsRepository from "./stats/WorkbenchClaimStatsRepository.ts";
-import WorkbenchFeedbackRepository from "./stats/WorkbenchFeedbackRepository.ts";
 import WorkbenchStatsImportRepository from "./stats/WorkbenchStatsImportRepository.ts";
 import WorkbenchStatsAttributionRepository from "./stats/WorkbenchStatsAttributionRepository.ts";
 import GitArcProposalDiffRepository from "./git/GitArcProposalDiffRepository.ts";
@@ -41,19 +35,6 @@ import WorkbenchThreadLaunchRepository from "./thread-launch/WorkbenchThreadLaun
 import WorkbenchProjectIdentityMigration from "./project/WorkbenchProjectIdentityMigration.ts";
 import databaseReleases from "workbench-shared/workbench/database/schema/releases";
 import WorkbenchExternalStorageMigration from "./WorkbenchExternalStorageMigration.ts";
-import WorkbenchTranscriptAssetStore from "./transcript/WorkbenchTranscriptAssetStore.ts";
-import WorkbenchLegacyDiffArtifactStore from "./git/WorkbenchLegacyDiffArtifactStore.ts";
-import WorkbenchApprovalOutcomeRepository from "./transcript/WorkbenchApprovalOutcomeRepository.ts";
-import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionStore.ts";
-import WorkbenchThreadSkillStore from "./skills/WorkbenchThreadSkillStore.ts";
-import WorkbenchThreadInstructionSelectionStore from "./thread-state/WorkbenchThreadInstructionSelectionStore.ts";
-import WorkbenchThreadGoalStore from "./goals/WorkbenchThreadGoalStore.ts";
-import WorkbenchThreadRuntimeFactsReader from "./thread-runtime/WorkbenchThreadRuntimeFactsReader.ts";
-import WorkbenchThreadVisStore from "./vis/WorkbenchThreadVisStore.ts";
-import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
-import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
-import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
-import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
 import WorkbenchTranscriptRetentionRepository from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
 import {
@@ -125,36 +106,29 @@ function proveReadWrite() {
   })();
 }
 
-/** Reclaims at most `maxPages` free pages per call so callers can yield the writer between chunks. */
-function reclaimDatabasePages(database: Database.Database, maxPages: number) {
-  const pageCount = database.pragma("page_count", { simple: true }) as number;
-  const mode = database.pragma("auto_vacuum", { simple: true }) as number;
-  let fullCompaction = false;
-  if (mode === 0) {
-    const startedAt = performance.now();
-    postDiagnostic({
-      source: "database", operation: "compaction", phase: "pending", level: "info",
-      detail: `${pageCount} pages`, elapsedMs: null, progress: null,
-    });
-    database.pragma("auto_vacuum = INCREMENTAL");
-    database.exec("VACUUM");
-    fullCompaction = true;
-    const compactedPages = database.pragma("page_count", { simple: true }) as number;
-    postDiagnostic({
-      source: "database", operation: "compaction", phase: "completed", level: "info",
-      detail: `${compactedPages} pages`, elapsedMs: performance.now() - startedAt, progress: null,
-    });
-  } else {
-    if (mode === 1) database.pragma("auto_vacuum = INCREMENTAL");
-    database.pragma(`incremental_vacuum(${Math.max(1, Math.trunc(maxPages))})`);
-  }
-  const retainedPages = database.pragma("page_count", { simple: true }) as number;
-  return {
-    fullCompaction,
-    reclaimedPages: Math.max(0, pageCount - retainedPages),
-    remainingFreePages: database.pragma("freelist_count", { simple: true }) as number,
-  };
+function required<Value>(value: Value | null, owner: string): Value {
+  if (!value) throw new Error(`Workbench ${owner} is not initialized`);
+  return value;
 }
+
+/** Registered requests reach the connection and repositories through this view of the worker's current state. */
+const context: WorkbenchDatabaseWorkerContext = {
+  get database() { return required(database, "database"); },
+  get projects() { return required(projectRepository, "project repository"); },
+  get threadLaunches() { return required(threadLaunchRepository, "thread launch repository"); },
+  get threadIdentities() { return required(threadIdentityRepository, "thread identity repository"); },
+  get transcriptIdentities() { return required(transcriptIdentityRepository, "transcript identity repository"); },
+  get transcripts() { return required(transcriptRepository, "transcript repository"); },
+  get threadState() { return required(threadStateRepository, "thread state"); },
+  get search() { return required(searchRepository, "search repository"); },
+  get stats() { return required(statsRepository, "stats repository"); },
+  get statsImports() { return required(statsImportRepository, "stats import repository"); },
+  get statsAttribution() { return required(statsAttributionRepository, "stats attribution repository"); },
+  get proposalDiffs() { return required(gitArcProposalDiffRepository, "Git arc proposal diff repository"); },
+  get retention() { return required(transcriptRetentionRepository, "transcript retention repository"); },
+  inventory: () => inventory(),
+  postDiagnostic: diagnostic => postDiagnostic(diagnostic),
+};
 
 function post(response: WorkbenchDatabaseResponse) {
   parentPort!.postMessage(response);
@@ -214,507 +188,11 @@ function postRequestFailure(request: WorkbenchDatabaseRequest, error: unknown) {
   }
 }
 
-function executeTransaction(request: Extract<WorkbenchDatabaseRequest, { type: "executeTransaction" }>) {
-  if (!database) throw new Error("Workbench database is not initialized");
-  return database.transaction(() => {
-    let changes = 0;
-    for (const statement of request.statements) {
-      const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, statement);
-      changes += database!.prepare(compiled.sql).run(...compiled.parameters).changes;
-    }
-    return { changes };
-  })();
-}
-
-function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { type: "initialize" | "acknowledgeMigration" | "suspend" | "resume" }>) {
-  if (request.type === "reserveThreadLaunch" || request.type === "readThreadLaunch" || request.type === "advanceThreadLaunch") {
-    if (!threadLaunchRepository) throw new Error("Workbench thread launch repository is not initialized");
-    if (request.type === "reserveThreadLaunch") {
-      post({ id: request.id, type: "threadLaunch", launch: threadLaunchRepository.reserve(request.request, request.location) });
-    } else if (request.type === "readThreadLaunch") {
-      const retained = threadLaunchRepository.read(request.launchId);
-      post({ id: request.id, type: "threadLaunch", launch: retained?.state ?? null,
-        request: retained?.request, location: retained?.location });
-    } else {
-      post({ id: request.id, type: "threadLaunch",
-        launch: threadLaunchRepository.advance(request.launchId, request.from, request.next) });
-    }
-    return;
-  }
-  switch (request.type) {
-    case "reconcileProjectCatalog":
-    case "readRetainedProjectCatalog":
-    case "readProjectAliases":
-    case "resolveProjectIdentity":
-    case "settleProjectIcon":
-      if (!projectRepository) throw new Error("Workbench project repository is not initialized");
-      if (request.type === "readRetainedProjectCatalog") {
-        post({ id: request.id, type: "projectCatalog", projects: projectRepository.readRetained(request.discoveryRoots) });
-      } else if (request.type === "reconcileProjectCatalog") {
-        post({ id: request.id, type: "projectCatalog", projects: projectRepository.reconcile(request.discovery) });
-      } else if (request.type === "readProjectAliases") {
-        post({ id: request.id, type: "projectAliases", aliases: projectRepository.readAliases() });
-      } else if (request.type === "resolveProjectIdentity") {
-        post({ id: request.id, type: "projectIdentity", projectId: projectRepository.resolve(request.projectId) });
-      } else {
-        post({ id: request.id, type: "projectIconSettlement", accepted: projectRepository.settleIcon(request.settlement) });
-      }
-      return;
-  }
-  if (request.type === "observeTurnIdentities") {
-    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
-    post({ id: request.id, type: "turnIdentities", identities: threadIdentityRepository.observeTurns(request.inputs) });
-    return;
-  }
-  if (request.type === "resolveTurnIdentity") {
-    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
-    const identity = threadIdentityRepository.resolveTurn(request.input);
-    post({ id: request.id, type: "turnIdentity", identity });
-    return;
-  }
-  if (request.type === "admitTranscriptItemIdentities" || request.type === "resolveTranscriptItemIdentity") {
-    if (!transcriptIdentityRepository) throw new Error("Workbench transcript identity repository is not initialized");
-    if (request.type === "admitTranscriptItemIdentities") {
-      post({ id: request.id, type: "transcriptItemIdentities", identities: transcriptIdentityRepository.admitMany(request.inputs) });
-    } else {
-      post({ id: request.id, type: "transcriptItemIdentity", identity: transcriptIdentityRepository.resolve(request.input) });
-    }
-    return;
-  }
-  if (request.type === "observeThreadIdentities") {
-    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
-    post({ id: request.id, type: "threadIdentities", identities: threadIdentityRepository.observeMany(request.inputs) });
-    return;
-  }
-  if (request.type === "reserveReplacementBinding" || request.type === "releaseReplacementBinding") {
-    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
-    const identity = request.type === "reserveReplacementBinding"
-      ? threadIdentityRepository.reserveReplacementBinding(request.input)
-      : threadIdentityRepository.releaseReplacementBinding(request.input);
-    post({ id: request.id, type: "threadIdentity", identity });
-    return;
-  }
-  if (request.type === "resolveThreadIdentity"
-    || request.type === "resolveNativeThreadIdentity" || request.type === "listThreadIdentities") {
-    if (!threadIdentityRepository) throw new Error("Workbench thread identity repository is not initialized");
-    if (request.type === "listThreadIdentities") {
-      post({ id: request.id, type: "threadIdentities", identities: threadIdentityRepository.list() });
-    } else {
-      const identity = request.type === "resolveThreadIdentity"
-          ? threadIdentityRepository.resolve(request.input)
-          : threadIdentityRepository.resolveNative(request.input);
-      post({ id: request.id, type: "threadIdentity", identity });
-    }
-    return;
-  }
-  if (request.type === "getInventory") {
-    post({ id: request.id, type: "inventory", inventory: inventory() });
-    return;
-  }
-  if (request.type === "executeTransaction") {
-    post({ id: request.id, type: "mutationResult", result: executeTransaction(request) });
-    return;
-  }
-  if (request.type === "query") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const compiled = compileWorkbenchDatabaseStatement(workbenchDatabaseTables, request.statement);
-    const rows = database.prepare(compiled.sql).all(...compiled.parameters) as WorkbenchDatabaseRow[];
-    post({ id: request.id, type: "queryResult", rows });
-    return;
-  }
-  if (request.type === "threadGitSelection") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadGitSelection", result: new WorkbenchThreadGitSelectionStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadSkills") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadSkills", result: new WorkbenchThreadSkillStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadInstructionSelection") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadInstructionSelection", result: new WorkbenchThreadInstructionSelectionStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadGoals") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadGoals", result: new WorkbenchThreadGoalStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadVis") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadVis", result: new WorkbenchThreadVisStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadTodos") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadTodos", result: new WorkbenchThreadTodoStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadSummaryFactSeeds") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const facts: Record<string, ThreadSummaryFacts> = {};
-    const seed = (counts: Record<string, number>, key: "addressedFeedbackCount" | "requiredTodoCount") => {
-      for (const [threadId, count] of Object.entries(counts)) facts[threadId] = { ...facts[threadId], [key]: count };
-    };
-    seed(new WorkbenchThreadTodoStore(database).requiredCounts(), "requiredTodoCount");
-    seed(new WorkbenchThreadAddressedFeedbackStore(database).counts(), "addressedFeedbackCount");
-    post({ id: request.id, type: "threadSummaryFactSeeds", facts });
-    return;
-  }
-  if (request.type === "threadAddressedFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadAddressedFeedback", result: new WorkbenchThreadAddressedFeedbackStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "projectStore") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "projectStore", result: new WorkbenchProjectStoreRepository(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "readLegacyDiffArtifact") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "legacyDiffArtifact", diff: new WorkbenchLegacyDiffArtifactStore(database).read(request.input) });
-    return;
-  }
-  if (request.type === "recordApprovalOutcome" || request.type === "readApprovalOutcomes") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const repository = new WorkbenchApprovalOutcomeRepository(database);
-    if (request.type === "recordApprovalOutcome") {
-      repository.record(request.entry);
-      post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
-    } else {
-      post({ id: request.id, type: "approvalOutcomes", entries: repository.read(request.threadId, request.turnIds) });
-    }
-    return;
-  }
-  if (request.type === "writeTranscriptAsset" || request.type === "readTranscriptAsset") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const store = new WorkbenchTranscriptAssetStore(database);
-    if (request.type === "writeTranscriptAsset") {
-      post({ id: request.id, type: "transcriptAssetWritten", asset: store.write(request.input) });
-    } else {
-      post({ id: request.id, type: "transcriptAssetContent", asset: store.read(request.input) });
-    }
-    return;
-  }
-  if (request.type === "settleTranscript") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptSettlement",
-      settlement: transcriptRepository.settle(request.observations, request.mode ?? "live"),
-    });
-    return;
-  }
-  if (request.type === "readTranscript") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptSnapshot",
-      snapshot: transcriptRepository.read(request.request),
-    });
-    return;
-  }
-  if (request.type === "readTranscriptItemRange") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptItemRange",
-      range: transcriptRepository.readItemRange(request.request),
-    });
-    return;
-  }
-  if (request.type === "readGitArcProposalDiff" || request.type === "writeGitArcProposalDiff") {
-    if (!gitArcProposalDiffRepository) throw new Error("Git arc proposal diff repository is not initialized");
-    if (request.type === "readGitArcProposalDiff") {
-      post({ id: request.id, type: "gitArcProposalDiff", changes: gitArcProposalDiffRepository.read(request.identity) });
-    } else {
-      gitArcProposalDiffRepository.write(request.value, request.maxBytes);
-      post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
-    }
-    return;
-  }
-  if (request.type === "expireRetainedPayloads") {
-    if (!transcriptRetentionRepository) throw new Error("Transcript retention repository is not initialized");
-    post({ id: request.id, type: "retentionExpiry", result: transcriptRetentionRepository.expire(request.cutoffs) });
-    return;
-  }
-  if (request.type === "listOrphanAssetCandidates" || request.type === "collectOrphanAsset") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const assets = new WorkbenchTranscriptAssetStore(database);
-    if (request.type === "listOrphanAssetCandidates") {
-      post({ id: request.id, type: "orphanAssetCandidates", digests: assets.listOrphanCandidates(request.createdBefore) });
-    } else {
-      const collected = assets.collectOrphan(request.digest, request.createdBefore);
-      post({ id: request.id, type: "mutationResult", result: { changes: collected ? 1 : 0 } });
-    }
-    return;
-  }
-  if (request.type === "evictProposalCaches") {
-    if (!gitArcProposalDiffRepository) throw new Error("Git arc proposal diff repository is not initialized");
-    post({ id: request.id, type: "mutationResult", result: { changes: gitArcProposalDiffRepository.evictOlderThan(request.cutoff) } });
-    return;
-  }
-  if (request.type === "reclaimDatabasePages") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "pageReclamation", ...reclaimDatabasePages(database, request.maxPages) });
-    return;
-  }
-  if (request.type === "readTranscriptProviderCursor") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id, type: "transcriptProviderCursor",
-      cursor: transcriptRepository.readProviderPreviousCursor(request.threadId, request.turnId),
-    });
-    return;
-  }
-  if (request.type === "readTranscriptCompactionExecution") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptCompactionExecution",
-      execution: transcriptRepository.readCompactionExecution(request.input),
-    });
-    return;
-  }
-  if (request.type === "readTranscriptContext") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({ id: request.id, type: "transcriptContext", snapshot: transcriptRepository.readContext(request.threadId) });
-    return;
-  }
-  if (request.type === "readThreadContextUsage") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({ id: request.id, type: "threadContextUsage", snapshot: transcriptRepository.readContextUsage(request.threadId) });
-    return;
-  }
-  if (request.type === "readThreadRuntimeFacts") {
-    if (!database || !transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({ id: request.id, type: "threadRuntimeFacts", facts: new WorkbenchThreadRuntimeFactsReader(database, transcriptRepository).read(request.threadIds) });
-    return;
-  }
-  switch (request.type) {
-    case "readSubagents":
-    case "readOwnedSubagents":
-    case "reserveSubagent":
-    case "activateSubagent":
-    case "removeSubagent": {
-      if (!database) throw new Error("Workbench database is not initialized");
-      const repository = new WorkbenchSubagentRelationshipRepository(database);
-      const response = database.transaction((): WorkbenchDatabaseResponse => {
-        switch (request.type) {
-          case "readSubagents": return { id: request.id, type: "subagents", records: repository.read(request.query) };
-          case "readOwnedSubagents": return { id: request.id, type: "subagents", records: repository.getOwnedMany(request.parentThreadId, request.projectId, request.threadIds) };
-          case "reserveSubagent": return { id: request.id, type: "subagentReservation", record: repository.reserve(request.record) };
-          case "activateSubagent":
-            repository.activate(request.parentThreadId, request.reservationId, request.record);
-            return { id: request.id, type: "mutationResult", result: { changes: 1 } };
-          case "removeSubagent": return {
-            id: request.id, type: "mutationResult",
-            result: { changes: repository.remove(request.parentThreadId, request.identifier) ? 1 : 0 },
-          };
-        }
-      })();
-      post(response);
-      return;
-    }
-    case "readThreadStateNavigationSummary":
-    case "readThreadStateProject":
-    case "readThreadStateTitleHistories":
-    case "readThreadGitCommits":
-    case "recordThreadGitCommitTimes":
-    case "findThreadGitCommitOwners":
-    case "writeThreadStateProject":
-    case "readThreadStateGlobal":
-    case "writeThreadStateGlobal":
-    case "readThreadStateRecords":
-    case "readThreadStateDrafts":
-    case "readThreadStateProfile":
-    case "readThreadStateLayout":
-    case "readThreadStatePinnedImports":
-    case "readThreadStateArchiveDeadline":
-    case "readThreadStateArchiveEligible":
-    case "readThreadStateActivity":
-    case "readThreadStateSnoozeSources":
-    case "commitThreadState": {
-      if (!database || !threadStateRepository) throw new Error("Workbench thread state is not initialized");
-      const repository = threadStateRepository;
-      const response = database.transaction((): WorkbenchDatabaseResponse => {
-        switch (request.type) {
-          case "readThreadStateNavigationSummary": return { id: request.id, type: "threadStateNavigationSummary", summary: repository.readNavigationSummary(request.projectId) };
-          case "readThreadStateProject": return { id: request.id, type: "threadStateProject", document: repository.readProject(request.projectId) };
-          case "readThreadStateTitleHistories": return { id: request.id, type: "threadStateTitleHistories", histories: repository.readTitleHistories(request.projectId) };
-          case "readThreadGitCommits": return { id: request.id, type: "threadGitCommits", threads: repository.readGitCommits(request.threadIds) };
-          case "recordThreadGitCommitTimes":
-            repository.recordGitCommitTimes(request.threadId, request.times);
-            return { id: request.id, type: "mutationResult", result: { changes: request.times.length } };
-          case "findThreadGitCommitOwners": return { id: request.id, type: "threadGitCommitOwners", threadIds: repository.findGitCommitOwners(request.projectId, request.commitSha) };
-          case "readThreadStateGlobal": return { id: request.id, type: "threadStateGlobal", document: repository.readGlobal(request.documentId) };
-          case "writeThreadStateProject":
-            repository.writeProject(request.projectId, request.document, request.titleHistories);
-            return { id: request.id, type: "mutationResult", result: { changes: 1 } };
-          case "writeThreadStateGlobal":
-            repository.writeGlobal(request.document);
-            return { id: request.id, type: "mutationResult", result: { changes: 1 } };
-          case "readThreadStateRecords": return { id: request.id, type: "threadStateRecords", records: repository.readRecords(request.query) };
-          case "readThreadStateDrafts": return { id: request.id, type: "threadStateDrafts", drafts: repository.readDrafts(request.projectId) };
-          case "readThreadStateProfile": return { id: request.id, type: "threadStateProfile", profile: repository.readProjectProfile(request.projectId) };
-          case "readThreadStateLayout": return { id: request.id, type: "threadStateLayout", layout: repository.readLayout(request.owner) };
-          case "readThreadStatePinnedImports": return { id: request.id, type: "threadStatePinnedImports", projectIds: repository.readPinnedImports() };
-          case "readThreadStateArchiveDeadline": return { id: request.id, type: "threadStateArchiveDeadline", activeAt: repository.readNextArchiveEligibility() };
-          case "readThreadStateArchiveEligible": return { id: request.id, type: "threadStateArchiveEligible", records: repository.readArchiveEligible(request.activeBefore) };
-          case "readThreadStateActivity": return { id: request.id, type: "threadStateActivity", activityAt: repository.readProjectActivity(request.projectId) };
-          case "readThreadStateSnoozeSources": return { id: request.id, type: "threadStateSnoozeSources", sources: repository.readSnoozeSources(request.targetThreadId) };
-          case "commitThreadState":
-            repository.commit(request.changes);
-            return { id: request.id, type: "mutationResult", result: { changes: 1 } };
-        }
-      })();
-      post(response);
-      return;
-    }
-  }
-  if (request.type === "queryTranscript") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    try {
-      post({ id: request.id, type: "transcriptQueryResult", result: { ok: true, page: new WorkbenchTranscriptQueryRepository(database).read(request.request) } });
-    } catch (error) {
-      if (!(error instanceof TranscriptQueryError)) throw error;
-      post({ id: request.id, type: "transcriptQueryResult", result: { ok: false, error: error.message } });
-    }
-    return;
-  }
-  if (request.type === "readTranscriptMaterializedTurnIds") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptMaterializedTurnIds",
-      turnIds: transcriptRepository.readMaterializedTurnIds(request.threadId, request.turnIds),
-    });
-    return;
-  }
-  if (request.type === "readTranscriptAbandonedHoldThreadIds") {
-    if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
-    post({
-      id: request.id,
-      type: "transcriptAbandonedHoldThreadIds",
-      threadIds: transcriptRepository.readAbandonedHoldThreadIds(request.before),
-    });
-    return;
-  }
-  if (request.type === "replaceSearchProjects") {
-    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
-    searchRepository.replaceProjects(request.projects);
-    post({ id: request.id, type: "mutationResult", result: { changes: request.projects.length } });
-    return;
-  }
-  if (request.type === "replaceSearchProjectFiles") {
-    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
-    searchRepository.replaceProjectFiles(request.projectId, request.paths);
-    post({ id: request.id, type: "mutationResult", result: { changes: request.paths.length } });
-    return;
-  }
-  if (request.type === "search") {
-    if (!searchRepository) throw new Error("Workbench search repository is not initialized");
-    post({ id: request.id, type: "searchResult", result: searchRepository.search(request.request) });
-    return;
-  }
-  if (request.type === "recordStatsClaimSnapshot") {
-    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    statsRepository.recordClaimSnapshot(request.snapshot);
-    post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
-    return;
-  }
-  if (request.type === "recordStatsRateLimits") {
-    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    statsRepository.recordRateLimits(request.observation);
-    post({ id: request.id, type: "mutationResult", result: { changes: 1 } });
-    return;
-  }
-  if (request.type === "readStats") {
-    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsResult", result: statsRepository.read(request.request, request.now, request.renames, request.workbenchProjectId ?? null) });
-    return;
-  }
-  if (request.type === "readStatsClaimedRoots") {
-    if (!statsRepository) throw new Error("Workbench stats repository is not initialized");
-    post({ id: request.id, type: "statsClaimedRoots", roots: statsRepository.claimedRoots(request.projectIds, request.range, request.now) });
-    return;
-  }
-  if (request.type === "readClaimStats") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "claimStatsResult", result: new WorkbenchClaimStatsRepository(database).read(request.request, request.now, request.renames) });
-    return;
-  }
-  if (request.type === "recordFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "feedbackRecorded", feedbackId: new WorkbenchFeedbackRepository(database).record(request.entry, request.now).id });
-    return;
-  }
-  if (request.type === "deleteFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "mutationResult", result: { changes: new WorkbenchFeedbackRepository(database).delete(request.ids) } });
-    return;
-  }
-  if (request.type === "resolveFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    const changes = new WorkbenchFeedbackRepository(database).setResolved(request.ids, request.resolved, request.now);
-    post({ id: request.id, type: "mutationResult", result: { changes } });
-    return;
-  }
-  if (request.type === "expireResolvedFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "mutationResult", result: { changes: new WorkbenchFeedbackRepository(database).expireResolved(request.now) } });
-    return;
-  }
-  if (request.type === "readFeedback") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "feedbackResult", result: new WorkbenchFeedbackRepository(database).read(request.request, request.now) });
-    return;
-  }
-  if (request.type === "beginStatsImport") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    statsImportRepository.beginUsage(request.runId, request.harnesses, request.now);
-    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
-    return;
-  }
-  if (request.type === "addStatsClaimDiscoveries") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    statsImportRepository.addClaimDiscoveries(request.runId, request.discoveries, request.now);
-    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
-    return;
-  }
-  if (request.type === "claimStatsUsageImport") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    post({ id: request.id, type: "statsUsageImportCandidate", candidate: statsImportRepository.claimUsage(request.runId, request.harnesses, request.now) });
-    return;
-  }
-  if (request.type === "claimStatsClaimImport") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    post({ id: request.id, type: "statsClaimImportCandidate", candidate: statsImportRepository.claimClaims(request.runId, request.now) });
-    return;
-  }
-  if (request.type === "settleStatsUsageImport") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    statsImportRepository.settleUsage(request.runId, request.candidate, request.settlement, request.now);
-    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
-    return;
-  }
-  if (request.type === "settleStatsClaimImport") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    statsImportRepository.settleClaims(request.runId, request.candidate, request.settlement, request.now);
-    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress("running", 1, 0) });
-    return;
-  }
-  if (request.type === "repairStatsAttributions") {
-    if (!statsAttributionRepository) throw new Error("Workbench stats attribution repository is not initialized");
-    post({ id: request.id, type: "mutationResult", result: { changes: statsAttributionRepository.repair(request.now, request.threadId) } });
-    return;
-  }
-  if (request.type === "readStatsImportProgress") {
-    if (!statsImportRepository) throw new Error("Workbench stats import repository is not initialized");
-    post({ id: request.id, type: "statsImportProgress", progress: statsImportRepository.progress(request.state, request.revision, request.unsupportedClaimCheckpoints) });
+function handleInitializedRequest(request: Extract<WorkbenchDatabaseRequest, { type: "call" | "close" }>) {
+  if (request.type === "call") {
+    const definition = getWorkbenchDatabaseRequest(request.name);
+    if (!definition) throw new Error(`Unknown database request ${String(request.name).slice(0, 120)}.`);
+    post({ id: request.id, type: "result", result: definition.run(context, ...request.args) });
     return;
   }
   const closeFailure = closeDatabase();

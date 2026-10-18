@@ -18,30 +18,11 @@ import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchTranscriptSnapshot } from "workbench-shared/workbench/database/transcript/workbench-transcript-contract";
 import type { TranscriptStreamUpdate, TranscriptLiveUpdate } from "workbench-shared/workbench/transcript/thread-transcript-stream";
 import type {
-  WorkbenchDatabaseMutation,
-  WorkbenchDatabaseQuery,
-  WorkbenchDatabaseRow,
-} from "workbench-shared/database/workbench-database-statements";
-import type {
   WorkbenchTranscriptObservation,
-  WorkbenchTranscriptContextSnapshot,
   WorkbenchTranscriptRecordingContext,
 } from "./database/transcript/workbench-transcript-types";
-import type { WorkbenchDatabaseMutationResult } from "./database/workbench-database-protocol";
-import type { WorkbenchProjectPersistence, WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
-import type { WorkbenchThreadIdentityDatabase } from "./database/thread-identity/workbench-thread-identity-types";
-import type { WorkbenchSearchRequest, WorkbenchSearchResponse } from "workbench-shared/workbench/search/workbench-search";
-import type { WorkbenchStatsReadRequest, WorkbenchStatsResponse } from "workbench-shared/workbench/stats/workbench-stats-contract";
-import type { WorkbenchRateLimitObservation } from "./database/stats/WorkbenchStatsRepository";
-import type { WorkbenchGitClaimSnapshot } from "./stats/git-claim-observation";
-import type {
-  WorkbenchGitClaimImportCandidate,
-  WorkbenchGitClaimImportDiscovery,
-  WorkbenchGitClaimImportSettlement,
-  WorkbenchStatsUsageImportCandidate,
-  WorkbenchStatsUsageImportSettlement,
-} from "./database/stats/WorkbenchStatsImportRepository";
-import type { WorkbenchStatsImportProgress } from "workbench-shared/workbench/stats/workbench-stats-contract";
+import type WorkbenchDatabaseController from "./database/WorkbenchDatabaseController";
+import type { WorkbenchDatabaseRequestMethods } from "./database/workbench-database-requests";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
 import type BrowseSessionCleanupSupervisor from "./BrowseSessionCleanupSupervisor";
@@ -70,10 +51,8 @@ import type WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireContr
 import type WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
 import type WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import type WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
-import type { WorkbenchThreadStateStoreDatabase } from "./WorkbenchThreadStateStore";
 import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityController";
 import type WorkbenchTranscriptIdentityController from "./WorkbenchTranscriptIdentityController";
-import type { WorkbenchTranscriptIdentityDatabase } from "./database/transcript/workbench-transcript-types";
 import type WorkbenchTurnRecoveryController from "./WorkbenchTurnRecoveryController";
 import type WorkbenchWebSocketRequestController from "./WorkbenchWebSocketRequestController";
 import type WorkbenchStatsController from "./stats/WorkbenchStatsController";
@@ -111,73 +90,9 @@ export interface DaemonBrowseExecution {
   initialize(): Promise<void>;
 }
 
-export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatabase, WorkbenchTranscriptIdentityDatabase,
-  Pick<import("./database/thread-state/workbench-thread-state-persistence").WorkbenchSubagentPersistence,
-    "readSubagents" | "readOwnedSubagents" | "reserveSubagent" | "activateSubagent" | "removeSubagent">,
-  WorkbenchThreadStateStoreDatabase,
-  WorkbenchProjectPersistence {
-  readInitialProjectCatalog(): WorkbenchProjectStartup | null;
-  queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
-  readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
-  readThreadRuntimeFacts: import("./database/WorkbenchDatabaseController").default["readThreadRuntimeFacts"];
-  readThreadStateRecords: import("./database/WorkbenchDatabaseController").default["readThreadStateRecords"];
-  findThreadGitCommitOwners: import("./database/WorkbenchDatabaseController").default["findThreadGitCommitOwners"];
-  readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
-  readTranscriptCompactionExecution?(input: {
-    harnessId: string; nativeLocation: string; nativeThreadId: string; nativeTurnId: string;
-  }): Promise<{
-    itemId: import("workbench-shared/workbench/identity").WorkbenchItemId;
-    threadId: import("workbench-shared/workbench/identity").WorkbenchThreadId;
-    turnId: import("workbench-shared/workbench/identity").WorkbenchTurnId;
-  } | null>;
-  readTranscriptContext?(threadId: string): Promise<WorkbenchTranscriptContextSnapshot | null>;
-  assertReady(): void;
-  close(): Promise<void>;
-  executeTransaction(statements: readonly WorkbenchDatabaseMutation[]): Promise<WorkbenchDatabaseMutationResult>;
-  readonly failure: Error | null;
-  query<Row extends WorkbenchDatabaseRow>(statement: WorkbenchDatabaseQuery<Row>): Promise<Row[]>;
-  readGitArcProposalDiff(identity: import("./lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheIdentity): Promise<import("workbench-shared/workbench/git/checkpoint-contracts").GitCheckpointFileChange[] | null>;
-  writeGitArcProposalDiff(value: import("./lib/workbench/git/GitArcProposalDiffController").GitArcProposalDiffCacheValue, maxBytes: number): Promise<void>;
-  writeTranscriptAsset: import("./database/WorkbenchDatabaseController").default["writeTranscriptAsset"];
-  readTranscriptAsset: import("./database/WorkbenchDatabaseController").default["readTranscriptAsset"];
-  readLegacyDiffArtifact: import("./database/WorkbenchDatabaseController").default["readLegacyDiffArtifact"];
-  recordApprovalOutcome: import("./database/WorkbenchDatabaseController").default["recordApprovalOutcome"];
-  readApprovalOutcomes: import("./database/WorkbenchDatabaseController").default["readApprovalOutcomes"];
-  executeThreadGitSelection: import("./database/WorkbenchDatabaseController").default["executeThreadGitSelection"];
-  executeThreadSkills: import("./database/WorkbenchDatabaseController").default["executeThreadSkills"];
-  executeThreadInstructionSelection: import("./database/WorkbenchDatabaseController").default["executeThreadInstructionSelection"];
-  executeThreadGoals: import("./database/WorkbenchDatabaseController").default["executeThreadGoals"];
-  executeThreadTodos: import("./database/WorkbenchDatabaseController").default["executeThreadTodos"];
-  readThreadSummaryFactSeeds: import("./database/WorkbenchDatabaseController").default["readThreadSummaryFactSeeds"];
-  executeThreadVis: import("./database/WorkbenchDatabaseController").default["executeThreadVis"];
-  executeThreadAddressedFeedback: import("./database/WorkbenchDatabaseController").default["executeThreadAddressedFeedback"];
-  executeProjectStore: import("./database/WorkbenchDatabaseController").default["executeProjectStore"];
-  reserveThreadLaunch: import("./database/WorkbenchDatabaseController").default["reserveThreadLaunch"];
-  readThreadLaunch: import("./database/WorkbenchDatabaseController").default["readThreadLaunch"];
-  advanceThreadLaunch: import("./database/WorkbenchDatabaseController").default["advanceThreadLaunch"];
-  readStats(request: WorkbenchStatsReadRequest): Promise<WorkbenchStatsResponse>;
-  readStatsClaimedRoots: import("./database/WorkbenchDatabaseController").default["readStatsClaimedRoots"];
-  recordFeedback: import("./database/WorkbenchDatabaseController").default["recordFeedback"];
-  readFeedback: import("./database/WorkbenchDatabaseController").default["readFeedback"];
-  deleteFeedback: import("./database/WorkbenchDatabaseController").default["deleteFeedback"];
-  resolveFeedback: import("./database/WorkbenchDatabaseController").default["resolveFeedback"];
-  readClaimStats(request: import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsRequest): Promise<import("workbench-shared/workbench/stats/workbench-stats-claims-contract").WorkbenchClaimStatsResponse>;
-  beginStatsImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsImportProgress>;
-  addStatsClaimDiscoveries(runId: string, discoveries: WorkbenchGitClaimImportDiscovery[], now: number): Promise<WorkbenchStatsImportProgress>;
-  claimStatsUsageImport(runId: string, harnesses: WorkbenchHarness[], now: number): Promise<WorkbenchStatsUsageImportCandidate | null>;
-  claimStatsClaimImport(runId: string, now: number): Promise<WorkbenchGitClaimImportCandidate | null>;
-  settleStatsUsageImport(runId: string, candidate: WorkbenchStatsUsageImportCandidate, settlement: WorkbenchStatsUsageImportSettlement, now: number): Promise<WorkbenchStatsImportProgress>;
-  settleStatsClaimImport(runId: string, candidate: WorkbenchGitClaimImportCandidate, settlement: WorkbenchGitClaimImportSettlement, now: number): Promise<WorkbenchStatsImportProgress>;
-  repairStatsAttributions(now: number, threadId?: string | null): Promise<WorkbenchDatabaseMutationResult>;
-  readStatsImportProgress(state: WorkbenchStatsImportProgress["state"], revision: number, unsupportedClaimCheckpoints?: number): Promise<WorkbenchStatsImportProgress>;
-  replaceSearchProjectFiles(projectId: string, paths: readonly string[]): Promise<void>;
-  replaceSearchProjects(projects: readonly { id: string; name: string; rootPath: string }[]): Promise<void>;
-  recordStatsClaimSnapshot(snapshot: WorkbenchGitClaimSnapshot): Promise<void>;
-  recordStatsRateLimits(observation: WorkbenchRateLimitObservation): Promise<void>;
-  search(request: WorkbenchSearchRequest): Promise<WorkbenchSearchResponse>;
-  start(): Promise<object>;
-  readonly state: import("./database/workbench-database-protocol").WorkbenchDatabaseControllerState;
-}
+/** Every registered database request plus the lifecycle and hand-written reads the daemon uses. */
+export interface DaemonDatabaseRegistration extends WorkbenchDatabaseRequestMethods, Pick<WorkbenchDatabaseController,
+  "assertReady" | "close" | "failure" | "query" | "queryTranscript" | "readInitialProjectCatalog" | "readStats" | "start" | "state"> {}
 
 export interface DaemonTranscriptRegistration {
   isThreadObserved(threadId: string): boolean;

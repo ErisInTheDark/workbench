@@ -18,6 +18,7 @@ import Database from "better-sqlite3";
 import WorkbenchTranscriptRepository from "./transcript/WorkbenchTranscriptRepository";
 import WorkbenchDatabaseController, { WorkbenchDatabaseRequestFailure } from "./WorkbenchDatabaseController";
 import { getWorkbenchDatabaseReadClass, isBackgroundDatabaseReadClass, WORKBENCH_DATABASE_READ_CLASSES } from "./workbench-database-protocol";
+import type { WorkbenchDatabaseRequestName } from "./workbench-database-requests";
 import {
   coreTables,
   projectTables,
@@ -56,20 +57,21 @@ const fixtureIdentityValues = {
 };
 
 test("read classes rank live transcript over interactive state, and keep history scans and stats aggregates in the background", () => {
-  const rank = (request: Parameters<typeof getWorkbenchDatabaseReadClass>[0]) => {
-    const readClass = getWorkbenchDatabaseReadClass(request);
+  const call = (name: WorkbenchDatabaseRequestName) => ({ type: "call" as const, name, args: [] });
+  const rank = (name: WorkbenchDatabaseRequestName) => {
+    const readClass = getWorkbenchDatabaseReadClass(call(name));
     assert.ok(readClass);
     return { background: isBackgroundDatabaseReadClass(readClass), rank: WORKBENCH_DATABASE_READ_CLASSES.indexOf(readClass) };
   };
-  const live = rank({ type: "readTranscriptCompactionExecution", input: { harnessId: "codex", nativeLocation: "/repo", nativeThreadId: "thread", nativeTurnId: "turn" } });
-  const state = rank({ type: "readThreadStateProject", projectId: testProjectIds.project });
-  const history = rank({ type: "queryTranscript", request: TranscriptQuerySchema.parse({ action: "stats" }) });
-  const aggregate = rank({ type: "readStats", request: { projectIds: null, range: "365d", section: "tools" } });
+  const live = rank("readTranscriptCompactionExecution");
+  const state = rank("readThreadStateProject");
+  const history = rank("queryTranscriptPage");
+  const aggregate = rank("readStatsSection");
   assert.ok(live.rank < state.rank, "live ingest reads run before interactive state reads");
   assert.deepEqual([live.background, state.background, history.background, aggregate.background], [false, false, true, true]);
   assert.ok(state.rank < history.rank && state.rank < aggregate.rank);
-  assert.equal(rank({ type: "query", statement: selectRows(coreTables.workbenchHarnesses) }).rank, state.rank);
-  assert.equal(getWorkbenchDatabaseReadClass({ type: "settleTranscript", observations: [] }), null);
+  assert.equal(rank("readRows").rank, state.rank);
+  assert.equal(getWorkbenchDatabaseReadClass(call("settleTranscript")), null);
 });
 
 function seedProviderCursor(databasePath: string, projectId = fixtureIdentityValues.ProjectId.project) {
@@ -302,7 +304,7 @@ test("a database reader opens the migrated database without accepting writes", a
     reader.postMessage({ id: 1, type: "initializeReader", databasePath });
     const [ready] = await once(reader, "message");
     assert.equal(ready.type, "ready", ready.message);
-    reader.postMessage({ id: 2, type: "executeTransaction", statements: [] });
+    reader.postMessage({ id: 2, type: "call", name: "executeTransaction", args: [[]] });
     const [rejected] = await once(reader, "message");
     assert.equal(rejected.type, "requestFailure");
     assert.match(rejected.message, /read-only/u);
