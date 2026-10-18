@@ -591,11 +591,11 @@ export default function ThreadComposer ({
     const action = getThreadComposerEnterAction({
       key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey,
       isComposing: isComposing || event.nativeEvent.isComposing,
-      isMobile: isMobileTextInputEnvironment(), isDraft: thread.isDraft,
+      isMobile: isMobileTextInputEnvironment(),
     });
     if (!action) return;
     event.preventDefault();
-    void submit(action === "stay");
+    void submit(action === "alt");
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {

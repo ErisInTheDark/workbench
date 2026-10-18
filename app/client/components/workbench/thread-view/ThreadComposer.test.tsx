@@ -7,13 +7,12 @@ import test from "node:test";
 
 import { getThreadComposerEnterAction, getThreadComposerStopControlState } from "./thread-composer-controls";
 
-test("draft enter shortcuts distinguish sending, staying and inserting a newline", () => {
-  const input = { key: "Enter", shiftKey: false, ctrlKey: false, isComposing: false, isMobile: false, isDraft: true };
+test("enter shortcuts distinguish sending, alt-sending and inserting a newline", () => {
+  const input = { key: "Enter", shiftKey: false, ctrlKey: false, isComposing: false, isMobile: false };
   assert.equal(getThreadComposerEnterAction(input), "send");
   assert.equal(getThreadComposerEnterAction({ ...input, ctrlKey: true }), "send");
   assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true }), null);
-  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true }), "stay");
-  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true, isDraft: false }), null);
+  assert.equal(getThreadComposerEnterAction({ ...input, shiftKey: true, ctrlKey: true }), "alt");
   for (const blocked of [{ isComposing: true }, { isMobile: true }, { key: "Escape" }]) {
     assert.equal(getThreadComposerEnterAction({ ...input, ...blocked }), null);
     assert.equal(getThreadComposerEnterAction({ ...input, ...blocked, shiftKey: true, ctrlKey: true }), null);

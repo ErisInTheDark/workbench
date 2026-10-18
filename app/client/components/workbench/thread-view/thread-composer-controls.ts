@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - getThreadComposerEnterAction: distinguish draft creation shortcuts from newline and composition input.
+ * - getThreadComposerEnterAction: distinguish send and alt-send (shift-mode) shortcuts from newline and composition input.
  * - getThreadComposerStopControlState: derive settle/snooze/stop action, visibility, and availability.
  */
 
@@ -10,11 +10,10 @@ export function getThreadComposerEnterAction(input: {
   ctrlKey: boolean;
   isComposing: boolean;
   isMobile: boolean;
-  isDraft: boolean;
-}): "send" | "stay" | null {
+}): "send" | "alt" | null {
   if (input.key !== "Enter" || input.isComposing || input.isMobile) return null;
   if (!input.shiftKey) return "send";
-  return input.ctrlKey && input.isDraft ? "stay" : null;
+  return input.ctrlKey ? "alt" : null;
 }
 
 export function getThreadComposerStopControlState ({
