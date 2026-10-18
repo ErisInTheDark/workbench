@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations and validated project dependencies.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, and wait cancellation.
+ * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations, settle handover ports and validated project dependencies.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, and wait cancellation.
  */
 import { randomUUID } from "node:crypto";
 
@@ -17,8 +17,11 @@ import {
 } from "./lib/workbench/project/agent-endpoint-project";
 import {
   renderSubagentQuestionnaireOutput,
+  renderSubagentSettleOutput,
   renderSubagentTurnOutput,
   renderSubagentWaitResultOutput,
+  type SubagentSettleHandover,
+  type SubagentSettleReceipt,
 } from "./lib/workbench/subagent/subagent-output";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
@@ -67,6 +70,12 @@ export interface WorkbenchSubagentControllerOptions {
   queueReleaseNote?(threadId: WorkbenchThreadId): string | null;
   /** Thread-owned work a child still holds; names why its settlement was not accepted. */
   settlementHold?(threadId: WorkbenchThreadId): Promise<WorkbenchThreadSettlementHold | null>;
+  /** Settle handover: move an owned child's complete Git claims, and its saved stash when asked, to the parent; throws the Git rejection. */
+  adoptChildGitWork?(input: {
+    cwd: string; harness: WorkbenchHarness; name: string; parentThreadId: WorkbenchThreadId; transferStash?: true;
+  }): Promise<void>;
+  /** Settle handover: move every todo from one thread to another, returning the ids they received. */
+  moveTodos?(fromThreadId: WorkbenchThreadId, toThreadId: WorkbenchThreadId): Promise<number[]>;
   messageWaits?: Pick<WorkbenchMessageWaitController, "isWaitingFor" | "subscribePending">;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -121,6 +130,8 @@ export default class WorkbenchSubagentController {
   private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   private readonly queueReleaseNote: WorkbenchSubagentControllerOptions["queueReleaseNote"];
   private readonly settlementHold: WorkbenchSubagentControllerOptions["settlementHold"];
+  private readonly adoptChildGitWork: WorkbenchSubagentControllerOptions["adoptChildGitWork"];
+  private readonly moveTodos: WorkbenchSubagentControllerOptions["moveTodos"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly messageWaits: WorkbenchSubagentControllerOptions["messageWaits"];
   private readonly waiters = new Map<string, AbortController>();
@@ -140,6 +151,8 @@ export default class WorkbenchSubagentController {
     stopThread,
     queueReleaseNote,
     settlementHold,
+    adoptChildGitWork,
+    moveTodos,
     threadState,
     messageWaits,
   }: WorkbenchSubagentControllerOptions) {
@@ -154,6 +167,8 @@ export default class WorkbenchSubagentController {
     this.stopThread = stopThread;
     this.queueReleaseNote = queueReleaseNote;
     this.settlementHold = settlementHold;
+    this.adoptChildGitWork = adoptChildGitWork;
+    this.moveTodos = moveTodos;
     this.threadState = threadState;
     this.messageWaits = messageWaits;
   }
@@ -557,35 +572,85 @@ export default class WorkbenchSubagentController {
     return {};
   }
 
+  /** Settles every selected child it can and reports each outcome; any child left unsettled fails the call with the full receipt. */
   private async settle(params: Record<string, unknown>) {
-    if (!this.threadState) throw new Error("Subagent lifecycle state is unavailable.");
+    const threadState = this.threadState;
+    if (!threadState) throw new Error("Subagent lifecycle state is unavailable.");
     const records = await this.ownedRecords(params);
     await this.assertUnlocked(records[0]!.projectId, records);
-    const unsettleable = async () => {
-      for (const record of records) {
-        const entry = await this.threadState!.getEntry(record.projectId, record.harness, record.threadId);
-        if (entry?.entryKind !== "subagent" || (entry.lifecycle.kind !== "completed" && entry.lifecycle.kind !== "stopped")) return record;
-      }
-      return null;
-    };
+    const handover = params.handover === true;
+    const parent = handover ? {
+      harness: WorkbenchHarnessSchema.parse(params.callerHarness),
+      threadId: this.readThreadId(params, "callerThreadId"),
+    } : null;
+    const entryOf = (record: WorkbenchSubagentRelationship) => threadState.getEntry(record.projectId, record.harness, record.threadId);
+    const isTerminal = (entry: WorkbenchThreadSidebarEntry | null) => entry?.entryKind === "subagent"
+      && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped");
     const deadline = Date.now() + SETTLE_READY_TIMEOUT_MS;
-    let blocked = await unsettleable();
-    while (blocked && Date.now() < deadline) {
+    let working = records;
+    while (true) {
+      const entries = await Promise.all(working.map(entryOf));
+      working = working.filter((_record, index) => !isTerminal(entries[index]!));
+      if (!working.length || Date.now() >= deadline) break;
       await delay(POLL_INTERVAL_MS);
       if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
-      blocked = await unsettleable();
     }
-    if (blocked) throw new Error(`Subagent ${blocked.name} can be settled only after it is Completed or Stopped.`);
+    const receipt: SubagentSettleReceipt = { settled: [], blocked: [] };
     for (const record of records) {
-      const { accepted } = await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
-      if (accepted) continue;
-      const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
-      if (entry?.entryKind === "subagent" && gitArcPreventsThreadSettlement(entry.gitArc)) {
-        throw new Error(`Subagent ${record.name} still holds live Git arc claims and cannot be settled.`);
+      const target = { name: record.name, threadId: record.threadId };
+      if (working.includes(record)) {
+        receipt.blocked.push({ ...target, reason: "can be settled only after it is Completed or Stopped." });
+        continue;
       }
-      const hold = await this.settlementHold?.(record.threadId);
-      throw new Error(hold ? `Subagent ${record.name} ${SETTLEMENT_HOLD_REASONS[hold]} and cannot be settled.` : `Subagent ${record.name} could not be settled.`);
+      let moved: SubagentSettleHandover | undefined;
+      if (parent) {
+        const handed = await this.handOver(record, parent, await entryOf(record));
+        if ("reason" in handed) {
+          receipt.blocked.push({ ...target, reason: handed.reason });
+          continue;
+        }
+        moved = handed;
+      }
+      const { accepted } = await threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
+      if (accepted) receipt.settled.push({ ...target, ...moved ? { handover: moved } : {} });
+      else receipt.blocked.push({ ...target, reason: await this.settlementRefusal(record, await entryOf(record)) });
     }
-    return { settled: records.map(({ name, threadId }) => ({ name, threadId })) };
+    if (receipt.blocked.length) throw new Error(renderSubagentSettleOutput(receipt));
+    return receipt;
+  }
+
+  /** Moves a terminal child's Git work and todos to its parent; a refused Git adoption leaves the child untouched. */
+  private async handOver(
+    record: WorkbenchSubagentRelationship,
+    parent: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
+    entry: WorkbenchThreadSidebarEntry | null,
+  ): Promise<SubagentSettleHandover | { reason: string }> {
+    if (!this.adoptChildGitWork || !this.moveTodos) return { reason: "handover is unavailable in this runtime." };
+    // Handover moves required todos itself; any other hold would leave the child unsettled after its work moved.
+    const hold = await this.settlementHold?.(record.threadId);
+    if (hold && hold !== "requiredTodos") return { reason: `${SETTLEMENT_HOLD_REASONS[hold]} and cannot be settled.` };
+    const arc = entry?.entryKind === "subagent" ? entry.gitArc ?? null : null;
+    const stashedPathCount = arc?.phase === "stashed" ? arc.claimedPaths.length : arc?.stashedPaths?.length ?? 0;
+    const claimCount = arc?.phase === "stashed" ? 0 : arc?.claimedPaths.length ?? 0;
+    if (gitArcPreventsThreadSettlement(arc)) {
+      try {
+        await this.adoptChildGitWork({
+          cwd: record.cwd, harness: parent.harness, name: record.name, parentThreadId: parent.threadId,
+          ...stashedPathCount ? { transferStash: true } : {},
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Git adoption failed.";
+        return { reason: `handover failed: ${message}${stashedPathCount ? " Adopt it with discardStash only if the user wants that stash gone." : ""}` };
+      }
+    }
+    return { claimCount, stashedPathCount, todoIds: await this.moveTodos(record.threadId, parent.threadId) };
+  }
+
+  private async settlementRefusal(record: WorkbenchSubagentRelationship, entry: WorkbenchThreadSidebarEntry | null) {
+    const arc = entry?.entryKind === "subagent" ? entry.gitArc ?? null : null;
+    if (arc?.claimedPaths.length && arc.phase !== "stashed") return "still holds live Git arc claims and cannot be settled.";
+    if (gitArcPreventsThreadSettlement(arc)) return "still holds a saved Git arc stash and cannot be settled.";
+    const hold = await this.settlementHold?.(record.threadId);
+    return hold ? `${SETTLEMENT_HOLD_REASONS[hold]} and cannot be settled.` : "could not be settled.";
   }
 }

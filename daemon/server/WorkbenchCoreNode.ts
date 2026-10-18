@@ -556,6 +556,17 @@ function createWorkbenchCoreFeature(
     identities: threadIdentity,
     queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
     settlementHold,
+    // Handover adopts through the ordinary Git arc ingress so it keeps every ownership gate and rejection.
+    adoptChildGitWork: async ({ cwd, harness, name, parentThreadId, transferStash }) => {
+      const response = await gitArc.executeRequest({
+        action: "arcAdoptSource", cwd, harness, threadId: parentThreadId,
+        source: { kind: "subagent", name }, ...(transferStash ? { transferStash } : {}),
+      });
+      if (response.ok) return;
+      const failure = await response.json().catch(() => null) as { error?: unknown } | null;
+      throw new Error(typeof failure?.error === "string" ? failure.error : "Git arc adoption failed.");
+    },
+    moveTodos: (fromThreadId, toThreadId) => threadTodos.moveAll(fromThreadId, toThreadId),
     provider,
     // Read lazily: the approval owner is built after subagents but within this same node.
     liveApprovals: () => approvals.list(),

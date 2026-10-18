@@ -3,7 +3,8 @@
  * - createEmptySubagentQuestionnaireResponse: resolve every pending question without a selection.
  * - renderSubagentQuestionnaireOutput/renderSubagentTurnOutput: render paused and settled WB turns, leading with the lifecycle's thread error or interruption.
  * - renderSubagentWaitResultOutput: identify which child triggered a multiplexed wait while preserving singular output.
- * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and settlement receipts.
+ * - SubagentSettleHandover/SubagentSettleReceipt: what a settle moved to the parent and every child's outcome.
+ * - renderSubagentListOutput/renderSubagentSettleOutput: render relationship lists and per-child settlement receipts.
  */
 import type { WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
@@ -88,6 +89,33 @@ export function renderSubagentListOutput(subagents: readonly WorkbenchSubagentSu
   return [...rows, ...hints].join("\n\n");
 }
 
-export function renderSubagentSettleOutput(settled: readonly { name: string; threadId: string }[]) {
-  return settled.length ? settled.map((entry) => `Settled ${entry.name} (${entry.threadId}).`).join("\n") : "No subagents were settled.";
+export interface SubagentSettleHandover {
+  claimCount: number;
+  stashedPathCount: number;
+  todoIds: number[];
+}
+
+export interface SubagentSettleReceipt {
+  settled: Array<{ name: string; threadId: string; handover?: SubagentSettleHandover }>;
+  blocked: Array<{ name: string; threadId: string; reason: string }>;
+}
+
+function describeHandover({ claimCount, stashedPathCount, todoIds }: SubagentSettleHandover) {
+  const git = [
+    claimCount ? `${claimCount} claim${claimCount === 1 ? "" : "s"}` : "",
+    stashedPathCount ? "saved stash" : "",
+  ].filter(Boolean).join(" and ");
+  const parts = [
+    git ? `adopted ${git}` : "",
+    todoIds.length ? `moved todo${todoIds.length === 1 ? "" : "s"} ${todoIds.join(", ")} to you` : "",
+  ].filter(Boolean);
+  return parts.length ? ` with handover: ${parts.join("; ")}` : " with handover: nothing to move";
+}
+
+export function renderSubagentSettleOutput({ settled, blocked }: SubagentSettleReceipt) {
+  const lines = [
+    ...settled.map(entry => `Settled ${entry.name} (${entry.threadId})${entry.handover ? describeHandover(entry.handover) : ""}.`),
+    ...blocked.map(entry => `Not settled ${entry.name} (${entry.threadId}): ${entry.reason}`),
+  ];
+  return lines.length ? lines.join("\n") : "No subagents were settled.";
 }

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadTodosOptions: persistence, thread resolution and runtime publication ports.
- * - default WorkbenchThreadTodoController: own each thread's follow-up todos for agents (wb todo) and the browser.
+ * - default WorkbenchThreadTodoController: own each thread's follow-up todos for agents (wb todo), the browser and settle handover.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { WorkbenchThreadTodoTextSchema, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
@@ -41,6 +41,16 @@ export default class WorkbenchThreadTodoController {
 
   async setRequired(threadId: string, id: number, required: boolean) {
     await this.#change(threadId, resolved => ({ kind: "setRequired", threadId: resolved, id, required }));
+  }
+
+  /** Hands every todo of one thread to another, returning the ids they received there. */
+  async moveAll(fromThreadId: string, toThreadId: string) {
+    const [from, to] = await Promise.all([this.options.resolve(fromThreadId), this.options.resolve(toThreadId)]);
+    if (!from || !to) throw new Error("Both todo owners must be known to Workbench.");
+    const result = await this.options.store({ kind: "move", threadId: from, toThreadId: to });
+    this.options.changed(from, result.todos);
+    this.options.changed(to, result.moved!.todos);
+    return result.moved!.ids;
   }
 
   async setText(threadId: string, id: number, text: string) {

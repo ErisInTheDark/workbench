@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchSubagentFeatureContext: current-generation project, relationship, and thread-state ports.
+ * - WorkbenchSubagentFeatureContext: current-generation project, relationship, settle handover and thread-state ports.
  * - default WorkbenchSubagentFeature: own the reloadable subagent controller and durable relationship-store wrapper.
  */
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
@@ -26,6 +26,8 @@ export interface WorkbenchSubagentFeatureContext {
   stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   queueReleaseNote: NonNullable<WorkbenchSubagentControllerOptions["queueReleaseNote"]>;
   settlementHold: NonNullable<WorkbenchSubagentControllerOptions["settlementHold"]>;
+  adoptChildGitWork: NonNullable<WorkbenchSubagentControllerOptions["adoptChildGitWork"]>;
+  moveTodos: NonNullable<WorkbenchSubagentControllerOptions["moveTodos"]>;
   messageWaits: NonNullable<WorkbenchSubagentControllerOptions["messageWaits"]>;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -56,6 +58,8 @@ export default class WorkbenchSubagentFeature {
       stopThread: context.stopThread,
       queueReleaseNote: context.queueReleaseNote,
       settlementHold: context.settlementHold,
+      adoptChildGitWork: context.adoptChildGitWork,
+      moveTodos: context.moveTodos,
       threadState: context.threadState,
       messageWaits: context.messageWaits,
     });

@@ -1,4 +1,4 @@
-/* No production exports. Tests protect thread-scoped todo edits and required-count summaries. */
+/* No production exports. Tests protect thread-scoped todo edits, whole-list moves and required-count summaries. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -46,4 +46,24 @@ test("todos stay in creation order and every edit is scoped to its own thread", 
 
   assert.deepEqual(todos.execute({ kind: "setRequired", threadId, id: second.id, required: true }).todos, [{ ...second, text: "polish more", required: true }]);
   assert.deepEqual(todos.requiredCounts(), { [threadId]: 1 }, "only required todos count, per thread");
+});
+
+test("moving todos appends them after the destination's own and empties the source", async context => {
+  const { todos, threadId, otherThreadId } = await fixture(context);
+  todos.execute({ kind: "add", threadId: otherThreadId, text: "parent's", required: false, at: 1 });
+  todos.execute({ kind: "add", threadId, text: "fix bug", required: true, at: 2 });
+  todos.execute({ kind: "add", threadId, text: "polish", required: false, at: 3 });
+
+  const result = todos.execute({ kind: "move", threadId, toThreadId: otherThreadId });
+  assert.deepEqual(result.todos, []);
+  assert.deepEqual(result.moved, {
+    ids: [2, 3],
+    todos: [
+      { id: 1, text: "parent's", required: false, createdAt: 1 },
+      { id: 2, text: "fix bug", required: true, createdAt: 2 },
+      { id: 3, text: "polish", required: false, createdAt: 3 },
+    ],
+  });
+  assert.deepEqual(todos.requiredCounts(), { [otherThreadId]: 1 }, "the obligation follows the todo");
+  assert.throws(() => todos.execute({ kind: "move", threadId: otherThreadId, toThreadId: otherThreadId }));
 });

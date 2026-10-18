@@ -76,9 +76,14 @@ export function adaptWorkbenchAgentCliResponse({
       const settled = Array.isArray(payload?.settled) ? payload.settled.filter(isRecord).flatMap((entry) => {
         const name = readString(entry, "name");
         const threadId = readString(entry, "threadId");
-        return name && threadId ? [{ name, threadId }] : [];
+        const handover = isRecord(entry.handover) ? {
+          claimCount: typeof entry.handover.claimCount === "number" ? entry.handover.claimCount : 0,
+          stashedPathCount: typeof entry.handover.stashedPathCount === "number" ? entry.handover.stashedPathCount : 0,
+          todoIds: Array.isArray(entry.handover.todoIds) ? entry.handover.todoIds.filter((id): id is number => typeof id === "number") : [],
+        } : null;
+        return name && threadId ? [{ name, threadId, ...handover ? { handover } : {} }] : [];
       }) : [];
-      return succeeded(renderSubagentSettleOutput(settled));
+      return succeeded(renderSubagentSettleOutput({ settled, blocked: [] }));
     }
     case "browse-command":
       return adaptBrowseCommand(payload, text);

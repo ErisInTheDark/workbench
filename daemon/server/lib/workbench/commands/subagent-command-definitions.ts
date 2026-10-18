@@ -12,16 +12,18 @@ import { WorkbenchAgentCommandFlags, WorkbenchCommandArgumentError } from "./wor
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
 const requiredText = z.string().trim().min(1);
-const targetsSchema = z.object({
+const targetFields = {
   names: z.array(requiredText).optional(),
   threadIds: z.array(requiredText).optional(),
-}).strict().superRefine(({ names = [], threadIds = [] }, context) => {
+};
+function refineTargets({ names = [], threadIds = [] }: { names?: string[]; threadIds?: string[] }, context: z.RefinementCtx) {
   if (!names.length && !threadIds.length) context.addIssue({ code: "custom", message: "At least one name or thread ID target is required." });
   if (new Set(threadIds).size !== threadIds.length) context.addIssue({ code: "custom", message: "Thread ID targets must be unique." });
   if (new Set(names.map((name) => name.toLocaleLowerCase())).size !== names.length) {
     context.addIssue({ code: "custom", message: "Name targets must be unique ignoring case." });
   }
-});
+}
+const targetsSchema = z.object(targetFields).strict().superRefine(refineTargets);
 
 function requireCallerThreadId(callerThreadId: string | null) {
   if (!callerThreadId) throw new Error("A managed Workbench thread identity is required.");
@@ -33,7 +35,7 @@ function parseTargets(args: string[]) {
   return { names: flags.repeated("--name"), threadIds: flags.repeated("--id") };
 }
 
-function targetsBody(input: z.output<typeof targetsSchema>) {
+function targetsBody(input: { names?: string[]; threadIds?: string[] }) {
   return {
     ...(input.names?.length ? { names: input.names } : {}),
     ...(input.threadIds?.length ? { threadIds: input.threadIds } : {}),
@@ -122,10 +124,10 @@ const create = defineWorkbenchAgentCommand({
   },
 });
 
-function targetCommand(action: "settle" | "stop" | "wait", description: string) {
+function targetCommand(action: "stop" | "wait", description: string) {
   return defineWorkbenchAgentCommand({
     description,
-    effects: action === "wait" ? { idempotent: true, readOnly: true } : action === "stop" ? { destructive: true } : {},
+    effects: action === "wait" ? { idempotent: true, readOnly: true } : { destructive: true },
     helpGroups: ["subagent"],
     mcpCodeModeEligible: action === "wait" || undefined,
     mcpRuntimeDrainPolicy: action === "wait" ? "preserve-across-reload" : undefined,
@@ -137,15 +139,35 @@ function targetCommand(action: "settle" | "stop" | "wait", description: string) 
     buildRequest(input, { callerThreadId, cwd, workbenchOrigin }) {
       return postWorkbenchAgentCommand("/api/subagents", {
         action, callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
-        ...(action !== "settle" && workbenchOrigin ? { workbenchOrigin } : {}),
-      }, action === "settle" ? "subagent-settle" : "native");
+        ...(workbenchOrigin ? { workbenchOrigin } : {}),
+      });
     },
   });
 }
 
 const wait = targetCommand("wait", "Wait until any selected child needs attention or reaches a terminal state.");
 const stop = targetCommand("stop", "Stop one or more direct child threads.");
-const settle = targetCommand("settle", "Settle one or more completed or stopped direct children.");
+
+const settle = defineWorkbenchAgentCommand({
+  description: "Settle one or more completed or stopped direct children, reporting each outcome. handover first moves each child's Git claims, saved stash and todos to you.",
+  helpGroups: ["subagent"],
+  words: ["subagent", "settle"],
+  usage: "wb subagent settle (--id <id> | --name <name>) [...] [--handover]",
+  inputSchema: z.object({
+    ...targetFields,
+    handover: z.boolean().default(false).describe("Adopt each child's Git claims and saved stash and move its todos to you before settling."),
+  }).strict().superRefine(refineTargets),
+  parseCliArgs(args) {
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--handover"], repeatable: ["--id", "--name"] });
+    return { names: flags.repeated("--name"), threadIds: flags.repeated("--id"), handover: flags.has("--handover") };
+  },
+  buildRequest(input, { callerHarness, callerThreadId, cwd }) {
+    return postWorkbenchAgentCommand("/api/subagents", {
+      action: "settle", callerThreadId: requireCallerThreadId(callerThreadId), cwd, ...targetsBody(input),
+      ...(input.handover ? { handover: true, callerHarness } : {}),
+    }, "subagent-settle");
+  },
+});
 
 /** Split the leading `<queue>` operand from the flag grammar. */
 function splitQueueOperand(args: string[]) {

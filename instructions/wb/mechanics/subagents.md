@@ -20,7 +20,7 @@ Every subagent call must run in the intended project cwd; this is the directory 
 - <tool id="subagent_stop" /> stops selected direct children.
 </docs>
 <docs tools="subagent_settle">
-- <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names.
+- <tool id="subagent_settle" /> settles completed or stopped direct children and releases their names. `handover: true` first adopts each child's claims and stash and moves its todos to you; children it cannot fully hand over stay unsettled and untouched.
 </docs>
 
 <docs tools="subagent_create">

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - ThreadTodoCommand: atomic thread-todo reads and edits, each scoped to one thread; todo ids are serials within it.
+ * - ThreadTodoCommand: atomic thread-todo reads and edits, each scoped to one thread, plus whole-list moves between threads; todo ids are serials within a thread.
  * - ThreadTodoResult: the thread's todos after one command, plus what the command changed.
  * - default WorkbenchThreadTodoStore: own per-thread follow-up todos in SQLite, handing out each thread's next serial, counting every thread's required todos and reading many threads' todos at once.
  */
@@ -13,14 +13,19 @@ export type ThreadTodoCommand =
   /** Ids the thread does not have are ignored. */
   | { kind: "remove"; threadId: string; ids: readonly number[] }
   | { kind: "setRequired"; threadId: string; id: number; required: boolean }
-  | { kind: "setText"; threadId: string; id: number; text: string };
+  | { kind: "setText"; threadId: string; id: number; text: string }
+  /** Moves every todo of `threadId` to the end of `toThreadId`'s list, keeping text, requirement and creation time. */
+  | { kind: "move"; threadId: string; toThreadId: string };
 
 export interface ThreadTodoResult {
+  /** The commanded thread's todos; a move reports its emptied source. */
   todos: WorkbenchThreadTodo[];
   /** The todo an add created. */
   added: WorkbenchThreadTodo | null;
   /** Ids a remove actually deleted. */
   removed: number[];
+  /** A move's destination list and the ids its todos received there. */
+  moved: { todos: WorkbenchThreadTodo[]; ids: number[] } | null;
 }
 
 interface ThreadTodoRow {
@@ -56,7 +61,23 @@ export default class WorkbenchThreadTodoStore {
     return this.database.transaction((): ThreadTodoResult => {
       let added: WorkbenchThreadTodo | null = null;
       let removed: number[] = [];
+      let moved: ThreadTodoResult["moved"] = null;
       switch (command.kind) {
+        case "move": {
+          if (command.toThreadId === command.threadId) throw new Error("Todos cannot move to their own thread.");
+          const next = (this.database.prepare("SELECT COALESCE(MAX(id), 0) AS last FROM workbench_thread_todos WHERE thread_id = ?")
+            .get(command.toThreadId) as { last: number }).last;
+          const sources = this.database.prepare("SELECT id, text, required, created_at FROM workbench_thread_todos WHERE thread_id = ? ORDER BY id")
+            .all(command.threadId) as ThreadTodoRow[];
+          const insert = this.database.prepare("INSERT INTO workbench_thread_todos (thread_id, id, text, required, created_at) VALUES (?, ?, ?, ?, ?)");
+          const ids = sources.map((row, index) => {
+            insert.run(command.toThreadId, next + index + 1, row.text, row.required, row.created_at);
+            return next + index + 1;
+          });
+          this.database.prepare("DELETE FROM workbench_thread_todos WHERE thread_id = ?").run(command.threadId);
+          moved = { ids, todos: this.list(command.toThreadId) };
+          break;
+        }
         case "list":
           break;
         case "add": {
@@ -85,9 +106,12 @@ export default class WorkbenchThreadTodoStore {
             .run(command.text.trim(), command.threadId, command.id);
           break;
       }
-      const todos = (this.database.prepare("SELECT id, text, required, created_at FROM workbench_thread_todos WHERE thread_id = ? ORDER BY id")
-        .all(command.threadId) as ThreadTodoRow[]).map(toTodo);
-      return { todos, added, removed };
+      return { todos: this.list(command.threadId), added, removed, moved };
     })();
+  }
+
+  private list(threadId: string) {
+    return (this.database.prepare("SELECT id, text, required, created_at FROM workbench_thread_todos WHERE thread_id = ? ORDER BY id")
+      .all(threadId) as ThreadTodoRow[]).map(toTodo);
   }
 }
