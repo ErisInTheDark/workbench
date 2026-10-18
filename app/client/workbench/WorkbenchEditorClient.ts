@@ -55,6 +55,7 @@ import WorkbenchBlockStructureController from "./editor/WorkbenchBlockStructureC
 import WorkbenchCodeBlockController, { type WorkbenchCodeBlockController as CodeBlockController } from "./editor/WorkbenchCodeBlockController";
 import WorkbenchCodeFormatController from "./editor/WorkbenchCodeFormatController";
 import WorkbenchSourceEditorController from "./editor/WorkbenchSourceEditorController";
+import WorkbenchTableController, { type WorkbenchTableController as TableController } from "./editor/WorkbenchTableController";
 import { captureRichCaretAnchor, findRichAnchorPoint, type CaretAnchor } from "./dom/selection/mode-caret-anchor";
 import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import WorkbenchCommentController, { type WorkbenchCommentController as CommentController } from "./editor/WorkbenchCommentController";
@@ -240,6 +241,7 @@ interface WorkbenchEditorClient {
   /** Run a format or comment command as a markdown text edit in source mode. */
   applySourceCommand: (command: FormatCommand | "comment") => void;
   codeBlocks: CodeBlockController;
+  tables: TableController;
   applyHoveredRevisionAction: (action: "accept" | "reject") => void;
   beginToolbarInteraction: (event: Event) => void;
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
@@ -968,8 +970,24 @@ function WorkbenchEditorClient(
     getProtectedEmptyInlineFormatElements: inlineFormatController.getProtectedEmptyInlineFormatElements,
     syncEditorAfterStructuralChange,
   });
+  const tableController = WorkbenchTableController({
+    container: editorShell ?? editor,
+    editor,
+    inline: inlineFormatController,
+    isRichMode: () => isRichMode(),
+    runStructuralMutation: (mutate) => {
+      runStructuralMutation(mutate);
+    },
+    scheduleFrame: (callback) => {
+      lifecycle.scheduleAnimationFrame("editor-table-refresh", callback);
+    },
+  });
   const formatCommandController = WorkbenchFormatCommandController({
     blockStructure: blockStructureController,
+    clearFormatting: () => {
+      inlineFormatController.clearFormatting();
+    },
+    formatCellBox: (format) => tableController.formatBox(format),
     clearPendingInlineFormats: () => {
       inlineFormatController.clearPendingInlineFormats();
     },
@@ -1012,6 +1030,8 @@ function WorkbenchEditorClient(
       || selection.isCollapsed === false
       || !editor.contains(selection.anchorNode)
       || !editor.contains(selection.focusNode)
+      // A cell box keeps the caret in its focus cell only so keys arrive there; it never shows.
+      || tableController.hasBox()
     ) {
       hideCustomCaret();
       return;
@@ -1293,6 +1313,7 @@ function WorkbenchEditorClient(
     onLayoutChanged: () => {
       commentController.scheduleRefresh();
       codeBlockController.scheduleRefresh();
+      tableController.scheduleRefresh();
       scheduleDiffGutterRefresh();
     },
     // Undo and redo cover both columns; other editor shortcuts stay off the original so it keeps editor markup.
@@ -1341,6 +1362,7 @@ function WorkbenchEditorClient(
     suggestionController.scheduleRefresh();
     commentController.scheduleRefresh();
     codeBlockController.scheduleRefresh();
+    tableController.scheduleRefresh();
   }
 
   /**
@@ -1352,6 +1374,7 @@ function WorkbenchEditorClient(
     renderDiffGutter();
     commentController.refresh();
     codeBlockController.refresh();
+    tableController.refresh();
   }
 
   function setShowGitMarkers(show: boolean) {
@@ -1395,6 +1418,7 @@ function WorkbenchEditorClient(
     refreshStatusMessage,
     renderDocument: (content, mode, renderOptions = {}) => {
       lastLoggedSaveIssue = null;
+      tableController.reset();
       markdownStyle = detectMarkdownStyle(content);
       if (mode === "rich") {
         editor.innerHTML = renderOptions.renderedState ?? renderMarkdownToHtml(content);
@@ -1604,6 +1628,7 @@ function WorkbenchEditorClient(
       syncStructuredStyles: true,
     }), () => {
       clearPendingInlineFormats();
+      tableController.reset();
       if (isSourceMode()) {
         sourceController.render(request.content);
       } else {
@@ -1915,7 +1940,7 @@ function WorkbenchEditorClient(
       if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") {
         suggestionController.prepareForEdit();
       }
-      if (isRichMode() && blockStructureController.handleBeforeInput(event)) {
+      if (isRichMode() && (tableController.handleBeforeInput(event) || blockStructureController.handleBeforeInput(event))) {
         return;
       }
       options.handleEditorBeforeInput(event);
@@ -1924,23 +1949,37 @@ function WorkbenchEditorClient(
 
   editor.addEventListener("keydown", (event) => {
     prepareForEditKey(event);
-    if (isRichMode() && blockStructureController.handleKeyDown(event)) {
+    if (isRichMode() && (tableController.handleKeyDown(event) || blockStructureController.handleKeyDown(event))) {
       return;
     }
     options.handleEditorKeyDown(event);
   }, { signal });
 
   editor.addEventListener("paste", (event) => {
+    if (tableController.handleClipboard(event)) return;
     options.handleEditorPaste?.(event);
   }, { signal });
 
+  for (const type of ["copy", "cut"] as const) {
+    editor.addEventListener(type, (event) => {
+      tableController.handleClipboard(event);
+    }, { signal });
+  }
+
+  editor.addEventListener("contextmenu", (event) => {
+    tableController.handleContextMenu(event);
+  }, { signal });
+
   document.addEventListener("selectionchange", () => {
+    // Pruning lands before history learns the new selection, so its frame's "before" is still in what it removes.
+    tableController.beforeSelectionChange();
     if (!isSelectionInsideEditor()) {
       scheduleEditorChromeRefresh();
       return;
     }
 
     options.handleSelectionChange();
+    tableController.afterSelectionChange();
     commentController.syncActiveFromSelection();
   }, { signal });
 
@@ -1949,6 +1988,7 @@ function WorkbenchEditorClient(
   }, { signal, passive: true });
 
   document.addEventListener("pointerup", () => {
+    tableController.handlePointerUp();
     scheduleEditorChromeRefresh();
   }, { signal });
 
@@ -2001,8 +2041,9 @@ function WorkbenchEditorClient(
     commentController.setHovered(null);
   }, { signal });
 
-  editor.addEventListener("pointerdown", () => {
+  editor.addEventListener("pointerdown", (event) => {
     preservedToolbarSelection = null;
+    tableController.handlePointerDown(event);
     options.handleEditorPointerDown();
   }, { signal });
 
@@ -2011,6 +2052,7 @@ function WorkbenchEditorClient(
       return;
     }
 
+    tableController.handlePointerMove(event);
     options.handlePointerMove(event);
   }, { signal });
 
@@ -2120,6 +2162,7 @@ function WorkbenchEditorClient(
     clearPendingInlineFormats,
     codeBlocks: codeBlockController,
     comments: commentController,
+    tables: tableController,
     dispose: () => {
       listeners.clear();
       toolbarListeners.clear();

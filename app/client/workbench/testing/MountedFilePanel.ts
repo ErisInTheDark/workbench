@@ -137,6 +137,22 @@ function edgeText(node: Node | undefined, edge: "first" | "last"): Text | null {
   return edgeText((edge === "first" ? node.firstChild : node.lastChild) ?? undefined, edge);
 }
 
+/** The `KeyboardEvent.code` a US layout reports for a key. */
+function keyCode(key: string) {
+  if (key === "`") return "Backquote";
+  if (key === "\\") return "Backslash";
+  return key.length === 1 ? `Key${key.toUpperCase()}` : key;
+}
+
+/** A clipboard event carrying an in-memory clipboard, as jsdom has no DataTransfer. */
+function clipboardEvent(type: "copy" | "cut" | "paste", data: Map<string, string>) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: (format: string) => data.get(format) ?? "", setData: (format: string, value: string) => data.set(format, value) },
+  });
+  return event as ClipboardEvent;
+}
+
 function isWhitespace(character: string | undefined) {
   return character === " " || character === " ";
 }
@@ -297,6 +313,30 @@ export default class MountedFilePanel {
     return this.client;
   }
 
+  /** Copy (or cut) the way the browser's shortcut does; resolves with what reached the clipboard by format. */
+  async copy(type: "copy" | "cut" = "copy") {
+    const data = new Map<string, string>();
+    this.editor.dispatchEvent(clipboardEvent(type, data));
+    await settle({ frames: true });
+    return data;
+  }
+
+  /** Paste clipboard contents by format; unhandled pastes fall through to the browser-default text insertion. */
+  async paste(data: Map<string, string>) {
+    const event = clipboardEvent("paste", data);
+    this.editor.dispatchEvent(event);
+    if (!event.defaultPrevented) {
+      await this.input("insertFromPaste", data.get("text/plain") ?? "", () => this.insertCharacter(data.get("text/plain") ?? ""));
+      return;
+    }
+    await settle({ frames: true });
+  }
+
+  /** Cells currently inside a table cell box. */
+  get boxedCells() {
+    return Array.from(this.editor.querySelectorAll("[data-cell-selected]"), (cell) => cell.textContent ?? "");
+  }
+
   /** The source-mode textarea, holding the file's markdown text while source mode is on. */
   get source() {
     return this.surfaces.editor.source;
@@ -397,7 +437,7 @@ export default class MountedFilePanel {
   async press(key: string, modifiers: KeyModifiers = {}) {
     this.focus();
     const keydown = new KeyboardEvent("keydown", {
-      bubbles: true, cancelable: true, key, code: key === "`" ? "Backquote" : `Key${key.toUpperCase()}`,
+      bubbles: true, cancelable: true, key, code: keyCode(key),
       ctrlKey: modifiers.ctrl ?? false, shiftKey: modifiers.shift ?? false, altKey: modifiers.alt ?? false,
     });
     this.editor.dispatchEvent(keydown);

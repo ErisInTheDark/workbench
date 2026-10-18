@@ -3,5 +3,6 @@
 - Every editor DOM state must save: markdown serialization never blocks the save guard nor changes the words a reader sees. `WorkbenchFilePanelClient.*.test.ts` sweep this through the mounted editor.
 - Unedited blocks save byte-for-byte from their source (`data-md-source`, trusted only while its render signature matches); rewritten blocks follow the file's detected style. Editing one block never rewrites another.
 - Code blocks are plain text: editor `pre` code ends in one newline sentinel markdown never sees, and marks never enter it. Table cells hold one line of inline text; pipes in them save escaped.
+- An empty table body row or column exists only while the selection is in it: leaving prunes it before history records the new selection, so undo restores it with the selection inside. Cell boxes and inherited cell formats (`data-cell-*`) are never saved.
 - Source mode (`plain` mode on a markdown file) edits the markdown text itself; switching modes keeps the draft, its history and the caret's words.
 - Review markup round-trips: comment threads are non-editable atoms (`data-comment-thread`) saved as `<!-- [name]: body -->` runs (older `@name:` comments still read), and suggestions are block groups (`data-suggestion`) saved as a `<del>` block plus `<ins>` block. Syntax is documented for agents in `instructions/wb/mechanics/agent-markdown.md`.

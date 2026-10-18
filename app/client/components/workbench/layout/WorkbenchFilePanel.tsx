@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - default WorkbenchFilePanel: mount one editable file panel with panel-scoped editor client surfaces: a persistent
- *   markdown toolbar ending in the folder index, save and hold-to-confirm reset, and the editor with its comment margin
- *   and suggestion originals, followed by a row stepping between the folder's documents; mosaic panels add a titled
+ *   markdown toolbar ending in the folder index, save and hold-to-confirm reset, and the editor (or its markdown source)
+ *   with its comment margin, suggestion originals and code block and table controls, followed by a row stepping between
+ *   the folder's documents; mosaic panels add a titled
  *   header instead of the index and steps.
  */
 "use client";
@@ -26,6 +27,7 @@ import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
 import MarkdownCodeBlockChrome from "../markdown-editor/MarkdownCodeBlockChrome";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
+import MarkdownTableChrome from "../markdown-editor/MarkdownTableChrome";
 import MarkdownEditorToolbar, { CommandTooltip } from "../markdown-editor/MarkdownEditorToolbar";
 import useEditorMarginLayout from "../markdown-editor/use-editor-margin-layout";
 import {
@@ -511,6 +513,8 @@ export default function WorkbenchFilePanel ({
               data-[custom-caret-visible=true]:caret-transparent
               empty:before:(text-fg/muted content-[attr(data-placeholder)])
               [& [data-comment-thread]]:(select-none)
+              [& [data-cell-selected]]:bg-[color-mix(in srgb, var(--accent) 16%, transparent)]
+              [& table[data-cell-box]]:selection:bg-transparent
               [& aside[data-comment-thread]]:(block h-0 m-0 overflow-hidden)
               [& span[data-comment-thread]:not([data-comment-anchored])]:(
                 inline-block size-[0.62em] mx-[0.18em] rounded-full align-[0.08em] cursor-pointer
@@ -542,6 +546,7 @@ export default function WorkbenchFilePanel ({
             spellCheck={spellCheck}
           />
           <MarkdownCodeBlockChrome client={client} />
+          <MarkdownTableChrome client={client} />
           <div
             ref={reviewLayerRef}
             aria-label="Suggestions"

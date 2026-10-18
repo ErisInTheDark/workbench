@@ -3,7 +3,7 @@
  * - SourceText: markdown source text with a selection inside it.
  * - SourceFormats: the block and inline formats the toolbar shows as active at a source selection.
  * - SourceCommandContext: the file's writing habits and the comment author source commands write with.
- * - applySourceCommand: run a toolbar format or comment command on markdown source text.
+ * - applySourceCommand: run a toolbar format, clear formatting or comment command on markdown source text.
  * - readSourceFormats: the formats a source selection sits in.
  * - continueSourceBlock: Enter inside a list item or quote line starts the next one, or ends an empty one.
  * - indentSourceLines: Tab and Shift+Tab: indent or outdent the touched lines, or indent at a collapsed caret.
@@ -11,6 +11,7 @@
  */
 
 import { normalizeCommentAuthor } from "./comment-markdown";
+import { isIntrawordUnderscore } from "./markdown-escape";
 import { parseSourcedBlocks } from "./markdown-parse";
 import type { MarkdownStyle } from "./markdown-style";
 import { formatSuggestion } from "./markdown-suggestion";
@@ -34,7 +35,7 @@ export interface SourceCommandContext {
 }
 
 export type SourceCommand =
-  | "bold" | "italic" | "inline-code" | "del" | "ins"
+  | "bold" | "italic" | "inline-code" | "del" | "ins" | "clear-format"
   | "h1" | "h2" | "h3" | "quote" | "unordered-list" | "ordered-list"
   | "code-block" | "table" | "comment";
 
@@ -95,6 +96,32 @@ function toggleWrap(source: SourceText, open: string, close: string): SourceText
     start: start + open.length,
     text: `${text.slice(0, start)}${open}${selected}${close}${text.slice(end)}`,
   };
+}
+
+const FORMAT_MARKERS = /<\/?(?:del|ins)>|\*\*|__|~~|(?<!\\)[*_`]/gu;
+const PAIRED_MARKERS = ["**", "__", "~~", "*", "_", "`"] as const;
+
+/** Formatting markers inside the selection go, and so does each matching pair wrapped right around it. */
+function clearFormatting(source: SourceText): SourceText {
+  let { end, start, text } = source;
+  // An underscore between word characters is part of the word (snake_case), not emphasis.
+  const inner = text.slice(start, end).replace(FORMAT_MARKERS, (marker, offset: number, selected: string) => {
+    return marker === "_" && isIntrawordUnderscore(selected, offset) ? marker : "";
+  });
+  text = `${text.slice(0, start)}${inner}${text.slice(end)}`;
+  end = start + inner.length;
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [open, close] of [...PAIRED_MARKERS.map((marker) => [marker, marker] as const), ["<del>", "</del>"] as const, ["<ins>", "</ins>"] as const]) {
+      if (text.slice(0, start).endsWith(open) && text.slice(end).startsWith(close)) {
+        text = `${text.slice(0, start - open.length)}${text.slice(start, end)}${text.slice(end + close.length)}`;
+        start -= open.length;
+        end -= open.length;
+        changed = true;
+      }
+    }
+  }
+  return { end, start, text };
 }
 
 function stripBlockPrefix(line: string) {
@@ -187,6 +214,8 @@ export function applySourceCommand(source: SourceText, command: SourceCommand, c
       return toggleWrap(source, "<del>", "</del>");
     case "ins":
       return toggleWrap(source, "<ins>", "</ins>");
+    case "clear-format":
+      return clearFormatting(source);
     case "h1":
       return toggleHeading(source, 1);
     case "h2":

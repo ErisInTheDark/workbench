@@ -17,11 +17,14 @@ import {
 import { closestCodeBlock } from "../dom/mutation/code-block-dom";
 import type { EditorMode } from "../WorkbenchEditorClient";
 import type { EditorCommand } from "./editor-commands";
+import type { TableStructureCommand } from "./WorkbenchTableController";
 import type { PendingInlineFormatKey } from "./WorkbenchInlineFormatController";
 
-export type FormatCommand = Exclude<EditorCommand, "comment" | "source" | "undo" | "redo" | "save">;
+export type FormatCommand = Exclude<EditorCommand, "comment" | "source" | "undo" | "redo" | "save" | TableStructureCommand>;
 
-const NON_FORMAT_COMMANDS = new Set<EditorCommand>(["comment", "source", "undo", "redo", "save"]);
+const NON_FORMAT_COMMANDS = new Set<EditorCommand>([
+  "comment", "source", "undo", "redo", "save", "row-above", "row-below", "column-left", "column-right", "delete-row", "delete-column",
+]);
 
 export function isFormatCommand(command: EditorCommand): command is FormatCommand {
   return !NON_FORMAT_COMMANDS.has(command);
@@ -29,6 +32,9 @@ export function isFormatCommand(command: EditorCommand): command is FormatComman
 
 export interface WorkbenchFormatCommandControllerOptions {
   blockStructure: { insertTable: () => void; toggleCodeBlock: () => void };
+  clearFormatting: () => void;
+  /** Formats the table cell box instead of the selection while one exists; false without a box. */
+  formatCellBox: (format: PendingInlineFormatKey | "clear") => boolean;
   editor: HTMLDivElement;
   getMode: () => EditorMode;
   clearPendingInlineFormats: () => void;
@@ -51,7 +57,8 @@ type FormatAction =
   | { kind: "block"; tag: BlockFormatTag }
   | { kind: "list"; tag: ListFormatTag }
   | { kind: "code-block" }
-  | { kind: "table" };
+  | { kind: "table" }
+  | { kind: "clear" };
 
 const FORMAT_ACTIONS: Record<FormatCommand, FormatAction> = {
   bold: { kind: "inline", format: "bold" },
@@ -59,6 +66,7 @@ const FORMAT_ACTIONS: Record<FormatCommand, FormatAction> = {
   "inline-code": { kind: "inline", format: "code" },
   del: { kind: "inline", format: "del" },
   ins: { kind: "inline", format: "ins" },
+  "clear-format": { kind: "clear" },
   h1: { kind: "block", tag: "h1" },
   h2: { kind: "block", tag: "h2" },
   h3: { kind: "block", tag: "h3" },
@@ -126,7 +134,11 @@ function WorkbenchFormatCommandController(
     const action = FORMAT_ACTIONS[command];
     switch (action.kind) {
       case "inline":
-        toggleInlineFormat(action.format);
+        if (!options.formatCellBox(action.format)) toggleInlineFormat(action.format);
+        return;
+      case "clear":
+        options.clearPendingInlineFormats();
+        if (!options.formatCellBox("clear")) options.clearFormatting();
         return;
       case "block":
         runBlockCommand((selection) => {

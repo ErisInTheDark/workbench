@@ -1,10 +1,10 @@
 /*
  * Exports:
  * - WorkbenchBlockStructureControllerOptions: the editor root and its structural mutation pipeline.
- * - WorkbenchBlockStructureController: keys and toolbar actions that edit code blocks and tables.
- * - default WorkbenchBlockStructureController: keep code blocks plain multi-line text and tables a grid of one-line
- *   cells while typing, pasting and deleting, step out of them below, and create them from the toolbar or a typed
- *   fence or pipe row.
+ * - WorkbenchBlockStructureController: keys and toolbar actions that edit code blocks, and create code blocks and tables.
+ * - default WorkbenchBlockStructureController: keep code blocks plain multi-line text while typing, pasting and
+ *   deleting, step out of them below, and create code blocks and tables from the toolbar or a typed fence or pipe row.
+ *   Editing inside tables belongs to WorkbenchTableController.
  */
 
 import {
@@ -14,10 +14,7 @@ import {
     writeCodeBlockText,
 } from "../dom/mutation/code-block-dom";
 import {
-    closestTableCell,
     createTable,
-    createTableRow,
-    isTableRowEmpty,
     placeCaretInCell,
     rowCells,
     tableRows,
@@ -30,9 +27,9 @@ export interface WorkbenchBlockStructureControllerOptions {
 }
 
 interface WorkbenchBlockStructureController {
-  /** Handle an edit inside a code block or table cell, or a typed shortcut that creates one; true when handled. */
+  /** Handle an edit inside a code block, or a typed shortcut that creates a code block or table; true when handled. */
   handleBeforeInput: (event: InputEvent) => boolean;
-  /** Tab indents code and moves between cells; true when handled. */
+  /** Tab indents code; true when handled. */
   handleKeyDown: (event: KeyboardEvent) => boolean;
   insertTable: () => void;
   toggleCodeBlock: () => void;
@@ -64,13 +61,6 @@ function emptyParagraph() {
   const paragraph = document.createElement("p");
   paragraph.append(document.createElement("br"));
   return paragraph;
-}
-
-function textBefore(container: HTMLElement, range: Range) {
-  const before = document.createRange();
-  before.selectNodeContents(container);
-  before.setEnd(range.startContainer, range.startOffset);
-  return before.toString();
 }
 
 function textAfter(container: HTMLElement, range: Range) {
@@ -202,100 +192,6 @@ function WorkbenchBlockStructureController(
     if (cell) placeCaretInCell(cell, atEnd);
   }
 
-  function appendRowAndEnter(table: HTMLTableElement, column: number) {
-    runStructuralMutation(() => {
-      const row = createTableRow(table);
-      (table.tBodies[0] ?? table.appendChild(document.createElement("tbody"))).append(row);
-      moveToCell(rowCells(row)[column] ?? rowCells(row)[0]);
-    });
-  }
-
-  /** Enter moves down a column, adding a row below the last; on an empty last row it leaves the table instead. */
-  function enterInCell(cell: HTMLTableCellElement) {
-    const row = cell.parentElement as HTMLTableRowElement;
-    const table = cell.closest("table")!;
-    const rows = tableRows(table);
-    const rowIndex = rows.indexOf(row);
-    const column = rowCells(row).indexOf(cell);
-    const below = rows[rowIndex + 1];
-    if (below) {
-      moveToCell(rowCells(below)[column]);
-      return;
-    }
-    if (rowIndex > 0 && isTableRowEmpty(row)) {
-      runStructuralMutation(() => {
-        row.remove();
-        stepOutBelow(table);
-      });
-      return;
-    }
-    appendRowAndEnter(table, column);
-  }
-
-  function tabInCell(cell: HTMLTableCellElement, backwards: boolean) {
-    const table = cell.closest("table")!;
-    const cells = tableRows(table).flatMap(rowCells);
-    const index = cells.indexOf(cell);
-    if (backwards) {
-      moveToCell(cells[index - 1], true);
-      return;
-    }
-    if (cells[index + 1]) moveToCell(cells[index + 1], true);
-    else appendRowAndEnter(table, 0);
-  }
-
-  /** Backspace at a cell's start never pulls cells together; on an empty body row it removes the row. */
-  function backspaceInCell(cell: HTMLTableCellElement) {
-    const row = cell.parentElement as HTMLTableRowElement;
-    const table = cell.closest("table")!;
-    const rows = tableRows(table);
-    const rowIndex = rows.indexOf(row);
-    if (rowIndex <= 0 || !isTableRowEmpty(row)) return;
-    runStructuralMutation(() => {
-      row.remove();
-      moveToCell(rowCells(rows[rowIndex - 1]!).at(-1), true);
-    });
-  }
-
-  function insertIntoCell(range: Range, text: string) {
-    runStructuralMutation(() => {
-      range.deleteContents();
-      const node = document.createTextNode(text);
-      range.insertNode(node);
-      placeCaret(node, node.length);
-    });
-  }
-
-  function handleCellBeforeInput(cell: HTMLTableCellElement, range: Range, event: InputEvent) {
-    const inCell = cell.contains(range.endContainer);
-    switch (event.inputType) {
-      case "insertParagraph":
-        event.preventDefault();
-        enterInCell(cell);
-        return true;
-      case "insertLineBreak":
-        event.preventDefault();
-        return true;
-      case "insertFromPaste":
-      case "insertFromDrop":
-        if (!inCell) return false;
-        event.preventDefault();
-        insertIntoCell(range, pastedText(event).replace(/\s*[\r\n]+\s*/gu, " "));
-        return true;
-      case "deleteContentBackward":
-        if (!range.collapsed || textBefore(cell, range)) return false;
-        event.preventDefault();
-        backspaceInCell(cell);
-        return true;
-      case "deleteContentForward":
-        if (!range.collapsed || textAfter(cell, range)) return false;
-        event.preventDefault();
-        return true;
-      default:
-        return false;
-    }
-  }
-
   function readParagraphText(paragraph: HTMLElement) {
     return (paragraph.textContent ?? "").replaceAll(" ", " ");
   }
@@ -344,8 +240,6 @@ function WorkbenchBlockStructureController(
     if (!range) return false;
     const pre = closestCodeBlock(editor, range.startContainer);
     if (pre) return handleCodeBeforeInput(pre, range, event);
-    const cell = closestTableCell(editor, range.startContainer);
-    if (cell) return handleCellBeforeInput(cell, range, event);
     return handleTypedShortcut(range, event);
   }
 
@@ -357,12 +251,6 @@ function WorkbenchBlockStructureController(
     if (pre && pre.contains(range.endContainer)) {
       event.preventDefault();
       indentCode(pre, range, event.shiftKey);
-      return true;
-    }
-    const cell = closestTableCell(editor, range.startContainer);
-    if (cell) {
-      event.preventDefault();
-      tabInCell(cell, event.shiftKey);
       return true;
     }
     return false;

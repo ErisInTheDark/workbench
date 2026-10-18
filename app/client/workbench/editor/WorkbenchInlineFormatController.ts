@@ -3,7 +3,8 @@
  * - CaretRenderContext: caret styling and geometry derived from active inline formats.
  * - PendingInlineFormatKey / InlineFormatState: inline formats toggled by toolbar and keyboard flows, and which are active.
  * - WorkbenchInlineFormatControllerOptions: minimal DOM and callback dependencies for inline format coordination.
- * - WorkbenchInlineFormatController: public surface for pending inline format state, inline selection toggles, and canonicalization.
+ * - WorkbenchInlineFormatController: public surface for pending inline format state, inline selection toggles, whole-container
+ *   toggles (table cell boxes), clearing formatting, and canonicalization.
  * - default WorkbenchInlineFormatController: create the inline format controller used by the editor client.
  */
 
@@ -59,7 +60,11 @@ export interface WorkbenchInlineFormatControllerOptions {
 
 interface WorkbenchInlineFormatController {
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
+  clearFormatting: () => void;
+  clearFormattingInContainers: (containers: readonly HTMLElement[]) => void;
   clearPendingInlineFormats: () => void;
+  setPendingFormats: (formats: InlineFormatState) => void;
+  toggleFormatInContainers: (containers: readonly HTMLElement[], format: PendingInlineFormatKey) => void;
   getActiveInlineFormats: () => InlineFormatState;
   getCaretInlineContext: (range: Range) => CaretRenderContext | null;
   getProtectedEmptyInlineFormatElements: (root: ParentNode) => Set<HTMLElement>;
@@ -78,6 +83,9 @@ const INLINE_FORMAT_ORDER: Array<{ key: PendingInlineFormatKey; tagName: keyof H
   { key: "del", tagName: "del" },
   { key: "ins", tagName: "ins" },
 ];
+
+const FORMAT_MARK_TAGS = new Set<string>(INLINE_FORMAT_ORDER.map((format) => format.tagName));
+const INLINE_RUN_CONTAINER_SELECTOR = "p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th, span[data-summary-text='true']";
 
 const NAVIGATION_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 
@@ -611,7 +619,7 @@ function WorkbenchInlineFormatController(
     const containers = root instanceof HTMLElement && root !== options.editor && options.isInlineRunContainer(root)
       ? [root]
       : "querySelectorAll" in root
-        ? Array.from(root.querySelectorAll<HTMLElement>("p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th, span[data-summary-text='true']"))
+        ? Array.from(root.querySelectorAll<HTMLElement>(INLINE_RUN_CONTAINER_SELECTOR))
             .filter((element) => options.isInlineRunContainer(element))
         : [];
 
@@ -751,9 +759,105 @@ function WorkbenchInlineFormatController(
     });
   }
 
+  /** The caret's next typed text takes exactly these formats, as if each had been toggled on or off. */
+  function setPendingFormats(formats: InlineFormatState) {
+    pendingInlineFormats = formats;
+    materializePendingInlineFormatsAtCaret(formats);
+    options.updateCustomCaret();
+    options.updateInlineToolbars();
+  }
+
+  /** Add a format to all text of the containers, or take it off when all of it already has it. */
+  function toggleFormatInContainers(containers: readonly HTMLElement[], format: PendingInlineFormatKey) {
+    const target = getInlineMarkForFormat(format);
+    const leaves = containers.map((container) => flattenInlineContent(container.childNodes));
+    const semantic = leaves.flat().filter((leaf) => leaf.type === "text" && /[^\t  ]/.test(leaf.text));
+    const remove = semantic.length > 0 && semantic.every((leaf) => leaf.type === "text" && leaf.marks.some((mark) => areInlineMarksEqual(mark, target)));
+    options.syncEditorAfterStructuralChange(() => {
+      containers.forEach((container, index) => {
+        rebuildInlineRunContainer(container, normalizeInlineLeaves(leaves[index]!.map((leaf): InlineLeaf => leaf.type !== "text" ? leaf : {
+          ...leaf,
+          marks: remove
+            ? leaf.marks.filter((mark) => !areInlineMarksEqual(mark, target))
+            : normalizeInlineMarks([...leaf.marks.filter((mark) => !areInlineMarksEqual(mark, target)), target]),
+        })));
+      });
+    });
+  }
+
+  function withoutFormatMarks(leaf: InlineLeaf): InlineLeaf {
+    return leaf.type === "text" ? { ...leaf, marks: leaf.marks.filter((mark) => !FORMAT_MARK_TAGS.has(mark.tag)) } : leaf;
+  }
+
+  function clearFormattingInContainers(containers: readonly HTMLElement[]) {
+    options.syncEditorAfterStructuralChange(() => {
+      for (const container of containers) {
+        rebuildInlineRunContainer(container, normalizeInlineLeaves(flattenInlineContent(container.childNodes).map(withoutFormatMarks)));
+      }
+    });
+  }
+
+  /**
+   * Strip bold, italic, code, del and ins from the selected text of every block it touches; links and comment anchors
+   * stay. A caret instead turns every pending format off.
+   */
+  function clearFormatting() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !options.editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      return;
+    }
+    if (selection.isCollapsed) {
+      setPendingFormats(createEmptyInlineFormatState());
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const containers = Array.from(options.editor.querySelectorAll<HTMLElement>(INLINE_RUN_CONTAINER_SELECTOR))
+      .filter((element) => options.isInlineRunContainer(element) && range.intersectsNode(element));
+    if (!containers.length) {
+      return;
+    }
+
+    const endMarker = createInlineSelectionMarker("selection-end");
+    const endRange = range.cloneRange();
+    endRange.collapse(false);
+    endRange.insertNode(endMarker);
+    const startMarker = createInlineSelectionMarker("selection-start");
+    const startRange = range.cloneRange();
+    startRange.collapse(true);
+    startRange.insertNode(startMarker);
+
+    options.syncEditorAfterStructuralChange(() => {
+      for (const container of containers) {
+        let selected = !container.contains(startMarker);
+        const leaves = flattenInlineContent(container.childNodes).map((leaf) => {
+          if (leaf.type === "marker") {
+            if (leaf.role === "selection-start") selected = true;
+            if (leaf.role === "selection-end") selected = false;
+            return leaf;
+          }
+          return selected ? withoutFormatMarks(leaf) : leaf;
+        });
+        rebuildInlineRunContainer(container, normalizeInlineLeaves(leaves));
+      }
+      preservePendingInlineFormatSelectionChanges = Math.max(preservePendingInlineFormatSelectionChanges, 2);
+    }, {
+      afterDomMutation: () => {
+        restoreSelectionToMarkers(
+          options.editor.querySelector<HTMLElement>('[data-inline-selection-marker="selection-start"]') ?? startMarker,
+          options.editor.querySelector<HTMLElement>('[data-inline-selection-marker="selection-end"]') ?? endMarker,
+        );
+      },
+    });
+  }
+
   return {
     canonicalizeAllInlineRunContainers,
+    clearFormatting,
+    clearFormattingInContainers,
     clearPendingInlineFormats,
+    setPendingFormats,
+    toggleFormatInContainers,
     getActiveInlineFormats,
     getCaretInlineContext,
     getProtectedEmptyInlineFormatElements: getProtectedEmptyInlineFormatElementsForRoot,

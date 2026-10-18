@@ -44,6 +44,11 @@ test("inline formats wrap a selection and unwrap it again, in the file's delimit
   );
 });
 
+test("clear formatting drops markers in and right around the selection, keeping snake_case words", () => {
+  assert.equal(run("say **[hi]** there", "clear-format"), "say [hi] there");
+  assert.equal(run("[my_var *x* `y` <del>z</del>]", "clear-format"), "[my_var x y z]");
+});
+
 test("block formats toggle line prefixes across every touched line", () => {
   assert.equal(run("[one\ntwo]", "h2"), "## [one\n## two]");
   assert.equal(run("## [one]", "h2"), "[one]");

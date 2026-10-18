@@ -6,7 +6,9 @@
  * - readTableAlignments: each column's alignment, read from the header row.
  * - tableRows: the header row followed by the body rows of a table.
  * - rowCells: the cells of one row.
- * - isTableRowEmpty: whether no cell of a row holds text or an atom.
+ * - isTableCellEmpty / isTableRowEmpty: whether a cell, or every cell of a row, holds no text or atom.
+ * - columnCells / tableCellAt / tableCellPosition: read a table as a grid of rows and columns.
+ * - insertTableRow / insertTableColumn / deleteTableColumn: grow or shrink the grid, keeping the header row first.
  * - createTableRow: an empty row of a table's width whose cells keep their column's alignment.
  * - createTable: an empty table with a header row and body rows.
  * - placeCaretInCell: put a collapsed caret at the start or end of a cell.
@@ -48,9 +50,52 @@ export function readTableAlignments(table: HTMLTableElement): TableAlignment[] {
   return header ? rowCells(header).map(readAlignment) : [];
 }
 
+export function isTableCellEmpty(cell: HTMLTableCellElement) {
+  return !(cell.textContent ?? "").replaceAll(" ", "").trim() && !cell.querySelector("[data-comment-thread]");
+}
+
 export function isTableRowEmpty(row: HTMLTableRowElement) {
-  return rowCells(row).every((cell) => !(cell.textContent ?? "").replaceAll(" ", "").trim()
-    && !cell.querySelector("[data-comment-thread]"));
+  return rowCells(row).every(isTableCellEmpty);
+}
+
+export function columnCells(table: HTMLTableElement, column: number) {
+  return tableRows(table).map((row) => rowCells(row)[column]).filter((cell): cell is HTMLTableCellElement => Boolean(cell));
+}
+
+export function tableCellAt(table: HTMLTableElement, row: number, column: number) {
+  const tableRow = tableRows(table)[row];
+  return tableRow ? rowCells(tableRow)[column] ?? null : null;
+}
+
+/** The row and column of a cell in its table. */
+export function tableCellPosition(cell: HTMLTableCellElement) {
+  const row = cell.parentElement as HTMLTableRowElement;
+  return { column: rowCells(row).indexOf(cell), row: tableRows(cell.closest("table")!).indexOf(row) };
+}
+
+/** An empty body row at a row index; the header stays first, so index 0 inserts below it too. */
+export function insertTableRow(table: HTMLTableElement, index: number) {
+  const row = createTableRow(table);
+  const body = table.tBodies[0] ?? table.appendChild(table.ownerDocument.createElement("tbody"));
+  const before = tableRows(table)[Math.max(1, index)];
+  if (before && before.parentElement === body) body.insertBefore(row, before);
+  else body.append(row);
+  return row;
+}
+
+/** An empty unaligned column at a column index; returns its cells from the header down. */
+export function insertTableColumn(table: HTMLTableElement, index: number) {
+  return tableRows(table).map((row, rowIndex) => {
+    const cell = createCell(table.ownerDocument, rowIndex === 0 ? "th" : "td", null);
+    const before = rowCells(row)[index];
+    if (before) row.insertBefore(cell, before);
+    else row.append(cell);
+    return cell;
+  });
+}
+
+export function deleteTableColumn(table: HTMLTableElement, index: number) {
+  for (const cell of columnCells(table, index)) cell.remove();
 }
 
 function createCell(document: Document, tag: "td" | "th", alignment: TableAlignment) {

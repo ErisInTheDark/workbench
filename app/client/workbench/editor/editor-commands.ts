@@ -14,6 +14,7 @@ export type EditorCommand =
   | "inline-code"
   | "del"
   | "ins"
+  | "clear-format"
   | "h1"
   | "h2"
   | "h3"
@@ -22,6 +23,12 @@ export type EditorCommand =
   | "ordered-list"
   | "code-block"
   | "table"
+  | "row-above"
+  | "row-below"
+  | "column-left"
+  | "column-right"
+  | "delete-row"
+  | "delete-column"
   | "comment"
   | "source"
   | "undo"
@@ -51,6 +58,7 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
   "inline-code": { label: "Inline code", keybinds: [{ mod: true, code: "Backquote" }] },
   del: { label: "Mark as deleted", keybinds: [{ mod: true, shift: true, key: "x" }] },
   ins: { label: "Mark as inserted", keybinds: [{ mod: true, shift: true, key: "a" }] },
+  "clear-format": { label: "Clear formatting", keybinds: [{ mod: true, code: "Backslash" }] },
   h1: { label: "Heading 1", keybinds: [{ mod: true, alt: true, code: "Digit1" }] },
   h2: { label: "Heading 2", keybinds: [{ mod: true, alt: true, code: "Digit2" }] },
   h3: { label: "Heading 3", keybinds: [{ mod: true, alt: true, code: "Digit3" }] },
@@ -59,6 +67,12 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
   "ordered-list": { label: "Numbered list", keybinds: [{ mod: true, shift: true, code: "Digit7" }] },
   "code-block": { label: "Code block", keybinds: [{ mod: true, alt: true, code: "KeyC" }] },
   table: { label: "Table", keybinds: [] },
+  "row-above": { label: "Insert row above", keybinds: [{ mod: true, alt: true, code: "ArrowUp" }] },
+  "row-below": { label: "Insert row below", keybinds: [{ mod: true, alt: true, code: "ArrowDown" }] },
+  "column-left": { label: "Insert column left", keybinds: [{ mod: true, alt: true, code: "ArrowLeft" }] },
+  "column-right": { label: "Insert column right", keybinds: [{ mod: true, alt: true, code: "ArrowRight" }] },
+  "delete-row": { label: "Delete row", keybinds: [] },
+  "delete-column": { label: "Delete column", keybinds: [] },
   comment: { label: "Comment", keybinds: [{ mod: true, alt: true, code: "KeyM" }] },
   source: { label: "Markdown source", keybinds: [{ mod: true, key: "e" }] },
   undo: { label: "Undo", keybinds: [{ mod: true, key: "z" }] },
@@ -90,7 +104,9 @@ export function matchEditorCommand(event: KeyboardEvent): EditorCommand | null {
   return null;
 }
 
-const CODE_LABELS: Record<string, string> = { Backquote: "`" };
+const CODE_LABELS: Record<string, string> = {
+  ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", Backquote: "`", Backslash: "\\",
+};
 
 export function describeKeybind(keybind: EditorKeybind, apple: boolean) {
   const keys: string[] = [apple ? "⌘" : "Ctrl"];

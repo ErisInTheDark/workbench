@@ -30,6 +30,7 @@ import {
 } from "./editor/inline-run-containers";
 import type { WorkbenchCodeBlockController } from "./editor/WorkbenchCodeBlockController";
 import type { WorkbenchCommentController } from "./editor/WorkbenchCommentController";
+import type { TableStructureCommand, WorkbenchTableController } from "./editor/WorkbenchTableController";
 import { isFormatCommand } from "./editor/WorkbenchFormatCommandController";
 import type { ReviewMode, SuggestionLayout } from "./editor/WorkbenchSuggestionController";
 import {
@@ -73,6 +74,7 @@ export interface WorkbenchFilePanelClient {
   beginToolbarInteraction: (event: Event) => void;
   codeBlocks: WorkbenchCodeBlockController;
   comments: WorkbenchCommentController;
+  tables: WorkbenchTableController;
   /** Discard the unsaved draft and reload the file from disk. */
   deleteDraft: () => Promise<void>;
   dispose: () => void;
@@ -133,6 +135,8 @@ function WorkbenchFilePanelClient(
   const sessionState = SessionState();
   const fileSessionState = FileSessionState();
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
+  const TABLE_STRUCTURE_COMMANDS = new Set<EditorCommand>(["row-above", "row-below", "column-left", "column-right", "delete-row", "delete-column"]);
+  const isTableStructureCommand = (command: EditorCommand): command is TableStructureCommand => TABLE_STRUCTURE_COMMANDS.has(command);
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
 
   /** Rich mode edits the rendered document; source mode runs the same commands as markdown text edits. */
@@ -153,6 +157,8 @@ function WorkbenchFilePanelClient(
       editHistoryManager.redoEditHistory();
     } else if (command === "source") {
       fileClient.switchMode(source ? "rich" : "plain");
+    } else if (isTableStructureCommand(command)) {
+      if (!source) editorClient.tables.runCommand(command);
     } else if (command === "comment") {
       if (source) editorClient.applySourceCommand(command);
       else editorClient.startCommentDraft();
@@ -522,6 +528,7 @@ function WorkbenchFilePanelClient(
     getToolbarState: editorClient.getToolbarState,
     codeBlocks: editorClient.codeBlocks,
     runCommand,
+    tables: editorClient.tables,
     setCommentAuthor: (author) => {
       commentAuthor = author;
     },

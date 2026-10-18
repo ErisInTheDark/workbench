@@ -83,5 +83,6 @@ test("the toolbar turns paragraphs into one code block and back, and inserts a t
   await panel.caret("two|");
   await panel.toolbar("table");
   await panel.type("h");
-  assert.equal(await panel.save(), "one\n\ntwo\n\n| h |  |\n| --- | --- |\n|  |  |\n");
+  // The empty column and body row the caret never entered are pruned as it moves.
+  assert.equal(await panel.save(), "one\n\ntwo\n\n| h |\n| --- |\n");
 }));
