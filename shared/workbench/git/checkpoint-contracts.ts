@@ -398,6 +398,8 @@ export const GitCheckpointProposalSchema = z.object({
   committedSha: checkpointSha.nullable(),
   description: z.string(),
   freshChanges: z.array(GitCheckpointFileChangeSchema).nullable().optional().default(null),
+  /** Message a pending amend proposal offers for committing fresh instead; null when it offers no fresh choice. */
+  freshCommitMessage: GitCheckpointCommitMessageSchema.nullable().optional().default(null),
   includeNewerAvailable: z.boolean(),
   unclaimedDirtAvailable: z.boolean().default(false).optional(),
   unclaimedDirt: z.object({

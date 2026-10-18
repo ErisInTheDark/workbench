@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, rebases onto HEAD, arc drift and seal/reopen operations.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, proposal-layer rewrites, rebases onto HEAD, arc drift and seal/reopen operations (sealing amendments as fresh commits).
  * - GitArcPreparedStackRevision: atomic ref and commit updates for one proposal revision or chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
@@ -27,6 +27,7 @@ import GitCheckpointStore from "./GitCheckpointStore";
 import type { StoredProposal } from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { type GitRefUpdate } from "./WorkbenchGitRepository";
+import freshCommitProposal from "./fresh-commit-proposal";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
 
 export interface GitArcStackLayer {
@@ -399,14 +400,29 @@ export default class GitArcStackController {
     const chain = await this.readChain(entry.stackTip);
     const sealed = new Set(this.ownLayers(chain, entry).flatMap(({ layer }) => layer.proposalIds));
     const candidates = lifecycleProposalIds(entry).filter(id => !sealed.has(id));
-    const pending = [];
+    const stored: StoredProposal[] = [];
     for (const proposalId of candidates) {
       if (await resolveStatus(identity, proposalId) !== "proposed") continue;
-      pending.push(await store.readProposal(identity.harness, identity.threadId, proposalId));
+      const proposal = await store.readProposal(identity.harness, identity.threadId, proposalId);
+      // Rewords carry no content to seal, so they stay pending beside the layer.
+      if (!proposal.metadata.messageOnly) stored.push(proposal);
     }
-    if (!pending.length) return null;
+    if (!stored.length) return null;
     // Stash baselines are real HEAD; sealing beside saved work would strand it below the stack.
     if (entry.savedStash || entry.phase === "stashed") throw new GitArcRejectionError({ reason: "savedWorkBlocksStack" });
+    // Sealed work never rewrites history, so amendments seal as the fresh commits they offered.
+    const freshUpdates: GitRefUpdate[] = [];
+    const pending: StoredProposal[] = [];
+    for (const proposal of stored) {
+      if (proposal.metadata.mode !== "amend") {
+        pending.push(proposal);
+        continue;
+      }
+      const fresh = await freshCommitProposal(this.repository, proposal);
+      const state = await store.createProposalCommit(fresh.tree, fresh.metadata, { previous: proposal });
+      freshUpdates.push({ newValue: state.commit, oldValue: proposal.proposalCommit, ref: proposal.proposalRef });
+      pending.push({ ...proposal, metadata: state.metadata, proposalCommit: state.commit, tree: fresh.tree });
+    }
     const parentTip = chain.length && await this.chainHasPending(chain) ? chain.at(-1)!.tipCommit : null;
     const parent = parentTip ?? await this.repository.headOrNull();
     let tree = await this.repository.resolveTree(parent);
@@ -444,7 +460,7 @@ export default class GitArcStackController {
       active.filter(path => !sealedPaths.covers(path)),
     );
     const mutation = await registry.prepareSet(nextEntry, entry.checkpointCommit);
-    const updates = [prepared.update, ...mutation.updates];
+    const updates = [...freshUpdates, prepared.update, ...mutation.updates];
     return this.operation(updates, {
       ...this.resultBase(entry),
       layerId: stackLayer.layerId,

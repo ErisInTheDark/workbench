@@ -117,6 +117,7 @@ function proposal(proposalId: string, status: GitCheckpointProposal["status"]): 
     committedSha: status === "committed" ? "b".repeat(40) : null,
     description: "",
     freshChanges: null,
+    freshCommitMessage: null,
     includeNewerAvailable: false,
     mode: "commit",
     paths: ["src/one.ts"],

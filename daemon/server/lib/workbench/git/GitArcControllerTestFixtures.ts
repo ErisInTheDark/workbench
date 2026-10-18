@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import GitArcRegistry from "./GitArcRegistry";
+import GitCheckpointStore from "./GitCheckpointStore";
 import type { GitTestFixtureSpec } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
@@ -209,7 +210,7 @@ export type ControllerFixtureState = Awaited<ReturnType<typeof CONTROLLER_OPERAT
 export const STACK_OPERATIONS_FIXTURE = {
   commits: CONTROLLER_BASE_FIXTURE.commits,
   name: "stack-shared-states",
-  revision: 7,
+  revision: 8,
   prepare: async ({ bundleRoot, repositoryRoot, runGit }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string, source = repositoryRoot) => {
@@ -250,8 +251,25 @@ export const STACK_OPERATIONS_FIXTURE = {
       cwd: amended, threadId: "owner", amend: true, amendProposalId: original, paths: ["one.txt"],
       title: "first amended", description: "", freshTitle: "first follow-up",
     })).proposalId;
+    // Layers sealed before stacking made amends fresh still hold the amend state.
+    const legacyAmendmentCommit = (await new GitCheckpointStore(await WorkbenchGitRepository.open(amended))
+      .readProposal("codex", "owner", amendment)).proposalCommit;
     await controller.stackArc({ cwd: amended, threadId: "owner", title: "amend layer" });
     const amendedUpper = await propose(amended, "owner", "one.txt", "stacked\n", "stacked");
+    const legacyAmended = await fork("legacy-amended", amended);
+
+    // reworded: a committed proposal's pending reword beside pending content work, not yet stacked.
+    const reworded = await fork("reworded");
+    await controller.createAndStartPlan({ cwd: reworded, threadId: "owner", intentName: "reworded work", paths: ["one.txt", "two.txt"] });
+    const rewordTarget = await propose(reworded, "owner", "one.txt", "first\n", "first");
+    await write(reworded, "two.txt", "pending two\n");
+    await controller.commitProposal({ cwd: reworded, threadId: "owner", proposalId: rewordTarget, title: "first", description: "", includeNewer: false });
+    const reword = (await controller.createProposal({
+      cwd: reworded, threadId: "owner", amendProposalId: rewordTarget, title: "first renamed", description: "",
+    })).proposalId;
+    const rewordedContent = (await controller.createProposal({
+      cwd: reworded, threadId: "owner", paths: ["two.txt"], title: "pending two", description: "",
+    })).proposalId;
 
     // transfer: the child received three.txt on parent layer one; the parent then sealed two.txt in layer two.
     const transfer = await fork("transfer");
@@ -273,12 +291,16 @@ export const STACK_OPERATIONS_FIXTURE = {
     await write(sibling, "two.txt", "sibling\n");
     await runGit(["commit", "--quiet", "-m", "sibling", "--", "two.txt"], { cwd: sibling });
 
-    for (const root of [sealed, stacked, broken, amended, transfer, sibling]) await runGit(["fsck", "--strict"], { cwd: root });
+    for (const root of [sealed, stacked, broken, amended, legacyAmended, reworded, transfer, sibling]) {
+      await runGit(["fsck", "--strict"], { cwd: root });
+    }
     return {
       sealed: { root: relative(sealed), lower },
       stacked: { root: relative(stacked), lower, upper },
       broken: { root: relative(broken), upper },
       amended: { root: relative(amended), amendment, upper: amendedUpper },
+      legacyAmended: { root: relative(legacyAmended), amendment, legacyAmendmentCommit },
+      reworded: { root: relative(reworded), content: rewordedContent, reword },
       transfer: { root: relative(transfer), lower: transferLower, upper: transferUpper },
       sibling: { root: relative(sibling), lower: siblingLower },
     };

@@ -30,7 +30,7 @@ const pendingProps = {
 
 const proposed = {
   amendTargetMessage: null, amendTargetSha: null, baseCommit: "a".repeat(40), changes: [],
-  committedSha: null, description: "proposal details", freshChanges: null, includeNewerAvailable: false,
+  committedSha: null, description: "proposal details", freshChanges: null, freshCommitMessage: null, includeNewerAvailable: false,
   mode: "commit", paths: [], proposalId: "proposal", status: "proposed",
   supersededByProposalId: null, supersededBySha: null, title: "loaded proposal", unavailableReason: null,
 } satisfies GitCheckpointProposal;

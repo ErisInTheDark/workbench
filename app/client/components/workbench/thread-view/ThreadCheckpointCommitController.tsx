@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadCheckpointCommitControllerProps: identify one proposal controller and its link inputs.
- * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed or permanent-commit summary until it loads; unobserved surfaces read for themselves), own edit and commit actions, and register commit-all readiness.
+ * - default ThreadCheckpointCommitController: demand near-visible proposal state and chosen inclusion variants from the observing thread (showing the observed or permanent-commit summary until it loads; unobserved surfaces read for themselves), offer the loaded proposal's fresh-commit choice, own edit and commit actions, and register commit-all readiness.
  */
 "use client";
 
@@ -147,7 +147,7 @@ function ThreadCheckpointCommitController({
   const commitDescriptionHydrated = useRef(intentOwnsCommit || Boolean(seedCommit));
   const title = commitMode === "amend" ? amendTitle : commitTitle;
   const description = commitMode === "amend" ? amendDescription : commitDescription;
-  const freshCommitAvailable = Boolean(intent?.freshTitle?.trim());
+  const freshCommitAvailable = state.status === "loaded" && Boolean(state.proposal.freshCommitMessage);
 
   useEffect(() => {
     if (!proposalId || !observeProposal || !observationTarget) return;
@@ -250,6 +250,13 @@ function ThreadCheckpointCommitController({
       if (!amendDescriptionHydrated.current || proposal.status !== "proposed") setAmendDescription(proposal.description);
       amendTitleHydrated.current = true;
       amendDescriptionHydrated.current = true;
+      const fresh = proposal.freshCommitMessage;
+      if (fresh) {
+        if (!commitTitleHydrated.current) setCommitTitle(fresh.title);
+        if (!commitDescriptionHydrated.current) setCommitDescription(fresh.description);
+        commitTitleHydrated.current = true;
+        commitDescriptionHydrated.current = true;
+      }
     } else {
       if (!commitTitleHydrated.current || proposal.status !== "proposed") setCommitTitle(proposal.title);
       if (!commitDescriptionHydrated.current || proposal.status !== "proposed") setCommitDescription(proposal.description);
@@ -257,7 +264,8 @@ function ThreadCheckpointCommitController({
       commitDescriptionHydrated.current = true;
     }
     loadedModeRef.current = proposal.mode;
-    if (proposal.status !== "proposed" || intent?.mode === null) setCommitMode(proposal.mode);
+    // Only a real amend-or-fresh choice keeps the user's mode; otherwise the proposal decides it.
+    if (proposal.status !== "proposed" || intent?.mode === null || !proposal.freshCommitMessage) setCommitMode(proposal.mode);
     if (!proposal.includeNewerAvailable && includeNewer) setIncludeNewer(false);
     // Observation pushes fresh objects; an unchanged proposal must not re-render the whole card.
     setState(current => current.status === "loaded" && areDeeplyEqual(current.proposal, proposal)

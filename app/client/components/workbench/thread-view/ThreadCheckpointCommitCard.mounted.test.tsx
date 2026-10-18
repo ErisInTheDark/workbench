@@ -37,7 +37,7 @@ const controls = {
 const proposed = {
   amendTargetMessage: null, amendTargetSha: null, baseCommit: "a".repeat(40),
   changes: [{ additions: 1, deletions: 1, diff: "@@ -1 +1 @@\n-a\n+b\n", kind: { type: "update", move_path: null }, path: "src/one.ts" }],
-  committedSha: null, description: "proposal details", freshChanges: null, includeNewerAvailable: false,
+  committedSha: null, description: "proposal details", freshChanges: null, freshCommitMessage: null, includeNewerAvailable: false,
   mode: "commit", paths: ["src/one.ts"], proposalId: "proposal", status: "proposed",
   supersededByProposalId: null, supersededBySha: null, title: "loaded proposal", unavailableReason: null,
 } satisfies GitCheckpointProposal;

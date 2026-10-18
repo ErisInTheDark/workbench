@@ -255,24 +255,49 @@ test("outside commits on unsealed paths never strand work beneath a pending stac
   assert.equal(await git("show", "HEAD:two.txt"), "sibling\nowner\n");
 });
 
-test("accepting a sealed amend rewrites the stack onto the amended history", async () => {
-  const { commit, cwd, git, state } = branch("amended");
-  const repository = await WorkbenchGitRepository.open(cwd);
-  const store = new GitCheckpointStore(repository);
-  const { amendTargetSha } = (await store.readProposal("codex", "owner", state.amendment)).metadata;
-  assert.ok(amendTargetSha);
-  await controller.commitProposal({
+/** Lands a sealed amendment as offered, then the layer above it; earlier history must survive untouched. */
+async function assertSealedAmendCommitsFresh(key: "amended" | "legacyAmended", upperId: string | null) {
+  const { commit, cwd, git, read, state } = branch(key);
+  const amendedHead = (await git("rev-parse", "HEAD")).trim();
+  const offered = await read("owner", state.amendment);
+  assert.equal(offered.mode, "commit");
+  assert.equal(offered.amendTargetSha, null);
+  assert.equal(offered.title, "first follow-up");
+  assert.deepEqual(offered.changes.map(({ path: filePath }) => filePath), ["one.txt"]);
+  await assert.rejects(controller.commitProposal({
     cwd, threadId: "owner", proposalId: state.amendment, title: "first amended", description: "", includeNewer: false, mode: "amend",
-  });
-  const accepted = (await store.readProposal("codex", "owner", state.amendment)).metadata;
-  assert.equal(accepted.replacedSha, amendTargetSha, "the accepted amend remembers the commit its permanent row replaces");
-  assert.notEqual(accepted.committedSha, amendTargetSha);
-  const { stackBase } = (await store.readProposal("codex", "owner", state.upper)).metadata;
-  assert.equal((await repository.readCommitAt(stackBase!))?.identity.parents[0], await repository.currentHead(),
-    "the stacked base follows the rewritten HEAD");
-  await commit("owner", state.upper, "stacked");
+  }), (error: unknown) => error instanceof GitArcRejectionError && error.rejection.reason === "cannotCommitAsAmend");
+  await commit("owner", state.amendment, offered.title);
+  assert.equal((await git("rev-parse", "HEAD~1")).trim(), amendedHead, "committing a sealed amendment never rewrites history");
+  assert.equal(await git("show", "HEAD:one.txt"), "amended\n");
+  if (!upperId) return;
+  await commit("owner", upperId, "stacked");
   assert.equal(await git("show", "HEAD:one.txt"), "stacked\n");
-  assert.equal(await git("log", "-1", "--format=%s", "HEAD~1"), "first amended\n");
+  assert.equal(await git("log", "-3", "--format=%s"), "stacked\nfirst follow-up\nfirst\n");
+}
+
+test("stacking turns an amendment into a fresh commit that lands beneath the layer above", async () => {
+  await assertSealedAmendCommitsFresh("amended", branch("amended").state.upper);
+});
+
+test("amendments sealed before stacking made them fresh still commit fresh", async () => {
+  const { cwd, state } = branch("legacyAmended");
+  const store = new GitCheckpointStore(await WorkbenchGitRepository.open(cwd));
+  const sealed = await store.readProposal("codex", "owner", state.amendment);
+  await (await WorkbenchGitRepository.open(cwd)).updateRefs([{
+    newValue: state.legacyAmendmentCommit, oldValue: sealed.proposalCommit, ref: sealed.proposalRef,
+  }]);
+  assert.equal((await store.readProposal("codex", "owner", state.amendment)).metadata.mode, "amend");
+  await assertSealedAmendCommitsFresh("legacyAmended", null);
+});
+
+test("stacking leaves pending rewords unsealed beside the layer", async () => {
+  const { cwd, read, state } = branch("reworded");
+  const stacked = await controller.stackArc({ cwd, threadId: "owner", title: "content layer" });
+  assert.deepEqual(stacked.proposalIds, [state.content]);
+  const reword = await read("owner", state.reword);
+  assert.equal(reword.status, "proposed");
+  assert.equal(reword.sealedInLayer, null);
 });
 
 test("transferred claims keep sealed proposals committable, never lower a stack tip, and fast-forward a child on a lower layer", async () => {

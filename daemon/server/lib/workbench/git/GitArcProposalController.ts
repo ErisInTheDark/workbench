@@ -31,6 +31,7 @@ import GitCheckpointStore, {
   type StoredCheckpoint,
   type StoredProposal,
 } from "./GitCheckpointStore";
+import freshCommitProposal from "./fresh-commit-proposal";
 import { formatGitRawDate } from "./GitObjectWriter";
 import WorkbenchGitHistoryRewriter, { type WorkbenchGitPreparedHead } from "./WorkbenchGitHistoryRewriter";
 import WorkbenchGitRepository, { type GitRefUpdate, type GitWorktreeSnapshot } from "./WorkbenchGitRepository";
@@ -444,9 +445,12 @@ async function buildProposalResult(
   const amendability: GitCheckpointProposal["amendability"] = classifiedAmendability?.status === "available"
     ? { status: "available" }
     : classifiedAmendability;
+  const freshCommitMessage = metadata.mode === "amend" && metadata.status === "proposed"
+    ? metadata.freshCommitMessage ?? null
+    : null;
   const [changes, freshChanges, amendTargetMessage] = await Promise.all([
     buildProposalFileChanges(proposalDiffs, repository, metadata, targetTree),
-    metadata.mode === "amend" && metadata.status === "proposed" && metadata.freshCommitMessage
+    freshCommitMessage
       ? buildProposalFileChanges(proposalDiffs, repository, metadata, targetTree, {
         baseCommit: metadata.liveBaseCommit,
         paths: metadata.livePaths,
@@ -465,6 +469,7 @@ async function buildProposalResult(
     committedSha: metadata.committedSha,
     description: metadata.description,
     freshChanges,
+    freshCommitMessage,
     includeNewerAvailable: options.includeNewerAvailable ?? false,
     unclaimedDirtAvailable: metadata.status === "proposed" && !metadata.messageOnly,
     mode: metadata.mode,
@@ -530,6 +535,17 @@ async function resolveProposalState(
     transitioned = true;
     return deriveProposalTransition(proposal, metadata, treeish);
   };
+  // Layers sealed before stacking made amendments fresh still hold them as amends.
+  if (
+    options.sealed
+    && proposal.metadata.status === "proposed"
+    && proposal.metadata.mode === "amend"
+    && proposal.metadata.freshCommitMessage
+    && !proposal.metadata.messageOnly
+  ) {
+    const fresh = await freshCommitProposal(repository, proposal);
+    proposal = await applyTransition(fresh.metadata, fresh.tree);
+  }
   if (proposal.metadata.stackBase && proposal.metadata.status === "proposed") {
     const head = options.snapshot ? options.snapshot.head : await repository.headOrNull();
     const stacked = await new GitArcStackController(repository, resolveThreadIdentity).classifyStackedProposal(
@@ -1784,28 +1800,22 @@ export default class GitArcProposalController {
     }
 
     const message = commitMessage(title, description);
-    const committingFresh = proposal.metadata.mode === "amend";
-    const baseCommit = committingFresh ? proposal.metadata.liveBaseCommit : proposal.metadata.baseCommit;
-    const selectedTree = includeNewer && resolved.includeNewerAvailable ? resolved.currentTree! : proposal.tree;
-    const targetTree = committingFresh && !(includeNewer && resolved.includeNewerAvailable)
-      ? await repository.writeTreeWithPathsFromSource(baseCommit, selectedTree, proposal.metadata.livePaths)
-      : selectedTree;
+    const committing = proposal.metadata.mode === "amend"
+      ? await freshCommitProposal(repository, proposal)
+      : { metadata: proposal.metadata, tree: proposal.tree };
+    const baseCommit = committing.metadata.baseCommit;
+    const includingNewer = includeNewer && resolved.includeNewerAvailable;
+    const targetTree = includingNewer ? resolved.currentTree! : committing.tree;
     if (targetTree === await repository.resolveTree(baseCommit)) {
       throw new GitArcRejectionError({ reason: "noChangesToPropose" }, "The selected result has no changes to commit.");
     }
     // Commits land at their proposal time so accepted stacks keep their real history; newer work is dated now.
-    const proposedAt = includeNewer && resolved.includeNewerAvailable ? undefined : proposal.metadata.proposedAt;
+    const proposedAt = includingNewer ? undefined : proposal.metadata.proposedAt;
     const committedSha = await repository.createCommitFromTree(targetTree, baseCommit, message,
       proposedAt ? { authorDate: proposedAt, committerDate: proposedAt } : undefined);
-    const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = proposal.metadata;
+    const { freshCommitMessage: _freshCommitMessage, ...proposalMetadata } = committing.metadata;
     const { commit: stateCommit, metadata: committedMetadata } = await store.createProposalCommit(targetTree, {
       ...proposalMetadata,
-      ...(committingFresh ? {
-        amendTargetSha: null,
-        baseCommit,
-        mode: "commit" as const,
-        paths: proposal.metadata.livePaths,
-      } : {}),
       committedSha,
       description: description.trim(),
       status: "committed",

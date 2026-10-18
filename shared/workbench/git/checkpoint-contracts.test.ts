@@ -394,6 +394,7 @@ test("proposal contracts keep paths explicit and terminal metadata complete", ()
   if (!compatibleProposal.success) throw compatibleProposal.error;
   assert.equal(compatibleProposal.data.amendTargetMessage, null);
   assert.equal(compatibleProposal.data.freshChanges, null);
+  assert.equal(compatibleProposal.data.freshCommitMessage, null);
   assert.equal(GitCheckpointProposalSchema.safeParse({
     ...compatibleProposal.data,
     amendTargetMessage: { description: "Current description", title: "Current title" },
@@ -404,6 +405,7 @@ test("proposal contracts keep paths explicit and terminal metadata complete", ()
       kind: { move_path: null, type: "update" },
       path: "src/a.ts",
     }],
+    freshCommitMessage: { description: "", title: "Fresh title" },
   }).success, true);
   assert.equal(GitCheckpointProposalSchema.safeParse({
     amendTargetSha: null,
