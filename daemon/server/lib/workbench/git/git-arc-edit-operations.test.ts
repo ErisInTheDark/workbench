@@ -144,6 +144,15 @@ test("several reference specs cover different syntaxes in one move", () => {
   assert.equal(textAt(result, "docs/notes.md"), "See [widget](../src/ui/Widget.tsx).");
 });
 
+test("regex patterns keep their edge whitespace so indented block deletions keep surrounding indentation", () => {
+  const result = run(files({
+    "src/a.rs": "impl A {\n    fn one() {}\n\n    fn two() {}\n}\n",
+  }), [
+    { kind: "replace", pattern: String.raw`    fn one\(\) \{\}\n\n(?=    fn two)`, replacement: "", roots: ["src"] },
+  ]);
+  assert.equal(textAt(result, "src/a.rs"), "impl A {\n    fn two() {}\n}\n");
+});
+
 test("invalid patterns and reference specs without a path group reject before changing anything", () => {
   const input = files({ "src/a.ts": "" });
   assert.throws(() => run(input, [{ kind: "replace", pattern: "(", replacement: "" }]), /Invalid replace regex/u);

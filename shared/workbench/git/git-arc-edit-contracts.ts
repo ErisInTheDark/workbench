@@ -12,6 +12,8 @@ import { z } from "zod";
 import { escapeGitArcValue, readGitArcValue } from "./git-arc-receipts";
 
 const text = z.string().trim().min(1);
+/** Regex source is exact: edge whitespace is part of what it matches. */
+const regex = z.string().min(1);
 const scopeRoots = z.array(text).min(1).default(["."]);
 
 export const GIT_ARC_EDIT_PAGE_SIZE = 100;
@@ -26,7 +28,7 @@ export const GitArcEditReferenceSpecSchema = z.object({
   /** Folder specifiers try `<folder>/<name><extension>`. */
   indexNames: z.array(text).default([]),
   /** JavaScript regex; its `path` named group is the only text ever rewritten. */
-  pattern: text,
+  pattern: regex,
   roots: scopeRoots,
 }).strict();
 export type GitArcEditReferenceSpec = z.infer<typeof GitArcEditReferenceSpecSchema>;
@@ -35,7 +37,7 @@ const MoveOperationSchema = z.object({
   from: text.optional(),
   includeIgnored: z.boolean().default(false),
   kind: z.literal("move"),
-  pathPattern: text.optional(),
+  pathPattern: regex.optional(),
   pathReplacement: z.string().optional(),
   references: z.array(GitArcEditReferenceSpecSchema).default([]),
   roots: z.array(text).min(1).optional(),
@@ -55,7 +57,7 @@ const ReplaceOperationSchema = z.object({
   globs: z.array(text).default([]),
   includeIgnored: z.boolean().default(false),
   kind: z.literal("replace"),
-  pattern: text,
+  pattern: regex,
   replacement: z.string(),
   roots: scopeRoots,
 }).strict();
