@@ -931,6 +931,19 @@ export function DiffIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M12 4 L12 14" /><path d="M7 20 L17 20" /><path d="M7 9 L17 9" /></OutlinedIcon>;
 }
 
+export function FileCodeCornerIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35" />
+    <path d="M14 2v5a1 1 0 0 0 1 1h5" /><path d="m5 16-3 3 3 3" /><path d="m9 22 3-3-3-3" />
+  </OutlinedIcon>;
+}
+
+export function RemoveFormattingIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M4 7V4h16v3" /><path d="M5 20h6" /><path d="M13 4 8 20" /><path d="m15 15 5 5" /><path d="m20 15-5 5" />
+  </OutlinedIcon>;
+}
+
 export function SquareCodeIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="m10 9-3 3 3 3" /><path d="m14 15 3-3-3-3" /><rect x="3" y="3" width="18" height="18" rx="2" /></OutlinedIcon>;
 }

@@ -19,7 +19,7 @@ import {
   BoldIcon,
   CodeIcon,
   DiffIcon,
-  FileCodeIcon,
+  FileCodeCornerIcon,
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
@@ -31,6 +31,7 @@ import {
   SparklesIcon,
   SquareCodeIcon,
   Redo2Icon,
+  RemoveFormattingIcon,
   TableIcon,
   TextQuoteIcon,
   Undo2Icon,
@@ -60,6 +61,7 @@ const GROUPS: ReadonlyArray<readonly ToolbarItem[]> = [
     { command: "bold", icon: <BoldIcon size={16} />, isActive: (state) => state.inline.bold },
     { command: "italic", icon: <ItalicIcon size={16} />, isActive: (state) => state.inline.italic },
     { command: "inline-code", icon: <CodeIcon size={16} />, isActive: (state) => state.inline.code },
+    { command: "clear-format", icon: <RemoveFormattingIcon size={16} /> },
   ],
   [
     { command: "h1", icon: <Heading1Icon size={16} />, isActive: (state) => state.block === "h1" },
@@ -168,7 +170,7 @@ export default function MarkdownEditorToolbar({
         </span>
       ))}
       <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-        {commandButton({ command: "source", disabled: !state.canEditSource, icon: <FileCodeIcon size={16} />, isActive: (current) => current.source })}
+        {commandButton({ command: "source", disabled: !state.canEditSource, icon: <FileCodeCornerIcon size={16} />, isActive: (current) => current.source })}
         <Tooltip placement="bottom" delayMs={350} content={state.showGitMarkers ? "Hide git change markers" : "Show git change markers"}>
           <IconButton
             label="Git change markers"
