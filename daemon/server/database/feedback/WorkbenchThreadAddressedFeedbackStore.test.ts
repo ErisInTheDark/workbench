@@ -1,4 +1,4 @@
-/* No production exports. Tests protect addressed-feedback ordering, scope, clearing, and per-thread counts. */
+/* No production exports. Tests protect addressed-feedback ordering, scope, single-report detaching, and per-thread counts. */
 import assert from "node:assert/strict";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -31,15 +31,16 @@ const report = (id: number, daemonId = "daemon-a"): WorkbenchThreadAddressedFeed
   thread: "thread", createdAt: id, report: "text",
 });
 
-test("addressed feedback keeps first-recorded order, ignores repeats, counts per thread, and clears per thread", async context => {
+test("addressed feedback keeps first-recorded order, ignores repeats, counts per thread, and detaches one report by daemon and id", async context => {
   const { store, threadId, otherThreadId } = await fixture(context);
   store.execute({ kind: "record", threadId, feedback: [report(2), report(1)] });
   store.execute({ kind: "record", threadId, feedback: [report(1), report(1, "daemon-b")] });
-  store.execute({ kind: "record", threadId: otherThreadId, feedback: [report(3)] });
+  store.execute({ kind: "record", threadId: otherThreadId, feedback: [report(1)] });
 
   assert.deepEqual(store.execute({ kind: "read", threadId }).map(item => `${item.daemonId}:${item.id}`),
     ["daemon-a:2", "daemon-a:1", "daemon-b:1"]);
   assert.deepEqual(store.counts(), { [threadId]: 3, [otherThreadId]: 1 });
-  assert.deepEqual(store.execute({ kind: "clear", threadId }), []);
-  assert.deepEqual(store.counts(), { [otherThreadId]: 1 });
+  assert.deepEqual(store.execute({ kind: "detach", threadId, daemonId: "daemon-a", feedbackId: 1 }).map(item => `${item.daemonId}:${item.id}`),
+    ["daemon-a:2", "daemon-b:1"]);
+  assert.deepEqual(store.counts(), { [threadId]: 2, [otherThreadId]: 1 });
 });

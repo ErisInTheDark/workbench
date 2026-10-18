@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadAddressedFeedbackController: own the feedback each thread was launched to address until the user clears it; any left hold settlement.
+ * - default WorkbenchThreadAddressedFeedbackController: own the feedback each thread was launched to address until each report is resolved or detached; any left hold settlement.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
@@ -18,8 +18,9 @@ export default class WorkbenchThreadAddressedFeedbackController {
     await this.#change(threadId, resolved => ({ kind: "record", threadId: resolved, feedback }));
   }
 
-  async clear(threadId: string) {
-    await this.#change(threadId, resolved => ({ kind: "clear", threadId: resolved }));
+  /** The thread stops addressing one report; the report itself is untouched. */
+  async detach(threadId: string, report: { daemonId: string; id: number }) {
+    await this.#change(threadId, resolved => ({ kind: "detach", threadId: resolved, daemonId: report.daemonId, feedbackId: report.id }));
   }
 
   async holdsSettlement(threadId: WorkbenchThreadId) {

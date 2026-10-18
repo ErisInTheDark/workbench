@@ -68,7 +68,6 @@ import { takeNewThreadReferences } from "../../../workbench/thread/new-thread-re
 import {
   composerReferenceKey, type ComposerReference,
 } from "workbench-shared/workbench/thread/composer-reference";
-import { workbenchThreadTodoReference, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
 import ComposerReferencePills from "./ComposerReferencePills";
 import ThreadLightboxImage from "./ThreadLightboxImage";
 import ComposerAttachments from "./ComposerAttachments";
@@ -180,9 +179,9 @@ export default function ThreadComposer ({
   targetControl,
   controlNotice,
   onDraftSessionChange,
-  selectedTodos,
-  onTodoDeselect,
-  onTodosSent,
+  selectedReferences,
+  onReferenceDeselect,
+  onReferencesSent,
 }: {
   autoFocusOnEntry?: boolean;
   children?: ReactNode | ((state: { isProfilePickerOpen: boolean }) => ReactNode);
@@ -231,11 +230,11 @@ export default function ThreadComposer ({
   /** Short alert shown at the left of the control row, such as a mode that cannot work yet. */
   controlNotice?: ReactNode;
   onDraftSessionChange?: (session: DraftSessionController<WorkbenchComposerInputDraft> | null) => void;
-  /** Todos the user picked to hand the agent with the next message. */
-  selectedTodos?: readonly WorkbenchThreadTodo[];
-  onTodoDeselect?: (id: number) => void;
-  /** The message carrying these todos was accepted. */
-  onTodosSent?: (ids: readonly number[]) => void;
+  /** Thread-owned references (todos, addressed feedback) the user picked to hand the agent with the next message. */
+  selectedReferences?: readonly ComposerReference[];
+  onReferenceDeselect?: (reference: ComposerReference) => void;
+  /** The message carrying these picked references was accepted. */
+  onReferencesSent?: (references: readonly ComposerReference[]) => void;
 }) {
   const daemon = useWorkbenchDaemonClient();
   const questionnaire = useWorkbenchQuestionnaire(projectId, thread.isDraft ? { kind: "draft", draftId: thread.id }
@@ -336,10 +335,13 @@ export default function ThreadComposer ({
     composerInputRef.current?.focus();
   }, [composerTarget.kind, projectId]);
   const draftReferences = isSending || isLaunchingDraft ? [] : editing.draft.references ?? [];
-  // Selected todos join only thread messages; drafts keep their own durable references.
-  const todoReferences = useMemo(() => thread.isDraft ? [] : (selectedTodos ?? []).map(workbenchThreadTodoReference),
-    [selectedTodos, thread.isDraft]);
-  const references: readonly ComposerReference[] = [...todoReferences, ...draftReferences];
+  // Picked references join only thread messages; drafts keep their own durable references. A report both picked and
+  // saved in the draft is one reference.
+  const pickedReferences = useMemo(() => thread.isDraft ? [] : selectedReferences ?? [], [selectedReferences, thread.isDraft]);
+  const pickedKeys = new Set(pickedReferences.map(composerReferenceKey));
+  const references: readonly ComposerReference[] = [
+    ...pickedReferences, ...draftReferences.filter(reference => !pickedKeys.has(composerReferenceKey(reference))),
+  ];
   const isSendDisabled = isInputDisabled || isProviderUnavailable
     || (!isActiveThread && !hasEffectiveProfile);
   const isShiftPressed = useNonTextInputShiftKey({
@@ -367,7 +369,7 @@ export default function ThreadComposer ({
     hasPendingUserInputRequest, isActiveThread, isCommentMode, isStopping,
     canSnooze: sidebarEntry?.entryKind === "thread" && isWorkbenchThreadSnoozeAvailable(sidebarEntry),
     canSettle: Boolean(client.controls && summary && sidebarEntry?.entryKind === "thread"
-      && isWorkbenchThreadSettlementAvailable(sidebarEntry, { requiredTodoCount: summary.summary.facts.requiredTodoCount })),
+      && isWorkbenchThreadSettlementAvailable(sidebarEntry, summary.summary.facts)),
     isApprovalBlocked,
     shiftKey: isShiftPressed,
     snoozed: sidebarEntry?.entryKind === "thread" && sidebarEntry.metadata.snoozed,
@@ -498,7 +500,6 @@ export default function ThreadComposer ({
     focusAfterSendRef.current = thread.isDraft && shiftKey;
 
     // Drafts launch from saved references; existing threads carry every attached reference in their next message.
-    const sentTodoIds = todoReferences.map(({ id }) => id);
     const input = createThreadComposerMessageInput(
       trimmedValue,
       attachments,
@@ -520,7 +521,7 @@ export default function ThreadComposer ({
     if (!thread.isDraft) {
       await editing.session.submitAccepted(async () => {
         await send();
-        if (sentTodoIds.length) onTodosSent?.(sentTodoIds);
+        if (pickedReferences.length) onReferencesSent?.(pickedReferences);
       }, () => onThreadComposerDraftClear(projectId, thread.id, composerTarget), "message");
       return;
     }
@@ -802,11 +803,9 @@ export default function ThreadComposer ({
                 <ComposerReferencePills
                   className="mb-2 px-1"
                   onRemove={(reference) => {
-                    if (reference.kind === "todo") {
-                      onTodoDeselect?.(reference.id);
-                      return;
-                    }
                     const key = composerReferenceKey(reference);
+                    if (pickedKeys.has(key)) onReferenceDeselect?.(reference);
+                    if (!draftReferences.some(item => composerReferenceKey(item) === key)) return;
                     editing.session.edit((draft) => ({
                       ...draft, references: (draft.references ?? []).filter(item => composerReferenceKey(item) !== key),
                     }));

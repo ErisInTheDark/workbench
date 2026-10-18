@@ -48,7 +48,7 @@ const unavailableActions: ThreadStoreActions = {
   loadOlder: unavailable, observeGitArcProposal: () => () => {},
   observeGitArcClaimChanges: () => () => {}, refreshGitArcClaimChanges: () => {},
   setGoal: unavailable, clearGoal: unavailable, deactivateSkill: unavailable,
-  addTodo: unavailable, removeTodo: unavailable, setTodoRequired: unavailable, setTodoText: unavailable, clearAddressedFeedback: unavailable,
+  addTodo: unavailable, removeTodo: unavailable, setTodoRequired: unavailable, setTodoText: unavailable, detachAddressedFeedback: unavailable,
 };
 
 function useSlice<Name extends ThreadSliceName>(store: ThreadStore | null, name: Name): ThreadStoreState[Name] {

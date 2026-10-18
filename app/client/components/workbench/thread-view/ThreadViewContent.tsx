@@ -75,8 +75,10 @@ import ThreadContextStatus from "./ThreadContextStatus";
 import ThreadErrorCard from "./ThreadErrorCard";
 import ThreadStatusArea from "./ThreadStatusArea";
 import ThreadTodoPanel from "./ThreadTodoPanel";
+import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
+import { workbenchThreadTodoReference } from "workbench-shared/workbench/thread/thread-todo";
 import useThreadLiveActivity from "./use-thread-live-activity";
-import useThreadTodoSelection from "./use-thread-todo-selection";
+import useThreadReferenceSelection from "./use-thread-reference-selection";
 import ThreadCheckpointCommitActions from "./ThreadCheckpointCommitActions";
 import useWorkspaceObservation from "../../../workbench/app/use-workspace-observation";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
@@ -553,7 +555,13 @@ export default memo(function ThreadViewContent ({
     turnId: liveTurn?.id ?? null,
     workspaceRoots: workspaceFileLinkRoots,
   });
-  const todoSelection = useThreadTodoSelection(activeThread?.id ?? "", active.head?.todos);
+  const headTodos = active.head?.todos;
+  const headFeedback = active.head?.addressedFeedback;
+  const pickableReferences = useMemo(
+    () => [...(headTodos ?? []).map(workbenchThreadTodoReference), ...(headFeedback ?? [])],
+    [headFeedback, headTodos],
+  );
+  const referenceSelection = useThreadReferenceSelection(activeThread?.id ?? "", pickableReferences);
   const projectFilePathDisambiguationIndex = useBackgroundProjectFilePathDisambiguationIndex(
     projectFilePaths,
     projectFileIndexId,
@@ -1024,9 +1032,9 @@ export default memo(function ThreadViewContent ({
       thread={resolvedActiveThread!}
       turns={loadedTurns}
       threadTarget={activeThread.isDraft ? composerTarget : activeTarget}
-      selectedTodos={todoSelection.selected}
-      onTodoDeselect={id => todoSelection.deselect([id])}
-      onTodosSent={todoSelection.deselect}
+      selectedReferences={referenceSelection.selected}
+      onReferenceDeselect={reference => referenceSelection.deselect([reference])}
+      onReferencesSent={referenceSelection.deselect}
     >
       {showDraftComposer ? (
         <ThreadRateLimits
@@ -1213,7 +1221,6 @@ export default memo(function ThreadViewContent ({
               {renderComposer(<>
         {activeThread && transcriptCanRender && !isMessageBoardOpen && (liveActivityView || !isDraftThreadView) ? (
           <ThreadStatusArea
-            addressedFeedback={active.head?.addressedFeedback ?? []}
             // Observed heads learn the working directory with the transcript; the arc panel's Git requests need it.
             gitArc={!isDraftThreadView && activeThread.cwd && (gitArcWork || activeGitArcSelection?.gitCommits.length) ? {
               claim: gitArcWork,
@@ -1226,7 +1233,6 @@ export default memo(function ThreadViewContent ({
             harness={activeThread.harness}
             key={activeThread.id}
             live={liveActivityView}
-            onFeedbackDeleted={active.actions.clearAddressedFeedback}
             projectFilePaths={projectFilePaths}
             projectId={projectId}
             projectRootPath={projectRootPath}
@@ -1237,20 +1243,28 @@ export default memo(function ThreadViewContent ({
             workspaceRoots={workspaceFileLinkRoots}
             todos={active.entry && !isDraftThreadView ? {
               goalSet: Boolean(active.head?.goal),
-              count: active.head?.todos?.length ?? 0,
+              count: headTodos?.length ?? 0,
+              feedbackCount: headFeedback?.length ?? 0,
               renderPanel: () => (
-                <ThreadTodoPanel
-                  goal={active.head?.goal ?? null}
-                  selection={todoSelection}
-                  threadId={activeThread.id}
-                  todos={active.head?.todos ?? []}
-                  onAddTodo={active.actions.addTodo}
-                  onClearGoal={active.actions.clearGoal}
-                  onRemoveTodo={active.actions.removeTodo}
-                  onSetGoal={active.actions.setGoal}
-                  onSetTodoRequired={active.actions.setTodoRequired}
-                  onSetTodoText={active.actions.setTodoText}
-                />
+                <>
+                  <ThreadTodoPanel
+                    goal={active.head?.goal ?? null}
+                    selection={referenceSelection}
+                    threadId={activeThread.id}
+                    todos={headTodos ?? []}
+                    onAddTodo={active.actions.addTodo}
+                    onClearGoal={active.actions.clearGoal}
+                    onRemoveTodo={active.actions.removeTodo}
+                    onSetGoal={active.actions.setGoal}
+                    onSetTodoRequired={active.actions.setTodoRequired}
+                    onSetTodoText={active.actions.setTodoText}
+                  />
+                  <ThreadAddressedFeedback
+                    feedback={headFeedback ?? []}
+                    onDetach={active.actions.detachAddressedFeedback}
+                    selection={referenceSelection}
+                  />
+                </>
               ),
             } : null}
           />

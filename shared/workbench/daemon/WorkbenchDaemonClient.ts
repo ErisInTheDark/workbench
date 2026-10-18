@@ -273,7 +273,7 @@ class WorkbenchDaemonClient {
       setText: (params: WorkbenchDaemonParams<"thread/todo/text/set">) => this.request("thread/todo/text/set", params),
     },
     addressedFeedback: {
-      clear: (params: WorkbenchDaemonParams<"thread/feedback/addressed/clear">) => this.request("thread/feedback/addressed/clear", params),
+      detach: (params: WorkbenchDaemonParams<"thread/feedback/addressed/detach">) => this.request("thread/feedback/addressed/detach", params),
     },
     vis: {
       end: (params: WorkbenchDaemonParams<"thread/vis/end">) => this.request("thread/vis/end", params),

@@ -14,31 +14,17 @@ import type { WorkbenchClientController } from "../workbench-client-context";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
 import ThreadStatusArea from "./ThreadStatusArea";
 
-const feedback = [{
-  kind: "feedback" as const,
-  id: 7,
-  daemonId: "daemon-a",
-  category: "bug" as const,
-  title: "Stats action fails",
-  author: "model",
-  thread: "source thread",
-  createdAt: 1,
-  report: "The stats action fails.",
-}];
-
 function render(lifecycle: WorkbenchThreadLifecycle) {
   return renderToStaticMarkup(createElement(WorkbenchClientContext.Provider, {
     value: { controls: null, mounted: null },
   }, createElement(ThreadStatusArea, {
-    addressedFeedback: feedback,
     gitArc: null,
     harness: "codex",
     live: null,
-    onFeedbackDeleted: async () => {},
     skills: null,
     threadId: "thread",
     threadLifecycle: lifecycle,
-    todos: { count: 0, goalSet: false, renderPanel: () => null },
+    todos: { count: 0, feedbackCount: 1, goalSet: false, renderPanel: () => null },
     vis: null,
   })));
 }
@@ -126,7 +112,6 @@ function renderPlanStatus(active: boolean, live: ThreadLiveActivityView | null =
     gitArc: null,
     harness: "codex",
     live,
-    onFeedbackDeleted: async () => {},
     skills: null,
     threadId: "thread",
     threadLifecycle: planOwner.lifecycle,

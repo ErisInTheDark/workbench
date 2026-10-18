@@ -10,7 +10,7 @@ export type ThreadAddressedFeedbackCommand =
   | { kind: "read"; threadId: string }
   /** Re-recording a report already addressed by the thread keeps its first position. */
   | { kind: "record"; threadId: string; feedback: readonly WorkbenchThreadAddressedFeedback[] }
-  | { kind: "clear"; threadId: string };
+  | { kind: "detach"; threadId: string; daemonId: string; feedbackId: number };
 
 interface AddressedRow {
   source_daemon_id: string;
@@ -45,8 +45,9 @@ export default class WorkbenchThreadAddressedFeedbackStore {
           command.threadId, item.daemonId, item.id, next + index, item.category, item.title, item.author, item.thread, item.report, item.createdAt,
         ));
       }
-      if (command.kind === "clear") {
-        this.database.prepare("DELETE FROM workbench_thread_addressed_feedback WHERE thread_id = ?").run(command.threadId);
+      if (command.kind === "detach") {
+        this.database.prepare("DELETE FROM workbench_thread_addressed_feedback WHERE thread_id = ? AND source_daemon_id = ? AND feedback_id = ?")
+          .run(command.threadId, command.daemonId, command.feedbackId);
       }
       return (this.database.prepare(`SELECT source_daemon_id, feedback_id, category, title, author, thread_label, report, created_at
         FROM workbench_thread_addressed_feedback WHERE thread_id = ? ORDER BY position`).all(command.threadId) as AddressedRow[])

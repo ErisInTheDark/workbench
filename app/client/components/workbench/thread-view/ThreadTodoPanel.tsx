@@ -1,17 +1,20 @@
 /*
  * Exports:
  * - default ThreadTodoPanel: a thread's goal and todos as always-live plain-text fields; todos can be picked for the next message, marked required or removed, and a trailing blank row becomes a new todo once it holds text.
+ * - threadTodoRowClassNames: todo row geometry for sibling rows in the same panel.
  */
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { WORKBENCH_THREAD_GOAL_MAX_LENGTH, type WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
-import { WORKBENCH_THREAD_TODO_MAX_LENGTH, type WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
+import {
+  WORKBENCH_THREAD_TODO_MAX_LENGTH, workbenchThreadTodoReference, type WorkbenchThreadTodo,
+} from "workbench-shared/workbench/thread/thread-todo";
 import IconButton from "../../ui/IconButton";
 import { AsteriskIcon, AsteriskOffIcon, FlagFilledIcon, FlagIcon, XIcon } from "../workbench-icons";
 import PlaintextEditable, { threadPlaintextEditableClassName } from "./PlaintextEditable";
-import type { ThreadTodoSelection } from "./use-thread-todo-selection";
+import type { ThreadReferenceSelection } from "./use-thread-reference-selection";
 
 const rowClassName = "group/row flex min-w-0 items-start gap-1 rounded-[0.6rem] px-1 transition-colors";
 const textClassName = "min-w-0 flex-1 py-1 text-[0.86em] leading-[1.6] text-text";
@@ -20,6 +23,8 @@ const fieldClassName = `${threadPlaintextEditableClassName} ${textClassName} whi
 const markerClassName = "flex h-[calc(1.376em+0.5rem)] min-w-7 shrink-0 items-center justify-center text-fg/muted";
 const serialClassName = "text-[0.72em] font-semibold tabular-nums";
 const revealClassName = "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 coarse-touch:opacity-100";
+/** Row geometry the addressed feedback rows under the todos share, so both lists line up. */
+export const threadTodoRowClassNames = { marker: markerClassName, reveal: revealClassName, row: rowClassName, text: textClassName };
 
 /** Plain text field: Enter or leaving commits, Escape reverts. */
 function InlineField ({ ariaLabel, autoFocus, draft, onCommit, onDraft, onEnter, onFocus, onRevert, placeholder }: {
@@ -143,7 +148,7 @@ export default function ThreadTodoPanel ({
   onSetTodoText,
 }: {
   goal: WorkbenchThreadGoal | null;
-  selection: ThreadTodoSelection;
+  selection: ThreadReferenceSelection;
   threadId: string;
   todos: readonly WorkbenchThreadTodo[];
   onAddTodo: (text: string, required: boolean) => Promise<void>;
@@ -193,7 +198,8 @@ export default function ThreadTodoPanel ({
       </div>
       <ul aria-label="Todos" className="m-0 list-none space-y-0.5 p-0">
         {todos.map((todo) => {
-          const selected = selection.isSelected(todo.id);
+          const reference = workbenchThreadTodoReference(todo);
+          const selected = selection.isSelected(reference);
           return (
             <li
               className={`
@@ -210,7 +216,7 @@ export default function ThreadTodoPanel ({
                   hover:bg-fg/7 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-soft
                   ${selected ? "text-accent" : ""}
                 `}
-                onClick={() => selection.toggle(todo.id)}
+                onClick={() => selection.toggle(reference)}
                 type="button"
               >
                 <span className={serialClassName}>#{todo.id}</span>

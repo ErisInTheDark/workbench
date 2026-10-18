@@ -7,7 +7,6 @@
 
 import type { ReactNode } from "react";
 import type { VisLiveSession } from "workbench-shared/workbench/vis/vis-contract";
-import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import type {
   WorkbenchHarnessId,
@@ -28,7 +27,6 @@ import ThreadGitArcIntersectionCard from "./ThreadGitArcIntersectionCard";
 import ThreadSkillPills, { skillPillToneClassName } from "./ThreadSkillPills";
 import ThreadStatusRow, { threadStatusSegmentClassName, type ThreadStatusPanel } from "./ThreadStatusRow";
 import ThreadVisSessionCard, { getVisSessionsUpdatedAt } from "./ThreadVisSessionCard";
-import ThreadAddressedFeedback from "./ThreadAddressedFeedback";
 import ThreadGitArcWork, { type ThreadGitArcWorkProps } from "./ThreadGitArcWork";
 import { getThreadAcceptedGitHistory } from "./ThreadGitArcProposalList";
 import type { ThreadLiveActivityView } from "./use-thread-live-activity";
@@ -41,12 +39,10 @@ function count(value: number) {
 }
 
 export default function ThreadStatusArea({
-  addressedFeedback = [],
   gitArc,
   gitCommits = [],
   harness,
   live,
-  onFeedbackDeleted,
   skills,
   threadId,
   threadLifecycle,
@@ -54,12 +50,10 @@ export default function ThreadStatusArea({
   vis,
   ...shared
 }: {
-  addressedFeedback?: readonly WorkbenchThreadAddressedFeedback[];
   gitArc: Omit<ThreadGitArcWorkProps, "projectFilePaths" | "projectId" | "projectRootPath" | "threadId" | "workspaceRoots"> | null;
   gitCommits?: readonly WorkbenchThreadGitCommit[];
   harness: WorkbenchHarnessId;
   live: ThreadLiveActivityView | null;
-  onFeedbackDeleted: () => Promise<void>;
   projectFilePaths?: readonly string[];
   projectId?: string | null;
   projectRootPath?: string;
@@ -67,8 +61,8 @@ export default function ThreadStatusArea({
   skills: { onDeactivate: (path: string) => Promise<void>; skills: readonly WorkbenchThreadSkill[] } | null;
   threadId: string;
   threadLifecycle: WorkbenchThreadLifecycle | null;
-  /** Absent where a thread has no goal or todos to manage. */
-  todos: { count: number; goalSet: boolean; renderPanel(): ReactNode } | null;
+  /** Absent where a thread has no goal or todos to manage; the panel also lists the feedback the thread addresses. */
+  todos: { count: number; feedbackCount: number; goalSet: boolean; renderPanel(): ReactNode } | null;
   vis: { onAnswer: (sessionId: string, value: string) => Promise<void>; onEnd: (sessionId: string) => void; sessions: readonly VisLiveSession[] } | null;
   workspaceRoots?: readonly WorkspaceFileLinkRoot[];
 }) {
@@ -81,8 +75,9 @@ export default function ThreadStatusArea({
   const accepted = getThreadAcceptedGitHistory(claim?.proposals ?? [], gitCommits).acceptedCount;
   const claimed = claim?.claimedPaths.length ?? 0;
   const stashed = claim?.stashedPaths?.length ?? 0;
-  const feedback = addressedFeedback;
-  const highlightFeedback = threadLifecycle?.kind === "completed";
+  const feedbackCount = todos?.feedbackCount ?? 0;
+  // Once the work is done, unhandled feedback is what holds settlement.
+  const highlightFeedback = threadLifecycle?.kind === "completed" || threadLifecycle?.kind === "stopped";
 
   const arcSegments: ThreadStatusPanel["segments"][number][] = [
     ...(overlapCount || plannedOverlapCount ? [{
@@ -152,24 +147,21 @@ export default function ThreadStatusArea({
       id: "todos",
       label: "Goal, todos and addressed feedback",
       render: () => (
-        <div className="[&>*+*]:(border-t border-fg-alpha/16)">
-          {todos.renderPanel()}
-          <ThreadAddressedFeedback feedback={feedback} onDeleted={onFeedbackDeleted} />
-        </div>
+        <div className="[&>*+*]:(border-t border-fg-alpha/16)">{todos.renderPanel()}</div>
       ),
       segments: [
         { key: "goal", className: "", content: todos.goalSet ? <FlagFilledIcon size={14} /> : <FlagIcon size={14} /> },
         {
           key: "todos",
-          className: todos.count || feedback.length ? threadStatusSegmentClassName : "",
+          className: todos.count || feedbackCount ? threadStatusSegmentClassName : "",
           content: <><ClipboardListIcon size={14} />{todos.count ? count(todos.count) : null}</>,
         },
-        ...(feedback.length ? [{
+        ...(feedbackCount ? [{
           key: "feedback",
           className: highlightFeedback
             ? `${threadStatusSegmentClassName} ${FEEDBACK_TEXT_TONE_CLASS_NAME}`
             : threadStatusSegmentClassName,
-          content: <><MegaphoneIcon size={14} />{count(feedback.length)}</>,
+          content: <><MegaphoneIcon size={14} />{count(feedbackCount)}</>,
         }] : []),
       ],
     }] : []),

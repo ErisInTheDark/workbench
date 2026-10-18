@@ -74,7 +74,7 @@ function fixture(providerWarning?: string) {
     skills: { read: unused, deactivate: unused },
     goals: { set: unused, clear: unused },
     todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
-    addressedFeedback: { clear: unused },
+    addressedFeedback: { detach: unused },
     vis: { answer: unused, endById: unused },
     readSkills: async () => [review],
     state: {

@@ -79,7 +79,7 @@ export const workspaceCommandRoutes = {
   "thread/todo/remove": "thread",
   "thread/todo/required/set": "thread",
   "thread/todo/text/set": "thread",
-  "thread/feedback/addressed/clear": "thread",
+  "thread/feedback/addressed/detach": "thread",
   "thread/vis/end": "thread",
   "thread/vis/answer": "thread",
   "thread/skills/read": "thread",

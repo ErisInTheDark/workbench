@@ -417,7 +417,7 @@ export default function createObservedThreadSource(
       async removeTodo(id) { await ports.daemon.threads.todo.remove({ threadId, id }); },
       async setTodoRequired(id, required) { await ports.daemon.threads.todo.setRequired({ threadId, id, required }); },
       async setTodoText(id, text) { await ports.daemon.threads.todo.setText({ threadId, id, text }); },
-      async clearAddressedFeedback() { await ports.daemon.threads.addressedFeedback.clear({ threadId }); },
+      async detachAddressedFeedback({ daemonId, id }) { await ports.daemon.threads.addressedFeedback.detach({ threadId, daemonId, id }); },
     },
     acquire(interest) {
       if (disposed) throw new Error("The thread store is disposed.");

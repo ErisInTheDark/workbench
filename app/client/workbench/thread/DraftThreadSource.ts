@@ -144,7 +144,7 @@ export default function createDraftThreadSource(
       removeTodo: unsupported("remove a todo"),
       setTodoRequired: unsupported("change a todo"),
       setTodoText: unsupported("edit a todo"),
-      clearAddressedFeedback: unsupported("clear addressed feedback"),
+      detachAddressedFeedback: unsupported("detach addressed feedback"),
     },
     acquire() {
       leases++;
