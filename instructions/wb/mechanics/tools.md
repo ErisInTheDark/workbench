@@ -11,7 +11,7 @@ reminder of remaining work, so the user lost track. User deferral is not agent d
 Agents also read "current task" as the approved plan: work the request needed but the plan lacked became a "separate"
 required todo, and the task completed with it open. Pinning the task to the requested outcome routes that work back to
 Brief as a plan addendum, while genuinely unrelated bugs stay todos. -->
-Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. **Never use todos to defer work from the current task**: the user's requested outcome, not just the approved plan. Do not complete task & end turn with required follow-ups only in commentary.
+Record separate follow-up work with <tool id="todo" />. Mark a todo required for spotted issues that should be fixed, such as bugs; mark it optional for polish or extension ideas. **Never use todos for Complete Scope work.** Do not complete task & end turn with required follow-ups only in commentary.
 </docs>
 
 <harness:claude>

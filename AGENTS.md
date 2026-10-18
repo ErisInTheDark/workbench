@@ -1,7 +1,7 @@
-## Task orientation guidance
+## Task orientation (required)
 
 1. Search (not read) `docs/GLOSSARY.md` for vague terminology the user gives that could have project meaning. Search the glossary for any potentially project-specific words or locations whenever they appear in new user messages.
-2. Before planning or editing project behaviour or architecture, read all files that seem relevant under `docs/invariants/`.
+2. Before diagnosing, planning or editing project behaviour or architecture, read all files that seem relevant under `docs/invariants/`. Claims about intended behaviour must cite them.
 3. If finding a term, invariant, or code takes more than one search, consider proposing a durable instruction or code improvement.
 4. Propose only succinct, truly durable and useful glossary terms and invariants; you needing them does not mean many agents will need them. Show exact proposed text prominently. Do not add headings or prose.
 
