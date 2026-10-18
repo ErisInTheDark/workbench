@@ -24,6 +24,7 @@ import DocumentPager from "../markdown-editor/DocumentPager";
 import WorkbenchLoadingSpinner from "../WorkbenchLoadingSpinner";
 import WorkbenchZoomButton from "../WorkbenchZoomButton";
 import DraftResetButton from "../markdown-editor/DraftResetButton";
+import MarkdownCodeBlockChrome from "../markdown-editor/MarkdownCodeBlockChrome";
 import MarkdownCommentMargin from "../markdown-editor/MarkdownCommentMargin";
 import MarkdownEditorToolbar, { CommandTooltip } from "../markdown-editor/MarkdownEditorToolbar";
 import useEditorMarginLayout from "../markdown-editor/use-editor-margin-layout";
@@ -51,7 +52,7 @@ const EDITOR_FONT_CLASS_NAMES: Record<WorkbenchEditorFontFamily, string> = {
 /** Typography of rendered markdown, shared by the editor and the suggestion originals shown beside it. */
 const markdownProseClassName = `
   text-[1.08rem] leading-[1.72] whitespace-normal [text-underline-offset:0.32em]
-  [& :is(p, blockquote, ul, ol, pre, h1, h2, h3, h4, h5, h6)]:(m-0 mb-4 text-justify)
+  [& :is(p, blockquote, ul, ol, pre, table, h1, h2, h3, h4, h5, h6)]:(m-0 mb-4 text-justify)
   [& :is(h1, h2, h3, h4, h5, h6)]:(font-sans font-semibold leading-[1.15])
   [& h1]:text-[2.05em] [& h2]:text-[1.55em] [& h3]:text-[1.25em]
   [& :is(ul, ol)]:(list-outside pl-[1.3rem])
@@ -61,14 +62,26 @@ const markdownProseClassName = `
   [& hr]:(my-8 [margin-inline:10%] [border-color:color-mix(in srgb, var(--text), var(--app-bg-solid) 70%)])
   [& a]:(text-inherit decoration-accent decoration-[0.08em])
   [& code]:(font-mono text-[0.94em] bg-fg/7 rounded-[0.35rem] px-[0.34em] py-[0.08em])
-  [& pre]:(overflow-x-auto whitespace-pre-wrap)
-  [& pre[data-language]:not([data-language=""])]:before:(
-    content-[attr(data-language)] block
-    -mx-[0.15rem] -mt-[0.2rem] mb-[0.65rem]
-    border-b border-fg-alpha/8 pb-[0.45rem]
-    font-mono text-[0.72em] leading-none text-fg/muted
+  [& pre]:(
+    relative max-w-full overflow-x-auto whitespace-pre rounded-[0.75rem] text-left leading-[1.55]
+    px-[0.95rem] pb-[0.8rem] pt-[calc(var(--code-block-head)+0.8rem)]
+    bg-[color-mix(in srgb, var(--text) 4%, transparent)]
+    bg-[linear-gradient(to bottom, transparent calc(var(--code-block-head) - 1px), color-mix(in srgb, var(--text) 8%, transparent) calc(var(--code-block-head) - 1px), color-mix(in srgb, var(--text) 8%, transparent) var(--code-block-head), transparent var(--code-block-head))]
   )
-  [& pre code]:(block bg-transparent rounded-none p-0)
+  [& pre code]:(block w-max min-w-full bg-transparent rounded-none p-0 font-mono text-[0.94em])
+  [&[data-code-wrap] pre]:(whitespace-pre-wrap wrap-anywhere)
+  [&[data-code-wrap] pre code]:(w-full min-w-0)
+  [& table]:(
+    w-full border-separate border-spacing-0 overflow-hidden rounded-[0.75rem] text-left
+    bg-[color-mix(in srgb, var(--text) 4%, transparent)] font-sans text-[0.92em] leading-[1.45]
+  )
+  [& thead tr]:bg-[color-mix(in srgb, var(--text) 5%, transparent)]
+  [& :is(td, th)]:(min-w-[3rem] align-top text-left [overflow-wrap:anywhere])
+  [& th]:(px-[0.65rem] py-[0.48rem] text-[0.82em] font-semibold border-b-2 border-[color-mix(in srgb, var(--text) 16%, transparent)])
+  [& td]:(px-[0.85rem] py-[0.5rem] border-t border-[color-mix(in srgb, var(--text) 7%, transparent)])
+  [& tbody tr:first-child td]:border-t-0
+  [& :is(td, th)[data-align=center]]:text-center
+  [& :is(td, th)[data-align=right]]:text-right
   [& :is(ins, del)]:(rounded-[0.2em] text-inherit -mx-[0.04em] px-[0.08em])
   [& ins]:(bg-success/16 [font-weight:inherit] no-underline)
   [& ins[data-revision-hover-active=true]]:bg-success/24
@@ -177,6 +190,7 @@ export default function WorkbenchFilePanel ({
     Number((panelBaseFontSize + panelZoomDelta * 0.08).toFixed(2))));
   const editorShellRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const sourceRef = useRef<HTMLTextAreaElement>(null);
   const customCaretRef = useRef<HTMLDivElement>(null);
   const diffGutterRef = useRef<HTMLDivElement>(null);
   const reviewLayerRef = useRef<HTMLDivElement>(null);
@@ -204,6 +218,7 @@ export default function WorkbenchFilePanel ({
     if (
       !file.document
       || !editorRef.current
+      || !sourceRef.current
       || !customCaretRef.current
       || !diffGutterRef.current
       || !reviewLayerRef.current
@@ -240,6 +255,7 @@ export default function WorkbenchFilePanel ({
         diffGutter: diffGutterRef.current,
         editor: editorRef.current,
         reviewLayer: reviewLayerRef.current,
+        source: sourceRef.current,
       },
       statusDisplay: {
         filePathLabel: filePathLabelRef.current,
@@ -275,6 +291,11 @@ export default function WorkbenchFilePanel ({
   useEffect(() => {
     client?.setFontSize(fontSizeRem, { persist: false });
   }, [client, fontSizeRem]);
+
+  const userName = settings.get("userName");
+  useEffect(() => {
+    client?.setCommentAuthor(userName || null);
+  }, [client, userName]);
 
   const threadCount = useSyncExternalStore(
     client?.comments.subscribe ?? noSubscription,
@@ -474,7 +495,7 @@ export default function WorkbenchFilePanel ({
       <div className="relative min-h-0 flex-1 pt-3" hidden={isMinimized || loading}>
         <div
           ref={editorShellRef}
-          className="editor-shell relative mx-auto grid w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto"
+          className="editor-shell relative mx-auto grid [--code-block-head:2.05rem] w-[calc(100%+1.25rem)] md:w-full grid-cols-[0.72rem minmax(0, 1fr)] gap-[0.53rem] md:max-w-[calc(var(--container-content)+2.5rem)] md:grid-cols-[1.25rem minmax(0, var(--container-content))] md:gap-3 -ml-5 md:ml-auto"
           style={marginLayout.shellOffset === null ? undefined : { marginLeft: marginLayout.shellOffset, marginRight: 0 }}
         >
           <div
@@ -485,7 +506,7 @@ export default function WorkbenchFilePanel ({
           <div
             ref={editorRef}
             className={`
-              editor-content ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
+              editor-content col-start-2 row-start-1 ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
               pb-16 ${editorFontClassName} ${markdownProseClassName} outline-none
               data-[custom-caret-visible=true]:caret-transparent
               empty:before:(text-fg/muted content-[attr(data-placeholder)])
@@ -509,6 +530,18 @@ export default function WorkbenchFilePanel ({
             spellCheck={spellCheck}
             data-placeholder="Select a markdown file to start editing."
           />
+          {/* Source mode shows the file's markdown text here instead of the editor; the client switches which shows. */}
+          <textarea
+            ref={sourceRef}
+            aria-label="Markdown source"
+            className={`
+              editor-source col-start-2 row-start-1 block w-full resize-none overflow-hidden bg-transparent p-0 pb-16
+              ${contained ? "min-h-[18rem]" : "min-h-[calc(100vh-6rem)]"}
+              font-mono leading-[1.65] text-text whitespace-pre-wrap wrap-anywhere outline-none
+            `}
+            spellCheck={spellCheck}
+          />
+          <MarkdownCodeBlockChrome client={client} />
           <div
             ref={reviewLayerRef}
             aria-label="Suggestions"
@@ -530,6 +563,10 @@ export default function WorkbenchFilePanel ({
                 content-['Nothing_here_before'] absolute left-0 top-0 pointer-events-none font-sans italic text-[0.85em] text-fg/50
               )
               [& [data-suggestion-row-old] > :last-child]:mb-0
+              [& pre]:before:(
+                content-[attr(data-language)] absolute left-[0.95rem] top-0 flex h-(--code-block-head) items-center
+                font-mono text-[0.72rem] leading-none text-fg/muted
+              )
               [& [data-suggestion-row-head]]:(
                 absolute flex h-[44px] items-center justify-between gap-2
                 font-sans text-[0.72rem] leading-none

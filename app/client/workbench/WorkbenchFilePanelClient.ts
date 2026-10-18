@@ -3,7 +3,8 @@
  * - WorkbenchFilePanelSnapshot: readonly mounted file panel state.
  * - WorkbenchFilePanelListener: subscriber for mounted file panel changes.
  * - WorkbenchFilePanelClientOptions: panel-controller collaborators.
- * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode and comment margin.
+ * - WorkbenchFilePanelClient: imperative mounted file panel API, including the toolbar, review mode, comment margin,
+ *   code block headers and the markdown source toggle.
  * - default WorkbenchFilePanelClient: own panel DOM, history, drafts, conflicts, editor commands and cleanup.
  */
 
@@ -18,7 +19,6 @@ import {
     getDirectChildSummaryTextElement,
 } from "./dom/mutation/structured-block-dom";
 import {
-    captureEditorSelection,
     placeCaretInElement,
     restoreListItemSelection,
     restoreParagraphSelection,
@@ -28,6 +28,7 @@ import {
     getInlineRunContainer,
     isInlineRunContainer,
 } from "./editor/inline-run-containers";
+import type { WorkbenchCodeBlockController } from "./editor/WorkbenchCodeBlockController";
 import type { WorkbenchCommentController } from "./editor/WorkbenchCommentController";
 import { isFormatCommand } from "./editor/WorkbenchFormatCommandController";
 import type { ReviewMode, SuggestionLayout } from "./editor/WorkbenchSuggestionController";
@@ -70,6 +71,7 @@ export interface WorkbenchFilePanelClient {
   acceptObservation: (snapshot: FileDocumentSnapshot) => void;
   /** Keep the editor selection through a toolbar press; call on the press, before focus can move. */
   beginToolbarInteraction: (event: Event) => void;
+  codeBlocks: WorkbenchCodeBlockController;
   comments: WorkbenchCommentController;
   /** Discard the unsaved draft and reload the file from disk. */
   deleteDraft: () => Promise<void>;
@@ -80,6 +82,8 @@ export interface WorkbenchFilePanelClient {
   restoreFromGit: () => Promise<void>;
   runCommand: (command: EditorCommand) => void;
   save: () => Promise<void>;
+  /** The name comments written in source mode are signed with. */
+  setCommentAuthor: (author: string | null) => void;
   setFontSize: (fontSize: number, options?: { persist?: boolean }) => void;
   setReviewMode: (mode: ReviewMode) => void;
   setShowGitMarkers: (show: boolean) => void;
@@ -124,30 +128,37 @@ function WorkbenchFilePanelClient(
 
   let editorHasFocus = false;
   let isComposing = false;
+  let commentAuthor: string | null = null;
   const eventBus = WorkbenchEventBus();
   const sessionState = SessionState();
   const fileSessionState = FileSessionState();
   let fileClient: ReturnType<typeof WorkbenchFileClient>;
   let editHistoryManager: ReturnType<typeof EditHistoryManager>;
 
+  /** Rich mode edits the rendered document; source mode runs the same commands as markdown text edits. */
   function runCommand(command: EditorCommand) {
     if (command === "save") {
       if (sessionState.currentPath) void saveCurrentFile();
       return;
     }
 
-    if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
+    if (!editorClient.getToolbarState().editable) {
       return;
     }
 
+    const source = fileSessionState.mode === "plain";
     if (command === "undo") {
       editHistoryManager.undoEditHistory();
     } else if (command === "redo") {
       editHistoryManager.redoEditHistory();
+    } else if (command === "source") {
+      fileClient.switchMode(source ? "rich" : "plain");
     } else if (command === "comment") {
-      editorClient.startCommentDraft();
+      if (source) editorClient.applySourceCommand(command);
+      else editorClient.startCommentDraft();
     } else if (isFormatCommand(command)) {
-      editorClient.applyFormatCommand(command);
+      if (source) editorClient.applySourceCommand(command);
+      else editorClient.applyFormatCommand(command);
     }
   }
 
@@ -192,6 +203,7 @@ function WorkbenchFilePanelClient(
       },
     },
     fileSessionState,
+    getCommentAuthor: () => commentAuthor,
     getEditorHasFocus: () => editorHasFocus,
     getProjectChangeSummary: () => document.getSnapshot().data?.changeSummary,
     handleCompositionEnd: () => {
@@ -265,14 +277,15 @@ function WorkbenchFilePanelClient(
       });
     },
     handleEditorKeyDown: (event) => {
-      if (!sessionState.currentPath || fileSessionState.mode !== "rich") {
+      if (!sessionState.currentPath) {
         return;
       }
 
-      editorClient.maybeClearPendingInlineFormatsForKey(event);
-
-      if (editorClient.handleListStructureKeyDown(event)) {
-        return;
+      if (fileSessionState.mode === "rich") {
+        editorClient.maybeClearPendingInlineFormatsForKey(event);
+        if (editorClient.handleListStructureKeyDown(event)) {
+          return;
+        }
       }
 
       const command = matchEditorCommand(event);
@@ -314,7 +327,7 @@ function WorkbenchFilePanelClient(
     handleSelectionChange: () => {
       editorClient.handlePendingInlineSelectionChange();
 
-      editHistoryManager.updateHistorySelection(captureEditorSelection(editor));
+      editHistoryManager.updateHistorySelection(editorClient.getDocumentAdapter().captureSelection());
       scheduleSelectionPersistence();
       editorClient.scheduleEditorChromeRefresh();
     },
@@ -345,6 +358,10 @@ function WorkbenchFilePanelClient(
         editHistoryManager.updateHistorySelection(selection);
       },
     },
+    runHistoryCommand: (command) => {
+      if (command === "undo") editHistoryManager.undoEditHistory();
+      else editHistoryManager.redoEditHistory();
+    },
     sessionState,
     shouldBlockBeforeUnload: () => Boolean(fileSessionState.saveIssue) || draftStore.hasSaveIssue(),
   });
@@ -368,6 +385,9 @@ function WorkbenchFilePanelClient(
     editorDocument: editorClient.getDocumentAdapter(),
     eventBus,
     fileSessionState,
+    recordEditHistory: (previousContent, nextContent) => {
+      editHistoryManager.recordEditHistory(previousContent, nextContent, editorClient.getDocumentAdapter().captureSelection());
+    },
     sessionState,
     updateHistorySelection: editHistoryManager.updateHistorySelection,
   });
@@ -500,7 +520,11 @@ function WorkbenchFilePanelClient(
     },
     getSnapshot,
     getToolbarState: editorClient.getToolbarState,
+    codeBlocks: editorClient.codeBlocks,
     runCommand,
+    setCommentAuthor: (author) => {
+      commentAuthor = author;
+    },
     setFontSize,
     setReviewMode: editorClient.setReviewMode,
     setShowGitMarkers: editorClient.setShowGitMarkers,

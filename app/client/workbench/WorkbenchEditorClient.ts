@@ -11,8 +11,8 @@
  * - WorkbenchEditorMutationRuntimeOptions: history, draft inspection and replay callbacks.
  * - WorkbenchEditorClientOptions: editor callbacks, dependencies and state readers.
  * - BlockFormat / EditorToolbarState: what the persistent toolbar shows as active, and the review mode.
- * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, review (suggestions and comments), mutations
- *   and event cleanup.
+ * - default WorkbenchEditorClient: own editor DOM, dialogs, formatting, code block and table structure, review
+ *   (suggestions and comments), the markdown source surface, mutations and event cleanup.
  */
 
 import type { ChangeSummary, SaveConflictPayload } from "workbench-shared/types";
@@ -26,11 +26,13 @@ import {
     replaceTag,
     unwrapTransparentSpans,
 } from "./dom/mutation/dom-normalization";
+import { normalizeCodeBlocks } from "./dom/mutation/code-block-dom";
 import {
     normalizeDivBlocks,
     normalizeRootInlineBlocks,
     syncStructuredBlockStyles as syncStructuredBlockDomStyles,
 } from "./dom/mutation/structured-block-dom";
+import { normalizeTables } from "./dom/mutation/table-dom";
 import {
     getNestedBlockElementsForItem,
     isIntentionalListBreakParagraph,
@@ -49,7 +51,12 @@ import { createEditorHighlightScope } from "./editor/editor-highlights";
 import RevisionHoverToolbarController, {
     type RevisionToolbarContext
 } from "./editor/RevisionHoverToolbarController";
+import WorkbenchBlockStructureController from "./editor/WorkbenchBlockStructureController";
+import WorkbenchCodeBlockController, { type WorkbenchCodeBlockController as CodeBlockController } from "./editor/WorkbenchCodeBlockController";
 import WorkbenchCodeFormatController from "./editor/WorkbenchCodeFormatController";
+import WorkbenchSourceEditorController from "./editor/WorkbenchSourceEditorController";
+import { captureRichCaretAnchor, findRichAnchorPoint, type CaretAnchor } from "./dom/selection/mode-caret-anchor";
+import { isMarkdownFile } from "workbench-shared/workbench/project/tree-utils";
 import WorkbenchCommentController, { type WorkbenchCommentController as CommentController } from "./editor/WorkbenchCommentController";
 import WorkbenchFormatCommandController, { type FormatCommand } from "./editor/WorkbenchFormatCommandController";
 import WorkbenchInlineFormatController, {
@@ -102,6 +109,7 @@ const TOOLBAR_TOUCH_MOUSE_COMPAT_WINDOW_MS = 750;
 /** Half the gap between a suggestion row's columns: where its git markers sit. */
 const SUGGESTION_ROW_GUTTER_INSET_PX = 16;
 const TOOLBAR_INTERACTION_GRACE_MS = 220;
+const NO_INLINE_FORMATS: InlineFormatState = { bold: false, code: false, del: false, ins: false, italic: false };
 
 export type EditorMode = "rich" | "plain";
 
@@ -151,14 +159,18 @@ export interface EditorUIStateSnapshot {
 
 export type EditorUIStateListener = (snapshot: EditorUIStateSnapshot) => void;
 
-export type BlockFormat = "paragraph" | "h1" | "h2" | "h3" | "blockquote" | "ul" | "ol";
+export type BlockFormat = "paragraph" | "h1" | "h2" | "h3" | "blockquote" | "ul" | "ol" | "code" | "table";
 
 export interface EditorToolbarState {
   block: BlockFormat | null;
+  /** The file is markdown, so it can be edited as rich text or as its markdown source. */
+  canEditSource: boolean;
   editable: boolean;
   inline: InlineFormatState;
   reviewMode: ReviewMode;
   showGitMarkers: boolean;
+  /** The markdown source is being edited as text. */
+  source: boolean;
 }
 
 export interface WorkbenchEditorControllerOptions {
@@ -196,6 +208,8 @@ export interface WorkbenchEditorClientOptions {
   closeActiveDialog: () => boolean;
   controllerOptions: WorkbenchEditorControllerOptions;
   fileSessionState: FileSessionState;
+  /** The name new comments are signed with, or null to leave them unsigned. */
+  getCommentAuthor: () => string | null;
   getEditorHasFocus: () => boolean;
   getProjectChangeSummary: (path: string) => ChangeSummary | null | undefined;
   handleCompositionEnd: () => void;
@@ -216,12 +230,16 @@ export interface WorkbenchEditorClientOptions {
   handleViewportChanged: () => void;
   listStructure: Omit<WorkbenchListStructureControllerOptions, "editor" | "syncEditorAfterStructuralChange">;
   mutationRuntime: WorkbenchEditorMutationRuntimeOptions;
+  runHistoryCommand: (command: "undo" | "redo") => void;
   sessionState: SessionState;
   shouldBlockBeforeUnload: () => boolean;
 }
 
 interface WorkbenchEditorClient {
   applyFormatCommand: (command: FormatCommand) => void;
+  /** Run a format or comment command as a markdown text edit in source mode. */
+  applySourceCommand: (command: FormatCommand | "comment") => void;
+  codeBlocks: CodeBlockController;
   applyHoveredRevisionAction: (action: "accept" | "reject") => void;
   beginToolbarInteraction: (event: Event) => void;
   canonicalizeAllInlineRunContainers: (root: ParentNode) => void;
@@ -351,6 +369,12 @@ function appendParsedBlockDiffRows(
         signature: `code|${block.language}|${block.text}`,
       });
       return;
+    case "table":
+      rows.push({
+        path: blockPath,
+        signature: `table|${JSON.stringify([block.alignments, block.header, block.rows])}`,
+      });
+      return;
     case "plan":
       rows.push({
         path: blockPath,
@@ -397,7 +421,7 @@ function flattenMarkdownDiffRows(markdown: string | null) {
 }
 
 function isDiffTrackableBlockElement(element: Element) {
-  return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr)$/i.test(element.tagName);
+  return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr|table)$/i.test(element.tagName);
 }
 
 function appendLiveListDiffAnchors(
@@ -709,6 +733,7 @@ function WorkbenchEditorClient(
   let fontSizePreview: number | null = null;
   const signal = lifecycle.getSignal();
   const editor = surfaces.editor.editor;
+  const source = surfaces.editor.source;
   const customCaret = surfaces.editor.customCaret;
   const diffGutter = surfaces.editor.diffGutter;
   const reviewLayer = surfaces.editor.reviewLayer;
@@ -728,12 +753,16 @@ function WorkbenchEditorClient(
   let toolbarStateKey = "";
   const highlights = createEditorHighlightScope();
 
+  /** Source mode edits the markdown text in its own textarea; rich mode edits the rendered document. */
+  const isSourceMode = () => options.fileSessionState.mode === "plain";
+
   function captureCurrentSelection() {
-    return captureEditorSelection(editor);
+    return isSourceMode() ? sourceController.captureSelection() : captureEditorSelection(editor);
   }
 
   function restoreSelection(selection: EditHistorySelection | null) {
-    restoreEditorSelection(editor, selection);
+    if (isSourceMode()) sourceController.restoreSelection(selection);
+    else restoreEditorSelection(editor, selection);
   }
 
   function syncEditorAfterStructuralChange(mutate: () => void, hooks: EditOperationHooks = {}) {
@@ -748,6 +777,32 @@ function WorkbenchEditorClient(
   const richInputController = WorkbenchRichInputController({
     editor,
     getMode: () => options.fileSessionState.mode,
+  });
+  const blockStructureController = WorkbenchBlockStructureController({
+    editor,
+    runStructuralMutation: (mutate) => {
+      runStructuralMutation(mutate);
+    },
+  });
+  const sourceController = WorkbenchSourceEditorController({
+    getAuthor: options.getCommentAuthor,
+    getReviewMode: () => reviewMode,
+    getStyle: () => markdownStyle,
+    onBlur: () => options.handleEditorBlur(),
+    onFocus: () => options.handleEditorFocus(),
+    onKeyDown: (event) => options.handleEditorKeyDown(event),
+    onSelectionChange: () => options.handleSelectionChange(),
+    redo: () => options.runHistoryCommand("redo"),
+    runInputMutation: (mutate) => {
+      runInputMutation(mutate);
+    },
+    runStructuralMutation: (mutate) => {
+      runStructuralMutation(mutate);
+    },
+    signal,
+    source,
+    undo: () => options.runHistoryCommand("undo"),
+    updateHistorySelection: (selection) => options.mutationRuntime.updateHistorySelection(selection),
   });
   let previousSessionSnapshot = options.sessionState.getSnapshot();
   let previousFileSnapshot = options.fileSessionState.getSnapshot();
@@ -775,6 +830,7 @@ function WorkbenchEditorClient(
 
   function applyEditorFontSize() {
     editor.style.fontSize = `${fontSizePreview ?? state.fontSize}rem`;
+    sourceController.setFontSize(editor.style.fontSize);
   }
 
   function getMinimumToolbarTop(viewport = getVisualViewportMetrics()) {
@@ -848,9 +904,8 @@ function WorkbenchEditorClient(
   }
 
   function syncEditorModePresentation() {
-    editor.dataset.placeholder = options.fileSessionState.mode === "rich"
-      ? "Select a markdown file to start editing."
-      : "Plain text mode";
+    editor.hidden = isSourceMode();
+    source.hidden = !isSourceMode();
   }
 
   function setStatusMessage(message: string) {
@@ -914,6 +969,7 @@ function WorkbenchEditorClient(
     syncEditorAfterStructuralChange,
   });
   const formatCommandController = WorkbenchFormatCommandController({
+    blockStructure: blockStructureController,
     clearPendingInlineFormats: () => {
       inlineFormatController.clearPendingInlineFormats();
     },
@@ -995,16 +1051,22 @@ function WorkbenchEditorClient(
     }
 
     const tag = block.tagName.toLowerCase();
-    return tag === "h1" || tag === "h2" || tag === "h3" || tag === "blockquote" || tag === "ul" || tag === "ol" ? tag : "paragraph";
+    if (tag === "pre") return "code";
+    return tag === "h1" || tag === "h2" || tag === "h3" || tag === "blockquote" || tag === "ul" || tag === "ol" || tag === "table" ? tag : "paragraph";
   }
 
   function refreshToolbarState() {
+    const path = options.sessionState.currentPath;
+    const canEditSource = Boolean(path) && isMarkdownFile(path);
+    const sourceFormats = isSourceMode() && canEditSource && sourceController.isFocused() ? sourceController.getFormats() : null;
     const next: EditorToolbarState = {
-      block: options.fileSessionState.mode === "rich" ? getBlockFormat() : null,
-      editable: Boolean(options.sessionState.currentPath) && options.fileSessionState.mode === "rich",
-      inline: inlineFormatController.getActiveInlineFormats(),
+      block: options.fileSessionState.mode === "rich" ? getBlockFormat() : sourceFormats?.block ?? null,
+      canEditSource,
+      editable: Boolean(path) && (options.fileSessionState.mode === "rich" || canEditSource),
+      inline: sourceFormats?.inline ?? (isSourceMode() ? NO_INLINE_FORMATS : inlineFormatController.getActiveInlineFormats()),
       reviewMode,
       showGitMarkers: !diffGutter.hidden,
+      source: isSourceMode(),
     };
     const key = JSON.stringify(next);
     if (key === toolbarStateKey) {
@@ -1138,6 +1200,8 @@ function WorkbenchEditorClient(
     replaceTag(root, "s", "del");
     unwrapTransparentSpans(root);
     normalizeDivBlocks(root);
+    normalizeCodeBlocks(root);
+    normalizeTables(root);
     normalizeRootInlineBlocks(root);
     syncStructuredBlockStyles(root);
     (root as Node).normalize();
@@ -1187,11 +1251,11 @@ function WorkbenchEditorClient(
       return { content: "", issue: null };
     }
 
-    if (options.fileSessionState.mode !== "rich") {
+    if (isSourceMode()) {
       lastLoggedSaveIssue = null;
       return inspectDraftContent({
         mode: options.fileSessionState.mode,
-        plainTextContent: editor.textContent ?? "",
+        plainTextContent: sourceController.read(),
       });
     }
 
@@ -1199,7 +1263,7 @@ function WorkbenchEditorClient(
     syncSaveIssueLogging(richInspection.issue, "markup mismatch detected while editing");
     return inspectDraftContent({
       mode: options.fileSessionState.mode,
-      plainTextContent: editor.textContent ?? "",
+      plainTextContent: "",
       richInspection,
     });
   }
@@ -1228,6 +1292,7 @@ function WorkbenchEditorClient(
     layer: reviewLayer,
     onLayoutChanged: () => {
       commentController.scheduleRefresh();
+      codeBlockController.scheduleRefresh();
       scheduleDiffGutterRefresh();
     },
     // Undo and redo cover both columns; other editor shortcuts stay off the original so it keeps editor markup.
@@ -1260,19 +1325,33 @@ function WorkbenchEditorClient(
     },
   });
 
+  const codeBlockController = WorkbenchCodeBlockController({
+    container: editorShell ?? editor,
+    editor,
+    isRichMode,
+    runStructuralMutation: (mutate) => {
+      runStructuralMutation(mutate);
+    },
+    scheduleFrame: (callback) => {
+      lifecycle.scheduleAnimationFrame("editor-code-block-refresh", callback);
+    },
+  });
+
   function scheduleReviewRefresh() {
     suggestionController.scheduleRefresh();
     commentController.scheduleRefresh();
+    codeBlockController.scheduleRefresh();
   }
 
   /**
-   * Lay out suggestion rows, gutter markers and comment cards before the next paint. After the whole document is
-   * rendered again (undo, redo, reset), waiting a frame would paint it unsplit first and then visibly jump.
+   * Lay out suggestion rows, gutter markers, comment cards and code block headers before the next paint. After the
+   * whole document is rendered again (undo, redo, reset), waiting a frame would paint it unsplit first and then jump.
    */
   function refreshReviewLayoutNow() {
     suggestionController.refresh();
     renderDiffGutter();
     commentController.refresh();
+    codeBlockController.refresh();
   }
 
   function setShowGitMarkers(show: boolean) {
@@ -1312,15 +1391,17 @@ function WorkbenchEditorClient(
     },
     readRenderedState: (mode) => mode === "rich"
       ? editor.innerHTML
-      : editor.textContent ?? "",
+      : sourceController.read(),
     refreshStatusMessage,
     renderDocument: (content, mode, renderOptions = {}) => {
       lastLoggedSaveIssue = null;
-      markdownStyle = mode === "rich" ? detectMarkdownStyle(content) : DEFAULT_MARKDOWN_STYLE;
+      markdownStyle = detectMarkdownStyle(content);
       if (mode === "rich") {
         editor.innerHTML = renderOptions.renderedState ?? renderMarkdownToHtml(content);
+        sourceController.render("");
       } else {
-        editor.textContent = renderOptions.renderedState ?? content;
+        editor.replaceChildren();
+        sourceController.render(renderOptions.renderedState ?? content);
       }
 
       syncStructuredBlockStyles();
@@ -1331,8 +1412,34 @@ function WorkbenchEditorClient(
     scheduleDiffGutterRefresh,
     setEditable: (editable) => {
       editor.setAttribute("contenteditable", editable ? "true" : "false");
+      sourceController.setEditable(editable);
+    },
+    captureCaretAnchor: () => isSourceMode() ? sourceController.captureAnchor() : captureRichCaretAnchor(editor),
+    restoreCaretAnchor: (anchor) => {
+      if (isSourceMode()) {
+        sourceController.restoreAnchor(anchor);
+        return;
+      }
+      placeRichCaretAtAnchor(anchor);
     },
   };
+
+  function placeRichCaretAtAnchor(anchor: CaretAnchor | null) {
+    const point = anchor ? findRichAnchorPoint(editor, anchor) : null;
+    editor.focus({ preventScroll: true });
+    if (!point) {
+      restoreEditorSelection(editor, null);
+      return;
+    }
+    const range = document.createRange();
+    range.setStart(point.node, point.offset);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const block = point.node instanceof Element ? point.node : point.node.parentElement;
+    block?.scrollIntoView?.({ block: "center" });
+  }
 
   function scheduleEditorChromeRefresh() {
     lifecycle.scheduleAnimationFrame("editor-chrome-refresh", () => {
@@ -1395,7 +1502,7 @@ function WorkbenchEditorClient(
       return;
     }
 
-    editor.focus();
+    (isSourceMode() ? source : editor).focus();
   }
 
   let mutationIsRunning = false;
@@ -1431,7 +1538,7 @@ function WorkbenchEditorClient(
     try {
       mutate();
 
-      if (context.syncStructuredStyles) {
+      if (context.syncStructuredStyles && !isSourceMode()) {
         syncStructuredBlockStyles();
       }
 
@@ -1497,13 +1604,20 @@ function WorkbenchEditorClient(
       syncStructuredStyles: true,
     }), () => {
       clearPendingInlineFormats();
-      if (options.fileSessionState.mode === "rich") {
-        editor.innerHTML = renderMarkdownToHtml(request.content);
+      if (isSourceMode()) {
+        sourceController.render(request.content);
       } else {
-        editor.textContent = request.content;
+        editor.innerHTML = renderMarkdownToHtml(request.content);
       }
     });
     refreshReviewLayoutNow();
+  }
+
+  function applySourceCommand(command: FormatCommand | "comment") {
+    if (!isSourceMode()) return;
+    prepareEditorForToolbarAction();
+    sourceController.applyCommand(command);
+    clearToolbarInteraction();
   }
 
   function handlePendingInlineBeforeInput(event: InputEvent) {
@@ -1801,12 +1915,18 @@ function WorkbenchEditorClient(
       if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") {
         suggestionController.prepareForEdit();
       }
+      if (isRichMode() && blockStructureController.handleBeforeInput(event)) {
+        return;
+      }
       options.handleEditorBeforeInput(event);
     }
   }, { signal });
 
   editor.addEventListener("keydown", (event) => {
     prepareForEditKey(event);
+    if (isRichMode() && blockStructureController.handleKeyDown(event)) {
+      return;
+    }
     options.handleEditorKeyDown(event);
   }, { signal });
 
@@ -1957,6 +2077,8 @@ function WorkbenchEditorClient(
     previousFileSnapshot = snapshot;
 
     if (previousSnapshot.mode !== snapshot.mode) {
+      // A toolbar press's saved selection belongs to the view it was made in.
+      preservedToolbarSelection = null;
       syncEditorModePresentation();
       refreshToolbarState();
       scheduleReviewRefresh();
@@ -1991,10 +2113,12 @@ function WorkbenchEditorClient(
   return {
     applyFormatCommand,
     applyHoveredRevisionAction,
+    applySourceCommand,
     beginToolbarInteraction,
     canonicalizeAllInlineRunContainers,
     changeFontSize,
     clearPendingInlineFormats,
+    codeBlocks: codeBlockController,
     comments: commentController,
     dispose: () => {
       listeners.clear();

@@ -2,7 +2,7 @@
  * Exports:
  * - DraftBuffer/FileSessionState: file draft and editing state contracts.
  * - WorkbenchFileClientOptions: one observed document and its editor collaborators.
- * - WorkbenchFileClient: observed updates, draft persistence and guarded mutations.
+ * - WorkbenchFileClient: observed updates, draft persistence, guarded mutations and rich/source mode switches.
  * - default WorkbenchFileClient: reconcile one file's disk facts with its local editable draft.
  */
 
@@ -28,7 +28,7 @@ import type FileSessionState from "./state/FileSessionState";
 import type { DraftBuffer } from "./state/FileSessionState";
 import LifecycleScope from "./state/LifecycleScope";
 import type SessionState from "./state/SessionState";
-import type { SaveGuardIssue } from "./WorkbenchEditorClient";
+import type { EditorMode, SaveGuardIssue } from "./WorkbenchEditorClient";
 import type WorkbenchEventBus from "./WorkbenchEventBus";
 
 export type { DraftBuffer, default as FileSessionState } from "./state/FileSessionState";
@@ -44,6 +44,8 @@ export interface WorkbenchFileClientOptions {
   editorDocument: EditorDocumentAdapter;
   eventBus: WorkbenchEventBus;
   fileSessionState: FileSessionState;
+  /** Record a content change the user did not type, such as rich rendering rewriting source. */
+  recordEditHistory: (previousContent: string, nextContent: string) => void;
   sessionState: SessionState;
   updateHistorySelection: (selection: EditHistorySelection | null) => void;
 }
@@ -56,6 +58,8 @@ interface WorkbenchFileClient {
   resetCurrentFileToHead: () => Promise<void>;
   saveCurrentFile: (options?: { force?: boolean }) => Promise<void>;
   scheduleSelectionPersistence: () => void;
+  /** Show a markdown file as rich text or as its markdown source. */
+  switchMode: (mode: EditorMode) => void;
   syncCurrentDraftBuffer: () => void;
 }
 
@@ -76,6 +80,7 @@ function WorkbenchFileClient(
     editorDocument,
     eventBus,
     fileSessionState: state,
+    recordEditHistory,
     sessionState,
     updateHistorySelection,
   } = options;
@@ -163,7 +168,8 @@ function WorkbenchFileClient(
       statusMessage?: string;
     } = {},
   ) {
-    const mode = isMarkdownFile(payload.path) ? "rich" : "plain";
+    // A markdown file reloaded from disk stays in the mode it is being edited in.
+    const mode = isMarkdownFile(payload.path) ? state.mode : "plain";
     const selectionSnapshot = preserveSelection ? editorDocument.captureSelection() : null;
 
     clearWriteConflict();
@@ -455,6 +461,31 @@ function WorkbenchFileClient(
     }
   }
 
+  /**
+   * Show a markdown file as rich text or as its source, keeping the draft, its history and the caret's words. Rich
+   * rendering may rewrite source the editor cannot keep verbatim; that rewrite becomes an undoable edit.
+   */
+  function switchMode(next: EditorMode) {
+    if (lifecycle.isDisposed || mutating || state.mode === next || !isMarkdownFile(sessionState.currentPath)
+      || state.expectedMtimeMs === null) return;
+    const inspection = inspectCurrentDraft();
+    if (inspection.issue) {
+      editorDocument.logBlockedSaveIssue(inspection.issue);
+      editorDocument.refreshStatusMessage("Markdown source is unavailable until the markup mismatch is fixed.");
+      return;
+    }
+
+    const content = state.currentContent;
+    const anchor = editorDocument.captureCaretAnchor();
+    state.mode = next;
+    editorDocument.renderDocument(content, next);
+    inspectCurrentDraft();
+    if (state.currentContent !== content) recordEditHistory(content, state.currentContent);
+    editorDocument.restoreCaretAnchor(anchor);
+    syncCurrentDraftBuffer();
+    editorDocument.refreshStatusMessage();
+  }
+
   function dispose() {
     if (lifecycle.isDisposed) return;
     syncCurrentDraftBuffer();
@@ -477,6 +508,7 @@ function WorkbenchFileClient(
     resetCurrentFileToHead,
     saveCurrentFile,
     scheduleSelectionPersistence,
+    switchMode,
     syncCurrentDraftBuffer,
   };
 }

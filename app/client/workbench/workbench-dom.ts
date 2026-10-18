@@ -4,7 +4,8 @@
  * - SaveConflictDialogDomSurface: required overwrite and reload dialog elements.
  * - DialogDomSurface: grouped runtime dialog capabilities.
  * - ToolbarDomSurface: the floating accept/reject toolbar shown over revisions.
- * - EditorDomSurface: React-owned editor elements; the review layer holds suggestion originals beside the text.
+ * - EditorDomSurface: React-owned editor elements; the review layer holds suggestion originals beside the text, and the
+ *   source textarea takes the editor's place in source mode.
  * - StatusDisplaySurface: file path and status labels.
  * - WORKBENCH_STICKY_CHROME_ATTRIBUTE: marks sticky chrome the floating editor toolbars must stay below.
  * - WorkbenchEditorDomSurfaces: DOM capabilities consumed by the editor client.
@@ -47,6 +48,8 @@ export interface EditorDomSurface {
   customCaret: HTMLDivElement;
   diffGutter: HTMLDivElement;
   reviewLayer: HTMLDivElement;
+  /** Source mode edits the markdown text here, in the editor's place. */
+  source: HTMLTextAreaElement;
 }
 
 export interface StatusDisplaySurface {

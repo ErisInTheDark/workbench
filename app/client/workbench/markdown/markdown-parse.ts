@@ -1394,8 +1394,9 @@ function isThreadStateChangeLine(line: string, options: MarkdownParseOptions) {
   return parseThreadStateChangeMode(line, options) !== null;
 }
 
-function canParsePipeTables(options: MarkdownParseOptions) {
-  return (options.profile ?? "editor") === "thread";
+/** Thread tables need two columns; editor tables written with outer pipes (as the editor writes them) may have one. */
+function minimumTableColumns(line: string, options: MarkdownParseOptions) {
+  return isEditorProfile(options) && line.trim().startsWith("|") ? 1 : 2;
 }
 
 function splitTableRow(line: string) {
@@ -1473,9 +1474,9 @@ function parseTableDelimiterCell(cell: string): ParsedTableAlignment | false {
   return null;
 }
 
-function parseTableDelimiterRow(line: string) {
+function parseTableDelimiterRow(line: string, options: MarkdownParseOptions) {
   const cells = splitTableRow(line);
-  if (cells.length < 2) {
+  if (cells.length < minimumTableColumns(line, options)) {
     return null;
   }
 
@@ -1485,8 +1486,8 @@ function parseTableDelimiterRow(line: string) {
     : null;
 }
 
-function looksLikeTableContentRow(line: string) {
-  return splitTableRow(line).length >= 2;
+function looksLikeTableContentRow(line: string, options: MarkdownParseOptions) {
+  return splitTableRow(line).length >= minimumTableColumns(line, options);
 }
 
 function normalizeTableCells(cells: string[], columnCount: number): ParsedTableCell[] {
@@ -1496,13 +1497,13 @@ function normalizeTableCells(cells: string[], columnCount: number): ParsedTableC
 }
 
 function parseTableBlock(lines: string[], startIndex: number, options: MarkdownParseOptions) {
-  if (!canParsePipeTables(options) || startIndex + 1 >= lines.length) {
+  if (startIndex + 1 >= lines.length) {
     return null;
   }
 
   const headerCells = splitTableRow(lines[startIndex]);
-  const alignments = parseTableDelimiterRow(lines[startIndex + 1]);
-  if (!alignments || headerCells.length < 2) {
+  const alignments = parseTableDelimiterRow(lines[startIndex + 1], options);
+  if (!alignments || headerCells.length < minimumTableColumns(lines[startIndex], options)) {
     return null;
   }
 
@@ -1510,7 +1511,7 @@ function parseTableBlock(lines: string[], startIndex: number, options: MarkdownP
   let index = startIndex + 2;
   const rows: ParsedTableCell[][] = [];
 
-  while (index < lines.length && lines[index].trim() && looksLikeTableContentRow(lines[index])) {
+  while (index < lines.length && lines[index].trim() && looksLikeTableContentRow(lines[index], options)) {
     rows.push(normalizeTableCells(splitTableRow(lines[index]), columnCount));
     index += 1;
   }

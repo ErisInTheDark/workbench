@@ -193,8 +193,9 @@ export function placeCaretAtEditorEnd(editor: HTMLElement) {
   selection.addRange(range);
 }
 
+/** A source-mode selection names markdown offsets, not blocks, so it puts the caret at the end like a missing one. */
 export function restoreEditorSelection(editor: HTMLElement, selectionSnapshot: EditHistorySelection | null) {
-  if (!selectionSnapshot) {
+  if (!selectionSnapshot || selectionSnapshot.source) {
     placeCaretAtEditorEnd(editor);
     return;
   }

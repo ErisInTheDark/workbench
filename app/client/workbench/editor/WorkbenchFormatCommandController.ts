@@ -14,17 +14,21 @@ import {
     type ListFormatDependencies,
     type ListFormatTag,
 } from "../dom/mutation/block-format-dom";
+import { closestCodeBlock } from "../dom/mutation/code-block-dom";
 import type { EditorMode } from "../WorkbenchEditorClient";
 import type { EditorCommand } from "./editor-commands";
 import type { PendingInlineFormatKey } from "./WorkbenchInlineFormatController";
 
-export type FormatCommand = Exclude<EditorCommand, "comment" | "undo" | "redo" | "save">;
+export type FormatCommand = Exclude<EditorCommand, "comment" | "source" | "undo" | "redo" | "save">;
+
+const NON_FORMAT_COMMANDS = new Set<EditorCommand>(["comment", "source", "undo", "redo", "save"]);
 
 export function isFormatCommand(command: EditorCommand): command is FormatCommand {
-  return command !== "comment" && command !== "undo" && command !== "redo";
+  return !NON_FORMAT_COMMANDS.has(command);
 }
 
 export interface WorkbenchFormatCommandControllerOptions {
+  blockStructure: { insertTable: () => void; toggleCodeBlock: () => void };
   editor: HTMLDivElement;
   getMode: () => EditorMode;
   clearPendingInlineFormats: () => void;
@@ -45,7 +49,9 @@ interface WorkbenchFormatCommandController {
 type FormatAction =
   | { kind: "inline"; format: PendingInlineFormatKey }
   | { kind: "block"; tag: BlockFormatTag }
-  | { kind: "list"; tag: ListFormatTag };
+  | { kind: "list"; tag: ListFormatTag }
+  | { kind: "code-block" }
+  | { kind: "table" };
 
 const FORMAT_ACTIONS: Record<FormatCommand, FormatAction> = {
   bold: { kind: "inline", format: "bold" },
@@ -59,6 +65,8 @@ const FORMAT_ACTIONS: Record<FormatCommand, FormatAction> = {
   quote: { kind: "block", tag: "blockquote" },
   "unordered-list": { kind: "list", tag: "ul" },
   "ordered-list": { kind: "list", tag: "ol" },
+  "code-block": { kind: "code-block" },
+  table: { kind: "table" },
 };
 
 function WorkbenchFormatCommandController(
@@ -66,7 +74,8 @@ function WorkbenchFormatCommandController(
 ): WorkbenchFormatCommandController {
   function toggleInlineFormat(format: PendingInlineFormatKey) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount) {
+    // Code is plain text: marks inside it have no markdown form.
+    if (!selection?.rangeCount || closestCodeBlock(options.editor, selection.getRangeAt(0).commonAncestorContainer)) {
       return;
     }
 
@@ -128,6 +137,14 @@ function WorkbenchFormatCommandController(
         runBlockCommand((selection) => {
           toggleRootBlockList(options.editor, selection, action.tag, options.listFormat);
         });
+        return;
+      case "code-block":
+        options.clearPendingInlineFormats();
+        options.blockStructure.toggleCodeBlock();
+        return;
+      case "table":
+        options.clearPendingInlineFormats();
+        options.blockStructure.insertTable();
         return;
     }
   }

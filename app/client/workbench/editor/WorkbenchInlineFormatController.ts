@@ -611,7 +611,7 @@ function WorkbenchInlineFormatController(
     const containers = root instanceof HTMLElement && root !== options.editor && options.isInlineRunContainer(root)
       ? [root]
       : "querySelectorAll" in root
-        ? Array.from(root.querySelectorAll<HTMLElement>("p, div, h1, h2, h3, h4, h5, h6, blockquote, li, span[data-summary-text='true']"))
+        ? Array.from(root.querySelectorAll<HTMLElement>("p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th, span[data-summary-text='true']"))
             .filter((element) => options.isInlineRunContainer(element))
         : [];
 

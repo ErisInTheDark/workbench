@@ -1,7 +1,7 @@
 /*
  * Exports:
- * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, comments and
- *   history, acting on the editor selection without taking it.
+ * - default MarkdownEditorToolbar: the markdown editor's persistent toolbar: edit/suggest mode, formatting, code blocks,
+ *   tables, comments, the markdown source toggle and history, acting on the editor selection without taking it.
  * - CommandTooltip: an editor command's label and this platform's keybind chip, for buttons outside the toolbar too.
  */
 "use client";
@@ -19,6 +19,7 @@ import {
   BoldIcon,
   CodeIcon,
   DiffIcon,
+  FileCodeIcon,
   Heading1Icon,
   Heading2Icon,
   Heading3Icon,
@@ -28,17 +29,21 @@ import {
   FeatherIcon,
   MessageSquareTextIcon,
   SparklesIcon,
+  SquareCodeIcon,
   Redo2Icon,
+  TableIcon,
   TextQuoteIcon,
   Undo2Icon,
 } from "../workbench-icons";
 
 const DISABLED_STATE: EditorToolbarState = {
   block: null,
+  canEditSource: false,
   editable: false,
   inline: { bold: false, code: false, del: false, ins: false, italic: false },
   reviewMode: "edit",
   showGitMarkers: true,
+  source: false,
 };
 
 const noSubscription = () => () => {};
@@ -63,6 +68,8 @@ const GROUPS: ReadonlyArray<readonly ToolbarItem[]> = [
     { command: "quote", icon: <TextQuoteIcon size={16} />, isActive: (state) => state.block === "blockquote" },
     { command: "unordered-list", icon: <ListIcon size={16} />, isActive: (state) => state.block === "ul" },
     { command: "ordered-list", icon: <ListOrderedIcon size={16} />, isActive: (state) => state.block === "ol" },
+    { command: "code-block", icon: <SquareCodeIcon size={16} />, isActive: (state) => state.block === "code" },
+    { command: "table", icon: <TableIcon size={16} />, isActive: (state) => state.block === "table" },
   ],
   [
     { command: "comment", icon: <MessageSquareTextIcon size={16} /> },
@@ -115,14 +122,14 @@ export default function MarkdownEditorToolbar({
     disabledState,
   );
 
-  const commandButton = ({ command, icon, isActive }: ToolbarItem) => (
+  const commandButton = ({ command, disabled = false, icon, isActive }: ToolbarItem & { disabled?: boolean }) => (
     <CommandTooltip command={command} key={command}>
       <IconButton
         label={EDITOR_COMMANDS[command].label}
         title=""
         size="small"
         display="hover-border"
-        disabled={!state.editable}
+        disabled={!state.editable || disabled}
         aria-pressed={isActive ? isActive(state) : undefined}
         className="aria-pressed:bg-fg/8"
         data-editor-command={command}
@@ -161,6 +168,7 @@ export default function MarkdownEditorToolbar({
         </span>
       ))}
       <span className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+        {commandButton({ command: "source", disabled: !state.canEditSource, icon: <FileCodeIcon size={16} />, isActive: (current) => current.source })}
         <Tooltip placement="bottom" delayMs={350} content={state.showGitMarkers ? "Hide git change markers" : "Show git change markers"}>
           <IconButton
             label="Git change markers"

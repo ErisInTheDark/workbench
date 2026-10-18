@@ -42,6 +42,7 @@ function fixture(overrides: Partial<WorkbenchFileDocument> = {}) {
     document,
     editorDocument: {
       appendMarkdownFragment: content => { renderedContent += content; },
+      captureCaretAnchor: () => null,
       captureSelection: () => null,
       inspectDraft: () => ({ content: renderedContent, issue: null }),
       inspectRichDocument: () => ({ markdown: renderedContent, issue: null }),
@@ -50,12 +51,14 @@ function fixture(overrides: Partial<WorkbenchFileDocument> = {}) {
       readRenderedState: () => renderedContent,
       refreshStatusMessage: () => undefined,
       renderDocument: (content) => { renderedContent = content; },
+      restoreCaretAnchor: () => undefined,
       restoreSelection: () => undefined,
       scheduleDiffGutterRefresh: () => undefined,
       setEditable: () => undefined,
     },
     eventBus: WorkbenchEventBus(),
     fileSessionState,
+    recordEditHistory: () => undefined,
     sessionState,
     updateHistorySelection: () => undefined,
   });

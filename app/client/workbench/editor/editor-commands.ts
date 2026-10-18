@@ -20,7 +20,10 @@ export type EditorCommand =
   | "quote"
   | "unordered-list"
   | "ordered-list"
+  | "code-block"
+  | "table"
   | "comment"
+  | "source"
   | "undo"
   | "redo"
   | "save";
@@ -54,7 +57,10 @@ export const EDITOR_COMMANDS: Record<EditorCommand, EditorCommandInfo> = {
   quote: { label: "Quote", keybinds: [{ mod: true, shift: true, code: "Digit9" }] },
   "unordered-list": { label: "Bulleted list", keybinds: [{ mod: true, shift: true, code: "Digit8" }] },
   "ordered-list": { label: "Numbered list", keybinds: [{ mod: true, shift: true, code: "Digit7" }] },
+  "code-block": { label: "Code block", keybinds: [{ mod: true, alt: true, code: "KeyC" }] },
+  table: { label: "Table", keybinds: [] },
   comment: { label: "Comment", keybinds: [{ mod: true, alt: true, code: "KeyM" }] },
+  source: { label: "Markdown source", keybinds: [{ mod: true, key: "e" }] },
   undo: { label: "Undo", keybinds: [{ mod: true, key: "z" }] },
   redo: {
     label: "Redo",

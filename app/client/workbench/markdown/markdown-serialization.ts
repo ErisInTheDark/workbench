@@ -16,6 +16,8 @@ import {
     isListElement,
     isSingleBreakParagraph
 } from "../dom/query/list-dom";
+import { readCodeBlockText } from "../dom/mutation/code-block-dom";
+import { readTableAlignments, rowCells, TABLE_ALIGN_ATTRIBUTE, tableRows } from "../dom/mutation/table-dom";
 import { serializeCommentThreadForMarkupSignature, serializeInlineRunContainerForMarkupSignature } from "../editor/inline-leaves";
 import { serializeInlineNodes } from "../editor/inline-markdown-serialization";
 import { formatComment, parseCommentLine, sameComments } from "./comment-markdown";
@@ -63,6 +65,7 @@ const BLOCK_TAGS = new Set([
   "PRE",
   "BLOCKQUOTE",
   "HR",
+  "TABLE",
 ]);
 
 export function createWorkbenchMarkupSignature(
@@ -76,7 +79,7 @@ export function createWorkbenchMarkupSignature(
 }
 
 function isTrailingWhitespaceBoundaryTag(tag: string) {
-  return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|li|summary)$/i.test(tag);
+  return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|li|summary|td|th)$/i.test(tag);
 }
 
 function serializeMarkupNode(
@@ -125,6 +128,10 @@ function serializeMarkupNode(
     }
   }
 
+  if (tag === "th" && element.getAttribute(TABLE_ALIGN_ATTRIBUTE)) {
+    attributes.push(`${TABLE_ALIGN_ATTRIBUTE}=${JSON.stringify(element.getAttribute(TABLE_ALIGN_ATTRIBUTE))}`);
+  }
+
   const childNodes = Array.from(element.childNodes);
   const trimLastChild = trimTrailingWhitespace || isTrailingWhitespaceBoundaryTag(tag);
   const openingTag = attributes.length > 0
@@ -135,11 +142,20 @@ function serializeMarkupNode(
     return openingTag;
   }
 
+  // Code is plain text whatever holds it, and only its sentinel-free text reaches markdown.
+  if (tag === "pre") {
+    return `${openingTag}text(${JSON.stringify(readCodeBlockText(element))})</pre>`;
+  }
+
   if (element instanceof HTMLElement && options.isInlineRunContainer(element)) {
     const children = serializeInlineRunContainerForMarkupSignature(
       element,
-      trimLastChild && tag !== "pre" && tag !== "code",
+      trimLastChild && tag !== "code",
     );
+    // A cell is one line: the break an empty cell keeps open has no markdown form.
+    if (tag === "td" || tag === "th") {
+      return `${openingTag}${children.content}</${tag}>`;
+    }
     return `${"<br>".repeat(children.leadingBreakCount)}${openingTag}${children.content}</${tag}>${"<br>".repeat(children.trailingBreakCount)}`;
   }
 
@@ -231,17 +247,23 @@ function escapeBlockStart(line: string) {
   return BLOCK_START_PATTERNS.some((pattern) => pattern.test(content)) ? `${indent}\\${content}` : line;
 }
 
+const TABLE_DELIMITER_LINE = /^ *\|? *:?-{3,}:? *(?:\| *:?-{3,}:? *)*\|? *$/u;
+
 /** Empty visual lines are written as two spaces, which keeps their newline inside the paragraph. */
 function formatParagraphText(text: string) {
   if (!text) {
     return "";
   }
 
-  return text
-    .split("\n")
-    .map((line) => {
-      const content = trimLineEnd(line);
-      return content ? escapeBlockStart(content) : "  ";
+  const lines = text.split("\n").map(trimLineEnd);
+  return lines
+    .map((content, index) => {
+      if (!content) return "  ";
+      // A pipe line over a delimiter line would read back as a table.
+      if (content.includes("|") && TABLE_DELIMITER_LINE.test(lines[index + 1] ?? "")) {
+        return escapeTablePipes(content);
+      }
+      return escapeBlockStart(content);
     })
     .join("\n");
 }
@@ -343,6 +365,49 @@ function serializeNestedListChildBlock(element: Element, style: MarkdownStyle, i
   return indentMarkdownLines(markdown, indent);
 }
 
+/** A literal pipe would split its cell; code spans are read whole, so pipes inside them stay as written. */
+function escapeTablePipes(text: string) {
+  let escaped = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "\\") {
+      escaped += text.slice(index, index + 2);
+      index += 1;
+    } else if (character === "`") {
+      const fence = text.slice(index).match(/^`+/u)![0];
+      const close = text.indexOf(fence, index + fence.length);
+      const end = close === -1 ? index + fence.length : close + fence.length;
+      escaped += text.slice(index, end);
+      index = end - 1;
+    } else {
+      escaped += character === "|" ? "\\|" : character;
+    }
+  }
+  return escaped;
+}
+
+const DELIMITER_CELLS: Record<string, string> = { center: ":---:", left: ":---", right: "---:" };
+
+function serializeTableElement(table: HTMLTableElement, style: MarkdownStyle) {
+  const rows = tableRows(table);
+  if (!rows.length) {
+    return "";
+  }
+
+  const alignments = readTableAlignments(table);
+  const columns = Math.max(1, alignments.length, ...rows.map((row) => rowCells(row).length));
+  const line = (cells: readonly string[]) => `| ${cells.join(" | ")} |`;
+  const rowLine = (row: HTMLTableRowElement) => {
+    const cells = rowCells(row);
+    return line(Array.from({ length: columns }, (_, column) => {
+      const cell = cells[column];
+      return cell ? escapeTablePipes(serializeInlineNodes(cell.childNodes, style).trim().replace(/[ \t]*\n[ \t]*/gu, " ")) : "";
+    }));
+  };
+  const delimiter = line(Array.from({ length: columns }, (_, column) => DELIMITER_CELLS[alignments[column] ?? ""] ?? "---"));
+  return [rowLine(rows[0]!), delimiter, ...rows.slice(1).map(rowLine)].join("\n");
+}
+
 function getCodeBlockFence(code: string) {
   const backtickRuns = code.match(/`+/g) ?? [];
   const fenceLength = Math.max(3, ...backtickRuns.map((run) => run.length + 1));
@@ -389,7 +454,7 @@ function serializeBlockElement(node: Element, style: MarkdownStyle): Omit<Serial
       };
     case "pre": {
       const language = node.getAttribute("data-language") ?? "";
-      const code = node.textContent?.replace(/\n$/, "") ?? "";
+      const code = readCodeBlockText(node);
       const fence = getCodeBlockFence(code);
       return {
         kind: "block",
@@ -397,6 +462,12 @@ function serializeBlockElement(node: Element, style: MarkdownStyle): Omit<Serial
         text: `${fence}${language}\n${code}\n${fence}`,
       };
     }
+    case "table":
+      return {
+        kind: "block",
+        isComment: false,
+        text: serializeTableElement(node as HTMLTableElement, style),
+      };
     case "hr":
       return {
         kind: "block",

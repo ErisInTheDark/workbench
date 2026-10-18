@@ -80,6 +80,6 @@ export function getNestedBlockElementsForItem(item: Element) {
       return false;
     }
 
-    return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr|ul|ol)$/i.test(child.tagName);
+    return /^(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre|hr|ul|ol|table)$/i.test(child.tagName);
   });
 }

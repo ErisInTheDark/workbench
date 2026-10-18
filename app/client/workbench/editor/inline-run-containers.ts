@@ -21,7 +21,7 @@ export function isInlineRunContainer(editor: HTMLElement, element: HTMLElement) 
     return true;
   }
 
-  if (/^(p|h1|h2|h3|h4|h5|h6|blockquote)$/i.test(element.tagName)) {
+  if (/^(p|h1|h2|h3|h4|h5|h6|blockquote|td|th)$/i.test(element.tagName)) {
     return true;
   }
 

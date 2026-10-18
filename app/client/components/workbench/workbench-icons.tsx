@@ -914,6 +914,14 @@ export function DiffIcon(props: IconProps) {
   return <OutlinedIcon {...props}><path d="M12 4 L12 14" /><path d="M7 20 L17 20" /><path d="M7 9 L17 9" /></OutlinedIcon>;
 }
 
+export function SquareCodeIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="m10 9-3 3 3 3" /><path d="m14 15 3-3-3-3" /><rect x="3" y="3" width="18" height="18" rx="2" /></OutlinedIcon>;
+}
+
+export function TableIcon(props: IconProps) {
+  return <OutlinedIcon {...props}><path d="M12 3v18" /><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M3 15h18" /></OutlinedIcon>;
+}
+
 const filePaths = [
   "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z",
   "M14 2v5a1 1 0 0 0 1 1h5",

@@ -2,8 +2,8 @@
  * Exports:
  * - SaveBlockedError: thrown when the real save button is pressed but the save guard refuses to write.
  * - KeyModifiers: modifier keys for simulated key presses.
- * - default MountedFilePanel: mount the real file panel client in jsdom over fake disk, drive it with browser-shaped events
- *   and toolbar commands, resolve suggestions, and prove saves reach disk.
+ * - default MountedFilePanel: mount the real file panel client in jsdom over fake disk, drive the rich editor and the
+ *   source textarea with browser-shaped events and toolbar commands, resolve suggestions, and prove saves reach disk.
  */
 import { flushAnimationFrames } from "./jsdom-environment";
 
@@ -32,7 +32,7 @@ export interface KeyModifiers {
 
 const PROJECT_ID = ProjectIdSchema.parse("project");
 const DAEMON_ID = DaemonIdSchema.parse("00000000-0000-4000-8000-000000000001");
-const BLOCK_TAGS = /^(P|DIV|H[1-6]|BLOCKQUOTE|LI|PRE|SUMMARY)$/u;
+const BLOCK_TAGS = /^(P|DIV|H[1-6]|BLOCKQUOTE|LI|PRE|SUMMARY|TD|TH)$/u;
 
 /** Disk double: one file whose writes always succeed and are recorded. */
 class FakeDisk implements WorkbenchFileDocument {
@@ -92,7 +92,10 @@ function createSurfaces(host: HTMLElement): WorkbenchEditorDomSurfaces {
     dialogs: {
       saveConflict: { actual: text(), dialog: dialog(), expected: text(), keepEditing: button(), overwrite: button(), reload: button(), summary: text() },
     },
-    editor: { customCaret: element("div", host), diffGutter: element("div", host), editor: element("div", host), reviewLayer: element("div", host) },
+    editor: {
+      customCaret: element("div", host), diffGutter: element("div", host), editor: element("div", host),
+      reviewLayer: element("div", host), source: element("textarea", host),
+    },
     statusDisplay: { filePathLabel: text(), statusLine: text() },
     toolbars: { revisionAccept: button(), revisionHover: element("div", host), revisionReject: button() },
   };
@@ -292,6 +295,83 @@ export default class MountedFilePanel {
   /** The panel client the React toolbar and comment margin drive. */
   get panel() {
     return this.client;
+  }
+
+  /** The source-mode textarea, holding the file's markdown text while source mode is on. */
+  get source() {
+    return this.surfaces.editor.source;
+  }
+
+  /** The source text with `|` at a collapsed caret, or `[...]` around a selection. */
+  get sourceCaretText() {
+    const { selectionEnd: end, selectionStart: start, value } = this.source;
+    return start === end
+      ? `${value.slice(0, start)}|${value.slice(start)}`
+      : `${value.slice(0, start)}[${value.slice(start, end)}]${value.slice(end)}`;
+  }
+
+  /** Select in the source text: `|` places a caret, `[...]` selects, as in `caret` and `select`. */
+  async selectSource(needle: string, occurrence = 0) {
+    const plain = needle.replace(/[|[\]]/gu, "");
+    let base = -1;
+    for (let seen = 0; seen <= occurrence; seen += 1) {
+      base = this.source.value.indexOf(plain, base + 1);
+      if (base < 0) throw new Error(`text ${JSON.stringify(plain)} #${occurrence} not in source: ${JSON.stringify(this.source.value)}`);
+    }
+    const caret = needle.indexOf("|");
+    const [start, end] = caret >= 0 ? [base + caret, base + caret] : [base + needle.indexOf("["), base + needle.indexOf("]") - 1];
+    this.source.focus();
+    this.source.setSelectionRange(start, end);
+    this.source.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+    await settle({ frames: true });
+  }
+
+  /** Type into the source textarea one character at a time through beforeinput, default insertion and input. */
+  async typeSource(text: string) {
+    for (const character of text) {
+      const inputType = character === "\n" ? "insertLineBreak" : "insertText";
+      await this.sourceInput(inputType, character === "\n" ? null : character, () => this.replaceSourceSelection(character));
+    }
+  }
+
+  /** Press a key in the source textarea; unhandled Enter and Backspace edit the text as a browser would. */
+  async pressSource(key: string, modifiers: KeyModifiers = {}) {
+    this.source.focus();
+    const keydown = new KeyboardEvent("keydown", {
+      bubbles: true, cancelable: true, key, code: /^[a-z]$/iu.test(key) ? `Key${key.toUpperCase()}` : key,
+      ctrlKey: modifiers.ctrl ?? false, shiftKey: modifiers.shift ?? false, altKey: modifiers.alt ?? false,
+    });
+    this.source.dispatchEvent(keydown);
+    if (keydown.defaultPrevented || modifiers.ctrl || modifiers.alt) {
+      await settle({ frames: true });
+      return;
+    }
+    if (key === "Enter") {
+      await this.sourceInput("insertLineBreak", null, () => this.replaceSourceSelection("\n"));
+    } else if (key === "Backspace") {
+      await this.sourceInput("deleteContentBackward", null, () => {
+        const { selectionEnd: end, selectionStart: start } = this.source;
+        const from = start === end ? Math.max(0, start - 1) : start;
+        this.source.setRangeText("", from, end, "end");
+      });
+    } else {
+      await settle({ frames: true });
+    }
+  }
+
+  private replaceSourceSelection(text: string) {
+    this.source.setRangeText(text, this.source.selectionStart, this.source.selectionEnd, "end");
+  }
+
+  private async sourceInput(inputType: string, data: string | null, applyDefault: () => void) {
+    this.source.focus();
+    const beforeInput = new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType, data });
+    this.source.dispatchEvent(beforeInput);
+    if (!beforeInput.defaultPrevented) {
+      applyDefault();
+      this.source.dispatchEvent(new InputEvent("input", { bubbles: true, inputType, data }));
+    }
+    await settle({ frames: true });
   }
 
   /** Keep one side of the first suggestion row through its header button. */

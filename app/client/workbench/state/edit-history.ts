@@ -28,8 +28,10 @@ export interface EditHistorySelectionPoint {
   path: number[];
 }
 
+/** Rich selections name blocks; `source` selections are offsets into the markdown text of source mode (empty paths). */
 export interface EditHistorySelection {
   end: EditHistorySelectionPoint;
+  source?: true;
   start: EditHistorySelectionPoint;
 }
 
@@ -76,6 +78,7 @@ export function cloneHistorySelection (selection: EditHistorySelection | null): 
   return {
     start: cloneHistorySelectionPoint(selection.start),
     end: cloneHistorySelectionPoint(selection.end),
+    ...(selection.source ? { source: true as const } : {}),
   };
 }
 

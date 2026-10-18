@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - markdownToHtml: render parsed workbench markdown into sanitized HTML for the rich editor and save guard. Editor
- *   blocks carry their source lines, comment threads become atoms and suggestions become tagged block groups.
+ *   blocks carry their source lines, comment threads become atoms, suggestions become tagged block groups, table
+ *   cells carry their column's alignment and code ends in its line sentinel.
  */
 
 import {
@@ -36,6 +37,8 @@ import {
     escapeAttribute,
     nextSuggestionId,
 } from "./review-markup";
+import { CODE_LINE_SENTINEL } from "../dom/mutation/code-block-dom";
+import { TABLE_ALIGN_ATTRIBUTE } from "../dom/mutation/table-dom";
 
 const escapeHtml = escapeAttribute;
 
@@ -191,20 +194,22 @@ function renderThreadStateChange(mode: string) {
 
 function getTableCellAlignAttribute(alignment: Extract<ParsedBlock, { type: "table" }>["alignments"][number]) {
   return alignment
-    ? ` style="text-align:${alignment}"`
+    ? ` ${TABLE_ALIGN_ATTRIBUTE}="${alignment}"`
     : "";
 }
 
 function renderTableBlock(block: Extract<ParsedBlock, { type: "table" }>, options: MarkdownParseOptions, attributes: string) {
+  // An empty cell keeps a line box, as an empty paragraph does, so it stays as tall as its row and can hold the caret.
+  const renderCell = (text: string) => renderInline(text, options) || "<br>";
   const header = block.header
-    .map((cell, index) => `<th${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderInline(cell.text, options)}</th>`)
+    .map((cell, index) => `<th${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderCell(cell.text)}</th>`)
     .join("");
   const rows = block.rows
     .map((row) => {
       const cells = block.header
         .map((_, index) => {
           const cell = row[index] ?? { text: "" };
-          return `<td${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderInline(cell.text, options)}</td>`;
+          return `<td${getTableCellAlignAttribute(block.alignments[index] ?? null)}>${renderCell(cell.text)}</td>`;
         })
         .join("");
       return `<tr>${cells}</tr>`;
@@ -259,7 +264,7 @@ function renderBlockHtml(block: ParsedBlock, options: MarkdownParseOptions = {},
     case "hr":
       return `<hr${attributes}>`;
     case "code":
-      return `<pre${attributes} data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}</code></pre>`;
+      return `<pre${attributes} data-language="${escapeHtml(block.language)}"><code>${escapeHtml(block.text)}${CODE_LINE_SENTINEL}</code></pre>`;
     case "plan":
       return renderChildBlocks(parseBlocks(block.text, options), options);
     case "notice":

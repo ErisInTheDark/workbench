@@ -10,7 +10,7 @@
  * - mergeAdjacentSiblingLists: merge compatible sibling lists separated only by empty spacer nodes. Keywords: workbench, list, merge, cleanup.
  * - normalizeDivBlocks: unwrap block-holding divs and turn inline-only divs into paragraphs, since markdown has no div. Keywords: workbench, div, paste, normalize.
  * - normalizeRootInlineBlocks: wrap direct root inline content into stable paragraph blocks for markdown round-trip comparison. Keywords: workbench, editor, root, inline, paragraph, save guard.
- * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks; root paragraphs holding only comment threads become block threads. Keywords: workbench, block dom, list, sync.
+ * - syncStructuredBlockStyles: run structured block normalization plus optional injected inline cleanup callbacks; root paragraphs holding only comment threads become block threads and code blocks keep their line sentinel. Keywords: workbench, block dom, list, sync.
  * - isBlockLikeChildElement: detect child elements that force a container to behave as block content, block comment threads included. Keywords: workbench, block dom, predicate, inline container.
  * - hasDirectBlockLikeChildren: detect whether a container contains direct block-like children. Keywords: workbench, block dom, predicate, container.
  */
@@ -30,6 +30,7 @@ import {
     isListElement,
     isSingleBreakParagraph,
 } from "../query/list-dom";
+import { ensureCodeBlockSentinels } from "./code-block-dom";
 import { getOrCreateDirectChildList } from "./list-item-dom-edit";
 
 export interface StructuredBlockStyleSyncOptions {
@@ -506,6 +507,7 @@ export function syncStructuredBlockStyles(
   options: StructuredBlockStyleSyncOptions = {},
 ) {
   convertCommentOnlyBlocks(root);
+  ensureCodeBlockSentinels(root);
   normalizeNestedListHierarchy(root);
   mergeAdjacentSiblingLists(root);
   options.canonicalizeInlineRunContainers?.(root);
@@ -533,7 +535,7 @@ export function isBlockLikeChildElement(element: HTMLElement) {
     return true;
   }
 
-  if (/^(ul|ol|li|details|summary|pre|hr)$/i.test(element.tagName)) {
+  if (/^(ul|ol|li|details|summary|pre|hr|table)$/i.test(element.tagName)) {
     return true;
   }
 
