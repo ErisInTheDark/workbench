@@ -354,6 +354,38 @@ test("target edits remain ordered and sending waits for their acknowledgement", 
   }
 });
 
+test("waiting on a never-read slot reads its saved selection before callers snapshot it", async (context) => {
+  const { controller, targets } = await createController([profile()]);
+  context.after(() => controller.dispose());
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentityValues.ProjectId["project-a"] };
+  const saved = { kind: "profile" as const, profileId: "profile-a", settings: CODEX_SETTINGS };
+  await targets.write(slot, saved);
+  await controller.waitForSelection(slot);
+  assert.deepEqual(controller.getDraftSelection(slot, { ...CODEX_SETTINGS, model: "fallback" }), saved);
+});
+
+test("waiting during a slot's first read settles only once that read lands", async (context) => {
+  const { controller, targets } = await createController([profile()]);
+  const slot = { kind: "new-thread" as const, projectId: fixtureIdentityValues.ProjectId["project-a"] };
+  const saved = { kind: "profile" as const, profileId: "profile-a", settings: CODEX_SETTINGS };
+  await targets.write(slot, saved);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  context.after(() => { release.resolve(); controller.dispose(); });
+  const read = targets.read.bind(targets);
+  let reads = 0;
+  targets.read = async (target) => { reads++; entered.resolve(); await release.promise; return await read(target); };
+  const loading = controller.loadSelection(slot);
+  let settled = false;
+  const waiting = controller.waitForSelection(slot).then(() => { settled = true; });
+  await entered.promise;
+  assert.equal(settled, false);
+  release.resolve();
+  await Promise.all([loading, waiting]);
+  assert.equal(reads, 1);
+  assert.deepEqual(controller.getDraftSelection(slot, { ...CODEX_SETTINGS, model: "fallback" }), saved);
+});
+
 test("scope changes retain stable ids and preserve hidden out-of-scope links", async () => {
   const { controller } = await createController();
   const sourceSlot = { kind: "new-thread" as const, projectId: fixtureIdentitySchemas.ProjectIdSchema.parse("project-b") };

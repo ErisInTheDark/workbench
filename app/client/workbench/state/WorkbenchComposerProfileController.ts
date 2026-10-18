@@ -68,6 +68,7 @@ export default class WorkbenchComposerProfileController {
   private snapshot: WorkbenchComposerProfileSnapshot;
   private targetPersistence: ComposerProfileTargetPersistence | null = null;
   private readonly selectionWrites = new Map<string, Promise<boolean>>();
+  private readonly selectionLoads = new Map<string, Promise<void>>();
   private readonly selectionFailures = new Map<string, string>();
   private readonly profileWrites = new Map<string, Promise<boolean>>();
   private catalogueRefresh: Promise<void> | null = null;
@@ -335,6 +336,7 @@ export default class WorkbenchComposerProfileController {
     }
   }
 
+  /** Settle the slot's saved selection, including its first read, so callers never snapshot an unread fallback. */
   async waitForSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     while (true) {
@@ -342,12 +344,22 @@ export default class WorkbenchComposerProfileController {
       const selection = this.selections[key] ?? EMPTY_CUSTOM_SELECTION;
       const pending = this.selectionWrites.get(key)
         ?? (selection.kind === "profile" ? this.profileWrites.get(selection.profileId) : null);
-      if (!pending) {
-        const failure = this.selectionFailures.get(key);
-        if (failure) throw new Error(failure);
-        return;
+      if (pending) {
+        if (!await pending) throw new Error(this.error || "The profile settings could not be saved.");
+        continue;
       }
-      if (!await pending) throw new Error(this.error || "The profile settings could not be saved.");
+      const loading = this.selectionLoads.get(key)
+        ?? (!this.hasSelection(slot) && this.targetPersistence ? this.loadSelection(slot) : null);
+      if (loading) {
+        await loading;
+        if (!this.hasSelection(slot) && !this.selectionLoads.has(key) && !this.selectionWrites.has(key)) {
+          throw new Error(this.error || "Unable to read the composer profile target.");
+        }
+        continue;
+      }
+      const failure = this.selectionFailures.get(key);
+      if (failure) throw new Error(failure);
+      return;
     }
   }
   materializeSelection(sourceSlot: WorkbenchComposerProfileSlot, threadId: WorkbenchThreadId, harness: WorkbenchHarness) {
@@ -368,7 +380,16 @@ export default class WorkbenchComposerProfileController {
       : { kind: "custom", settings });
   }
 
-  async loadSelection(slot: WorkbenchComposerProfileSlot) {
+  loadSelection(slot: WorkbenchComposerProfileSlot): Promise<void> {
+    const key = getSlotKey(slot);
+    const load = this.readSelection(slot).finally(() => {
+      if (this.selectionLoads.get(key) === load) this.selectionLoads.delete(key);
+    });
+    this.selectionLoads.set(key, load);
+    return load;
+  }
+
+  private async readSelection(slot: WorkbenchComposerProfileSlot) {
     const key = getSlotKey(slot);
     this.slots.set(key, slot);
     const pending = this.selectionWrites.get(key);

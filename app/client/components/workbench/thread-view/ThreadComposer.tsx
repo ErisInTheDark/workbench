@@ -297,8 +297,9 @@ export default function ThreadComposer ({
     focusAfterSendRef.current = false;
     if (!isMobileTextInputEnvironment()) composerInputRef.current?.focus();
   }, [isInputDisabled]);
-  // A one-shot seed, such as feedback being addressed, joins the new-thread composer's references through the normal draft path.
-  useLayoutEffect(() => {
+  // A one-shot seed, such as feedback being addressed, joins the new-thread composer's references through the normal
+  // draft path: it runs after the draft session attaches, so it saves as an ordinary edit rather than a detached flush.
+  useEffect(() => {
     if (composerTarget.kind !== "new") return;
     const seed = takeNewThreadReferences(projectId);
     if (!seed?.length) return;
