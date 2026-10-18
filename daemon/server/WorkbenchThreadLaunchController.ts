@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, rejecting mismatched skill activations before reserving, naming the created thread from its first message, and recording addressed feedback once accepted.
+ * - default WorkbenchThreadLaunchController: own one durable create-and-first-input attempt per immutable launch ID, rejecting mismatched skill activations before reserving, listing the created thread under its launch and first message, and recording addressed feedback once accepted.
  */
 import {
   WorkbenchThreadLaunchRequestSchema,
@@ -29,7 +29,7 @@ export default class WorkbenchThreadLaunchController {
     database: Pick<WorkbenchDatabaseController, "reserveThreadLaunch" | "readThreadLaunch" | "advanceThreadLaunch">;
     projects: Pick<WorkbenchProjectCatalogController, "resolveProjectById">;
     actions: Pick<WorkbenchThreadActionController, "handle" | "createForLaunch">;
-    threadState: Pick<WorkbenchThreadStateFeature, "nameLaunchedThread">;
+    threadState: Pick<WorkbenchThreadStateFeature, "admitLaunchedThread">;
     addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "record">;
     warn(message: string): void;
   }) {}
@@ -91,14 +91,15 @@ export default class WorkbenchThreadLaunchController {
     }
   }
 
-  /** Naming is presentation: the thread exists either way, so a failure warns instead of failing the launch. */
-  private async nameCreatedThread(thread: ThreadPayload, request: WorkbenchThreadLaunchRequest) {
+  /** Listing is presentation: the thread exists either way, so a failure warns instead of failing the launch. */
+  private async admitCreatedThread(thread: ThreadPayload, request: WorkbenchThreadLaunchRequest) {
     const preview = request.firstInput.find(part => part.type === "text" && part.text.trim());
-    if (preview?.type !== "text") return;
     try {
-      await this.owners.threadState.nameLaunchedThread(request.projectId, thread, preview.text);
+      await this.owners.threadState.admitLaunchedThread(request.projectId, thread, {
+        launchId: request.launchId, ...(preview?.type === "text" ? { firstMessagePreview: preview.text } : {}),
+      });
     } catch (error) {
-      this.owners.warn(`The launched thread was not named from its first message: ${
+      this.owners.warn(`The launched thread was not listed under its launch: ${
         error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
     }
   }
@@ -126,7 +127,7 @@ export default class WorkbenchThreadLaunchController {
           throw new Error("Created thread was not bound to its launch during identity admission.");
         }
         state = recorded.state;
-        await this.nameCreatedThread(thread, request);
+        await this.admitCreatedThread(thread, request);
       }
       if (state.phase !== "created") return state;
       const sending = await this.owners.database.advanceThreadLaunch(request.launchId, "created", {

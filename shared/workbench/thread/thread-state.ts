@@ -162,6 +162,8 @@ const WorkbenchThreadDraftInputSchema = z.object({
   createdAt: z.number().int().nonnegative(),
   draftId: CanonicalUuidSchema.brand<"DraftId">(),
   harness: WorkbenchHarnessSchema.optional(),
+  /** An app draft whose send is in flight; it stands in for its thread until the launch is accepted. */
+  launching: z.literal(true).optional(),
   model: z.string().nullable().optional(),
   profileId: z.string().nullable(),
   projectId: ProjectIdSchema,
@@ -520,6 +522,8 @@ const TopLevelEntrySchema = SidebarCommonSchema.extend({
   gitArcPlan: WorkbenchGitArcPlanStateSchema.nullable().optional(),
   gitCommits: z.array(WorkbenchThreadGitCommitSchema).optional(),
   identity: ThreadIdentitySchema,
+  /** The app draft launch that created this thread, while the daemon remembers it; that draft lists in its place until accepted. */
+  launchId: CanonicalUuidSchema.optional(),
   lifecycle: WorkbenchThreadLifecycleSchema,
   metadata: TopLevelMetadataSchema,
   orderAt: z.number().int().nonnegative().optional(),

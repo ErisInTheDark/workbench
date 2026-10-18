@@ -369,7 +369,8 @@ export const WorkspaceThreadMemberSchema = z.object({
   activityAt: z.number(),
   ref: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("thread"), identity: z.object({ harness: ProviderKeySchema, threadId: WorkbenchThreadIdSchema }).strict() }).strict(),
-    z.object({ kind: z.literal("draft"), draftId: z.string().min(1) }).strict(),
+    /** `launching`: the app is launching this draft, so it stands in for its thread. */
+    z.object({ kind: z.literal("draft"), draftId: z.string().min(1), launching: z.literal(true).optional() }).strict(),
   ]),
 }).strict();
 export type WorkspaceThreadMember = z.infer<typeof WorkspaceThreadMemberSchema>;

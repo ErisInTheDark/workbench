@@ -521,7 +521,7 @@ test("provider sidebar normalization keeps provider names as display labels only
   }
 });
 
-test("a launched thread keeps its first-message name through untitled provider snapshots", async () => {
+test("a launched thread keeps its launch and first-message name through untitled provider snapshots", async () => {
   const projectId = fixtureIdentityValues.ProjectId.project;
   const database = createThreadStateDatabase("C:/project", [["thread", "codex"]]);
   await database.identities.threads.start();
@@ -537,12 +537,17 @@ test("a launched thread keeps its first-message name through untitled provider s
   });
   try {
     const created = { id: "thread", harness: "codex", name: null, preview: "", status: { type: "idle" }, updatedAt: 1 };
-    await feature.nameLaunchedThread(projectId, created as never, "Fix the login redirect\nthen add a test");
+    const launchId = "dc085242-b595-4a51-9bd0-099013ead304";
+    await feature.admitLaunchedThread(projectId, created as never, {
+      launchId, firstMessagePreview: "Fix the login redirect\nthen add a test",
+    });
     const untitled = normalizeProviderSidebarEntry("codex", created);
     assert.ok(untitled?.entryKind === "thread");
     await feature.controller.ensureProviderEntry(projectId, untitled);
     const entry = await feature.controller.getCanonicalThreadEntry(projectId, untitled.identity.threadId);
-    assert.equal(entry?.title, "Fix the login redirect");
+    assert.ok(entry?.entryKind === "thread");
+    assert.equal(entry.title, "Fix the login redirect");
+    assert.equal(entry.launchId, launchId);
   } finally { await feature.dispose(); }
 });
 

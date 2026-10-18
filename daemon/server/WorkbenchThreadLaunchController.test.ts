@@ -33,7 +33,7 @@ function fixture({ failMessage = false, failBeforeCreation = false, failNaming =
   initial?: WorkbenchThreadLaunchState; launch?: typeof request;
 } = {}) {
   const addressed: Array<{ threadId: string; ids: number[] }> = [];
-  const names: Array<{ threadId: string; preview: string; messagesSent: number }> = [];
+  const admissions: Array<{ threadId: string; launchId: string; preview?: string; messagesSent: number }> = [];
   let state: WorkbenchThreadLaunchState = initial ?? { phase: "prepared", launchId };
   let recorded = initial !== undefined;
   const location = { rootPath: "/repo", roots: ["/repo"] };
@@ -81,10 +81,10 @@ function fixture({ failMessage = false, failBeforeCreation = false, failNaming =
       },
     },
     threadState: {
-      nameLaunchedThread: async (namedProjectId, thread, preview) => {
-        assert.equal(namedProjectId, projectId);
+      admitLaunchedThread: async (admittedProjectId, thread, launch) => {
+        assert.equal(admittedProjectId, projectId);
         if (failNaming) throw new Error("thread state is reloading");
-        names.push({ threadId: thread.id, preview, messagesSent: messages });
+        admissions.push({ threadId: thread.id, launchId: launch.launchId, preview: launch.firstMessagePreview, messagesSent: messages });
       },
     },
     addressedFeedback: {
@@ -93,7 +93,7 @@ function fixture({ failMessage = false, failBeforeCreation = false, failNaming =
     warn: message => warnings.push(message),
   });
   return {
-    controller, addressed, names, warnings, get state() { return state; }, get creations() { return creations; },
+    controller, addressed, admissions, warnings, get state() { return state; }, get creations() { return creations; },
     get messages() { return messages; }, get recorded() { return recorded; },
   };
 }
@@ -159,17 +159,17 @@ test("addressed feedback is recorded once, only for an accepted launch", async (
   assert.deepEqual(uncertain.addressed, []);
 });
 
-test("a created thread is named from its first message before that message is dispatched", async () => {
+test("a created thread is listed under its launch and first message before that message is dispatched", async () => {
   const owner = fixture();
   assert.equal((await owner.controller.launch(request)).phase, "accepted");
-  assert.deepEqual(owner.names, [{ threadId: "thread-1", preview: "hello", messagesSent: 0 }]);
+  assert.deepEqual(owner.admissions, [{ threadId: "thread-1", launchId, preview: "hello", messagesSent: 0 }]);
 });
 
-test("a naming failure only warns: the created thread still receives its first input", async () => {
+test("a listing failure only warns: the created thread still receives its first input", async () => {
   const owner = fixture({ failNaming: true });
   assert.equal((await owner.controller.launch(request)).phase, "accepted");
   assert.equal(owner.messages, 1);
-  assert.match(owner.warnings.join("\n"), /not named/u);
+  assert.match(owner.warnings.join("\n"), /not listed/u);
 });
 
 test("a retained created thread sends only its still-unstarted first input", async () => {

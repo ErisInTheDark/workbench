@@ -26,6 +26,7 @@ import type { WorkbenchDaemonTranscriptEvent } from "./WorkbenchDaemonSource";
 import type WorkbenchWorkspaceController from "./WorkbenchWorkspaceController";
 import type WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import type WorkbenchGitPeerSync from "./WorkbenchGitPeerSync";
+import type WorkbenchWorkspaceDrafts from "./WorkbenchWorkspaceDrafts";
 import { z } from "zod";
 import { WorkspaceCommandSchema, WorkspaceThreadMutationSchema, WorkspaceThreadActionSchema, workspaceCommandRoutes, type WorkspaceThreadActionResult, type WorkspaceThreadMutation } from "workbench-shared/workbench/workspace/workspace-commands";
 import { VoiceStartSchema, type VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
@@ -126,6 +127,8 @@ export default class WorkbenchWorkspaceRequestController {
     sources: WorkbenchDaemonSources;
     threads: WorkbenchWorkspaceThreads;
     presentation: Pick<WorkbenchPresentationController, "read" | "subscribe" | "mutate">;
+    /** Draft launches in flight, whose reservations stand in for their thread rows. */
+    launches?: Pick<WorkbenchWorkspaceDrafts, "inFlight" | "subscribe">;
     network: {
       read(): Extract<Payload, { kind: "network" }>;
       subscribe(listener: () => void): () => void;
@@ -613,7 +616,8 @@ export default class WorkbenchWorkspaceRequestController {
         break;
       case "projectThreads":
         interest.stop.push(this.options.workspace.subscribe(refresh),
-          this.options.presentation.subscribe(refresh), this.options.workspace.retain());
+          this.options.presentation.subscribe(refresh), this.options.workspace.retain(),
+          this.options.launches?.subscribe(refresh) ?? (() => {}));
         break;
       case "projectSelection":
         interest.stop.push(this.options.workspace.subscribe(refresh),
@@ -1196,7 +1200,8 @@ export default class WorkbenchWorkspaceRequestController {
       }
     }
     const presentation = this.options.presentation.read();
-    const rows: WorkbenchProjectedThreadRow[] = projectLogicalThreadRows(workspace.projects, sidebars, presentation)
+    const inFlight = this.options.launches?.inFlight() ?? new Set<string>();
+    const rows: WorkbenchProjectedThreadRow[] = projectLogicalThreadRows(workspace.projects, sidebars, presentation, inFlight)
       .filter(row => targets.get(row.location.daemonId)?.has(row.location.projectId));
     for (const project of workspace.observedProjects) for (const location of project.locations) {
       if (!targets.get(location.location.daemonId)?.has(location.location.projectId)) continue;

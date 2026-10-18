@@ -111,7 +111,7 @@ function threadClaimSort(entry: WorkbenchThreadSidebarEntry) {
 }
 
 function threadLifecycleSort(entry: WorkbenchThreadSidebarEntry) {
-  if (entry.entryKind === "draft") return ThreadLifecycleSort.Draft;
+  if (entry.entryKind === "draft") return entry.draft.launching ? ThreadLifecycleSort.Working : ThreadLifecycleSort.Draft;
   if (entry.lifecycle.kind === "needsAttention") return ThreadLifecycleSort.NeedsAttention;
   if (entry.lifecycle.kind === "working") return ThreadLifecycleSort.Working;
   return ThreadLifecycleSort.Complete;

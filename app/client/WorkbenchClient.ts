@@ -445,14 +445,16 @@ export function WorkbenchClient(bindings: WorkbenchBindings & {
     return { main, archivedMembers };
   }
 
-  /** Members whose detail is known, as rows: thread summaries that have landed, and unsent presentation drafts. */
+  /** Members whose detail is known, as rows: thread summaries that have landed, and listed presentation drafts. */
   function materializeRows(members: readonly WorkspaceThreadMember[]): WorkbenchProjectedThreadRow[] {
     const logical = projectFacts()?.projects ?? [];
     return members.flatMap(member => {
       if (member.ref.kind === "draft") {
+        // The listing decided which drafts show and which stand in for their launching thread.
         const draft = presentation.draft(member.ref.draftId);
-        return draft?.phase === "unsent"
-          ? [materializeWorkspaceThreadRow(member, projectPresentationDraftRow(draft, logical).entry)] : [];
+        return draft && (draft.phase === "unsent" || draft.phase === "submitting")
+          ? [materializeWorkspaceThreadRow(member,
+            projectPresentationDraftRow(draft, logical, member.ref.launching === true).entry)] : [];
       }
       const located = threadSummaries.get(member.ref.identity.threadId);
       return located ? [materializeWorkspaceThreadRow(member, located.summary.row)] : [];

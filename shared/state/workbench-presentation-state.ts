@@ -142,8 +142,11 @@ export const PresentationMutationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("completeLaunch"), draftId: uuid, launchId: uuid, threadId: z.string().min(1),
   }).strict(),
-  /** The daemon definitely launched nothing for this reservation; the draft becomes editable again. */
-  z.object({ kind: z.literal("releaseLaunch"), draftId: uuid, launchId: uuid }).strict(),
+  /**
+   * End a reservation no launch will finish: the draft becomes editable again, or with `discard` is deleted because
+   * its content already lives on (a launched thread or an identical draft).
+   */
+  z.object({ kind: z.literal("releaseLaunch"), draftId: uuid, launchId: uuid, discard: z.literal(true).optional() }).strict(),
   layoutInput.extend({ kind: z.literal("saveLayout"), expectedRevision: revision }).strict(),
   z.object({
     kind: z.literal("saveLayouts"), expectedRevision: revision,

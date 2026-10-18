@@ -1964,8 +1964,10 @@ export default class WorkbenchThreadStateController {
         ? { archived: true as const, pinned: false as const, snoozed: false as const }
         : { archived: false as const, pinned: existing?.entryKind === "thread" ? existing.metadata.pinned : providerEntry.metadata.pinned, snoozed: existing?.entryKind === "thread" ? existing.metadata.snoozed : providerEntry.metadata.snoozed };
       const lifecycle = providerLifecycle(key, providerEntry, existing);
+      const launchId = providerEntry.launchId ?? (existing?.entryKind === "thread" ? existing.launchId : undefined);
       install(key, parseWorkbenchThreadStateEntry(existing ? {
         ...providerEntry,
+        ...(launchId ? { launchId } : {}),
         gitHistoryCleanedAt: existing.gitHistoryCleanedAt,
         lifecycle: gitArcPreventsThreadSettlement(providerEntry.gitArc) && lifecycle.settled
           ? { ...lifecycle, settled: false as const }

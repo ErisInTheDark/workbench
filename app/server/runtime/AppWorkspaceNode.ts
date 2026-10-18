@@ -77,6 +77,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
         workspace.start();
         workspaceThreads.start();
         presentationImport.start();
+        workspaceDrafts.start();
         sources.start();
       },
       dispose,

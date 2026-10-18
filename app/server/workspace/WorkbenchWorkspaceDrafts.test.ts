@@ -242,28 +242,97 @@ async function assertEditableAndRelaunchable(f: Awaited<ReturnType<typeof fixtur
   assert.notEqual(relaunch?.launchId, rejectedLaunchId);
 }
 
-test("a replacement owner reads an uncertain launch without resending the first message", async context => {
-  const f = await fixture(context);
+/** A daemon that records every launch with `outcome` and then drops the connection, answering later reads. */
+function uncertainDaemon(f: Awaited<ReturnType<typeof fixture>>,
+  outcome: (launchId: string) => WorkbenchThreadLaunchState, readable = () => true) {
   let recorded: WorkbenchThreadLaunchState | null = null;
   f.handle(async (method, params) => {
     if (method === "models/list") return { data: [model] };
     if (method === "thread/launch") {
-      const request = WorkbenchThreadLaunchRequestSchema.parse(params);
-      recorded = { phase: "unknown", launchId: request.launchId, threadId: null, reason: "dispatch uncertain" };
+      recorded = outcome(WorkbenchThreadLaunchRequestSchema.parse(params).launchId);
       throw new Error("connection interrupted");
     }
     assert.equal(method, "thread/launch/read");
+    if (!readable()) throw new Error("daemon unreachable");
     assert.equal(z.object({ launchId: z.uuid() }).parse(params).launchId, recorded?.launchId);
     return { state: recorded };
   });
+}
+
+test("an uncertain launch that created nothing returns its draft for editing instead of fencing it", async context => {
+  const f = await fixture(context);
+  uncertainDaemon(f, launchId => ({ phase: "unknown", launchId, threadId: null, reason: "dispatch uncertain" }));
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /dispatch uncertain.*editable again/u);
+  await assertEditableAndRelaunchable(f);
+});
+
+test("an uncertain launch whose thread exists discards its reservation, since the message lives on there", async context => {
+  const f = await fixture(context);
+  uncertainDaemon(f, launchId => ({ phase: "unknown", launchId, threadId: randomUUID(), reason: "dispatch uncertain" }));
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), /removed/u);
+  assert.equal(f.draft(), undefined);
+  assert.equal(f.presentation.readAcceptedLaunch(f.draftId), null);
+});
+
+test("an unreadable outcome keeps the reservation until a later owner reaches its daemon and resolves it", async context => {
+  const f = await fixture(context);
+  let readable = false;
+  const threadId = randomUUID();
+  uncertainDaemon(f, launchId => ({ phase: "accepted", launchId, threadId, turnId: randomUUID() }), () => readable);
   await assert.rejects(f.owner.launch(f.draftId, f.draft().revision), error =>
     error instanceof WorkbenchRpcRequestInterruptedError && error.dispatched);
-  const launchId = f.draft().launchId;
-  await f.owner.dispose();
-  await assert.rejects(f.createOwner().launch(f.draftId, f.draft().revision), /not confirmed/);
-  assert.equal(f.draft().launchId, launchId);
   assert.equal(f.draft().phase, "submitting");
+  await f.owner.dispose();
+
+  readable = true;
+  const replacement = f.createOwner();
+  replacement.start();
+  await replacement.drain();
+  assert.deepEqual(f.presentation.readAcceptedLaunch(f.draftId), { threadId, harness: "codex" });
   assert.equal(f.requests.filter(request => request.method === "thread/launch").length, 1);
+});
+
+test("an orphaned reservation duplicating an unsent draft is discarded rather than reopened beside it", async context => {
+  const f = await fixture(context);
+  uncertainDaemon(f, launchId => ({ phase: "unknown", launchId, threadId: null, reason: "dispatch uncertain" }), () => false);
+  await assert.rejects(f.owner.launch(f.draftId, f.draft().revision));
+  await f.owner.dispose();
+  const reservation = f.draft();
+  f.presentation.mutate({ kind: "putDraft", expectedRevision: null, draft: {
+    id: randomUUID(), logicalProjectId: reservation.logicalProjectId, target: reservation.target,
+    prompt: reservation.prompt, selection: reservation.selection, updatedAt: 3,
+  } });
+  f.handle(async (method, params) => {
+    assert.equal(method, "thread/launch/read");
+    return { state: { phase: "unknown", launchId: z.object({ launchId: z.uuid() }).parse(params).launchId, threadId: null, reason: "x" } };
+  });
+  const replacement = f.createOwner();
+  replacement.start();
+  await replacement.drain();
+  assert.equal(f.draft(), undefined);
+  assert.equal(f.presentation.read().drafts.filter(draft => draft.prompt === reservation.prompt).length, 1);
+});
+
+test("in-flight launches are published from start until they settle", async context => {
+  const f = await fixture(context);
+  const entered = Promise.withResolvers<void>();
+  const accepted = Promise.withResolvers<object>();
+  f.handle(async (method, params) => {
+    if (method === "models/list") return { data: [model] };
+    const request = WorkbenchThreadLaunchRequestSchema.parse(params);
+    entered.resolve();
+    return accepted.promise.then(() => ({ phase: "accepted", launchId: request.launchId, threadId: randomUUID(), turnId: randomUUID() }));
+  });
+  const seen: Array<readonly string[]> = [];
+  f.owner.subscribe(() => seen.push([...f.owner.inFlight()]));
+  const launching = f.owner.launch(f.draftId, f.draft().revision);
+  await entered.promise;
+  assert.deepEqual([...f.owner.inFlight()], [f.draftId]);
+  accepted.resolve({});
+  await launching;
+  await f.owner.drain();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(seen, [[f.draftId], []]);
 });
 
 test("launch reads stored image bytes and disposal drains the accepted operation", async context => {

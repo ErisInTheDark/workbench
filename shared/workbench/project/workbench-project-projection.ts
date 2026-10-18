@@ -10,7 +10,7 @@
  * - projectLogicalSummaries/LogicalProjectSummary: combine source-qualified thread summaries without rewriting ids.
  * - projectLogicalGroups: combine daemon placement and app drafts into ordered cross-daemon project groups.
  * - projectLogicalThreadRows/projectLogicalThreadDisplayOrder/projectLogicalHomeDisplayOrder/projectLogicalPinnedDisplayOrder: retain sources and app-owned layouts.
- * - projectPresentationDraftRow: one unsent presentation draft as a sidebar row.
+ * - projectPresentationDraftRow: one listed presentation draft as a sidebar row; in-flight launches stand in for their thread.
  * - WorkbenchProjectedThreadRow/projectWorkspaceThreadMember/materializeWorkspaceThreadRow: rows as sidebar members and back.
  * - projectWorkbenchThreadMembership: members, combined home placement keys and saved folders for listed projects.
  */
@@ -179,28 +179,35 @@ export function projectLogicalThreadRows(
   projects: readonly WorkbenchLogicalProject[],
   sources: ReadonlyMap<DaemonId, { projects: readonly Pick<WorkbenchThreadSidebarRowSnapshot, "projectId" | "entries">[] }>,
   presentation: PresentationSnapshot,
+  /** Draft ids whose launch the app is running right now. */
+  inFlight: ReadonlySet<string>,
 ): WorkbenchLogicalThreadRow[] {
+  const listedDrafts = presentation.drafts.filter(draft => draft.phase === "unsent" || draft.phase === "submitting");
+  const launching = (draft: PresentationSnapshot["drafts"][number]) => draft.phase === "submitting" && inFlight.has(draft.id);
+  // A launching draft stands in for the thread its launch created until the launch is accepted.
+  const launchingIds = new Set(listedDrafts.flatMap(draft => launching(draft) && draft.launchId ? [draft.launchId] : []));
   const materialized = projects.flatMap(project => projectDisplayLocations(project).flatMap(location =>
     (sources.get(location.target.daemonId)?.projects.find(sidebar =>
       sidebar.projectId === location.target.projectId)?.entries ?? [])
-      .filter(entry => entry.entryKind !== "draft")
+      .filter(entry => entry.entryKind !== "draft" && !(entry.entryKind === "thread" && entry.launchId && launchingIds.has(entry.launchId)))
       .map(entry => ({
         logicalProjectId: project.id, location: location.target,
         hostname: location.hostname, rootPath: location.rootPath, entry,
         ...(location.observedOnly ? { observedOnly: true } : {}),
       })),
   ));
-  const drafts = presentation.drafts.filter(draft => draft.phase === "unsent")
-    .map(draft => projectPresentationDraftRow(draft, projects));
+  // A reservation no launch is running for is an orphan its launch owner resolves; until then it is a plain draft.
+  const drafts = listedDrafts.map(draft => projectPresentationDraftRow(draft, projects, launching(draft)));
   return [...materialized, ...drafts].sort((left, right) => compareThreadSidebarEntries(left.entry, right.entry)
     || left.location.daemonId.localeCompare(right.location.daemonId)
     || left.location.projectId.localeCompare(right.location.projectId));
 }
 
-/** One unsent presentation draft as a sidebar row in its logical project. */
+/** One listed presentation draft as a sidebar row in its logical project; a launching one stands in for its thread. */
 export function projectPresentationDraftRow(
   draft: PresentationSnapshot["drafts"][number],
   projects: readonly Pick<WorkbenchLogicalProject, "id" | "locations">[],
+  launching: boolean,
 ): WorkbenchLogicalThreadRow {
   const location = projects.find(project => project.id === draft.logicalProjectId)?.locations.find(item =>
     item.target.daemonId === draft.target.daemonId && item.target.projectId === draft.target.projectId);
@@ -213,6 +220,7 @@ export function projectPresentationDraftRow(
     draftId: draft.id, profileId: draft.selection.kind === "profile" ? draft.selection.profileId : null,
     projectId: draft.target.projectId, prompt: draft.prompt, updatedAt: draft.updatedAt,
     ...(draft.references?.length ? { referenceKinds: draftReferenceKinds(draft.references) } : {}),
+    ...(launching ? { launching: true } : {}),
   });
   return {
     logicalProjectId: draft.logicalProjectId, location: draft.target,
@@ -241,7 +249,8 @@ export function projectWorkspaceThreadMember(row: WorkbenchProjectedThreadRow): 
     logicalProjectId: row.logicalProjectId, location: row.location, hostname: row.hostname, rootPath: row.rootPath,
     ...(row.observedOnly ? { observedOnly: true } : {}),
     title: entry.title, activityAt: entry.activityAt,
-    ref: entry.entryKind === "draft" ? { kind: "draft", draftId: entry.draft.draftId }
+    ref: entry.entryKind === "draft"
+      ? { kind: "draft", draftId: entry.draft.draftId, ...(entry.draft.launching ? { launching: true } : {}) }
       : { kind: "thread", identity: { harness: entry.identity.harness, threadId: entry.identity.threadId } },
   };
 }

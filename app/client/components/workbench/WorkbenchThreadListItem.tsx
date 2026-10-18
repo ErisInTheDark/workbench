@@ -15,7 +15,7 @@ import type { WorkbenchThreadTarget } from "workbench-shared/workbench/thread/th
 import ContextMenuCapability from "./ContextMenuCapability";
 import ThreadTooltipContent from "./WorkbenchThreadTooltipContent";
 import WorkbenchProjectLabel from "./WorkbenchProjectLabel";
-import { describeThreadEntry, isPinnedDraftSummaryEntry, type ThreadListEntry } from "./thread-entry-presentation";
+import { describeThreadEntry, isLaunchingDraftEntry, isPinnedDraftSummaryEntry, type ThreadListEntry } from "./thread-entry-presentation";
 import { workbenchThreadListLabelClassName } from "./workbench-class-names";
 import {
   ArchiveIcon,
@@ -216,8 +216,9 @@ export default function WorkbenchThreadListItem({
   ].filter(Boolean);
   const rowName = `${projectName}${entry.title}${hasDraftImages ? ", includes image" : ""}, ${status}${gitWorkLabels.length ? `, ${gitWorkLabels.join(", ")}` : ""}${group === "snoozed" ? ", snoozed" : ""}${pinned ? ", pinned" : ""}, ${formatLongTimestamp(activityAt)}`;
   const dimmed = !selected && (dimmedOverride ?? (group === "snoozed" || group === "settled" || archived));
-  const hasDashedBorder = entry.entryKind === "draft" || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
-  const strokeOpacity = entry.entryKind === "draft" ? 0.24 : 1;
+  const restingDraft = entry.entryKind === "draft" && !isLaunchingDraftEntry(entry);
+  const hasDashedBorder = restingDraft || (!waiting && (lifecycle?.kind === "needsAttention" || lifecycle?.kind === "stopped"));
+  const strokeOpacity = restingDraft ? 0.24 : 1;
   const compact = compactOverride ?? (group === "settled" || archived);
   const actionReplacesPriority = Boolean(actionOverride) || (showActions && Boolean(action));
   const visibleAction = actionOverride ?? (showActions ? actionDisplay : null);
@@ -267,7 +268,7 @@ export default function WorkbenchThreadListItem({
         ${dimmed ? `opacity-50 ${isDragActive ? "" : "hover:opacity-100 has-[:focus-visible]:opacity-100"}` : ""}
         ${className}
       `}
-      data-thread-status-tone={entry.entryKind === "draft" ? "draft" : statusTone}
+      data-thread-status-tone={restingDraft ? "draft" : statusTone}
       role={role === "option" ? "presentation" : undefined}
     >
       {showFrame ? <svg aria-hidden="true" className={`pointer-events-none absolute inset-0 z-0 size-full transition-opacity duration-75 ease-out ${statusClassName} ${selected ? "opacity-100" : `opacity-0${isDragActive ? "" : " group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100"}`}`}>

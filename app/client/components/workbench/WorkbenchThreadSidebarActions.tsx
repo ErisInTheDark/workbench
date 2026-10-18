@@ -27,6 +27,7 @@ import type {
 } from "workbench-shared/workbench/thread/thread-sidebar-row";
 import { getNeedsAttentionThreadStatusTone } from "./workbench-thread-status-colors";
 import { getThreadStopIntent } from "./thread-row-actions";
+import { isLaunchingDraftEntry, isPinnedDraftSummaryEntry, type ThreadListEntry } from "./thread-entry-presentation";
 import {
   ArchiveIcon,
   CompletedThreadIcon,
@@ -45,12 +46,6 @@ import WorkbenchComposerDraftPresenceProvider from "./WorkbenchComposerDraftPres
 import type { WorkbenchContextMenuDefinition } from "./WorkbenchContextMenuContext";
 import { useWorkbenchClientController } from "./workbench-client-context";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
-
-type ThreadListEntry = WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry;
-
-function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Extract<WorkbenchPinnedThreadSummaryEntry, { entryKind: "draft" }> {
-  return entry.entryKind === "draft" && "draftId" in entry;
-}
 
 function targetForEntry(entry: ThreadListEntry): Extract<WorkbenchThreadTarget, { kind: "draft" | "provider" }> {
   return entry.entryKind === "draft"
@@ -212,6 +207,8 @@ function WorkbenchThreadSidebarActionsProvider({
     const pinnedThreadLayout = sidebarStore?.getPinnedThreadLayout?.() ?? null;
     const target = targetForEntry(entry);
     const draftId = target.kind === "draft" ? target.draftId : null;
+    // Its send is in flight: the app no longer lets the draft change, and its thread takes over once accepted.
+    const launching = isLaunchingDraftEntry(entry);
     const identifier = target.kind === "draft" ? target.draftId : target.threadId;
     const qualifiedRow = source && logicalProjectId ? readRows().find(row =>
       row.logicalProjectId === logicalProjectId
@@ -311,14 +308,14 @@ function WorkbenchThreadSidebarActionsProvider({
       closeOnSelect: false,
       controls: [{
         checked: pinned,
-        disabled: group === "archived",
+        disabled: group === "archived" || launching,
         icon: <PinIcon size={16} />,
         id: "pin",
         label: pinned ? "Unpin thread" : "Pin thread",
         onSelect: () => mutateEntry(entry, ownerProjectId, "pin/set", !pinned, source),
       }, {
         checked: snoozed,
-        disabled: group === "archived" || (!snoozed && !isWorkbenchThreadSnoozeAvailable(entry)),
+        disabled: group === "archived" || launching || (!snoozed && !isWorkbenchThreadSnoozeAvailable(entry)),
         icon: <SnoozedThreadIcon size={16} />,
         id: "snooze",
         label: snoozed ? "Wake" : "Snooze thread",
@@ -419,7 +416,7 @@ function WorkbenchThreadSidebarActionsProvider({
         presentation: "actions",
       });
     }
-    if (draftId) {
+    if (draftId && !launching) {
       items.push({ id: "discard-separator", kind: "separator" }, {
         disabled: !controls,
         icon: <DiscardDraftIcon size={16} />,

@@ -426,11 +426,56 @@ test("one logical project includes thread rows from both daemon folders", () => 
     [second, { projects: [{ projectId: concrete, revision: 1, error: null,
       freshness: "fresh" as const, entries: [entry("second-thread")] }] }],
   ]);
-  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sidebars, snapshot);
+  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sidebars, snapshot, new Set());
   assert.deepEqual(rows.map(row => [row.logicalProjectId, row.location.daemonId,
     row.entry.entryKind === "thread" ? row.entry.identity.threadId : null]), [
     [remoteId, first, "first-thread"], [remoteId, second, "second-thread"],
   ]);
+});
+
+test("an in-flight launch's draft holds its new thread's slot until accepted; an orphaned reservation is a plain draft", () => {
+  const launchId = "dc085242-b595-4a51-9bd0-099013ead304";
+  const orphanLaunchId = "dc085242-b595-4a51-9bd0-099013ead305";
+  const draft = (id: string, prompt: string, updatedAt: number, launch: string | null): PresentationSnapshot["drafts"][number] => ({
+    id: DraftIdSchema.parse(id), logicalProjectId: remoteId, target: { daemonId: first, projectId: concrete },
+    prompt, selection: { kind: "custom", settings: {
+      agentPath: null, agentSource: null, harness: "codex", model: "", reasoningEffort: null, serviceTier: null,
+    } },
+    updatedAt, revision: 1, phase: launch ? "submitting" : "unsent", pinned: false, snoozed: false,
+    launchId: launch, acceptedThreadId: null, attachments: [],
+  });
+  const presentation = (drafts: PresentationSnapshot["drafts"]): PresentationSnapshot => ({
+    revision: 1, daemons: [{ id: first, hostname: "desktop" }],
+    projects: [{ id: remoteId, matchKey: "remote://example.test/team/repo", label: "repo" }],
+    locations: [{ target: { daemonId: first, projectId: concrete }, logicalProjectId: remoteId,
+      identityKey: "remote://example.test/team/repo", name: "repo", rootPath: "C:/repo" }],
+    defaults: [], drafts, folders: [], members: [], divergences: [], sourceMappings: [],
+  });
+  const working: WorkbenchThreadLifecycle = { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } };
+  const thread = (id: string, orderAt: number, lifecycle: WorkbenchThreadLifecycle, launch?: string): WorkbenchThreadSidebarEntry => ({
+    entryKind: "thread", title: id, activityAt: orderAt, orderAt,
+    identity: { harness: "codex", threadId: WorkbenchThreadIdSchema.parse(id) },
+    lifecycle, metadata: { archived: false, pinned: false, snoozed: false }, ...(launch ? { launchId: launch } : {}),
+  });
+  const sources: ReadonlyMap<typeof first, WorkbenchProjectThreadSidebars> = new Map([[first, { projects: [{
+    projectId: concrete, revision: 1, error: null, freshness: "fresh", entries: [
+      thread("attention", 1, { kind: "needsAttention", reason: "noActiveTurn", settled: false }),
+      thread("launched", 60, working, launchId),
+      thread("orphan-thread", 40, working, orphanLaunchId),
+      thread("older-working", 5, working),
+    ],
+  }] }]]);
+  const launchingDraftId = "00000000-0000-4000-8000-000000000002";
+  const titles = (snapshot: PresentationSnapshot) => projectLogicalThreadRows(
+    projectLogicalProjects(snapshot, new Map()), sources, snapshot, new Set([launchingDraftId]),
+  ).map(row => row.entry.title);
+
+  const idea = draft("00000000-0000-4000-8000-000000000001", "idea", 2, null);
+  const orphan = draft("00000000-0000-4000-8000-000000000003", "orphan", 3, orphanLaunchId);
+  assert.deepEqual(titles(presentation([idea, orphan, draft(launchingDraftId, "launch me", 50, launchId)])),
+    ["orphan", "idea", "attention", "launch me", "orphan-thread", "older-working"]);
+  assert.deepEqual(titles(presentation([idea, orphan])),
+    ["orphan", "idea", "attention", "launched", "orphan-thread", "older-working"]);
 });
 
 test("merged project rows keep priority and lifecycle layers across daemon folders, and membership places them the same way", () => {
@@ -485,7 +530,7 @@ test("merged project rows keep priority and lifecycle layers across daemon folde
       thread("snoozed", 10, attention, { snoozed: true }),
     ] }] }],
   ]);
-  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sources, snapshot);
+  const rows = projectLogicalThreadRows(projectLogicalProjects(snapshot, new Map()), sources, snapshot, new Set());
   const title = (entry: { title: string }) => entry.title;
   assert.deepEqual(rows.map(row => title(row.entry)), [
     "pinned", "claimed", "draft", "attention", "working", "complete", "snoozed", "settled",
@@ -551,7 +596,7 @@ test("observed daemon facts show Home rows without becoming persisted launch tar
       }],
     }],
   }]]);
-  const rows = projectLogicalThreadRows(projects, sidebars, snapshot);
+  const rows = projectLogicalThreadRows(projects, sidebars, snapshot, new Set());
   assert.equal(rows[0]?.entry.entryKind, "thread");
   assert.equal(rows[0]?.observedOnly, true);
 });

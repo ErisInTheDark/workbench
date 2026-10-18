@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadRowAction: intents available from a thread row.
- * - getThreadRowActions: choose ordinary and shift-only row intents without changing subagent authority.
+ * - getThreadRowActions: choose ordinary and shift-only row intents without changing subagent authority; launching drafts take none.
  * - getThreadStopIntent: carry the sidebar's current interruption evidence to the stop owner.
  */
 import {
@@ -29,7 +29,9 @@ export function getThreadRowActions(
   /** The thread's summary facts, whose required todos and addressed feedback hold settlement. */
   facts: Parameters<typeof isWorkbenchThreadSettlementAvailable>[1] = {},
 ): { baseAction: ThreadRowAction | null; shiftAction: ThreadRowAction | null } {
-  if (entry.entryKind === "draft") return { baseAction: "discard", shiftAction: null };
+  if (entry.entryKind === "draft") {
+    return { baseAction: "draft" in entry && entry.draft.launching ? null : "discard", shiftAction: null };
+  }
   const hasQuestionnaire = "canCompleteQuestionnaire" in entry
     ? entry.canCompleteQuestionnaire
     : "pendingQuestionnaire" in entry && Boolean(entry.pendingQuestionnaire);

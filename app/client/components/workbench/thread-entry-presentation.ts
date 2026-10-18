@@ -2,6 +2,7 @@
  * Exports:
  * - ThreadListEntry: a sidebar thread entry or pinned summary entry.
  * - isPinnedDraftSummaryEntry: identify pinned draft summaries, which carry no full draft.
+ * - isLaunchingDraftEntry: identify draft rows standing in for their launching thread.
  * - describeThreadWait: identify explicit compaction or ordinary waiting presentation.
  * - describeThreadEntry: derive a thread entry's group, lifecycle status, icon, tone, claims, and activity time.
  */
@@ -34,6 +35,11 @@ export function isPinnedDraftSummaryEntry(entry: ThreadListEntry): entry is Pinn
   return entry.entryKind === "draft" && "draftId" in entry;
 }
 
+/** A draft row whose send is in flight; it stands in for its thread, so it takes no draft actions. */
+export function isLaunchingDraftEntry(entry: ThreadListEntry) {
+  return entry.entryKind === "draft" && !isPinnedDraftSummaryEntry(entry) && entry.draft.launching === true;
+}
+
 /** Compaction is a live summary fact; displays without the thread's summary read it as not compacting. */
 export function describeThreadWait(entry: ThreadListEntry, facts: ThreadSummaryFacts = {}) {
   const compacting = entry.entryKind !== "draft" && Boolean(facts.compacting);
@@ -59,10 +65,14 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
   const wait = describeThreadWait(entry, facts);
   const waiting = wait.waiting;
   const showProposedCommit = !waiting && lifecycle?.kind === "completed" && hasProposedCommit;
+  // A launching draft stands in for its working thread, so it already reads as one.
+  const launching = isLaunchingDraftEntry(entry);
   const status = waiting
     ? wait.label
     : showProposedCommit
     ? "Proposed commit"
+    : launching
+      ? "Working"
     : entry.entryKind === "draft"
       ? "Draft"
       : lifecycle?.kind === "needsAttention" ? attentionLabel.trim() || "Needs attention" : lifecycle?.kind === "working" ? "Working" : lifecycle?.kind === "stopped" ? "Stopped" : "Completed";
@@ -74,10 +84,10 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
     || (lifecycle?.kind === "needsAttention" && lifecycle.reason === "pendingInput")
   );
   const tooltipStatus = lifecycle?.kind === "needsAttention" && hasTooltipDetails && hasAttentionDetails ? "Needs attention" : status;
-  const Icon: ComponentType<IconProps> = entry.entryKind === "draft" ? DraftThreadIcon : waiting ? WorkingThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
+  const Icon: ComponentType<IconProps> = launching ? WorkingThreadIcon : entry.entryKind === "draft" ? DraftThreadIcon : waiting ? WorkingThreadIcon : showProposedCommit ? ProposedCommitThreadIcon : lifecycle?.kind === "needsAttention" ? NeedsAttentionThreadIcon : lifecycle?.kind === "working" ? WorkingThreadIcon : lifecycle?.kind === "stopped" ? StoppedThreadIcon : CompletedThreadIcon;
   const statusTone: WorkbenchThreadStatusTone = waiting
     ? "waiting"
-    : lifecycle?.kind === "working"
+    : launching || lifecycle?.kind === "working"
       ? "working"
     : lifecycle?.kind === "needsAttention"
       ? getNeedsAttentionThreadStatusTone(entry.entryKind === "subagent" ? hasActiveGitArc : !entry.metadata.snoozed)
@@ -94,7 +104,7 @@ export function describeThreadEntry(entry: ThreadListEntry, { attentionLabel = "
     stashed,
     stashedPaths,
     status,
-    statusClassName: entry.entryKind === "draft" ? "text-fg/muted" : getWorkbenchThreadStatusClassName(statusTone),
+    statusClassName: entry.entryKind === "draft" && !launching ? "text-fg/muted" : getWorkbenchThreadStatusClassName(statusTone),
     statusTone,
     tooltipStatus,
     waiting,

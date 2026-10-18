@@ -642,17 +642,25 @@ export default class WorkbenchPresentationRepository {
     }
     // The reservation also records the resolved selection: the durable launch intent must not
     // re-resolve differently on retry, and the accepted receipt needs the applied identity.
+    // Sending is the draft's latest activity, so it lists where its new working thread will.
     this.requireDatabase().prepare(`
-      UPDATE presentation_drafts SET phase = 'submitting', launch_id = ?, selection_json = ?, revision = ? WHERE id = ?
-    `).run(input.launchId, JSON.stringify(input.selection), this.nextRevision(), input.draftId);
+      UPDATE presentation_drafts SET phase = 'submitting', launch_id = ?, selection_json = ?, revision = ?, updated_at = ?
+      WHERE id = ?
+    `).run(input.launchId, JSON.stringify(input.selection), this.nextRevision(), Date.now(), input.draftId);
   }
 
-  /** Only the owning, still-submitting reservation reopens; uncertain or accepted launches keep their fence. */
+  /** Only the owning, still-submitting reservation reopens or is discarded; accepted launches keep their receipt. */
   private releaseLaunch(input: Extract<PresentationMutation, { kind: "releaseLaunch" }>) {
-    this.requireDatabase().prepare(`
-      UPDATE presentation_drafts SET phase = 'unsent', launch_id = NULL, revision = ?
-      WHERE id = ? AND phase = 'submitting' AND launch_id = ?
-    `).run(this.nextRevision(), input.draftId, input.launchId);
+    const db = this.requireDatabase();
+    const draft = this.draft(input.draftId);
+    if (draft?.phase !== "submitting" || draft.launch_id !== input.launchId) return;
+    db.prepare(`UPDATE presentation_drafts SET phase = ?, launch_id = NULL, revision = ? WHERE id = ?`)
+      .run(input.discard ? "deleted" : "unsent", this.nextRevision(), input.draftId);
+    if (!input.discard) return;
+    db.prepare("DELETE FROM presentation_layout_members WHERE draft_id = ?").run(input.draftId);
+    db.prepare("DELETE FROM presentation_draft_attachments WHERE draft_id = ?").run(input.draftId);
+    db.prepare("DELETE FROM presentation_attachment_chunks WHERE draft_id = ?").run(input.draftId);
+    this.replaceReferences(input.draftId, []);
   }
 
   private completeLaunch(input: Extract<PresentationMutation, { kind: "completeLaunch" }>) {

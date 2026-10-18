@@ -211,7 +211,7 @@ export default class WorkbenchAppEventSocketController {
       && this.options.presentation && this.options.runtime && this.options.state
       ? new WorkbenchWorkspaceRequestController({
         workspace: this.options.workspace, sources: this.options.sources, threads: this.options.workspaceThreads,
-        presentation: this.options.presentation,
+        presentation: this.options.presentation, launches: this.options.workspaceDrafts,
         network: {
           read: () => ({ kind: "network", phase: this.options.network.getFacts().phase,
             failure: this.options.network.getFacts().failure, data: this.options.routes.snapshotFor(request, url) }),
