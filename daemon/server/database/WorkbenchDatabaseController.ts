@@ -359,11 +359,12 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.result;
   }
 
-  async readThreadRequiredTodoCounts() {
+  /** Every thread's stored summary facts (required todo and addressed feedback counts) in one read. */
+  async readThreadSummaryFactSeeds() {
     await this.start();
-    const response = await this.#request({ type: "threadRequiredTodoCounts" });
-    if (response.type !== "threadRequiredTodoCounts") throw new WorkbenchDatabaseFailure(`Unexpected thread todo count response: ${response.type}`);
-    return new Map(Object.entries(response.counts));
+    const response = await this.#request({ type: "threadSummaryFactSeeds" });
+    if (response.type !== "threadSummaryFactSeeds") throw new WorkbenchDatabaseFailure(`Unexpected thread summary facts response: ${response.type}`);
+    return new Map(Object.entries(response.facts));
   }
 
   async executeThreadAddressedFeedback(command: ThreadAddressedFeedbackCommand) {
@@ -371,15 +372,6 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     const response = await this.#request({ type: "threadAddressedFeedback", command });
     if (response.type !== "threadAddressedFeedback") throw new WorkbenchDatabaseFailure(`Unexpected addressed feedback response: ${response.type}`);
     return response.result;
-  }
-
-  async readThreadAddressedFeedbackCounts() {
-    await this.start();
-    const response = await this.#request({ type: "threadAddressedFeedbackCounts" });
-    if (response.type !== "threadAddressedFeedbackCounts") {
-      throw new WorkbenchDatabaseFailure(`Unexpected addressed feedback count response: ${response.type}`);
-    }
-    return new Map(Object.entries(response.counts));
   }
 
   async executeProjectStore(command: ProjectStoreCommand) {

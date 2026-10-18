@@ -1,18 +1,15 @@
 /*
  * Exports:
- * - default WorkbenchCoreNode: own core state, Git, thread skills, auto-compaction admission, turn liveness, questionnaire and virtual steers, harness, project, orphaned-turn settlement, unfinished-turn continuation, and supervisor registrations plus direct child declarations (including provider runtime installs).
- * Local helpers: construct reloadable modules, harness capabilities, and the core feature lifecycle.
+ * - default WorkbenchCoreNode: own the core generation's lifecycle (start, drain, reload handoff, dispose order) and registrations, wiring the
+ *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, thread actions, launches, daemon requests,
+ *   MCP servers and browse cleanup, plus supervisor registrations and direct child declarations (including provider runtime installs).
+ * Local helpers: construct reloadable modules and the core feature lifecycle.
  */
 import path from "node:path";
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
-import type { WorkbenchHarness } from "workbench-shared/types";
-import {
-  type WorkbenchThreadLifecycle, type WorkbenchThreadSettlementHold, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest,
-} from "workbench-shared/workbench/thread/thread-state";
-import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
-import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
-import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
+import { WorkbenchThreadIdSchema, WorkbenchTurnIdSchema } from "workbench-shared/workbench/identity";
+import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import * as workbenchPromptFiles from "./lib/workbench/instructions/WorkbenchPromptFiles";
 import * as workbenchLibrary from "./lib/workbench-library";
 import type { WorkbenchProjectStartup } from "./database/project/workbench-project-persistence";
@@ -26,77 +23,31 @@ import type {
   DaemonDatabaseRegistration,
   DaemonReloadableModules,
   DaemonRuntimeObjects,
-  DaemonTranscriptRegistration,
 } from "./daemon-runtime-objects";
 import ReloadableNode, { type ReloadableNodeBuild, type ReloadableNodeLease } from "./ReloadableNode";
 import WorkbenchAgentCommandNode from "./WorkbenchAgentCommandNode";
-import WorkbenchAgentSkillCatalogController from "./WorkbenchAgentSkillCatalogController";
 import WorkbenchBrowseNode from "./WorkbenchBrowseNode";
 import WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
 import WorkbenchModelUsageStore from "./WorkbenchModelUsageStore";
 import VoiceSettingsStore from "./voice/VoiceSettingsStore";
 import WorkbenchProviderDispatcher from "./WorkbenchProviderDispatcher";
-import WorkbenchAgentContextController from "./WorkbenchAgentContextController";
 import WorkbenchCoreFeature, { WORKBENCH_CORE_FEATURE_KEYS } from "./WorkbenchCoreFeature";
-import WorkbenchGitArcFeature from "./WorkbenchGitArcFeature";
-import WorkbenchWorkingTreeController from "./WorkbenchWorkingTreeController";
-import WorkbenchAccountLimitsController from "./WorkbenchAccountLimitsController";
-import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
 import WorkbenchProjectCreationController from "./WorkbenchProjectCreationController";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import { ThreadReferenceSchema, TurnReferenceSchema } from "workbench-shared/workbench/identity";
 import WorkbenchHarnessController from "./WorkbenchHarnessController";
 import { isThreadStatusActive } from "workbench-shared/workbench/thread/thread-runtime-state";
 import WorkbenchDaemonRequestController from "./WorkbenchDaemonRequestController";
 import WorkbenchThreadActionController from "./WorkbenchThreadActionController";
-import WorkbenchThreadSkillsController from "./WorkbenchThreadSkillsController";
-import WorkbenchThreadGoalController from "./WorkbenchThreadGoalController";
-import WorkbenchThreadTodoController from "./WorkbenchThreadTodoController";
 import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
-import WorkbenchThreadAddressedFeedbackController from "./WorkbenchThreadAddressedFeedbackController";
-import WorkbenchVisController from "./vis/WorkbenchVisController";
-import { requireWorkbenchPowerShellExecutable } from "./windows-powershell-runtime";
-import WorkbenchVisBrowse from "./vis/WorkbenchVisBrowse";
-import WorkbenchTurnSettlementController from "./WorkbenchTurnSettlementController";
-import WorkbenchTurnContinuationController from "./WorkbenchTurnContinuationController";
-import WorkbenchThreadInstructionSelectionController from "./WorkbenchThreadInstructionSelectionController";
-import WorkbenchTranscriptReader, { threadPayloadStatus } from "./WorkbenchTranscriptReader";
-import WorkbenchTranscriptReconciliationController from "./WorkbenchTranscriptReconciliationController";
 import WorkbenchMcpNode from "./WorkbenchMcpNode";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "./workbench-agent-mcp-request-registry";
-import WorkbenchProjectCatalogController from "./WorkbenchProjectCatalogController";
-import WorkbenchProjectFileController from "./WorkbenchProjectFileController";
-import WorkbenchProjectSnapshotController from "./WorkbenchProjectSnapshotController";
-import WorkbenchProjectStore from "./store/WorkbenchProjectStore";
 import { readDeviceIdentity } from "./store/device-identity";
-import WorkbenchSearchController from "./WorkbenchSearchController";
-import WorkbenchStatsController from "./stats/WorkbenchStatsController";
-import WorkbenchToolCatalogueTokens from "./stats/WorkbenchToolCatalogueTokens";
-import { readWorkbenchInstructionSources } from "./lib/workbench/instructions/instruction-source";
-import WorkbenchClaimRenameController from "./stats/WorkbenchClaimRenameController";
-import { reconcileCatalogClaims } from "./stats/reconcile-catalog-claims";
-import { resolveGitDirectory } from "./lib/git";
-import WorkbenchQuestionnaireController from "./WorkbenchQuestionnaireController";
-import WorkbenchApprovalController, { type WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
-import WorkbenchApprovalReviewController from "./approval-review/WorkbenchApprovalReviewController";
+import type { WorkbenchApprovalHandoff } from "./WorkbenchApprovalController";
 import WorkbenchMcpServerController from "./mcp-servers/WorkbenchMcpServerController";
-import { readOpenCodeApiKey } from "./approval-review/opencode-auth-credential";
-import { DEFAULT_APPROVAL_MODE, resolveApprovalMode } from "workbench-shared/workbench/approval-review/approval-mode";
-import WorkbenchQuestionnaireResponseController from "./WorkbenchQuestionnaireResponseController";
-import WorkbenchQuestionnaireSteerController from "./WorkbenchQuestionnaireSteerController";
 import WorkbenchNativeFileController from "./WorkbenchNativeFileController";
-import WorkbenchServerSettings from "./lib/workbench/settings/WorkbenchServerSettings";
-import WorkbenchThreadAutoCompactController from "./WorkbenchThreadAutoCompactController";
-import WorkbenchThreadTurnLiveness from "./WorkbenchThreadTurnLiveness";
-import WorkbenchThreadAdmissionController from "./WorkbenchThreadAdmissionController";
-import WorkbenchThreadCompactionController from "./WorkbenchThreadCompactionController";
-import WorkbenchThreadContextRolloverController from "./WorkbenchThreadContextRolloverController";
-import WorkbenchSubagentFeature from "./WorkbenchSubagentFeature";
-import WorkbenchThreadMessageController from "./WorkbenchThreadMessageController";
 import type { WorkbenchMessageWaitHandoff } from "./WorkbenchMessageWaitController";
-import WorkbenchSubagentQueueController, { type WorkbenchSubagentQueueHandoff } from "./WorkbenchSubagentQueueController";
+import type { WorkbenchSubagentQueueHandoff } from "./WorkbenchSubagentQueueController";
 import WorkbenchThreadLaunchController from "./WorkbenchThreadLaunchController";
-import WorkbenchThreadGitFeature from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadStateFeature from "./WorkbenchThreadStateFeature";
 import WorkbenchTopologyNode from "./WorkbenchTopologyNode";
 import type WorkbenchReloadDirtController from "./WorkbenchReloadDirtController";
@@ -104,10 +55,14 @@ import WorkbenchWebSocketNode from "./WorkbenchWebSocketNode";
 import WorkbenchVoiceNode from "./WorkbenchVoiceNode";
 import WorkbenchInstallationUpdateNode from "./WorkbenchInstallationUpdateNode";
 import { createWorktreeGitTransitions } from "./worktree-git-transitions";
-import WorkbenchGitPeerController from "./WorkbenchGitPeerController";
-import GitArcRegistry, { getGitArcLiveClaimPaths } from "./lib/workbench/git/GitArcRegistry";
-import type { GitArcThreadIdentityResolver } from "./lib/workbench/git/git-arc-thread-identity";
-import WorkbenchBranchPositionController from "./WorkbenchBranchPositionController";
+import WorkbenchCoreGitFeature from "./core/WorkbenchCoreGitFeature";
+import WorkbenchCoreProjectsFeature from "./core/WorkbenchCoreProjectsFeature";
+import WorkbenchCoreStatsFeature from "./core/WorkbenchCoreStatsFeature";
+import WorkbenchCoreSubagentsFeature from "./core/WorkbenchCoreSubagentsFeature";
+import WorkbenchCoreThreadLookup from "./core/WorkbenchCoreThreadLookup";
+import WorkbenchInteractionsFeature from "./core/WorkbenchInteractionsFeature";
+import WorkbenchThreadFactsFeature from "./core/WorkbenchThreadFactsFeature";
+import WorkbenchTurnRuntimeFeature, { type WorkbenchCoreTranscript } from "./core/WorkbenchTurnRuntimeFeature";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
 
@@ -131,7 +86,7 @@ function createWorkbenchCoreFeature(
   reloadDirt: WorkbenchReloadDirtController,
   database: DaemonDatabaseRegistration,
   commandApprovals: DaemonRuntimeObjects["commandApprovals"],
-  transcript: Pick<DaemonTranscriptRegistration, "read" | "readMaterializedTurnIds" | "readAbandonedHoldThreadIds" | "readContextUsage" | "readRecoveryGaps" | "isThreadObserved" | "record" | "subscribeItemActivity" | "subscribeContextCompaction" | "subscribeTurnStarted" | "subscribeHeldSteers" | "subscribeAgentMessageDelivery" | "subscribeSettled" | "acceptApprovalOutcome">,
+  transcript: WorkbenchCoreTranscript,
   threadIdentity: DaemonRuntimeObjects["threadIdentity"],
   transcriptIdentity: DaemonRuntimeObjects["transcriptIdentity"],
   turnRecovery: DaemonRuntimeObjects["turnRecovery"],
@@ -144,278 +99,58 @@ function createWorkbenchCoreFeature(
   subagentQueueHandoff?: WorkbenchSubagentQueueHandoff,
 ) {
   const modules = createModules();
-  const settings = new WorkbenchServerSettings(database);
-  const projectCatalog = new WorkbenchProjectCatalogController({
-    initialProjects: initialCatalog,
-    // The daemon's own checkout always has a project, so wb feedback and Workbench threads have an owner.
-    pinnedProjectRoots: [context.legacyMigrationProjectRoot],
-    persistence: database,
-    settings,
-  });
-  const projectSnapshot = new WorkbenchProjectSnapshotController({
-    observeProject: (projectId) => { void projectCatalog.observeProjectIcon(ProjectIdSchema.parse(projectId)); },
-    resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
-  });
-  const search = new WorkbenchSearchController({
-    database,
-    readCatalog: () => projectCatalog.readCatalog(),
-    readProjectSnapshot: (projectId) => projectSnapshot.readProjectSnapshot(projectId),
-  });
+  const projects = new WorkbenchCoreProjectsFeature({ context, database, initialCatalog });
+  const { catalog: projectCatalog, settings } = projects;
   const worktreeGitTransitions = createWorktreeGitTransitions(threadTransitions);
+  const logThreadStateWarning = (message: string) => {
+    console.warn("[thread-state-ws]", message.slice(0, 500));
+  };
   let threadState: WorkbenchThreadStateFeature | null = null;
-  /** Compaction and todos are wired before thread state exists; their facts reach the index once it does. */
+  /** Turn runtime and thread facts are wired before thread state exists; their facts reach the index once it does. */
   let threadSummaries: WorkbenchThreadSummaryIndex | null = null;
-  let stats: WorkbenchStatsController | null = null;
-  const admission = new WorkbenchThreadAdmissionController();
-  /** Threads whose runtime facts (token usage, auto-compaction) changed; thread observations reread them. */
-  const runtimeListeners = new Set<(threadId: string, change: Partial<ThreadRuntime> | null) => void>();
-  /** The thread's shown approval prompt; approvals are live provider facts, never durable thread state. */
-  const readPendingApproval = (threadId: string): ThreadRuntime["pendingApproval"] => {
-    const request = approvals.list().find(candidate => candidate.threadId === threadId);
-    return request ? { itemId: request.itemId, request: request.request, requestKey: request.requestKey, turnId: request.turnId } : null;
+  let coreStats: WorkbenchCoreStatsFeature | null = null;
+  const setSummaryFacts = (threadId: string, facts: Parameters<WorkbenchThreadSummaryIndex["setFacts"]>[1]) => {
+    threadSummaries?.setFacts(threadId, facts);
   };
-  const turnLiveness = new WorkbenchThreadTurnLiveness({
-    threads: harness => {
-      const key = installedProviderKeys.find(candidate => candidate === harness);
-      if (!key) throw new Error(`Provider ${harness} is not installed.`);
-      return providers.get(key).threads;
-    },
-    resolveHarness: async threadId => (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness ?? null,
-    publish: (threadId, turnLive) => {
-      for (const listener of runtimeListeners) listener(threadId, { turnLive });
-    },
-    warn: message => logThreadStateWarning(message),
+  const lookup = new WorkbenchCoreThreadLookup({ identities: threadIdentity, providers: () => providers, threadState: () => threadState });
+  const turns = new WorkbenchTurnRuntimeFeature({
+    context, database, transcript, turnRecovery, identities: threadIdentity, lookup, settings, projectCatalog, run,
+    providers: () => providers,
+    setSummaryFacts,
+    readPendingApproval: threadId => interactions.readPendingApproval(threadId),
+    warn: logThreadStateWarning,
   });
-  const compaction = new WorkbenchThreadCompactionController(admission, {
-    record: transcript.record.bind(transcript),
-    setCompacting: (threadId, compacting) => threadSummaries?.setCompacting(threadId, compacting),
-    now: Date.now,
-    warn: message => console.warn(`[compaction] ${message.slice(0, 500)}`),
+  const { admission, autoCompact, compaction, contextRollover: threadContextRollover, continuations, turnLiveness, turnSettlement } = turns;
+  const { transcriptReader, transcriptReconciliation } = turns;
+  const facts = new WorkbenchThreadFactsFeature({
+    context, database, transcript, lookup, projectCatalog, settings, run, lease,
+    providers: () => providers,
+    harnesses: () => harnesses,
+    publishRuntime: (threadId, change) => turns.publish(threadId, change),
+    setSummaryFacts,
   });
-  const autoCompact = new WorkbenchThreadAutoCompactController(admission, compaction, {
-    readSettings: () => settings.readThreadAutoCompact(),
-    readEvidence: async reference => {
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(reference) });
-      if (!identity || !threadState) return null;
-      const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-      if (!entry || entry.entryKind === "draft") return null;
-      const usage = await database.readThreadContextUsage(identity.threadId);
-      return { activityAt: entry.activityAt, contextTokens: usage?.tokenUsage?.last.inputTokens ?? null };
-    },
-    // Status comes from the saved Workbench lifecycle; only the latest turn and its liveness are provider facts.
-    readRuntime: async target => {
-      const key = installedProviderKeys.find(candidate => candidate === target.harness);
-      if (!key) throw new Error(`Provider ${target.harness} is not installed.`);
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(target.threadId) });
-      const entry = identity && threadState
-        ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
-      const latestTurn = await run(providerRegistrations[key], provider => provider.threads.latestTurn(target.threadId),
-        `${key}: auto-compact latest turn`);
-      return { latestTurn, status: threadPayloadStatus(entry), turnLive: await turnLiveness.read(target.threadId, target.harness) };
-    },
-    publish: (target, willAutoCompact) => {
-      for (const listener of runtimeListeners) listener(target.threadId, { willAutoCompact });
-    },
-    now: Date.now,
-    warn: message => console.warn(`[auto-compact] ${message.slice(0, 500)}`),
-  });
-  const skillCatalog = new WorkbenchAgentSkillCatalogController(
-    (projectId) => projectCatalog.resolveProjectById(projectId),
-    (provider, sections) => providers.get(harnesses.resolveHarness(provider)).configuration.guidance.contains(sections),
-  );
-  /** The skills a thread's messages can activate: its project's catalog, as the composer reads it. */
-  const readThreadSkills = async (threadId: string) => {
-    const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-    return identity ? await skillCatalog.readActivatableSkills(identity.projectId) : [];
-  };
-  const instructionSelection = new WorkbenchThreadInstructionSelectionController({
-    store: command => database.executeThreadInstructionSelection(command),
-    readThreadKind: async threadId => {
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-      const entry = identity && threadState
-        ? await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
-      return entry && entry.entryKind !== "draft" ? entry.entryKind : null;
-    },
-    readSkills: readThreadSkills,
-    recordSkillActivations: (threadId, paths) => threadSkills.recordActivations(threadId, paths, "user"),
-    now: Date.now,
-    warn: message => console.warn(`[instruction-selection] ${message.slice(0, 500)}`),
-  });
+  const { agentContext, skillCatalog, vis } = facts;
   const providers = new WorkbenchProviderDispatcher(run, {
-    instructionSelection,
+    instructionSelection: facts.instructionSelection,
     messageAdmission: autoCompact.run.bind(autoCompact),
     onAgentMessageAdmitted: (threadId, message) => run(
       "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
     ),
-    onMessageAdmitted: async admission => {
+    onMessageAdmitted: async admitted => {
       const identity = await threadIdentity.resolve({
-        harness: admission.harness,
-        threadId: WorkbenchThreadIdSchema.parse(admission.threadId),
+        harness: admitted.harness,
+        threadId: WorkbenchThreadIdSchema.parse(admitted.threadId),
       });
       if (!identity) throw new Error("Accepted message has no canonical Workbench thread identity.");
-      await requireThreadState().controller.acceptAdmission(
+      await lookup.requireThreadState().controller.acceptAdmission(
         identity.projectId,
-        admission.harness,
+        admitted.harness,
         identity.threadId,
-        { kind: admission.kind, turnId: WorkbenchTurnIdSchema.parse(admission.turnId) },
-        admission.firstMessagePreview,
+        { kind: admitted.kind, turnId: WorkbenchTurnIdSchema.parse(admitted.turnId) },
+        admitted.firstMessagePreview,
       );
     },
   });
-  const threadContextRollover = new WorkbenchThreadContextRolloverController(admission, {
-    readSelectedCap: async threadId => {
-      const identity = await threadIdentity.resolve({ threadId });
-      if (!identity || !threadState) return null;
-      const entry = await threadState.controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-      return entry && entry.entryKind !== "draft" ? entry.profile?.settings.contextWindowTokens ?? null : null;
-    },
-    requestDirective: async (threadId, turnId, instruction, key) => {
-      const rollover = providers.get("opencode").threads.contextRollover;
-      if (!rollover) throw new Error("OpenCode context rollover is unavailable.");
-      await rollover.requestDirective({ instruction, key, threadId, turnId });
-    },
-    record: async observation => {
-      await transcript.record([observation], { source: "provider" });
-    },
-    replace: async input => {
-      const rollover = providers.get("opencode").threads.contextRollover;
-      if (!rollover) throw new Error("OpenCode context rollover is unavailable.");
-      await rollover.replace(input);
-    },
-    now: Date.now,
-    warn: message => console.warn(`[context-rollover] ${message.slice(0, 500)}`),
-  });
-  const threadSkillTarget = async (threadId: string) => {
-    const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-    const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
-    return identity && harness ? { identity, harness } : null;
-  };
-  const threadSkills = new WorkbenchThreadSkillsController({
-    store: command => database.executeThreadSkills(command),
-    target: async threadId => {
-      const resolved = await threadSkillTarget(threadId);
-      return resolved ? { harness: resolved.harness, threadId: resolved.identity.threadId } : null;
-    },
-    resolve: async (target, paths) => {
-      const resolved = await threadSkillTarget(target.threadId);
-      if (!resolved) return [];
-      const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
-      return workbenchLibrary.resolveWorkbenchActivatedSkills(await project.listProjectSkillDefinitionsFromRoot(owner.rootPath), paths);
-    },
-    buildCatalog: async (target, paths) => {
-      const resolved = await threadSkillTarget(target.threadId);
-      if (!resolved) return null;
-      const owner = await projectCatalog.resolveProjectById(resolved.identity.projectId);
-      const profile = await requireThreadState().controller.readComposerProfileTarget({
-        harness: target.harness, kind: "thread", projectId: owner.id, threadId: resolved.identity.threadId,
-      });
-      return workbenchPromptFiles.buildWorkbenchManagedThreadActivatedSkills({
-        cwd: owner.rootPath, projectId: owner.id, threadId: resolved.identity.threadId,
-        roots: owner.roots.map(root => ({
-          id: root.id, name: root.name, relativePath: root.relativePath ?? ".",
-          rootPath: root.rootPath, isPrimary: root.rootPath === owner.rootPath,
-        })),
-        harness: target.harness, managedThread: true, model: profile?.settings.model ?? null,
-        activatedSkillPaths: paths, workbenchOrigin: context.localDaemonOrigin,
-        readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Thread skill instruction tool catalogue"),
-      }, () => settings.readLocalCapabilities());
-    },
-    publish: (target, text) => agentContext.publish(target, text),
-    broadcast: (target, skills) => {
-      for (const listener of runtimeListeners) listener(target.threadId, { skills: [...skills] });
-    },
-    warn: message => { console.warn("[thread-skills]", message.slice(0, 500)); },
-  });
-  const threadGoals = new WorkbenchThreadGoalController({
-    store: command => database.executeThreadGoals(command),
-    target: async threadId => {
-      const resolved = await threadSkillTarget(threadId);
-      return resolved ? { harness: resolved.harness, threadId: resolved.identity.threadId } : null;
-    },
-    publish: (target, text) => agentContext.publish(target, text),
-    changed: (threadId, goal) => {
-      for (const listener of runtimeListeners) listener(threadId, { goal });
-    },
-    warn: message => { console.warn("[thread-goal]", message.slice(0, 500)); },
-  });
-  const resolveCanonicalThread = async (threadId: string) =>
-    (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.threadId ?? null;
-  const threadTodos = new WorkbenchThreadTodoController({
-    store: command => database.executeThreadTodos(command),
-    resolve: resolveCanonicalThread,
-    changed: (threadId, todos) => {
-      threadSummaries?.setRequiredTodoCount(threadId, todos.filter(({ required }) => required).length);
-      for (const listener of runtimeListeners) listener(threadId, { todos });
-    },
-  });
-  /** Cancels this generation's vis browser calls when the core node is disposed. */
-  const visBrowseLifetime = new AbortController();
-  const vis = new WorkbenchVisController({
-    store: command => database.executeThreadVis(command),
-    resolveRoot: async session => {
-      try {
-        return (await projectCatalog.resolveAgentEndpointProjectFromCwd(session.cwd, { endpointName: "Vis session" })).root.rootPath;
-      } catch {
-        // Expected when the project left the catalogue; its session simply stops being live here.
-        return null;
-      }
-    },
-    // Project vis commands run as the session's thread, in its sandbox, with nothing writable and no network.
-    runCommand: session => async ({ command, cwd }, signal) => {
-      const key = installedProviderKeys.find(key => key === session.harness);
-      const prepare = key ? providers.get(key).tools?.prepareExecution : undefined;
-      if (!prepare) throw new Error(`Provider ${session.harness} cannot run sandboxed commands.`);
-      const prepared = await prepare({
-        caller: { harness: session.harness, threadId: WorkbenchThreadIdSchema.parse(session.threadId), cwd: session.cwd },
-        command, cwd, permissions: { mode: "restricted", writableRoots: [], network: false },
-      }, signal);
-      return await getProcessWorkbenchAgentMcpRequestRegistry().executeShell(prepared, signal);
-    },
-    scratchDirectory: path.join(context.dataRootPath, "daemon", "vis"),
-    powerShellExecutable: () => requireWorkbenchPowerShellExecutable(context.dataRootPath),
-    // This file lives at daemon/server in the Workbench checkout the kit vis context builds from.
-    workbenchRoot: path.resolve(import.meta.dirname, "..", ".."),
-    browse: new WorkbenchVisBrowse({
-      directory: path.join(context.dataRootPath, "daemon", "vis", "browse"),
-      // Browse is its own reload node; these run as the session's thread through its agent entry points.
-      port: {
-        execute: request => run("browseExecution", execution => execution.executeBrowseRequest(Buffer.from(JSON.stringify(request)), visBrowseLifetime.signal), "Vis browser"),
-        stop: async request => {
-          const response = await run("browseExecution", execution => execution.executeSessionRequest({
-            body: Buffer.from(JSON.stringify({ action: "stop", ...request })), method: "POST", url: "/",
-          }, visBrowseLifetime.signal), "Vis browser stop");
-          if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? `Browse stop failed with status ${response.status}.`);
-        },
-      },
-      log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
-    }),
-    log: message => console.warn(`[vis] ${message.slice(0, 500)}`),
-  });
-  const threadAddressedFeedback = new WorkbenchThreadAddressedFeedbackController({
-    store: command => database.executeThreadAddressedFeedback(command),
-    resolve: resolveCanonicalThread,
-    changed: (threadId, addressedFeedback) => {
-      threadSummaries?.setAddressedFeedbackCount(threadId, addressedFeedback.length);
-      for (const listener of runtimeListeners) listener(threadId, { addressedFeedback });
-    },
-  });
-  /** Required todos and unresolved addressed feedback keep a thread from settling, exactly like live claims. */
-  const settlementHold = async (threadId: WorkbenchThreadId): Promise<WorkbenchThreadSettlementHold | null> => {
-    if ((await threadTodos.read(threadId)).some(({ required }) => required)) return "requiredTodos";
-    return await threadAddressedFeedback.holdsSettlement(threadId) ? "addressedFeedback" : null;
-  };
-  const agentContext = new WorkbenchAgentContextController({
-    sources: [threadSkills.contextSource, threadGoals.contextSource],
-    inject: async (target, text, signal) => {
-      if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
-      return await providers.get(target.harness).context?.inject({ threadId: target.threadId, text }, signal) ?? "unsupported";
-    },
-    warn: message => { console.warn("[agent-context]", message); },
-  });
-  const requireThreadState = () => {
-    if (!threadState) throw new Error("Thread state is not ready for subagent lifecycle projection.");
-    return threadState;
-  };
   const harnesses = new WorkbenchHarnessController({
     providers,
     identities: threadIdentity,
@@ -423,206 +158,19 @@ function createWorkbenchCoreFeature(
   const profileStore = new WorkbenchComposerProfileStore(database);
   const modelUsage = new WorkbenchModelUsageStore(database);
   const voiceSettings = new VoiceSettingsStore(database);
-  const logThreadStateWarning = (message: string) => {
-    console.warn("[thread-state-ws]", message.slice(0, 500));
-  };
-  const gitArc = new WorkbenchGitArcFeature({
-    identities: threadIdentity,
-    legacyDiffStore: database,
-    proposalDiffStore: {
-      read: async identity => await database.readGitArcProposalDiff(identity),
-      write: async (value, maxBytes) => await database.writeGitArcProposalDiff(value, maxBytes),
-    },
-    // Without permanent history facts a lifecycle read publishes every accepted proposal: slower, never missing one.
-    readDurableProposalIds: async threadIds => {
-      if (!threadState) return new Map();
-      try { return await threadState.controller.readDurableProposalIds(threadIds); }
-      catch (error) {
-        logThreadStateWarning(`Durable proposal read failed: ${error instanceof Error ? error.message : "unknown failure"}`);
-        return new Map();
-      }
-    },
-    getThreadCreatedAt: async (projectId, _harness, threadId) => {
-      const snapshot = await transcript.read({ threadId, turnLimit: 1 });
-      if (!snapshot) return null;
-      if (snapshot.thread.project_id !== projectId) {
-        throw new Error(`Managed thread ${threadId} does not belong to project ${projectId}.`);
-      }
-      return snapshot.thread.created_at;
-    },
-    getThreadClaimContext: async (projectId, harness, threadId) => {
-      if (!threadState) throw new Error("Thread state is not ready for Git arc ownership.");
-      return await threadState.controller.getThreadClaimContext(projectId, harness, threadId);
-    },
-    publishGitArcAcceptance: async (projectId, harness, threadId, acceptance) => {
-      if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
-      await threadState.controller.publishGitArcAcceptance(projectId, harness, threadId, acceptance);
-    },
-    refreshThreadGitArcState: async (projectId, harness, threadId) => {
-      if (!threadState) throw new Error("Thread state is not ready for Git arc publication.");
-      await threadState.controller.refreshGitArcState(projectId, harness, threadId);
-    },
-    publishAgentContext: (target, text) => agentContext.publish(target, text),
-    resolveSubagentPeer: input => subagents.resolveGitArcPeer(input),
-    observeClaimSnapshot: (snapshot) => stats?.observeClaimSnapshot(snapshot),
-    resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc" }),
-    transitions: worktreeGitTransitions,
+  const git = new WorkbenchCoreGitFeature({
+    database, transcript, identities: threadIdentity, projectCatalog, transitions: worktreeGitTransitions, agentContext,
+    threadState: () => threadState,
+    subagents: () => collaboration.subagents,
+    stats: () => coreStats?.stats ?? null,
+    warn: logThreadStateWarning,
   });
-  stats = new WorkbenchStatsController({
-    providers,
-    renames: new WorkbenchClaimRenameController({
-      listRoots: async (projectId) => {
-        const catalog = await projectCatalog.readCatalog();
-        return catalog.data.filter((project) => projectId === null || project.id === projectId).flatMap((project) => (
-          project.roots.map((root) => ({ projectId: project.id, rootId: root.id, workspaceRoot: root.rootPath }))
-        ));
-      },
-    }),
-    claims: {
-      reconcile: async (signal) => await reconcileCatalogClaims({
-        isCheckout: async (rootPath) => Boolean(await resolveGitDirectory(rootPath)),
-        projects: projectCatalog.getCurrentSnapshot().data,
-        reconcile: async (rootPath) => await gitArc.reconcileClaimSnapshots(rootPath),
-        reportFailure: (projectId, error) => stats.reportCaptureFailure(null, `claim reconciliation for project ${projectId}`, error),
-        signal,
-      }),
-      discover: async () => {
-        const catalog = await projectCatalog.readCatalog();
-        const discoveries = await Promise.all(catalog.data.flatMap((project) => project.roots.map(async (root) => (
-          await gitArc.discoverClaimHistory({
-            projectId: project.id,
-            rootId: root.id,
-            workspaceRoot: root.rootPath,
-          })
-        ))));
-        return {
-          candidates: discoveries.flatMap(({ candidates }) => candidates),
-          unsupported: discoveries.reduce((total, discovery) => total + discovery.unsupported, 0),
-        };
-      },
-      hydrate: async (candidate) => await gitArc.hydrateClaimHistory(candidate),
-    },
-    database,
-    harnesses,
-    log: (message) => {
-      console.warn("[stats]", message.slice(0, 500));
-    },
-    // wb feedback belongs to the project whose root is this daemon's own Workbench checkout.
-    resolveWorkbenchProjectId: async () => {
-      const key = (value: string) => {
-        const resolved = path.resolve(value);
-        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-      };
-      const workbenchRoot = key(context.legacyMigrationProjectRoot);
-      const catalog = await projectCatalog.readCatalog();
-      return catalog.data.find((candidate) => candidate.roots.some((root) => key(root.rootPath) === workbenchRoot))?.id ?? null;
-    },
-    toolCatalogue: new WorkbenchToolCatalogueTokens({
-      harnesses: installedProviderKeys,
-      readToolSpecs: harness => run("mcp", mcp => mcp.listToolSpecs(harness), "Stats tool spec catalogue"),
-      readInstructionTools: () => run("mcp", mcp => mcp.listInstructionTools(), "Stats instruction tool catalogue"),
-      readInstructionSources: () => readWorkbenchInstructionSources(),
-    }),
+  const { gitArc, threadGit, workingTree, gitPeer, branchPositions } = git;
+  coreStats = new WorkbenchCoreStatsFeature({
+    context, database, providers, harnesses, projectCatalog, gitArc, run, warn: logThreadStateWarning,
   });
-  const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => {
-    const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(input.repositoryRoot, { endpointName: "Working tree" });
-    return await threadIdentity.resolveGitArcThreadIdentity({
-      ...input, harness: WorkbenchHarnessSchema.parse(input.harness), projectId: resolved.project.id,
-    });
-  };
-  const threadGit = new WorkbenchThreadGitFeature({
-    selectionStore: database,
-    identities: threadIdentity,
-    resolveProjectFromCwd: async (cwd) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git" }),
-    transitions: worktreeGitTransitions,
-    integrations: {
-      listClaims: async repository => (await new GitArcRegistry(repository, resolveGitArcIdentity).list())
-        .map(entry => ({ threadId: entry.threadId, paths: getGitArcLiveClaimPaths(entry) })),
-      waitForClaims: (attempt, signal) => gitArc.waitForClaimChanges(attempt, signal),
-    },
-  });
-  const provider = (harness: WorkbenchHarness) => {
-    const key = installedProviderKeys.find(key => key === harness);
-    if (!key) throw new Error(`Provider ${harness} is unavailable.`);
-    return providers.get(key);
-  };
-  // Built after thread state below; its lifecycle listener must register before any subagent wait subscribes.
-  let subagentQueues: WorkbenchSubagentQueueController | undefined;
-  const subagents = new WorkbenchSubagentFeature({
-    messageWaits: {
-      isWaitingFor: (caller, sender) => messages.isWaitingFor(caller, sender),
-      subscribePending: listener => messages.subscribePending(listener),
-    },
-    identities: threadIdentity,
-    queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
-    settlementHold,
-    // Handover adopts through the ordinary Git arc ingress so it keeps every ownership gate and rejection.
-    adoptChildGitWork: async ({ cwd, harness, name, parentThreadId, transferStash }) => {
-      const response = await gitArc.executeRequest({
-        action: "arcAdoptSource", cwd, harness, threadId: parentThreadId,
-        source: { kind: "subagent", name }, ...(transferStash ? { transferStash } : {}),
-      });
-      if (response.ok) return;
-      const failure = await response.json().catch(() => null) as { error?: unknown } | null;
-      throw new Error(typeof failure?.error === "string" ? failure.error : "Git arc adoption failed.");
-    },
-    moveTodos: (fromThreadId, toThreadId) => threadTodos.moveAll(fromThreadId, toThreadId),
-    provider,
-    // Read lazily: the approval owner is built after subagents but within this same node.
-    liveApprovals: () => approvals.list(),
-    onRelationshipCommitted: (record) => requireThreadState().installSubagentRelationship(record),
-    resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
-    profileStore,
-    persistence: database,
-    // Read lazily: thread actions own stop and are built later in this node.
-    stopThread: threadId => threadActions.stopThread(threadId),
-    threadState: {
-      getEntry: async (projectId, harness, threadId) => {
-        return requireThreadState().controller.getThreadEntry(projectId, harness, threadId);
-      },
-      mutate: async (request: WorkbenchThreadStateRequest) => {
-        const response = await requireThreadState().controller.handleRequest("subagent-controller", request);
-        if ("error" in response) throw new Error(response.error.message);
-        if (!("accepted" in response.result)) throw new Error("The subagent settle mutation returned no acceptance decision.");
-        return { accepted: response.result.accepted };
-      },
-      subscribe: (listener: (projectId: string, entry: WorkbenchThreadSidebarEntry) => void) => requireThreadState().controller.subscribe(listener),
-    },
-  });
-  const messages = new WorkbenchThreadMessageController({
-    identities: threadIdentity,
-    listSubagents: projectId => subagents.listRelationships(projectId),
-    provider,
-    // Resolve lazily: the shared waiter is built later within this core generation.
-    questionnaires: {
-      canDeliver: (threadId, requestKey) => questionnaires.canDeliver(threadId, requestKey),
-      deliver: input => questionnaires.deliver(input),
-    },
-    recordQuestionnaire: async entry => {
-      await transcript.record([{
-        kind: "questionnaire",
-        entry: {
-          ...entry,
-          itemId: entry.itemId ?? null,
-          insertAfterItemId: entry.insertAfterItemId ?? null,
-          insertAfterItemIndex: entry.insertAfterItemIndex ?? null,
-          threadId: WorkbenchThreadIdSchema.parse(entry.threadId),
-        },
-        observedAt: entry.resolvedAt,
-      }], { source: "workbench" });
-    },
-    resolveProjectFromCwd: async (cwd, options) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
-    threadState: {
-      getEntry: async (projectId, harness, threadId) => (
-        await requireThreadState().controller.getThreadEntry(projectId, harness, threadId)
-      ),
-      resolvePendingQuestionnaire: (input, deliver) => (
-        requireThreadState().controller.resolvePendingQuestionnaire(input, deliver)
-      ),
-      subscribe: listener => requireThreadState().controller.subscribe(listener),
-    },
-  }, messageWaitHandoff);
-  threadState = new WorkbenchThreadStateFeature({
+  const { stats, accountLimits } = coreStats;
+  const threadStateFeature = threadState = new WorkbenchThreadStateFeature({
     agentContext,
     providers,
     identities: { threads: threadIdentity, items: transcriptIdentity },
@@ -633,10 +181,10 @@ function createWorkbenchCoreFeature(
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
-    settlementHold,
+    settlementHold: threadId => facts.settlementHold(threadId),
     compactThread: input => threadContextRollover.acceptSummary(input),
     refreshThread: (harness, target) => continuations.refresh(harness, target),
-    listSubagents: (projectId) => subagents.listRelationships(projectId),
+    listSubagents: (projectId) => collaboration.subagents.listRelationships(projectId),
     log: logThreadStateWarning,
     resolveProjectById: (projectId) => projectCatalog.resolveProjectById(projectId),
     resolveProjectFromCwd: (cwd, options) => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, options),
@@ -644,212 +192,34 @@ function createWorkbenchCoreFeature(
     locks: threadTransitions,
     pruneThreadVis: threadIds => vis.prune(threadIds),
   });
-  const threadStateController = threadState.controller;
+  const threadStateController = threadStateFeature.controller;
   threadSummaries = new WorkbenchThreadSummaryIndex({
-    resolveProject: async threadId => (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.projectId ?? null,
+    resolveProject: async threadId => (await lookup.identity(threadId))?.projectId ?? null,
     peekProject: projectId => threadStateController.peekProject(projectId),
     readProject: projectId => threadStateController.readProject(projectId),
     subscribeProjects: listener => threadStateController.subscribeProjects(listener),
-    readRequiredTodoCounts: () => database.readThreadRequiredTodoCounts(),
-    readAddressedFeedbackCounts: () => database.readThreadAddressedFeedbackCounts(),
+    seedFacts: () => database.readThreadSummaryFactSeeds(),
     warn: logThreadStateWarning,
   });
   const summaries = threadSummaries;
-  // A settled thread's live vis sessions end with a final snapshot, so no live card outlives its thread.
-  const unsubscribeVisSettlement = threadState.controller.subscribe((_projectId, entry) => {
-    if (lease.isCurrent() && entry.entryKind !== "draft" && entry.lifecycle.settled) void vis.endThread(entry.identity.threadId);
+  facts.endVisOnSettlement(listener => threadStateController.subscribe(listener));
+  const collaboration = new WorkbenchCoreSubagentsFeature({
+    database, transcript, identities: threadIdentity, lookup, projectCatalog, profileStore, threadState: threadStateFeature, facts, gitArc,
+    approvals: () => interactions.approvals,
+    questionnaires: () => interactions.questionnaires,
+    threadActions: () => threadActions,
+    messageWaitHandoff,
+    subagentQueueHandoff,
   });
-  const queues = subagentQueues = new WorkbenchSubagentQueueController({
-    resolveProjectFromCwd: async cwd => (
-      await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Workbench subagent queue" })
-    ).project.id,
-    resolveThreadId: async (threadId, projectId) => {
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId), projectId });
-      if (!identity) throw new Error("The queue caller has no admitted identity in this project.");
-      return identity.threadId;
-    },
-    listRelationships: async projectId => (await subagents.listRelationships(projectId)).subagents,
-    readLifecycle: async (projectId, threadId) => {
-      const entry = await requireThreadState().controller.getCanonicalThreadEntry(projectId, threadId);
-      return entry && entry.entryKind !== "draft" ? entry.lifecycle : null;
-    },
-    subscribeLifecycle: listener => requireThreadState().controller.subscribe(listener),
-    sendNotice: input => messages.sendNotice(input),
-    warn: message => { console.warn("[subagent-queue]", message.slice(0, 500)); },
-  }, subagentQueueHandoff);
-  const questionnaires = new WorkbenchQuestionnaireController({
-    beforeAnswer: async (threadId, signal) => {
-      const identity = await threadIdentity.resolve({ threadId });
-      const harness = installedProviderKeys.find(key => key === identity?.bindings[0]?.harness);
-      if (harness) await agentContext.collect({ harness, threadId }, "answer", signal);
-    },
-    ...createWorkbenchQuestionnaireStatePorts({ threads: threadIdentity, items: transcriptIdentity }, threadState.controller, async cwd => {
-      const resolved = await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Questionnaire" });
-      return ProjectIdSchema.parse(resolved.project.id);
-    }),
-    logError: (message) => {
-      console.error("[questionnaire]", message.slice(0, 500));
-    },
+  const { subagents, messages, queues } = collaboration;
+  const interactions = new WorkbenchInteractionsFeature({
+    context, database, transcript, identities: threadIdentity, transcriptIdentity, commandApprovals, approvalHandoff, lookup,
+    projectCatalog, threadState: threadStateFeature, agentContext, facts, harnesses, providers, turnLiveness, transcriptReader,
+    publishRuntime: (threadId, change) => turns.publish(threadId, change),
+    warn: logThreadStateWarning,
   });
-  const approvalReview = new WorkbenchApprovalReviewController({
-    database,
-    readDeviceIdentity,
-    readOpenCodeApiKey: () => readOpenCodeApiKey(),
-    codexReviewer: () => installedProviderKeys.includes("codex") ? provider("codex").approvalReview : null,
-  });
+  const { approvalReview, approvals, questionnaires, questionnaireSteers, questionnaireResponses } = interactions;
   const mcpServers = new WorkbenchMcpServerController({ database, readDeviceIdentity });
-  const approvals = new WorkbenchApprovalController({
-    broadcast: (harness, notification) => context.broadcastProviderNotification(harness, notification),
-    collectAnswerContext: async (harness, threadId, signal) => {
-      const key = installedProviderKeys.find(candidate => candidate === harness);
-      if (key) await agentContext.collect({ harness: key, threadId }, "answer", signal);
-    },
-    commandApprovals,
-    deliver: async (harness, input) => await provider(harness).interactions?.deliverApproval(input) ?? false,
-    logError: message => { console.error("[approval]", message.slice(0, 500)); },
-    observeLifecycle: async (harness, threadId, event) => {
-      await threadState.controller.observeLifecycle(harness, threadId, event);
-    },
-    pendingChanged: threadId => {
-      const pendingApproval = readPendingApproval(threadId);
-      for (const listener of runtimeListeners) listener(threadId, { pendingApproval });
-    },
-    recordOutcome: async entry => {
-      await database.recordApprovalOutcome(entry);
-      transcript.acceptApprovalOutcome(entry);
-    },
-    resolveProject: async threadId => (await threadIdentity.resolve({ threadId }))?.projectId ?? null,
-    resolveApprovalMode: async threadId => {
-      const identity = await threadIdentity.resolve({ threadId });
-      // Approval modes only exist in daemon projects; normal projects always ask.
-      if (!identity || (await projectCatalog.resolveProjectById(identity.projectId)).kind !== "daemon") return DEFAULT_APPROVAL_MODE;
-      const states = requireThreadState().controller;
-      // Subagents follow the mode of the top-level thread that started their tree.
-      let entry = await states.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-      for (let depth = 0; entry?.entryKind === "subagent" && depth < 64; depth += 1) {
-        entry = await states.getCanonicalThreadEntry(identity.projectId, entry.parentThreadId);
-      }
-      if (!entry || entry.entryKind === "draft" || entry.entryKind === "subagent") return DEFAULT_APPROVAL_MODE;
-      return resolveApprovalMode(await states.readComposerProfileSnapshot({
-        kind: "thread", projectId: identity.projectId, harness: entry.identity.harness, threadId: entry.identity.threadId,
-      }));
-    },
-    review: (input, signal) => approvalReview.review(input.subject, signal),
-  }, approvalHandoff);
-  const recordSkillActivations = (threadId: string, paths: readonly string[]) => threadSkills.recordActivations(threadId, paths, "user");
-  const unsubscribeCompaction = transcript.subscribeContextCompaction(async completion => {
-    if (!lease.isCurrent()) return;
-    // Observers reread token usage when the transcript settles; agents get their skills and goal re-sent.
-    await threadSkills.observeCompaction(completion.threadId);
-    if (lease.isCurrent()) await threadGoals.observeCompaction(completion.threadId);
-  });
-  const questionnaireSteers = new WorkbenchQuestionnaireSteerController({
-    hasPendingQuestionnaire: async threadId => {
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-      const entry = identity ? await requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId) : null;
-      return Boolean(entry && entry.entryKind !== "draft" && "pendingQuestionnaire" in entry && entry.pendingQuestionnaire);
-    },
-    latestTurn: async threadId => {
-      const harness = (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness;
-      if (!harness) return null;
-      const turn = await provider(harness).threads.latestTurn(threadId);
-      return turn ? { id: turn.id, live: await turnLiveness.read(threadId, harness) } : null;
-    },
-    readSteers: async threadId => (await transcriptReader.history(threadId)).steerEntries,
-    record: transcript.record.bind(transcript),
-    now: Date.now,
-    warn: message => logThreadStateWarning(message),
-  });
-  const questionnaireResponses = new WorkbenchQuestionnaireResponseController({
-    approvals,
-    harnesses,
-    providers,
-    questionnaireSteers,
-    readSkills: readThreadSkills,
-    recordSkillActivations,
-    resolveLatestTurn: async ({ projectId, threadId }) => {
-      const snapshot = await transcript.read({ threadId, turnLimit: 1 });
-      if (!snapshot) return null;
-      if (snapshot.thread.project_id !== projectId) {
-        throw new Error(`Questionnaire thread ${threadId} does not belong to project ${projectId}.`);
-      }
-      const turnId = snapshot.turns.at(-1)?.id;
-      return turnId ? WorkbenchTurnIdSchema.parse(turnId) : null;
-    },
-    state: threadState.controller,
-  });
-  const transcriptReader = new WorkbenchTranscriptReader({
-    readProviderCursor: (threadId, turnId) => database.readTranscriptProviderCursor!(threadId, turnId),
-    readSnapshot: request => transcript.read(request),
-    readContext: threadId => database.readTranscriptContext!(threadId),
-    readMaterializedTurns: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
-    readContextUsage: threadId => transcript.readContextUsage(threadId),
-    readApprovalOutcomes: (threadId, turnIds) => database.readApprovalOutcomes(threadId, turnIds),
-    readMetadata: async (thread, provenance) => {
-      const entry = await threadState.controller.getCanonicalThreadEntry(
-        ProjectIdSchema.parse(thread.project_id), WorkbenchThreadIdSchema.parse(thread.id),
-      );
-      let harness = (entry && entry.entryKind !== "draft" ? entry.identity.harness : null) ?? provenance;
-      if (!harness) {
-        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(thread.id) });
-        harness = identity?.bindings[0]?.harness ?? null;
-      }
-      if (!harness) throw new Error("Canonical transcript has no stored execution provenance.");
-      return { entry, harness: WorkbenchHarnessSchema.parse(harness) };
-    },
-  });
-  const transcriptReconciliation = new WorkbenchTranscriptReconciliationController({
-    identities: threadIdentity,
-    transcripts: transcriptReader,
-    isThreadObserved: threadId => transcript.isThreadObserved(threadId),
-    readPreviousCursor: (threadId, turnId) => database.readTranscriptProviderCursor!(threadId, turnId),
-    readMaterializedTurnIds: (threadId, turnIds) => transcript.readMaterializedTurnIds(threadId, turnIds),
-    readRecoveryGaps: threadId => transcript.readRecoveryGaps(WorkbenchThreadIdSchema.parse(threadId)),
-    subscribeSettled: listener => transcript.subscribeSettled(listener),
-    recover: async (input, signal) => {
-      const key = installedProviderKeys.find(key => key === input.harness);
-      if (!key) throw new Error("Transcript provider is not installed.");
-      const provider = providers.get(key);
-      if (!provider.threads.reconcile) throw new Error("Transcript provider does not support reconciliation.");
-      return provider.threads.reconcile(input, signal);
-    },
-    warn: message => logThreadStateWarning(message),
-  });
-  const continuations = new WorkbenchTurnContinuationController({
-    coordinator: turnRecovery,
-    readLifecycle: async (harness, threadId) => {
-      const identity = await threadIdentity.resolve({ harness, threadId: ThreadReferenceSchema.parse(threadId) });
-      if (!identity) return null;
-      const entry = await requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
-      return entry && entry.entryKind !== "draft" ? { projectId: identity.projectId, lifecycle: entry.lifecycle } : null;
-    },
-    canonicalTurnId: reference => threadIdentity.knownTurn(TurnReferenceSchema.parse(reference)).turnId,
-    interrupt: async (harness, threadId) => { await provider(harness).threads.interrupt(threadId); },
-    admitHiddenTurn: async (harness, turn) => {
-      const key = installedProviderKeys.find(key => key === harness);
-      if (!key) throw new Error(`Provider ${harness} is unavailable.`);
-      return await providers.admitHiddenTurn(key, turn);
-    },
-    reportFailed: async (projectId, harness, threadId) => await requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
-    log: context.logTurnRecovery,
-  });
-  const turnSettlement = new WorkbenchTurnSettlementController({
-    providers, identities: threadIdentity, transcripts: transcriptReader, transcript,
-    observe: async (harness, facts) => await requireThreadState().observeProviderNotification(harness, facts),
-    listThreadLifecycles: async () => {
-      const { data } = await projectCatalog.readCatalog();
-      const threads: Array<{ threadId: string; lifecycle: WorkbenchThreadLifecycle }> = [];
-      for (const { id } of data) {
-        const { entries } = await requireThreadState().controller.getSnapshot(ProjectIdSchema.parse(id));
-        for (const entry of entries) {
-          if (entry.entryKind !== "draft") threads.push({ threadId: entry.identity.threadId, lifecycle: entry.lifecycle });
-        }
-      }
-      return threads;
-    },
-    readAbandonedHoldThreadIds: before => transcript.readAbandonedHoldThreadIds(before),
-    warn: message => logThreadStateWarning(message),
-  });
   const threadActions = new WorkbenchThreadActionController({
     questionnaireSteers,
     autoCompact,
@@ -862,9 +232,9 @@ function createWorkbenchCoreFeature(
     settlement: turnSettlement,
     continuations,
     providers, projects: projectCatalog, identities: threadIdentity,
-    profiles: threadState, state: threadState.controller,
-    skills: threadSkills, goals: threadGoals, todos: threadTodos, addressedFeedback: threadAddressedFeedback, vis,
-    readSkills: readThreadSkills,
+    profiles: threadStateFeature, state: threadStateController,
+    skills: facts.skills, goals: facts.goals, todos: facts.todos, addressedFeedback: facts.addressedFeedback, vis,
+    readSkills: threadId => facts.readThreadSkills(threadId),
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.
@@ -890,7 +260,7 @@ function createWorkbenchCoreFeature(
   // Held steers live outside the transcript stream, so open views learn about them from this push.
   const unsubscribeHeldSteers = transcript.subscribeHeldSteers(async ({ threadId, turnId }) => {
     if (!lease.isCurrent()) return;
-    const harness = (await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) }))?.bindings[0]?.harness;
+    const harness = (await lookup.identity(threadId))?.bindings[0]?.harness;
     if (harness && lease.isCurrent()) {
       context.broadcastProviderNotification(WorkbenchHarnessSchema.parse(harness), {
         method: "steer/history/changed", params: { threadId, turnId },
@@ -900,83 +270,10 @@ function createWorkbenchCoreFeature(
   const launches = new WorkbenchThreadLaunchController({
     readProjectSkills: projectId => skillCatalog.readActivatableSkills(projectId),
     database, projects: projectCatalog, actions: threadActions,
-    addressedFeedback: threadAddressedFeedback,
+    addressedFeedback: facts.addressedFeedback,
     warn: message => logThreadStateWarning(message),
   });
-  const workingTree = new WorkbenchWorkingTreeController({
-    resolveProject: projectId => projectCatalog.resolveProjectById(projectId),
-    resolveIdentity: resolveGitArcIdentity,
-    readOwner: async (threadId, harness) => {
-      const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
-      if (!identity) return null;
-      const entry = await threadState.controller.getThreadEntry(identity.projectId, WorkbenchHarnessSchema.parse(harness), identity.threadId);
-      return entry ? { id: identity.threadId, projectId: identity.projectId, entry } : null;
-    },
-    transitions: worktreeGitTransitions,
-  });
-  const resolveCheckoutRoot = async (projectId: string) => (await projectCatalog.resolveProjectById(projectId)).rootPath;
-  const gitPeer = new WorkbenchGitPeerController({
-    resolveRoot: resolveCheckoutRoot, transitions: worktreeGitTransitions, warn: message => logThreadStateWarning(message),
-  });
-  const branchPositions = new WorkbenchBranchPositionController({
-    resolveRoot: resolveCheckoutRoot, warn: message => logThreadStateWarning(message),
-  });
-  const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
-  const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
-    // Stored facts arrive in one reader round trip; only liveness of in-progress turns asks providers.
-    readMany: async entries => {
-      if (!entries.length) return new Map();
-      let facts: Awaited<ReturnType<typeof database.readThreadRuntimeFacts>>;
-      try { facts = await database.readThreadRuntimeFacts(entries.map(({ identity }) => identity.threadId)); }
-      catch (error) {
-        logThreadStateWarning(`Thread runtime read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
-        return new Map();
-      }
-      const turnLive = await Promise.all(entries.map(async ({ identity }, index) => {
-        try { return await turnLiveness.observe(identity.threadId, identity.harness, facts[index]!.latestTurn); }
-        catch (error) {
-          logThreadStateWarning(`Thread runtime turn liveness read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
-          return undefined;
-        }
-      }));
-      const willAutoCompact = await autoCompact.observeMany(entries.map((entry, index) => ({
-        target: { harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId },
-        evidence: { activityAt: entry.activityAt, contextTokens: facts[index]!.tokenUsage?.last.inputTokens ?? null },
-        runtime: { latestTurn: facts[index]!.latestTurn, status: threadPayloadStatus(entry), turnLive: turnLive[index] ?? false },
-      })));
-      return new Map(entries.map(({ identity: { threadId } }, index) => {
-        const { addressedFeedback, goal, skills, todos, tokenUsage } = facts[index]!;
-        const live = turnLive[index];
-        return [threadId, {
-          tokenUsage, willAutoCompact: willAutoCompact.get(threadId) ?? false,
-          ...(live !== undefined ? { turnLive: live } : {}),
-          pendingApproval: readPendingApproval(threadId), goal, skills, todos, addressedFeedback,
-        }];
-      }));
-    },
-    readTokenUsage,
-    subscribe: listener => {
-      runtimeListeners.add(listener);
-      // Token usage commits through the transcript; only usage is reread for committed threads.
-      const stopSettled = transcript.subscribeSettled(threadIds => { for (const threadId of threadIds) listener(threadId, null); });
-      return () => { runtimeListeners.delete(listener); stopSettled(); };
-    },
-  };
-  const accountLimits = new WorkbenchAccountLimitsController({
-    read: harness => {
-      const key = installedProviderKeys.find(candidate => candidate === harness);
-      return key ? providers.get(key).account?.limits.read() ?? null : null;
-    },
-    record: (harness, limits) => stats.observeAccountLimits(harness, limits),
-    warn: message => logThreadStateWarning(message),
-  });
-  const projectStore = new WorkbenchProjectStore({
-    execute: command => database.executeProjectStore(command),
-    readDeviceIdentity,
-    resolveProjectById: projectId => projectCatalog.resolveProjectById(projectId),
-    resolveProjectFromCwd: cwd => projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Project store" }),
-  });
-  const projectFiles = new WorkbenchProjectFileController(projectCatalog, projectSnapshot);
+  const { snapshot: projectSnapshot, search, store: projectStore, files: projectFiles } = projects;
   const daemonRequests = new WorkbenchDaemonRequestController({
     autoCompact,
     commandApprovals,
@@ -987,7 +284,7 @@ function createWorkbenchCoreFeature(
     providers,
     threadActions,
     launches,
-    presentationExport: threadState.controller,
+    presentationExport: threadStateController,
     agents: skillCatalog,
     files: projectFiles,
     gitArc,
@@ -995,8 +292,8 @@ function createWorkbenchCoreFeature(
     profiles: profileStore,
     modelUsage,
     profileTargets: {
-      readComposerProfileTarget: async (slot) => await threadState.controller.readComposerProfileTarget(slot),
-      setComposerProfileTarget: async (slot, selection) => await threadState.controller.setComposerProfileTarget(slot, selection),
+      readComposerProfileTarget: async (slot) => await threadStateController.readComposerProfileTarget(slot),
+      setComposerProfileTarget: async (slot, selection) => await threadStateController.setComposerProfileTarget(slot, selection),
     },
     projects: projectCatalog,
     projectCreation: new WorkbenchProjectCreationController({ catalog: projectCatalog }),
@@ -1011,7 +308,7 @@ function createWorkbenchCoreFeature(
     readThreadActive: async threadId => {
       if (!lease.isCurrent()) return null;
       try {
-        const identity = await threadIdentity.resolve({ threadId: ThreadReferenceSchema.parse(threadId) });
+        const identity = await lookup.identity(threadId);
         if (!identity) return null;
         const key = installedProviderKeys.find(key => identity.bindings.some(binding => binding.harness === key));
         if (!key) return null;
@@ -1034,23 +331,23 @@ function createWorkbenchCoreFeature(
     agentContext,
     approvals,
     voiceSettings,
-    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState, threadActions, threadSkills, threadTodos, transcriptReader, transcriptReconciliation,
+    browseSessionCleanup, daemonRequests, gitArc, gitPeer, branchPositions, harnesses, mcpServers, messages, modules, projectCatalog, projectSnapshot, projectStore, questionnaires, stats, subagents, subagentQueues: queues, threadGit, threadState: threadStateFeature, threadActions, threadSkills: facts.skills, threadTodos: facts.todos, transcriptReader, transcriptReconciliation,
     vis,
     threadContextRollover,
     workingTree,
     accountLimits,
-    threadRuntime,
+    threadRuntime: turns.threadRuntime,
     threadSummaries: summaries,
     projectFiles,
     providerObservations: {
-      observe: async (harness, facts) => {
+      observe: async (harness, observed) => {
         if (!lease.isCurrent()) return null;
-        stats.observeProviderNotification(harness, facts);
+        stats.observeProviderNotification(harness, observed);
         accountLimits.noteActivity(harness);
-        const observation = await threadState!.observeProviderNotification(harness, facts);
+        const observation = await threadStateFeature.observeProviderNotification(harness, observed);
         if (!lease.isCurrent()) return null;
         const lifecycle = observation?.lifecycle ?? null;
-        continuations.observe(harness, facts, lifecycle);
+        continuations.observe(harness, observed, lifecycle);
         return lifecycle;
       },
     },
@@ -1089,15 +386,13 @@ function createWorkbenchCoreFeature(
       subagents.beginRuntimeDrain();
     },
     dispose: async (reportPhase = () => undefined) => {
-      unsubscribeCompaction();
+      facts.stopObserving();
       unsubscribeAutoCompactSettled();
       unsubscribeTurnStarted();
       unsubscribeHeldSteers();
       unsubscribeAgentMessageDelivery();
-      unsubscribeVisSettlement();
       summaries.dispose();
-      vis.dispose();
-      visBrowseLifetime.abort(new Error("Vis browser calls are reloading."));
+      facts.disposeVis();
       continuations.dispose();
       await threadContextRollover.dispose();
       await autoCompact.dispose();
@@ -1130,7 +425,7 @@ function createWorkbenchCoreFeature(
       await questionnaires.dispose();
       approvals.dispose();
       reportPhase("thread-state disposal");
-      await threadState.dispose();
+      await threadStateFeature.dispose();
       reportPhase("composer profile disposal");
       await voiceSettings.dispose();
       await profileStore.dispose();

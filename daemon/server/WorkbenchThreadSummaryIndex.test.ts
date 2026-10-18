@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 
 import { ProjectIdSchema, WorkbenchThreadIdSchema, type ProjectId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadSidebarSnapshot } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
 import WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
 
 const PROJECT = "project" as ProjectId;
@@ -20,10 +21,7 @@ function entry(threadId: string, title: string) {
   };
 }
 
-function harness(
-  todoCounts: ReadonlyMap<string, number> = new Map(),
-  addressedFeedbackCounts: ReadonlyMap<string, number> | Promise<ReadonlyMap<string, number>> = new Map(),
-) {
+function harness(seeds: ReadonlyMap<string, ThreadSummaryFacts> | Promise<ReadonlyMap<string, ThreadSummaryFacts>> = new Map()) {
   let snapshot = { entries: [entry("a", "first")], error: null, freshness: "fresh", projectId: PROJECT, revision: 1 } as unknown as WorkbenchThreadSidebarSnapshot;
   let notify: (projectId: ProjectId) => void = () => {};
   const changed: string[] = [];
@@ -32,8 +30,7 @@ function harness(
     peekProject: () => snapshot,
     readProject: async () => snapshot,
     subscribeProjects: listener => { notify = listener; return () => {}; },
-    readRequiredTodoCounts: async () => todoCounts,
-    readAddressedFeedbackCounts: async () => await addressedFeedbackCounts,
+    seedFacts: async () => await seeds,
     warn: message => { throw new Error(message); },
   });
   index.subscribe(threadId => changed.push(threadId));
@@ -46,8 +43,8 @@ function harness(
   };
 }
 
-test("a read summary carries its owner project and seeded required todo count, and stays the same object until it changes", async () => {
-  const h = harness(new Map([["a", 3]]), new Map([["a", 2]]));
+test("a read summary carries its owner project and seeded facts, and stays the same object until it changes", async () => {
+  const h = harness(new Map([["a", { addressedFeedbackCount: 2, requiredTodoCount: 3 }]]));
   const located = await h.index.read("a");
   assert.equal(located?.projectId, PROJECT);
   assert.equal(located?.summary.row.title, "first");
@@ -71,29 +68,26 @@ test("project changes re-project only threads whose row changed, and a thread th
 
 test("pushed facts announce read threads and wait for unread ones", async () => {
   const h = harness();
-  h.index.setRequiredTodoCount("a", 2);
+  h.index.setFacts("a", { requiredTodoCount: 2 });
   assert.deepEqual(h.changed, []);
   assert.deepEqual((await h.index.read("a"))?.summary.facts, { requiredTodoCount: 2 });
-  h.index.setCompacting("a", true);
-  h.index.setCompacting("a", true);
+  h.index.setFacts("a", { compacting: true });
+  h.index.setFacts("a", { compacting: true });
   assert.deepEqual(h.changed, ["a"], "repeating a fact changes nothing");
   assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true, requiredTodoCount: 2 });
-  h.index.setRequiredTodoCount("a", 0);
+  h.index.setFacts("a", { requiredTodoCount: 0 });
   assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true }, "zero counts read as absent");
-  h.index.setAddressedFeedbackCount("a", 2);
-  h.index.setAddressedFeedbackCount("a", 2);
+  h.index.setFacts("a", { addressedFeedbackCount: 2 });
   assert.deepEqual(h.index.peek("a")?.summary.facts, { addressedFeedbackCount: 2, compacting: true });
-  h.index.setAddressedFeedbackCount("a", 0);
-  assert.deepEqual(h.index.peek("a")?.summary.facts, { compacting: true });
 });
 
-test("a feedback change during startup wins over the older count seed", async () => {
-  const pending = Promise.withResolvers<ReadonlyMap<string, number>>();
-  const h = harness(new Map(), pending.promise);
+test("a fact pushed during startup wins over its older seed while other seeded facts still land", async () => {
+  const pending = Promise.withResolvers<ReadonlyMap<string, ThreadSummaryFacts>>();
+  const h = harness(pending.promise);
   const read = h.index.read("a");
-  h.index.setAddressedFeedbackCount("a", 0);
-  pending.resolve(new Map([["a", 3]]));
-  assert.deepEqual((await read)?.summary.facts, {});
+  h.index.setFacts("a", { addressedFeedbackCount: 0 });
+  pending.resolve(new Map([["a", { addressedFeedbackCount: 3, requiredTodoCount: 1 }]]));
+  assert.deepEqual((await read)?.summary.facts, { requiredTodoCount: 1 });
 });
 
 function batchFixture(context: TestContext) {
@@ -124,8 +118,7 @@ function batchFixture(context: TestContext) {
       return held.promise;
     },
     subscribeProjects: () => () => {},
-    readRequiredTodoCounts: async () => new Map(),
-    readAddressedFeedbackCounts: async () => new Map(),
+    seedFacts: async () => new Map(),
     warn: message => { throw new Error(message); },
   });
   context.after(() => index.dispose());

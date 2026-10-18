@@ -329,8 +329,7 @@ function indexedSummaries(context: TestContext) {
       return read;
     },
     subscribeProjects: () => () => {},
-    readRequiredTodoCounts: async () => new Map(),
-    readAddressedFeedbackCounts: async () => new Map(),
+    seedFacts: async () => new Map(),
     warn: message => { throw new Error(message); },
   });
   context.after(() => index.dispose());

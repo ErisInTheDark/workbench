@@ -52,6 +52,7 @@ import WorkbenchThreadRuntimeFactsReader from "./thread-runtime/WorkbenchThreadR
 import WorkbenchThreadVisStore from "./vis/WorkbenchThreadVisStore.ts";
 import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
+import type { ThreadSummaryFacts } from "workbench-shared/workbench/thread/thread-summary";
 import WorkbenchProjectStoreRepository from "./store/WorkbenchProjectStoreRepository.ts";
 import WorkbenchTranscriptRetentionRepository from "./retention/WorkbenchTranscriptRetentionRepository.ts";
 import type { WorkbenchProjectStartup } from "./project/workbench-project-persistence.ts";
@@ -351,19 +352,20 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "threadTodos", result: new WorkbenchThreadTodoStore(database).execute(request.command) });
     return;
   }
-  if (request.type === "threadRequiredTodoCounts") {
+  if (request.type === "threadSummaryFactSeeds") {
     if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadRequiredTodoCounts", counts: new WorkbenchThreadTodoStore(database).requiredCounts() });
+    const facts: Record<string, ThreadSummaryFacts> = {};
+    const seed = (counts: Record<string, number>, key: "addressedFeedbackCount" | "requiredTodoCount") => {
+      for (const [threadId, count] of Object.entries(counts)) facts[threadId] = { ...facts[threadId], [key]: count };
+    };
+    seed(new WorkbenchThreadTodoStore(database).requiredCounts(), "requiredTodoCount");
+    seed(new WorkbenchThreadAddressedFeedbackStore(database).counts(), "addressedFeedbackCount");
+    post({ id: request.id, type: "threadSummaryFactSeeds", facts });
     return;
   }
   if (request.type === "threadAddressedFeedback") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "threadAddressedFeedback", result: new WorkbenchThreadAddressedFeedbackStore(database).execute(request.command) });
-    return;
-  }
-  if (request.type === "threadAddressedFeedbackCounts") {
-    if (!database) throw new Error("Workbench database is not initialized");
-    post({ id: request.id, type: "threadAddressedFeedbackCounts", counts: new WorkbenchThreadAddressedFeedbackStore(database).counts() });
     return;
   }
   if (request.type === "projectStore") {

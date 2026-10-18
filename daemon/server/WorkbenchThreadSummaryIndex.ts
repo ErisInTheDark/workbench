@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadSummaryIndexPorts: thread ownership, project snapshots and live-fact seeds the index reads.
- * - default WorkbenchThreadSummaryIndex: batch concurrent reads by project and own canonical thread summaries and their change announcements.
+ * - default WorkbenchThreadSummaryIndex: batch concurrent reads by project and own canonical thread summaries, their seeded and pushed facts, and their change announcements.
  */
 import { areDeeplyEqual } from "workbench-shared/workbench/deep-equality";
 import type { ProjectId } from "workbench-shared/workbench/identity";
@@ -16,10 +16,8 @@ export interface WorkbenchThreadSummaryIndexPorts {
   peekProject(projectId: ProjectId): WorkbenchThreadSidebarSnapshot | null;
   readProject(projectId: ProjectId): Promise<WorkbenchThreadSidebarSnapshot>;
   subscribeProjects(listener: (projectId: ProjectId) => void): () => void;
-  /** Every thread's required todo count, read once; later counts arrive through `setRequiredTodoCount`. */
-  readRequiredTodoCounts(): Promise<ReadonlyMap<string, number>>;
-  /** Every thread's addressed feedback count, read once; later counts arrive through `setAddressedFeedbackCount`. */
-  readAddressedFeedbackCounts(): Promise<ReadonlyMap<string, number>>;
+  /** Every thread's stored facts, read once; later changes arrive through `setFacts`. */
+  seedFacts(): Promise<ReadonlyMap<string, ThreadSummaryFacts>>;
   warn(message: string): void;
 }
 
@@ -39,23 +37,16 @@ export default class WorkbenchThreadSummaryIndex {
 
   constructor(private readonly ports: WorkbenchThreadSummaryIndexPorts) {
     this.stop = ports.subscribeProjects(projectId => this.projectChanged(projectId));
-    const todoCounts = ports.readRequiredTodoCounts().then(counts => {
-      for (const [threadId, requiredTodoCount] of counts) {
-        // A todo change during the seed read is newer than the seed.
-        if (this.facts.get(threadId)?.requiredTodoCount === undefined) this.setFact(threadId, { requiredTodoCount });
+    this.seeded = ports.seedFacts().then(seeds => {
+      for (const [threadId, seed] of seeds) {
+        // A fact pushed during the seed read is newer than the seed, so only still-unknown facts take seeded values.
+        const known = this.facts.get(threadId) ?? {};
+        const unknown = Object.fromEntries(Object.entries(seed).filter(([key]) => known[key as keyof ThreadSummaryFacts] === undefined));
+        this.setFacts(threadId, unknown);
       }
     }, error => {
-      ports.warn(`Thread todo counts could not be read: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+      ports.warn(`Thread summary facts could not be seeded: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
     });
-    const addressedFeedbackCounts = ports.readAddressedFeedbackCounts().then(counts => {
-      for (const [threadId, addressedFeedbackCount] of counts) {
-        // A feedback change during the seed read is newer than the seed.
-        if (this.facts.get(threadId)?.addressedFeedbackCount === undefined) this.setFact(threadId, { addressedFeedbackCount });
-      }
-    }, error => {
-      ports.warn(`Thread addressed feedback counts could not be read: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
-    });
-    this.seeded = Promise.all([todoCounts, addressedFeedbackCounts]).then(() => undefined);
   }
 
   subscribe(listener: (threadId: string) => void) {
@@ -124,16 +115,13 @@ export default class WorkbenchThreadSummaryIndex {
     return read;
   }
 
-  setCompacting(threadId: string, compacting: boolean) {
-    this.setFact(threadId, { compacting });
-  }
-
-  setRequiredTodoCount(threadId: string, requiredTodoCount: number) {
-    this.setFact(threadId, { requiredTodoCount });
-  }
-
-  setAddressedFeedbackCount(threadId: string, addressedFeedbackCount: number) {
-    this.setFact(threadId, { addressedFeedbackCount });
+  /** Merge changed facts into the thread's summary; an unchanged patch announces nothing. */
+  setFacts(threadId: string, patch: ThreadSummaryFacts) {
+    const current = this.facts.get(threadId) ?? {};
+    const next = { ...current, ...patch };
+    if (areDeeplyEqual(current, next)) return;
+    this.facts.set(threadId, next);
+    this.changed(threadId);
   }
 
   dispose() {
@@ -142,14 +130,6 @@ export default class WorkbenchThreadSummaryIndex {
     this.reads.clear();
     this.projectReads.clear();
     this.listeners.clear();
-  }
-
-  private setFact(threadId: string, patch: ThreadSummaryFacts) {
-    const current = this.facts.get(threadId) ?? {};
-    const next = { ...current, ...patch };
-    if (areDeeplyEqual(current, next)) return;
-    this.facts.set(threadId, next);
-    this.changed(threadId);
   }
 
   /** Threads already read follow their project; a thread that left it reads as unknown. */
