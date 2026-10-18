@@ -410,6 +410,8 @@ export default class OpenCodeEventController {
               kind: "turnCompleted",
               turnId: WorkbenchTurnIdSchema.parse(turn.id),
               status,
+              ...(status === "failed" && event.type === "session.execution.failed"
+                ? { error: event.data.error.message } : {}),
             },
           },
           displayLabel: null,

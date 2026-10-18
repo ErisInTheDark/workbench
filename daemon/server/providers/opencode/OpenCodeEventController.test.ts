@@ -709,3 +709,31 @@ test("maps OpenCode cancellation failure to interrupted after a WB stop", async 
     { method: "thread/status/changed", params: { threadId, status: { type: "idle" } } },
   ]);
 });
+
+test("settles an OpenCode execution failure with the provider error message", async () => {
+  const completions: unknown[] = [];
+  const controller = new OpenCodeEventController({
+    threads: {
+      ...executionLifecycle,
+      currentTurn: () => ({ threadId, turnId }),
+      consumeRequestedInterrupt: () => false,
+      syncNative: async () => ({ threadId, hasPendingSteers: false, turn: turn() }),
+    },
+    transcript: {
+      recordCompaction: async () => undefined, recordTurnState: async () => undefined,
+      recordItem: async () => "00000000-0000-4000-8000-000000000003" as never,
+      appendText: () => undefined,
+    },
+    observe: async facts => {
+      if (facts.lifecycle?.event.kind === "turnCompleted") completions.push(facts.lifecycle.event);
+    },
+  });
+
+  await controller.accept(event({
+    id: "execution-failed", created: 3, type: "session.execution.failed", durable,
+    data: { sessionID: "session", error: { type: "AI.Error", message: "This API key has expired." } },
+  }));
+  assert.deepEqual(completions, [
+    { kind: "turnCompleted", turnId: turn().id, status: "failed", error: "This API key has expired." },
+  ]);
+});

@@ -1017,10 +1017,10 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     messageId: string,
   ) {
     const tracked = Promise.all([
-      request.then(() => true, () => false),
+      request.then(() => null, (error: unknown) => openCodeFailure("prompt", error)),
       owner,
-    ]).then(async ([succeeded, resolvedOwner]) => {
-      if (succeeded || !resolvedOwner || this.options.signal.aborted) return;
+    ]).then(async ([rejection, resolvedOwner]) => {
+      if (!rejection || !resolvedOwner || this.options.signal.aborted) return;
       const inbox = await (await this.options.acquire()).session.inbox.list(
         { sessionID: nativeThreadId },
         { signal: this.options.signal },
@@ -1032,7 +1032,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
         turnStarted: null,
         lifecycle: {
           threadId: resolvedOwner.threadId,
-          event: { kind: "turnCompleted", turnId: resolvedOwner.turnId, status: "failed" },
+          event: { kind: "turnCompleted", turnId: resolvedOwner.turnId, status: "failed", error: rejection.message },
         },
         displayLabel: null,
       });

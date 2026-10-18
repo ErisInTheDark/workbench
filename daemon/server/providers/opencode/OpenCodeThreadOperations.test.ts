@@ -7,6 +7,7 @@ import {
 } from "workbench-shared/workbench/identity";
 import OpenCodeThreadOperations, { type OpenCodeThreadOperationsOptions } from "./OpenCodeThreadOperations";
 import type { WorkbenchToolTranscriptReference, ProviderToolResult } from "../../provider-execution";
+import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
 import type { WorkbenchQuestionnaireHistoryEntryState, WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
 import {
   createWorkbenchQuestionnaireResponseInput,
@@ -235,7 +236,7 @@ function operations(
   transcript: object,
   state: object = {},
   lifecycle: {
-    observe?: (facts: object) => Promise<void>;
+    observe?: (facts: WorkbenchProviderObservation) => Promise<void>;
     questionnaires?: object;
     readPage?: () => Promise<object>;
     resolveTurn?: (input: { threadId: string; turnId: string }) => Promise<{
@@ -1093,14 +1094,14 @@ test("preserves a root when an ambiguous prompt failure still exists in the nati
 test("fails and releases a root when rejected prompt admission is absent from the native inbox", async () => {
   let promptCalls = 0;
   const deliveries: string[] = [];
-  const lifecycle: object[] = [];
+  const lifecycle: WorkbenchProviderObservation[] = [];
   const owner = operations({
     session: {
       get: async () => ({ ...session, outcome: "failed" }),
       inbox: { list: async () => [] },
       prompt: async (input: { delivery: string }) => {
         deliveries.push(input.delivery);
-        if (++promptCalls === 1) throw new Error("admission rejected");
+        if (++promptCalls === 1) throw { _tag: "ProviderAuthError", message: "This API key has expired." };
         return { id: "root", sessionID: nativeThreadId, time: { created: 4 }, type: "user" };
       },
     },
@@ -1132,6 +1133,9 @@ test("fails and releases a root when rejected prompt admission is absent from th
   });
 
   assert.equal(lifecycle.length, 1);
+  const event = lifecycle[0]?.lifecycle?.event;
+  assert.equal(event?.kind === "turnCompleted" && event.status, "failed");
+  assert.match(event?.kind === "turnCompleted" && event.error || "", /This API key has expired\./);
   assert.deepEqual(deliveries, ["queue", "queue"]);
   assert.equal(continuation.kind, "started");
 });
