@@ -12,17 +12,19 @@ import type { CodexSingleFileOptions } from "./CodexSingleFileController";
 export default function createCodexSingleFileRuntime({
   documentsDirectory,
   transformerDirectory = WorkbenchTemporaryDirectory.resolve("voice-transformer"),
+  resolveExecutable,
   createServer,
 }: {
   documentsDirectory: string;
   transformerDirectory?: string;
+  resolveExecutable: CodexAppServerOptions["resolveExecutable"];
   createServer?: (options: CodexAppServerOptions) => Pick<CodexAppServer, "send" | "stopAsync">;
 }): CodexSingleFileOptions {
   const documents = new CodexSingleFileDocuments(documentsDirectory);
   return {
     createDocument: text => documents.create(text),
     createTransport: (onMessage, onFailure) => createCodexIsolatedTransport({
-      projectRoot: transformerDirectory, label: "Voice transformer", onMessage, onFailure,
+      projectRoot: transformerDirectory, label: "Voice transformer", resolveExecutable, onMessage, onFailure,
       ...(createServer ? { createServer } : {}),
     }),
   };

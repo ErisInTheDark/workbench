@@ -69,7 +69,7 @@ test("intentional replacement ignores stale child output and exit", async () => 
     logError: (name, message) => lifecycleErrors.push(`[${name}] ${message}`),
     onFatalExit: (reason) => fatalReasons.push(reason),
     onMessage: (message) => messages.push(message),
-    projectRoot: "C:/workspace",
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     terminateChildAsync: async (child) => {
       terminated.push(child);
       (child as unknown as { killed: boolean }).killed = true;
@@ -104,7 +104,7 @@ for (const [code, retry] of [["ENOENT", false], ["EACCES", true]] as const) {
       logError: () => undefined,
       onFatalExit: (reason, options) => fatal.push({ reason, retry: options.retry }),
       onMessage: () => undefined,
-      projectRoot: "C:/workspace",
+      projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     });
     server.send({ method: "first" });
     child.emit("error", Object.assign(new Error(`spawn codex ${code}`), { code }));
@@ -124,7 +124,7 @@ test("asynchronous stop detaches ownership before process-tree termination settl
     logError: () => undefined,
     onFatalExit: () => undefined,
     onMessage: () => undefined,
-    projectRoot: "C:/workspace",
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     terminateChildAsync: async (child) => {
       terminated.push(child);
       await releaseTermination.promise;
@@ -159,7 +159,7 @@ test("failed retirement fences replacement until an explicit stop retry succeeds
     logError: (_name, message) => errors.push(message),
     onFatalExit: () => undefined,
     onMessage: () => undefined,
-    projectRoot: "C:/workspace",
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     terminateChildAsync: async () => {
       attempts += 1;
       if (fails) throw new Error("retirement denied");
@@ -181,7 +181,7 @@ test("predecessor retirement closes every generation even when an older one fail
   const oldest = new Error("oldest retirement failed");
   const previous = new Error("previous retirement failed");
   const server = new CodexAppServer({
-    projectRoot: "C:/workspace", onFatalExit() {}, onMessage() {},
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex", onFatalExit() {}, onMessage() {},
     previousAppServer: {
       retirePrevious: async () => { throw oldest; },
       stopAsync: async () => { throw previous; },
@@ -197,7 +197,7 @@ test("a new process owner cannot spawn until its retained predecessor retires", 
   const options = {
     createChild: () => fakeChild(++spawned),
     log() {}, logError() {}, onFatalExit() {}, onMessage() {},
-    projectRoot: "C:/workspace",
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     terminateChildAsync: async () => {},
   };
   const previous = new CodexAppServer({ ...options, terminateChildAsync: () => release.promise });
@@ -231,7 +231,7 @@ test("unexpected leader exit still retires its group before allowing replacement
     logError: () => undefined,
     onFatalExit: () => undefined,
     onMessage: () => undefined,
-    projectRoot: "C:/workspace",
+    projectRoot: "C:/workspace", resolveExecutable: () => "codex",
     terminateChildAsync: async (child) => { retired.push(child); },
   });
   server.send({ method: "first" });

@@ -7,6 +7,7 @@ import ReloadableNode from "../../ReloadableNode";
 import OpenCodeBridgeNode from "./OpenCodeBridgeNode";
 import OpenCodeServiceController from "./OpenCodeServiceController";
 import OpenCodeProvider from "./OpenCodeProvider";
+import { resolveProviderRuntime } from "../provider-runtimes";
 import type { DaemonProcessContext } from "../../daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "../../daemon-runtime-objects";
 
@@ -17,9 +18,11 @@ interface OpenCodeServiceHandoff {
 export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>()({
   access: "cli",
   children: [OpenCodeBridgeNode, OpenCodeProvider],
-  create: (_context, build) => {
+  create: (context, build) => {
     const inherited = build.handoffState as OpenCodeServiceHandoff | undefined;
-    const service = new OpenCodeServiceController();
+    const service = new OpenCodeServiceController({
+      resolveRuntime: dataRoot => resolveProviderRuntime(dataRoot, "opencode", context.providerRuntimePins.opencode()),
+    });
     let restart = false;
     const detach = async () => {
       try {

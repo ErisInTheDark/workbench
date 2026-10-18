@@ -27,6 +27,8 @@ import WorkbenchDaemonControlIngress from "./WorkbenchDaemonControlIngress";
 import WorkbenchDaemonListener from "./WorkbenchDaemonListener";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import WorkbenchServiceLauncher from "../host/WorkbenchServiceLauncher.ts";
+import stageCodexRuntime from "./codex-executable";
+import { captureProviderRuntimePins, preloadProviderRuntimeClients } from "./providers/provider-runtimes";
 import {
   DaemonHostMessageSchema,
   DaemonOwnedMessageSchema,
@@ -81,9 +83,11 @@ const reportDiagnostic = (diagnostic: DaemonDiagnosticMessage["diagnostic"]) => 
 let nextBridgeConnectionId = 0;
 const bridgeClientsByConnectionId = new Map<string, BridgeClient>();
 let featureHost: ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>;
-function createFeatureHost(endpoint: WorkbenchDaemonEndpoint) {
+type DaemonProviderBoot = Pick<DaemonProcessContext, "providerRuntimePins" | "resolveCodexExecutable">;
+
+function createFeatureHost(endpoint: WorkbenchDaemonEndpoint, providers: DaemonProviderBoot) {
   return new ReloadableNodeHost<DaemonProcessContext, DaemonRuntimeObjects, DaemonProviderNotification>(
-  createDaemonFeatureContext(endpoint),
+  createDaemonFeatureContext(endpoint, providers),
   createReloadableNodeModuleLoader(),
   {
     logError: (message) => logError("runtime-drain", message),
@@ -223,8 +227,9 @@ function createHardReloadNotifications(): WorkbenchHardReloadNotification[] {
   ];
 }
 
-function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint): DaemonProcessContext {
+function createDaemonFeatureContext(endpoint: WorkbenchDaemonEndpoint, providers: DaemonProviderBoot): DaemonProcessContext {
   return {
+    ...providers,
     ...(process.connected ? { sleep: {
       demanded: () => hostDemand,
       connected: () => bridgeConnections.size > 0,
@@ -587,7 +592,18 @@ async function startDaemon() {
   const endpoint = await startBridgeServer();
   if (shuttingDown) return;
   log("daemon", "loopback listener bound");
-  featureHost = createFeatureHost(endpoint);
+  // Captured before any provider code runs, so a later checkout install cannot move this process's pins.
+  const providers: DaemonProviderBoot = {
+    providerRuntimePins: captureProviderRuntimePins(),
+    resolveCodexExecutable: await stageCodexRuntime({
+      dataRoot: WORKBENCH_DATA_ROOT,
+      warn: message => logError("codex-runtime", message),
+    }),
+  };
+  await preloadProviderRuntimeClients();
+  if (shuttingDown) return;
+  log("daemon", "provider runtimes pinned");
+  featureHost = createFeatureHost(endpoint, providers);
   log("daemon", "feature graph loaded");
   await ensureWorkbenchPromptFiles();
   if (shuttingDown) return;

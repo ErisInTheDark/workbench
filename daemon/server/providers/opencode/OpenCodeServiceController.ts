@@ -10,7 +10,6 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
-import { resolveProviderRuntime } from "../provider-runtimes";
 
 export type WorkbenchOpenCodeClient = OpenCodeClient;
 type OpenCodeModelCatalog = {
@@ -25,7 +24,7 @@ export interface OpenCodeServiceControllerOptions {
   createClient?: (endpoint: Endpoint) => WorkbenchOpenCodeClient;
   environment?: NodeJS.ProcessEnv;
   /** Workbench-installed OpenCode executable and version; throws when it isn't installed. */
-  resolveRuntime?: (dataRoot: string) => { executable: string; version: string };
+  resolveRuntime: (dataRoot: string) => { executable: string; version: string };
   pluginSource?: string;
   warn?: (message: string) => void;
 }
@@ -142,7 +141,7 @@ export default class OpenCodeServiceController {
   private readonly serviceFile: string;
   private readonly modelCatalogs = new Map<string, Promise<OpenCodeModelCatalog>>();
 
-  constructor(private readonly options: OpenCodeServiceControllerOptions = {}) {
+  constructor(private readonly options: OpenCodeServiceControllerOptions) {
     const dataRoot = this.dataRoot = resolveWorkbenchDataRoot({ environment: options.environment ?? process.env });
     this.serviceStateHome = path.join(dataRoot, "daemon", "providers", "opencode", "state");
     this.serviceFile = path.join(this.serviceStateHome, "opencode", "service.json");
@@ -217,7 +216,7 @@ export default class OpenCodeServiceController {
   private async create() {
     const lifetime = this.lifetime;
     // Fails before any service work when the runtime isn't installed, so the user sees the Settings pointer.
-    const runtime = (this.options.resolveRuntime ?? (dataRoot => resolveProviderRuntime(dataRoot, "opencode")))(this.dataRoot);
+    const runtime = this.options.resolveRuntime(this.dataRoot);
     const [{ OpenCode }, { Service }] = await Promise.all([
       import("@opencode/client"),
       import("@opencode/client/service"),

@@ -15,7 +15,6 @@ import { z } from "zod";
 import {
   CODEX_EXEC_AUDIT_METHODS, readCodexExecFrame, type CodexExecRequest, type CodexExecResult,
 } from "./codex-exec-protocol";
-import resolveCodexExecutable from "./codex-executable";
 import { readExecRootMarker, withExecRootMarker } from "./exec/exec-root-marker";
 import type SandboxRelayBroker from "./exec/SandboxRelayBroker";
 import type { SandboxRelayAdmission } from "./exec/SandboxRelayBroker";
@@ -64,6 +63,8 @@ function managedNetwork(
 
 export interface CodexExecServerOptions {
   cwd: string;
+  /** The daemon's staged Codex binary; throws ENOENT-coded when Codex isn't installed. */
+  resolveExecutable: () => string;
   env?: NodeJS.ProcessEnv;
   spawnProcess?: () => ChildProcessWithoutNullStreams;
   retireProcess?: (pid: number | undefined) => Promise<void>;
@@ -244,7 +245,7 @@ export default class CodexExecServer {
   private start(): Session {
     if (this.disposed) throw new Error("Codex executor has been disposed.");
     if (this.session) return this.session;
-    const child = this.options.spawnProcess?.() ?? spawn(resolveCodexExecutable(), ["exec-server", "--listen", "stdio"], {
+    const child = this.options.spawnProcess?.() ?? spawn(this.options.resolveExecutable(), ["exec-server", "--listen", "stdio"], {
       ...createSpawnOptions(this.options.cwd, this.options.env ?? process.env, true),
       stdio: ["pipe", "pipe", "pipe"],
     });

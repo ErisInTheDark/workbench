@@ -24,6 +24,7 @@ export interface CodexIsolatedTransportOptions {
   projectRoot: string;
   /** Names the owner in failure messages, such as "Voice transformer". */
   label: string;
+  resolveExecutable: CodexAppServerOptions["resolveExecutable"];
   onMessage(message: unknown): Promise<void>;
   onFailure(error: Error): void;
   createServer?: (options: CodexAppServerOptions) => Pick<CodexAppServer, "send" | "stopAsync">;
@@ -44,7 +45,7 @@ const ISOLATION_CONFIG = [
 ];
 
 export default function createCodexIsolatedTransport({
-  projectRoot, label, onMessage, onFailure,
+  projectRoot, label, resolveExecutable, onMessage, onFailure,
   createServer = options => new CodexAppServer(options),
 }: CodexIsolatedTransportOptions): CodexIsolatedTransport {
   let nextId = 0;
@@ -60,6 +61,7 @@ export default function createCodexIsolatedTransport({
   };
   const server = createServer({
     projectRoot,
+    resolveExecutable,
     args: [...ISOLATION_CONFIG.flatMap(value => ["--config", value]), "app-server", "--listen", "stdio://"],
     onFatalExit: () => fail(new Error(`${label} process exited.`)),
     onMessage(message) {

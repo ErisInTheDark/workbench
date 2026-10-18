@@ -6,7 +6,6 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 
-import resolveCodexExecutable from "./codex-executable";
 import {
     createSpawnOptions,
     killProcessTreeAsync,
@@ -25,6 +24,8 @@ export type CodexAppServerOptions = {
   onFatalExit: (reason: string, options: { retry: boolean }) => void;
   onMessage: (message: unknown) => void;
   projectRoot: string;
+  /** The daemon's staged Codex binary; throws ENOENT-coded when Codex isn't installed. */
+  resolveExecutable: () => string;
   previousAppServer?: CodexAppServer;
   terminateChildAsync?: (child: ChildProcess) => Promise<void>;
 };
@@ -80,17 +81,19 @@ export default class CodexAppServer {
   private readonly onFatalExit: CodexAppServerOptions["onFatalExit"];
   private readonly onMessage: CodexAppServerOptions["onMessage"];
   private readonly projectRoot: string;
+  private readonly resolveExecutable: () => string;
   private readonly args: readonly string[];
   private previousAppServer: CodexAppServer | undefined;
   private readonly terminateChildAsync: (child: ChildProcess) => Promise<void>;
 
-  constructor({ args, createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, previousAppServer, projectRoot, terminateChildAsync }: CodexAppServerOptions) {
+  constructor({ args, createChild, log: lifecycleLog, logError: lifecycleLogError, onFatalExit, onMessage, previousAppServer, projectRoot, resolveExecutable, terminateChildAsync }: CodexAppServerOptions) {
     this.createChild = createChild ?? (() => this.createStdioChild());
     this.log = lifecycleLog ?? log;
     this.logError = lifecycleLogError ?? logError;
     this.onFatalExit = onFatalExit;
     this.onMessage = onMessage;
     this.projectRoot = projectRoot;
+    this.resolveExecutable = resolveExecutable;
     this.args = args ?? getCodexAppServerArgs();
     this.previousAppServer = previousAppServer;
     this.terminateChildAsync = terminateChildAsync ?? (async (child) => await killProcessTreeAsync(child.pid));
@@ -144,7 +147,7 @@ export default class CodexAppServer {
   }
 
   private createStdioChild() {
-    const child = spawn(resolveCodexExecutable(), [...this.args], {
+    const child = spawn(this.resolveExecutable(), [...this.args], {
       ...createSpawnOptions(this.projectRoot, {
         ...process.env,
         FORCE_COLOR: "0",

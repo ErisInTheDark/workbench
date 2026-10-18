@@ -32,7 +32,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         }),
       })
       : undefined;
-    const executor = new CodexExecServer({ cwd: context.daemonPackageRoot, relayBroker });
+    const executor = new CodexExecServer({ cwd: context.daemonPackageRoot, resolveExecutable: context.resolveCodexExecutable, relayBroker });
     const sandboxAcl = new CodexSandboxAclController();
     // Shared by every provider's shell so one machine-wide limit covers all agents' builds and test suites.
     const commandCapacity = new WorkbenchCommandCapacity({

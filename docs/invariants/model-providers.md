@@ -1,2 +1,3 @@
 - Prefer provider integrations that reuse the user's existing preferences, credentials, sessions, and other provider-owned state so Workbench and native clients stay synchronized.
 - Provider executables are pinned to the checkout's SDK versions, never resolved from PATH: Codex ships as a checkout dependency; Claude Code and OpenCode are optional provider runtimes the user installs from Settings.
+- The daemon captures provider pins and loads provider client packages once per process; checkout dependency installs activate only on daemon restart. Codex runs from a data-root copy of its pinned platform package, so installs never touch a running executable.

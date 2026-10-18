@@ -31,7 +31,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const settings = new WorkbenchServerSettings(build.get("database"));
     // Turn launches resolve default windows here; the provider definition reads the same probes for model choices.
     // Resolved per launch, so an install from Settings applies to the very next turn or probe.
-    const resolveExecutable = () => resolveProviderRuntime(context.dataRootPath, "claude").executable;
+    const resolveExecutable = () => resolveProviderRuntime(context.dataRootPath, "claude", context.providerRuntimePins.claude()).executable;
     const configuration = new ClaudeConfigurationController(query, resolveExecutable);
     const promptContext = async (input: ClaudeInstructionInput & { activatedSkillPaths?: readonly string[] }) => {
       const project = await build.get("projectCatalog").resolveProjectById(input.projectId);

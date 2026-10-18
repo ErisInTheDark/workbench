@@ -7,11 +7,13 @@ import path from "node:path";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import createCodexSingleFileRuntime from "./CodexSingleFileRuntime";
 
+const resolveExecutable = () => "codex";
+
 test("first voice preparation creates its isolated process directory before native send", async () => {
   const temporary = await WorkbenchTemporaryDirectory.create("voice-spawn-");
   try {
     const runtime = createCodexSingleFileRuntime({
-      documentsDirectory: "/unused",
+      documentsDirectory: "/unused", resolveExecutable,
       transformerDirectory: path.join(temporary.path, "transformer"),
       createServer: options => ({
       send(message) {
@@ -40,7 +42,7 @@ test("an unavailable transformer directory rejects preparation before native spa
   await fs.writeFile(path.join(temporary.path, "blocker"), "file");
   let sent = false;
   const runtime = createCodexSingleFileRuntime({
-    documentsDirectory: "/unused",
+    documentsDirectory: "/unused", resolveExecutable,
     transformerDirectory: path.join(temporary.path, "blocker", "transformer"),
     createServer: () => ({ send() { sent = true; }, async stopAsync() {} }),
   });
@@ -59,7 +61,7 @@ test("initialization acknowledges readiness before later native requests", async
   context.after(() => temporary.dispose());
   const methods: string[] = [];
   const runtime = createCodexSingleFileRuntime({
-    documentsDirectory: "/unused", transformerDirectory: path.join(temporary.path, "transformer"),
+    documentsDirectory: "/unused", resolveExecutable, transformerDirectory: path.join(temporary.path, "transformer"),
     createServer: options => ({
     send(message) {
       const request = message as { id?: number; method: string };
@@ -85,7 +87,7 @@ test("scratch disposal retains history without affecting another active document
   const temporary = await WorkbenchTemporaryDirectory.create("voice-test-");
   const root = temporary.path;
   context.after(() => temporary.dispose());
-  const runtime = createCodexSingleFileRuntime({ documentsDirectory: root });
+  const runtime = createCodexSingleFileRuntime({ documentsDirectory: root, resolveExecutable });
   const first = await runtime.createDocument("first");
   const second = await runtime.createDocument("second");
   try {
@@ -106,7 +108,7 @@ test("native process failure rejects pending and future work without silently re
   const dispatched = Promise.withResolvers<void>();
   const failures: Error[] = [];
   const runtime = createCodexSingleFileRuntime({
-    documentsDirectory: "/unused", transformerDirectory: path.join(temporary.path, "transformer"),
+    documentsDirectory: "/unused", resolveExecutable, transformerDirectory: path.join(temporary.path, "transformer"),
     createServer: options => {
     fail = () => options.onFatalExit("exited", { retry: true });
     return { send() { sent++; dispatched.resolve(); }, async stopAsync() {} };
@@ -131,7 +133,7 @@ test("edited scratch contents cannot exceed the receiving document contract", as
   const temporary = await WorkbenchTemporaryDirectory.create("voice-test-");
   const root = temporary.path;
   context.after(() => temporary.dispose());
-  const document = await createCodexSingleFileRuntime({ documentsDirectory: root }).createDocument("original");
+  const document = await createCodexSingleFileRuntime({ documentsDirectory: root, resolveExecutable }).createDocument("original");
   try {
     await fs.writeFile(document.file, "x".repeat(1_000_001), "utf8");
     await assert.rejects(document.read());
@@ -143,7 +145,7 @@ test("thread admission disables inherited MCP servers while preserving caller re
   context.after(() => temporary.dispose());
   const configurations: object[] = [];
   const runtime = createCodexSingleFileRuntime({
-    documentsDirectory: "/unused", transformerDirectory: path.join(temporary.path, "transformer"),
+    documentsDirectory: "/unused", resolveExecutable, transformerDirectory: path.join(temporary.path, "transformer"),
     createServer: options => ({
     send(message) {
       const request = message as { id: number; method: string; params: { config?: object } };

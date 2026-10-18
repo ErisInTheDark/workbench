@@ -54,6 +54,7 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?:
   const grace = new Promise<void>(resolve => { releaseGrace = resolve; });
   const owner = new CodexExecServer({
     cwd: process.cwd(),
+    resolveExecutable: () => "codex",
     spawnProcess: () => {
       if (spawns++) child = spawnChild();
       return child;

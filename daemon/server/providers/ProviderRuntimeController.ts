@@ -1,13 +1,12 @@
 /*
  * Exports:
- * - ProviderRuntimeControllerOptions: data root plus injectable target, npm and executable probe.
+ * - ProviderRuntimeControllerOptions: data root and captured pins plus injectable target, npm and executable probe.
  * - default ProviderRuntimeController: own single-flight installs, status reads and pin auto-follow for Workbench-installed provider runtimes.
  */
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   ProviderRuntimeKeySchema,
@@ -16,25 +15,28 @@ import {
   type ProviderRuntimesSnapshot,
 } from "workbench-shared/workbench/provider/provider-runtime";
 import {
+  PROVIDER_RUNTIME_STAGING_PREFIX,
+  commitProviderRuntime,
   currentProviderRuntimeTarget,
+  probeExecutableVersion,
   providerRuntimeDefinitions,
-  providerRuntimeMarkerPath,
   providerRuntimeRoot,
   providerRuntimeVersionRoot,
   readInstalledProviderRuntime,
+  removeOtherProviderRuntimeVersions,
   type InstalledProviderRuntime,
   type ProviderRuntimeDefinition,
+  type ProviderRuntimePins,
   type ProviderRuntimeTarget,
 } from "./provider-runtimes";
 
 const run = promisify(execFile);
-const STAGING_PREFIX = ".staging-";
 const ERROR_LIMIT = 1500;
-const WINDOWS_LOCK_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
-const COMMIT_RENAME_RETRIES = 12;
 
 export interface ProviderRuntimeControllerOptions {
   dataRoot: string;
+  /** Pins this daemon process loaded; installs and status never follow a newer checkout before a restart. */
+  pins: ProviderRuntimePins;
   warn: (message: string) => void;
   definitions?: Record<ProviderRuntimeKey, ProviderRuntimeDefinition>;
   target?: ProviderRuntimeTarget;
@@ -67,26 +69,6 @@ async function runBundledNpm(args: string[], signal: AbortSignal) {
   await run(process.execPath, [bundledNpmCli(), ...args], { signal, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
 }
 
-async function probeVersion(executable: string, signal: AbortSignal) {
-  const { stdout } = await run(executable, ["--version"], { signal, windowsHide: true });
-  return stdout.trim();
-}
-
-/**
- * Windows briefly locks freshly written files (antivirus, indexers, watchers), so a locked commit rename
- * backs off for up to ~17s before the install fails and the user can retry.
- */
-async function commitRename(from: string, to: string, signal: AbortSignal) {
-  for (let attempt = 0; ; attempt++) {
-    try { return await rename(from, to); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code ?? "";
-      if (process.platform !== "win32" || !WINDOWS_LOCK_CODES.has(code) || attempt >= COMMIT_RENAME_RETRIES) throw error;
-      await delay(Math.min(100 * 2 ** attempt, 2_000), undefined, { signal });
-    }
-  }
-}
-
 class VerifyFailure extends Error {}
 
 export default class ProviderRuntimeController {
@@ -102,7 +84,7 @@ export default class ProviderRuntimeController {
     this.definitions = options.definitions ?? providerRuntimeDefinitions;
     this.target = options.target ?? currentProviderRuntimeTarget();
     this.runNpm = options.runNpm ?? runBundledNpm;
-    this.probe = options.probe ?? probeVersion;
+    this.probe = options.probe ?? probeExecutableVersion;
   }
 
   /** Reinstalls runtimes the user already installed whose pin moved with a Workbench update. */
@@ -135,7 +117,7 @@ export default class ProviderRuntimeController {
     const definition = this.definitions[key];
     let version = "";
     try {
-      const pin = definition.readPin();
+      const pin = this.options.pins[key]();
       version = pin.version;
       if (!definition.packages(this.target).length) {
         return { provider: key, version, installedVersion: null, state: "unsupported",
@@ -157,7 +139,7 @@ export default class ProviderRuntimeController {
   private stale(key: ProviderRuntimeKey, packageVersion: string): InstalledProviderRuntime | null {
     const root = providerRuntimeRoot(this.options.dataRoot, key);
     if (!existsSync(root)) return null;
-    for (const entry of readdirSync(root).filter(name => name !== packageVersion && !name.startsWith(STAGING_PREFIX)).sort().reverse()) {
+    for (const entry of readdirSync(root).filter(name => name !== packageVersion && !name.startsWith(PROVIDER_RUNTIME_STAGING_PREFIX)).sort().reverse()) {
       const installed = readInstalledProviderRuntime(path.join(root, entry));
       if (installed) return installed;
     }
@@ -181,13 +163,13 @@ export default class ProviderRuntimeController {
 
   private async perform(key: ProviderRuntimeKey, signal: AbortSignal) {
     const definition = this.definitions[key];
-    const pin = definition.readPin();
+    const pin = this.options.pins[key]();
     const root = providerRuntimeRoot(this.options.dataRoot, key);
     const versionRoot = providerRuntimeVersionRoot(this.options.dataRoot, key, pin.packageVersion);
     await mkdir(root, { recursive: true });
     let verifyFailure: VerifyFailure | null = null;
     for (const packageName of definition.packages(this.target)) {
-      const staging = await mkdtemp(path.join(root, STAGING_PREFIX));
+      const staging = await mkdtemp(path.join(root, PROVIDER_RUNTIME_STAGING_PREFIX));
       try {
         signal.throwIfAborted();
         await this.runNpm([
@@ -205,11 +187,8 @@ export default class ProviderRuntimeController {
           throw new VerifyFailure(`${packageName} reported "${reported.slice(0, 120)}" instead of ${pin.version}.`);
         }
         const marker: InstalledProviderRuntime = { packageName, packageVersion: pin.packageVersion, version: pin.version, executable };
-        await writeFile(providerRuntimeMarkerPath(staging), `${JSON.stringify(marker, null, 2)}\n`);
-        await rm(versionRoot, { recursive: true, force: true });
-        // The rename commits the runtime: readers only ever see a verified, marked directory.
-        await commitRename(staging, versionRoot, signal);
-        await this.removeOtherVersions(root, pin.packageVersion);
+        await commitProviderRuntime(staging, versionRoot, marker, signal);
+        await removeOtherProviderRuntimeVersions(root, pin.packageVersion, this.options.warn);
         return;
       } catch (error) {
         await rm(staging, { recursive: true, force: true, maxRetries: 3 }).catch((cleanup: unknown) => {
@@ -220,14 +199,5 @@ export default class ProviderRuntimeController {
       }
     }
     throw verifyFailure ?? new Error(`${definition.label} has no build for ${this.target.platform}-${this.target.arch}.`);
-  }
-
-  private async removeOtherVersions(root: string, keep: string) {
-    for (const entry of readdirSync(root).filter(name => name !== keep)) {
-      // A running executable can hold an old version on Windows; the next install sweeps it.
-      await rm(path.join(root, entry), { recursive: true, force: true }).catch((error: unknown) => {
-        this.options.warn(`Could not remove old runtime ${path.join(root, entry)}: ${bounded(error)}`);
-      });
-    }
   }
 }

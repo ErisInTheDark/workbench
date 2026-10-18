@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import NativeArtifactStage from "../../shared/process/NativeArtifactStage";
 import CodexExecServer from "../../daemon/server/CodexExecServer";
+import stageCodexRuntime from "../../daemon/server/codex-executable";
 import SandboxRelayBroker from "../../daemon/server/exec/SandboxRelayBroker";
 import type { CodexExecRequest } from "../../daemon/server/codex-exec-protocol";
 import IsolatedWorkbench from "./IsolatedWorkbench";
@@ -16,6 +17,7 @@ test("native executor enforces workspace writes and reuses Windows private deskt
   const fixture = await IsolatedWorkbench.create(path.resolve(process.cwd(), ".."), t.signal);
   const executor = new CodexExecServer({
     cwd: fixture.project,
+    resolveExecutable: await stageCodexRuntime({ dataRoot: fixture.dataRootPath, warn: assert.fail }),
     env: { ...process.env, CODEX_HOME: path.join(fixture.root, "codex") },
   });
   try {
@@ -140,6 +142,7 @@ test("Linux managed-network commands reach host loopback services over raw TCP t
   });
   const executor = new CodexExecServer({
     cwd: fixture.project, relayBroker, reportError: message => errors.push(message),
+    resolveExecutable: await stageCodexRuntime({ dataRoot: fixture.dataRootPath, warn: assert.fail }),
     env: { ...process.env, CODEX_HOME: path.join(fixture.root, "codex") },
   });
   try {

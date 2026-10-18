@@ -16,10 +16,9 @@ import {
 
 const target = { platform: "linux" as const, arch: "x64", musl: false };
 
-function definition(packageVersion: string, packages = ["@test/primary", "@test/baseline"]): ProviderRuntimeDefinition {
+function definition(packages = ["@test/primary", "@test/baseline"]): ProviderRuntimeDefinition {
   return {
     label: "Test runtime",
-    readPin: () => ({ packageVersion, version: `v${packageVersion}` }),
     packages: () => packages,
     executable: () => path.join("bin", "tool"),
   };
@@ -45,9 +44,11 @@ async function harness(context: TestContext, options: {
   const version = options.version ?? "1.0.0";
   const installs: string[] = [];
   const warnings: string[] = [];
-  const definitions = { claude: definition(version, options.packages), opencode: definition(version, options.packages) } satisfies Record<ProviderRuntimeKey, ProviderRuntimeDefinition>;
+  const definitions = { claude: definition(options.packages), opencode: definition(options.packages) } satisfies Record<ProviderRuntimeKey, ProviderRuntimeDefinition>;
+  const pin = () => ({ packageVersion: version, version: `v${version}` });
   const controller = new ProviderRuntimeController({
     dataRoot: temporary.path,
+    pins: { claude: pin, opencode: pin },
     definitions,
     target,
     warn: message => { warnings.push(message); },
@@ -113,7 +114,7 @@ test("a failed verify leaves nothing installed and reports a retryable failure",
   assert.equal(failed.state, "failed");
   assert.match(failed.error ?? "", /instead of v1\.0\.0/u);
   assert.deepEqual(await readdir(providerRuntimeRoot(dataRoot, "claude")), []);
-  assert.throws(() => resolveProviderRuntime(dataRoot, "claude"));
+  assert.throws(() => resolveProviderRuntime(dataRoot, "claude", { packageVersion: "1.0.0", version: "v1.0.0" }));
   assert.equal(warnings.length, 1);
 });
 

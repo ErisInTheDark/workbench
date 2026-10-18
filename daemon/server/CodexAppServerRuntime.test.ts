@@ -20,7 +20,7 @@ function runtimeOwner(stopAsync = async () => {}, retirePrevious = async () => {
   const ports = {
     appServer: {
       logError() {},
-      projectRoot: "C:/repo",
+      projectRoot: "C:/repo", resolveExecutable: () => "codex",
     },
     onFatalExit() {},
   };
@@ -75,7 +75,7 @@ test("failed predecessor readiness can be retried before the process generation 
     async stopAsync() {},
   } as unknown as CodexAppServer;
   const runtime = new CodexAppServerRuntime({
-    appServer: { projectRoot: "C:/repo" },
+    appServer: { projectRoot: "C:/repo", resolveExecutable: () => "codex" },
     onFatalExit() {},
   }, {
     createAppServer: () => appServer,
@@ -272,7 +272,7 @@ function stallFixture() {
   const errors: string[] = [];
   let deliver!: (message: unknown) => void;
   const runtime = new CodexAppServerRuntime({
-    appServer: { projectRoot: "C:/repo", logError: (_name, message) => { errors.push(message); } },
+    appServer: { projectRoot: "C:/repo", resolveExecutable: () => "codex", logError: (_name, message) => { errors.push(message); } },
     onFatalExit() {},
   }, {
     createAppServer(options) {

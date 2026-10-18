@@ -18,12 +18,13 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   create: (context, { get }) => {
     const singleFile = new CodexSingleFileController(createCodexSingleFileRuntime({
       documentsDirectory: path.resolve(context.daemonPackageRoot, "../.workbench/voice-sessions"),
+      resolveExecutable: context.resolveCodexExecutable,
     }));
     const reviewDirectory = WorkbenchTemporaryDirectory.resolve("codex-auto-review");
     const approvalReviewer = new CodexApprovalReviewer({
       reviewDirectory,
       createTransport: (onMessage, onFailure) => createCodexIsolatedTransport({
-        projectRoot: reviewDirectory, label: "Codex auto-review", onMessage, onFailure,
+        projectRoot: reviewDirectory, label: "Codex auto-review", resolveExecutable: context.resolveCodexExecutable, onMessage, onFailure,
       }),
     });
     const local = get("codexConfiguration");

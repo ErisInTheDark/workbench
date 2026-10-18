@@ -13,6 +13,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   create: (context, { get }) => {
     const controller = new ProviderRuntimeController({
       dataRoot: context.dataRootPath,
+      pins: context.providerRuntimePins,
       warn: message => console.warn(`[provider-runtimes] ${message.slice(0, 2000)}`),
     });
     const unregister = get("daemonRequests").registerProviderRuntimes(controller);

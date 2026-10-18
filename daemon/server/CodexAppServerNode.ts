@@ -21,7 +21,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     const previous = build.handoffState as CodexServerHandoff | undefined;
     const lifecycle = build.get("codexLifecycle");
     const runtime = new CodexAppServerRuntime({
-      appServer: { log, logError, projectRoot: context.daemonPackageRoot },
+      appServer: { log, logError, projectRoot: context.daemonPackageRoot, resolveExecutable: context.resolveCodexExecutable },
       onFatalExit: (reason, { retry }) => retry ? lifecycle.requestRecovery(reason) : lifecycle.stopRecovery(reason),
     }, { previousAppServer: previous?.appServer });
     const reportRetirement = (error: unknown) => {

@@ -13,6 +13,7 @@ import type { DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import type { WorkbenchWebSocketDelivery } from "./WorkbenchWebSocketRequestController";
 import type { DaemonSleepPorts } from "./WorkbenchDaemonSleepController";
 import type { DaemonDiagnosticMessage } from "workbench-shared/http/workbench-daemon-lifecycle";
+import type { ProviderRuntimePins } from "./providers/provider-runtimes";
 
 export const DAEMON_PROCESS_REQUIRED_REGISTRATIONS = [
   "daemonSleep",
@@ -31,6 +32,10 @@ export interface DaemonProcessContext {
   sleep?: DaemonSleepPorts;
   dataRootPath: string;
   daemonPackageRoot: string;
+  /** Provider pins this process loaded at boot; checkout dependency installs apply only after a restart. */
+  providerRuntimePins: ProviderRuntimePins;
+  /** Codex binary staged into the data root at boot; throws ENOENT-coded when Codex can't run. */
+  resolveCodexExecutable(): string;
   webSocketUrl: string;
   isShuttingDown(): boolean;
   isHardReloadPending(): boolean;
