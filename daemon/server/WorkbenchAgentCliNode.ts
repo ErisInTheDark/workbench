@@ -1,9 +1,10 @@
 /*
  * Exports:
- * - default WorkbenchAgentCliNode: install daemon-discovering wb agent shims in an isolated reloadable boundary.
+ * - default WorkbenchAgentCliNode: stage the agent wb launcher in an isolated reloadable boundary.
  */
 import path from "node:path";
 
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import type { DaemonProcessContext } from "./daemon-process-context";
 import type { DaemonProviderNotification, DaemonRuntimeObjects } from "./daemon-runtime-objects";
 import ReloadableNode from "./ReloadableNode";
@@ -13,11 +14,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
   access: "agent",
   children: [],
   create: (context) => {
-    const cliRoot = path.join(context.daemonPackageRoot, "server", "lib", "workbench", "cli");
+    const warn = (message: string) => console.warn(`[cli] ${message}`);
     const environment = new WorkbenchAgentCliEnvironment({
-      resolverSourcePath: path.join(cliRoot, "resolve-workbench-daemon-origin.mts"),
-      runtimeDirectoryPath: path.join(context.daemonPackageRoot, "node_modules", ".bin"),
-      shellSourcePath: path.join(cliRoot, "workbench-agent-cli.sh"),
+      checkoutRoot: path.resolve(context.daemonPackageRoot, ".."),
+      legacyShimDirectoryPath: path.join(context.daemonPackageRoot, "node_modules", ".bin"),
+      stage: new NativeArtifactStage({ runtimeRoot: context.dataRootPath, warn }),
+      warn,
     });
     return {
       dispose: () => undefined,
@@ -30,13 +32,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       },
     };
   },
-  description: "Reload daemon-discovering wb command shims without replacing command or provider state.",
+  description: "Reload the staged agent wb launcher without replacing command or provider state.",
   lifecycle: "atomic",
   provides: [],
   requires: [],
   safeAll: true,
   scope: "server:cli",
-  // Installed shims run the shell script and origin resolver outside the daemon.
-  entries: [path.join(__dirname, "lib", "workbench", "cli", "resolve-workbench-daemon-origin.mts")],
-  assets: ["/wb", "/package/wb", "/daemon/server/lib/workbench/cli/workbench-agent-cli.sh"].join("\n"),
+  // Agents run the staged copy; rebuilding the committed launcher marks this scope dirty until reload re-stages it.
+  assets: ["/wb", "/package/wb", "/daemon/launcher/bin/"].join("\n"),
 });

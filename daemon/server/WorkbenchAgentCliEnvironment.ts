@@ -1,79 +1,75 @@
 /*
  * Exports:
- * - WorkbenchAgentCliEnvironmentOptions: CLI shim environment configuration.
- * - default WorkbenchAgentCliEnvironment: generate cross-platform wb shims with their owning runtime paths.
+ * - WORKBENCH_LAUNCHER_ARTIFACT: committed Go `wb` launcher sidecar description.
+ * - WorkbenchAgentCliEnvironmentOptions: checkout, staging and legacy shim locations.
+ * - default WorkbenchAgentCliEnvironment: stage the verified launcher, put it first on agent PATH and retire earlier shell shims.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const SHIM_MARKER = "workbench-agent-cli-shim-v1";
+import { verifyNativeSidecarArtifact, type NativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
+import type { NativeArtifactStager } from "workbench-shared/process/NativeArtifactStage";
+
+export const WORKBENCH_LAUNCHER_ARTIFACT: NativeSidecarArtifact = {
+  label: "launcher", buildScript: "build:launcher", source: "daemon/launcher", executable: "wb", protocol: 1,
+};
+
+const LEGACY_SHIM_MARKER = "workbench-agent-cli-shim-v1";
+const LEGACY_SHIM_NAMES = ["wb", "wb.cmd", "wb.ps1"] as const;
 
 export interface WorkbenchAgentCliEnvironmentOptions {
-  resolverSourcePath: string;
-  runtimeDirectoryPath: string;
-  shellSourcePath: string;
-}
-
-function quotePosixSingle(value: string) {
-  return `'${value.replace(/'/gu, `'"'"'`)}'`;
+  checkoutRoot: string;
+  /** Where earlier releases wrote shell shims; only files carrying their marker are removed. */
+  legacyShimDirectoryPath: string;
+  /** Owns the running copy, so rebuilding the committed launcher waits for the next install. */
+  stage: NativeArtifactStager;
+  warn?: (message: string) => void;
 }
 
 export default class WorkbenchAgentCliEnvironment {
-  private readonly resolverSourcePath: string;
-  private readonly runtimeDirectoryPath: string;
-  private readonly shellSourcePath: string;
+  private readonly checkoutRoot: string;
+  private readonly legacyShimDirectoryPath: string;
+  private readonly stage: NativeArtifactStager;
+  private readonly warn: (message: string) => void;
 
-  constructor({ resolverSourcePath, runtimeDirectoryPath, shellSourcePath }: WorkbenchAgentCliEnvironmentOptions) {
-    this.resolverSourcePath = path.resolve(resolverSourcePath);
-    this.runtimeDirectoryPath = path.resolve(runtimeDirectoryPath);
-    this.shellSourcePath = path.resolve(shellSourcePath);
+  constructor({ checkoutRoot, legacyShimDirectoryPath, stage, warn = console.warn }: WorkbenchAgentCliEnvironmentOptions) {
+    this.checkoutRoot = path.resolve(checkoutRoot);
+    this.legacyShimDirectoryPath = path.resolve(legacyShimDirectoryPath);
+    this.stage = stage;
+    this.warn = warn;
   }
 
   async install(env: NodeJS.ProcessEnv = process.env) {
-    const shellSource = await fs.readFile(this.shellSourcePath, "utf8");
-    const checkoutCli = path.resolve(path.dirname(this.shellSourcePath), "../../../../../cli/dispatch.mjs");
-    const testEntry = path.resolve(path.dirname(this.shellSourcePath), "../../../../../test/run-claimed-tests.mjs");
-    await fs.mkdir(this.runtimeDirectoryPath, { recursive: true });
+    const launcherPath = await verifyNativeSidecarArtifact(this.checkoutRoot, WORKBENCH_LAUNCHER_ARTIFACT, this.stage, {
+      onSourceDrift: message => this.warn(`${message} Agents keep the last published launcher until then.`),
+    });
+    await Promise.all(LEGACY_SHIM_NAMES.map(name => this.retireLegacyShim(path.join(this.legacyShimDirectoryPath, name))));
 
-    const posixShimPath = path.join(this.runtimeDirectoryPath, "wb");
-    const powershellShimPath = path.join(this.runtimeDirectoryPath, "wb.ps1");
-    const windowsShimPath = path.join(this.runtimeDirectoryPath, "wb.cmd");
-    await Promise.all([
-      assertManagedOrMissing(posixShimPath),
-      assertManagedOrMissing(powershellShimPath),
-      assertManagedOrMissing(windowsShimPath),
-    ]);
-    await Promise.all([
-      fs.writeFile(posixShimPath, `${shellSource.replace(/^#![^\n]*\n/u, "#!/usr/bin/env bash\n# " + SHIM_MARKER + "\nexport WORKBENCH_CHECKOUT_CLI=" + quotePosixSingle(checkoutCli) + "\nexport WORKBENCH_DAEMON_ORIGIN_RESOLVER=" + quotePosixSingle(this.resolverSourcePath) + "\nexport WORKBENCH_TEST_ENTRY=" + quotePosixSingle(testEntry) + "\n")}`, "utf8"),
-      fs.writeFile(windowsShimPath, `@echo off\r\n@rem ${SHIM_MARKER}\r\n@set "WORKBENCH_DAEMON_ORIGIN_RESOLVER=${this.resolverSourcePath.replace(/"/gu, '""')}"\r\nbash "${posixShimPath.replace(/"/gu, '""')}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf8"),
-    ]);
-    // PowerShell consumes unquoted -- for .ps1 commands; let it resolve wb.cmd instead.
-    await fs.rm(powershellShimPath, { force: true });
-    await fs.chmod(posixShimPath, 0o755);
-
+    const launcherDirectory = path.dirname(launcherPath);
     const currentPath = env.PATH ?? env.Path ?? "";
-    const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
-    const hasRuntimePath = pathEntries.some((entry) => path.resolve(entry) === this.runtimeDirectoryPath);
-    env.PATH = hasRuntimePath
-      ? currentPath
-      : [this.runtimeDirectoryPath, currentPath].filter(Boolean).join(path.delimiter);
-
-    return {
-      posixShimPath,
-      windowsShimPath,
-    };
-  }
-}
-
-async function assertManagedOrMissing(filePath: string) {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    if (!content.includes(SHIM_MARKER)) {
-      throw new Error(`Refusing to replace non-Workbench command shim: ${filePath}`);
+    const entries = currentPath.split(path.delimiter).filter(Boolean);
+    if (!entries.some(entry => path.resolve(entry) === launcherDirectory)) {
+      env.PATH = [launcherDirectory, currentPath].filter(Boolean).join(path.delimiter);
     }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    env.WORKBENCH_CHECKOUT_ROOT = this.checkoutRoot;
+    return { launcherPath };
+  }
+
+  private async retireLegacyShim(filePath: string) {
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
+    }
+    if (!content.includes(LEGACY_SHIM_MARKER)) return;
+    try {
+      await fs.rm(filePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EBUSY" && code !== "EPERM") throw error;
+      this.warn(`Retained a running legacy wb shim until its command finishes: ${filePath}`);
     }
   }
 }

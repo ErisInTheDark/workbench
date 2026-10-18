@@ -4,6 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -13,6 +14,10 @@ import { promisify } from "node:util";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
+import { verifyNativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
+import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
+import { WORKBENCH_LAUNCHER_ARTIFACT } from "./WorkbenchAgentCliEnvironment";
 import WorkbenchAgentCommandController from "./WorkbenchAgentCommandController";
 import WorkbenchAgentCommandLogger from "./WorkbenchAgentCommandLogger";
 import CodexToolsController from "./CodexToolsController";
@@ -51,14 +56,25 @@ function deferred<TValue>() {
 }
 
 async function startController(controller: WorkbenchAgentCommandController, onHandled: () => void = () => undefined) {
+  let endpoint: WorkbenchDaemonEndpoint | null = null;
   const server = http.createServer((request, response) => {
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(endpoint));
+      return;
+    }
     void controller.handleHttpRequest(request, response).finally(onHandled);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${address.port}`;
+  endpoint = { version: 1, instanceId: randomUUID(), pid: process.pid, origin };
+  const published = endpoint;
   return {
     close: async () => await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
-    origin: `http://127.0.0.1:${address.port}`,
+    origin,
+    /** Publish this server as the daemon under `dataRoot`, as launchers discover it. */
+    publish: async (dataRoot: string) => await publishDaemonEndpoint(path.join(dataRoot, "daemon", "runtime.json"), published),
   };
 }
 
@@ -117,7 +133,9 @@ test("shell store access crosses HTTP per request rather than inheriting daemon 
   }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   const server = await startController(controller);
   t.after(server.close);
-  const shell = path.join(import.meta.dirname, "lib/workbench/cli/workbench-agent-cli.sh");
+  const dataRoot = path.join(temporary.path, "data");
+  await server.publish(dataRoot);
+  const launcher = await verifyNativeSidecarArtifact(path.resolve(import.meta.dirname, "../.."), WORKBENCH_LAUNCHER_ARTIFACT);
   for (const scenario of [
     { daemon: "", child: "1", action: "get", allowed: true },
     { daemon: "", child: "", action: "get", allowed: false },
@@ -128,17 +146,15 @@ test("shell store access crosses HTTP per request rather than inheriting daemon 
     await t.test(JSON.stringify(scenario), async () => {
       process.env[flag] = scenario.daemon;
       const previousCalls = calls.length;
-      const result = promisify(execFile)("bash", [
-        shell, "store", scenario.action, "API_KEY", ...(scenario.action === "set" ? ["replacement"] : []),
+      const result = promisify(execFile)(launcher, [
+        "store", scenario.action, "API_KEY", ...(scenario.action === "set" ? ["replacement"] : []),
       ], {
         cwd: temporary.path,
         env: {
           ...process.env,
           [flag]: scenario.child,
           WORKBENCH_THREAD_ID: "managed-fixture",
-          WORKBENCH_CWD_REDIRECTED: "1",
-          WORKBENCH_DAEMON_ORIGIN_RESOLVER: "",
-          WORKBENCH_ORIGIN: server.origin,
+          WORKBENCH_DATA_ROOT: dataRoot,
         },
       });
       if (scenario.allowed) {

@@ -2,6 +2,7 @@
  * Exports:
  * - NativeSidecarArtifact: describes one committed Go sidecar's source directory, executable name and manifest protocol.
  * - nativeSidecarSourceHash: fingerprint production Go sources and module identities in one directory.
+ * - NativeSidecarVerifyOptions: optional source-drift tolerance for sidecars that must keep serving their published image.
  * - verifyNativeSidecarArtifact: return the verified current-platform executable path, staged when a stager is supplied, or throw a bounded rebuild message.
  */
 import { createHash } from "node:crypto";
@@ -23,6 +24,11 @@ export interface NativeSidecarArtifact {
   protocol: number;
 }
 
+export interface NativeSidecarVerifyOptions {
+  /** Receives the rebuild message instead of a throw when sources changed after the image was published. */
+  onSourceDrift?: (message: string) => void;
+}
+
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const artifactSchema = z.object({ file: z.string(), sha256: digest, sourceHash: digest }).strict();
 
@@ -40,7 +46,7 @@ export async function nativeSidecarSourceHash(directory: string): Promise<string
 }
 
 export async function verifyNativeSidecarArtifact(
-  root: string, sidecar: NativeSidecarArtifact, stage?: NativeArtifactStager,
+  root: string, sidecar: NativeSidecarArtifact, stage?: NativeArtifactStager, { onSourceDrift }: NativeSidecarVerifyOptions = {},
 ): Promise<string> {
   const { label, buildScript } = sidecar;
   if (process.arch !== "x64" || (process.platform !== "win32" && process.platform !== "linux")) {
@@ -67,7 +73,9 @@ export async function verifyNativeSidecarArtifact(
   const bytes = await fs.readFile(executable);
   if (createHash("sha256").update(bytes).digest("hex") !== artifact.sha256) throw new Error(`The ${label} executable does not match its manifest.`);
   if (await nativeSidecarSourceHash(source) !== artifact.sourceHash) {
-    throw new Error(`${label[0]!.toUpperCase()}${label.slice(1)} sources changed; rebuild the bundled executable.`);
+    const message = `${label[0]!.toUpperCase()}${label.slice(1)} sources changed; rebuild the bundled executable with pnpm ${buildScript}.`;
+    if (!onSourceDrift) throw new Error(message);
+    onSourceDrift(message);
   }
   return stage ? await stage.stage({ label, executable }) : executable;
 }

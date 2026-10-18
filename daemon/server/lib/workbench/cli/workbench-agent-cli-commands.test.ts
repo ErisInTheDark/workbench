@@ -1,8 +1,8 @@
-/* Exports: none. Tests cover wb parsing, questionnaire JSON, paged arc output, transport, response text, and generated shims. */
+/* Exports: none. Tests cover wb parsing, questionnaire JSON, paged arc output, launcher transport and response text. */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -15,7 +15,9 @@ import WorkbenchAgentCommandController from "../../../WorkbenchAgentCommandContr
 import CodexToolsController from "../../../CodexToolsController";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
-import WorkbenchAgentCliEnvironment from "../../../WorkbenchAgentCliEnvironment.ts";
+import WorkbenchAgentCliEnvironment, { WORKBENCH_LAUNCHER_ARTIFACT } from "../../../WorkbenchAgentCliEnvironment.ts";
+import { verifyNativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import {
   listWorkbenchAgentCliCommandDescriptors,
   parseWorkbenchAgentCliCommand,
@@ -308,9 +310,9 @@ const reloadCatalog = [
   { access: "cli" as const, description: "OpenCode app-server", safeAll: false, scope: "harness:opencode" },
   { access: "operator" as const, description: "Process", safeAll: false, scope: "server:process" },
 ];
-const shellSourcePath = fileURLToPath(new URL("./workbench-agent-cli.sh", import.meta.url));
-const resolverSourcePath = fileURLToPath(new URL("./resolve-workbench-daemon-origin.mts", import.meta.url));
-const rootLauncherPath = fileURLToPath(new URL("../../../../../wb", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../../../../..", import.meta.url));
+const rootLauncherPath = path.join(repositoryRoot, "wb");
+let launcherPath = "";
 const requests: Array<{ body: string; method: string; url: string }> = [];
 let agentCommandController: WorkbenchAgentCommandController;
 let origin = "";
@@ -612,6 +614,7 @@ before(async () => {
     origin,
   };
   await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), publishedEndpoint);
+  launcherPath = await verifyNativeSidecarArtifact(repositoryRoot, WORKBENCH_LAUNCHER_ARTIFACT);
 });
 
 after(async () => {
@@ -1422,17 +1425,17 @@ test("keeps reload and dirt hidden while direct reload help explains user owners
   }
 });
 
-test("runs the native shell transport and preserves the server response", async () => {
+test("runs the launcher transport and preserves the server response", async () => {
   const unusableTempPath = path.join(temporaryDirectoryPath, "not-a-directory");
-  await writeFile(unusableTempPath, "The shell transport must not use this as a temp directory.", "utf8");
+  await writeFile(unusableTempPath, "The launcher transport must not use this as a temp directory.", "utf8");
   const env = {
     ...process.env,
+    TEMP: unusableTempPath,
+    TMP: unusableTempPath,
     TMPDIR: unusableTempPath,
     WORKBENCH_DATA_ROOT: temporaryDataRootPath,
-    WORKBENCH_ORIGIN: origin,
   };
-  const result = await execFileAsync("bash", [
-    shellSourcePath,
+  const result = await execFileAsync(launcherPath, [
     "thread", "recall", "search", "--thread", recalledThreadId, "--query", "needle", "--kind", "commentary",
   ], {
     cwd: temporaryDirectoryPath,
@@ -1448,7 +1451,7 @@ test("runs the native shell transport and preserves the server response", async 
   });
 
   await assert.rejects(
-    execFileAsync("bash", [shellSourcePath, "unsupported-command"], {
+    execFileAsync(launcherPath, ["unsupported-command"], {
       cwd: temporaryDirectoryPath,
       env,
     }),
@@ -1470,7 +1473,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     WORKBENCH_ORIGIN: origin,
     WORKBENCH_THREAD_ID: "",
   };
-  const hookArgs = [shellSourcePath, "__hook", "apply-patch-claim"];
+  const hookArgs = ["__hook", "apply-patch-claim"];
   const hookInput = (filePath: string) => JSON.stringify({
     cwd: temporaryDirectoryPath,
     session_id: hookNativeThreadId,
@@ -1479,11 +1482,10 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     tool_name: "apply_patch",
     turn_id: "turn-one",
   });
-  const checkoutRoot = path.resolve(path.dirname(shellSourcePath), "../../../../..");
   for (const [command, args] of [
-    ["bash", hookArgs],
-    [process.execPath, [path.join(checkoutRoot, "cli/dispatch.mjs"), ...hookArgs.slice(1)]],
-    [process.execPath, [path.join(checkoutRoot, "package/wb"), ...hookArgs.slice(1)]],
+    [launcherPath, hookArgs],
+    [process.execPath, [path.join(repositoryRoot, "cli/dispatch.mjs"), ...hookArgs]],
+    [process.execPath, [path.join(repositoryRoot, "package/wb"), ...hookArgs]],
   ] satisfies [string, string[]][]) {
     const allowed = await execFileWithInput(command, args, hookInput("claimed.ts"), {
       cwd: temporaryDirectoryPath,
@@ -1505,7 +1507,7 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     assert.equal(deniedDecision.additionalContext, undefined);
   }
 
-  const unavailable = await execFileWithInput("bash", hookArgs, hookInput("unavailable.ts"), {
+  const unavailable = await execFileWithInput(launcherPath, hookArgs, hookInput("unavailable.ts"), {
     cwd: temporaryDirectoryPath,
     env,
   });
@@ -1521,125 +1523,41 @@ test("streams hook stdin, preserves claim decisions, and allows transport failur
     pid: process.pid,
     origin: "http://127.0.0.1:1",
   });
-  const disconnected = await execFileWithInput("bash", hookArgs, hookInput("claimed.ts"), {
+  const disconnected = await execFileWithInput(launcherPath, hookArgs, hookInput("claimed.ts"), {
     cwd: temporaryDirectoryPath,
     env: { ...env, WORKBENCH_DATA_ROOT: disconnectedDataRoot },
   });
   assert.equal(disconnected.exitCode, 0);
   assert.deepEqual(JSON.parse(disconnected.stdout), {});
 
-  if (process.platform === "win32") {
-    const shimDirectoryPath = path.join(temporaryDirectoryPath, "hook-shims");
-    const shimEnv: NodeJS.ProcessEnv = { ...env, WORKBENCH_DATA_ROOT: temporaryDataRootPath };
-    await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath,
-      runtimeDirectoryPath: shimDirectoryPath,
-      shellSourcePath,
-    }).install(shimEnv);
-    const nested = await execFileWithInput("C:\\Program Files\\PowerShell\\7\\pwsh.exe", [
-      "-NoProfile", "-Command", "wb __hook apply-patch-claim",
-    ], hookInput("unclaimed.ts"), {
-      cwd: temporaryDirectoryPath,
-      env: shimEnv,
+  // Providers run the hook through their own shell; the installed launcher must answer from PATH there too.
+  const shellEnv: NodeJS.ProcessEnv = { ...env, WORKBENCH_DATA_ROOT: temporaryDataRootPath };
+  await new WorkbenchAgentCliEnvironment({
+    checkoutRoot: repositoryRoot,
+    legacyShimDirectoryPath: path.join(temporaryDirectoryPath, "hook-legacy"),
+    stage: new NativeArtifactStage({ runtimeRoot: path.join(temporaryDirectoryPath, "hook-runtime") }),
+  }).install(shellEnv);
+  const nested = process.platform === "win32"
+    ? await execFileWithInput("pwsh", ["-NoProfile", "-Command", "wb __hook apply-patch-claim"], hookInput("unclaimed.ts"), {
+      cwd: temporaryDirectoryPath, env: shellEnv,
+    })
+    : await execFileWithInput("bash", ["-c", "wb __hook apply-patch-claim"], hookInput("unclaimed.ts"), {
+      cwd: temporaryDirectoryPath, env: shellEnv,
     });
-    assert.equal(nested.exitCode, 0, nested.stderr);
-    assert.equal(nested.stderr, "");
-    assert.equal(JSON.parse(nested.stdout).hookSpecificOutput.permissionDecision, "deny");
-  }
+  assert.equal(nested.exitCode, 0, nested.stderr);
+  assert.equal(nested.stderr, "");
+  assert.equal(JSON.parse(nested.stdout).hookSpecificOutput.permissionDecision, "deny");
 });
 
-test("generates executable POSIX and working Windows shims", async (context) => {
-  const shimDirectoryPath = path.join(temporaryDirectoryPath, "shims");
-  const env = { ...process.env };
-  const installed = await new WorkbenchAgentCliEnvironment({
-    resolverSourcePath,
-    runtimeDirectoryPath: shimDirectoryPath,
-    shellSourcePath,
-  }).install(env);
-  const posixContent = await readFile(installed.posixShimPath, "utf8");
-  assert.match(posixContent, /^#!\/usr\/bin\/env bash/u);
-  if (process.platform !== "win32") {
-    assert.notEqual((await stat(installed.posixShimPath)).mode & 0o111, 0);
-  }
-  assert.equal(env.WORKBENCH_ORIGIN, process.env.WORKBENCH_ORIGIN);
-  assert.equal(env.PATH?.split(path.delimiter)[0], shimDirectoryPath);
-
-  if (process.platform !== "win32") {
-    context.skip("Windows shim execution is only available on Windows.");
-    return;
-  }
-  delete env.WORKBENCH_ORIGIN;
-  env.WORKBENCH_DATA_ROOT = temporaryDataRootPath;
-  env.WORKBENCH_THREAD_ID = "";
-  env.CODEX_THREAD_ID = "";
+test("the launcher completes reload requests that outlive their first status read", async () => {
   reloadStatusReadCount = 0;
-  const command = process.env.ComSpec ?? "cmd.exe";
-  const result = await execFileAsync(command, [
-    "/d", "/s", "/c", installed.windowsShimPath, "reload", "--server:codex",
-  ], {
+  const result = await execFileAsync(launcherPath, ["reload", "--server:codex"], {
     cwd: temporaryDirectoryPath,
-    env,
+    env: { ...process.env, CODEX_THREAD_ID: "", WORKBENCH_DATA_ROOT: temporaryDataRootPath, WORKBENCH_THREAD_ID: "" },
   });
   assert.equal(result.stdout, "Reload succeeded.\nApplied: server:codex\nQueued: none\n");
   const reloadPost = [...requests].reverse().find((request) => request.url === "/daemon/reload" && request.method === "POST");
   assert.deepEqual(JSON.parse(reloadPost?.body ?? "{}"), { scopes: ["server:codex"] });
-});
-
-test("redirects a PATH-resolved wb command to the Workbench install in cwd", async () => {
-  const cwdRequests: string[] = [];
-  const cwdServer = http.createServer((request, response) => {
-    let requestBody = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => { requestBody += chunk; });
-    request.on("end", () => {
-      cwdRequests.push(requestBody);
-      response.writeHead(200, { "Content-Type": "text/plain" });
-      response.end("cwd-local\n");
-    });
-  });
-  await new Promise<void>((resolve) => cwdServer.listen(0, "127.0.0.1", resolve));
-  try {
-    const cwdAddress = cwdServer.address();
-    assert(cwdAddress && typeof cwdAddress === "object");
-    const workbenchRoot = path.join(temporaryDirectoryPath, "cwd-workbench");
-    const cwdRuntimePath = path.join(workbenchRoot, "daemon", "node_modules", ".bin");
-    const pathRuntimePath = path.join(temporaryDirectoryPath, "path-workbench-bin");
-    const cwdResolverPath = path.join(temporaryDirectoryPath, "cwd-resolver.mjs");
-    const pathResolverPath = path.join(temporaryDirectoryPath, "path-resolver.mjs");
-    await Promise.all([
-      writeFile(cwdResolverPath, `process.stdout.write(${JSON.stringify(`http://127.0.0.1:${cwdAddress.port}`)});\n`, "utf8"),
-      writeFile(pathResolverPath, `process.stdout.write(${JSON.stringify(origin)});\n`, "utf8"),
-    ]);
-    const cwdEnv = { ...process.env };
-    await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath: cwdResolverPath,
-      runtimeDirectoryPath: cwdRuntimePath,
-      shellSourcePath,
-    }).install(cwdEnv);
-    await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath: cwdResolverPath,
-      runtimeDirectoryPath: path.join(workbenchRoot, "node_modules", ".bin"),
-      shellSourcePath,
-    }).install({ ...process.env });
-    const pathEnv = { ...process.env };
-    const pathInstall = await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath: pathResolverPath,
-      runtimeDirectoryPath: pathRuntimePath,
-      shellSourcePath,
-    }).install(pathEnv);
-
-    const result = await execFileAsync("bash", [pathInstall.posixShimPath, "subagent", "list"], {
-      cwd: workbenchRoot,
-      env: { ...process.env, WORKBENCH_ORIGIN: origin },
-      timeout: 2_000,
-    });
-
-    assert.equal(result.stdout, "cwd-local\n");
-    assert.equal(cwdRequests.length, 1);
-    assert.match(cwdRequests[0], /(?:^|&)cwd=.*cwd-workbench(?:&|$)/u);
-  } finally {
-    await new Promise<void>((resolve, reject) => cwdServer.close((error) => error ? reject(error) : resolve()));
-  }
 });
 
 test("skill CLI requires a managed caller and routes its name without output adornments", async () => {
@@ -1713,7 +1631,7 @@ test("stash commands are argument-free whole-arc operations with conflict guidan
   assert.deepEqual(parseGitArcReceipt(output.stdout)?.conflictedPaths, ["src/a.ts"]);
 });
 
-test("generated and root launchers follow endpoint publication instead of inherited origin", async () => {
+test("agent and root launchers follow endpoint publication instead of inherited origin", async () => {
   const rotatedRequests: string[] = [];
   let rotatedEndpoint!: WorkbenchDaemonEndpoint;
   const rotatedServer = http.createServer((request, response) => {
@@ -1737,19 +1655,13 @@ test("generated and root launchers follow endpoint publication instead of inheri
       origin: `http://127.0.0.1:${rotatedAddress.port}`,
     };
     await publishDaemonEndpoint(path.join(temporaryDataRootPath, "daemon", "runtime.json"), rotatedEndpoint);
-    const shimDirectoryPath = path.join(temporaryDirectoryPath, "rotated-shims");
-    const installed = await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath,
-      runtimeDirectoryPath: shimDirectoryPath,
-      shellSourcePath,
-    }).install({});
     const env = {
       ...process.env,
       WORKBENCH_DATA_ROOT: temporaryDataRootPath,
       WORKBENCH_ORIGIN: origin,
     };
-    for (const launcher of [installed.posixShimPath, rootLauncherPath]) {
-      const result = await execFileAsync("bash", [launcher, "subagent", "list"], {
+    for (const [command, args] of [[launcherPath, []], ["bash", [rootLauncherPath]]] as const) {
+      const result = await execFileAsync(command, [...args, "subagent", "list"], {
         cwd: temporaryDirectoryPath,
         env,
       });
@@ -1762,7 +1674,7 @@ test("generated and root launchers follow endpoint publication instead of inheri
   }
 });
 
-test("generated launchers reject a stale daemon publication before dispatch", async () => {
+test("the launcher rejects a stale daemon publication before dispatch", async () => {
   const staleDataRoot = path.join(temporaryDirectoryPath, "stale-daemon-data");
   await publishDaemonEndpoint(path.join(staleDataRoot, "daemon", "runtime.json"), {
     version: 1,
@@ -1770,14 +1682,8 @@ test("generated launchers reject a stale daemon publication before dispatch", as
     pid: process.pid,
     origin: "http://127.0.0.1:1",
   });
-  const shimDirectoryPath = path.join(temporaryDirectoryPath, "stale-shims");
-  const installed = await new WorkbenchAgentCliEnvironment({
-    resolverSourcePath,
-    runtimeDirectoryPath: shimDirectoryPath,
-    shellSourcePath,
-  }).install({});
   await assert.rejects(
-    execFileAsync("bash", [installed.posixShimPath, "subagent", "list"], {
+    execFileAsync(launcherPath, ["subagent", "list"], {
       cwd: temporaryDirectoryPath,
       env: {
         ...process.env,

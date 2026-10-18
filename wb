@@ -9,7 +9,10 @@ if [[ "${WORKBENCH_CWD_REDIRECTED:-}" != "1" ]]; then
   fi
 fi
 workbench_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-daemon_cli="$workbench_root/daemon/server/lib/workbench/cli/workbench-agent-cli.sh"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) launcher="$workbench_root/daemon/launcher/bin/windows-x64/wb.exe" ;;
+  *) launcher="$workbench_root/daemon/launcher/bin/linux-x64/wb" ;;
+esac
 thread_id="${WORKBENCH_THREAD_ID:-${CODEX_THREAD_ID:-}}"
 hook_mode=0
 checkout_mode=0
@@ -29,12 +32,12 @@ elif [[ "${1:-}" == "view" ]] && { [[ "$#" -eq 1 ]] || [[ "$#" -eq 2 && ( "${2:-
 fi
 
 if (( hook_mode == 1 || checkout_mode == 0 )) || { [[ -n "$thread_id" ]] && (( human_only == 1 )); }; then
-  if [[ ! -f "$daemon_cli" ]]; then
-    printf '%s\n' "Workbench daemon CLI is unavailable: $daemon_cli" >&2
+  if [[ ! -f "$launcher" ]]; then
+    printf '%s\n' "Workbench wb launcher is unavailable: $launcher. Run pnpm build:launcher." >&2
     exit 1
   fi
-  export WORKBENCH_DAEMON_ORIGIN_RESOLVER="$workbench_root/daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"
-  exec bash "$daemon_cli" "$@"
+  # Git Bash and MSYS2 would otherwise rewrite /path-like arguments on their way into a native image.
+  WORKBENCH_CHECKOUT_ROOT="$workbench_root" MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" exec "$launcher" "$@"
 fi
 
 exec node --disable-warning=ExperimentalWarning "$workbench_root/cli/dispatch.mjs" "$@"

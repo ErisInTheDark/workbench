@@ -200,8 +200,8 @@ test("loaded modules and hostile boundaries generate narrow source ownership wit
   assert.equal(descriptors.get("server:commands")!.paths.includes("daemon/server/WorkbenchAgentCommandController.ts"), true);
   assert.deepEqual(owners("wb"), ["server:cli"]);
   assert.deepEqual(owners("daemon/server/WorkbenchAgentCliEnvironment.ts"), ["server:cli"]);
-  assert.deepEqual(owners("daemon/server/lib/workbench/cli/workbench-agent-cli.sh"), ["server:cli"]);
-  assert.deepEqual(owners("daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/launcher/bin/windows-x64/wb.exe"), ["server:cli"]);
+  assert.deepEqual(owners("daemon/launcher/bin/manifest.json"), ["server:cli"]);
   assert.deepEqual(owners("instructions/wb/mechanics/git.md"), ["server:instructions"]);
   // Out-of-process entries own their static import closure.
   assert.deepEqual(owners("daemon/server/database/workbench-database-worker.ts"), ["server:database"]);

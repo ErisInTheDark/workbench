@@ -1,153 +1,143 @@
-/* No exports. Tests protect local test, checkout command, and bounded redirect dispatch with cwd isolation. */
+/* No exports. Tests protect launcher staging, exact argv delivery from agent shells, checkout redirects and local test/ports dispatch. */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import test from "node:test";
-import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
-import WorkbenchAgentCliEnvironment from "./WorkbenchAgentCliEnvironment";
+import test, { type TestContext } from "node:test";
 
-test("checkout handoffs preserve local redirect suppression until daemon dispatch", async context => {
-  const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-  const temporary = await WorkbenchTemporaryDirectory.create("wb-redirect-");
+import { verifyNativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
+import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import WorkbenchAgentCliEnvironment, { WORKBENCH_LAUNCHER_ARTIFACT } from "./WorkbenchAgentCliEnvironment";
+
+const execFileAsync = promisify(execFile);
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const platformLauncher = process.platform === "win32" ? "windows-x64/wb.exe" : "linux-x64/wb";
+
+async function daemonFixture(context: TestContext) {
+  const temporary = await WorkbenchTemporaryDirectory.create("wb-launcher-");
   context.after(() => temporary.dispose());
-  const checkout = path.join(temporary.path, "checkout");
-  const shellRelativePath = "daemon/server/lib/workbench/cli/workbench-agent-cli.sh";
-  const resolverRelativePath = "daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts";
-  await mkdir(path.dirname(path.join(checkout, shellRelativePath)), { recursive: true });
-  for (const relativePath of ["wb", shellRelativePath]) {
-    await writeFile(path.join(checkout, relativePath), await readFile(path.join(repositoryRoot, relativePath)));
-  }
-  await writeFile(path.join(checkout, resolverRelativePath), "process.stdout.write(process.env.FIXTURE_ORIGIN);\n");
-  const requests: URLSearchParams[] = [];
-  let responseStatus = 200;
+  const received: URLSearchParams[] = [];
+  const endpoint = { version: 1 as const, instanceId: "00000000-0000-4000-8000-000000000001", pid: process.pid, origin: "" };
   const server = http.createServer((request, response) => {
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(endpoint));
+      return;
+    }
     let body = "";
     request.setEncoding("utf8");
     request.on("data", chunk => { body += chunk; });
     request.on("end", () => {
-      requests.push(new URLSearchParams(body));
-      response.writeHead(responseStatus);
-      response.end("fixture-response\n");
+      received.push(new URLSearchParams(body));
+      response.writeHead(200);
+      response.end("ok\n");
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
   const address = server.address();
   assert(address && typeof address === "object");
-  const entry = path.join(checkout, "wb");
-  const localWrapper = [
-    "#!/usr/bin/env bash",
-    'visits="${FIXTURE_REDIRECT_VISITS:-0}"',
-    'if (( visits >= 1 )); then printf "%s\\n" "fixture blocked repeated redirect" >&2; exit 91; fi',
-    'export FIXTURE_REDIRECT_VISITS="$((visits + 1))"',
-    'printf "%s\\n" visited >> "$FIXTURE_VISIT_LOG"',
-    'exec bash "$FIXTURE_CHECKOUT/wb" "$@"',
-    "",
-  ].join("\n");
-  for (const localPath of ["node_modules/.bin/wb", "daemon/node_modules/.bin/wb", "wb"]) {
-    for (const redirected of [false, true]) {
-      for (const status of [200, 503]) {
-        await context.test(`${localPath}, redirected=${redirected}, status=${status}`, async () => {
-          const project = path.join(temporary.path, `project-${localPath.replaceAll("/", "-")}-${redirected}-${status}`);
-          const local = path.join(project, localPath);
-          const log = path.join(project, "visits");
-          await mkdir(path.dirname(local), { recursive: true });
-          await writeFile(local, localWrapper);
-          await writeFile(log, "");
-          requests.length = 0;
-          responseStatus = status;
-          const args = ["store", "get", "key with spaces"];
-          const invocation = promisify(execFile)("bash", [entry, ...args], {
-            cwd: project,
-            env: {
-              ...process.env,
-              WORKBENCH_CWD_REDIRECTED: redirected ? "1" : "",
-              FIXTURE_REDIRECT_VISITS: "0",
-              FIXTURE_CHECKOUT: checkout,
-              FIXTURE_VISIT_LOG: log,
-              FIXTURE_ORIGIN: `http://127.0.0.1:${address.port}`,
-            },
-          });
-          if (status === 200) {
-            const result = await invocation;
-            assert.equal(result.stdout, "fixture-response\n");
-            assert.equal(result.stderr, "");
-          } else {
-            await assert.rejects(invocation, error => {
-              const failure = error as Error & { code: number; stdout: string; stderr: string };
-              assert.equal(failure.code, 1);
-              assert.equal(failure.stdout, "");
-              assert.equal(failure.stderr, "fixture-response\n");
-              return true;
-            });
-          }
-          assert.equal(await readFile(log, "utf8"), redirected ? "" : "visited\n");
-          assert.equal(requests.length, 1);
-          assert.deepEqual(requests[0].getAll("arg"), args);
-          // Git Bash reports Windows cwd using its POSIX drive spelling.
-          const cwd = requests[0].get("cwd")!.replace(/^\/([a-z])\//iu, "$1:/");
-          assert.equal(cwd.toLowerCase(), project.replaceAll("\\", "/").toLowerCase());
-        });
-      }
-    }
-  }
+  endpoint.origin = `http://127.0.0.1:${address.port}`;
+  const dataRoot = path.join(temporary.path, "data");
+  await mkdir(path.join(dataRoot, "daemon"), { recursive: true });
+  await writeFile(path.join(dataRoot, "daemon", "runtime.json"), JSON.stringify(endpoint));
+  return { dataRoot, received, temporary: temporary.path };
+}
+
+async function installFixture(temporary: string, dataRoot: string, legacyShimDirectoryPath = path.join(temporary, "legacy")) {
+  const warnings: string[] = [];
+  const env: NodeJS.ProcessEnv = { ...process.env, WORKBENCH_DATA_ROOT: dataRoot, WORKBENCH_CWD_REDIRECTED: "" };
+  const installed = await new WorkbenchAgentCliEnvironment({
+    checkoutRoot: repositoryRoot,
+    legacyShimDirectoryPath,
+    stage: new NativeArtifactStage({ runtimeRoot: path.join(temporary, "runtime") }),
+    warn: message => warnings.push(message),
+  }).install(env);
+  return { env, installed, warnings };
+}
+
+/** A checkout layout around a copy of the published launcher, with a fixture `cli/dispatch.mjs`. */
+async function checkoutFixture(root: string, label: string) {
+  const launcher = path.join(root, "daemon/launcher/bin", platformLauncher);
+  await mkdir(path.dirname(launcher), { recursive: true });
+  await copyFile(await verifyNativeSidecarArtifact(repositoryRoot, WORKBENCH_LAUNCHER_ARTIFACT), launcher);
+  await mkdir(path.join(root, "cli"), { recursive: true });
+  await writeFile(path.join(root, "cli/dispatch.mjs"), `process.stdout.write(\`${label}:\${process.argv.slice(2).join(" ")}\\n\`);\n`);
+  return launcher;
+}
+
+test("install stages the launcher outside the checkout, puts it first on PATH and retires only managed shims", async context => {
+  const { dataRoot, temporary } = await daemonFixture(context);
+  const legacy = path.join(temporary, "legacy");
+  await mkdir(legacy, { recursive: true });
+  await writeFile(path.join(legacy, "wb"), "#!/usr/bin/env bash\n# workbench-agent-cli-shim-v1\n");
+  await writeFile(path.join(legacy, "wb.cmd"), "@rem workbench-agent-cli-shim-v1\r\n");
+  await writeFile(path.join(legacy, "wb.ps1"), "# someone else's wb\n");
+  const { env, installed } = await installFixture(temporary, dataRoot, legacy);
+
+  assert.equal(path.dirname(installed.launcherPath), path.join(temporary, "runtime", "native", "launcher"));
+  assert.deepEqual(
+    await readFile(installed.launcherPath),
+    await readFile(await verifyNativeSidecarArtifact(repositoryRoot, WORKBENCH_LAUNCHER_ARTIFACT)),
+  );
+  assert.equal(env.PATH?.split(path.delimiter)[0], path.dirname(installed.launcherPath));
+  assert.equal(env.WORKBENCH_CHECKOUT_ROOT, repositoryRoot);
+  await assert.rejects(readFile(path.join(legacy, "wb")), { code: "ENOENT" });
+  await assert.rejects(readFile(path.join(legacy, "wb.cmd")), { code: "ENOENT" });
+  assert.equal(await readFile(path.join(legacy, "wb.ps1"), "utf8"), "# someone else's wb\n");
 });
 
-test("generated shims dispatch local tests only from their owning repository", async () => {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const cleanupTemporary = await WorkbenchTemporaryDirectory.create("wb-test-shim-");
-  const temporary = cleanupTemporary.path;
-  try {
-    const installed = await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath: path.join(root, "daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts"),
-      runtimeDirectoryPath: temporary,
-      shellSourcePath: path.join(root, "daemon/server/lib/workbench/cli/workbench-agent-cli.sh"),
-    }).install({});
-    const invoke = (cwd: string) => promisify(execFile)("bash", [installed.posixShimPath, "test", "--help"], {
-      cwd, env: { ...process.env, WORKBENCH_CWD_REDIRECTED: "1" },
-    });
-    assert.match((await invoke(root)).stdout, /wb test/);
-    await assert.rejects(invoke(temporary), error => {
-      assert.match((error as Error & { stderr: string }).stderr, /repository root/);
-      return true;
-    });
-  } finally {
-    await cleanupTemporary.dispose();
+test("agent shells deliver wb argv exactly", async context => {
+  const { dataRoot, received, temporary } = await daemonFixture(context);
+  const { env } = await installFixture(temporary, dataRoot);
+  const quoted = ['{"a":"b|c"}', "line one\nline two", "^x", "100%PATH%", "it's", "*.ts", "a & b", "trailing\\", "", "ünï"];
+  const expected = ["tokens", ...quoted.slice(0, 5), "--", ...quoted.slice(5)];
+  if (process.platform === "win32") {
+    const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const script = `wb tokens ${quoted.slice(0, 5).map(literal).join(" ")} -- ${quoted.slice(5).map(literal).join(" ")}`;
+    await execFileAsync("pwsh", ["-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { cwd: temporary, env });
+  } else {
+    await execFileAsync("bash", ["-c", 'wb "$@"', "wb", ...expected], { cwd: temporary, env });
   }
+  assert.deepEqual(received.map(form => form.getAll("arg")), [expected]);
 });
 
-test("generated shims dispatch ports through their owning checkout", async () => {
-  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-  const cleanupTemporary = await WorkbenchTemporaryDirectory.create("wb-ports-shim-");
-  const root = cleanupTemporary.path;
-  try {
-    const shellSourcePath = path.join(root, "daemon/server/lib/workbench/cli/workbench-agent-cli.sh");
-    const resolverSourcePath = path.join(root, "daemon/server/lib/workbench/cli/resolve-workbench-daemon-origin.mts");
-    const checkoutCliPath = path.join(root, "cli/dispatch.mjs");
-    await mkdir(path.dirname(shellSourcePath), { recursive: true });
-    await mkdir(path.dirname(checkoutCliPath), { recursive: true });
-    await writeFile(
-      shellSourcePath,
-      await readFile(path.join(repositoryRoot, "daemon/server/lib/workbench/cli/workbench-agent-cli.sh"), "utf8"),
-    );
-    await writeFile(checkoutCliPath, "process.stdout.write(`native:${process.argv.slice(2).join(' ')}\\n`);\n");
-    const installed = await new WorkbenchAgentCliEnvironment({
-      resolverSourcePath,
-      runtimeDirectoryPath: path.join(root, "daemon/node_modules/.bin"),
-      shellSourcePath,
-    }).install({});
-
-    const result = await promisify(execFile)("bash", [installed.posixShimPath, "ports"], {
-      cwd: root,
-      env: { ...process.env, WORKBENCH_THREAD_ID: "managed-thread" },
-    });
-    assert.equal(result.stdout, "native:ports\n");
-    assert.equal(result.stderr, "");
-  } finally {
-    await cleanupTemporary.dispose();
+test("piped vis output and hook input travel as their own fields", async context => {
+  const { dataRoot, received, temporary } = await daemonFixture(context);
+  const { installed, env } = await installFixture(temporary, dataRoot);
+  for (const [args, extra] of [[["vis", "render", "--run", "r1"], {}], [[], { WORKBENCH_APPLY_PATCH_CLAIM_HOOK: "1" }]] as const) {
+    const child = execFile(installed.launcherPath, [...args], { cwd: temporary, env: { ...env, ...extra } });
+    child.stdin!.end("piped\nbody");
+    await new Promise<void>((resolve, reject) => child.once("exit", code => code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
   }
+  assert.equal(received[0]!.get("stdin"), "piped\nbody");
+  assert.deepEqual(received[1]!.getAll("arg"), ["__hook", "apply-patch-claim"]);
+  assert.equal(received[1]!.get("hookInput"), "piped\nbody");
+});
+
+test("wb inside another checkout runs that checkout's launcher once", async context => {
+  const { dataRoot, temporary } = await daemonFixture(context);
+  const { installed, env } = await installFixture(temporary, dataRoot);
+  const other = path.join(temporary, "other-checkout");
+  await checkoutFixture(other, "other");
+  const redirected = await execFileAsync(installed.launcherPath, ["ports"], { cwd: other, env });
+  assert.equal(redirected.stdout, "other:ports\n");
+  // A redirected launcher keeps its own checkout instead of redirecting again.
+  await assert.rejects(
+    execFileAsync(installed.launcherPath, ["ports"], { cwd: other, env: { ...env, WORKBENCH_CWD_REDIRECTED: "1", WORKBENCH_CHECKOUT_ROOT: temporary } }),
+    (error: Error & { stderr: string }) => /checkout CLI is unavailable/u.test(error.stderr),
+  );
+});
+
+test("local tests dispatch only from the owning checkout root", async context => {
+  const { dataRoot, temporary } = await daemonFixture(context);
+  const { installed, env } = await installFixture(temporary, dataRoot);
+  assert.match((await execFileAsync(installed.launcherPath, ["test", "--help"], { cwd: repositoryRoot, env })).stdout, /wb test/u);
+  await assert.rejects(
+    execFileAsync(installed.launcherPath, ["test", "--help"], { cwd: temporary, env }),
+    (error: Error & { stderr: string }) => /repository root/u.test(error.stderr),
+  );
 });

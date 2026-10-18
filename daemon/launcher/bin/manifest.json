@@ -1,0 +1,15 @@
+{
+  "protocol": 1,
+  "artifacts": {
+    "windows-x64": {
+      "file": "windows-x64/wb.exe",
+      "sha256": "c1e3d78517de7e11e5c0df88bd45e7ee61774bfee14e0931bf474e5e38f6d6a3",
+      "sourceHash": "f5e87133a46912a819a610429284f866b6de773cade01f15e6c35e7ddc34ec23"
+    },
+    "linux-x64": {
+      "file": "linux-x64/wb",
+      "sha256": "96c6c801d71f5502b0a36604a107280b97a9563847ce00aa09ea8e6fb0fd03d9",
+      "sourceHash": "f5e87133a46912a819a610429284f866b6de773cade01f15e6c35e7ddc34ec23"
+    }
+  }
+}

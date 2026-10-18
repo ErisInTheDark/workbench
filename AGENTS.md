@@ -13,6 +13,7 @@
 | /daemon/voice | rust vtt service |
 | /daemon/repo | go vfs service |
 | /daemon/relay | go sandbox loopback relay (linux) |
+| /daemon/launcher | go wb launcher (windows/linux); argv-exact daemon dispatch, endpoint discovery |
 | /integration | integrations in third party software |
 | /instructions | instructions for agents, copied into the user's `~/.workbench` folder whenever read |
 | /app/server | server for frontend app. orchestrates daemons, batches requests |
