@@ -1,4 +1,4 @@
-/* No production exports. Protect partial queries, shared demand, stale-result fencing and connection-waiting requests. */
+/* No production exports. Protect partial queries, shared demand, stale-result fencing, connection-waiting requests and thread-command identity. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { workspaceObservationShape } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -59,6 +59,27 @@ test("auto-compaction settings cross the workspace facade to the selected daemon
   assert.deepEqual(next.params.params, { settings: patch });
   socket.reply(next, { settings: { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch } });
   assert.deepEqual((await update).settings, { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS, ...patch });
+});
+
+test("thread-scoped commands keep the identity they name and fall back to the scope thread", async context => {
+  const fixture = createWorkspaceClientFixture();
+  context.after(() => fixture.dispose());
+  const socket = await fixture.open();
+  const parent = ThreadReferenceSchema.parse("00000000-0000-4000-8000-0000000000a1");
+  const child = ThreadReferenceSchema.parse("00000000-0000-4000-8000-0000000000b2");
+  const daemon = fixture.workspace.daemon({ kind: "thread", threadId: parent });
+  const discard = daemon.git.arc.discardStash({ cwd: "C:/repo", harness: "codex", threadId: child });
+  const request = await socket.request("workspace/command");
+  assert.equal(request.params.method, "git/arc/stash/discard");
+  assert.equal(request.params.params.threadId, child);
+  socket.reply(request, { ok: true });
+  await discard;
+
+  const sessions = daemon.browse.sessions.read({});
+  const browse = await socket.request("workspace/command", socket.sent.indexOf(request) + 1);
+  assert.equal(browse.params.params.threadId, parent);
+  socket.reply(browse, { sessions: [] });
+  await sessions;
 });
 
 test("daemon requests made before the app connection opens are sent once it opens", async context => {
