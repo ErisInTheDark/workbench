@@ -29,6 +29,7 @@
  * - ReloadIcon: runtime reload glyph.
  * - StopIcon/PlayIcon/ClockIcon/WarningIcon/CircleAlertIcon: execution status and alert glyphs.
  * - PinIcon/FolderClosedIcon/FolderOpenIcon/FolderInputIcon/LockIcon/UnlockIcon: folder and ownership glyphs.
+ * - KeyRoundIcon/KeyRoundOffIcon: credential glyphs for authenticating and removing a credential.
  * - PennantIcon: claim pennant.
  * - OpenThreadIcon/ArchiveIcon: thread navigation and archive glyphs.
  * - WrapTextIcon/PreviewIcon: code display controls.
@@ -589,6 +590,22 @@ export function LockIcon(props: IconProps) {
 
 export function UnlockIcon(props: IconProps) {
   return <OutlinedIcon {...props}><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 9.9-1" /></OutlinedIcon>;
+}
+
+export function KeyRoundIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+    <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+  </OutlinedIcon>;
+}
+
+export function KeyRoundOffIcon(props: IconProps) {
+  return <OutlinedIcon {...props}>
+    <path d="M19.37 13.713a6.5 6.5 0 10-9.083-9.082" />
+    <path d="m2 2 20 20" />
+    <path d="M9.066 9.066A6.5 6.5 0 009.4 10.6l-6.814 6.814A2 2 0 002 18.828V21a1 1 0 001 1h3a1 1 0 001-1v-1a1 1 0 011-1h1a1 1 0 001-1v-1a1 1 0 011-1h.172a2 2 0 001.414-.586l.814-.814a6.5 6.5 0 001.534.334" />
+    <circle cx="16.5" cy="7.5" r="0.5" fill="currentColor" />
+  </OutlinedIcon>;
 }
 
 const bubblePath = "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719";

@@ -27,12 +27,18 @@ class FakeServer {
   readonly calls: string[] = [];
   closed = 0;
 
+  constructor(public reportedName: string | null = null) {}
+
   connect(endpoint: McpServerEndpoint): McpServerConnectionPort {
     this.endpoints.push(endpoint);
     return {
       listTools: async () => {
         if (this.failure) throw this.failure;
         return this.tools;
+      },
+      serverName: async () => {
+        if (this.failure) throw this.failure;
+        return this.reportedName;
       },
       callTool: async (name): Promise<CallToolResult> => {
         this.calls.push(name);
@@ -80,12 +86,12 @@ function setup(servers: Record<string, FakeServer>) {
 const signal = () => new AbortController().signal;
 
 test("only allowed tools the server currently offers are forwarded; allow-all covers tools added later", async () => {
-  const drive = new FakeServer();
+  const drive = new FakeServer("drive");
   drive.tools = [tool("SEARCH"), tool("EXECUTE")];
   const { create, close } = setup({ drive });
   try {
     const owner = create();
-    const { servers: [server] } = await owner.update({ action: "add", name: "drive", url: "https://drive.example/mcp" });
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
     const id = server!.id;
     await assert.rejects(owner.call({ server: "drive", tool: "SEARCH", arguments: {} }, signal()), /not allowed/u);
 
@@ -107,12 +113,13 @@ test("only allowed tools the server currently offers are forwarded; allow-all co
 });
 
 test("the credential reaches the server but never the snapshot or storage in plain text, and is unusable on another device", async () => {
-  const drive = new FakeServer();
+  const drive = new FakeServer("drive");
   drive.tools = [tool("SEARCH")];
   const { create, database, close } = setup({ drive });
   try {
+    const { servers: [added] } = await create().update({ action: "add", url: "https://drive.example/mcp" });
     const snapshot = await create().update({
-      action: "add", name: "drive", url: "https://drive.example/mcp", auth: { header: "x-consumer-api-key", value: "secret-key" },
+      action: "setAuth", id: added!.id, auth: { header: "x-consumer-api-key", value: "secret-key" },
     });
     assert.equal(JSON.stringify(snapshot).includes("secret-key"), false);
     assert.deepEqual(snapshot.servers[0]?.auth, { kind: "header", header: "x-consumer-api-key" });
@@ -130,30 +137,31 @@ test("the credential reaches the server but never the snapshot or storage in pla
 });
 
 test("one unreachable server is reported without hiding the others", async () => {
-  const drive = new FakeServer();
-  const docs = new FakeServer();
+  const drive = new FakeServer("drive");
+  const docs = new FakeServer("docs");
   drive.failure = new Error("connect ECONNREFUSED");
   docs.tools = [tool("READ_DOC", "Read a document\nwith detail")];
   const { create, close } = setup({ drive, docs });
   try {
     const owner = create();
-    await owner.update({ action: "add", name: "drive", url: "https://drive.example/mcp" });
-    const { servers } = await owner.update({ action: "add", name: "docs", url: "https://docs.example/mcp" });
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    const { servers } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setAllowAll", id: servers.find(server => server.name === "docs")!.id, allowAll: true });
     assert.deepEqual((await owner.read()).servers.map(server => server.catalog.status), ["error", "ready"]);
     const listing = await owner.listTools({}, signal());
     assert.match(listing, /^docs\/READ_DOC: Read a document$/mu);
-    assert.match(listing, /^drive: unavailable \(connect ECONNREFUSED\)$/mu);
+    // Unreachable when added, so it is named after its hostname.
+    assert.match(listing, /^drive\.example: unavailable \(connect ECONNREFUSED\)$/mu);
   } finally { close(); }
 });
 
 test("a query returns ranked allowed matches with input schemas; without one, every allowed tool is listed briefly", async () => {
-  const docs = new FakeServer();
+  const docs = new FakeServer("docs");
   docs.tools = [tool("UPLOAD", "Upload a file, then search it"), tool("SEARCH_FILES", "Find files by name"), tool("HIDDEN", "Search everything")];
   const { create, close } = setup({ docs });
   try {
     const owner = create();
-    const { servers: [server] } = await owner.update({ action: "add", name: "docs", url: "https://docs.example/mcp" });
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
     await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH_FILES", "UPLOAD"] });
     assert.equal(await owner.listTools({}, signal()), "docs/UPLOAD: Upload a file, then search it\ndocs/SEARCH_FILES: Find files by name\n");
     const matches = await owner.listTools({ query: "search" }, signal());
@@ -163,28 +171,54 @@ test("a query returns ranked allowed matches with input schemas; without one, ev
 });
 
 test("invalid settings store nothing; removal closes the connection and drops every row", async () => {
-  const drive = new FakeServer();
+  const drive = new FakeServer("drive");
   drive.tools = [tool("SEARCH")];
   const { create, database, close } = setup({ drive });
   try {
     const owner = create();
-    await assert.rejects(owner.update({ action: "add", name: "Drive!", url: "https://drive.example/mcp" }));
-    await assert.rejects(owner.update({ action: "add", name: "drive", url: "file:///etc/passwd" }));
-    await assert.rejects(owner.update({
-      action: "add", name: "drive", url: "https://drive.example/mcp", auth: { header: "Content-Type", value: "x" },
-    }));
+    await assert.rejects(owner.update({ action: "add", url: "file:///etc/passwd" }));
     assert.deepEqual((await owner.read()).servers, []);
 
-    const { servers: [server] } = await owner.update({
-      action: "add", name: "drive", url: "https://drive.example/mcp", auth: { header: "authorization", value: "Bearer t" },
-    });
-    await assert.rejects(owner.update({ action: "add", name: "drive", url: "https://drive.example/other" }), /already exists/u);
+    const { servers: [server] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await assert.rejects(owner.update({ action: "setAuth", id: server!.id, auth: { header: "Content-Type", value: "x" } }));
+    assert.equal((await owner.read()).servers[0]?.auth, null);
+    await owner.update({ action: "setAuth", id: server!.id, auth: { header: "authorization", value: "Bearer t" } });
     await owner.update({ action: "setTools", id: server!.id, tools: ["SEARCH"] });
     await owner.update({ action: "remove", id: server!.id });
-    assert.equal(drive.closed, 1);
+    assert.equal(drive.closed > 0, true);
     for (const table of ["mcp_servers", "mcp_server_tools", "mcp_server_auth"]) {
       assert.equal((database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count, 0);
     }
+  } finally { close(); }
+});
+
+test("servers are named after what they report, else their hostname, without colliding", async () => {
+  const drive = new FakeServer("Google Drive (Composio)");
+  const docs = new FakeServer(null);
+  const { create, close } = setup({ drive, docs });
+  try {
+    const owner = create();
+    await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    await owner.update({ action: "add", url: "https://drive.example/other" });
+    const { servers } = await owner.update({ action: "add", url: "https://docs.example/mcp" });
+    assert.deepEqual(servers.map(server => server.name), ["google-drive-composio", "google-drive-composio-2", "docs.example"]);
+  } finally { close(); }
+});
+
+test("a hostname-named server adopts its reported name once it connects, and reported names never change", async () => {
+  const drive = new FakeServer("Drive");
+  drive.failure = new Error("401");
+  const { create, close } = setup({ drive });
+  try {
+    const owner = create();
+    const { servers: [added] } = await owner.update({ action: "add", url: "https://drive.example/mcp" });
+    assert.equal(added?.name, "drive.example");
+    drive.failure = null;
+    await owner.update({ action: "refresh", id: added!.id });
+    assert.equal((await owner.read()).servers[0]?.name, "drive");
+    drive.reportedName = "Renamed Upstream";
+    await owner.update({ action: "refresh", id: added!.id });
+    assert.equal((await owner.read()).servers[0]?.name, "drive");
   } finally { close(); }
 });
 
@@ -251,7 +285,7 @@ async function startOAuthServer() {
         response.writeHead(401, { "WWW-Authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"` }).end();
         return;
       }
-      const mcp = new McpServer({ name: "fake", version: "1.0.0" });
+      const mcp = new McpServer({ name: "Composio", version: "1.0.0" });
       mcp.registerTool("whoami", { description: "Who is signed in" }, async () => ({ content: [{ type: "text", text: bearer }] }));
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       response.on("close", () => { void transport.close(); void mcp.close(); });
@@ -292,8 +326,9 @@ test("OAuth sign-in registers, exchanges a PKCE code once, refreshes silently an
   const { create, database, close } = setup({});
   const owner = create({ connect: undefined });
   try {
-    const { servers: [server] } = await owner.update({ action: "add", name: "composio", url: provider.url });
+    const { servers: [server] } = await owner.update({ action: "add", url: provider.url });
     assert.deepEqual(server?.catalog, { status: "signInRequired" });
+    assert.equal(server?.name, "127.0.0.1", "a server that needs sign-in first is named after its hostname");
     assert.equal(provider.registrations.length, 0, "background reads never register a client");
 
     const { authorizationUrl } = await owner.startSignIn({ id: server!.id, redirectUri: REDIRECT });
@@ -305,11 +340,12 @@ test("OAuth sign-in registers, exchanges a PKCE code once, refreshes silently an
     assert.ok(state);
     assert.deepEqual(provider.registrations[0]?.redirect_uris, [REDIRECT]);
 
-    assert.deepEqual(await owner.finishSignIn({ state, code: provider.approve(authorizationUrl) }), { outcome: "signedIn", server: "composio" });
+    assert.deepEqual(await owner.finishSignIn({ state, code: provider.approve(authorizationUrl) }), { outcome: "signedIn", server: "127.0.0.1" });
     await assert.rejects(owner.finishSignIn({ state, code: "replayed" }), /expired or was already used/u);
     const signedIn = await owner.read();
+    assert.equal(signedIn.servers[0]?.name, "composio", "the first successful connection adopts the reported name");
     assert.deepEqual(signedIn.servers[0]?.auth, { kind: "oauth" });
-    assert.deepEqual(signedIn.servers[0]?.catalog, { status: "ready", tools: [{ name: "whoami", description: "Who is signed in" }] });
+    assert.deepEqual(signedIn.servers[0]?.catalog, { status: "ready", tools: [{ name: "whoami", title: null, description: "Who is signed in" }] });
     assert.equal(/access-|refresh-/u.test(JSON.stringify(signedIn)), false);
     const stored = database.prepare("SELECT access_ciphertext FROM mcp_server_oauth_tokens").get() as { access_ciphertext: Buffer };
     assert.equal(stored.access_ciphertext.toString("utf8").includes("access-"), false);
@@ -338,7 +374,7 @@ test("a sign-in expires, a provider refusal stores nothing, and sign-out or a he
   const owner = create({ connect: undefined, now: () => now });
   const count = (table: string) => (database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count;
   try {
-    const { servers: [server] } = await owner.update({ action: "add", name: "composio", url: provider.url });
+    const { servers: [server] } = await owner.update({ action: "add", url: provider.url });
     const id = server!.id;
     const late = await owner.startSignIn({ id, redirectUri: REDIRECT });
     now += 11 * 60_000;
@@ -347,7 +383,7 @@ test("a sign-in expires, a provider refusal stores nothing, and sign-out or a he
 
     const refused = await owner.startSignIn({ id, redirectUri: REDIRECT });
     assert.deepEqual(await owner.finishSignIn({ state: new URL(refused.authorizationUrl).searchParams.get("state")!, error: "access_denied" }),
-      { outcome: "failed", server: "composio", detail: "access_denied" });
+      { outcome: "failed", server: "127.0.0.1", detail: "access_denied" });
     assert.equal(count("mcp_server_oauth_tokens"), 0);
 
     const signIn = async () => {

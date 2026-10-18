@@ -65,6 +65,27 @@ function sanitize(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ").slice(0, 300);
 }
 
+const NAME_LIMIT = 64;
+
+/** A reported server name squashed to the agent-facing name characters, or null when nothing usable remains. */
+function serverNameFrom(reported: string | null) {
+  const name = (reported ?? "").toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^[^a-z0-9]+|[-._]+$/gu, "").slice(0, NAME_LIMIT);
+  return name || null;
+}
+
+function hostnameOf(url: string) {
+  return serverNameFrom(new URL(url).hostname) ?? "mcp";
+}
+
+function uniqueName(base: string, taken: readonly string[]) {
+  if (!taken.includes(base)) return base;
+  for (let index = 2; ; index += 1) {
+    const suffix = `-${index}`;
+    const candidate = `${base.slice(0, NAME_LIMIT - suffix.length)}${suffix}`;
+    if (!taken.includes(candidate)) return candidate;
+  }
+}
+
 function credentialKey(serverId: string, header: string) {
   return `${serverId}\0${header.toLowerCase()}`;
 }
@@ -77,28 +98,57 @@ export default class WorkbenchMcpServerController {
 
   async read(): Promise<McpServerSettingsSnapshot> {
     const servers = await this.#servers();
-    return { servers: await Promise.all(servers.map(async (server): Promise<McpServerSnapshot> => {
-      const catalog = await this.#catalog(server);
+    const catalogs = await Promise.all(servers.map(server => this.#catalog(server)));
+    const names = await this.#adoptServerNames(servers, catalogs);
+    return { servers: servers.map((server, index): McpServerSnapshot => {
+      const catalog = catalogs[index]!;
       return {
-        id: server.id, name: server.name, url: server.url, allowAll: server.allowAll, allowedTools: server.allowedTools,
+        id: server.id, name: names.get(server.id) ?? server.name, url: server.url, allowAll: server.allowAll, allowedTools: server.allowedTools,
         auth: server.header ? { kind: "header", header: server.header.name } : server.oauth.signedIn ? { kind: "oauth" } : null,
         catalog: catalog.status === "ready"
-          ? { status: "ready", tools: catalog.tools.map(tool => ({ name: tool.name, description: tool.description })) }
+          ? { status: "ready", tools: catalog.tools.map(tool => ({ name: tool.name, title: tool.title ?? null, description: tool.description })) }
           : catalog,
       };
-    })) };
+    }) };
+  }
+
+  /**
+   * A server still named after its hostname (it could not report a name when added, e.g. before sign-in) takes its
+   * reported name on its first successful connection. Names taken from the server never change again.
+   */
+  async #adoptServerNames(servers: readonly StoredServer[], catalogs: readonly Catalog[]) {
+    const names = new Map<string, string>();
+    const taken = servers.map(server => server.name);
+    for (const [index, server] of servers.entries()) {
+      if (catalogs[index]?.status !== "ready" || server.name !== hostnameOf(server.url)) continue;
+      const reported = serverNameFrom(await this.#connection(server).serverName().catch(() => null));
+      if (!reported || reported === server.name) continue;
+      const name = uniqueName(reported, taken);
+      await this.options.database.executeTransaction([updateRows(mcpServers, { name }, { id: server.id })]);
+      taken[index] = name;
+      names.set(server.id, name);
+    }
+    return names;
   }
 
   async update(input: McpServerSettingsUpdate): Promise<McpServerSettingsSnapshot> {
     const update = McpServerSettingsUpdateSchema.parse(input);
     const servers = await this.#servers();
     if (update.action === "add") {
-      if (servers.some(server => server.name === update.name)) throw new Error(`An MCP server named ${update.name} already exists.`);
       const id = randomUUID();
-      await this.options.database.executeTransaction([
-        insertRow(mcpServers, { id, name: update.name, url: update.url, allow_all: 0, created_at: this.#now() }),
-        ...update.auth ? [await this.#sealHeader(id, update.auth)] : [],
-      ]);
+      const probe = this.#connection({
+        id, name: "", url: update.url, allowAll: false, allowedTools: [], header: null, oauth: { redirectUri: null, signedIn: false },
+      });
+      const reported = await probe.serverName().catch(() => null);
+      const name = uniqueName(serverNameFrom(reported) ?? hostnameOf(update.url), servers.map(server => server.name));
+      try {
+        await this.options.database.executeTransaction([
+          insertRow(mcpServers, { id, name, url: update.url, allow_all: 0, created_at: this.#now() }),
+        ]);
+      } catch (error) {
+        await this.#disconnect(id);
+        throw error;
+      }
       return await this.read();
     }
     const server = servers.find(candidate => candidate.id === update.id);

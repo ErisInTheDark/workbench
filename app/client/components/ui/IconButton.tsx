@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - default IconButton: circular or multi-glyph pill action or link with shared border, focus, pressed and invalid styling.
+ * - iconButtonClassName: the same look for controls that render their own trigger element.
  */
 "use client";
 
@@ -20,15 +21,18 @@ type IconButtonProps = {
   | (Omit<ComponentPropsWithRef<"a">, "aria-label"> & { as: "a" })
 );
 
-export default function IconButton({
-  label, shape = "circle", size = "medium", tone = "default", display = "bordered", pendingHalo = false, className = "", title = label, children, ...props
-}: IconButtonProps) {
+type IconButtonLook = Pick<IconButtonProps, "shape" | "size" | "tone" | "display" | "pendingHalo">;
+
+/** The icon button look, for controls that render their own trigger element (such as menu triggers). */
+export function iconButtonClassName({
+  shape = "circle", size = "medium", tone = "default", display = "bordered", pendingHalo = false,
+}: IconButtonLook = {}) {
   const sizeClassName = shape === "pill"
     // Each child gets a circle-sized cell, so glyphs sit as far apart as separate buttons would.
     ? `[&>*]:(flex h-full items-center justify-center) ${size === "font" ? "h-[1.75em] [&>*]:min-w-[1.75em]"
       : size === "compact" ? "h-6 [&>*]:min-w-6" : size === "small" ? "h-8 [&>*]:min-w-8" : "h-9 [&>*]:min-w-9"}`
     : size === "font" ? "size-[1.75em]" : size === "compact" ? "size-6" : size === "small" ? "size-8" : "size-9";
-  const classes = `
+  return `
       inline-flex shrink-0 items-center justify-center rounded-full border bg-transparent text-fg/muted transition enabled:cursor-pointer
       ${pendingHalo ? "relative isolate" : ""}
       [&:not(:disabled)]:hover:border-[color-mix(in_srgb,var(--text)_18%,transparent)] [&:not(:disabled)]:hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]
@@ -40,8 +44,13 @@ export default function IconButton({
       ${display === "hover-border" ? "border-transparent" : "border-[color-mix(in_srgb,var(--text)_10%,transparent)]"}
       ${sizeClassName}
       ${tone === "danger" ? "[&:not(:disabled)]:hover:text-danger" : "[&:not(:disabled)]:hover:text-text"}
-      ${className}
     `;
+}
+
+export default function IconButton({
+  label, shape = "circle", size = "medium", tone = "default", display = "bordered", pendingHalo = false, className = "", title = label, children, ...props
+}: IconButtonProps) {
+  const classes = `${iconButtonClassName({ shape, size, tone, display, pendingHalo })} ${className}`;
   const content = <>{pendingHalo ? <WorkbenchSpinningBorder radius="50cqb" /> : null}{children}</>;
   if (props.as === "a") {
     const { as, ...linkProps } = props;

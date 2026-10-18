@@ -21,12 +21,15 @@ export interface McpServerEndpoint {
 
 export interface McpServerTool {
   name: string;
+  title?: string | null;
   description: string;
   inputSchema: Record<string, unknown>;
 }
 
 export interface McpServerConnectionPort {
   listTools(signal?: AbortSignal): Promise<McpServerTool[]>;
+  /** The `serverInfo.name` the server reported when its session started. */
+  serverName(): Promise<string | null>;
   callTool(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
   close(): Promise<void>;
 }
@@ -42,6 +45,10 @@ function describeFailure(error: unknown, signedIn: boolean) {
   if (error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403)) {
     return new Error(`The server rejected the credential (${error.code}). Check the credential header and value.`, { cause: error });
   }
+  // The SDK embeds the whole response body (often an HTML page) in its message; the status says enough.
+  if (error instanceof StreamableHTTPError && error.code !== undefined && error.code > 0) {
+    return new Error(`The URL answered HTTP ${error.code} instead of an MCP server. Check the URL.`, { cause: error });
+  }
   return error;
 }
 
@@ -56,6 +63,10 @@ export default class McpServerConnection implements McpServerConnectionPort {
     // A failed or cancelled read must not stay cached for the next caller.
     tools.catch(() => { if (this.#tools === tools) this.#tools = null; });
     return tools;
+  }
+
+  serverName() {
+    return this.#use(async client => client.getServerVersion()?.name?.trim() || null);
   }
 
   callTool(name: string, args: Record<string, unknown>, signal: AbortSignal) {
@@ -77,7 +88,7 @@ export default class McpServerConnection implements McpServerConnectionPort {
     for (let page = 0; page < MAX_CATALOGUE_PAGES; page += 1) {
       const result = await client.listTools(cursor ? { cursor } : {}, { signal, timeout: CATALOGUE_TIMEOUT_MS });
       tools.push(...result.tools.map(tool => ({
-        name: tool.name, description: tool.description ?? "", inputSchema: tool.inputSchema as Record<string, unknown>,
+        name: tool.name, title: tool.title ?? tool.annotations?.title ?? null, description: tool.description ?? "", inputSchema: tool.inputSchema as Record<string, unknown>,
       })));
       cursor = result.nextCursor;
       if (!cursor) return tools;

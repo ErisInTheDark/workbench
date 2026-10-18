@@ -55,6 +55,23 @@ test("the credential header authenticates catalogue reads and forwarded calls", 
   }
 });
 
+test("a URL that is not an MCP server reports its HTTP status, not its page body", async () => {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(404, { "Content-Type": "text/html" }).end("<!doctype html><title>Example Domain</title>");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const connection = new McpServerConnection({ url: `http://127.0.0.1:${address.port}/mcp`, headers: {} });
+  try {
+    await assert.rejects(connection.listTools(), (error: Error) =>
+      /answered HTTP 404/u.test(error.message) && !error.message.includes("<"));
+  } finally {
+    await connection.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 test("a refused credential is reported as such, and a failed connection is not reused", async () => {
   const server = await startServer();
   const connection = new McpServerConnection({ url: server.url, headers: { "x-consumer-api-key": "rotated" } });

@@ -11,8 +11,8 @@
  */
 import { z } from "zod";
 
-export const McpServerNameSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/u,
-  "Use 1-64 lowercase letters, digits, - or _, starting with a letter or digit.");
+export const McpServerNameSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u,
+  "Use 1-64 lowercase letters, digits, ., - or _, starting with a letter or digit.");
 
 export const McpServerUrlSchema = z.string().trim().max(2048).refine(value => {
   try {
@@ -40,7 +40,12 @@ const credential = z.object({
 const catalog = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("ready"),
-    tools: z.array(z.object({ name: McpServerToolNameSchema, description: z.string() }).strict()),
+    tools: z.array(z.object({
+      name: McpServerToolNameSchema,
+      /** Human-readable title the server gives the tool, when it gives one. */
+      title: z.string().max(256).nullable().default(null),
+      description: z.string(),
+    }).strict()),
   }).strict(),
   z.object({ status: z.literal("signInRequired") }).strict(),
   z.object({ status: z.literal("error"), detail: z.string().max(300) }).strict(),
@@ -68,7 +73,8 @@ export type McpServerSettingsSnapshot = z.infer<typeof McpServerSettingsSnapshot
 
 const id = z.uuid();
 export const McpServerSettingsUpdateSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("add"), name: McpServerNameSchema, url: McpServerUrlSchema, auth: credential.optional() }).strict(),
+  /** The daemon names the server from its own `serverInfo.name`, falling back to the URL's hostname. */
+  z.object({ action: z.literal("add"), url: McpServerUrlSchema }).strict(),
   z.object({ action: z.literal("remove"), id }).strict(),
   z.object({ action: z.literal("setAuth"), id, auth: credential.nullable() }).strict(),
   z.object({ action: z.literal("setAllowAll"), id, allowAll: z.boolean() }).strict(),
