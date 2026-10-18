@@ -110,7 +110,7 @@ In Inspect mode:
 - do not edit files
 - do not ask for implementation approval yet
 
-Before leaving Inspect, complete Plan Analysis checks.
+Before leaving Inspect, load skills triggered by inspected work and complete Plan Analysis checks.
 
 ## Brief Mode
 

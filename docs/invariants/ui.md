@@ -6,7 +6,7 @@
   - always use custom scrollbars
 - Support both light and dark color schemes in every visual change
 - Make desktop and mobile behavior deliberate, layouts and sticky controls
-- Prefer browser use validation unless overridden by user instructions
+- Browser use is activated for UI validation; prefer it unless user instructions override
 - Prefer workbench's extra tailwind features (they compose correctly)
   - nested variant grouping `motion-reduce:(transition-none stuck:(animate-none hover:bg-red-500))`
   - any whitespace within square brackets [] converts to standard tailwind `_`, allowing multiline `transition`/`transform`/gradients
