@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default WorkbenchFeedbackRepository: record and delete agent feedback, and read importance-weighted stats summaries, paged agent reports, and one report by id as a stats section.
+ * - default WorkbenchFeedbackRepository: record, resolve, reopen, delete and expire agent feedback, and read importance-weighted stats summaries
+ *   (open plus recently resolved), paged open agent reports, and one report by id as a stats section.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -8,6 +9,7 @@ import { statsRangeShape } from "workbench-shared/workbench/stats/workbench-stat
 import {
   WORKBENCH_FEEDBACK_CATEGORIES,
   WORKBENCH_FEEDBACK_PAGE_SIZE,
+  WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS,
   WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT,
   type WorkbenchFeedbackCategory,
   type WorkbenchFeedbackChannel,
@@ -26,6 +28,8 @@ interface FeedbackFilter {
   channel?: WorkbenchFeedbackChannel | null;
   endedAt: number | null;
   projectIds: readonly string[] | null;
+  /** Open reports, or reports resolved at or after `since`. */
+  resolution: { kind: "open" } | { kind: "resolved"; since: number };
   startedAt: number;
   /** When set, wb reports are scoped by this owner instead of their filing project. */
   workbenchProjectId?: string | null;
@@ -37,13 +41,16 @@ interface ScoredRow {
   createdAt: number;
   id: number;
   importance: number;
+  resolvedAt: number | null;
   scored: boolean;
 }
 
 interface StoredScoreRow {
   category: WorkbenchFeedbackCategory; channel: WorkbenchFeedbackChannel; created_at: number;
-  id: number; model: string | null; reasoning_effort: string | null;
+  id: number; model: string | null; reasoning_effort: string | null; resolved_at: number | null;
 }
+
+const OPEN = { kind: "open" } as const;
 
 function scoreRow(row: StoredScoreRow): ScoredRow {
   return {
@@ -51,6 +58,7 @@ function scoreRow(row: StoredScoreRow): ScoredRow {
     channel: row.channel,
     createdAt: row.created_at,
     id: row.id,
+    resolvedAt: row.resolved_at,
     ...scoreFeedbackImportance({ category: row.category, model: row.model, reasoningEffort: row.reasoning_effort }),
   };
 }
@@ -82,32 +90,55 @@ export default class WorkbenchFeedbackRepository {
       .run(JSON.stringify(ids)).changes;
   }
 
+  /** Resolving keeps an earlier resolution time; reopening clears it. Counts only reports whose state changed. */
+  setResolved(ids: readonly number[], resolved: boolean, now: number) {
+    if (!ids.length) return 0;
+    return this.database.prepare(`
+      UPDATE workbench_agent_feedback SET resolved_at = @resolvedAt
+      WHERE id IN (SELECT value FROM json_each(@ids)) AND (resolved_at IS NULL) = @open
+    `).run({ ids: JSON.stringify(ids), open: resolved ? 1 : 0, resolvedAt: resolved ? now : null }).changes;
+  }
+
+  /** Retention: resolved reports older than the resolved view's window are gone for good. */
+  expireResolved(now: number) {
+    return this.database.prepare("DELETE FROM workbench_agent_feedback WHERE resolved_at < ?")
+      .run(now - WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS).changes;
+  }
+
   /**
    * The stats view's section. Project reports stay with the project that filed them; wb reports are about
-   * Workbench itself, so they belong to the Workbench project whichever project filed them.
+   * Workbench itself, so they belong to the Workbench project whichever project filed them. Open reports follow the
+   * period; resolved ones follow their retention window instead, so a resolution never hides behind an old filing date.
    */
-  summary(projectIds: readonly string[] | null, startedAt: number, endedAt: number, workbenchProjectId: string | null = null): WorkbenchStatsFeedback {
-    const rows = this.#scored({ projectIds, startedAt, endedAt, workbenchProjectId });
+  summary(projectIds: readonly string[] | null, startedAt: number, endedAt: number, workbenchProjectId: string | null = null, now = Date.now()): WorkbenchStatsFeedback {
+    const rows = this.#scored({ projectIds, resolution: OPEN, startedAt, endedAt, workbenchProjectId });
     const counts = WORKBENCH_FEEDBACK_CATEGORIES
       .map((category) => ({ category, count: rows.filter((row) => row.category === category).length }))
       .filter(({ count }) => count > 0);
     const items = ordered(rows, "importance").slice(0, WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT);
-    const details = this.#details(items);
+    const resolved = this.#scored({
+      projectIds, resolution: { kind: "resolved", since: now - WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS },
+      startedAt: 0, endedAt: null, workbenchProjectId,
+    }).sort((left, right) => right.resolvedAt! - left.resolvedAt! || right.id - left.id).slice(0, WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT);
+    const details = this.#details([...items, ...resolved]);
     return {
       counts,
       items: items.map((row) => details.get(row.id)!),
       ownership: this.#ownership({ projectIds, startedAt, endedAt }),
+      resolved: resolved.map((row) => details.get(row.id)!),
       total: rows.length,
       workbenchProjectId: workbenchProjectId ? new WorkbenchProjectRepository(this.database).resolveStoredReference(workbenchProjectId) : null,
     };
   }
 
+  /** Agents read only open reports; resolved ones are already handled. */
   read(request: WorkbenchFeedbackReadRequest, now = Date.now()): WorkbenchFeedbackReadResponse {
     const rows = ordered(this.#scored({
       category: request.category,
       channel: request.channel,
       endedAt: null,
       projectIds: request.projectIds,
+      resolution: OPEN,
       startedAt: request.range === "all" ? 0 : statsRangeShape(request.range, now).startedAt,
     }), request.sort);
     const pages = Math.max(1, Math.ceil(rows.length / WORKBENCH_FEEDBACK_PAGE_SIZE));
@@ -116,15 +147,15 @@ export default class WorkbenchFeedbackRepository {
     return { page: request.page, pages, rows: page.map((row) => details.get(row.id)!) };
   }
 
-  /** The stats section narrowed to one report by id, whatever its scope or age; empty once deleted. */
+  /** The stats section narrowed to one report by id, whatever its scope, age or resolution; empty once deleted. */
   report(id: number): WorkbenchStatsFeedback {
     const row = this.database.prepare(`
-      SELECT id, channel, category, model, reasoning_effort, created_at FROM workbench_agent_feedback WHERE id = ?
+      SELECT id, channel, category, model, reasoning_effort, created_at, resolved_at FROM workbench_agent_feedback WHERE id = ?
     `).get(id) as StoredScoreRow | undefined;
     const item = row ? this.#details([scoreRow(row)]).get(id) : undefined;
     return item
-      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], total: 1, workbenchProjectId: null }
-      : { counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null };
+      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], resolved: [], total: 1, workbenchProjectId: null }
+      : { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null };
   }
 
   /** Importance depends on the maintained trust registry, so it is computed on read rather than stored. */
@@ -134,9 +165,10 @@ export default class WorkbenchFeedbackRepository {
     const ownedByWorkbench = filter.workbenchProjectId !== undefined;
     const workbench = filter.workbenchProjectId ? projects.resolveStoredReference(filter.workbenchProjectId) : null;
     const rows = this.database.prepare(`
-      SELECT id, channel, category, model, reasoning_effort, created_at
+      SELECT id, channel, category, model, reasoning_effort, created_at, resolved_at
       FROM workbench_agent_feedback
       WHERE created_at >= @startedAt AND (@endedAt IS NULL OR created_at < @endedAt)
+        AND (CASE WHEN @resolvedSince IS NULL THEN resolved_at IS NULL ELSE resolved_at >= @resolvedSince END)
         AND (
           CASE WHEN @ownedByWorkbench AND channel = 'wb'
             THEN @workbenchInScope
@@ -151,6 +183,7 @@ export default class WorkbenchFeedbackRepository {
       endedAt: filter.endedAt,
       ownedByWorkbench: ownedByWorkbench ? 1 : 0,
       projects: scope === null ? null : JSON.stringify(scope),
+      resolvedSince: filter.resolution.kind === "resolved" ? filter.resolution.since : null,
       startedAt: filter.startedAt,
       workbenchInScope: workbench !== null && (scope === null || scope.includes(workbench)) ? 1 : 0,
     }) as StoredScoreRow[];
@@ -181,6 +214,7 @@ export default class WorkbenchFeedbackRepository {
         projectId: row.project_id,
         reasoningEffort: row.reasoning_effort,
         report: row.report,
+        resolvedAt: score.resolvedAt,
         scored: score.scored,
         threadId: row.thread_id,
         title: row.title,

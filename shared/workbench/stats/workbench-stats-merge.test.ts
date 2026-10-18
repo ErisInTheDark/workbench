@@ -103,35 +103,40 @@ test("tools price every tool from the attached catalogue and keep each period's 
   ]);
 });
 
-test("feedback merges reports by importance and names the daemon each id belongs to", () => {
-  const item = (id: number, importance: number) => ({
+test("feedback merges open reports by importance and resolved ones by latest resolution, naming the daemon each id belongs to", () => {
+  const item = (id: number, importance: number, resolvedAt: number | null = null) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id, importance,
-    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null,
+    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", resolvedAt, scored: true, threadId: null,
     title: "Stats action fails",
   });
-  const feedback = (items: ReturnType<typeof item>[], ownership: Array<{ daemonId: string; id: number }> = []) => ({
+  const feedback = (items: ReturnType<typeof item>[], resolved: ReturnType<typeof item>[] = []) => ({
     ...EMPTY.feedback,
     feedback: {
       counts: [{ category: "bug" as const, count: items.length }],
       items,
-      ownership,
+      ownership: [],
+      resolved,
       total: items.length,
       workbenchProjectId: null,
     },
   });
-  const merged = merge<"feedback">([source("here", feedback([item(1, 0.2)]), true), source("there", feedback([item(1, 0.9)]))]).feedback;
+  const merged = merge<"feedback">([
+    source("here", feedback([item(1, 0.2)], [item(2, 0.9, 10)]), true),
+    source("there", feedback([item(1, 0.9)], [item(2, 0.1, 20)])),
+  ]).feedback;
   assert.deepEqual(merged.items.map(({ daemonId, id }) => [daemonId, id]), [["there", 1], ["here", 1]]);
+  assert.deepEqual(merged.resolved.map(({ daemonId, id }) => [daemonId, id]), [["there", 2], ["here", 2]]);
   assert.deepEqual([merged.total, merged.counts], [2, [{ category: "bug", count: 2 }]]);
 });
 
 test("feedback ownership follows source daemon and id across machines", () => {
   const item = (title: string) => ({
     category: "bug" as const, channel: "wb" as const, createdAt: 1, daemonId: null, harness: null, id: 7, importance: 0.5,
-    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", scored: true, threadId: null, title,
+    model: null, owned: false, projectId: "p", reasoningEffort: null, report: "r", resolvedAt: null, scored: true, threadId: null, title,
   });
   const feedback = (row: ReturnType<typeof item>, ownership: Array<{ daemonId: string; id: number }> = []) => ({
     ...EMPTY.feedback,
-    feedback: { counts: [{ category: "bug" as const, count: 1 }], items: [row], ownership, total: 1, workbenchProjectId: null },
+    feedback: { counts: [{ category: "bug" as const, count: 1 }], items: [row], ownership, resolved: [], total: 1, workbenchProjectId: null },
   });
   const merged = merge<"feedback">([
     source("here", feedback(item("Here"))),

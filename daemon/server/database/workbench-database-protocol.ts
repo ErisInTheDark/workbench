@@ -224,6 +224,8 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "recordFeedback"; entry: WorkbenchFeedbackRecord; now: number }
   | { type: "readFeedback"; request: WorkbenchFeedbackReadRequest; now?: number }
   | { type: "deleteFeedback"; ids: readonly number[] }
+  | { type: "resolveFeedback"; ids: readonly number[]; resolved: boolean; now: number }
+  | { type: "expireResolvedFeedback"; now: number }
   | { type: "beginStatsImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }
   | { type: "addStatsClaimDiscoveries"; runId: string; discoveries: WorkbenchGitClaimImportDiscovery[]; now: number }
   | { type: "claimStatsUsageImport"; runId: string; harnesses: WorkbenchHarness[]; now: number }

@@ -32,7 +32,7 @@ export const testStatsRoutes = {
 export function testFeedbackItem(overrides: Partial<WorkbenchFeedbackItem> = {}): WorkbenchFeedbackItem {
   return {
     category: "bug", channel: "wb", createdAt: 1_000, harness: "codex", id: 53, importance: 0.8, model: "openai/gpt-5.6",
-    owned: false, projectId: "project-one", reasoningEffort: "high", report: "Stored report text.", scored: true, threadId: "thread-one",
+    owned: false, projectId: "project-one", reasoningEffort: "high", report: "Stored report text.", resolvedAt: null, scored: true, threadId: "thread-one",
     title: "Stored report title", ...overrides,
   };
 }
@@ -44,8 +44,8 @@ export const TEST_STATS_THREAD_LOCATION = { daemonId: TEST_STATS_DAEMON_ID, proj
 export function testFeedbackReportSection(item: WorkbenchFeedbackItem | null): WorkbenchStatsResponse {
   return {
     feedback: item
-      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], total: 1, workbenchProjectId: null }
-      : { counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null },
+      ? { counts: [{ category: item.category, count: 1 }], items: [item], ownership: [], resolved: [], total: 1, workbenchProjectId: null }
+      : { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null },
     generatedAt: 1, section: "feedback",
   };
 }

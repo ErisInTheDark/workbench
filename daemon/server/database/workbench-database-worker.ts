@@ -655,6 +655,17 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
     post({ id: request.id, type: "mutationResult", result: { changes: new WorkbenchFeedbackRepository(database).delete(request.ids) } });
     return;
   }
+  if (request.type === "resolveFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    const changes = new WorkbenchFeedbackRepository(database).setResolved(request.ids, request.resolved, request.now);
+    post({ id: request.id, type: "mutationResult", result: { changes } });
+    return;
+  }
+  if (request.type === "expireResolvedFeedback") {
+    if (!database) throw new Error("Workbench database is not initialized");
+    post({ id: request.id, type: "mutationResult", result: { changes: new WorkbenchFeedbackRepository(database).expireResolved(request.now) } });
+    return;
+  }
   if (request.type === "readFeedback") {
     if (!database) throw new Error("Workbench database is not initialized");
     post({ id: request.id, type: "feedbackResult", result: new WorkbenchFeedbackRepository(database).read(request.request, request.now) });

@@ -224,6 +224,7 @@ export interface WorkbenchDaemonRequestMap extends WorkbenchThreadActionMap {
   "stats/import/start": { params: object; result: WorkbenchStatsImportProgress };
   "stats/rate-limits/refresh": { params: object; result: { ok: true } };
   "stats/feedback/delete": { params: { ids: number[] }; result: { deleted: number } };
+  "stats/feedback/resolve": { params: { ids: number[]; resolved: boolean }; result: { changed: number } };
   "skills/read": { params: { projectId: string | null; provider: string }; result: WorkbenchSkillCatalogResponse };
   "thread/identity/resolve": { params: WorkbenchThreadIdentityResolveRequest; result: { data: WorkbenchThreadIdentityResolution | null } };
 }

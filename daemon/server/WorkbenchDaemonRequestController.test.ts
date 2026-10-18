@@ -250,6 +250,7 @@ function createController(options: {
     },
     stats: {
       deleteFeedback: async (ids) => ids.length,
+      resolveFeedback: async (ids, resolved) => resolved ? ids.length : 0,
       observeAccountLimits: (harness, limits) => { observedLimits.push({ harness, limitId: limits.rateLimits.limitId }); },
       refreshRateLimits: async () => { statsRefreshes += 1; },
       startImport: async () => ({
@@ -544,6 +545,8 @@ test("stats commands refresh limits while reads arrive only through observations
   assert.deepEqual((await controller.handle({ id: 3, method: "stats/rate-limits/refresh", params: {} })).result, { ok: true });
   assert.equal(statsRefreshes(), 1);
   assert.deepEqual((await controller.handle({ id: 4, method: "stats/feedback/delete", params: { ids: [1, 2] } })).result, { deleted: 2 });
+  assert.deepEqual((await controller.handle({ id: 5, method: "stats/feedback/resolve", params: { ids: [1, 2], resolved: true } })).result, { changed: 2 });
+  assert.equal((await controller.handle({ id: 6, method: "stats/feedback/resolve", params: { ids: [1] } })).error?.code, -32602);
   for (const legacy of ["stats/read", "stats/read/scoped", "stats/read/detailed", "stats/read/efficiency", "stats/read/efficiency/v2"]) {
     assert.equal(controller.accepts(legacy), false);
   }

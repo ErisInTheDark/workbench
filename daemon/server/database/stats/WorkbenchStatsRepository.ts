@@ -181,7 +181,7 @@ export default class WorkbenchStatsRepository {
           return {
             feedback: request.feedbackId
               ? feedback.report(request.feedbackId)
-              : feedback.summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId),
+              : feedback.summary(request.projectIds, period.startedAt, period.endedAt, workbenchProjectId, now),
             generatedAt: now, section: "feedback",
           };
         }

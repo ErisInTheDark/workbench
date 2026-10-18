@@ -1,5 +1,5 @@
 /*
- * No exports. Tests protect feedback scope, windows, filters, ordering, paging, single-report reads, and thread-independent retention.
+ * No exports. Tests protect feedback scope, windows, filters, ordering, paging, single-report reads, resolution and its retention, and thread-independent retention.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -65,10 +65,10 @@ test("one report reads by id exactly as the stats summary lists it, whatever its
     repository.record(report({ channel: "project", category: "bug" }), now - day);
     const listed = repository.summary(null, 0, now + day).items.find((item) => item.id === id);
     assert.deepEqual(repository.report(id), {
-      counts: [{ category: "waste", count: 1 }], items: [listed], ownership: [], total: 1, workbenchProjectId: null,
+      counts: [{ category: "waste", count: 1 }], items: [listed], ownership: [], resolved: [], total: 1, workbenchProjectId: null,
     });
     repository.delete([id]);
-    assert.deepEqual(repository.report(id), { counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null });
+    assert.deepEqual(repository.report(id), { counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null });
   } finally {
     database.close();
   }
@@ -144,6 +144,51 @@ test("deleting feedback removes only the given reports", () => {
     assert.equal(repository.delete([...removed, 999]), 2);
     assert.deepEqual(repository.summary(null, 0, now + 1, testProjectIds.project).items.map(({ id }) => id), [kept]);
     assert.equal(repository.delete([]), 0);
+  } finally {
+    database.close();
+  }
+});
+
+test("resolved reports leave the open summary and agent reads, list by latest resolution whatever the period, and reopen", () => {
+  const { database, repository } = setup();
+  try {
+    const open = repository.record(report(), now - day).id;
+    const old = repository.record(report({ category: "bug" }), now - 90 * day).id;
+    const recent = repository.record(report(), now - 2 * day).id;
+    assert.equal(repository.setResolved([old], true, now - 3 * day), 1);
+    assert.equal(repository.setResolved([recent, old], true, now - day), 1, "re-resolving keeps the first resolution");
+
+    const summary = repository.summary([testProjectIds.project], now - 7 * day, now + 1, testProjectIds.project, now);
+    assert.deepEqual([summary.total, summary.items.map(({ id }) => id)], [1, [open]]);
+    assert.deepEqual(summary.counts, [{ category: "waste", count: 1 }]);
+    assert.deepEqual(summary.resolved.map(({ id, resolvedAt }) => [id, resolvedAt]), [[recent, now - day], [old, now - 3 * day]]);
+    const agentRows = repository.read({ category: null, channel: null, page: 1, projectIds: null, range: "all", sort: "newest" }, now).rows;
+    assert.deepEqual(agentRows.map(({ id }) => id), [open]);
+
+    assert.equal(repository.setResolved([recent], false, now), 1);
+    const reopened = repository.summary([testProjectIds.project], now - 7 * day, now + 1, testProjectIds.project, now);
+    assert.deepEqual(reopened.items.map(({ id, resolvedAt }) => [id, resolvedAt]).sort(), [[open, null], [recent, null]].sort());
+    assert.deepEqual(reopened.resolved.map(({ id }) => id), [old]);
+  } finally {
+    database.close();
+  }
+});
+
+test("resolved reports disappear once their resolution leaves the retention window, and retention deletes them", () => {
+  const { database, repository } = setup();
+  try {
+    const project = report({ channel: "project" });
+    const kept = repository.record(project, now - 30 * day).id;
+    const expired = repository.record(project, now - 30 * day).id;
+    const open = repository.record(project, now - 30 * day).id;
+    repository.setResolved([kept], true, now - 6 * day);
+    repository.setResolved([expired], true, now - 8 * day);
+
+    assert.deepEqual(repository.summary(null, 0, now + 1, null, now).resolved.map(({ id }) => id), [kept]);
+    assert.equal(repository.expireResolved(now), 1);
+    assert.equal(repository.report(expired).total, 0);
+    assert.equal(repository.report(kept).items[0]?.resolvedAt, now - 6 * day);
+    assert.equal(repository.report(open).total, 1);
   } finally {
     database.close();
   }

@@ -12,7 +12,7 @@ import { feedbackAddressProjectId, feedbackReference, feedbackSearchText, select
 
 const item = (overrides: Partial<WorkbenchFeedbackItem>): WorkbenchFeedbackItem => ({
   category: "bug", channel: "project", createdAt: 1, daemonId: null, harness: "claude", id: 1, importance: 0.89, model: "claude-opus-5-5",
-  owned: false, projectId: "game", reasoningEffort: "medium", report: "it broke", scored: true, threadId: "thread",
+  owned: false, projectId: "game", reasoningEffort: "medium", report: "it broke", resolvedAt: null, scored: true, threadId: "thread",
   title: "Stats action fails", ...overrides,
 });
 

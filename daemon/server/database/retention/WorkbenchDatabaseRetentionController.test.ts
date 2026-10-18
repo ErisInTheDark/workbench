@@ -14,7 +14,10 @@ test("retention delegates live observation sampling for each expiry dispatch", a
   const owner = new WorkbenchDatabaseRetentionController({
     runRetention: async (_cutoffs, _cacheCutoff, _signal, readObservedThreadIds) => {
       protections.push(readObservedThreadIds?.() ?? []);
-      return { expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0, fullCompaction: false, reclaimedPages: 0 };
+      return {
+        expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0, expiredResolvedFeedback: 0,
+        fullCompaction: false, reclaimedPages: 0,
+      };
     },
   }, () => 0, createScheduler().scheduling, () => observed);
   try {
@@ -58,6 +61,7 @@ test("retention starts immediately, uses exact clocks, and never overlaps", asyn
     expiredTurns: number;
     expiredAssets: number;
     expiredProposalCaches: number;
+    expiredResolvedFeedback: number;
     fullCompaction: boolean;
     reclaimedPages: number;
   }>();
@@ -90,7 +94,7 @@ test("retention starts immediately, uses exact clocks, and never overlaps", asyn
   assert.equal(calls.length, 1);
 
   first.resolve({
-    expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0,
+    expiredResults: 0, expiredTurns: 0, expiredAssets: 0, expiredProposalCaches: 0, expiredResolvedFeedback: 0,
     fullCompaction: false, reclaimedPages: 0,
   });
   await controller.run();

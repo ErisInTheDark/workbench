@@ -677,6 +677,8 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     }
     const eviction = await step({ type: "evictProposalCaches", cutoff: proposalCacheCutoff });
     if (eviction.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${eviction.type}`);
+    const resolvedFeedback = await step({ type: "expireResolvedFeedback", now: cutoffs.expiredAt });
+    if (resolvedFeedback.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected retention response: ${resolvedFeedback.type}`);
     let fullCompaction = false;
     let reclaimedPages = 0;
     for (;;) {
@@ -687,11 +689,12 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
       if (!reclamation.remainingFreePages || !reclamation.reclaimedPages) break;
     }
     const result = {
-      ...expiry.result, expiredAssets, expiredProposalCaches: eviction.result.changes, fullCompaction, reclaimedPages,
+      ...expiry.result, expiredAssets, expiredProposalCaches: eviction.result.changes,
+      expiredResolvedFeedback: resolvedFeedback.result.changes, fullCompaction, reclaimedPages,
     };
     this.#report({
       source: "database", operation: "retention", phase: "completed", level: "info",
-      detail: `${result.expiredResults} results, ${result.expiredTurns} turns, ${result.expiredAssets} assets, ${result.expiredProposalCaches} proposal caches, ${result.reclaimedPages} pages`,
+      detail: `${result.expiredResults} results, ${result.expiredTurns} turns, ${result.expiredAssets} assets, ${result.expiredProposalCaches} proposal caches, ${result.expiredResolvedFeedback} resolved feedback reports, ${result.reclaimedPages} pages`,
       elapsedMs: performance.now() - startedAt, progress: null,
     });
     return result;
@@ -998,6 +1001,13 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     await this.start();
     const response = await this.#request({ type: "deleteFeedback", ids });
     if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback delete response: ${response.type}`);
+    return response.result.changes;
+  }
+
+  async resolveFeedback(ids: readonly number[], resolved: boolean, now = Date.now()) {
+    await this.start();
+    const response = await this.#request({ type: "resolveFeedback", ids, resolved, now });
+    if (response.type !== "mutationResult") throw new WorkbenchDatabaseFailure(`Unexpected feedback resolve response: ${response.type}`);
     return response.result.changes;
   }
 

@@ -8,7 +8,7 @@ import { useContext, useState } from "react";
 
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
 import PrimaryButton from "../../ui/PrimaryButton";
-import deleteFeedbackReports from "../stats/workspaces/delete-feedback-reports";
+import { deleteFeedbackReports } from "../stats/workspaces/feedback-report-mutations";
 import WorkbenchWorkspaceContext from "../WorkbenchWorkspaceContext";
 import { BinIcon } from "../workbench-icons";
 import ComposerReferencePills from "./ComposerReferencePills";

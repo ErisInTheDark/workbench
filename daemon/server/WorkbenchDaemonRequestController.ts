@@ -123,7 +123,7 @@ const REQUEST_METHODS = {
   "project/file/read": true, "project/file/reset": true, "project/file/save": true,
   "questionnaire/respond": true,
   "search/query": true,
-  "stats/import/start": true, "stats/rate-limits/refresh": true, "stats/feedback/delete": true,
+  "stats/import/start": true, "stats/rate-limits/refresh": true, "stats/feedback/delete": true, "stats/feedback/resolve": true,
   "skills/read": true,
   "thread/identity/resolve": true,
 } as const satisfies Record<DaemonRequestMethod, true>;
@@ -281,7 +281,7 @@ export default class WorkbenchDaemonRequestController {
     projectCreation?: Pick<WorkbenchProjectCreationController, "listFolders" | "create">;
     projectSnapshot: Pick<WorkbenchProjectSnapshotController, "readProjectSnapshot" | "handleRequest">;
     search: Pick<WorkbenchSearchController, "search">;
-    stats: Pick<WorkbenchStatsController, "deleteFeedback" | "observeAccountLimits" | "refreshRateLimits" | "startImport">;
+    stats: Pick<WorkbenchStatsController, "deleteFeedback" | "observeAccountLimits" | "refreshRateLimits" | "resolveFeedback" | "startImport">;
     settings: Pick<WorkbenchServerSettings, "readLocalCapabilities" | "updateLocalCapabilities" | "readThreadAutoCompact" | "updateThreadAutoCompact">;
     threadIdentity: { resolve: WorkbenchHarnessController["resolveThreadIdentity"] };
     questionnaireResponses: Pick<WorkbenchQuestionnaireResponseController, "respond">;
@@ -637,6 +637,14 @@ export default class WorkbenchDaemonRequestController {
           const ids = z.object({ ids: z.array(z.number().int().positive()).min(1).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT) }).strict().safeParse(params);
           if (!ids.success) throw new InvalidParamsError("Feedback deletion needs between 1 and 200 feedback ids.");
           result = { deleted: await this.owners.stats.deleteFeedback(ids.data.ids) };
+          break;
+        }
+        case "stats/feedback/resolve": {
+          const input = z.object({
+            ids: z.array(z.number().int().positive()).min(1).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT), resolved: z.boolean(),
+          }).strict().safeParse(params);
+          if (!input.success) throw new InvalidParamsError("Feedback resolution needs between 1 and 200 feedback ids and a resolved flag.");
+          result = { changed: await this.owners.stats.resolveFeedback(input.data.ids, input.data.resolved) };
           break;
         }
         case "local-capabilities/read": result = { localCapabilities: await this.owners.settings.readLocalCapabilities() }; break;

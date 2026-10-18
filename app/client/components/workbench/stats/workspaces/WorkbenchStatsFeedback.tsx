@@ -2,7 +2,9 @@
 
 /*
  * Exports:
- * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, defaulting to unowned reports, searchable with painted matches, filterable by ownership and category, ordered by importance or recency, and selectable for deletion or addressing in a new thread.
+ * - default WorkbenchStatsFeedback: agent friction reports for the selected projects, open or recently resolved, defaulting to open unowned reports,
+ *   searchable with painted matches, filterable by ownership and category, ordered by importance or recency, and selectable for deletion,
+ *   resolving, reopening, or addressing in a new thread.
  */
 import { useContext, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
@@ -20,7 +22,7 @@ import useStats from "../use-stats";
 import Skeleton, { statsReloadingClassName, statsRevealClassName } from "../../../ui/Skeleton";
 import WorkbenchStatsFeedbackReport, { WorkbenchFeedbackReportSkeleton } from "./WorkbenchStatsFeedbackReport";
 import WorkbenchStatsFeedbackSelectionBar from "./WorkbenchStatsFeedbackSelectionBar";
-import deleteFeedbackReports from "./delete-feedback-reports";
+import { deleteFeedbackReports, setFeedbackReportsResolved } from "./feedback-report-mutations";
 import Draggable from "../../drag/Draggable";
 import { WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID } from "../../../../workbench/layout/workbench-drag";
 import {
@@ -31,12 +33,14 @@ import {
   countFeedbackCategories,
   selectFeedbackItems,
   type FeedbackOwnershipFilter,
+  type FeedbackStatus,
 } from "./stats-feedback-presentation";
 
 export default function WorkbenchStatsFeedback() {
   const { addressFeedback: onAddress, localProject, projectName, scope } = useStats();
   const { data: stats, loading } = useStats.feedback();
   const workspace = useContext(WorkbenchWorkspaceContext);
+  const [status, setStatus] = useState<FeedbackStatus>("open");
   const [sort, setSort] = useState<WorkbenchFeedbackSort>("importance");
   const [categories, setCategories] = useState<ReadonlySet<WorkbenchFeedbackCategory>>(new Set());
   const [ownership, setOwnership] = useState<FeedbackOwnershipFilter>("unowned");
@@ -47,10 +51,11 @@ export default function WorkbenchStatsFeedback() {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const feedback = stats?.feedback ?? null;
-  const items = feedback?.items ?? [];
+  const open = status === "open";
+  const items = (open ? feedback?.items : feedback?.resolved) ?? [];
   const attached = scope.attachedDaemonId;
   const keyOf = (item: { daemonId?: string | null; id: number }) => `${item.daemonId ?? ""}:${item.id}`;
-  // Selection follows the published reports, so deleted or out-of-period reports simply stop counting.
+  // Selection follows the published reports, so deleted, moved or out-of-period reports simply stop counting.
   const selected = items.filter((item) => selectedKeys.has(keyOf(item)));
   // A new thread runs on this machine, so reports from elsewhere address this machine's folder of their project.
   const local = selected.map((item) => ({ ...item, projectId: localProject(item.projectId, item.daemonId) }));
@@ -70,15 +75,15 @@ export default function WorkbenchStatsFeedback() {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [selected.length]);
-  const deleteSelected = async () => {
+  const mutateSelected = async (mutate: (reports: { daemonId: string | null; id: number }[]) => Promise<void>, failure: string) => {
     if (!workspace || !selected.length) return;
     setBusy(true);
     setActionError("");
     try {
-      await deleteFeedbackReports(workspace, selected.map(({ daemonId, id }) => ({ daemonId: daemonId ?? attached, id })));
+      await mutate(selected.map(({ daemonId, id }) => ({ daemonId: daemonId ?? attached, id })));
       setSelectedKeys(new Set());
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Unable to delete the selected feedback.");
+      setActionError(error instanceof Error ? error.message : failure);
     } finally {
       setBusy(false);
     }
@@ -91,22 +96,27 @@ export default function WorkbenchStatsFeedback() {
     modelName: modelName(item.harness, item.model),
     projectName: projectName(item.projectId, item.daemonId),
   })])), [items, modelName, projectName]);
+  // Resolved reports keep their latest-resolution order and ignore ownership; a resolved report no longer needs an owner.
   const { searched, visible } = useMemo(
-    () => selectFeedbackItems(items, { categories, ownership, search, sort }, (item) => searchTexts.get(item) ?? ""),
-    [categories, items, ownership, search, searchTexts, sort],
+    () => selectFeedbackItems(items, {
+      categories, ownership: open ? ownership : "all", search, sort: open ? sort : null,
+    }, (item) => searchTexts.get(item) ?? ""),
+    [categories, items, open, ownership, search, searchTexts, sort],
   );
   const categoryCounts = useMemo(() => countFeedbackCategories(searched), [searched]);
   useSearchHighlight(results, searchQuery);
-  const newest = items.reduce((latest, item) => Math.max(latest, item.createdAt), 0);
+  const newest = items.reduce((latest, item) => Math.max(latest, open ? item.createdAt : item.resolvedAt ?? 0), 0);
+  const resolvedCount = feedback?.resolved.length ?? 0;
   const toggle = (category: WorkbenchFeedbackCategory) => setCategories((current) => {
     const next = new Set(current);
     if (!next.delete(category)) next.add(category);
     return next;
   });
-  const changeOwnership = (next: FeedbackOwnershipFilter) => {
-    setOwnership(next);
+  const resetFor = <Value,>(set: (value: Value) => void) => (next: Value) => {
+    set(next);
     setCategories(new Set());
     setSelectedKeys(new Set());
+    setActionError("");
   };
   const address = () => {
     if (!addressProjectId || (!attached && selected.some((item) => !item.daemonId))) return;
@@ -117,14 +127,15 @@ export default function WorkbenchStatsFeedback() {
     })));
     setSelectedKeys(new Set());
   };
+  const reportCount = open ? feedback?.total ?? 0 : resolvedCount;
   return (
     <section aria-busy={loading} aria-labelledby="feedback-heading" className={`space-y-3 [--hue-chroma:60%] ${statsReloadingClassName(loading && Boolean(stats))}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="m-0 text-[1rem] font-semibold text-text" id="feedback-heading">Agent feedback</h2>
-        {feedback?.total ? (
+        {reportCount ? (
           <span className={`text-[0.72rem] text-fg/muted ${statsRevealClassName}`}>
-            {feedback.total} {feedback.total === 1 ? "report" : "reports"}
-            {newest ? <> · newest <WorkbenchRelativeTime timestampMs={newest} /></> : null}
+            {reportCount} {open ? "open" : "resolved"} {reportCount === 1 ? "report" : "reports"}
+            {newest ? <> · {open ? "newest" : "latest resolved"} <WorkbenchRelativeTime timestampMs={newest} /></> : null}
           </span>
         ) : null}
       </div>
@@ -133,7 +144,7 @@ export default function WorkbenchStatsFeedback() {
           <div className="flex gap-1">{[0, 1, 2, 3].map((index) => <Skeleton className="h-6 w-20 rounded-full" key={index} />)}</div>
           {[0, 1, 2].map((index) => <WorkbenchFeedbackReportSkeleton index={index} key={index} />)}
         </div>
-      ) : !feedback.total ? (
+      ) : !feedback.total && !resolvedCount ? (
         <p className={`m-0 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>No agent feedback in this period.</p>
       ) : (
         <>
@@ -149,6 +160,15 @@ export default function WorkbenchStatsFeedback() {
             {searching ? `${visible.length} matching ${visible.length === 1 ? "report" : "reports"}` : ""}
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <RadioRow
+              ariaLabel="Feedback status"
+              onChange={resetFor(setStatus)}
+              options={[
+                { label: `Open ${feedback.total}`, title: "Reports still waiting to be handled", value: "open" },
+                { label: `Resolved ${resolvedCount}`, title: "Reports resolved in the last 7 days; they are deleted after that", value: "resolved" },
+              ]}
+              value={status}
+            />
             <div aria-label="Feedback categories" className="flex flex-wrap gap-1" role="group">
               {WORKBENCH_FEEDBACK_CATEGORIES.map((category) => {
                 const count = categoryCounts.find((row) => row.category === category)?.count ?? 0;
@@ -176,26 +196,28 @@ export default function WorkbenchStatsFeedback() {
                 );
               })}
             </div>
-            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <RadioRow
-                ariaLabel="Feedback display"
-                onChange={changeOwnership}
-                options={[
-                  { label: "Unowned", title: "Reports not attached to a thread", value: "unowned" },
-                  { label: "All", title: "All reports, including ones attached to a thread", value: "all" },
-                ]}
-                value={ownership}
-              />
-              <RadioRow
-                ariaLabel="Feedback order"
-                onChange={setSort}
-                options={[
-                  { label: "Most important", title: "Strongest authors first", value: "importance" },
-                  { label: "Newest", title: "Latest reports first", value: "newest" },
-                ]}
-                value={sort}
-              />
-            </div>
+            {open ? (
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                <RadioRow
+                  ariaLabel="Feedback display"
+                  onChange={resetFor(setOwnership)}
+                  options={[
+                    { label: "Unowned", title: "Reports not attached to a thread", value: "unowned" },
+                    { label: "All", title: "All reports, including ones attached to a thread", value: "all" },
+                  ]}
+                  value={ownership}
+                />
+                <RadioRow
+                  ariaLabel="Feedback order"
+                  onChange={setSort}
+                  options={[
+                    { label: "Most important", title: "Strongest authors first", value: "importance" },
+                    { label: "Newest", title: "Latest reports first", value: "newest" },
+                  ]}
+                  value={sort}
+                />
+              </div>
+            ) : null}
           </div>
           <div ref={setResults}>
             {visible.length ? (
@@ -212,7 +234,8 @@ export default function WorkbenchStatsFeedback() {
                       selected={selectedKeys.has(key)}
                     />
                   );
-                  if (!daemonId) return <div className="contents" key={key}>{report}</div>;
+                  // Only open reports can still be handed to a thread.
+                  if (!daemonId || !open) return <div className="contents" key={key}>{report}</div>;
                   return (
                     <Draggable
                       dropTargetIds={[WORKBENCH_THREAD_COMPOSER_DROP_TARGET_ID]}
@@ -236,7 +259,9 @@ export default function WorkbenchStatsFeedback() {
               <p className={`m-0 flex flex-wrap items-center gap-x-2 py-1 text-[0.8rem] text-fg/muted ${statsRevealClassName}`}>
                 {searching && !searched.length
                   ? <span>No reports match <q className="font-semibold text-text">{searchQuery.trim()}</q>.</span>
-                  : <span>No feedback matches these filters.</span>}
+                  : !items.length
+                    ? <span>{open ? "No open feedback in this period." : "Nothing resolved in the last 7 days."}</span>
+                    : <span>No feedback matches these filters.</span>}
                 {searching ? (
                   <button
                     className="
@@ -252,7 +277,7 @@ export default function WorkbenchStatsFeedback() {
               </p>
             )}
           </div>
-          {feedback.total > items.length ? (
+          {open && feedback.total > items.length ? (
             <p className="m-0 text-[0.72rem] text-fg/muted">
               {searching ? "Searching" : "Showing"} the {items.length} most important of {feedback.total} reports.
               {" "}Narrow the period to {searching ? "search" : "see"} the rest.
@@ -267,8 +292,13 @@ export default function WorkbenchStatsFeedback() {
         busy={busy}
         error={actionError}
         onAddress={address}
-        onDelete={() => void deleteSelected()}
+        onDelete={() => void mutateSelected((reports) => deleteFeedbackReports(workspace!, reports), "Unable to delete the selected feedback.")}
+        onResolve={(resolved) => void mutateSelected(
+          (reports) => setFeedbackReportsResolved(workspace!, reports, resolved),
+          resolved ? "Unable to resolve the selected feedback." : "Unable to reopen the selected feedback.",
+        )}
         selection={selected.length ? { counts: countFeedbackCategories(selected), total: selected.length } : null}
+        status={status}
       />
     </section>
   );

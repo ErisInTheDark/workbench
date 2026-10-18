@@ -6,8 +6,9 @@
  * - WorkbenchFeedbackTitleSchema: bounded single-line report title.
  * - WorkbenchFeedbackReportSchema: bounded agent report text.
  * - WORKBENCH_FEEDBACK_SORTS/WorkbenchFeedbackSort: importance-first or newest-first ordering.
- * - WorkbenchFeedbackItemSchema/WorkbenchFeedbackItem: one report with its author, computed importance, and merged thread ownership.
- * - WorkbenchStatsFeedbackSchema/WorkbenchStatsFeedback/EMPTY_WORKBENCH_STATS_FEEDBACK/WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT: the stats view's feedback section and cross-daemon ownership evidence; wb reports belong to the Workbench project.
+ * - WorkbenchFeedbackItemSchema/WorkbenchFeedbackItem: one report with its author, computed importance, merged thread ownership, and resolution time.
+ * - WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS: how long a resolved report stays readable before retention deletes it.
+ * - WorkbenchStatsFeedbackSchema/WorkbenchStatsFeedback/EMPTY_WORKBENCH_STATS_FEEDBACK/WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT: the stats view's open and recently resolved feedback with cross-daemon ownership evidence; wb reports belong to the Workbench project.
  * - WorkbenchFeedbackRecord: trusted, cwd-resolved feedback write.
  * - WorkbenchFeedbackReadRequest/WorkbenchFeedbackReadResponse/WORKBENCH_FEEDBACK_PAGE_SIZE: paged agent read.
  */
@@ -51,6 +52,8 @@ export const WorkbenchFeedbackItemSchema = z.object({
   projectId: z.string().min(1),
   reasoningEffort: z.string().max(50).nullable(),
   report: z.string().max(4_000),
+  /** When the report was resolved; null while it is open. */
+  resolvedAt: z.number().finite().nonnegative().nullable().default(null),
   /** False when the author's model is missing from the trust registry and scored at its median. */
   scored: z.boolean(),
   /** Null once the authoring thread is gone. */
@@ -60,20 +63,26 @@ export const WorkbenchFeedbackItemSchema = z.object({
 }).strict();
 export type WorkbenchFeedbackItem = z.infer<typeof WorkbenchFeedbackItemSchema>;
 
+export const WORKBENCH_RESOLVED_FEEDBACK_RETENTION_MS = 7 * 86_400_000;
+
 export const WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT = 200;
 export const WorkbenchStatsFeedbackSchema = z.object({
+  /** Open reports per category. */
   counts: z.array(z.object({ category: WorkbenchFeedbackCategorySchema, count }).strict()).max(WORKBENCH_FEEDBACK_CATEGORIES.length),
-  /** Most important first; viewers filter and reorder locally. */
+  /** Open reports, most important first; viewers filter and reorder locally. */
   items: z.array(WorkbenchFeedbackItemSchema).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT),
   /** Thread attachments this daemon stores; the app merges these compound identities into each item's `owned` flag. */
   ownership: z.array(z.object({ daemonId: z.string().min(1), id: count }).strict()).default([]),
+  /** Reports resolved within the retention window, in scope whatever the period, latest resolution first. */
+  resolved: z.array(WorkbenchFeedbackItemSchema).max(WORKBENCH_STATS_FEEDBACK_ITEM_LIMIT).default([]),
+  /** Open reports in scope and period. */
   total: count,
   /** The project wb reports belong to, so viewers can name reports filed elsewhere. */
   workbenchProjectId: z.string().min(1).nullable().default(null),
 }).strict();
 export type WorkbenchStatsFeedback = z.infer<typeof WorkbenchStatsFeedbackSchema>;
 export const EMPTY_WORKBENCH_STATS_FEEDBACK: WorkbenchStatsFeedback = {
-  counts: [], items: [], ownership: [], total: 0, workbenchProjectId: null,
+  counts: [], items: [], ownership: [], resolved: [], total: 0, workbenchProjectId: null,
 };
 
 export interface WorkbenchFeedbackRecord {

@@ -146,6 +146,7 @@ function schemaFor(method: WorkbenchDaemonMethod): z.ZodType {
     case "stats/import/start": return WorkbenchStatsImportProgressSchema;
     case "stats/rate-limits/refresh": return z.object({ ok: z.literal(true) }).strict();
     case "stats/feedback/delete": return z.object({ deleted: z.number().int().nonnegative() }).strict();
+    case "stats/feedback/resolve": return z.object({ changed: z.number().int().nonnegative() }).strict();
     case "local-capabilities/read":
     case "local-capabilities/update": return z.object({
       localCapabilities: z.object({ browseRawCommandsEnabled: z.boolean() }).strict(),
@@ -412,6 +413,7 @@ class WorkbenchDaemonClient {
     startImport: () => this.request("stats/import/start", {}),
     refreshRateLimits: () => this.request("stats/rate-limits/refresh", {}),
     deleteFeedback: (ids: number[]) => this.request("stats/feedback/delete", { ids }),
+    resolveFeedback: (ids: number[], resolved: boolean) => this.request("stats/feedback/resolve", { ids, resolved }),
   };
 
   readonly git = {

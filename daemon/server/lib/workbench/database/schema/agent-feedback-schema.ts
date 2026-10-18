@@ -22,10 +22,12 @@ const feedbackV1 = defineTable("workbench_agent_feedback", {
   constraints: [check(sql`length(${table.report}) BETWEEN 1 AND 4000`)],
   indexes: [index("workbench_agent_feedback_project_idx", [table.project_id, table.created_at])],
 }));
-const feedback = evolveTable(feedbackV1, {
+const titledFeedback = evolveTable(feedbackV1, {
   // Old daemon generations may still submit during reload; the new command boundary always supplies a real title.
   add: { title: text().notNull().default("Feedback report") },
 });
+// Null while open; retention deletes resolved reports once they age out of the resolved view.
+const feedback = evolveTable(titledFeedback, { add: { resolved_at: integer().nonNegative() } });
 
 export const agentFeedbackSchemaHistory = defineSubsystemHistory([defineTableHistory({
   current: feedback,
@@ -33,8 +35,13 @@ export const agentFeedbackSchemaHistory = defineSubsystemHistory([defineTableHis
     tableVersion({ schemaVersion: releases.agentFeedback.version, table: feedbackV1, migration: createTable(feedbackV1) }),
     tableVersion({
       schemaVersion: releases.feedbackTitles.version,
+      table: titledFeedback,
+      migration: addColumns({ from: feedbackV1, to: titledFeedback, columns: ["title"] }),
+    }),
+    tableVersion({
+      schemaVersion: releases.feedbackResolution.version,
       table: feedback,
-      migration: addColumns({ from: feedbackV1, to: feedback, columns: ["title"] }),
+      migration: addColumns({ from: titledFeedback, to: feedback, columns: ["resolved_at"] }),
     }),
   ],
 })]);

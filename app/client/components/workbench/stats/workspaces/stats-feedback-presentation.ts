@@ -2,7 +2,7 @@
  * Exports:
  * - FEEDBACK_CATEGORY_PRESENTATION: label and hue for each feedback category.
  * - feedbackImportanceTone: text colour class for an importance between 0 and 1.
- * - FeedbackOwnershipFilter/selectFeedbackItems: the reports a viewer sees for ownership, search, category, and sort filters.
+ * - FeedbackOwnershipFilter/FeedbackStatus/selectFeedbackItems: the reports a viewer sees for ownership, search, category, and sort filters.
  * - feedbackSearchText: folded text a search matches one report against.
  * - feedbackOwnerProjectId/feedbackAddressProjectId: the project a report, or a whole selection, is addressed in.
  * - countFeedbackCategories: per-category counts of the given reports, empty categories omitted.
@@ -17,6 +17,8 @@ import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbenc
 import { TextSearch } from "../../../../workbench/search/text-search";
 
 export type FeedbackOwnershipFilter = "unowned" | "all";
+/** Open reports, or reports resolved within the retention window. */
+export type FeedbackStatus = "open" | "resolved";
 
 /** Hue utilities are listed whole so Tailwind can see them. */
 export const FEEDBACK_CATEGORY_PRESENTATION: Readonly<Record<WorkbenchFeedbackCategory, {
@@ -76,7 +78,7 @@ export function feedbackSearchText(item: WorkbenchFeedbackItem, names: { modelNa
 
 /**
  * `searched` passes ownership and search, so category pills count where matches live;
- * `visible` narrows that by category, in the chosen order.
+ * `visible` narrows that by category, in the chosen order; a null sort keeps the given order.
  */
 export function selectFeedbackItems(
   items: readonly WorkbenchFeedbackItem[],
@@ -84,7 +86,7 @@ export function selectFeedbackItems(
     categories: ReadonlySet<WorkbenchFeedbackCategory>;
     ownership: FeedbackOwnershipFilter;
     search: TextSearch;
-    sort: WorkbenchFeedbackSort;
+    sort: WorkbenchFeedbackSort | null;
   },
   searchText: (item: WorkbenchFeedbackItem) => string,
 ) {

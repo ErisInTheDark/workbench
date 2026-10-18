@@ -3,7 +3,7 @@
 /*
  * Exports:
  * - WorkbenchFeedbackReportDisplay: category tag, title, and clampable report text, for stored reports and reports known only from their filing call.
- * - WorkbenchFeedbackReportBody: one stored report with its importance flame, and its author's profile, time, and optional thread in one footer row.
+ * - WorkbenchFeedbackReportBody: one stored report with its importance flame, and its author's profile, time, resolution, and optional thread in one footer row.
  * - WorkbenchFeedbackReportSkeleton: loading placeholder shaped like one report.
  * - default WorkbenchStatsFeedbackReport: one selectable report in the stats view's feedback list.
  */
@@ -15,7 +15,7 @@ import type {
 import MarkdownRender from "../../../ui/MarkdownRender";
 import WorkbenchRelativeTime from "../../WorkbenchRelativeTime";
 import WorkbenchThreadButton from "../../WorkbenchThreadButton";
-import { FlameIcon, HarnessIcon } from "../../workbench-icons";
+import { CheckIcon, FlameIcon, HarnessIcon } from "../../workbench-icons";
 import { feedbackImportanceTone } from "./stats-feedback-presentation";
 import WorkbenchStatsFeedbackTag from "./WorkbenchStatsFeedbackTag";
 import { statsThreadIdentity } from "../stats-thread-identity";
@@ -140,6 +140,11 @@ export function WorkbenchFeedbackReportBody({ clamp, item, modelName, showThread
         </span>
         <span aria-hidden="true">·</span>
         <WorkbenchRelativeTime className="shrink-0" timestampMs={item.createdAt} />
+        {item.resolvedAt !== null ? (
+          <span className="inline-flex shrink-0 items-center gap-1 text-hue-150">
+            <CheckIcon size={12} />resolved <WorkbenchRelativeTime timestampMs={item.resolvedAt} />
+          </span>
+        ) : null}
         {showThread ? (
           <span className="ml-auto min-w-0 max-w-[60%] text-[0.8rem]">
             {thread ? (
