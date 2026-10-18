@@ -2,7 +2,7 @@
  * Exports:
  * - ThreadTodoCommand: atomic thread-todo reads and edits, each scoped to one thread; todo ids are serials within it.
  * - ThreadTodoResult: the thread's todos after one command, plus what the command changed.
- * - default WorkbenchThreadTodoStore: own per-thread follow-up todos in SQLite, handing out each thread's next serial and counting every thread's required todos.
+ * - default WorkbenchThreadTodoStore: own per-thread follow-up todos in SQLite, handing out each thread's next serial, counting every thread's required todos and reading many threads' todos at once.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadTodo } from "workbench-shared/workbench/thread/thread-todo";
@@ -42,6 +42,14 @@ export default class WorkbenchThreadTodoStore {
     const rows = this.database.prepare("SELECT thread_id, COUNT(*) AS count FROM workbench_thread_todos WHERE required = 1 GROUP BY thread_id")
       .all() as Array<{ thread_id: string; count: number }>;
     return Object.fromEntries(rows.map(({ thread_id: threadId, count }) => [threadId, count]));
+  }
+
+  /** Each listed thread's todos in one read, in serial order; threads without any are absent. */
+  readMany(threadIds: readonly string[]): Map<string, WorkbenchThreadTodo[]> {
+    const rows = this.database.prepare(`SELECT thread_id, id, text, required, created_at FROM workbench_thread_todos
+      WHERE thread_id IN (SELECT value FROM json_each(?)) ORDER BY thread_id, id`)
+      .all(JSON.stringify(threadIds)) as Array<ThreadTodoRow & { thread_id: string }>;
+    return new Map([...Map.groupBy(rows, row => row.thread_id)].map(([threadId, todos]) => [threadId, todos.map(toTodo)]));
   }
 
   execute(command: ThreadTodoCommand): ThreadTodoResult {

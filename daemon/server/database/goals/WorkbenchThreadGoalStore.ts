@@ -3,7 +3,7 @@
  * - ThreadGoalNotice: undelivered agent notice kinds.
  * - ThreadGoalCommand: atomic thread-goal reads and transitions.
  * - ThreadGoalState: the current goal plus its undelivered notice after one command.
- * - default WorkbenchThreadGoalStore: own per-thread user-set goals and their notice lifecycle in SQLite.
+ * - default WorkbenchThreadGoalStore: own per-thread user-set goals and their notice lifecycle in SQLite, and read many threads' goals at once.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadGoal } from "workbench-shared/workbench/thread/thread-goal";
@@ -75,6 +75,14 @@ export default class WorkbenchThreadGoalStore {
       }
       return this.#state(this.#row(command.threadId));
     })();
+  }
+
+  /** Each listed thread's current goal in one read; threads without one are absent. */
+  readMany(threadIds: readonly string[]): Map<string, WorkbenchThreadGoal> {
+    const rows = this.database.prepare(`SELECT thread_id, objective, updated_at FROM workbench_thread_goals
+      WHERE objective IS NOT NULL AND thread_id IN (SELECT value FROM json_each(?))`)
+      .all(JSON.stringify(threadIds)) as Array<{ thread_id: string; objective: string; updated_at: number }>;
+    return new Map(rows.map(row => [row.thread_id, { objective: row.objective, updatedAt: row.updated_at }]));
   }
 
   #row(threadId: string) {

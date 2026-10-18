@@ -116,6 +116,30 @@ test("a held questionnaire compacts before its answer, while a live one stays in
   await live.owner.dispose();
 });
 
+test("observing many threads decides from supplied facts with one settings read and no per-thread port reads", async () => {
+  let settingsReads = 0;
+  const owner = new WorkbenchThreadAutoCompactController(new WorkbenchThreadAdmissionController(), compaction, {
+    readSettings: async () => { settingsReads += 1; return { ...DEFAULT_THREAD_AUTO_COMPACT_SETTINGS }; },
+    readEvidence: async () => { throw new Error("Supplied evidence is never reread."); },
+    readRuntime: async () => { throw new Error("Supplied runtime is never reread."); },
+    publish: () => {},
+    schedule: () => ({}),
+    cancel: () => {},
+    now: () => 30 * 60_000,
+    warn: () => {},
+  });
+  const settled = { latestTurn: { id: "turn" }, status: "idle", turnLive: false };
+  const decisions = await owner.observeMany([
+    { target: { harness: "claude", threadId: "due" }, evidence: { activityAt: 0, contextTokens: 200_000 }, runtime: settled },
+    { target: { harness: "claude", threadId: "small" }, evidence: { activityAt: 0, contextTokens: 10 }, runtime: settled },
+    { target: { harness: "claude", threadId: "live" }, evidence: { activityAt: 0, contextTokens: 200_000 },
+      runtime: { ...settled, status: "active", turnLive: true } },
+  ]);
+  assert.deepEqual(Object.fromEntries(decisions), { due: true, small: false, live: false });
+  assert.equal(settingsReads, 1);
+  await owner.dispose();
+});
+
 test("observed thread publishes when its daemon-owned idle deadline becomes due", async () => {
   const f = fixture();
   f.now(29 * 60_000);

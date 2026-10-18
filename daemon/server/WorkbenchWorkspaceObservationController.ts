@@ -10,7 +10,7 @@ import {
 } from "workbench-shared/workbench/workspace/workspace-observation";
 import type { LocatedThreadSummary } from "workbench-shared/workbench/thread/thread-summary";
 import type WorkbenchThreadSummaryIndex from "./WorkbenchThreadSummaryIndex";
-import type { ThreadRuntime } from "workbench-shared/workbench/thread/thread-state";
+import type { ThreadRuntime, WorkbenchThreadSidebarEntry } from "workbench-shared/workbench/thread/thread-state";
 import { diffObservationValue, type ObservationDelta } from "workbench-shared/workbench/workspace/observation-patch";
 import type { ProjectId, WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import { ProjectIdSchema, ThreadReferenceSchema } from "workbench-shared/workbench/identity";
@@ -106,7 +106,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     vis?: Pick<WorkbenchVisController, "observe" | "readSnapshot">;
     /** Live per-thread provider facts; `subscribe` names threads whose runtime changed. */
     runtime?: {
-      read(threadId: string, harness: string): Promise<ThreadRuntime>;
+      readMany(entries: readonly Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>[]): Promise<ReadonlyMap<string, ThreadRuntime>>;
       readTokenUsage(threadId: string): Promise<ThreadRuntime["tokenUsage"]>;
       subscribe(listener: (threadId: string, change: Partial<ThreadRuntime> | null) => void): () => void;
     };
@@ -752,25 +752,23 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     }
   }
 
-  /** Runtime for each family thread: kept for threads already read, read once for newly listed ones; a retired observation stops reading. */
-  private async familyRuntime(observation: Observation<Client>, entries: readonly { entryKind: string; identity?: { harness: string; threadId: string } }[]) {
+  /** Runtime for each family thread: kept for threads already read, one batched read for newly listed ones. */
+  private async familyRuntime(observation: Observation<Client>, entries: readonly WorkbenchThreadSidebarEntry[]) {
     const previous = observation.value.kind === "thread" ? observation.value.runtime : {};
-    const runtime: Record<string, ThreadRuntime> = {};
-    for (const entry of entries) {
-      if (!this.active(observation)) break;
-      if (entry.entryKind === "draft" || !entry.identity) continue;
-      const { threadId, harness } = entry.identity;
-      runtime[threadId] = previous[threadId] ?? await this.readRuntime(threadId, harness);
-    }
-    return runtime;
+    const threads = entries.flatMap(entry => entry.entryKind === "draft" ? [] : [entry]);
+    const unread = threads.filter(({ identity }) => !previous[identity.threadId]);
+    const read = unread.length ? await this.readRuntime(unread) : new Map<string, ThreadRuntime>();
+    // A thread the batch could not read keeps an empty runtime, so it is not reread on every publication.
+    return Object.fromEntries(threads.map(({ identity: { threadId } }) => [threadId,
+      previous[threadId] ?? read.get(threadId) ?? { tokenUsage: null, willAutoCompact: null }]));
   }
 
-  private async readRuntime(threadId: string, harness: string): Promise<ThreadRuntime> {
-    if (!this.owners.runtime) return { tokenUsage: null, willAutoCompact: null };
-    try { return await this.owners.runtime.read(threadId, harness); }
+  private async readRuntime(entries: readonly Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>[]): Promise<ReadonlyMap<string, ThreadRuntime>> {
+    if (!this.owners.runtime) return new Map();
+    try { return await this.owners.runtime.readMany(entries); }
     catch (error) {
       this.owners.warn(`Workspace thread runtime read failed: ${failure(error)}`);
-      return { tokenUsage: null, willAutoCompact: null };
+      return new Map();
     }
   }
 

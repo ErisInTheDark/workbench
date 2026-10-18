@@ -4,7 +4,7 @@
  * - ThreadSkillActivation: one skill a thread activates.
  * - ThreadSkillCommand: atomic thread-skill reads and transitions.
  * - ThreadSkillState: active skills plus undelivered notices after one command.
- * - default WorkbenchThreadSkillStore: own per-thread active skills and their notice lifecycle in SQLite.
+ * - default WorkbenchThreadSkillStore: own per-thread active skills and their notice lifecycle in SQLite, and read many threads' active skills at once.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadSkill, WorkbenchThreadSkillSource } from "workbench-shared/workbench/thread/thread-skill-state";
@@ -81,6 +81,14 @@ export default class WorkbenchThreadSkillStore {
       }
       return this.#read(command.threadId);
     })();
+  }
+
+  /** Each listed thread's active skills in one read, in activation order; threads without any are absent. */
+  readMany(threadIds: readonly string[]): Map<string, WorkbenchThreadSkill[]> {
+    const rows = this.database.prepare(`SELECT thread_id, path, name, source, activated_at, active, pending_notice
+      FROM workbench_thread_skills WHERE active = 1 AND thread_id IN (SELECT value FROM json_each(?))
+      ORDER BY thread_id, activated_at, path`).all(JSON.stringify(threadIds)) as Array<ThreadSkillRow & { thread_id: string }>;
+    return new Map([...Map.groupBy(rows, row => row.thread_id)].map(([threadId, skills]) => [threadId, skills.map(toSkill)]));
   }
 
   #read(threadId: string): ThreadSkillState {

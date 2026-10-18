@@ -119,6 +119,7 @@ export interface DaemonDatabaseRegistration extends WorkbenchThreadIdentityDatab
   readInitialProjectCatalog(): WorkbenchProjectStartup | null;
   queryTranscript(request: import("./database/transcript/transcript-query-contract").TranscriptQuery): Promise<import("./database/transcript/transcript-query-contract").TranscriptQueryPage>;
   readThreadContextUsage(threadId: string): Promise<ThreadContextUsageSnapshot | null>;
+  readThreadRuntimeFacts: import("./database/WorkbenchDatabaseController").default["readThreadRuntimeFacts"];
   readThreadStateRecords: import("./database/WorkbenchDatabaseController").default["readThreadStateRecords"];
   findThreadGitCommitOwners: import("./database/WorkbenchDatabaseController").default["findThreadGitCommitOwners"];
   readTranscriptProviderCursor?(threadId: string, turnId: string): Promise<string | null | undefined>;
@@ -302,7 +303,8 @@ export interface DaemonRuntimeObjects {
   accountLimits: import("./WorkbenchAccountLimitsController").default;
   /** Per-thread live provider facts for thread observations. */
   threadRuntime: {
-    read(threadId: string, harness: string): Promise<import("workbench-shared/workbench/thread/thread-state").ThreadRuntime>;
+    /** Runtime for many observed thread entries from one batched read; entries it could not read are absent. */
+    readMany(entries: readonly Exclude<import("workbench-shared/workbench/thread/thread-state").WorkbenchThreadSidebarEntry, { entryKind: "draft" }>[]): Promise<ReadonlyMap<string, import("workbench-shared/workbench/thread/thread-state").ThreadRuntime>>;
     readTokenUsage(threadId: string): Promise<import("workbench-shared/workbench/thread/thread-state").ThreadRuntime["tokenUsage"]>;
     /** `change` carries pushed values; null means token usage may have changed and must be reread. */
     subscribe(listener: (threadId: string, change: Partial<import("workbench-shared/workbench/thread/thread-state").ThreadRuntime> | null) => void): () => void;

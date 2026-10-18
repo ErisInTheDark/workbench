@@ -541,6 +541,16 @@ export default class WorkbenchDatabaseController implements WorkbenchProjectPers
     return response.range;
   }
 
+  /** Many threads' stored runtime facts in one reader round trip. */
+  async readThreadRuntimeFacts(threadIds: readonly string[]) {
+    await this.start();
+    const response = await this.#request({ type: "readThreadRuntimeFacts", threadIds });
+    if (response.type !== "threadRuntimeFacts") {
+      throw new WorkbenchDatabaseFailure(`Unexpected thread runtime facts response: ${response.type}`);
+    }
+    return response.facts;
+  }
+
   async readThreadContextUsage(threadId: string) {
     await this.start();
     const response = await this.#request({ type: "readThreadContextUsage", threadId });

@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - default WorkbenchThreadTurnLiveness: own whether each thread's latest provider turn is live, publishing changes as a thread runtime fact.
+ * - default WorkbenchThreadTurnLiveness: own whether each thread's latest provider turn is live (asking the provider only about in-progress turns), publishing changes as a thread runtime fact.
  */
 import type { WorkbenchProviderThreads } from "workbench-shared/workbench/provider/provider-thread";
+import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 
 type LivenessThreads = Pick<WorkbenchProviderThreads, "latestTurn" | "isTurnLive">;
 
@@ -18,9 +19,12 @@ export default class WorkbenchThreadTurnLiveness {
   }) {}
 
   async read(threadId: string, harness: string) {
-    const threads = this.ports.threads(harness);
-    const turn = await threads.latestTurn(threadId);
-    const turnLive = turn ? await threads.isTurnLive(threadId, turn.id) : false;
+    return await this.observe(threadId, harness, await this.ports.threads(harness).latestTurn(threadId));
+  }
+
+  /** Liveness of an already known latest turn; only a turn still in progress can be live, so only it asks the provider. */
+  async observe(threadId: string, harness: string, turn: Pick<Turn, "id" | "status"> | null) {
+    const turnLive = turn?.status === "inProgress" ? await this.ports.threads(harness).isTurnLive(threadId, turn.id) : false;
     if (turnLive) this.live.set(threadId, harness);
     else this.live.delete(threadId);
     return turnLive;

@@ -57,7 +57,6 @@ test("setting and clearing a goal tells the agent silently at once and publishes
   await controller.clear(threadId);
   assert.match(published[1]!, /^<wb:goal-cleared>/u);
   assert.deepEqual(changes.map(goal => goal?.objective ?? null), ["finish the port", null]);
-  assert.equal(await controller.read(threadId), null);
   await controller.observeCompaction(threadId);
   assert.equal(published.length, 2, "a cleared goal is never re-sent");
 });

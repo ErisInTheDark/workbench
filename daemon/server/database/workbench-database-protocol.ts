@@ -97,6 +97,7 @@ import type { ThreadVisCommand, ThreadVisResult } from "./vis/WorkbenchThreadVis
 import type { ThreadTodoCommand, ThreadTodoResult } from "./todos/WorkbenchThreadTodoStore.ts";
 import type { ThreadAddressedFeedbackCommand } from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
+import type { WorkbenchThreadRuntimeFacts } from "./thread-runtime/WorkbenchThreadRuntimeFactsReader.ts";
 import type {
   WorkbenchTranscriptRetentionCutoffs,
   WorkbenchTranscriptRetentionResult,
@@ -172,6 +173,7 @@ export type WorkbenchDatabaseRequestPayload =
   | { type: "readThreadStateProject"; projectId: ProjectId }
   | { type: "readThreadStateTitleHistories"; projectId: ProjectId }
   | { type: "readThreadGitCommits"; threadIds: readonly WorkbenchThreadId[] }
+  | { type: "readThreadRuntimeFacts"; threadIds: readonly string[] }
   | { type: "recordThreadGitCommitTimes"; threadId: WorkbenchThreadId; times: readonly WorkbenchThreadGitCommitTime[] }
   | { type: "findThreadGitCommitOwners"; projectId: ProjectId; commitSha: string }
   | { type: "writeThreadStateProject"; projectId: ProjectId; document: WorkbenchThreadStateProjectDocument; titleHistories?: readonly WorkbenchStoredThreadTitleHistory[] }
@@ -240,7 +242,7 @@ const CORE_READ_REQUEST_TYPES = new Set<WorkbenchDatabaseRequestPayload["type"]>
   "readRetainedProjectCatalog", "readProjectAliases", "resolveProjectIdentity", "readThreadLaunch",
   "resolveThreadIdentity", "resolveNativeThreadIdentity", "listThreadIdentities", "resolveTurnIdentity",
   "resolveTranscriptItemIdentity", "readThreadStateNavigationSummary", "readThreadStateProject",
-  "readThreadStateTitleHistories", "readThreadGitCommits", "findThreadGitCommitOwners",
+  "readThreadStateTitleHistories", "readThreadGitCommits", "findThreadGitCommitOwners", "readThreadRuntimeFacts",
   "readThreadStateGlobal", "readThreadStateRecords",
   "readThreadStateDrafts", "readThreadStateProfile", "readThreadStateLayout",
   "readThreadStatePinnedImports", "readThreadStateArchiveDeadline", "readThreadStateActivity",
@@ -321,6 +323,7 @@ export type WorkbenchDatabaseResponse =
   | { id: number; type: "threadStateProject"; document: WorkbenchThreadStateProjectDocument }
   | { id: number; type: "threadStateTitleHistories"; histories: WorkbenchStoredThreadTitleHistory[] }
   | { id: number; type: "threadGitCommits"; threads: Array<{ commits: WorkbenchThreadGitCommit[]; threadId: WorkbenchThreadId }> }
+  | { id: number; type: "threadRuntimeFacts"; facts: WorkbenchThreadRuntimeFacts[] }
   | { id: number; type: "threadGitCommitOwners"; threadIds: string[] }
   | { id: number; type: "threadStateGlobal"; document: WorkbenchThreadStateGlobalDocument | null }
   | { id: number; type: "threadStateRecords"; records: WorkbenchThreadStateRecord[] }

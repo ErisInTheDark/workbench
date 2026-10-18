@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits), context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, and bounded reads.
+ * - default WorkbenchTranscriptRepository: own atomic item admission and body settlement, held steers (virtual while a questionnaire waits), context compaction, abandoned-hold retirement, usage facts, provider evidence reconciliation, turn-anchored capture gaps, bounded reads, and batched latest-turn and usage reads.
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -161,6 +161,26 @@ export default class WorkbenchTranscriptRepository {
 
   readContextUsage(threadId: string) {
     return this.#contextUsage.read(threadId);
+  }
+
+  readContextUsages(threadIds: readonly string[]) {
+    return this.#contextUsage.readMany(threadIds);
+  }
+
+  /** Each listed thread's newest turn row in one read, legacy rows under their Workbench turn identity; threads without turns are absent. */
+  readLatestTurns(threadIds: readonly string[]): Map<string, TranscriptTurnRow> {
+    const rows = this.#database.prepare(`
+      SELECT turn.*, thread.identity_origin AS thread_identity_origin FROM thread_turns turn
+      JOIN workbench_threads thread ON thread.id = turn.thread_id
+      WHERE turn.thread_id IN (SELECT value FROM json_each(?))
+        AND turn.turn_index = (SELECT MAX(latest.turn_index) FROM thread_turns latest WHERE latest.thread_id = turn.thread_id)
+    `).all(JSON.stringify(threadIds)) as Array<TranscriptTurnRow & { thread_identity_origin: string }>;
+    return new Map(rows.map(({ thread_identity_origin: threadOrigin, ...turn }) => [turn.thread_id,
+      threadOrigin === "workbench" && turn.identity_origin === "legacy" ? {
+        ...turn, identity_origin: "workbench" as const,
+        id: this.#identity.resolveTurn({ threadId: WorkbenchThreadIdSchema.parse(turn.thread_id), turnId: TurnReferenceSchema.parse(turn.id) })!.turnId,
+      } : turn,
+    ]));
   }
 
   readStoredItems(threadId: string, itemIds: number[]) {

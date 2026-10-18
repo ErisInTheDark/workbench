@@ -42,11 +42,6 @@ export default class WorkbenchThreadGoalController {
 
   constructor(private readonly options: WorkbenchThreadGoalsOptions) {}
 
-  async read(threadId: string) {
-    const target = await this.options.target(threadId);
-    return target ? (await this.options.store({ kind: "read", threadId: target.threadId })).goal : null;
-  }
-
   async set(threadId: string, objective: string) {
     const target = await this.#requireTarget(threadId);
     const state = await this.options.store({

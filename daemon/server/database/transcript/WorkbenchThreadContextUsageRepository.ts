@@ -1,7 +1,6 @@
 /*
- * Keywords: thread, context, sqlite, snapshot.
  * Exports:
- * - default WorkbenchThreadContextUsageRepository: own durable last-reported measurements and insert-only recovery.
+ * - default WorkbenchThreadContextUsageRepository: own durable last-reported measurements, batch reads and insert-only recovery.
  */
 import type Database from "better-sqlite3";
 import type { ThreadContextUsageSnapshot } from "workbench-shared/workbench/thread/thread-context-usage";
@@ -12,27 +11,37 @@ import type { SelectRow } from "workbench-shared/database/schema/schema-definiti
 
 const tables = { [threadContextUsage.name]: threadContextUsage };
 
+function snapshotOf(row: SelectRow<typeof threadContextUsage>): ThreadContextUsageSnapshot {
+  if (row.state === "unavailable") return { tokenUsage: null };
+  return { tokenUsage: ThreadTokenUsageSchema.parse({
+    modelContextWindow: row.model_context_window,
+    last: {
+      inputTokens: row.last_input_tokens, cachedInputTokens: row.last_cached_input_tokens,
+      cacheWriteInputTokens: row.last_cache_write_input_tokens, outputTokens: row.last_output_tokens,
+      reasoningOutputTokens: row.last_reasoning_output_tokens, totalTokens: row.last_total_tokens,
+    },
+    total: {
+      inputTokens: row.total_input_tokens, cachedInputTokens: row.total_cached_input_tokens,
+      cacheWriteInputTokens: row.total_cache_write_input_tokens, outputTokens: row.total_output_tokens,
+      reasoningOutputTokens: row.total_reasoning_output_tokens, totalTokens: row.total_tokens,
+    },
+  }) };
+}
+
 export default class WorkbenchThreadContextUsageRepository {
   constructor(private readonly database: Database.Database) {}
 
   read(threadId: string): ThreadContextUsageSnapshot | null {
     const query = compileWorkbenchDatabaseStatement(tables, selectRows(threadContextUsage, { where: { thread_id: threadId } }));
     const row = this.database.prepare(query.sql).get(...query.parameters) as SelectRow<typeof threadContextUsage> | undefined;
-    if (!row) return null;
-    if (row.state === "unavailable") return { tokenUsage: null };
-    return { tokenUsage: ThreadTokenUsageSchema.parse({
-      modelContextWindow: row.model_context_window,
-      last: {
-        inputTokens: row.last_input_tokens, cachedInputTokens: row.last_cached_input_tokens,
-        cacheWriteInputTokens: row.last_cache_write_input_tokens, outputTokens: row.last_output_tokens,
-        reasoningOutputTokens: row.last_reasoning_output_tokens, totalTokens: row.last_total_tokens,
-      },
-      total: {
-        inputTokens: row.total_input_tokens, cachedInputTokens: row.total_cached_input_tokens,
-        cacheWriteInputTokens: row.total_cache_write_input_tokens, outputTokens: row.total_output_tokens,
-        reasoningOutputTokens: row.total_reasoning_output_tokens, totalTokens: row.total_tokens,
-      },
-    }) };
+    return row ? snapshotOf(row) : null;
+  }
+
+  /** Each listed thread's last measurement in one read; threads never measured are absent. */
+  readMany(threadIds: readonly string[]): Map<string, ThreadContextUsageSnapshot> {
+    const query = compileWorkbenchDatabaseStatement(tables, selectRows(threadContextUsage, { whereIn: { thread_id: [...threadIds] } }));
+    const rows = this.database.prepare(query.sql).all(...query.parameters) as Array<SelectRow<typeof threadContextUsage>>;
+    return new Map(rows.map(row => [row.thread_id, snapshotOf(row)]));
   }
 
   write(threadId: string, snapshot: ThreadContextUsageSnapshot, initialise: boolean) {

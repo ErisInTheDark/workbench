@@ -495,14 +495,14 @@ test("identity admission during a pending lookup is visible even if that lookup 
   assert.equal(value.kind === "threadIdentity" ? value.identity?.threadId : null, threadId);
 });
 
-test("releasing a thread observation stops reading runtime for the rest of its family", async context => {
+test("a thread family's runtime is one batched read, and releasing during it publishes nothing", async context => {
   const entries = [thread(0), thread(1), thread(2)];
   const firstRead = Promise.withResolvers<void>();
-  const heldRuntime = Promise.withResolvers<{ tokenUsage: null; willAutoCompact: null }>();
-  const runtimeReads: string[] = [];
+  const heldRuntime = Promise.withResolvers<ReadonlyMap<string, { tokenUsage: null; willAutoCompact: null }>>();
+  const runtimeReads: string[][] = [];
   const f = fixture(context, { runtime: {
-    read: async threadId => {
-      runtimeReads.push(threadId);
+    readMany: async requested => {
+      runtimeReads.push(requested.map(entry => entry.identity.threadId));
       firstRead.resolve();
       return heldRuntime.promise;
     },
@@ -516,11 +516,12 @@ test("releasing a thread observation stops reading runtime for the rest of its f
   });
   const observation = f.observe({ kind: "thread", projectId: a, threadId: ThreadReferenceSchema.parse(threadId) });
   await firstRead.promise;
+  assert.deepEqual(runtimeReads, [entries.map(entry => entry.entryKind === "draft" ? "" : entry.identity.threadId)]);
   f.owner.release("connection", { subscriptionId: observation.subscriptionId, generation: observation.generation });
-  heldRuntime.resolve({ tokenUsage: null, willAutoCompact: null });
+  heldRuntime.resolve(new Map());
   await heldRuntime.promise;
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(runtimeReads.length, 1, "A released observation reads no further family runtime");
+  assert.equal(runtimeReads.length, 1);
   assert.equal(f.updates.some(update => update.value.kind === "thread" && update.value.phase === "current"), false);
 });
 

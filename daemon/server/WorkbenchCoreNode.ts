@@ -907,29 +907,36 @@ function createWorkbenchCoreFeature(
   });
   const readTokenUsage = async (threadId: string) => (await transcript.readContextUsage(threadId))?.tokenUsage ?? null;
   const threadRuntime: DaemonRuntimeObjects["threadRuntime"] = {
-    read: async (threadId, harness) => {
-      // Goal, skills, todos and addressed feedback are optional facts: one failing read must not drop the thread's usage.
-      const optional = async <Value>(label: string, read: () => Promise<Value>) => {
-        try { return await read(); } catch (error) {
-          logThreadStateWarning(`Thread runtime ${label} read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+    // Stored facts arrive in one reader round trip; only liveness of in-progress turns asks providers.
+    readMany: async entries => {
+      if (!entries.length) return new Map();
+      let facts: Awaited<ReturnType<typeof database.readThreadRuntimeFacts>>;
+      try { facts = await database.readThreadRuntimeFacts(entries.map(({ identity }) => identity.threadId)); }
+      catch (error) {
+        logThreadStateWarning(`Thread runtime read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
+        return new Map();
+      }
+      const turnLive = await Promise.all(entries.map(async ({ identity }, index) => {
+        try { return await turnLiveness.observe(identity.threadId, identity.harness, facts[index]!.latestTurn); }
+        catch (error) {
+          logThreadStateWarning(`Thread runtime turn liveness read failed: ${error instanceof Error ? error.message.slice(0, 300) : "unknown failure"}`);
           return undefined;
         }
-      };
-      const goal = await optional("goal", () => threadGoals.read(threadId));
-      const skills = await optional("skills", () => threadSkills.read(threadId));
-      const todos = await optional("todos", () => threadTodos.read(threadId));
-      const addressedFeedback = await optional("addressed feedback", () => threadAddressedFeedback.read(threadId));
-      const turnLive = await optional("turn liveness", () => turnLiveness.read(threadId, harness));
-      return {
-        tokenUsage: await readTokenUsage(threadId),
-        willAutoCompact: await autoCompact.observe({ harness: WorkbenchHarnessSchema.parse(harness), threadId }),
-        ...(turnLive !== undefined ? { turnLive } : {}),
-        pendingApproval: readPendingApproval(threadId),
-        ...(goal !== undefined ? { goal } : {}),
-        ...(skills !== undefined ? { skills } : {}),
-        ...(todos !== undefined ? { todos } : {}),
-        ...(addressedFeedback !== undefined ? { addressedFeedback } : {}),
-      };
+      }));
+      const willAutoCompact = await autoCompact.observeMany(entries.map((entry, index) => ({
+        target: { harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId },
+        evidence: { activityAt: entry.activityAt, contextTokens: facts[index]!.tokenUsage?.last.inputTokens ?? null },
+        runtime: { latestTurn: facts[index]!.latestTurn, status: threadPayloadStatus(entry), turnLive: turnLive[index] ?? false },
+      })));
+      return new Map(entries.map(({ identity: { threadId } }, index) => {
+        const { addressedFeedback, goal, skills, todos, tokenUsage } = facts[index]!;
+        const live = turnLive[index];
+        return [threadId, {
+          tokenUsage, willAutoCompact: willAutoCompact.get(threadId) ?? false,
+          ...(live !== undefined ? { turnLive: live } : {}),
+          pendingApproval: readPendingApproval(threadId), goal, skills, todos, addressedFeedback,
+        }];
+      }));
     },
     readTokenUsage,
     subscribe: listener => {

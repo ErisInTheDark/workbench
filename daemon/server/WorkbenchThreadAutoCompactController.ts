@@ -2,7 +2,8 @@
  * Exports:
  * - ThreadAutoCompactEvidence: canonical activity and current-context measurement.
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility and compact-before-message policy, including held questionnaire answers and user messages queued behind compaction.
+ * - ThreadAutoCompactRuntime: latest turn, status and liveness a decision weighs.
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts) and compact-before-message policy, including held questionnaire answers and user messages queued behind compaction.
  */
 import type { ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchHarness } from "workbench-shared/types";
@@ -26,10 +27,17 @@ export interface ThreadAutoCompactTarget {
   threadId: string;
 }
 
-interface ThreadAutoCompactRuntime {
+export interface ThreadAutoCompactRuntime {
   latestTurn: Pick<Turn, "id"> | null;
   status: string;
   turnLive: boolean;
+}
+
+/** Facts a caller already holds, so a decision needs no port reads. */
+interface ThreadAutoCompactFacts {
+  settings: ThreadAutoCompactSettings;
+  evidence: ThreadAutoCompactEvidence | null;
+  runtime: ThreadAutoCompactRuntime;
 }
 
 interface ThreadAutoCompactDecision {
@@ -69,6 +77,20 @@ export default class WorkbenchThreadAutoCompactController {
   }
 
   async observe(target: ThreadAutoCompactTarget) {
+    return await this.observeWith(target);
+  }
+
+  /** Observe many threads from facts the caller already read: one settings read, no per-thread port reads. */
+  async observeMany(entries: ReadonlyArray<{ target: ThreadAutoCompactTarget; evidence: ThreadAutoCompactEvidence | null; runtime: ThreadAutoCompactRuntime }>) {
+    this.lifetime.signal.throwIfAborted();
+    if (!entries.length) return new Map<string, boolean>();
+    const settings = await this.ports.readSettings();
+    return new Map(await Promise.all(entries.map(async ({ evidence, runtime, target }) => (
+      [target.threadId, await this.observeWith(target, { evidence, runtime, settings })] as const
+    ))));
+  }
+
+  private async observeWith(target: ThreadAutoCompactTarget, facts?: ThreadAutoCompactFacts) {
     this.lifetime.signal.throwIfAborted();
     const current = this.observed.get(target.threadId);
     const observed = current ?? {
@@ -80,7 +102,7 @@ export default class WorkbenchThreadAutoCompactController {
     observed.target = target;
     this.observed.set(target.threadId, observed);
     try {
-      return await this.trackRefresh(observed);
+      return await this.trackRefresh(observed, undefined, facts);
     } catch (error) {
       if (this.lifetime.signal.aborted) throw error;
       this.warn(target.threadId, error);
@@ -178,11 +200,12 @@ export default class WorkbenchThreadAutoCompactController {
   private async decide(
     threadId: string,
     provider?: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
+    facts?: ThreadAutoCompactFacts,
   ): Promise<ThreadAutoCompactDecision> {
     const signal = this.lifetime.signal;
     signal.throwIfAborted();
-    const settings = await this.ports.readSettings();
-    const evidence = settings.enabled ? await this.ports.readEvidence(threadId) : null;
+    const settings = facts?.settings ?? await this.ports.readSettings();
+    const evidence = !settings.enabled ? null : facts ? facts.evidence : await this.ports.readEvidence(threadId);
     signal.throwIfAborted();
     if (!evidence || evidence.contextTokens === null || evidence.contextTokens < settings.tokenThreshold) {
       return { dueAt: null, willAutoCompact: false };
@@ -190,7 +213,7 @@ export default class WorkbenchThreadAutoCompactController {
     const dueAt = evidence.activityAt + settings.idleMinutes * 60_000;
     if (this.ports.now() < dueAt) return { dueAt, willAutoCompact: false };
     const target = this.observed.get(threadId)?.target;
-    const runtime = provider
+    const runtime = facts ? facts.runtime : provider
       ? await this.readProviderRuntime(threadId, provider)
       : target ? await this.ports.readRuntime(target) : null;
     signal.throwIfAborted();
@@ -228,10 +251,11 @@ export default class WorkbenchThreadAutoCompactController {
   private async refresh(
     observed: ObservedThread,
     provider?: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
+    facts?: ThreadAutoCompactFacts,
   ) {
     this.clearTimer(observed);
     const revision = ++observed.revision;
-    const decision = await this.decide(observed.target.threadId, provider);
+    const decision = await this.decide(observed.target.threadId, provider, facts);
     if (this.lifetime.signal.aborted || this.observed.get(observed.target.threadId) !== observed
       || observed.revision !== revision) return observed.willAutoCompact ?? false;
     const previous = observed.willAutoCompact;
@@ -256,8 +280,9 @@ export default class WorkbenchThreadAutoCompactController {
   private trackRefresh(
     observed: ObservedThread,
     provider?: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
+    facts?: ThreadAutoCompactFacts,
   ) {
-    const refresh = this.refresh(observed, provider);
+    const refresh = this.refresh(observed, provider, facts);
     this.refreshes.add(refresh);
     void refresh.then(
       () => { this.refreshes.delete(refresh); },

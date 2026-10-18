@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - ThreadAddressedFeedbackCommand: atomic reads and edits of the feedback one thread was launched to address.
- * - default WorkbenchThreadAddressedFeedbackStore: own and count each thread's addressed feedback references in SQLite.
+ * - default WorkbenchThreadAddressedFeedbackStore: own, count and batch-read each thread's addressed feedback references in SQLite.
  */
 import type Database from "better-sqlite3";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
@@ -50,10 +50,20 @@ export default class WorkbenchThreadAddressedFeedbackStore {
       }
       return (this.database.prepare(`SELECT source_daemon_id, feedback_id, category, title, author, thread_label, report, created_at
         FROM workbench_thread_addressed_feedback WHERE thread_id = ? ORDER BY position`).all(command.threadId) as AddressedRow[])
-        .map((row): WorkbenchThreadAddressedFeedback => ({
-          kind: "feedback", id: row.feedback_id, daemonId: row.source_daemon_id, category: row.category, title: row.title,
-          author: row.author, thread: row.thread_label, createdAt: row.created_at, report: row.report,
-        }));
+        .map(toFeedback);
     })();
   }
+
+  /** Each listed thread's addressed feedback in one read, in recorded order; threads without any are absent. */
+  readMany(threadIds: readonly string[]): Map<string, WorkbenchThreadAddressedFeedback[]> {
+    const rows = this.database.prepare(`SELECT thread_id, source_daemon_id, feedback_id, category, title, author, thread_label, report, created_at
+      FROM workbench_thread_addressed_feedback WHERE thread_id IN (SELECT value FROM json_each(?)) ORDER BY thread_id, position`)
+      .all(JSON.stringify(threadIds)) as Array<AddressedRow & { thread_id: string }>;
+    return new Map([...Map.groupBy(rows, row => row.thread_id)].map(([threadId, feedback]) => [threadId, feedback.map(toFeedback)]));
+  }
 }
+
+const toFeedback = (row: AddressedRow): WorkbenchThreadAddressedFeedback => ({
+  kind: "feedback", id: row.feedback_id, daemonId: row.source_daemon_id, category: row.category, title: row.title,
+  author: row.author, thread: row.thread_label, createdAt: row.created_at, report: row.report,
+});

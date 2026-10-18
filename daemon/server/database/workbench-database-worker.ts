@@ -48,6 +48,7 @@ import WorkbenchThreadGitSelectionStore from "./git/WorkbenchThreadGitSelectionS
 import WorkbenchThreadSkillStore from "./skills/WorkbenchThreadSkillStore.ts";
 import WorkbenchThreadInstructionSelectionStore from "./thread-state/WorkbenchThreadInstructionSelectionStore.ts";
 import WorkbenchThreadGoalStore from "./goals/WorkbenchThreadGoalStore.ts";
+import WorkbenchThreadRuntimeFactsReader from "./thread-runtime/WorkbenchThreadRuntimeFactsReader.ts";
 import WorkbenchThreadVisStore from "./vis/WorkbenchThreadVisStore.ts";
 import WorkbenchThreadTodoStore from "./todos/WorkbenchThreadTodoStore.ts";
 import WorkbenchThreadAddressedFeedbackStore from "./feedback/WorkbenchThreadAddressedFeedbackStore.ts";
@@ -484,6 +485,11 @@ function handleInitializedRequest(request: Exclude<WorkbenchDatabaseRequest, { t
   if (request.type === "readThreadContextUsage") {
     if (!transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
     post({ id: request.id, type: "threadContextUsage", snapshot: transcriptRepository.readContextUsage(request.threadId) });
+    return;
+  }
+  if (request.type === "readThreadRuntimeFacts") {
+    if (!database || !transcriptRepository) throw new Error("Workbench transcript repository is not initialized");
+    post({ id: request.id, type: "threadRuntimeFacts", facts: new WorkbenchThreadRuntimeFactsReader(database, transcriptRepository).read(request.threadIds) });
     return;
   }
   switch (request.type) {

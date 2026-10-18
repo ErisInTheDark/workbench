@@ -13,11 +13,6 @@ export default class WorkbenchThreadAddressedFeedbackController {
     changed(threadId: WorkbenchThreadId, feedback: WorkbenchThreadAddressedFeedback[]): void;
   }) {}
 
-  async read(threadId: string) {
-    const resolved = await this.options.resolve(threadId);
-    return resolved ? await this.options.store({ kind: "read", threadId: resolved }) : [];
-  }
-
   async record(threadId: string, feedback: readonly WorkbenchThreadAddressedFeedback[]) {
     if (!feedback.length) return;
     await this.#change(threadId, resolved => ({ kind: "record", threadId: resolved, feedback }));
