@@ -26,7 +26,8 @@ export function getThreadStopIntent(entry: Extract<WorkbenchThreadSidebarEntry, 
 export function getThreadRowActions(
   entry: WorkbenchThreadSidebarEntry | WorkbenchPinnedThreadSummaryEntry,
   group: WorkbenchThreadSidebarGroup,
-  { requiredTodoCount = 0 }: { requiredTodoCount?: number } = {},
+  /** The thread's summary facts, whose required todos and addressed feedback hold settlement. */
+  facts: Parameters<typeof isWorkbenchThreadSettlementAvailable>[1] = {},
 ): { baseAction: ThreadRowAction | null; shiftAction: ThreadRowAction | null } {
   if (entry.entryKind === "draft") return { baseAction: "discard", shiftAction: null };
   const hasQuestionnaire = "canCompleteQuestionnaire" in entry
@@ -35,7 +36,7 @@ export function getThreadRowActions(
   const canComplete = isWorkbenchSidebarThreadCompletionAvailable(entry)
     && entry.lifecycle.kind === "needsAttention"
     && (!entry.waitingFor || hasQuestionnaire);
-  const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry, { requiredTodoCount });
+  const settlementAvailable = isWorkbenchThreadSettlementAvailable(entry, facts);
   const canSnooze = isWorkbenchThreadSnoozeAvailable(entry);
   const baseAction = group === "settled" || group === "archived" ? "restore" : group === "snoozed" ? "wake"
     : (canComplete || entry.lifecycle.kind === "working") && canSnooze ? "snooze" : settlementAvailable ? "settle" : null;

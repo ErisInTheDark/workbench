@@ -90,6 +90,14 @@ test("pinned summaries preserve questionnaire completion without enabling shift 
   assert.deepEqual(getThreadRowActions(summary.pinnedThreads[0]!, "pinned"), { baseAction: "snooze", shiftAction: "complete" });
 });
 
+test("required todos and unhandled addressed feedback hold settlement like live claims", () => {
+  assert.equal(getThreadRowActions(stopped, "main", { requiredTodoCount: 1 }).baseAction, null);
+  assert.equal(getThreadRowActions(stopped, "main", { addressedFeedbackCount: 2 }).baseAction, null);
+  assert.deepEqual(getThreadRowActions(completed, "main", { addressedFeedbackCount: 1 }), { baseAction: null, shiftAction: "snooze" });
+  assert.equal(getThreadRowActions(completed, "snoozed", { addressedFeedbackCount: 1 }).shiftAction, null);
+  assert.equal(getThreadRowActions(stopped, "main", { addressedFeedbackCount: 0, requiredTodoCount: 0 }).baseAction, "settle");
+});
+
 test("completed rows keep settlement primary while snoozed rows expose settlement through shift", () => {
   assert.deepEqual(getThreadRowActions(completed, "main"), { baseAction: "settle", shiftAction: "snooze" });
   assert.deepEqual(getThreadRowActions(completed, "snoozed"), { baseAction: "wake", shiftAction: "settle" });

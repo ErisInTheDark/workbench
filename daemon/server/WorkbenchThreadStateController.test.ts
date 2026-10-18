@@ -4642,7 +4642,7 @@ test("manual status persists, restores settled threads, and rejects provider-own
       assert.equal(insideGitArcTransition, true);
       return terminalHasGitArc && !terminalGitArcResolved && threadId === "terminal";
     },
-    hasRequiredTodos: async threadId => terminalHasRequiredTodos && threadId === "terminal",
+    settlementHold: async threadId => terminalHasRequiredTodos && threadId === "terminal" ? "requiredTodos" : null,
     onProject: snapshot => { published.push(snapshot); },
     reconcileProject: async (_projectId, _signal, acceptProviderSnapshot) => {
       await acceptProviderSnapshot("codex", [terminal, pending, working], { complete: true });

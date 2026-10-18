@@ -17,7 +17,7 @@ import {
 } from "./thread-sidebar-row";
 
 export const ThreadSummaryFactsSchema = z.object({
-  /** Feedback reports this thread was launched to address. */
+  /** Feedback reports this thread addresses; until each is resolved or detached they keep it from settling. */
   addressedFeedbackCount: z.number().int().nonnegative().optional(),
   /** Context compaction is running now. */
   compacting: z.boolean().optional(),

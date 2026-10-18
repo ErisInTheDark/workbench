@@ -1,7 +1,7 @@
 /*
  * Exports: none. Tests protect subagent settle: a late terminal lifecycle is awaited,
  * a still-working child still errors at the deadline, a runtime drain aborts the wait,
- * and a refused mutation surfaces as failure naming held claims or required todos instead of false success.
+ * and a refused mutation surfaces as failure naming held claims, required todos or addressed feedback instead of false success.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -10,6 +10,7 @@ import { test } from "node:test";
 import type { WorkbenchSubagentRelationship } from "workbench-shared/types";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import * as identitySchemas from "workbench-shared/workbench/identity";
+import type { WorkbenchThreadSettlementHold } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcResponse } from "./bridge-types";
 import type { AgentEndpointProjectResolution } from "./lib/workbench/project/agent-endpoint-project";
 import WorkbenchSubagentController from "./WorkbenchSubagentController";
@@ -57,11 +58,11 @@ async function createHarness() {
   let gitArc: unknown = null;
   let lifecycle: Lifecycle = { kind: "working" };
   let refuseMutation = false;
-  let requiredTodos = false;
+  let hold: WorkbenchThreadSettlementHold | null = null;
   const mutations: Array<Record<string, unknown>> = [];
   const controller = new WorkbenchSubagentController({
     identities: database.identities.threads,
-    hasRequiredTodos: async () => requiredTodos,
+    settlementHold: async () => hold,
     publicThreadId: async () => { throw new Error("Settle does not publish thread identities."); },
     provider: () => { throw new Error("Settle does not call providers."); },
     stopThread: async () => { throw new Error("Settle does not stop threads."); },
@@ -84,7 +85,7 @@ async function createHarness() {
     setGitArc: (next: unknown) => { gitArc = next; },
     setLifecycle: (next: Lifecycle) => { lifecycle = next; },
     setRefuseMutation: (next: boolean) => { refuseMutation = next; },
-    setRequiredTodos: (next: boolean) => { requiredTodos = next; },
+    setSettlementHold: (next: WorkbenchThreadSettlementHold | null) => { hold = next; },
     settle: (): Promise<JsonRpcResponse> => controller.handleRequest({
       id: 1,
       method: "workbench/subagent/settle",
@@ -162,15 +163,19 @@ test("a refused mutation surfaces failure instead of false success", async (cont
   assert.equal(harness.mutations.length, 1);
 });
 
-test("a settle held by required todos names them", async (context) => {
+test("a settle held by thread-owned work names what holds it", async (context) => {
   context.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const harness = await createHarness();
   context.after(() => harness.controller.dispose());
   harness.setLifecycle({ kind: "completed" });
-  harness.setRequiredTodos(true);
   harness.setRefuseMutation(true);
 
-  const response = await harness.settle();
-  assert.match(response.error?.message ?? "", /still holds required todos and cannot be settled/u);
-  assert.equal(response.result, undefined);
+  harness.setSettlementHold("requiredTodos");
+  const todos = await harness.settle();
+  assert.match(todos.error?.message ?? "", /still holds required todos and cannot be settled/u);
+  assert.equal(todos.result, undefined);
+
+  harness.setSettlementHold("addressedFeedback");
+  const feedback = await harness.settle();
+  assert.match(feedback.error?.message ?? "", /still addresses feedback that is not resolved or detached and cannot be settled/u);
 });

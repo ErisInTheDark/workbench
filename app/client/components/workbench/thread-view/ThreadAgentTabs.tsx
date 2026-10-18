@@ -7,7 +7,9 @@ import type { MouseEvent } from "react";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
 import { ProjectIdSchema, ThreadReferenceSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
-import { gitArcPreventsThreadSettlement, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import {
+  getWorkbenchThreadSettlementHold, gitArcPreventsThreadSettlement, type WorkbenchThreadLifecycle,
+} from "workbench-shared/workbench/thread/thread-state";
 import ContextMenuCapability from "../ContextMenuCapability";
 import { useWorkbenchComposerDraftPresence } from "../WorkbenchComposerDraftPresenceProvider";
 import WorkbenchThreadEntryBadge from "../WorkbenchThreadEntryBadge";
@@ -83,9 +85,9 @@ function SubagentTabLink({
   const parsedProjectId = ProjectIdSchema.safeParse(projectId).data ?? null;
   const threadId = WorkbenchThreadIdSchema.parse(tab.id);
   const summary = useThread.summary(threadId)?.summary ?? null;
-  // Live claims and required todos hold settlement, so the option is absent, matching thread rows.
+  // Live claims and thread-owned holds keep a child from settling, so the option is absent, matching thread rows.
   const settleable = (tab.subagent?.lifecycle?.kind === "completed" || tab.subagent?.lifecycle?.kind === "stopped")
-    && !gitArcPreventsThreadSettlement(summary?.row.gitArc) && !summary?.facts.requiredTodoCount;
+    && !gitArcPreventsThreadSettlement(summary?.row.gitArc) && !getWorkbenchThreadSettlementHold(summary?.facts);
   const hasComposerDraft = useWorkbenchComposerDraftPresence(projectId, tab.id);
   const claimedCount = summary?.row.gitArc?.claimedPaths.length ?? 0;
   const stashedCount = summary?.row.gitArc?.stashedPaths?.length ?? 0;

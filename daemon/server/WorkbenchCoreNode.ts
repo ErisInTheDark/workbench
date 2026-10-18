@@ -7,7 +7,9 @@ import path from "node:path";
 import * as project from "./lib/project";
 import * as threadBootstrap from "./lib/thread-bootstrap";
 import type { WorkbenchHarness } from "workbench-shared/types";
-import { type WorkbenchThreadLifecycle, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import {
+  type WorkbenchThreadLifecycle, type WorkbenchThreadSettlementHold, type WorkbenchThreadSidebarEntry, type WorkbenchThreadStateRequest,
+} from "workbench-shared/workbench/thread/thread-state";
 import { createWorkbenchQuestionnaireStatePorts } from "./thread-identity-workbench-mapping";
 import { ProjectIdSchema, WorkbenchThreadIdSchema, WorkbenchTurnIdSchema, type WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import providerRegistrations, { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -346,8 +348,6 @@ function createWorkbenchCoreFeature(
       for (const listener of runtimeListeners) listener(threadId, { todos });
     },
   });
-  /** Required todos keep a thread from settling, exactly like live claims. */
-  const hasRequiredTodos = async (threadId: WorkbenchThreadId) => (await threadTodos.read(threadId)).some(({ required }) => required);
   /** Cancels this generation's vis browser calls when the core node is disposed. */
   const visBrowseLifetime = new AbortController();
   const vis = new WorkbenchVisController({
@@ -399,7 +399,12 @@ function createWorkbenchCoreFeature(
       for (const listener of runtimeListeners) listener(threadId, { addressedFeedback });
     },
   });
-  const agentContext =new WorkbenchAgentContextController({
+  /** Required todos and unresolved addressed feedback keep a thread from settling, exactly like live claims. */
+  const settlementHold = async (threadId: WorkbenchThreadId): Promise<WorkbenchThreadSettlementHold | null> => {
+    if ((await threadTodos.read(threadId)).some(({ required }) => required)) return "requiredTodos";
+    return await threadAddressedFeedback.holdsSettlement(threadId) ? "addressedFeedback" : null;
+  };
+  const agentContext = new WorkbenchAgentContextController({
     sources: [threadSkills.contextSource, threadGoals.contextSource],
     inject: async (target, text, signal) => {
       if (!lease.isCurrent()) throw new Error("Agent context generation has retired.");
@@ -550,7 +555,7 @@ function createWorkbenchCoreFeature(
     },
     identities: threadIdentity,
     queueReleaseNote: threadId => subagentQueues?.takeReleaseNote(threadId) ?? null,
-    hasRequiredTodos,
+    settlementHold,
     provider,
     // Read lazily: the approval owner is built after subagents but within this same node.
     liveApprovals: () => approvals.list(),
@@ -617,7 +622,7 @@ function createWorkbenchCoreFeature(
     database,
     getProjectCatalog: () => projectCatalog.getCurrentSnapshot(),
     gitArcs: gitArc,
-    hasRequiredTodos,
+    settlementHold,
     compactThread: input => threadContextRollover.acceptSummary(input),
     refreshThread: (harness, target) => continuations.refresh(harness, target),
     listSubagents: (projectId) => subagents.listRelationships(projectId),

@@ -34,7 +34,8 @@
  * - WorkbenchProjectThreadSummaryCountsSchema/WorkbenchProjectThreadSummaryEntrySchema/WorkbenchPinnedThreadSummaryEntrySchema/WorkbenchProjectThreadSummarySchema/createWorkbenchProjectThreadSummary: unsettled and pinned cross-project rows, counts, ordering, and activity.
  * - WorkbenchThreadPrioritySchema/WorkbenchThreadPriority: exact pinned, main, and snoozed placement intent.
  * - WorkbenchThreadStateSnapshotSchema/WorkbenchThreadStateRequestSchema/WorkbenchThreadStateMutationResultSchema/WorkbenchThreadTitleMutationResultSchema: current thread-family snapshots and daemon-owned mutations.
- * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git and required-todo blockers, terminal settlement, and aggregate wake readiness.
+ * - gitArcPreventsThreadSettlement/isWorkbenchThreadSettlementAvailable/areAllUnsnoozedThreadEntriesSettlementReady: identify Git blockers, terminal settlement, and aggregate wake readiness.
+ * - WorkbenchThreadSettlementHold/getWorkbenchThreadSettlementHold: thread-owned settlement blockers (required todos, unhandled addressed feedback) and reading them from summary facts.
  * - getThreadSidebarGroup/groupWorkbenchThreadSidebarEntries/hasUnarchivedSidebarWork: classify project placement and ordered thread sections.
  * - WorkbenchThreadClaimIntersections/getWorkbenchThreadClaimIntersections/createWorkbenchThreadClaimIntersectionSelector: derive and identity-stabilize sibling intersections for plan or stashed claims.
  * - normalizeWorkbenchTimestampMs: normalize provider second/millisecond timestamps at the sidebar boundary.
@@ -796,14 +797,23 @@ export function hasUnarchivedSidebarWork(entries: readonly SidebarRow[]) {
   return entries.some(entry => entry.entryKind !== "subagent" && !entry.metadata.archived);
 }
 
-/** `requiredTodoCount` comes from the thread's summary; remaining required todos hold settlement like live claims. */
-export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow, { requiredTodoCount = 0 }: { requiredTodoCount?: number } = {}) {
+/** Thread-owned work that holds settlement like live claims: required todos, and addressed feedback not yet resolved or detached. */
+export type WorkbenchThreadSettlementHold = "requiredTodos" | "addressedFeedback";
+/** The counts a thread's summary facts carry for its settlement holds. */
+type SettlementHoldFacts = { addressedFeedbackCount?: number; requiredTodoCount?: number };
+
+export function getWorkbenchThreadSettlementHold(facts: SettlementHoldFacts = {}): WorkbenchThreadSettlementHold | null {
+  return facts.requiredTodoCount ? "requiredTodos" : facts.addressedFeedbackCount ? "addressedFeedback" : null;
+}
+
+/** `facts` are the thread's summary facts. */
+export function isWorkbenchThreadSettlementAvailable(entry: SidebarRow, facts: SettlementHoldFacts = {}) {
   return entry.entryKind !== "draft"
     && !entry.waitingFor
     && !entry.lifecycle.settled
     && (entry.lifecycle.kind === "completed" || entry.lifecycle.kind === "stopped")
     && !gitArcPreventsThreadSettlement(entry.gitArc)
-    && !requiredTodoCount;
+    && !getWorkbenchThreadSettlementHold(facts);
 }
 
 export function areAllUnsnoozedThreadEntriesSettlementReady(entries: readonly SidebarRow[]) {

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default WorkbenchThreadAddressedFeedbackController: own the feedback each thread was launched to address, until the user clears it.
+ * - default WorkbenchThreadAddressedFeedbackController: own the feedback each thread was launched to address until the user clears it; any left hold settlement.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchThreadAddressedFeedback } from "workbench-shared/workbench/thread/thread-addressed-feedback";
@@ -20,6 +20,10 @@ export default class WorkbenchThreadAddressedFeedbackController {
 
   async clear(threadId: string) {
     await this.#change(threadId, resolved => ({ kind: "clear", threadId: resolved }));
+  }
+
+  async holdsSettlement(threadId: WorkbenchThreadId) {
+    return (await this.options.store({ kind: "read", threadId })).length > 0;
   }
 
   async #change(threadId: string, command: (resolved: WorkbenchThreadId) => ThreadAddressedFeedbackCommand) {

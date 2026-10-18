@@ -25,7 +25,7 @@ export interface WorkbenchSubagentFeatureContext {
   persistence: WorkbenchSubagentPersistence;
   stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   queueReleaseNote: NonNullable<WorkbenchSubagentControllerOptions["queueReleaseNote"]>;
-  hasRequiredTodos: NonNullable<WorkbenchSubagentControllerOptions["hasRequiredTodos"]>;
+  settlementHold: NonNullable<WorkbenchSubagentControllerOptions["settlementHold"]>;
   messageWaits: NonNullable<WorkbenchSubagentControllerOptions["messageWaits"]>;
   threadState: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -55,7 +55,7 @@ export default class WorkbenchSubagentFeature {
       subagentStore: this.store,
       stopThread: context.stopThread,
       queueReleaseNote: context.queueReleaseNote,
-      hasRequiredTodos: context.hasRequiredTodos,
+      settlementHold: context.settlementHold,
       threadState: context.threadState,
       messageWaits: context.messageWaits,
     });

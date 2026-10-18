@@ -185,7 +185,8 @@ export default function WorkbenchThreadListItem({
     ? 0
     : entry.gitArc?.proposals.filter(({ status: proposalStatus }) => proposalStatus === "proposed").length ?? 0;
   const stashedClaimCount = stashedPaths.length;
-  const feedbackCount = entry.entryKind === "thread" && lifecycle?.kind === "completed"
+  // Once the work is done, the feedback still holding settlement is what the row should explain.
+  const feedbackCount = entry.entryKind === "thread" && (lifecycle?.kind === "completed" || lifecycle?.kind === "stopped")
     ? facts?.addressedFeedbackCount ?? 0
     : 0;
   const hasDraftImages = entry.entryKind === "draft"
@@ -198,7 +199,7 @@ export default function WorkbenchThreadListItem({
   </span>;
   const archived = entry.entryKind === "thread" && group === "archived";
   const pinned = isPinnedDraftSummaryEntry(entry) ? true : entry.entryKind === "subagent" ? entry.pinned : entry.metadata.pinned;
-  const { baseAction, shiftAction } = getThreadRowActions(entry, group, { requiredTodoCount });
+  const { baseAction, shiftAction } = getThreadRowActions(entry, group, facts);
   const action = isShiftPressed && shiftAction ? shiftAction : baseAction;
   const priority = group === "snoozed" ? "snoozed" : showPinPriorityIcon && pinned ? "pinned" : null;
   const PriorityIcon = priority === "snoozed" ? SnoozedThreadIcon : priority === "pinned" ? PinIcon : null;

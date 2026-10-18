@@ -22,7 +22,7 @@ import {
 } from "./lib/workbench/subagent/subagent-output";
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchMessageContext } from "workbench-shared/workbench/provider/provider-input";
-import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
+import type { WorkbenchThreadSettlementHold, WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
 import { gitArcPreventsThreadSettlement, WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import type WorkbenchComposerProfileStore from "./WorkbenchComposerProfileStore";
@@ -42,6 +42,10 @@ const POLL_INTERVAL_MS = 1_000;
 // The deadline still fails fast for a genuinely working child instead of waiting open-ended.
 const SETTLE_READY_TIMEOUT_MS = 30_000;
 const PARENT_AGENT_NAME = "parent agent";
+const SETTLEMENT_HOLD_REASONS: Record<WorkbenchThreadSettlementHold, string> = {
+  requiredTodos: "still holds required todos",
+  addressedFeedback: "still addresses feedback that is not resolved or detached",
+};
 type WorkbenchSubagentControllerStore = Pick<
   WorkbenchSubagentStore,
   "getOwnedMany" | "list" | "remove" | "replace" | "reserve"
@@ -61,8 +65,8 @@ export interface WorkbenchSubagentControllerOptions {
   stopThread(threadId: WorkbenchThreadId): Promise<void>;
   /** Consume queue lines (paused holds, dropped places) owed to the parent about a child whose turn ended. */
   queueReleaseNote?(threadId: WorkbenchThreadId): string | null;
-  /** Whether a child still holds required follow-up todos; names why its settlement was not accepted. */
-  hasRequiredTodos?(threadId: WorkbenchThreadId): Promise<boolean>;
+  /** Thread-owned work a child still holds; names why its settlement was not accepted. */
+  settlementHold?(threadId: WorkbenchThreadId): Promise<WorkbenchThreadSettlementHold | null>;
   messageWaits?: Pick<WorkbenchMessageWaitController, "isWaitingFor" | "subscribePending">;
   threadState?: {
     getEntry(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<WorkbenchThreadSidebarEntry | null>;
@@ -116,7 +120,7 @@ export default class WorkbenchSubagentController {
   private readonly subagentStore: WorkbenchSubagentControllerStore;
   private readonly stopThread: WorkbenchSubagentControllerOptions["stopThread"];
   private readonly queueReleaseNote: WorkbenchSubagentControllerOptions["queueReleaseNote"];
-  private readonly hasRequiredTodos: WorkbenchSubagentControllerOptions["hasRequiredTodos"];
+  private readonly settlementHold: WorkbenchSubagentControllerOptions["settlementHold"];
   private readonly threadState: WorkbenchSubagentControllerOptions["threadState"];
   private readonly messageWaits: WorkbenchSubagentControllerOptions["messageWaits"];
   private readonly waiters = new Map<string, AbortController>();
@@ -135,7 +139,7 @@ export default class WorkbenchSubagentController {
     subagentStore,
     stopThread,
     queueReleaseNote,
-    hasRequiredTodos,
+    settlementHold,
     threadState,
     messageWaits,
   }: WorkbenchSubagentControllerOptions) {
@@ -149,7 +153,7 @@ export default class WorkbenchSubagentController {
     this.subagentStore = subagentStore;
     this.stopThread = stopThread;
     this.queueReleaseNote = queueReleaseNote;
-    this.hasRequiredTodos = hasRequiredTodos;
+    this.settlementHold = settlementHold;
     this.threadState = threadState;
     this.messageWaits = messageWaits;
   }
@@ -576,11 +580,11 @@ export default class WorkbenchSubagentController {
       const { accepted } = await this.threadState.mutate({ identity: { harness: record.harness, threadId: record.threadId }, method: "workbench/thread-state/settle", projectId: record.projectId });
       if (accepted) continue;
       const entry = await this.threadState.getEntry(record.projectId, record.harness, record.threadId);
-      throw new Error(entry?.entryKind === "subagent" && gitArcPreventsThreadSettlement(entry.gitArc)
-        ? `Subagent ${record.name} still holds live Git arc claims and cannot be settled.`
-        : await this.hasRequiredTodos?.(record.threadId)
-          ? `Subagent ${record.name} still holds required todos and cannot be settled.`
-          : `Subagent ${record.name} could not be settled.`);
+      if (entry?.entryKind === "subagent" && gitArcPreventsThreadSettlement(entry.gitArc)) {
+        throw new Error(`Subagent ${record.name} still holds live Git arc claims and cannot be settled.`);
+      }
+      const hold = await this.settlementHold?.(record.threadId);
+      throw new Error(hold ? `Subagent ${record.name} ${SETTLEMENT_HOLD_REASONS[hold]} and cannot be settled.` : `Subagent ${record.name} could not be settled.`);
     }
     return { settled: records.map(({ name, threadId }) => ({ name, threadId })) };
   }

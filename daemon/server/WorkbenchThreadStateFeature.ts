@@ -7,7 +7,7 @@
  * - default WorkbenchThreadStateFeature: own reconciliation, SQLite state, workbench-owned titles, thread-owned status commands, item-owned activity time, and provider notifications.
  */
 import type { ThreadPayload, WorkbenchComposerProfileStorePayload, WorkbenchComposerProfileTargetSelection, WorkbenchHarness, WorkbenchProjectsPayload, WorkbenchSubagentRelationship, WorkbenchThreadCreationProfile } from "workbench-shared/types";
-import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchGitArcLifecycleState, type WorkbenchThreadLifecycle } from "workbench-shared/workbench/thread/thread-state";
+import { getWorkbenchLifecycleTurnId, normalizeWorkbenchTimestampMs, resolveWorkbenchThreadTitle, WorkbenchGitArcLifecycleStateSchema, type WorkbenchDurableQuestionnaire, type WorkbenchGitArcLifecycleState, type WorkbenchThreadLifecycle, type WorkbenchThreadSettlementHold } from "workbench-shared/workbench/thread/thread-state";
 import { currentThreadTitleName } from "workbench-shared/workbench/thread/thread-title-history";
 import type { HarnessKind, JsonRpcRequest, JsonRpcResponse } from "./bridge-types";
 import { normalizeThreadTitle } from "./lib/thread-bootstrap";
@@ -91,8 +91,8 @@ export interface WorkbenchThreadStateFeatureContext {
     readCommitTimes?(cwd: string, requests: ReadonlyArray<{ commitShas: string[]; rootId: string }>): Promise<ReadonlyMap<string, string>>;
   };
   getProjectCatalog(): WorkbenchProjectsPayload;
-  /** Whether the thread still holds required follow-up todos, which keep it from settling. */
-  hasRequiredTodos?(threadId: WorkbenchThreadId): Promise<boolean>;
+  /** Thread-owned work that still keeps the thread from settling, if any. */
+  settlementHold?(threadId: WorkbenchThreadId): Promise<WorkbenchThreadSettlementHold | null>;
   providers: Pick<WorkbenchProviderDispatcher, "get">;
   listSubagents(projectId: ProjectId): Promise<SubagentRelationshipList>;
   compactThread?(input: { cwd: string; summary: string; threadId: WorkbenchThreadId; turnId: WorkbenchTurnId }): Promise<void>;
@@ -255,7 +255,7 @@ export default class WorkbenchThreadStateFeature {
           : await context.gitArcs.findActiveClaim(project.rootPath, harness, threadId);
         return Boolean(state && (state.claimedPaths.length || ("phase" in state && state.phase === "stashed")));
       },
-      ...(context.hasRequiredTodos ? { hasRequiredTodos: (threadId: WorkbenchThreadId) => context.hasRequiredTodos!(threadId) } : {}),
+      ...(context.settlementHold ? { settlementHold: (threadId: WorkbenchThreadId) => context.settlementHold!(threadId) } : {}),
       runGitArcReadTransition: async (projectId, operation) => {
         if (!this.projectWorktreeAvailable(projectId)) return await operation();
         const project = await context.resolveProjectById(projectId);

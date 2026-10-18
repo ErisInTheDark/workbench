@@ -71,6 +71,7 @@ import {
   type WorkbenchQuestionnaireHistoryEntryState,
   type WorkbenchThreadLifecycle,
   type WorkbenchThreadDraft,
+  type WorkbenchThreadSettlementHold,
   type WorkbenchGitArcLifecycleState,
   type WorkbenchGitArcPlanState,
   type WorkbenchThreadGitCommit,
@@ -174,8 +175,8 @@ export interface WorkbenchThreadStateControllerOptions {
   recordComposerModelUsage?: (harness: WorkbenchHarnessId, modelId: string, at: number) => Promise<void>;
   getProjectCatalog: () => WorkbenchProjectsPayload;
   hasGitArcBlockingSettlement: (projectId: ProjectId, harness: WorkbenchHarnessId, threadId: WorkbenchThreadId) => Promise<boolean>;
-  /** Required follow-up todos block settlement the same way live claims do. */
-  hasRequiredTodos?: (threadId: WorkbenchThreadId) => Promise<boolean>;
+  /** Thread-owned work, such as required todos or unhandled addressed feedback, blocks settlement the same way live claims do. */
+  settlementHold?: (threadId: WorkbenchThreadId) => Promise<WorkbenchThreadSettlementHold | null>;
   log?: (message: string) => void;
   publishAgentContext?: (harness: WorkbenchHarnessId, threadId: WorkbenchThreadId, text: string) => Promise<void>;
   now?: () => number;
@@ -2254,7 +2255,7 @@ export default class WorkbenchThreadStateController {
       if (
         request.method === "workbench/thread-state/settle"
         && (await this.options.hasGitArcBlockingSettlement(request.projectId, entry.identity.harness, entry.identity.threadId)
-          || await this.options.hasRequiredTodos?.(entry.identity.threadId))
+          || await this.options.settlementHold?.(entry.identity.threadId))
       ) {
         return { accepted: false, revision: state.revision };
       }
