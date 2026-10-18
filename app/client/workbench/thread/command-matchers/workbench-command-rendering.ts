@@ -55,7 +55,7 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "mcp_tools",
   "mcp_request",
   "mcp_call",
-  // Vis is CLI-only; its CLI matcher renders through these names, which also keep earlier MCP calls rendering.
+  // Vis is deferred; its CLI matcher and `mcp_call` on server wb render through these names, which also keep earlier MCP calls rendering.
   "vis_start",
   "vis_end",
   "vis_read",
@@ -99,7 +99,11 @@ export const WORKBENCH_COMMAND_PRESENTATION_NAMES = [
   "git_arc_unstack",
   "git_arc_wait",
   "git_arc_continue",
-  "git_arc_edit",
+  "git_arc_edit_start",
+  "git_arc_edit_view",
+  "git_arc_edit_apply",
+  "git_arc_edit_revert",
+  "git_arc_edit_end",
   "git_arc_release",
   "git_arc_compare",
   "git_arc_diff",
@@ -117,6 +121,7 @@ export type WorkbenchCommandPresentationName = typeof WORKBENCH_COMMAND_PRESENTA
 
 const GIT_ARC_EDIT_STEPS = ["start", "view", "apply", "revert", "end"] as const;
 export type GitArcEditStep = typeof GIT_ARC_EDIT_STEPS[number];
+const GIT_ARC_EDIT_PREFIX = "git_arc_edit_";
 
 export function isGitArcEditStep(value: string | null | undefined): value is GitArcEditStep {
   return GIT_ARC_EDIT_STEPS.includes(value as GitArcEditStep);
@@ -512,7 +517,11 @@ function gitArcAction(name: WorkbenchCommandPresentationName): WorkbenchGitArcOp
     git_arc_compare: "compare",
     git_arc_continue: "continue",
     git_arc_diff: "diff",
-    git_arc_edit: "edit",
+    git_arc_edit_start: "edit",
+    git_arc_edit_view: "edit",
+    git_arc_edit_apply: "edit",
+    git_arc_edit_revert: "edit",
+    git_arc_edit_end: "edit",
     git_arc_propose: "propose",
     git_arc_release: "release",
     git_arc_rescind: "rescind",
@@ -537,7 +546,7 @@ export function getUnknownGitArcCommandRoute(): WorkbenchCommandRoute {
 function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }) {
   const action = gitArcAction(name);
   if (!action) return null;
-  const editStep = readString(args.editStep);
+  const editStep = name.startsWith(GIT_ARC_EDIT_PREFIX) ? name.slice(GIT_ARC_EDIT_PREFIX.length) : null;
   const messages = [readString(args.title), readString(args.description)].filter((value): value is string => value !== null);
   const combined = name === "git_plan_claims" || name === "git_plan_start" || name === "git_arc_claims";
   const pathField = combined ? "addPaths" : "paths";

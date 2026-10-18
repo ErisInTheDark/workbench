@@ -29,7 +29,7 @@ claims and safety:
 - Arc-managed edits require claims. Gitignored files need none.
 <docs tools="git_arc_edit">
 <!-- Agents otherwise burn hundreds of read/edit calls on mechanical renames and risk substring replacements; edit sessions preview, claim and revert as one unit. -->
-- File moves and multi-file replacements in Git-visible files require `wb git arc edit`; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.
+- File moves and multi-file replacements in Git-visible files require `wb git arc edit` or its deferred `git_arc_edit_*` tools; run `wb git arc edit --help` first. Gitignored files may use shell commands or `wb git arc edit` with `includeIgnored`.
 </docs>
 <docs tools="git_plan_claims git_arc_claims">
 - Adopt intentional command-caused dirt for inclusion in proposals.

@@ -86,7 +86,7 @@ export function formatWorkbenchSocketSpy(answer: {
 
 /** Debug tooling is for working on Workbench itself: CLI only, and only from the Workbench repo cwd. */
 const DEBUG_VISIBILITY = {
-  helpGroups: ["debug"], hideFromMcp: true, hideFromRootHelp: true, managedThreadRootOnly: true,
+  helpGroups: ["debug"], mcpDeferred: true, hideFromRootHelp: true, managedThreadRootOnly: true,
 } as const;
 
 const socket = defineWorkbenchAgentCommand({

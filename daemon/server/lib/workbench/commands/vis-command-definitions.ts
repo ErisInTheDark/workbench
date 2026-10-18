@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchVisRequestSchema: validate one managed caller's vis session start, end, answer read or browser check.
- * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot`, CLI-only: most threads never use vis, so its
- *   tools stay out of every thread's MCP list and the /vis skill teaches them when needed.
+ * - WORKBENCH_VIS_COMMANDS: `wb vis start|end|read|snapshot|screenshot`, deferred: most threads never use vis, so its
+ *   tools stay out of every thread's preloaded MCP list and the /vis skill teaches them when needed.
  */
 import { z } from "zod";
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
@@ -40,7 +40,7 @@ function visCommand(action: Exclude<VisAction, "start">, description: string, re
     description,
     effects: { readOnly },
     helpGroups: ["vis"],
-    hideFromMcp: true,
+    mcpDeferred: true,
     inputSchema,
     parseCliArgs: parsePath,
     buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action, ...input, ...managedWorkbenchAgentCommandBody(context) }),
@@ -53,7 +53,7 @@ const start = defineWorkbenchAgentCommand({
   description: "Show an .html, .svg, .tsx or .jsx file live to the user until you end it; snapshots it now. Load the /vis skill first.",
   effects: { readOnly: false },
   helpGroups: ["vis"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   inputSchema: startInputSchema,
   parseCliArgs: parseStart,
   buildRequest: (input, context) => postWorkbenchAgentCommand("/internal/vis", { action: "start", ...input, ...managedWorkbenchAgentCommandBody(context) }),

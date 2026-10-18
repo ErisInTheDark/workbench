@@ -16,7 +16,7 @@ import { listWorkbenchInstructionTools, resolveWorkbenchInstructionToolReference
 
 const instructionRoot = fileURLToPath(new URL("../../../../../instructions", import.meta.url));
 const catalogue = listWorkbenchInstructionTools(listWorkbenchAgentCommands([], "agent", { virtualRepos: true }));
-const mcpServed = new Set(catalogue.filter(({ hiddenFromMcp }) => !hiddenFromMcp).map(({ id }) => id));
+const mcpServed = new Set(catalogue.filter(({ deferred }) => !deferred).map(({ id }) => id));
 
 test("docs text groups by tools across sources and only counts what this caller would render", () => {
   const docs = collectWorkbenchInstructionToolDocs([
@@ -35,7 +35,7 @@ test("docs text groups by tools across sources and only counts what this caller 
 
 test("docs regions render for any usable subtool, CLI-only included, but never for a mere name prefix", () => {
   const catalogue = [
-    { id: "git_arc_edit_start", codeModeEligible: false, hiddenFromMcp: true },
+    { id: "git_arc_edit_start", codeModeEligible: false, deferred: true },
     { id: "messages", codeModeEligible: true },
   ];
   const output = filterWorkbenchInstructionContent(

@@ -2,9 +2,11 @@
  * Exports:
  * - McpToolListing: one server's offered tools with their allowed state, or why they are unavailable.
  * - formatMcpToolListing: agent-facing text for `mcp_tools`; allowed tools first, then disabled ones under one hint; a query ranks matches and adds input schemas.
+ * - formatWorkbenchToolSection: the same ranked text for Workbench's deferred tools under server `wb`.
  * - formatMcpToolResult: agent-facing text for one `mcp_call` result.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { McpServerTool } from "./McpServerConnection";
 
 export type McpToolListing =
@@ -55,6 +57,25 @@ function section(lines: readonly string[], separator: string) {
   return lines.join(separator);
 }
 
+function rank(candidates: readonly Entry[], queryTerms: readonly string[]) {
+  if (!queryTerms.length) return [...candidates];
+  return candidates.map(entry => ({ entry, score: score(entry, queryTerms) }))
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score
+      || `${left.entry.server}/${left.entry.tool.name}`.localeCompare(`${right.entry.server}/${right.entry.tool.name}`))
+    .slice(0, MAX_MATCHES).map(({ entry }) => entry);
+}
+
+/** Workbench's deferred tools as one `wb/<tool>` block, ranked and rendered exactly like server tools. */
+export function formatWorkbenchToolSection(tools: readonly McpServerTool[], query: string | undefined) {
+  const queryTerms = terms(query ?? "");
+  const matches = rank(tools.map(tool => ({ server: WORKBENCH_MCP_SERVER_NAME, tool, allowed: true })), queryTerms);
+  if (!matches.length) {
+    return queryTerms.length ? `No deferred Workbench tools match "${query}".\n` : "No deferred Workbench tools are available.\n";
+  }
+  return `${section(matches.map(queryTerms.length ? detailed : brief), queryTerms.length ? "\n\n" : "\n")}\n`;
+}
+
 export function formatMcpToolListing(listings: readonly McpToolListing[], query: string | undefined, includeDisabled = false) {
   if (!listings.length) return `${NO_SERVERS}\n`;
   const entries = listings.flatMap(listing => listing.status === "ready"
@@ -66,13 +87,7 @@ export function formatMcpToolListing(listings: readonly McpToolListing[], query:
       ? [`${listing.server}: needs authentication; the user can authenticate it in Settings > Agents > MCP servers`]
       : []);
   const queryTerms = terms(query ?? "");
-  const ranked = (candidates: Entry[]) => queryTerms.length
-    ? candidates.map(entry => ({ entry, score: score(entry, queryTerms) }))
-      .filter(({ score }) => score > 0)
-      .sort((left, right) => right.score - left.score
-        || `${left.entry.server}/${left.entry.tool.name}`.localeCompare(`${right.entry.server}/${right.entry.tool.name}`))
-      .slice(0, MAX_MATCHES).map(({ entry }) => entry)
-    : candidates;
+  const ranked = (candidates: Entry[]) => rank(candidates, queryTerms);
   const render = queryTerms.length ? detailed : brief;
   const separator = queryTerms.length ? "\n\n" : "\n";
   const enabled = ranked(entries.filter(entry => entry.allowed)).map(render);

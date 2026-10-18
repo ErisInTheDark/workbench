@@ -8,6 +8,7 @@ import { useMemo, type ReactNode } from "react";
 
 import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
 import { readGitArcMcpResult } from "workbench-shared/workbench/git/git-arc-mcp-result";
+import { parseGitArcEditText } from "workbench-shared/workbench/git/git-arc-edit-contracts";
 import reportClientSchemaError from "workbench-shared/workbench/report-client-schema-error";
 import type { WorkbenchSubagentSummary } from "workbench-shared/types";
 import type { RelatedThread } from "../../../workbench/thread/ThreadStore";
@@ -247,6 +248,7 @@ export default function ThreadWorkbenchCommandItem({
       <ThreadGitArcItem
         commandIntent={intent}
         durationMs={visibleDurationMs ?? null}
+        editResult={intent.action === "edit" ? parseGitArcEditText(output) : null}
         failureReason={hasStructuredResult ? typed?.kind === "invalid" ? "The tool result could not be read." : null : outcome === "failed" ? output : null}
         interruptedBySteer={interruptedBySteer}
         operationDetails={operationDetails}

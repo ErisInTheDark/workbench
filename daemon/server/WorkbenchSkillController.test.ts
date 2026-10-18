@@ -40,7 +40,7 @@ test("selected skill returns only filtered body with relative imports", async ()
       }],
       readInstructionTools: async () => [
         { id: "rg", codeModeEligible: true },
-        { id: "browse_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" },
+        { id: "browse_raw", codeModeEligible: false, deferred: true, requiresCapability: "browseRawCommandsEnabled" },
       ],
       readLocalCapabilities: async () => ({ browseRawCommandsEnabled: browseRawEnabled }),
     });

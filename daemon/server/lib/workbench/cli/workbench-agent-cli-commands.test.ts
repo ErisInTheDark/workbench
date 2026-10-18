@@ -333,7 +333,7 @@ test("canonical command descriptors are immutable and unique", () => {
   assert.equal(Object.isFrozen(descriptors), true);
   assert.equal(Object.isFrozen(descriptors[0]), true);
   assert.equal(Object.isFrozen(descriptors[0]?.words), true);
-  assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.hideFromMcp, true);
+  assert.equal(definitions.find(({ words }) => words.join(" ") === "browse raw")?.mcpDeferred, true);
 });
 
 test("CLI help and dispatch enforce every command audience", async () => {
@@ -664,7 +664,7 @@ test("claim analysis parses as a read-only cli command without MCP exposure", as
     cwd: "C:/workspace", file: "workbench:src/view.ts", range: "90d", page: 2,
   });
   const command = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "stats claims");
-  assert.equal(command?.hideFromMcp, true);
+  assert.equal(command?.mcpDeferred, true);
   assert.equal(command?.effects.readOnly, true);
 });
 
@@ -680,7 +680,7 @@ test("commit thread lookup is a read-only cli command without MCP exposure", asy
     responseKind: "native",
   });
   const command = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git thread");
-  assert.equal(command?.hideFromMcp, true);
+  assert.equal(command?.mcpDeferred, true);
   assert.equal(command?.effects.readOnly, true);
   const help = await parseWorkbenchAgentCliCommand(["git", "--help"], { cwd: "C:/workspace" });
   assert.match(help.kind === "help" ? help.help : "", /wb git thread <commit>/u);
@@ -1402,7 +1402,7 @@ test("keeps reload and dirt hidden while direct reload help explains user owners
   assert.equal((await parseWorkbenchAgentCliCommand(["daemon", "reload", "--server:core"], unmanaged)).kind, "error");
   const reloadDefinition = listWorkbenchAgentCommands(reloadCatalog, "cli").find(({ words }) => words.join(" ") === "reload");
   assert.ok(reloadDefinition);
-  assert.equal(reloadDefinition.hideFromMcp, true);
+  assert.equal(reloadDefinition.mcpDeferred, true);
   assert.equal(reloadDefinition.hideFromRootHelp, true);
   assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["server:mcp"] }).success, true);
   assert.equal(reloadDefinition.inputSchema.safeParse({ scopes: ["harness:codex"] }).success, true);

@@ -78,7 +78,7 @@ const run = defineWorkbenchAgentCommand({
 const raw = defineWorkbenchAgentCommand({
   description: "Run the explicitly gated raw Browse CLI passthrough.",
   effects: { openWorld: true },
-  hideFromMcp: true,
+  mcpDeferred: true,
   helpGroups: ["browse"],
   requiresCapability: "browseRawCommandsEnabled",
   words: ["browse", "raw"],

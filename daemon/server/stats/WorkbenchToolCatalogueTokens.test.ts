@@ -46,11 +46,11 @@ test("docs gated on a tool family split evenly across its served subtools", asyn
     harnesses: ["claude"],
     readInstructionSources: async () => [{ relativePath: "wb/mechanics/git.md", content: "<docs tools=\"edit\">\n1234\n</docs>" }],
     readInstructionTools: async () => [
-      { id: "edit_start", codeModeEligible: false, hiddenFromMcp: true },
-      { id: "edit_end", codeModeEligible: false, hiddenFromMcp: true },
+      { id: "edit_start", codeModeEligible: false, deferred: true },
+      { id: "edit_end", codeModeEligible: false, deferred: true },
       { id: "editor", codeModeEligible: true },
       // A typical thread has no optional capabilities, so gated tools neither open docs nor share their cost.
-      { id: "edit_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" },
+      { id: "edit_raw", codeModeEligible: false, deferred: true, requiresCapability: "browseRawCommandsEnabled" },
     ],
     readToolSpecs: async () => [],
   });

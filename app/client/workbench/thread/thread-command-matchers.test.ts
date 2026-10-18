@@ -269,7 +269,7 @@ function workbenchMcpServerForTool(tool: string) {
 test("every exposed typed wb MCP tool has a semantic route", () => {
   const commands = listWorkbenchAgentCommands();
   const exposedNames = commands
-    .filter((definition) => !definition.hideFromMcp)
+    .filter((definition) => !definition.mcpDeferred)
     .map(getWorkbenchAgentCommandToolName)
     .sort();
   for (const tool of exposedNames) {
@@ -374,6 +374,19 @@ test("MCP server CLI and MCP calls read as their intent, and enable requests lea
   assert.ok(call?.kind === "simple");
   assert.equal(getWorkbenchMcpCommandRoute({ argumentsValue: { server: "pd-connect", tool: "x", reason: "y" }, server: "wb", tool: "mcp_request" })
     ?.rendering.result.omitFromDisplay, true);
+});
+
+test("mcp_call on server wb presents as the deferred Workbench tool it ran", () => {
+  const edit = getWorkbenchMcpCommandRoute({
+    argumentsValue: { server: "wb", tool: "git_arc_edit_apply", arguments: {} }, server: "wbex", tool: "mcp_call",
+  });
+  assert.ok(edit?.kind === "specialized" && edit.operation.kind === "gitArc");
+  assert.equal(edit.operation.operation.action, "edit");
+  assert.equal(edit.operation.operation.editStep, "apply");
+  const vis = getWorkbenchMcpCommandRoute({
+    argumentsValue: { server: "wb", tool: "vis_screenshot", arguments: { path: "mockups/a.tsx" } }, server: "wb", tool: "mcp_call",
+  });
+  assert.deepEqual(vis, getWorkbenchMcpCommandRoute({ argumentsValue: { path: "mockups/a.tsx" }, server: "wb", tool: "vis_screenshot" }));
 });
 
 test("a grouped command label counts every item, naming vis checks and never dropping unnamed ones", () => {

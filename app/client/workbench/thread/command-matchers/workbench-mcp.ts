@@ -1,11 +1,12 @@
 /*
  * Exports:
- * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls and retain dedicated Git, title, and status failure presentation.
+ * - getWorkbenchMcpCommandRoute/shouldUseWorkbenchMcpSpecializedRenderer: route wb calls, including deferred tools run through `mcp_call`, and retain dedicated Git, title, and status failure presentation.
  * - getWorkbenchMcpCommandDisplay: match simple wb calls to shared summary presentation.
  * - WorkbenchMcpShellCommandItem/getWorkbenchMcpShellCommandItem: derive ordinary command presentation from wb shell evidence.
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
+import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { NativeFileChange } from "./native-file-changes";
 import {
   getWorkbenchShellAggregatedOutput,
@@ -17,7 +18,7 @@ import type { CommandShell, ThreadCommandSummaryDisplay } from "./types";
 import {
   getWorkbenchCommandRoute,
   getUnknownGitArcCommandRoute,
-  getWorkbenchCommandSummaryDisplay,
+  getWorkbenchCommandRouteSummaryDisplay,
   isWorkbenchCommandPresentationName,
   type WorkbenchCommandPresentationContext,
   type WorkbenchCommandRoute,
@@ -105,13 +106,26 @@ export function getWorkbenchFileRemovalChanges(item: ThreadItem): NativeFileChan
   }));
 }
 
+/** `mcp_call` on server `wb` runs a deferred Workbench tool; it presents as that tool. */
+function readDeferredCall(tool: string, argumentsValue: JsonValue) {
+  if (tool !== "mcp_call" || argumentsValue === null || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return null;
+  const { arguments: inner, server, tool: target } = argumentsValue;
+  if (server !== WORKBENCH_MCP_SERVER_NAME || typeof target !== "string" || target === "mcp_call") return null;
+  return { arguments: inner ?? {}, tool: target };
+}
+
 export function getWorkbenchMcpCommandRoute({
   argumentsValue,
   context,
   server,
   tool,
-}: WorkbenchMcpCommandInput) {
+}: WorkbenchMcpCommandInput): WorkbenchCommandRoute | null {
   if (!isWorkbenchMcpServer(server)) return null;
+  const deferred = readDeferredCall(tool, argumentsValue);
+  if (deferred) {
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: deferred.arguments, context, server, tool: deferred.tool });
+    if (route) return route;
+  }
   if (!isWorkbenchCommandPresentationName(tool)) {
     return /^git_(?:arc|plan)(?:_|$)/u.test(tool) ? getUnknownGitArcCommandRoute() : null;
   }
@@ -136,6 +150,5 @@ export function getWorkbenchMcpCommandDisplay({
   server,
   tool,
 }: WorkbenchMcpCommandInput): ThreadCommandSummaryDisplay | null {
-  if (!isWorkbenchMcpServer(server) || !isWorkbenchCommandPresentationName(tool)) return null;
-  return getWorkbenchCommandSummaryDisplay(tool, argumentsValue, context);
+  return getWorkbenchCommandRouteSummaryDisplay(getWorkbenchMcpCommandRoute({ argumentsValue, context, server, tool }));
 }

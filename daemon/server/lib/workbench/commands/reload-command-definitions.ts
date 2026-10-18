@@ -56,7 +56,7 @@ export function createWorkbenchReloadCommands(catalog: readonly DaemonReloadScop
   const reload = defineWorkbenchAgentCommand({
     description: "Reload selected Workbench runtime scopes with user permission.",
     helpGroups: ["reload"],
-    hideFromMcp: true,
+    mcpDeferred: true,
     hideFromRootHelp: true,
     inputSchema: reloadInput,
     usage: "wb reload [--all [--unsafe] | --<scope> ... | --hard]",
@@ -77,7 +77,7 @@ export function createWorkbenchReloadCommands(catalog: readonly DaemonReloadScop
   const dirt = defineWorkbenchAgentCommand({
     description: "List reload scopes required by the current workspace dirt.",
     helpGroups: [],
-    hideFromMcp: true,
+    mcpDeferred: true,
     hideFromRootHelp: true,
     inputSchema: z.object({}).strict(),
     usage: "wb dirt",

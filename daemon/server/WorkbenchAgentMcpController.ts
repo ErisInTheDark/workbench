@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, cancellation, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, plus the served tool specs for prompt-cost accounting.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, plus the served tool specs for prompt-cost accounting.
  */
 import type http from "node:http";
 
@@ -15,9 +15,13 @@ import {
 } from "./provider-execution";
 import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import { z } from "zod";
+import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { adaptWorkbenchAgentCliResponse } from "./lib/workbench/cli/workbench-agent-cli-responses";
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
+import { WORKBENCH_MCP_COMMANDS } from "./lib/workbench/commands/mcp-command-definitions";
 import { listWorkbenchAgentCommands } from "./lib/workbench/commands/workbench-agent-command-registry";
+import { formatWorkbenchToolSection } from "./mcp-servers/mcp-tool-search";
 import {
   getWorkbenchAgentCommandToolName,
   type WorkbenchAgentCommandDefinition,
@@ -98,6 +102,22 @@ function isLoopbackAddress(address: string | undefined) {
 function toolError(error: unknown): CallToolResult {
   return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
 }
+
+function textResult(text: string): CallToolResult {
+  return { content: [{ type: "text", text }] };
+}
+
+/** What a call is recorded as: the tool the agent named, even when `mcp_call` runs a deferred command. */
+type ToolTranscriptIdentity = { tool: string; input: object };
+
+const [MCP_TOOLS_COMMAND, MCP_REQUEST_COMMAND, MCP_CALL_COMMAND] = WORKBENCH_MCP_COMMANDS;
+/** The `mcp_*` fields that decide whether a call targets Workbench's own deferred tools. */
+const McpRoutingFieldsSchema = z.object({
+  arguments: z.record(z.string(), z.unknown()).optional(),
+  query: z.string().optional(),
+  server: z.string().optional(),
+  tool: z.string().optional(),
+});
 
 /** McpServer's input validation, reproduced for hand-served tools. */
 async function validateToolInput(schema: AnySchema, args: unknown, toolName: string) {
@@ -238,10 +258,15 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     serveWorkbenchMcpHttpRequest(request, response, { logError: this.lifecycleLogError, registry: this.requestRegistry, scope });
   }
 
-  /** Visible commands for one request, in catalogue order; duplicate names are a catalogue defect. */
+  /**
+   * Commands one request may use, in catalogue order: preloaded tools, and deferred ones found and run through
+   * `mcp_tools`/`mcp_call` on server `wb`. Deferred search mirrors CLI help, so root-help-hidden commands stay out.
+   * Duplicate names are a catalogue defect.
+   */
   private visibleCommands(scope: WorkbenchMcpScope) {
     const names = new Set<string>([WORKBENCH_SHELL_MCP_TOOL_NAME]);
-    const visible = new Map<string, WorkbenchAgentCommandDefinition>();
+    const direct = new Map<string, WorkbenchAgentCommandDefinition>();
+    const deferred = new Map<string, WorkbenchAgentCommandDefinition>();
     for (const definition of this.listCommands()) {
       const name = getWorkbenchAgentCommandToolName(definition);
       if (!isWorkbenchCommandVisibleTo(name, {
@@ -249,13 +274,28 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         harnesses: definition.harnesses,
         subagent: scope.subagent,
       })) continue;
-      if (definition.hideFromMcp || (definition.managedThreadRootOnly && !scope.projectLocal)
-      ) continue;
+      if (definition.managedThreadRootOnly && !scope.projectLocal) continue;
+      if (definition.mcpDeferred && definition.hideFromRootHelp) continue;
       if (names.has(name)) throw new Error(`Duplicate Workbench MCP tool name: ${name}`);
       names.add(name);
-      visible.set(name, definition);
+      (definition.mcpDeferred ? deferred : direct).set(name, definition);
     }
-    return visible;
+    return { deferred, direct };
+  }
+
+  private toolSpec(name: string, definition: WorkbenchAgentCommandDefinition): Tool & { description: string } {
+    return {
+      name,
+      description: `${definition.description}\n\nCLI equivalent: ${definition.usage}`,
+      inputSchema: toolJsonSchema(definition.inputSchema, "input") as Tool["inputSchema"],
+      annotations: {
+        destructiveHint: definition.effects.destructive ?? false,
+        idempotentHint: definition.effects.idempotent ?? false,
+        openWorldHint: definition.effects.openWorld ?? false,
+        readOnlyHint: definition.effects.readOnly ?? false,
+      },
+      ...(definition.mcpCodeModeEligible ? { _meta: CODE_MODE_META } : {}),
+    };
   }
 
   async describe(scope: WorkbenchMcpScope, signal: AbortSignal) {
@@ -270,20 +310,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       outputSchema: toolJsonSchema(WorkbenchShellResultSchema, "output") as Tool["outputSchema"],
       _meta: CODE_MODE_META,
     }];
-    for (const [name, definition] of this.visibleCommands(scope)) {
-      tools.push({
-        name,
-        description: `${definition.description}\n\nCLI equivalent: ${definition.usage}`,
-        inputSchema: toolJsonSchema(definition.inputSchema, "input") as Tool["inputSchema"],
-        annotations: {
-          destructiveHint: definition.effects.destructive ?? false,
-          idempotentHint: definition.effects.idempotent ?? false,
-          openWorldHint: definition.effects.openWorld ?? false,
-          readOnlyHint: definition.effects.readOnly ?? false,
-        },
-        ...(definition.mcpCodeModeEligible ? { _meta: CODE_MODE_META } : {}),
-      });
-    }
+    for (const [name, definition] of this.visibleCommands(scope).direct) tools.push(this.toolSpec(name, definition));
     return { experimental: description.experimental, tools };
   }
 
@@ -296,16 +323,56 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         const input = shellInputSchema.parse(await validateToolInput(shellInputSchema, call.arguments, call.name));
         return await this.callShell(scope, call, input, tools, shellEscalation);
       }
-      const definition = this.visibleCommands(scope).get(call.name);
+      const { deferred, direct } = this.visibleCommands(scope);
+      const definition = direct.get(call.name);
       if (!definition) throw new McpError(ErrorCode.InvalidParams, `Tool ${call.name} not found`);
       const input = await validateToolInput(definition.inputSchema, call.arguments, call.name) as object;
-      if (definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
-        return await this.detachTool(definition, input, call, scope.clientScope, tools);
+      const routing = McpRoutingFieldsSchema.parse(input);
+      const workbenchServer = routing.server === WORKBENCH_MCP_SERVER_NAME;
+      const transcript = { tool: call.name, input };
+      if (definition === MCP_TOOLS_COMMAND && (workbenchServer || (!routing.server && deferred.size))) {
+        const section = formatWorkbenchToolSection([...deferred].map(([name, tool]) => this.toolSpec(name, tool)), routing.query);
+        const result = workbenchServer
+          ? await this.observeTool(call.name, input, call.meta, scope.clientScope, call.signal, tools, async () => textResult(section))
+          : await this.callTool(definition, input, call.meta, scope.clientScope, call.requestId, call.signal, tools, {
+            decorate: listed => ({ ...listed, content: [...listed.content, { type: "text", text: section }] }),
+          });
+        return { kind: "result", result };
       }
-      return { kind: "result", result: await this.callTool(definition, input, call.meta, scope.clientScope, call.requestId, call.signal, tools) };
+      if (definition === MCP_REQUEST_COMMAND && workbenchServer) {
+        return {
+          kind: "result",
+          result: await this.observeTool(call.name, input, call.meta, scope.clientScope, call.signal, tools, async () => ({
+            ...textResult(`Workbench tools need no enabling; call them with mcp_call on server ${WORKBENCH_MCP_SERVER_NAME}.`), isError: true,
+          })),
+        };
+      }
+      const target = definition === MCP_CALL_COMMAND && workbenchServer
+        ? await this.deferredTarget(deferred, routing)
+        : { definition, input };
+      if (target.definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
+        return await this.detachTool(target.definition, target.input, call, scope.clientScope, tools, transcript);
+      }
+      return {
+        kind: "result",
+        result: await this.callTool(target.definition, target.input, call.meta, scope.clientScope, call.requestId, call.signal, tools, { transcript }),
+      };
     } catch (error) {
       return { kind: "result", result: toolError(error) };
     }
+  }
+
+  private async deferredTarget(
+    deferred: ReadonlyMap<string, WorkbenchAgentCommandDefinition>, routing: z.infer<typeof McpRoutingFieldsSchema>,
+  ) {
+    const name = routing.tool ?? "";
+    const definition = deferred.get(name);
+    if (!definition) {
+      throw new McpError(ErrorCode.InvalidParams,
+        `${WORKBENCH_MCP_SERVER_NAME}/${name} is not a deferred Workbench tool. Find one with mcp_tools on server ${WORKBENCH_MCP_SERVER_NAME}.`);
+    }
+    const input = await validateToolInput(definition.inputSchema, routing.arguments ?? {}, `${WORKBENCH_MCP_SERVER_NAME}/${name}`) as object;
+    return { definition, input };
   }
 
   /**
@@ -314,7 +381,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
    */
   private async detachTool(
     definition: WorkbenchAgentCommandDefinition, input: object, call: WorkbenchMcpToolCall, clientScope: string,
-    tools: WorkbenchProviderTools,
+    tools: WorkbenchProviderTools, transcript: ToolTranscriptIdentity,
   ): Promise<WorkbenchMcpToolStep> {
     const toolName = getWorkbenchAgentCommandToolName(definition);
     let registered: WorkbenchAgentMcpRegisteredCommand;
@@ -323,7 +390,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     } catch (error) {
       return { kind: "result", result: this.commandFailure(definition, error, call.signal) };
     }
-    const started = await this.startTranscript(toolName, input, call.meta, clientScope, registered.signal, tools);
+    const started = await this.startTranscript(transcript.tool, transcript.input, call.meta, clientScope, registered.signal, tools);
     if (started.kind === "failed") {
       registered.registration.unregister();
       return { kind: "result", result: started.result };
@@ -516,14 +583,17 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     requestId: WorkbenchAgentMcpRequestId,
     signal: AbortSignal,
     tools: WorkbenchProviderTools,
+    {
+      decorate = result => result,
+      transcript = { tool: getWorkbenchAgentCommandToolName(definition), input },
+    }: { decorate?: (result: CallToolResult) => CallToolResult; transcript?: ToolTranscriptIdentity } = {},
   ) {
+    const execute = async () => decorate(await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools));
     if (definition.hideMcpTranscript) {
-      return this.observeTool(getWorkbenchAgentCommandToolName(definition), {}, meta, clientScope, signal, tools,
-        () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools),
+      return this.observeTool(transcript.tool, {}, meta, clientScope, signal, tools, execute,
         result => ({ content: [], isError: result.isError === true }));
     }
-    return this.observeTool(getWorkbenchAgentCommandToolName(definition), input, meta, clientScope, signal, tools,
-      () => this.executeTool(definition, input, meta, clientScope, requestId, signal, tools));
+    return this.observeTool(transcript.tool, transcript.input, meta, clientScope, signal, tools, execute);
   }
 
   private listCommands() {

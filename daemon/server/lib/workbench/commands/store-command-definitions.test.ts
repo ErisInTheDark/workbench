@@ -59,5 +59,5 @@ test("store commands stay out of help and MCP", async () => {
   }
   const store = listWorkbenchAgentCommands().filter(command => command.words[0] === "store");
   assert.equal(store.length, 2);
-  assert.ok(store.every(command => command.hideFromMcp && command.helpGroups.length === 0));
+  assert.ok(store.every(command => command.mcpDeferred && command.helpGroups.length === 0));
 });

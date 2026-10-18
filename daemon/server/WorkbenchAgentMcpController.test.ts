@@ -367,6 +367,56 @@ test("MCP preserves typed Git rejections before and after dispatch", async () =>
   }
 });
 
+test("deferred commands are found and run through server wb without joining the preloaded tool list", async () => {
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const controller = codexController({
+    executeCommand: async request => {
+      executed.push(request);
+      if (request.path === "/internal/mcp") return new Response("No MCP servers are configured.\n");
+      return Response.json({ additions: 0, deletions: 0, fileCount: 0, files: [], page: 1, pageCount: 1, phase: "preview", session: "s1" });
+    },
+    getReloadScopeCatalog: () => reloadCatalog,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args, _meta: { threadId: "native-thread" } });
+  try {
+    const names = (await client.listTools()).tools.map(({ name }) => name);
+    assert.equal(names.includes("git_arc_edit_start"), false);
+    assert.equal(names.includes("mcp_call"), true);
+
+    const searched = responseText(await call("mcp_tools", { server: "wb", query: "edit session preview" }));
+    assert.match(searched, /^wb\/git_arc_edit_start$/mu);
+    assert.match(searched, /Input schema: .*"operations"/u);
+    // Search mirrors CLI help: root-help-hidden commands stay undiscoverable and unrunnable.
+    assert.doesNotMatch(responseText(await call("mcp_tools", { server: "wb" })), /wb\/(?:reload|store_get)\b/u);
+    const listedAlongside = responseText(await call("mcp_tools", {}));
+    assert.match(listedAlongside, /No MCP servers are configured/u);
+    assert.match(listedAlongside, /^wb\/git_arc_tree: /mu);
+
+    const operations = [{ kind: "replace", pattern: "    a", replacement: "b" }];
+    const ran = await call("mcp_call", { server: "wb", tool: "git_arc_edit_start", arguments: { operations } });
+    assert.equal(ran.isError, false, responseText(ran));
+    assert.deepEqual(executed.at(-1)?.body?.operations, [{ ...operations[0], flags: "", globs: [], includeIgnored: false, roots: ["."] }]);
+
+    const dispatchesBefore = executed.length;
+    for (const args of [
+      { server: "wb", tool: "git_arc_edit_start", arguments: { operations: [] } },
+      { server: "wb", tool: "reload", arguments: {} },
+      { server: "wb", tool: "rg", arguments: { args: ["x"] } },
+    ]) assert.equal((await call("mcp_call", args)).isError, true, JSON.stringify(args));
+    assert.equal((await call("mcp_request", { server: "wb", tool: "git_arc_tree", reason: "need it" })).isError, true);
+    assert.equal(executed.length, dispatchesBefore);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 for (const failResolution of [false, true]) test(`shell resolves caller identity from thread cwd with resolution failure=${failResolution}`, async () => {
   const cwd = process.cwd();
   const identities: object[] = [];
@@ -636,7 +686,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
   try {
     const inventory = await client.listTools();
     const eligible = listWorkbenchAgentCommands(reloadCatalog, "agent").filter((definition) => (
-      !definition.hideFromMcp && !definition.managedThreadRootOnly
+      !definition.mcpDeferred && !definition.managedThreadRootOnly
       && isWorkbenchCommandVisibleTo(getWorkbenchAgentCommandToolName(definition), {
         harness: "codex",
         harnesses: definition.harnesses,
@@ -661,11 +711,11 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.equal(projectInventory.tools.some(({ name }) => name === "tokens_instructions"), true);
     const instructionTools = controller.listInstructionTools();
     assert.deepEqual(
-      instructionTools.filter(({ hiddenFromMcp }) => !hiddenFromMcp).map(({ id }) => id).filter((id) => !hiddenFromCodex.has(id)).sort(),
+      instructionTools.filter(({ deferred }) => !deferred).map(({ id }) => id).filter((id) => !hiddenFromCodex.has(id)).sort(),
       projectInventory.tools.map(({ name }) => name).sort(),
     );
-    // CLI-only commands stay in the instruction catalogue so `<docs>` gates reflect what the agent can use.
-    assert.equal(instructionTools.find(({ id }) => id === "git_arc_edit_start")?.hiddenFromMcp, true);
+    // Deferred commands stay in the instruction catalogue so `<docs>` gates reflect what the agent can use.
+    assert.equal(instructionTools.find(({ id }) => id === "git_arc_edit_start")?.deferred, true);
     assert.equal(instructionTools.find(({ id }) => id === "rg")?.codeModeEligible, true);
     assert.equal(instructionTools.find(({ id }) => id === "git_arc_release")?.codeModeEligible, false);
     assert.equal(instructionTools.some(({ id }) => id === "not_a_tool"), false);

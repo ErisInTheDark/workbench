@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions, plus CLI-only history amend, commit-owner lookup
+ * - WORKBENCH_GIT_COMMANDS: typed commit-selection and commit definitions, plus deferred history amend, commit-owner lookup
  *   and the resumable `wb git integrate` session.
  */
 import { z } from "zod";
@@ -78,7 +78,7 @@ const commit = defineWorkbenchAgentCommand({
 const amend = defineWorkbenchAgentCommand({
   description: "Rewrite unpushed linear commits: fold selected files or a new message into one commit, or change author, committer, dates and co-authors across many.",
   helpGroups: ["git"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "amend"],
   usage: "wb git amend [--commit <commit>]... [--range <base>..<tip>]... [--worktree <absolute-path>] [--selected] [--title <title> [--description <description>]] [--author \"Name <email>\"] [--author-date <date>] [--committer \"Name <email>\"] [--committer-date <date>] [--co-author \"Name <email>\"]... [--no-co-authors]",
   inputSchema: z.object({
@@ -144,7 +144,7 @@ const thread = defineWorkbenchAgentCommand({
   description: "Print the canonical Workbench thread that owns a committed Git arc proposal.",
   effects: { readOnly: true },
   helpGroups: ["git"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "thread"],
   usage: "wb git thread <commit>",
   inputSchema: z.object({ commit: requiredText }).strict(),
@@ -162,7 +162,7 @@ const thread = defineWorkbenchAgentCommand({
 const integrateStart = defineWorkbenchAgentCommand({
   description: "Start integrating incoming commits into the checked-out branch, from its upstream or a peer daemon's same-named branch. Replays local commits (or adds one merge commit with --merge) in memory; nothing in the worktree moves until apply.",
   helpGroups: ["git"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "integrate", "start"],
   usage: "wb git integrate start --from upstream|<host>[:<folder>] [--carry-own] [--merge]",
   inputSchema: z.object({ from: requiredText, carryOwn: z.boolean().default(false), merge: z.boolean().default(false) }).strict(),
@@ -183,7 +183,7 @@ function integrateStep(operation: "view" | "resolve" | "wait" | "apply" | "end",
     description,
     ...(operation === "view" ? { effects: { readOnly: true } } : {}),
     helpGroups: ["git"],
-    hideFromMcp: true,
+    mcpDeferred: true,
     words: ["git", "integrate", operation],
     usage: `wb git integrate ${operation}`,
     inputSchema: z.object({}).strict(),

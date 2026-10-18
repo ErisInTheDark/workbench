@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the CLI-only build view tree and edit sessions.
+ * - WORKBENCH_GIT_ARC_COMMANDS: typed planning, status, lifecycle, inspection and proposal commands shared by CLI/MCP, plus the deferred build view tree and edit sessions.
  */
 import path from "node:path";
 import { z } from "zod";
@@ -137,7 +137,7 @@ function editRootFlag(args: string[], values: string[] = [], repeatable: string[
 const editStart = defineWorkbenchAgentCommand({
   description: "Preview an edit session of ordered moves (with path reference rewrites) and regex replacements, reporting claim intersections. Writes no files.",
   helpGroups: ["git-arc-edit"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "arc", "edit", "start"],
   usage: "wb git arc edit start (--operations-json <file> | --operations <json>) [--root <root>]",
   inputSchema: z.object({
@@ -171,7 +171,7 @@ const editView = defineWorkbenchAgentCommand({
   description: "Page through the edit session's changed files and line numbers, or diff selected files or lines.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["git-arc-edit"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "arc", "edit", "view"],
   usage: "wb git arc edit view [--page <n>] [--diff <path>[:<line>]]... [--root <root>]",
   inputSchema: z.object({ diffs: paths.default([]), page: z.number().int().positive().default(1), rootId: editRoot }).strict(),
@@ -190,10 +190,12 @@ const editView = defineWorkbenchAgentCommand({
 function editStep(step: "apply" | "revert" | "end", description: string, effects: { destructive?: boolean } = {}) {
   const action = step === "apply" ? "arcEditApply" : step === "revert" ? "arcEditRevert" : "arcEditEnd";
   return defineWorkbenchAgentCommand({
+    // Apply waits for sibling claims exactly like git_arc_wait.
+    ...(step === "apply" ? { mcpCodeModeEligible: true, mcpRuntimeDrainPolicy: "preserve-across-reload" as const, mcpSteerInterruptible: true } : {}),
     description,
     effects: { idempotent: false, ...effects },
     helpGroups: ["git-arc-edit"],
-    hideFromMcp: true,
+    mcpDeferred: true,
     words: ["git", "arc", "edit", step],
     usage: `wb git arc edit ${step} [--root <root>]`,
     inputSchema: z.object({ rootId: editRoot }).strict(),
@@ -507,7 +509,7 @@ const tree = defineWorkbenchAgentCommand({
   description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' dirty claims at their arc baselines (stack-aware). --hold-own holds the caller's back too. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing files it previously mirrored that left the view; files it didn't write are never touched.",
   effects: { idempotent: true },
   helpGroups: ["git-arc"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   words: ["git", "arc", "tree"],
   usage: "wb git arc tree [--hold-own] [--into <ignored-dir>] [-- <path>...]",
   inputSchema: z.object({ holdOwn: z.boolean().default(false), into: requiredText.optional(), paths: paths.default([]) }).strict()

@@ -128,7 +128,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
       "Read/turns/search: --direction <older|newer>. Read pages render chronologically; older starts at the end, newer at the start.",
       "Pages: --limit <1-50>, --cursor <returned-cursor>, --json. Search scans bounded worker batches until a page fills or history ends.",
       "Cursors exclude new insertions, not edits to live items. Changed expansion content invalidates its cursor.",
-      "Managed agents must run at the Workbench repository root. Ordinary user CLI access is allowed. No MCP tools.",
+      "Managed agents must run at the Workbench repository root. Ordinary user CLI access is allowed. MCP callers reach them through mcp_call on server wb.",
     ].join("\n"),
   },
   {

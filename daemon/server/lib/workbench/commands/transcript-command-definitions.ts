@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WORKBENCH_TRANSCRIPT_COMMANDS: CLI-only stored-history discovery, search and reading.
+ * - WORKBENCH_TRANSCRIPT_COMMANDS: deferred stored-history discovery, search and reading.
  */
 import {
   TranscriptCommandQuerySchema,
@@ -71,7 +71,7 @@ export const WORKBENCH_TRANSCRIPT_COMMANDS = descriptors.map(({ action, descript
   description,
   effects: { readOnly: true, idempotent: true, openWorld: false },
   helpGroups: ["transcript"],
-  hideFromMcp: true,
+  mcpDeferred: true,
   managedThreadRootOnly: true,
   words: ["transcript", action],
   usage: `wb transcript ${action}${["read", "show", "turns"].includes(action) ? " --thread <wb-id>" : " [--thread <wb-id>...]"}${action === "search" ? " --query <text>" : ""}${action === "show" ? " --item <id>" : ""} [options]`,

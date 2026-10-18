@@ -76,7 +76,7 @@ export function listWorkbenchAgentCommands(
 
 export function listWorkbenchAgentCodeModeToolNames() {
   return WORKBENCH_AGENT_COMMANDS
-    .filter(({ hideFromMcp, mcpCodeModeEligible }) => mcpCodeModeEligible && !hideFromMcp)
+    .filter(({ mcpDeferred, mcpCodeModeEligible }) => mcpCodeModeEligible && !mcpDeferred)
     .map(getWorkbenchAgentCommandToolName)
     .sort();
 }

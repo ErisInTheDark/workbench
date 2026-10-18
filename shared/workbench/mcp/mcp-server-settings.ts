@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - McpServerNameSchema: agent-facing server name used by `mcp_tools` and `mcp_call`.
+ * - WORKBENCH_MCP_SERVER_NAME: reserved server name under which `mcp_tools`/`mcp_call` reach Workbench's own deferred tools.
  * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
  * - McpServerAuthHeaderSchema: custom request header name carrying a server's sealed credential.
  * - McpServerToolNameSchema: one tool name a server offers.
@@ -13,6 +14,9 @@ import { z } from "zod";
 
 export const McpServerNameSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u,
   "Use 1-64 lowercase letters, digits, ., - or _, starting with a letter or digit.");
+
+/** User-added servers never take this name; Workbench serves its deferred tools there. */
+export const WORKBENCH_MCP_SERVER_NAME = "wb";
 
 export const McpServerUrlSchema = z.string().trim().max(2048).refine(value => {
   try {

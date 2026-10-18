@@ -127,7 +127,7 @@ export const GIT_CHECKPOINT_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
     match: ({ stage }) => {
       const intent = parseGitArcCommand(stage.text.trim());
       if (intent?.action !== "edit" || !intent.editStep) return null;
-      return getWorkbenchCommandRendering("git_arc_edit", { editStep: intent.editStep })?.result ?? null;
+      return getWorkbenchCommandRendering(`git_arc_edit_${intent.editStep}`, {})?.result ?? null;
     },
   }),
   createMatcher({

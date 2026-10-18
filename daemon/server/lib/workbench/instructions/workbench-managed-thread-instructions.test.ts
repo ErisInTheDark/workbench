@@ -150,7 +150,7 @@ test("docs gated on a capability-bound CLI tool follow injected local capabiliti
   const context = {
     ...createContext(),
     readInstructionTools: async () => [{
-      id: "browse_raw", codeModeEligible: false, hiddenFromMcp: true, requiresCapability: "browseRawCommandsEnabled" as const,
+      id: "browse_raw", codeModeEligible: false, deferred: true, requiresCapability: "browseRawCommandsEnabled" as const,
     }],
   };
 

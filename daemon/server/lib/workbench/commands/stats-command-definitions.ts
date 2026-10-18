@@ -3,7 +3,7 @@
  * - WorkbenchClaimStatsExecutionRequestSchema: validate cwd-owned claim analysis.
  * - WorkbenchFeedbackStatsExecutionRequestSchema: validate cwd-owned feedback reads; only wb-channel reads may span projects.
  * - WorkbenchToolStatsExecutionRequestSchema: validate cwd-owned tool value reads; --all-projects spans every project.
- * - WORKBENCH_STATS_COMMANDS: CLI-only claim ranking, file-thread reads, agent feedback reads, and tool value ranking.
+ * - WORKBENCH_STATS_COMMANDS: deferred claim ranking, file-thread reads, agent feedback reads, and tool value ranking.
  */
 import { z } from "zod";
 import { WorkbenchClaimStatsRangeSchema } from "workbench-shared/workbench/stats/workbench-stats-claims-contract";
@@ -57,7 +57,7 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   usage: "wb stats claims [--file <root:path>] [--range <7d|14d|30d|90d|365d|all>] [--page <n>]",
   description: "Rank files by distinct claiming threads, or list one file's claiming thread titles and ids.",
   effects: { readOnly: true, idempotent: true },
-  hideFromMcp: true,
+  mcpDeferred: true,
   helpGroups: ["stats"],
   inputSchema: claimsInputSchema,
   parseCliArgs(args) {
@@ -77,7 +77,7 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   workbenchRootUsage: `${FEEDBACK_USAGE} [--channel wb --all-projects]`,
   description: "List agent feedback for this project, most important first, with each author's model and effort.",
   effects: { readOnly: true, idempotent: true },
-  hideFromMcp: true,
+  mcpDeferred: true,
   helpGroups: ["stats"],
   inputSchema: feedbackInputSchema,
   parseCliArgs(args) {
@@ -104,7 +104,7 @@ export const WORKBENCH_STATS_COMMANDS = [defineWorkbenchAgentCommand({
   workbenchRootUsage: `${TOOLS_USAGE} [--all-projects]`,
   description: "Rank wb tools by calls per 100 always-on prompt tokens (spec plus docs), lowest value first, with tool waste per thread.",
   effects: { readOnly: true, idempotent: true },
-  hideFromMcp: true,
+  mcpDeferred: true,
   helpGroups: ["stats"],
   inputSchema: toolsInputSchema,
   parseCliArgs(args) {

@@ -12,6 +12,7 @@ import {
   McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema, McpServerSignInStartParamsSchema,
   type McpServerSettingsSnapshot, type McpServerSettingsUpdate, type McpServerSignInFinishParams,
   type McpServerSignInFinishResult, type McpServerSignInStartParams, type McpServerSignInStartResult, type McpServerSnapshot,
+  WORKBENCH_MCP_SERVER_NAME,
 } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import {
   deleteRows, insertRow, selectRows, updateRows, upsertRow,
@@ -77,7 +78,8 @@ function hostnameOf(url: string) {
   return serverNameFrom(new URL(url).hostname) ?? "mcp";
 }
 
-function uniqueName(base: string, taken: readonly string[]) {
+function uniqueName(base: string, existing: readonly string[]) {
+  const taken = [...existing, WORKBENCH_MCP_SERVER_NAME];
   if (!taken.includes(base)) return base;
   for (let index = 2; ; index += 1) {
     const suffix = `-${index}`;
