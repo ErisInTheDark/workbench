@@ -17,6 +17,7 @@ import WorkbenchWorkspaceThreads from "./WorkbenchWorkspaceThreads";
 import WorkbenchWorkspaceRequestController from "./WorkbenchWorkspaceRequestController";
 import { WorkspaceCommandSchema } from "workbench-shared/workbench/workspace/workspace-commands";
 import { DEFAULT_THREAD_AUTO_COMPACT_SETTINGS } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { EMPTY_WORKBENCH_STATS_FEEDBACK } from "workbench-shared/workbench/stats/workbench-stats-feedback-contract";
 import {
   emptyTranscriptSnapshotRows,
   type WorkbenchTranscriptPrefetchResult,
@@ -791,7 +792,7 @@ test("stats fan out to every daemon, merge once all answer, combine refinement, 
   for (const source of [here, there]) assert.deepEqual(source.observed, [{ kind: "stats", request: { ...request, projectIds: null } }]);
 
   const feedback = (total: number) => ({
-    section: "feedback", generatedAt: 1, feedback: { counts: [], items: [], total, workbenchProjectId: null },
+    section: "feedback", generatedAt: 1, feedback: { ...EMPTY_WORKBENCH_STATS_FEEDBACK, total },
   });
   here.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "current", data: feedback(2) } };
   there.snapshot = { phase: "current", failure: null, value: { kind: "stats", refinement: "pending", data: feedback(3) } };
